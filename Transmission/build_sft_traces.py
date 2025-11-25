@@ -56,7 +56,10 @@ def build_sft(
     out_path="sft_with_tools.jsonl",
     mock=False,
     seed=7,
-    add_no_error=50
+    add_no_error=50,
+    with_correction=True,
+    corr_max_iter=2,
+    corr_tol=1e-3
 ):
     """
     add_no_error: number of "no_error" negative controls synthesized from clean measurements (small noise only)
@@ -112,7 +115,7 @@ def build_sft(
             "You have MCP tools: `wls_from_path` (state estimation with bad-data indicators).\n"
             "Procedure: (1) call `wls_from_path` on the provided snapshot; (2) inspect residuals `r` and normalized Lagrange multipliers `lambdaN`; "
             "(3) produce a STRICT JSON decision with keys: "
-            "{has_error:boolean, error_family:'measurement_error'|'parameter_error'|'no_error', "
+            "{has_error:boolean, error_family:'measurement_error'|'parameter_error'|'topology_error'|'no_error', "
             "decision_basis:{r_topk:number[], lambda_topk:number[]}, "
             "suspect_location:{...}, "
             "recommended_tool:null, confidence:number}.\n"
@@ -157,6 +160,16 @@ def build_sft(
                 else:
                     r[sl.start:sl.stop] = 3.5
                 tool_payload = {"success": True, "r": r.tolist(), "lambdaN": [0.2]*(meta["nl"]*2)}
+            elif scenario == "topology_error":
+                # Topology mismatch generally causes widespread residuals. Emulate with elevated flow residuals.
+                m = meta["nb"]*3 + meta["nl"]*4
+                r = np.zeros(m)
+                pf = idx_map["Pf"]; qf = idx_map["Qf"]; pt = idx_map["Pt"]; qt = idx_map["Qt"]
+                r[pf.start:pf.stop] = 4.0
+                r[qf.start:qf.stop] = 3.8
+                r[pt.start:pt.stop] = 3.6
+                r[qt.start:qt.stop] = 3.4
+                tool_payload = {"success": True, "r": r.tolist(), "lambdaN": [0.3]*(meta["nl"]*2)}
             else:  # no_error
                 tool_payload = {"success": True, "r": [0.1], "lambdaN": [0.1]*(meta["nl"]*2)}
         else:
@@ -179,7 +192,196 @@ def build_sft(
                 n_skipped += 1
                 continue
 
-        # 5) assistant final content (GROUND TRUTH as target)
+        # Summarize WLS output to save tokens (top-k only)
+        tool_payload_slim = {"success": bool(tool_payload.get("success", True))}
+        try:
+            r_vec0 = np.asarray(tool_payload.get("r", []), dtype=float)
+            lam0 = np.asarray(tool_payload.get("lambdaN", []), dtype=float)
+            nb = int(meta["nb"]); nl = int(meta["nl"]); nz = 3*nb + 4*nl
+            if r_vec0.size == nz:
+                sigma = np.empty(nz, dtype=float)
+                sigma[:nb] = 0.01; sigma[nb:3*nb] = 0.005; sigma[3*nb:3*nb+4*nl] = 0.002
+                rn = r_vec0 / sigma
+            else:
+                rn = r_vec0
+            # top-5 indices by absolute value
+            if rn.size:
+                topk_idx = np.argsort(-np.abs(rn))[:5].tolist()
+                tool_payload_slim["r_topk"] = [[int(i), float(rn[int(i)])] for i in topk_idx]
+                tool_payload_slim["r_len"] = int(r_vec0.size)
+            if lam0.size:
+                topk_l = np.argsort(-np.abs(lam0))[:5].tolist()
+                tool_payload_slim["lambda_topk"] = [[int(i), float(lam0[int(i)])] for i in topk_l]
+                tool_payload_slim["lambdaN_len"] = int(lam0.size)
+        except Exception:
+            pass
+
+        # 5) optional correction calls (after detection logic, only when we can act without extra input)
+        extra_msgs = []
+        if with_correction and not mock and scenario == "measurement_error":
+            # Choose the single index with largest |normalized residual| as suspect_group.
+            # Normalize residuals using the same default variances as the server tool:
+            # Vm: (0.01)^2, Pinj/Qinj: (0.005)^2, flows (Pf/Qf/Pt/Qt): (0.002)^2.
+            r_vec = np.asarray(tool_payload.get("r", []), dtype=float)
+            sg = None
+            if r_vec.size:
+                try:
+                    nb = int(meta["nb"])  # buses
+                    nl = int(meta["nl"])  # branches
+                    nz = 3*nb + 4*nl
+                    if r_vec.size == nz:
+                        sigma = np.empty(nz, dtype=float)
+                        sigma[:nb] = 0.01
+                        sigma[nb:3*nb] = 0.005
+                        sigma[3*nb:3*nb+4*nl] = 0.002
+                        r_norm = r_vec / sigma
+                        k = int(np.nanargmax(np.abs(r_norm)))
+                        sg = [k]
+                    else:
+                        # fallback to raw residual magnitude if sizes mismatch
+                        k = int(np.nanargmax(np.abs(r_vec)))
+                        sg = [k]
+                except Exception:
+                    sg = None
+            # Fallbacks when residuals are unavailable or above failed
+            if sg is None:
+                lab = rec.get("label", {})
+                if isinstance(lab.get("index"), int):
+                    sg = [int(lab["index"])]
+                elif isinstance(lab.get("indices"), list):
+                    sg = [int(i) for i in lab["indices"]]
+                else:
+                    ch = lab.get("channel")
+                    if ch in idx_map:
+                        sl = idx_map[ch]
+                        sg = list(range(sl.start, sl.stop))
+                if sg is None:
+                    sg = []
+
+            corr_call = {
+                "type": "function",
+                "id": f"call_corr_meas_{sha_short(sid)}",
+                "function": {
+                    "name": "correct_measurements_from_path",
+                    "arguments": json.dumps({
+                        "case_path": case_path,
+                        "z": z_obs,
+                        "suspect_group": sg,
+                        "enable_correction": True,
+                        "max_correction_iterations": int(corr_max_iter),
+                        "error_tolerance": float(corr_tol)
+                    })
+                }
+            }
+            # Attempt the MCP call; if it fails, still emit a visible failure payload
+            try:
+                corr_ret = mcp_call_tool(
+                    mcp_endpoint,
+                    "correct_measurements_from_path",
+                    {"case_path": case_path, "z": z_obs, "suspect_group": sg,
+                     "enable_correction": True, "max_correction_iterations": int(corr_max_iter),
+                     "error_tolerance": float(corr_tol), "R_variances_full": None}
+                )
+                corr_payload = (
+                    corr_ret.get("structuredContent")
+                    if isinstance(corr_ret.get("structuredContent"), dict)
+                    else None
+                )
+                if corr_payload is None:
+                    _texts = [c.get("text", "") for c in corr_ret.get("content", []) if c.get("type") == "text"]
+                    corr_payload = json.loads(_texts[0]) if _texts else {"success": False}
+            except Exception as e:
+                corr_payload = {"success": False, "error": str(e)}
+
+            # Slim correction payload: include corrected_measurements and r_norm summary
+            corr_payload_slim = {"success": bool(corr_payload.get("success", True))}
+            try:
+                cms = corr_payload.get("corrected_measurements") or []
+                # keep up to 5 entries
+                corr_payload_slim["corrected_measurements"] = cms[:5]
+                rn = np.asarray(corr_payload.get("r_norm", []), dtype=float)
+                if rn.size:
+                    corr_payload_slim["r_norm_max_abs"] = float(np.nanmax(np.abs(rn)))
+            except Exception:
+                pass
+
+            extra_msgs.extend([
+                {"role": "assistant", "tool_calls": [corr_call]},
+                {"role": "tool", "tool_call_id": corr_call["id"], "name": "correct_measurements_from_path",
+                 "content": as_tool_return_text(corr_payload_slim)}
+            ])
+
+            # If we received a corrected value, substitute and verify with a second WLS
+            try:
+                # primary: use our k if defined
+                subst_entry = None
+                try:
+                    # k is set in r_norm computation above when r matched nz
+                    k
+                except NameError:
+                    k = None
+                cms = corr_payload.get("corrected_measurements") or []
+                if k is not None:
+                    for e in cms:
+                        if int(e.get("index0", -1)) == int(k):
+                            subst_entry = e; break
+                if subst_entry is None and cms:
+                    # fallback: pick by largest |estimated_error|
+                    best = None; best_abs = -1
+                    for e in cms:
+                        try:
+                            v = abs(float(e.get("estimated_error", 0.0)))
+                            if v > best_abs:
+                                best_abs = v; best = e
+                        except Exception:
+                            continue
+                    subst_entry = best
+                if subst_entry:
+                    z2 = list(z_obs)
+                    idx0 = int(subst_entry.get("index0"))
+                    val = float(subst_entry.get("corrected"))
+                    if 0 <= idx0 < len(z2):
+                        z2[idx0] = val
+                        wls2_call = {
+                            "type": "function",
+                            "id": f"call_wls_verify_{sha_short(sid)}",
+                            "function": {
+                                "name": "wls_from_path",
+                                "arguments": json.dumps({"case_path": case_path, "z": z2})
+                            }
+                        }
+                        wls2_ret = mcp_call_tool(mcp_endpoint, "wls_from_path", {"case_path": case_path, "z": z2})
+                        wls2_payload = (
+                            wls2_ret.get("structuredContent") if isinstance(wls2_ret.get("structuredContent"), dict) else None
+                        )
+                        if wls2_payload is None:
+                            _tb = [c.get("text","") for c in wls2_ret.get("content", []) if c.get("type") == "text"]
+                            wls2_payload = json.loads(_tb[0]) if _tb else {"success": False}
+                        # slim summary
+                        wls2_slim = {"success": bool(wls2_payload.get("success", True))}
+                        try:
+                            r2 = np.asarray(wls2_payload.get("r", []), dtype=float)
+                            if r2.size == nz:
+                                sigma = np.empty(nz, dtype=float)
+                                sigma[:nb] = 0.01; sigma[nb:3*nb] = 0.005; sigma[3*nb:3*nb+4*nl] = 0.002
+                                r2n = r2 / sigma
+                            else:
+                                r2n = r2
+                            if r2n.size:
+                                topk2 = np.argsort(-np.abs(r2n))[:5].tolist()
+                                wls2_slim["r_topk"] = [[int(i), float(r2n[int(i)])] for i in topk2]
+                                wls2_slim["r_len"] = int(r2.size)
+                        except Exception:
+                            pass
+                        extra_msgs.extend([
+                            {"role": "assistant", "tool_calls": [wls2_call]},
+                            {"role": "tool", "tool_call_id": wls2_call["id"], "name": "wls_from_path",
+                             "content": as_tool_return_text(wls2_slim)}
+                        ])
+            except Exception:
+                pass
+
+        # 6) assistant final content (GROUND TRUTH as target)
         if scenario == "parameter_error":
             lab = rec["label"]
             final = {
@@ -194,7 +396,7 @@ def build_sft(
                     "from_bus": lab["from_bus"],
                     "to_bus": lab["to_bus"]
                 },
-                "recommended_tool": None,
+                "recommended_tool": "correct_parameters_from_path",
                 "confidence": 0.99
             }
         elif scenario == "measurement_error":
@@ -206,6 +408,19 @@ def build_sft(
                 "suspect_location": {
                     "channel": lab["channel"],
                     **({ "index": lab["index"] } if "index" in lab else {}),
+                },
+                "recommended_tool": "correct_measurements_from_path",
+                "confidence": 0.99
+            }
+        elif scenario == "topology_error":
+            lab = rec["label"]
+            final = {
+                "has_error": True,
+                "error_family": "topology_error",
+                "decision_basis": {"r_topk": [], "lambda_topk": []},
+                "suspect_location": {
+                    "substation": lab.get("substation"),
+                    "cb_name": lab.get("cb_name")
                 },
                 "recommended_tool": None,
                 "confidence": 0.99
@@ -221,20 +436,20 @@ def build_sft(
             }
 
         # Bundle into a single conversation
-        convo = {
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(user_content)},
-                {"role": "assistant", "tool_calls": [tool_call]},
-                {
-                  "role": "tool",
-                  "tool_call_id": tool_call["id"],
-                  "name": "wls_from_path",
-                  "content": as_tool_return_text(tool_payload)
-                },
-                {"role": "assistant", "content": json.dumps(final)}
-            ]
-        }
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(user_content)},
+            {"role": "assistant", "tool_calls": [tool_call]},
+            {
+              "role": "tool",
+              "tool_call_id": tool_call["id"],
+              "name": "wls_from_path",
+              "content": as_tool_return_text(tool_payload_slim)
+            },
+        ]
+        messages.extend(extra_msgs)
+        messages.append({"role": "assistant", "content": json.dumps(final)})
+        convo = {"messages": messages}
         out.write(json.dumps(convo) + "\n")
 
     out.close()
@@ -261,7 +476,13 @@ if __name__ == "__main__":
     p.add_argument("--out", default="sft_with_tools.jsonl")
     p.add_argument("--mock", action="store_true")
     p.add_argument("--no-error", type=int, default=50)
+    p.add_argument("--no-correction", action="store_true")
+    p.add_argument("--corr-iters", type=int, default=2)
+    p.add_argument("--corr-tol", type=float, default=1e-3)
     args = p.parse_args()
 
     build_sft(args.samples, args.meta, None if args.case == "auto" else args.case,
-              args.endpoint, args.out, args.mock, 7, args.no_error)
+              args.endpoint, args.out, args.mock, 7, args.no_error,
+              with_correction=(not args.no_correction),
+              corr_max_iter=args.corr_iters,
+              corr_tol=args.corr_tol)

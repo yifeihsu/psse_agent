@@ -5,8 +5,6 @@ import os
 import json
 import tempfile
 import threading
-import subprocess
-from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 from fastmcp import FastMCP
@@ -15,16 +13,17 @@ mcp = FastMCP("MATPOWER Power Flow (FastMCP v2)")
 
 # NOTE ABOUT MATLAB ENGINE (Python 3.13):
 # Importing matlab.engine can crash CPython 3.13 on some setups.
-# To keep the server robust, we avoid importing matlab.engine at module import time
-# and provide a CLI-based fallback for the WLS tool using `matlab -batch`.
+# To keep the server robust, we avoid importing matlab.engine at module import time by
+# lazily importing it inside _get_engine(). The WLS tools use the Python engine.
 
 # ---------- (Optional) MATLAB engine support (disabled by default) ----------
 _ENG = None
 _ENG_LOCK = threading.Lock()
+_MATPOWER_READY = False
+_CONSTANTS_DEFINED = False
 
 def _get_engine(startup_options: str | None = None):  # pragma: no cover
     """Lazy-import and start MATLAB engine if available.
-    Avoid calling this on Python versions where the engine crashes.
     """
     global _ENG
     with _ENG_LOCK:
@@ -36,24 +35,40 @@ def _get_engine(startup_options: str | None = None):  # pragma: no cover
 
 # ---------- MATPOWER path handling (non-invasive) ----------
 def _ensure_matpower_visible(eng) -> None:  # pragma: no cover
-    """Use MATPOWER already on path if present; otherwise try $MATPOWER_PATH; else error."""
+    """Ensure MATLAB sees both user .m files and MATPOWER functions.
+
+    Always add the repo paths first so helpers like LagrangianM_singlephase.m
+    are discoverable even when MATPOWER is already on the path. Then ensure
+    runpf is available (via existing path or $MATPOWER_PATH).
+    """
     global _MATPOWER_READY
     if _MATPOWER_READY:
         return
-    if eng.which("runpf"):  # already visible to this MATLAB process
-        _MATPOWER_READY = True
-        return
-    env = os.environ.get("MATPOWER_PATH")
-    if env:
-        eng.addpath(eng.genpath(env), nargout=0)
-    # Also ensure server dir is on path (user functions)
+
+    # Always add server and repo root (Transmission/*.m) so user functions are visible
     server_dir = os.path.abspath(os.path.dirname(__file__))
-    eng.addpath(eng.genpath(server_dir), nargout=0)
+    repo_root = os.path.abspath(os.path.join(server_dir, os.pardir))
+    try:
+        eng.addpath(eng.genpath(server_dir), nargout=0)
+        eng.addpath(eng.genpath(repo_root), nargout=0)
+    except Exception:
+        pass
+
+    # If MATPOWER not visible yet, try MATPOWER_PATH
+    if not eng.which("runpf"):
+        env = os.environ.get("MATPOWER_PATH")
+        if env:
+            try:
+                eng.addpath(eng.genpath(env), nargout=0)
+            except Exception:
+                pass
+
     if not eng.which("runpf"):
         raise RuntimeError(
             "MATPOWER not found in MATLAB path. Either add it to MATLAB's path, "
             "or set MATPOWER_PATH env var before starting the server."
         )
+
     _MATPOWER_READY = True
 
 
@@ -188,9 +203,284 @@ def _wls_json(eng, case_path: str, z_list: List[float]) -> Dict[str, Any]:  # pr
         S.ea         = full(ea);
         JsonOut = jsonencode(S);
     """, nargout=0)
-    return json.loads(eng.workspace["JsonOut"])
+    return json.loads(eng.workspace["JsonOut"]) 
 
 
+
+# ---------- Measurement Error Correction (LagrangianM_correct) ----------
+def _meas_correction_json(
+    eng,  # matlab.engine.MatlabEngine
+    case_path: str,
+    z_list: List[float],
+    *,
+    suspect_group: List[int] | None = None,
+    enable_correction: bool = True,
+    max_correction_iterations: int = 2,
+    error_tolerance: float = 1e-3,
+    R_variances_full: List[float] | None = None,
+) -> Dict[str, Any]:  # pragma: no cover
+    """
+    Measurement-error correction using Transmission/LagrangianM_correct.m
+
+    Mirrors the WLS+NLM tool flow:
+    - Loads the case via loadcase (no OPF)
+    - Expects full measurement vector ordered as [Vm(nb), Pinj(nb), Qinj(nb), Pf(nl), Qf(nl), Pt(nl), Qt(nl)]
+    - Optionally accepts a suspect group of global indices for grouped correction
+
+    Returns a dict with keys: success, r_norm, resid_raw, lambdaN, and optionally Omega or Omega_shape,
+    plus z_corrected_info (as produced by the MATLAB routine).
+    """
+    _ensure_matpower_visible(eng)
+
+    if not eng.which("LagrangianM_correct"):
+        raise RuntimeError(
+            "LagrangianM_correct.m not found on MATLAB path. "
+            "Ensure Transmission/ is on path or place the file alongside the server."
+        )
+
+    # Put inputs in MATLAB workspace
+    eng.workspace["CasePath"] = case_path
+    import matlab as ml  # type: ignore
+    eng.workspace["Z"] = ml.double([float(x) for x in z_list])
+    if suspect_group:
+        sg = [int(i) for i in suspect_group]
+        if any(i == 0 for i in sg):
+            sg = [i + 1 for i in sg]
+        eng.workspace["SuspectGroup"] = ml.double(sg)
+    else:
+        eng.workspace["SuspectGroup"] = ml.double([])
+    eng.workspace["EnableCorr"] = float(1 if enable_correction else 0)
+    eng.workspace["MaxCorrIter"] = float(max_correction_iterations)
+    eng.workspace["ErrTol"] = float(error_tolerance)
+
+    # Load case, check dimensions, build defaults, call MATLAB function
+    eng.eval(r"""
+        mpc = loadcase(CasePath);
+        bus_data = mpc.bus;
+        nb = size(mpc.bus, 1); nl = size(mpc.branch, 1);
+        nz = 3*nb + 4*nl;
+        if numel(Z) ~= nz
+            error('Correction input error: |z|=%d, expected %d (=3*nb + 4*nl).', numel(Z), nz);
+        end
+    """, nargout=0)
+
+    # Provide R variances
+    if R_variances_full is None:
+        eng.eval(r"""
+            R_variances_full = zeros(nz, 1);
+            R_variances_full(1:nb) = (0.001)^2;              % Vm
+            R_variances_full(nb+1:3*nb) = (0.01)^2;        % P/Q inj
+            R_variances_full(3*nb+1:3*nb+4*nl) = (0.01)^2; % Pf/Qf/Pt/Qt
+        """, nargout=0)
+    else:
+        eng.workspace["R_variances_full_py"] = ml.double([float(x) for x in R_variances_full])
+        eng.eval(r"""
+            if numel(R_variances_full_py) ~= nz
+                error('R_variances length=%d mismatch expected %d', numel(R_variances_full_py), nz);
+            end
+            R_variances_full = R_variances_full_py(:);
+        """, nargout=0)
+
+    eng.eval(r"""
+        [lambdaN, success_final, r_norm, Omega, final_resid_raw, z_corrected_info] = ...
+            LagrangianM_correct(Z(:), mpc, 0, bus_data, struct( ...
+                'enable_group_correction', (EnableCorr ~= 0), ...
+                'correction_group_full_indices', SuspectGroup(:)', ...
+                'max_correction_iterations', MaxCorrIter, ...
+                'correction_error_tolerance', ErrTol), ...
+                R_variances_full(:));
+
+        S = struct();
+        S.success = logical(success_final);
+        S.lambdaN = full(lambdaN(:)');
+        S.r_norm = full(r_norm(:)');
+        S.resid_raw = full(final_resid_raw(:)');
+        if numel(Omega) <= 4000
+            S.Omega = full(Omega);
+        else
+            S.Omega_shape = size(Omega);
+        end
+        try
+            S.z_corrected_info = z_corrected_info;
+        catch
+            S.z_corrected_info = struct();
+        end
+        JsonOut = jsonencode(S);
+    """, nargout=0)
+
+    # Post-process JSON to add a flattened, normalized summary of corrected measurements
+    obj = json.loads(eng.workspace["JsonOut"])  # type: ignore
+    def _flatten(x):
+        if isinstance(x, list):
+            out = []
+            for v in x:
+                out.extend(_flatten(v))
+            return out
+        return [x] if x is not None else []
+    zci = obj.get("z_corrected_info") or {}
+    idxs = _flatten(zci.get("last_corrected_global_indices") or [])
+    orig_vals = _flatten(zci.get("last_original_values") or [])
+    corr_vals = _flatten(zci.get("last_corrected_values") or [])
+    err_vals = _flatten(zci.get("last_estimated_errors") or [])
+    corrected = []
+    n = min(len(idxs), len(corr_vals))
+    for j in range(n):
+        try:
+            idx1 = int(round(float(idxs[j])))
+            idx0 = idx1 - 1
+        except Exception:
+            continue
+        rec = {
+            "index1": idx1,
+            "index0": idx0,
+            "corrected": float(corr_vals[j]) if j < len(corr_vals) else None,
+            "original": float(orig_vals[j]) if j < len(orig_vals) else None,
+            "estimated_error": float(err_vals[j]) if j < len(err_vals) else None,
+        }
+        corrected.append(rec)
+    obj["corrected_measurements"] = corrected
+    if isinstance(zci, dict):
+        obj["applied_any_correction"] = bool(zci.get("applied_any_correction", False))
+        obj["iterations_performed"] = int(zci.get("iterations_performed", 0))
+    return obj
+
+
+# ---------- Parameter Error Correction (multi-scan) ----------
+def _param_correction_json(
+    eng,
+    case_path: str,
+    line_index: int,
+    z_scans: List[List[float]],
+    initial_states: List[List[float]],
+    R_variances_full: List[float] | None = None,
+) -> Dict[str, Any]:  # pragma: no cover
+    """
+    Correct a single line's parameters [R, X] using multiple measurement snapshots.
+
+    Mirrors existing tool patterns:
+    - Loads the case via loadcase (expects the case already contains the erroneous R/X).
+    - Expects multiple measurement scans, each a full-length vector ordered as
+      [Vm(nb), Pinj(nb), Qinj(nb), Pf(nl), Qf(nl), Pt(nl), Qt(nl)].
+    - Initial states per scan are provided as [V(1..nb); angle_deg(1..nb)] for each scan.
+
+    Inputs
+    - case_path: MATPOWER case name/path (e.g., 'case14').
+    - line_index: Branch row index of the line to correct (0- or 1-based is accepted; 0 => +1).
+    - z_scans: Measurement snapshots. Shape can be either
+        (s x nz) => s scans of length nz, or (nz x s) => already column-stacked. We normalize to (nz x s).
+    - initial_states: Initial [V; angle_deg] per scan. Shape can be
+        (s x 2*nb) or (2*nb x s). We normalize to (2*nb x s).
+    - R_variances_full (optional): Full-length measurement variances; if omitted, defaults are used.
+
+    Returns
+    - success: boolean convergence flag from correct_parameter_group_multi_scan
+    - corrected_params: [R_est, X_est]
+    - meta: {line_index, from_bus, to_bus, nb, nl, scans}
+    """
+    _ensure_matpower_visible(eng)
+
+    # Verify MATLAB routine availability
+    if not eng.which("correct_parameter_group_multi_scan"):
+        raise RuntimeError(
+            "correct_parameter_group_multi_scan.m not found on MATLAB path. "
+            "Ensure Transmission/ is on path or place the file alongside the server."
+        )
+
+    # Load case, determine sizes
+    eng.workspace["CasePath"] = case_path
+    _ensure_constants(eng)
+    eng.eval(r"""
+        mpc = loadcase(CasePath);
+        nb = size(mpc.bus, 1); nl = size(mpc.branch, 1);
+        nz = 3*nb + 4*nl;
+        baseMVA = mpc.baseMVA;
+        F_BUS = 1; T_BUS = 2;  % define_constants would do this as well
+    """, nargout=0)
+
+    # Fetch sizes to condition Python-side shaping logic
+    nb = int(eng.eval("nb"))  # type: ignore
+    nl = int(eng.eval("nl"))  # type: ignore
+    nz = int(eng.eval("nz"))  # type: ignore
+
+    # Normalize line index to 1-based for MATLAB
+    line_idx = int(line_index)
+    if line_idx == 0:
+        line_idx = 1
+    if line_idx < 1:
+        raise ValueError("line_index must be >= 1 (or 0 to indicate first line)")
+    if line_idx > nl:
+        raise ValueError(f"line_index={line_idx} exceeds number of branches nl={nl}")
+
+    # Normalize z_scans to shape (nz x s)
+    if not z_scans or not isinstance(z_scans[0], (list, tuple)):
+        raise ValueError("z_scans must be a 2D list: scans x nz or nz x scans")
+    s_dim0 = len(z_scans)
+    s_dim1 = len(z_scans[0])
+    if s_dim0 == nz:
+        # already (nz x s)
+        z_mat_rows = z_scans
+        s = s_dim1
+    elif s_dim1 == nz:
+        # (s x nz) -> transpose to (nz x s)
+        s = s_dim0
+        z_mat_rows = [[float(z_scans[row][col]) for row in range(s)] for col in range(nz)]
+    else:
+        raise ValueError(f"z_scans shape not compatible with nz={nz} (got {s_dim0}x{s_dim1})")
+
+    # Normalize initial_states to shape (2*nb x s)
+    if not initial_states or not isinstance(initial_states[0], (list, tuple)):
+        raise ValueError("initial_states must be a 2D list: scans x 2*nb or 2*nb x scans")
+    ist_dim0 = len(initial_states)
+    ist_dim1 = len(initial_states[0])
+    two_nb = 2 * nb
+    if ist_dim0 == two_nb:
+        ist_rows = initial_states
+        s_states = ist_dim1
+    elif ist_dim1 == two_nb:
+        s_states = ist_dim0
+        ist_rows = [[float(initial_states[row][col]) for row in range(s_states)] for col in range(two_nb)]
+    else:
+        raise ValueError(f"initial_states shape not compatible with 2*nb={two_nb} (got {ist_dim0}x{ist_dim1})")
+    if s_states != s:
+        raise ValueError(f"number of scans mismatch between z_scans (s={s}) and initial_states (s={s_states})")
+
+    # Provide variables to MATLAB workspace
+    import matlab as ml  # type: ignore
+    eng.workspace["LineIdx"] = float(line_idx)
+    eng.workspace["ZScans"] = ml.double(z_mat_rows)  # rows=nz, cols=s
+    eng.workspace["InitStates"] = ml.double(ist_rows)  # rows=2*nb, cols=s
+
+    # Provide variances vector
+    if R_variances_full is None:
+        eng.eval(r"""
+            R_variances_full = zeros(nz, 1);
+            R_variances_full(1:nb) = (0.01)^2;              % Vm
+            R_variances_full(nb+1:3*nb) = (0.005)^2;        % P/Q inj
+            R_variances_full(3*nb+1:3*nb+4*nl) = (0.002)^2; % Pf/Qf/Pt/Qt
+        """, nargout=0)
+    else:
+        if len(R_variances_full) != nz:
+            raise ValueError(f"R_variances_full length {len(R_variances_full)} != expected nz {nz}")
+        eng.workspace["RVariances"] = ml.double([float(x) for x in R_variances_full])
+        eng.eval("R_variances_full = RVariances(:);", nargout=0)
+
+    # Invoke the MATLAB routine and package results
+    eng.eval(r"""
+        % Extract branch info for metadata
+        from_bus = mpc.branch(LineIdx, 1); to_bus = mpc.branch(LineIdx, 2);
+
+        [corrected_params_group, success_correction] = correct_parameter_group_multi_scan( ...
+            mpc, LineIdx, ZScans, InitStates, R_variances_full, baseMVA);
+
+        S = struct();
+        S.success = logical(success_correction);
+        S.corrected_params = full(corrected_params_group(:)'); % [R_est, X_est]
+        S.meta = struct('line_index', LineIdx, 'from_bus', from_bus, 'to_bus', to_bus, ...
+                        'nb', nb, 'nl', nl, 'scans', size(ZScans,2));
+        JsonOut = jsonencode(S);
+    """, nargout=0)
+
+    return json.loads(eng.workspace["JsonOut"])  # type: ignore
 
 # ---------- Minimal tools  ----------
 @mcp.tool(name="run_pf_from_path")
@@ -243,90 +533,191 @@ def run_opf_from_text(*, case_name: str, case_text: str) -> Dict[str, Any]:  # p
     path = _write_case_text(case_text, case_name)
     return _opf_json(eng, path)
 
-# ---------- Tools: WLS ----------
-def _wls_cli_json(case_path: str, z_list: List[float]) -> Dict[str, Any]:
-    """Run WLS via MATLAB CLI using wls_cli_main.m
 
-    Writes input JSON to a temp file, calls MATLAB with -batch to run wls_cli_main,
-    and parses the output JSON.
+# ---------- Tools: Measurement Error Correction ----------
+@mcp.tool(name="correct_measurements_from_path")
+def correct_measurements_from_path(
+    *,
+    case_path: str,
+    z: List[float],
+    suspect_group: List[int] | None = None,
+    enable_correction: bool = True,
+    max_correction_iterations: int = 2,
+    error_tolerance: float = 1e-3,
+    R_variances_full: List[float] | None = None,
+) -> Dict[str, Any]:
     """
-    # Prepare IO files
-    tmpdir = Path(tempfile.mkdtemp(prefix="wls_cli_"))
-    in_path = tmpdir / "in.json"
-    out_path = tmpdir / "out.json"
+    Grouped measurement-error correction using Transmission/LagrangianM_correct.m.
 
-    with in_path.open("w", encoding="utf-8") as f:
-        json.dump({"case_path": case_path, "z": [float(x) for x in z_list]}, f)
+    Behavior
+    - Mirrors WLS+NLM tool semantics: loads the case via loadcase, checks vector length,
+      and invokes the MATLAB routine. Accepts optional suspect group indices
+      (0-based or 1-based) and basic correction parameters.
 
-    # Compose MATLAB batch command
-    server_dir = Path(__file__).parent.resolve()
-    # Use forward slashes for MATLAB and escape quotes
-    sd = str(server_dir).replace("\\", "/")
-    ip = str(in_path).replace("\\", "/")
-    op = str(out_path).replace("\\", "/")
-    batch_cmd = (
-        f"try, addpath(genpath('{sd}')); wls_cli_main('{ip}','{op}'); catch e, disp(getReport(e,'extended')); exit(1); end"
+    Inputs
+    - case_path: MATPOWER case name/path (e.g., 'case14').
+    - z: Full measurement vector ordered as [Vm(nb), Pinj(nb), Qinj(nb), Pf(nl), Qf(nl), Pt(nl), Qt(nl)].
+    - suspect_group (optional): list of global indices indicating the group to correct.
+    - enable_correction (default True), max_correction_iterations (default 2), error_tolerance (default 1e-3).
+    - R_variances_full (optional): full variance vector; defaults applied if omitted.
+
+    Returns
+    - success: boolean
+    - r_norm: normalized residuals (kept ordering)
+    - resid_raw: raw residuals
+    - lambdaN: normalized multipliers
+    - Omega or Omega_shape: KKT/Gain information (omitted if too large)
+    - z_corrected_info: diagnostic struct with correction details
+    """
+    try:
+        eng = _get_engine()
+        return _meas_correction_json(
+            eng,
+            case_path,
+            z,
+            suspect_group=suspect_group,
+            enable_correction=enable_correction,
+            max_correction_iterations=max_correction_iterations,
+            error_tolerance=error_tolerance,
+            R_variances_full=R_variances_full,
+        )
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool(name="correct_measurements_from_text")
+def correct_measurements_from_text(
+    *,
+    case_name: str,
+    case_text: str,
+    z: List[float],
+    suspect_group: List[int] | None = None,
+    enable_correction: bool = True,
+    max_correction_iterations: int = 2,
+    error_tolerance: float = 1e-3,
+    R_variances_full: List[float] | None = None,
+) -> Dict[str, Any]:
+    """
+    Same as correct_measurements_from_path, but accepts inline case.m text.
+    'case_name' must match the function name inside the .m.
+    """
+    path = _write_case_text(case_text, case_name)
+    return correct_measurements_from_path(
+        case_path=str(path),
+        z=z,
+        suspect_group=suspect_group,
+        enable_correction=enable_correction,
+        max_correction_iterations=max_correction_iterations,
+        error_tolerance=error_tolerance,
+        R_variances_full=R_variances_full,
     )
 
-    # Launch MATLAB in batch mode
-    env = os.environ.copy()
-    try:
-        proc = subprocess.run(
-            ["matlab", "-batch", batch_cmd],
-            cwd=str(server_dir),
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
-    except FileNotFoundError:
-        return {"success": False, "error": "MATLAB executable not found in PATH"}
-    except subprocess.TimeoutExpired:
-        return {"success": False, "error": "MATLAB batch run timed out"}
 
-    if proc.returncode != 0:
-        return {
-            "success": False,
-            "error": "MATLAB returned non-zero exit code",
-            "stderr": proc.stderr[-2000:],
-            "stdout": proc.stdout[-2000:],
-        }
+# ---------- Tools: Parameter Error Correction (multi-scan) ----------
+@mcp.tool(name="correct_parameters_from_path")
+def correct_parameters_from_path(
+    *,
+    case_path: str,
+    line_index: int,
+    z_scans: List[List[float]],
+    initial_states: List[List[float]],
+    R_variances_full: List[float] | None = None,
+) -> Dict[str, Any]:
+    """
+    Correct a single line's parameters [R, X] using multiple measurement snapshots (multi-scan ASE).
 
-    # Read output JSON
-    if not out_path.exists():
-        return {
-            "success": False,
-            "error": "Output JSON not produced by MATLAB",
-            "stdout": proc.stdout[-2000:],
-        }
-    try:
-        with out_path.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        return {"success": False, "error": f"Failed to parse output JSON: {e}"}
+    Behavior
+    - Follows existing tool conventions: loads the case via loadcase and calls
+      Transmission/correct_parameter_group_multi_scan.m.
+    - Assumes the case already contains the erroneous parameters; this tool estimates corrected [R, X]
+      for branch row `line_index` using multiple measurement snapshots.
 
+    Inputs
+    - case_path: MATPOWER case name/path (e.g., 'case14').
+    - line_index: Branch row index (0- or 1-based accepted; 0 => +1).
+    - z_scans: Measurement snapshots. Each scan is a full vector ordered as
+      [Vm(nb), Pinj(nb), Qinj(nb), Pf(nl), Qf(nl), Pt(nl), Qt(nl)]. Provide either
+      shape (s x nz) [preferred] or (nz x s) — the tool normalizes to (nz x s).
+    - initial_states: Initial states per scan as [V(1..nb); angle_deg(1..nb)] for each scan.
+      Provide either shape (s x 2*nb) [preferred] or (2*nb x s) — normalized internally.
+    - R_variances_full (optional): Full variances (length nz); defaults will be applied if omitted.
+
+    Returns
+    - success: boolean
+    - corrected_params: [R_est, X_est]
+    - meta: {line_index, from_bus, to_bus, nb, nl, scans}
+
+    Notes
+    - The calling agent should request measurement snapshots from the user after detecting a parameter error;
+      this tool does not synthesize scans.
+    """
+    eng = _get_engine()
+    return _param_correction_json(
+        eng,
+        case_path,
+        line_index,
+        z_scans,
+        initial_states,
+        R_variances_full,
+    )
+
+
+@mcp.tool(name="correct_parameters_from_text")
+def correct_parameters_from_text(
+    *,
+    case_name: str,
+    case_text: str,
+    line_index: int,
+    z_scans: List[List[float]],
+    initial_states: List[List[float]],
+    R_variances_full: List[float] | None = None,
+) -> Dict[str, Any]:
+    """
+    Same as correct_parameters_from_path, but accepts inline case.m text.
+    'case_name' must match the function name inside the .m.
+    """
+    eng = _get_engine()
+    path = _write_case_text(case_text, case_name)
+    return _param_correction_json(
+        eng,
+        path,
+        line_index,
+        z_scans,
+        initial_states,
+        R_variances_full,
+    )
 
 @mcp.tool(name="wls_from_path")
 def wls_from_path(*, case_path: str, z: List[float]) -> Dict[str, Any]:
     """
-    WLS state estimation + bad-data post-processing using LagrangianM_singlephase.
-    Uses MATLAB CLI fallback for robustness across Python versions.
+    Weighted least-squares state estimation with normalized Lagrange multipliers (WLS+NLM).
 
-    Args:
-      case_path : path or case name for mpc
-      z         : measurement vector in the expected order (see notes)
+    Behavior
+    - Loads the MATPOWER case (name/path) and runs the MATLAB routine LagrangianM_singlephase via matlab.engine.
+    - Expects a full measurement vector ordered as [Vm(nb), Pinj(nb), Qinj(nb), Pf(nl), Qf(nl), Pt(nl), Qt(nl)].
+
+    Inputs
+    - case_path: Path or case name resolvable by MATLAB (e.g., 'case14').
+    - z: Full measurement vector length 3*nb + 4*nl.
+
+    Returns
+    - success: boolean
+    - r: normalized residual vector (same ordering as inputs)
+    - lambdaN: normalized multipliers (typically length 2*nl)
+    - lambda_vec, ea: additional diagnostic arrays
     """
-    # Prefer CLI approach to avoid matlab.engine import issues on Python 3.13+
-    return _wls_cli_json(case_path, z)
+    eng = _get_engine()
+    return _wls_json(eng, case_path, z)
 
 @mcp.tool(name="wls_from_text")
 def wls_from_text(*, case_name: str, case_text: str, z: List[float]) -> Dict[str, Any]:
     """
-    Same as wls_from_path, but loads case from raw .m text ('case_name' must match function name).
-    Uses MATLAB CLI fallback.
+    Same as wls_from_path, but accepts inline case.m contents.
+    'case_name' must match the function name inside the .m file.
     """
+    eng = _get_engine()
     path = _write_case_text(case_text, case_name)
-    return _wls_cli_json(path, z)
+    return _wls_json(eng, path, z)
 
 if __name__ == "__main__":
     # Bind to a stable HTTP port so clients (build_sft_traces.py) can call reliably
