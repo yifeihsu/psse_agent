@@ -166,7 +166,6 @@ $RECYCLE.BIN/
 .vscode/
 
 # Project specific
-data/
 outputs/
 unsloth_compiled_cache/
 _unsloth_sentencepiece_temp/

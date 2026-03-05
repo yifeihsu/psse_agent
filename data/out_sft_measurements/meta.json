@@ -1,0 +1,159 @@
+{
+  "case": "case14",
+  "baseMVA": 100.0,
+  "nb": 14,
+  "nl": 20,
+  "index_map": {
+    "Vm": [
+      0,
+      14
+    ],
+    "Pinj": [
+      14,
+      28
+    ],
+    "Qinj": [
+      28,
+      42
+    ],
+    "Pf": [
+      42,
+      62
+    ],
+    "Qf": [
+      62,
+      82
+    ],
+    "Pt": [
+      82,
+      102
+    ],
+    "Qt": [
+      102,
+      122
+    ]
+  },
+  "branch_info": [
+    {
+      "i": 0,
+      "from_bus": 1,
+      "to_bus": 2,
+      "is_line": true
+    },
+    {
+      "i": 1,
+      "from_bus": 1,
+      "to_bus": 5,
+      "is_line": true
+    },
+    {
+      "i": 2,
+      "from_bus": 2,
+      "to_bus": 3,
+      "is_line": true
+    },
+    {
+      "i": 3,
+      "from_bus": 2,
+      "to_bus": 4,
+      "is_line": true
+    },
+    {
+      "i": 4,
+      "from_bus": 2,
+      "to_bus": 5,
+      "is_line": true
+    },
+    {
+      "i": 5,
+      "from_bus": 3,
+      "to_bus": 4,
+      "is_line": true
+    },
+    {
+      "i": 6,
+      "from_bus": 4,
+      "to_bus": 5,
+      "is_line": true
+    },
+    {
+      "i": 7,
+      "from_bus": 4,
+      "to_bus": 7,
+      "is_line": false
+    },
+    {
+      "i": 8,
+      "from_bus": 4,
+      "to_bus": 9,
+      "is_line": false
+    },
+    {
+      "i": 9,
+      "from_bus": 5,
+      "to_bus": 6,
+      "is_line": false
+    },
+    {
+      "i": 10,
+      "from_bus": 6,
+      "to_bus": 11,
+      "is_line": true
+    },
+    {
+      "i": 11,
+      "from_bus": 6,
+      "to_bus": 12,
+      "is_line": true
+    },
+    {
+      "i": 12,
+      "from_bus": 6,
+      "to_bus": 13,
+      "is_line": true
+    },
+    {
+      "i": 13,
+      "from_bus": 7,
+      "to_bus": 8,
+      "is_line": true
+    },
+    {
+      "i": 14,
+      "from_bus": 7,
+      "to_bus": 9,
+      "is_line": true
+    },
+    {
+      "i": 15,
+      "from_bus": 9,
+      "to_bus": 10,
+      "is_line": true
+    },
+    {
+      "i": 16,
+      "from_bus": 9,
+      "to_bus": 14,
+      "is_line": true
+    },
+    {
+      "i": 17,
+      "from_bus": 10,
+      "to_bus": 11,
+      "is_line": true
+    },
+    {
+      "i": 18,
+      "from_bus": 12,
+      "to_bus": 13,
+      "is_line": true
+    },
+    {
+      "i": 19,
+      "from_bus": 13,
+      "to_bus": 14,
+      "is_line": true
+    }
+  ],
+  "note": "Flows (Pf/Qf/Pt/Qt) follow PYPOWER branch order."
+}
