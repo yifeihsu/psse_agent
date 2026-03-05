@@ -1,0 +1,9 @@
+\frametitle{Build the SFT File}
+\begin{verbatim}
+python Transmission/build_sft_traces.py \
+  --samples out_sft_measurements/samples.jsonl \
+  --meta out_sft_measurements/meta.json \
+  --endpoint http://127.0.0.1:3929/tools \
+  --out sft_with_tools.jsonl
+\end{verbatim}
+  Outputs: \texttt{sft\_with\_tools.jsonl}, \texttt{split\_train/valid/test.jsonl}

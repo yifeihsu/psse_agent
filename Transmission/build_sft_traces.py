@@ -112,13 +112,15 @@ def build_sft(
         # 1) system prompt: agent contract + output schema
         system_prompt = (
             "You are a power-system diagnostic agent. "
-            "You have MCP tools: `wls_from_path` (state estimation with bad-data indicators).\n"
+            "You have MCP tools: `wls_from_path` (state estimation with bad-data indicators) and `run_hse_from_path` (harmonic state estimation).\n"
             "Procedure: (1) call `wls_from_path` on the provided snapshot; (2) inspect residuals `r` and normalized Lagrange multipliers `lambdaN`; "
+            "If the global residual J is significantly elevated without a clear single bad measurement, suspect harmonics and call `run_hse_from_path` with the available harmonic measurements.\n"
             "(3) produce a STRICT JSON decision with keys: "
-            "{has_error:boolean, error_family:'measurement_error'|'parameter_error'|'topology_error'|'no_error', "
+            "{has_error:boolean, error_family:'measurement_error'|'parameter_error'|'topology_error'|'three_phase_imbalance'|'harmonic_anomaly'|'no_error', "
             "decision_basis:{r_topk:number[], lambda_topk:number[]}, "
             "suspect_location:{...}, "
             "recommended_tool:null, confidence:number}.\n"
+            "If three-phase imbalance is suspected, request 3ϕ substation voltage measurements before finalizing.\n"
             "Never include chain-of-thought, only the final JSON."
         )
 
@@ -129,6 +131,12 @@ def build_sft(
             "meta_hint": {"nb": meta["nb"], "nl": meta["nl"]},
             "note": "Run WLS (wls_from_path) and decide."
         }
+        if scenario == "three_phase_imbalance":
+            user_content["note"] = (
+                "This snapshot is a 1ϕ-equivalent operator z vector (phase-A Vm + 3ϕ totals). "
+                "If imbalance is suspected, request 3ϕ VLN voltage measurements from substations."
+            )
+            user_content["has_three_phase_voltage_measurements"] = True
 
         # 3) assistant -> tool call
         tool_call = {
@@ -170,6 +178,29 @@ def build_sft(
                 r[pt.start:pt.stop] = 3.6
                 r[qt.start:qt.stop] = 3.4
                 tool_payload = {"success": True, "r": r.tolist(), "lambdaN": [0.3]*(meta["nl"]*2)}
+            elif scenario == "three_phase_imbalance":
+                # Emulate widespread flow residuals (model mismatch) with moderate voltage/injection residuals.
+                m = meta["nb"] * 3 + meta["nl"] * 4
+                r = np.zeros(m)
+                pf = idx_map["Pf"]; qf = idx_map["Qf"]; pt = idx_map["Pt"]; qt = idx_map["Qt"]
+                vm = idx_map["Vm"]; pinj = idx_map["Pinj"]; qinj = idx_map["Qinj"]
+                r[vm.start:vm.stop] = 2.5
+                r[pinj.start:pinj.stop] = 2.0
+                r[qinj.start:qinj.stop] = 2.0
+                r[pf.start:pf.stop] = 4.2
+                r[qf.start:qf.stop] = 4.0
+                r[pt.start:pt.stop] = 3.8
+                r[qt.start:qt.stop] = 3.6
+                tool_payload = {"success": True, "r": r.tolist(), "lambdaN": [0.2] * (meta["nl"] * 2)}
+            elif scenario == "harmonic_anomaly":
+                # Elevated global residual (J), but no single massive spike > 6
+                m = meta["nb"] * 3 + meta["nl"] * 4
+                r = np.random.normal(0, 0.5, m)
+                vm = idx_map["Vm"]
+                r[vm.start:vm.stop] = np.random.normal(1.5, 0.5, vm.stop - vm.start) # moderate voltage stress
+                # Make J roughly 150-300
+                r *= (200.0 / np.sum(r**2))**0.5
+                tool_payload = {"success": True, "r": r.tolist(), "lambdaN": [0.1] * (meta["nl"] * 2)}
             else:  # no_error
                 tool_payload = {"success": True, "r": [0.1], "lambdaN": [0.1]*(meta["nl"]*2)}
         else:
@@ -192,55 +223,42 @@ def build_sft(
                 n_skipped += 1
                 continue
 
-        # Summarize WLS output to save tokens (top-k only)
-        tool_payload_slim = {"success": bool(tool_payload.get("success", True))}
-        try:
-            r_vec0 = np.asarray(tool_payload.get("r", []), dtype=float)
-            lam0 = np.asarray(tool_payload.get("lambdaN", []), dtype=float)
-            nb = int(meta["nb"]); nl = int(meta["nl"]); nz = 3*nb + 4*nl
-            if r_vec0.size == nz:
-                sigma = np.empty(nz, dtype=float)
-                sigma[:nb] = 0.01; sigma[nb:3*nb] = 0.005; sigma[3*nb:3*nb+4*nl] = 0.002
-                rn = r_vec0 / sigma
-            else:
-                rn = r_vec0
-            # top-5 indices by absolute value
-            if rn.size:
-                topk_idx = np.argsort(-np.abs(rn))[:5].tolist()
-                tool_payload_slim["r_topk"] = [[int(i), float(rn[int(i)])] for i in topk_idx]
-                tool_payload_slim["r_len"] = int(r_vec0.size)
-            if lam0.size:
-                topk_l = np.argsort(-np.abs(lam0))[:5].tolist()
-                tool_payload_slim["lambda_topk"] = [[int(i), float(lam0[int(i)])] for i in topk_l]
-                tool_payload_slim["lambdaN_len"] = int(lam0.size)
-        except Exception:
-            pass
-
         # 5) optional correction calls (after detection logic, only when we can act without extra input)
         extra_msgs = []
+        if scenario == "three_phase_imbalance":
+            # In this workflow, the operator requests 3ϕ voltage measurements from substations.
+            three_phase = rec.get("three_phase_voltages")
+            if isinstance(three_phase, list) and three_phase:
+                extra_msgs.extend(
+                    [
+                        {
+                            "role": "assistant",
+                            "content": (
+                                "The residual pattern is consistent with a possible three-phase imbalance. "
+                                "Please provide three-phase (A/B/C) substation voltage measurements (VLN magnitude/angle per bus) "
+                                "so I can proceed with three-phase state estimation / imbalance assessment."
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": json.dumps(
+                                {
+                                    "three_phase_voltages": three_phase,
+                                    "note": "Per-bus 3ϕ VLN voltage measurements (pu) from substations.",
+                                }
+                            ),
+                        },
+                    ]
+                )
         if with_correction and not mock and scenario == "measurement_error":
             # Choose the single index with largest |normalized residual| as suspect_group.
-            # Normalize residuals using the same default variances as the server tool:
-            # Vm: (0.01)^2, Pinj/Qinj: (0.005)^2, flows (Pf/Qf/Pt/Qt): (0.002)^2.
+            # Note: wls_from_path returns normalized residuals already (field 'r').
             r_vec = np.asarray(tool_payload.get("r", []), dtype=float)
             sg = None
             if r_vec.size:
                 try:
-                    nb = int(meta["nb"])  # buses
-                    nl = int(meta["nl"])  # branches
-                    nz = 3*nb + 4*nl
-                    if r_vec.size == nz:
-                        sigma = np.empty(nz, dtype=float)
-                        sigma[:nb] = 0.01
-                        sigma[nb:3*nb] = 0.005
-                        sigma[3*nb:3*nb+4*nl] = 0.002
-                        r_norm = r_vec / sigma
-                        k = int(np.nanargmax(np.abs(r_norm)))
-                        sg = [k]
-                    else:
-                        # fallback to raw residual magnitude if sizes mismatch
-                        k = int(np.nanargmax(np.abs(r_vec)))
-                        sg = [k]
+                    k = int(np.nanargmax(np.abs(r_vec)))
+                    sg = [k]
                 except Exception:
                     sg = None
             # Fallbacks when residuals are unavailable or above failed
@@ -292,34 +310,17 @@ def build_sft(
                     corr_payload = json.loads(_texts[0]) if _texts else {"success": False}
             except Exception as e:
                 corr_payload = {"success": False, "error": str(e)}
-
-            # Slim correction payload: include corrected_measurements and r_norm summary
-            corr_payload_slim = {"success": bool(corr_payload.get("success", True))}
-            try:
-                cms = corr_payload.get("corrected_measurements") or []
-                # keep up to 5 entries
-                corr_payload_slim["corrected_measurements"] = cms[:5]
-                rn = np.asarray(corr_payload.get("r_norm", []), dtype=float)
-                if rn.size:
-                    corr_payload_slim["r_norm_max_abs"] = float(np.nanmax(np.abs(rn)))
-            except Exception:
-                pass
-
             extra_msgs.extend([
                 {"role": "assistant", "tool_calls": [corr_call]},
                 {"role": "tool", "tool_call_id": corr_call["id"], "name": "correct_measurements_from_path",
-                 "content": as_tool_return_text(corr_payload_slim)}
+                 "content": as_tool_return_text(corr_payload)}
             ])
 
             # If we received a corrected value, substitute and verify with a second WLS
             try:
                 # primary: use our k if defined
                 subst_entry = None
-                try:
-                    # k is set in r_norm computation above when r matched nz
-                    k
-                except NameError:
-                    k = None
+                # k is set above
                 cms = corr_payload.get("corrected_measurements") or []
                 if k is not None:
                     for e in cms:
@@ -357,29 +358,193 @@ def build_sft(
                         if wls2_payload is None:
                             _tb = [c.get("text","") for c in wls2_ret.get("content", []) if c.get("type") == "text"]
                             wls2_payload = json.loads(_tb[0]) if _tb else {"success": False}
-                        # slim summary
-                        wls2_slim = {"success": bool(wls2_payload.get("success", True))}
-                        try:
-                            r2 = np.asarray(wls2_payload.get("r", []), dtype=float)
-                            if r2.size == nz:
-                                sigma = np.empty(nz, dtype=float)
-                                sigma[:nb] = 0.01; sigma[nb:3*nb] = 0.005; sigma[3*nb:3*nb+4*nl] = 0.002
-                                r2n = r2 / sigma
-                            else:
-                                r2n = r2
-                            if r2n.size:
-                                topk2 = np.argsort(-np.abs(r2n))[:5].tolist()
-                                wls2_slim["r_topk"] = [[int(i), float(r2n[int(i)])] for i in topk2]
-                                wls2_slim["r_len"] = int(r2.size)
-                        except Exception:
-                            pass
+                        # emit full payload (including ea)
                         extra_msgs.extend([
                             {"role": "assistant", "tool_calls": [wls2_call]},
                             {"role": "tool", "tool_call_id": wls2_call["id"], "name": "wls_from_path",
-                             "content": as_tool_return_text(wls2_slim)}
+                             "content": as_tool_return_text(wls2_payload)}
                         ])
             except Exception:
                 pass
+        elif with_correction and not mock and scenario == "parameter_error":
+            # Use multi-scan data (if available) to call parameter correction tool
+            lab = rec.get("label", {})
+            line_row = int(lab.get("line_row", -1))
+            z_scans = rec.get("z_scans")
+            init_states = rec.get("initial_states")
+            if line_row >= 0 and isinstance(z_scans, list) and isinstance(init_states, list):
+                # prefer 1-based line index for MATLAB; tool accepts 0/1-based
+                line_index = line_row + 1
+                param_call = {
+                    "type": "function",
+                    "id": f"call_corr_param_{sha_short(sid)}",
+                    "function": {
+                        "name": "correct_parameters_from_path",
+                        "arguments": json.dumps({
+                            "case_path": case_path,
+                            "line_index": line_index,
+                            "z_scans": z_scans,
+                            "initial_states": init_states,
+                            "R_variances_full": None
+                        })
+                    }
+                }
+                try:
+                    param_ret = mcp_call_tool(
+                        mcp_endpoint,
+                        "correct_parameters_from_path",
+                        {
+                            "case_path": case_path,
+                            "line_index": line_index,
+                            "z_scans": z_scans,
+                            "initial_states": init_states,
+                            "R_variances_full": None
+                        }
+                    )
+                    param_payload = (
+                        param_ret.get("structuredContent")
+                        if isinstance(param_ret.get("structuredContent"), dict)
+                        else None
+                    )
+                    if param_payload is None:
+                        _texts = [c.get("text", "") for c in param_ret.get("content", []) if c.get("type") == "text"]
+                        param_payload = json.loads(_texts[0]) if _texts else {"success": False}
+                except Exception as e:
+                    param_payload = {"success": False, "error": str(e)}
+
+                extra_msgs.extend([
+                    {"role": "assistant", "tool_calls": [param_call]},
+                    {"role": "tool", "tool_call_id": param_call["id"], "name": "correct_parameters_from_path",
+                     "content": as_tool_return_text(param_payload)}
+                ])
+        elif with_correction and not mock and scenario == "topology_error":
+            lab = rec.get("label", {})
+            cb_name = lab.get("cb_name")
+            desired_status = not bool(lab.get("new_status", False))  # flip back
+            if cb_name:
+                topo_call = {
+                    "type": "function",
+                    "id": f"call_corr_topo_{sha_short(sid)}",
+                    "function": {
+                        "name": "correct_topology_from_path",
+                        "arguments": json.dumps({
+                            "case_path": case_path,
+                            "cb_name": cb_name,
+                            "desired_status": desired_status
+                        })
+                    }
+                }
+                try:
+                    topo_ret = mcp_call_tool(
+                        mcp_endpoint,
+                        "correct_topology_from_path",
+                        {"case_path": case_path, "cb_name": cb_name, "desired_status": desired_status}
+                    )
+                    topo_payload = (
+                        topo_ret.get("structuredContent")
+                        if isinstance(topo_ret.get("structuredContent"), dict)
+                        else None
+                    )
+                    if topo_payload is None:
+                        _texts = [c.get("text", "") for c in topo_ret.get("content", []) if c.get("type") == "text"]
+                        topo_payload = json.loads(_texts[0]) if _texts else {"success": False}
+                except Exception as e:
+                    topo_payload = {"success": False, "error": str(e)}
+
+                extra_msgs.extend([
+                    {"role": "assistant", "tool_calls": [topo_call]},
+                    {"role": "tool", "tool_call_id": topo_call["id"], "name": "correct_topology_from_path",
+                     "content": as_tool_return_text(topo_payload)}
+                ])
+
+                # Optional: re-run WLS on corrected z if provided
+                try:
+                    # NEW LOGIC: Prefer pre-generated corrected model and measurements
+                    case_path_verify = case_path
+                    z_verify = None
+                    
+                    if "corrected_model_path" in rec and "z_true_full_model" in rec:
+                        case_path_verify = rec["corrected_model_path"]
+                        z_verify = rec["z_true_full_model"]
+                    elif "z_corrected" in topo_payload:
+                        # Fallback to tool output
+                        z_verify = topo_payload.get("z_corrected")
+                        
+                    if isinstance(z_verify, list):
+                        wls2_call = {
+                            "type": "function",
+                            "id": f"call_wls_verify_topo_{sha_short(sid)}",
+                            "function": {
+                                "name": "wls_from_path",
+                                "arguments": json.dumps({"case_path": case_path_verify, "z": z_verify})
+                            }
+                        }
+                        wls2_ret = mcp_call_tool(mcp_endpoint, "wls_from_path", {"case_path": case_path_verify, "z": z_verify})
+                        wls2_payload = (
+                            wls2_ret.get("structuredContent")
+                            if isinstance(wls2_ret.get("structuredContent"), dict)
+                            else None
+                        )
+                        if wls2_payload is None:
+                            _tb = [c.get("text", "") for c in wls2_ret.get("content", []) if c.get("type") == "text"]
+                            wls2_payload = json.loads(_tb[0]) if _tb else {"success": False}
+                        extra_msgs.extend([
+                            {"role": "assistant", "tool_calls": [wls2_call]},
+                            {"role": "tool", "tool_call_id": wls2_call["id"], "name": "wls_from_path",
+                             "content": as_tool_return_text(wls2_payload)}
+                        ])
+                except Exception:
+                    pass
+        elif scenario == "harmonic_anomaly":
+            # the agent sees the elevated J, suspects harmonics, calls run_hse_from_path
+            # we check if harmonic measurements are provided in the trace
+            h_meas = rec.get("harmonic_measurements", [])
+            hse_call = {
+                "type": "function",
+                "id": f"call_hse_{sha_short(sid)}",
+                "function": {
+                    "name": "run_hse_from_path",
+                    "arguments": json.dumps({
+                        "case_path": case_path,
+                        "harmonic_measurements": h_meas
+                    })
+                }
+            }
+            if mock:
+                lab = rec.get("label", {})
+                source_bus = lab.get("source_bus", 3)
+                thd = lab.get("thd_target", 10.0)
+                hse_payload = {
+                    "success": True,
+                    "best_candidate": source_bus,
+                    "max_thd": thd,
+                    "source_injection_magnitude": 0.05,
+                    "candidates_tested": [3, 4, 9],
+                    "notes": "Harmonic source identified."
+                }
+            else:
+                try:
+                    hse_ret = mcp_call_tool(
+                        mcp_endpoint,
+                        "run_hse_from_path",
+                        {"case_path": case_path, "harmonic_measurements": h_meas}
+                    )
+                    hse_payload = (
+                        hse_ret.get("structuredContent")
+                        if isinstance(hse_ret.get("structuredContent"), dict)
+                        else None
+                    )
+                    if hse_payload is None:
+                        _texts = [c.get("text", "") for c in hse_ret.get("content", []) if c.get("type") == "text"]
+                        hse_payload = json.loads(_texts[0]) if _texts else {"success": False}
+                except Exception as e:
+                    hse_payload = {"success": False, "error": str(e)}
+
+            extra_msgs.extend([
+                {"role": "assistant", "tool_calls": [hse_call]},
+                {"role": "tool", "tool_call_id": hse_call["id"], "name": "run_hse_from_path",
+                 "content": as_tool_return_text(hse_payload)}
+            ])
 
         # 6) assistant final content (GROUND TRUTH as target)
         if scenario == "parameter_error":
@@ -387,10 +552,6 @@ def build_sft(
             final = {
                 "has_error": True,
                 "error_family": "parameter_error",
-                "decision_basis": {
-                    "r_topk": [],  # optional: fill during training time if desired
-                    "lambda_topk": []  # same
-                },
                 "suspect_location": {
                     "line_row": lab["line_row"],
                     "from_bus": lab["from_bus"],
@@ -404,7 +565,6 @@ def build_sft(
             final = {
                 "has_error": True,
                 "error_family": "measurement_error",
-                "decision_basis": {"r_topk": [], "lambda_topk": []},
                 "suspect_location": {
                     "channel": lab["channel"],
                     **({ "index": lab["index"] } if "index" in lab else {}),
@@ -417,7 +577,6 @@ def build_sft(
             final = {
                 "has_error": True,
                 "error_family": "topology_error",
-                "decision_basis": {"r_topk": [], "lambda_topk": []},
                 "suspect_location": {
                     "substation": lab.get("substation"),
                     "cb_name": lab.get("cb_name")
@@ -425,11 +584,32 @@ def build_sft(
                 "recommended_tool": None,
                 "confidence": 0.99
             }
+        elif scenario == "three_phase_imbalance":
+            lab = rec.get("label", {})
+            final = {
+                "has_error": True,
+                "error_family": "three_phase_imbalance",
+                "suspect_location": {
+                    "unbalance_bus": lab.get("unbalance_bus"),
+                },
+                "recommended_tool": None,
+                "confidence": 0.95
+            }
+        elif scenario == "harmonic_anomaly":
+            lab = rec.get("label", {})
+            final = {
+                "has_error": True,
+                "error_family": "harmonic_anomaly",
+                "suspect_location": {
+                    "source_bus": lab.get("source_bus"),
+                },
+                "recommended_tool": None,
+                "confidence": 0.95
+            }
         else:  # no_error
             final = {
                 "has_error": False,
                 "error_family": "no_error",
-                "decision_basis": {"r_topk": [], "lambda_topk": []},
                 "suspect_location": {},
                 "recommended_tool": None,
                 "confidence": 0.98
@@ -444,7 +624,7 @@ def build_sft(
               "role": "tool",
               "tool_call_id": tool_call["id"],
               "name": "wls_from_path",
-              "content": as_tool_return_text(tool_payload_slim)
+              "content": as_tool_return_text(tool_payload)
             },
         ]
         messages.extend(extra_msgs)

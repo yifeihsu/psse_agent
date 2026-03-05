@@ -1,0 +1,169 @@
+% Beamer slides: LLM-based Power-System Agent — Weekly Update
+\documentclass{beamer}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\definecolor{codebg}{RGB}{247,247,247}
+\definecolor{codeborder}{RGB}{220,220,220}
+\lstdefinestyle{json}{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeborder},
+  breaklines=true,
+  showstringspaces=false
+}
+
+\title{LLM-based Power-System Agent\\Weekly Update}
+\subtitle{Data Curation / Generation Stage}
+\author{Project Team}
+\date{\today}
+
+\begin{document}
+
+\frame{\titlepage}
+
+\begin{frame}{Where We Are}
+  \begin{itemize}
+    \item Stage: Data curation/generation for SFT (supervised fine-tuning)
+    \item Source dataset: diagnostic scenarios + metadata
+      \begin{itemize}
+        \item Samples: \texttt{out\_sft\_measurements/samples.jsonl}
+        \item Meta: \texttt{out\_sft\_measurements/meta.json} (nb, nl, index map, branch info)
+      \end{itemize}
+    \item Builder script: \texttt{Transmission/build\_sft\_traces.py}
+    \item MCP server: \texttt{mcp\_server/matpower\_server.py}
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Pipeline Overview}
+  \begin{enumerate}
+    \item Read scenarios from \texttt{samples.jsonl} and \texttt{meta.json}
+    \item For each sample: call MCP tool \texttt{wls\_from\_path} against \texttt{case} and \texttt{z\_obs}
+    \item Package a single-turn chat: system prompt + user + tool call + tool result + final JSON decision
+    \item Write SFT file: \texttt{sft\_with\_tools.jsonl} and split into train/valid/test
+  \end{enumerate}
+  \vspace{0.5em}
+  \textbf{Endpoint:} \texttt{http://localhost:3929/tools} (FastMCP HTTP)
+\end{frame}
+
+\begin{frame}{SFT Trace Structure (per row)}
+  \begin{itemize}
+    \item \texttt{messages}: list of roles and contents
+    \item Roles: \texttt{system}, \texttt{user}, \texttt{assistant(tool\_calls)}, \texttt{tool}, \texttt{assistant}
+    \item Tool: \texttt{wls\_from\_path} (WLS+NLM)
+    \item Final answer: STRICT JSON (no CoT) with keys: \texttt{has\_error}, \texttt{error\_family}, \texttt{decision\_basis}, \texttt{suspect\_location}, \texttt{confidence}
+  \end{itemize}
+  \vspace{0.5em}
+  \textbf{Channel ordering matches OpenAI-style tool usage.}
+\end{frame}
+
+\begin{frame}[fragile]{Example: Tool Call and Return}
+\begin{lstlisting}[style=json]
+{
+  "messages": [
+    {"role":"system","content":"You are a power-system diagnostic agent..."},
+    {"role":"user","content":"{\"case\":\"case14\",\"z_obs\":[...]}"},
+    {"role":"assistant","tool_calls":[{
+      "type":"function","id":"call_wls_24ff54d0",
+      "function":{"name":"wls_from_path",
+        "arguments":"{\"case_path\":\"case14\",\"z\":[...]}"}}]},
+    {"role":"tool","tool_call_id":"call_wls_24ff54d0",
+     "name":"wls_from_path", "content":"{\"success\":1,\"r\":[...],\"lambdaN\":[...]}"},
+    {"role":"assistant",
+     "content":"{\"has_error\":false,\"error_family\":\"no_error\",...}"}
+  ]
+}
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}{Dataset Facts}
+  \begin{itemize}
+    \item Measurement order: $[V_m(\text{nb}),\ P_{inj}(\text{nb}),\ Q_{inj}(\text{nb}),\ P_f(\text{nl}),\ Q_f(\text{nl}),\ P_t(\text{nl}),\ Q_t(\text{nl})]$
+    \item Case selection from meta (e.g., \texttt{case14}); aligns \texttt{nb}, \texttt{nl} and index map
+    \item Negative controls: option to add \textit{no\_error} rows by undoing simple bias/scale
+    \item Splits: 80/10/10 into \texttt{split\_train/valid/test.jsonl}
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{MCP Tools Implemented}
+  \textbf{State Estimation / Diagnostics}
+  \begin{itemize}
+    \item \texttt{wls\_from\_path(case\_path, z)}: WLS + normalized Lagrange multipliers (uses \texttt{LagrangianM\_singlephase.m})
+    \item \texttt{wls\_from\_text(case\_name, case\_text, z)}: inline case support
+  \end{itemize}
+  \vspace{0.5em}
+  \textbf{Measurement Error Correction}
+  \begin{itemize}
+    \item \texttt{correct\_measurements\_from\_path(case\_path, z, suspect\_group, ...)} (\texttt{LagrangianM\_correct.m})
+    \item \texttt{correct\_measurements\_from\_text(...)}
+  \end{itemize}
+  \vspace{0.5em}
+  \textbf{Parameter Error Correction (multi-scan)}
+  \begin{itemize}
+    \item \texttt{correct\_parameters\_from\_path(case\_path, line\_index, z\_scans, initial\_states, ...)}
+    \item \texttt{correct\_parameters\_from\_text(...)} (\texttt{correct\_parameter\_group\_multi\_scan.m})
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Measurement Correction (Group)}
+  \begin{itemize}
+    \item Mirrors WLS tool logic: \texttt{loadcase}, check $|z|=3\,\text{nb}+4\,\text{nl}$, default $R$ if not provided
+    \item Inputs: full $z$ (999 allowed for missing), optional suspect group (0- or 1-based), correction params
+    \item Outputs: \texttt{success}, \texttt{r\_norm}, \texttt{lambdaN}, \texttt{resid\_raw}, optional \texttt{Omega}, and \texttt{z\_corrected\_info}
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Parameter Correction (Multi-Scan)}
+  \begin{itemize}
+    \item Agent requests multiple snapshots after detecting a parameter error
+    \item Inputs:
+      \begin{itemize}
+        \item \texttt{z\_scans}: shape $s\!\times\!nz$ (preferred) or $nz\!\times\!s$ (normalized internally)
+        \item \texttt{initial\_states}: per scan $[V;\ \theta\_{deg}]$ of shape $s\!\times\!2\,\text{nb}$ (or $2\,\text{nb}\!\times\!s$)
+        \item \texttt{line\_index}: branch row (0- or 1-based accepted)
+      \end{itemize}
+    \item Returns: \texttt{success}, \texttt{corrected\_params} = $[R\_\text{est}, X\_\text{est}]$, and metadata (from/to bus, nb, nl, scans)
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Server/Runtime Notes}
+  \begin{itemize}
+    \item Server: FastMCP HTTP at \texttt{mcp\_server/matpower\_server.py}
+    \item MATLAB Engine: lazy import; Transmission/ added to MATLAB path
+    \item Environment:
+      \begin{itemize}
+        \item Windows side: Python 3.12 + MATLAB Engine + MATPOWER on path
+        \item Endpoint: \texttt{python -m mcp\_server.run\_http\_server --port 3929 --path /tools}
+      \end{itemize}
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{Build the SFT File}
+\begin{verbatim}
+python Transmission/build_sft_traces.py \
+  --samples out_sft_measurements/samples.jsonl \
+  --meta out_sft_measurements/meta.json \
+  --endpoint http://127.0.0.1:3929/tools \
+  --out sft_with_tools.jsonl
+\end{verbatim}
+  Outputs: \texttt{sft\_with\_tools.jsonl}, \texttt{split\_train/valid/test.jsonl}
+\end{frame}
+
+\begin{frame}{Next Steps}
+  \begin{itemize}
+    \item Expand scenario coverage and balance classes (parameter vs measurement errors vs no\_error)
+    \item Add confidence/threshold annotations derived from $\max|r|$, $\max|\lambda_N|$ for analysis
+    \item Integrate correction tools into the agent loop (ask user for scans, then correct)
+    \item Add quick health/shape probe tool for nb/nl/nz guidance
+  \end{itemize}
+\end{frame}
+
+\end{document}
+

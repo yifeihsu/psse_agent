@@ -88,6 +88,24 @@ def _write_case_text(case_text: str, case_name: str) -> str:
         f.write(case_text)
     return fpath
 
+# ---------- (lazy) imports for topology correction helpers ----------
+def _lazy_import_topology_helpers():
+    """
+    Import node-breaker helpers on demand. Returns tuple (nb_module, load_case_fn, nb_to_operator_fn).
+    """
+    try:
+        import sys as _sys
+        import os as _os
+        repo_root = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), os.pardir))
+        if repo_root not in _sys.path:
+            _sys.path.append(repo_root)
+        from Transmission import nodebreaker_pp14 as nb  # type: ignore
+        from Transmission.generate_measurements import load_case as _gm_load_case, _nb_to_operator_z  # type: ignore
+        import pandapower as pp  # type: ignore
+        return nb, _gm_load_case, _nb_to_operator_z, pp
+    except Exception as e:  # pragma: no cover
+        raise ImportError(f"Topology helpers not available: {e}") from e
+
 # ---------- Core: run PF in MATLAB and return JSON (no sparse crossing) ----------
 def _pf_json(eng, case_path: str, *, dc: bool) -> Dict[str, Any]:  # pragma: no cover
     _ensure_matpower_visible(eng)  # as in your fixed server
@@ -198,9 +216,9 @@ def _wls_json(eng, case_path: str, z_list: List[float]) -> Dict[str, Any]:  # pr
         S = struct();
         S.success    = success;
         S.lambdaN    = full(lambdaN);
-        S.r          = full(r);
-        S.lambda_vec = full(lambda_vec);
-        S.ea         = full(ea);
+        S.r          = full(r); % NOTE: this is the normalized residual
+        % S.lambda_vec = full(lambda_vec);   % (omitted to reduce payload size)
+        % S.ea         = full(ea);           % (omitted to reduce payload size)
         JsonOut = jsonencode(S);
     """, nargout=0)
     return json.loads(eng.workspace["JsonOut"]) 
@@ -365,7 +383,8 @@ def _param_correction_json(
 
     Inputs
     - case_path: MATPOWER case name/path (e.g., 'case14').
-    - line_index: Branch row index of the line to correct (0- or 1-based is accepted; 0 => +1).
+    - line_index: **1-based** MATPOWER branch row index of the line to correct.
+      If you have a 0-based Python index `line_row`, pass `line_row + 1`.
     - z_scans: Measurement snapshots. Shape can be either
         (s x nz) => s scans of length nz, or (nz x s) => already column-stacked. We normalize to (nz x s).
     - initial_states: Initial [V; angle_deg] per scan. Shape can be
@@ -454,9 +473,10 @@ def _param_correction_json(
     if R_variances_full is None:
         eng.eval(r"""
             R_variances_full = zeros(nz, 1);
-            R_variances_full(1:nb) = (0.01)^2;              % Vm
-            R_variances_full(nb+1:3*nb) = (0.005)^2;        % P/Q inj
-            R_variances_full(3*nb+1:3*nb+4*nl) = (0.002)^2; % Pf/Qf/Pt/Qt
+            % Defaults aligned with Transmission/generate_measurements.py and main_pe_correction.m
+            R_variances_full(1:nb) = (0.001)^2;             % Vm
+            R_variances_full(nb+1:3*nb) = (0.01)^2;         % P/Q inj
+            R_variances_full(3*nb+1:3*nb+4*nl) = (0.01)^2;  % Pf/Qf/Pt/Qt
         """, nargout=0)
     else:
         if len(R_variances_full) != nz:
@@ -634,10 +654,11 @@ def correct_parameters_from_path(
 
     Inputs
     - case_path: MATPOWER case name/path (e.g., 'case14').
-    - line_index: Branch row index (0- or 1-based accepted; 0 => +1).
+    - line_index: **1-based** MATPOWER branch row index.
+      If you have a 0-based Python index `line_row`, pass `line_row + 1`.
     - z_scans: Measurement snapshots. Each scan is a full vector ordered as
       [Vm(nb), Pinj(nb), Qinj(nb), Pf(nl), Qf(nl), Pt(nl), Qt(nl)]. Provide either
-      shape (s x nz) [preferred] or (nz x s) — the tool normalizes to (nz x s).
+      shape (s x nz) [preferred] or (nz x s) - the tool normalizes to (nz x s).
     - initial_states: Initial states per scan as [V(1..nb); angle_deg(1..nb)] for each scan.
       Provide either shape (s x 2*nb) [preferred] or (2*nb x s) — normalized internally.
     - R_variances_full (optional): Full variances (length nz); defaults will be applied if omitted.
@@ -687,6 +708,227 @@ def correct_parameters_from_text(
         R_variances_full,
     )
 
+# ---------- Tools: Harmonic State Estimation ----------
+def _lazy_import_hse_utils():
+    try:
+        import sys as _sys
+        import os as _os
+        repo_root = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), _os.pardir))
+        if repo_root not in _sys.path:
+            _sys.path.append(repo_root)
+        from Harmonics import hse_utils  # type: ignore
+        from Harmonics import ieee14_verification as h_ver_global # fallback if needed to set constants
+        return hse_utils
+    except Exception as e:
+        raise ImportError(f"HSE utils not available: {e}") from e
+
+
+def _run_hse_logic(
+    case_path: str,
+    harmonic_measurements: List[Dict[str, Any]],
+    harmonic_orders: List[int],
+    slack_bus: int = 0
+) -> Dict[str, Any]:
+    """Internal implementation of HSE logic."""
+    import numpy as np
+    import math
+    try:
+        hse = _lazy_import_hse_utils()
+        eng = _get_engine()
+        
+        # 1. Load Case Data (BUS, BRANCH, BASEMVA) via MATLAB
+        eng.workspace["CasePath"] = case_path
+        _ensure_constants(eng)
+        eng.eval(r"""
+            mpc = loadcase(CasePath);
+            bus = mpc.bus;
+            branch = mpc.branch;
+            baseMVA = mpc.baseMVA;
+            % Ensure full matrices
+            bus = full(bus);
+            branch = full(branch);
+        """, nargout=0)
+        
+        bus_mat = np.array(eng.workspace["bus"])
+        branch_mat = np.array(eng.workspace["branch"])
+        base_mva = float(eng.workspace["baseMVA"])
+        
+        # 2. Parse Measurements
+        # hse_utils expects: Vh_meas_by_h[h] = (buses0, Vmeas, sigma)
+        Vh_meas_by_h = {}
+        
+        # Group by harmonic
+        grouped = {}
+        for m in harmonic_measurements:
+            h = int(m["h"])
+            if h not in grouped:
+                grouped[h] = {"buses": [], "V": [], "sigma": []}
+            
+            b_idx = int(m["bus"]) - 1 # to 0-based
+            
+            if "V_real" in m and "V_imag" in m:
+                v_complex = complex(m["V_real"], m["V_imag"])
+            else:
+                deg = float(m.get("Va_deg", 0.0))
+                rad = math.radians(deg)
+                mag = float(m["Vm"])
+                v_complex = complex(mag * math.cos(rad), mag * math.sin(rad))
+                
+            sigma = float(m.get("sigma", 1e-4))
+            
+            grouped[h]["buses"].append(b_idx)
+            grouped[h]["V"].append(v_complex)
+            grouped[h]["sigma"].append(sigma)
+            
+        for h, data in grouped.items():
+            Vh_meas_by_h[h] = (
+                np.array(data["buses"], dtype=int),
+                np.array(data["V"], dtype=complex),
+                np.array(data["sigma"], dtype=float)
+            )
+            
+        # 3. Running HSE
+        best_bus, ranking, I_source_hat, Vhat_by_h = hse.harmonic_source_hse_single_source_scan(
+            bus=bus_mat,
+            branch=branch_mat,
+            base_mva=base_mva,
+            harmonic_orders=harmonic_orders,
+            Vh_meas_by_h=Vh_meas_by_h,
+            slack_bus=slack_bus,
+            candidate_buses_1based=None
+        )
+        
+        # 4. THD Calculation (need fundamental voltages)
+        Vm = bus_mat[:, 7]
+        Va = np.radians(bus_mat[:, 8])
+        V1 = Vm * (np.cos(Va) + 1j * np.sin(Va))
+        
+        thd_est = hse.compute_thd_from_states(Vhat_by_h, [1] + harmonic_orders, V1)
+        
+        # 5. Serialize Output
+        def c2l(c): return [float(c.real), float(c.imag)]
+        
+        return {
+            "success": True,
+            "best_candidate_bus_1based": int(best_bus) if best_bus else None,
+            "ranking_top10": ranking[:10] if ranking else [],
+            "estimated_injections": {str(h): c2l(val) for h, val in I_source_hat.items()},
+            "estimated_thd_percent": {str(i+1): float(t*100) for i, t in enumerate(thd_est)}
+        }
+        
+    except Exception as e:
+        import traceback
+        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+
+
+@mcp.tool(name="run_hse_from_path")
+def run_hse_from_path(
+    *,
+    case_path: str,
+    harmonic_measurements: List[Dict[str, Any]],
+    harmonic_orders: List[int],
+    slack_bus: int = 0,
+) -> Dict[str, Any]:
+    """
+    Run Harmonic State Estimation (HSE) to identify a single harmonic source.
+    
+    Inputs:
+    - case_path: MATPOWER case name/path (e.g. 'case14').
+    - harmonic_measurements: List of measurements. Each item is a dict:
+        { "h": int, "bus": int, "Vm": float, "Va_deg": float, "sigma": float }
+      where 'bus' is 1-based index (MATPOWER convention), Vm is magnitude, Va_deg is phase in degrees.
+      OR provided as direct complex if "V_real" and "V_imag" are keys.
+    - harmonic_orders: List of harmonics to consider (e.g. [5, 7, 11, ...]).
+    - slack_bus: 0-based index of slack bus (default 0).
+
+    Returns:
+    - success: bool
+    - full_ranking: List of {bus_1based, score} sorted by likelihood (lower score = better).
+    - best_candidate: bus_1based of likely source.
+    - estimated_injections: {h: [real, imag]} at best bus.
+    - est_thd: {bus_1based: thd_percent} estimated across network.
+    """
+    return _run_hse_logic(case_path, harmonic_measurements, harmonic_orders, slack_bus)
+
+@mcp.tool(name="correct_topology_from_path")
+def correct_topology_from_path(
+    *,
+    case_path: str,
+    cb_name: str,
+    desired_status: bool | str = False,
+) -> Dict[str, Any]:
+    """
+    Flip or set a circuit-breaker status in pocket substations, run PF, and return corrected measurements.
+
+    Inputs
+    - case_path: MATPOWER case name/path (e.g., 'case14').
+    - cb_name: CB identifier as exposed by nodebreaker_pp14 (e.g., 'CB_1_N1_N2').
+    - desired_status: True/closed or False/open (string 'open'/'closed' also accepted).
+
+    Returns
+    - success: boolean
+    - z_corrected: corrected measurement vector (operator order) if success
+    - cb_name, old_status, new_status
+    - error/skipped_reason if not successful
+    """
+    try:
+        nb, load_case_fn, nb_to_operator_fn, pp = _lazy_import_topology_helpers()
+    except Exception as e:  # pragma: no cover
+        return {"success": False, "error": str(e)}
+
+    # normalize desired_status
+    ds = desired_status
+    if isinstance(ds, str):
+        ds = ds.strip().lower()
+        if ds in ("open", "false", "0"):
+            ds_bool = False
+        elif ds in ("closed", "true", "1"):
+            ds_bool = True
+        else:
+            return {"success": False, "error": f"invalid desired_status={desired_status}"}
+    else:
+        ds_bool = bool(ds)
+
+    # Build NB net with the requested CB status
+    try:
+        status_map = {cb_name: ds_bool}
+        net, sec_bus, cb_idx, line_idx, trafo_idx = nb.build_nb_ieee14_pocket123(status_map=status_map)
+    except Exception as e:
+        return {"success": False, "error": f"build_nb failed: {e}"}
+
+    # Run PF with a few fallbacks for robustness
+    pf_errors: List[str] = []
+    for kwargs in (
+        {"init": "dc", "max_iteration": 20},
+        {"init": "flat", "max_iteration": 40},
+        {"init": "results", "max_iteration": 40},
+    ):
+        try:
+            pp.runpp(net, calculate_voltage_angles=True, **kwargs)
+            break
+        except Exception as err:  # pragma: no cover - diagnostic path
+            pf_errors.append(f"{kwargs}: {err}")
+            continue
+    else:
+        return {"success": False, "error": f"PF failed: {' | '.join(pf_errors)}"}
+
+    # Map PB measurements to operator z order
+    try:
+        # case_path may be 'case14' or '14'
+        case_name_only = case_path.replace("case", "") if isinstance(case_path, str) else case_path
+        ppc_base = load_case_fn(str(case_name_only))
+        z_corr = nb_to_operator_fn(net, line_idx, trafo_idx, ppc_base)
+    except Exception as e:
+        return {"success": False, "error": f"mapping failed: {e}"}
+
+    return {
+        "success": True,
+        "z_corrected": z_corr.tolist(),
+        "cb_name": cb_name,
+        "old_status": None,  # not tracked here
+        "new_status": ds_bool,
+    }
+
 @mcp.tool(name="wls_from_path")
 def wls_from_path(*, case_path: str, z: List[float]) -> Dict[str, Any]:
     """
@@ -704,7 +946,7 @@ def wls_from_path(*, case_path: str, z: List[float]) -> Dict[str, Any]:
     - success: boolean
     - r: normalized residual vector (same ordering as inputs)
     - lambdaN: normalized multipliers (typically length 2*nl)
-    - lambda_vec, ea: additional diagnostic arrays
+    Note: large diagnostic arrays (EA, lambda_vec) are omitted to reduce payload size.
     """
     eng = _get_engine()
     return _wls_json(eng, case_path, z)
@@ -722,3 +964,5 @@ def wls_from_text(*, case_name: str, case_text: str, z: List[float]) -> Dict[str
 if __name__ == "__main__":
     # Bind to a stable HTTP port so clients (build_sft_traces.py) can call reliably
     mcp.run(transport="http", host="127.0.0.1", port=3929)
+
+

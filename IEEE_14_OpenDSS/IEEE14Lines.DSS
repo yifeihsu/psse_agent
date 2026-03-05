@@ -1,0 +1,134 @@
+/*
+Network data extracted from MatPower Version 7.1.
+All per unit values converted to actual values with the formula Z_pu = Z_Ohms/Z_base
+where Z_base = (KV_LL)^2/MVA_base
+MVA_base = 100MVA
+Bus Voltage KV_LL = 1kV (Since VBus Voltages are not mentioned in Common Data Format, Assumed KV_LL = 1kV based on ETAP IEEE14Bus Model)
+
+Susceptance B (in microS) = (B_pu x 10^6)/Z_base
+
+This version uses LineCode objects with positive-sequence equivalents matching the
+original per-line R1/X1/B1 data (1 kV base). C1 [nF] is computed from B1 [µS] via
+    C1 = B1 * 1000 / (2*pi*60).
+*/
+
+Set DefaultBaseFrequency=60
+
+! 1-2 (3-phase LineCode using full matrices; diag only, no mutuals)
+New LineCode.LC_1_2 nphases=3 BaseFreq=60 Units=None
+~ Rmatrix=[ 0.0001938 | 0 0.0001938 | 0 0 0.0001938 ]
+~ Xmatrix=[ 0.0005917 | 0 0.0005917 | 0 0 0.0005917 ]
+~ Cmatrix=[ 14005634.99208679 | 0 14005634.99208679 | 0 0 14005634.99208679 ]
+New Line.1-2 phases=3 Bus1=B1 Bus2=B2 LineCode=LC_1_2 Length=1
+
+! 1-5
+New LineCode.LC_1_5 nphases=3 BaseFreq=60 Units=None
+~ Rmatrix=[ 0.0005403 | 0 0.0005403 | 0 0 0.0005403 ]
+~ Xmatrix=[ 0.0022304 | 0 0.0022304 | 0 0 0.0022304 ]
+~ Cmatrix=[ 13050705.333535418 | 0 13050705.333535418 | 0 0 13050705.333535418 ]
+New Line.1-5 phases=3 Bus1=B1 Bus2=B5 LineCode=LC_1_5 Length=1
+
+! 2-3
+New LineCode.LC_2_3 nphases=3 BaseFreq=60 Units=None
+~ Rmatrix=[ 0.0004699 | 0 0.0004699 | 0 0 0.0004699 ]
+~ Xmatrix=[ 0.0019797 | 0 0.0019797 | 0 0 0.0019797 ]
+~ Cmatrix=[ 11618310.84570836 | 0 11618310.84570836 | 0 0 11618310.84570836 ]
+New Line.2-3 phases=3 Bus1=B2 Bus2=B3 LineCode=LC_2_3 Length=1
+
+! 2-4
+New LineCode.LC_2_4 nphases=3 BaseFreq=60 Units=None
+~ Rmatrix=[ 0.0005811 | 0 0.0005811 | 0 0 0.0005811 ]
+~ Xmatrix=[ 0.0017632 | 0 0.0017632 | 0 0 0.0017632 ]
+~ Cmatrix=[ 9018780.108540736 | 0 9018780.108540736 | 0 0 9018780.108540736 ]
+New Line.2-4 phases=3 Bus1=B2 Bus2=B4 LineCode=LC_2_4 Length=1
+
+! 2-5
+New LineCode.LC_2_5 nphases=3 BaseFreq=60 Units=None
+~ Rmatrix=[ 0.0005695 | 0 0.0005695 | 0 0 0.0005695 ]
+~ Xmatrix=[ 0.0017388 | 0 0.0017388 | 0 0 0.0017388 ]
+~ Cmatrix=[ 9177935.051632632 | 0 9177935.051632632 | 0 0 9177935.051632632 ]
+New Line.2-5 phases=3 Bus1=B2 Bus2=B5 LineCode=LC_2_5 Length=1
+
+! 3-4
+New LineCode.LC_3_4 nphases=3 BaseFreq=60 Units=None
+~ Rmatrix=[ 0.0006701 | 0 0.0006701 | 0 0 0.0006701 ]
+~ Xmatrix=[ 0.0017103 | 0 0.0017103 | 0 0 0.0017103 ]
+~ Cmatrix=[ 3395305.4526271005 | 0 3395305.4526271005 | 0 0 3395305.4526271005 ]
+New Line.3-4 phases=3 Bus1=B3 Bus2=B4 LineCode=LC_3_4 Length=1
+
+! 4-5
+New LineCode.LC_4_5 nphases=3 BaseFreq=60 Units=None
+~ Rmatrix=[ 0.0001335 | 0 0.0001335 | 0 0 0.0001335 ]
+~ Xmatrix=[ 0.0004211 | 0 0.0004211 | 0 0 0.0004211 ]
+~ Cmatrix=[ 0 | 0 0 | 0 0 0 ]
+New Line.4-5 phases=3 Bus1=B4 Bus2=B5 LineCode=LC_4_5 Length=1
+
+! 6-11
+New LineCode.LC_6_11 nphases=3 BaseFreq=60 Units=None
+~ Rmatrix=[ 0.0009498 | 0 0.0009498 | 0 0 0.0009498 ]
+~ Xmatrix=[ 0.001989 | 0 0.001989 | 0 0 0.001989 ]
+~ Cmatrix=[ 0 | 0 0 | 0 0 0 ]
+New Line.6-11 phases=3 Bus1=B6 Bus2=B11 LineCode=LC_6_11 Length=1
+
+! 6-12
+New LineCode.LC_6_12 nphases=3 BaseFreq=60 Units=None
+~ Rmatrix=[ 0.0012291 | 0 0.0012291 | 0 0 0.0012291 ]
+~ Xmatrix=[ 0.0025581 | 0 0.0025581 | 0 0 0.0025581 ]
+~ Cmatrix=[ 0 | 0 0 | 0 0 0 ]
+New Line.6-12 phases=3 Bus1=B6 Bus2=B12 LineCode=LC_6_12 Length=1
+
+! 6-13
+New LineCode.LC_6_13 nphases=3 BaseFreq=60 Units=None
+~ Rmatrix=[ 0.0006615 | 0 0.0006615 | 0 0 0.0006615 ]
+~ Xmatrix=[ 0.0013027 | 0 0.0013027 | 0 0 0.0013027 ]
+~ Cmatrix=[ 0 | 0 0 | 0 0 0 ]
+New Line.6-13 phases=3 Bus1=B6 Bus2=B13 LineCode=LC_6_13 Length=1
+
+! 7-8
+New LineCode.LC_7_8 nphases=3 BaseFreq=60 Units=None
+~ Rmatrix=[ 0 | 0 0 | 0 0 0 ]
+~ Xmatrix=[ 0.0017615 | 0 0.0017615 | 0 0 0.0017615 ]
+~ Cmatrix=[ 0 | 0 0 | 0 0 0 ]
+New Line.7-8 phases=3 Bus1=B7 Bus2=B8 LineCode=LC_7_8 Length=1
+
+! 7-9
+New LineCode.LC_7_9 nphases=3 BaseFreq=60 Units=None
+~ Rmatrix=[ 0 | 0 0 | 0 0 0 ]
+~ Xmatrix=[ 0.0011001 | 0 0.0011001 | 0 0 0.0011001 ]
+~ Cmatrix=[ 0 | 0 0 | 0 0 0 ]
+New Line.7-9 phases=3 Bus1=B7 Bus2=B9 LineCode=LC_7_9 Length=1
+
+! 9-10
+New LineCode.LC_9_10 nphases=3 BaseFreq=60 Units=None
+~ Rmatrix=[ 0.0003181 | 0 0.0003181 | 0 0 0.0003181 ]
+~ Xmatrix=[ 0.000845 | 0 0.000845 | 0 0 0.000845 ]
+~ Cmatrix=[ 0 | 0 0 | 0 0 0 ]
+New Line.9-10 phases=3 Bus1=B9 Bus2=B10 LineCode=LC_9_10 Length=1
+
+! 9-14
+New LineCode.LC_9_14 nphases=3 BaseFreq=60 Units=None
+~ Rmatrix=[ 0.0012711 | 0 0.0012711 | 0 0 0.0012711 ]
+~ Xmatrix=[ 0.0027038 | 0 0.0027038 | 0 0 0.0027038 ]
+~ Cmatrix=[ 0 | 0 0 | 0 0 0 ]
+New Line.9-14 phases=3 Bus1=B9 Bus2=B14 LineCode=LC_9_14 Length=1
+
+! 10-11
+New LineCode.LC_10_11 nphases=3 BaseFreq=60 Units=None
+~ Rmatrix=[ 0.0008205 | 0 0.0008205 | 0 0 0.0008205 ]
+~ Xmatrix=[ 0.0019207 | 0 0.0019207 | 0 0 0.0019207 ]
+~ Cmatrix=[ 0 | 0 0 | 0 0 0 ]
+New Line.10-11 phases=3 Bus1=B10 Bus2=B11 LineCode=LC_10_11 Length=1
+
+! 12-13
+New LineCode.LC_12_13 nphases=3 BaseFreq=60 Units=None
+~ Rmatrix=[ 0.0022092 | 0 0.0022092 | 0 0 0.0022092 ]
+~ Xmatrix=[ 0.0019988 | 0 0.0019988 | 0 0 0.0019988 ]
+~ Cmatrix=[ 0 | 0 0 | 0 0 0 ]
+New Line.12-13 phases=3 Bus1=B12 Bus2=B13 LineCode=LC_12_13 Length=1
+
+! 13-14
+New LineCode.LC_13_14 nphases=3 BaseFreq=60 Units=None
+~ Rmatrix=[ 0.0017093 | 0 0.0017093 | 0 0 0.0017093 ]
+~ Xmatrix=[ 0.0034802 | 0 0.0034802 | 0 0 0.0034802 ]
+~ Cmatrix=[ 0 | 0 0 | 0 0 0 ]
+New Line.13-14 phases=3 Bus1=B13 Bus2=B14 LineCode=LC_13_14 Length=1

@@ -1,0 +1,183 @@
+Using hardcoded IEEE 14 branch data for Truth values...
+Loading parameter samples from out_sft_measurements\samples.jsonl...
+Found 1000 parameter_error samples. Analyzing first 20...
+
+--- Sample 1 ---
+Line Index: 16 (9->14)
+Base Values:  R=0.1271, X=0.2704
+Reality (Target): R=0.3602, X=1.0444 (Factors: 2.83, 3.86)
+Calling correct_parameters_from_path...
+  [FAILURE] Tool did not converge.
+  Last Estimate: R=0.1446, X=0.0000
+  Error/Meta: {'success': False, 'corrected_params': [0.1445820952145731, 1e-06], 'meta': {'line_index': 16, 'from_bus': 9, 'to_bus': 10, 'nb': 14, 'nl': 20, 'scans': 8}}
+
+--- Sample 2 ---
+Line Index: 15 (9->10)
+Base Values:  R=0.0318, X=0.0845
+Reality (Target): R=0.0318, X=0.2799 (Factors: 1.00, 3.31)
+Calling correct_parameters_from_path...
+  [SUCCESS] Converged.
+  Estimated:    R=0.0097, X=0.1220
+  Error:        R_err=0.0221, X_err=0.1579
+
+--- Sample 3 ---
+Line Index: 3 (2->4)
+Base Values:  R=0.0581, X=0.1763
+Reality (Target): R=0.2531, X=0.1763 (Factors: 4.36, 1.00)
+Calling correct_parameters_from_path...
+  [SUCCESS] Converged.
+  Estimated:    R=0.0174, X=0.1777
+  Error:        R_err=0.2357, X_err=0.0014
+
+--- Sample 4 ---
+Line Index: 10 (6->11)
+Base Values:  R=0.0950, X=0.1989
+Reality (Target): R=0.0950, X=0.8912 (Factors: 1.00, 4.48)
+Calling correct_parameters_from_path...
+  [SUCCESS] Converged.
+  Estimated:    R=0.0000, X=0.3027
+  Error:        R_err=0.0950, X_err=0.5885
+
+--- Sample 5 ---
+Line Index: 13 (7->8)
+Base Values:  R=0.0000, X=0.1762
+Reality (Target): R=0.0000, X=0.6417 (Factors: 1.00, 3.64)
+Calling correct_parameters_from_path...
+  [SUCCESS] Converged.
+  Estimated:    R=0.0632, X=0.1300
+  Error:        R_err=0.0632, X_err=0.5117
+
+--- Sample 6 ---
+Line Index: 19 (13->14)
+Base Values:  R=0.1709, X=0.3480
+Reality (Target): R=0.0642, X=0.3480 (Factors: 0.38, 1.00)
+Calling correct_parameters_from_path...
+  [SUCCESS] Converged.
+  Estimated:    R=0.2112, X=0.1364
+  Error:        R_err=0.1470, X_err=0.2117
+
+--- Sample 7 ---
+Line Index: 5 (3->4)
+Base Values:  R=0.0670, X=0.1710
+Reality (Target): R=0.2510, X=0.1710 (Factors: 3.75, 1.00)
+Calling correct_parameters_from_path...
+  [SUCCESS] Converged.
+  Estimated:    R=0.0610, X=0.1784
+  Error:        R_err=0.1900, X_err=0.0073
+
+--- Sample 8 ---
+Line Index: 16 (9->14)
+Base Values:  R=0.1271, X=0.2704
+Reality (Target): R=0.1271, X=0.1150 (Factors: 1.00, 0.43)
+Calling correct_parameters_from_path...
+  [SUCCESS] Converged.
+  Estimated:    R=0.0031, X=0.1946
+  Error:        R_err=0.1240, X_err=0.0795
+
+--- Sample 9 ---
+Line Index: 12 (6->13)
+Base Values:  R=0.0662, X=0.1303
+Reality (Target): R=0.0662, X=0.0212 (Factors: 1.00, 0.16)
+Calling correct_parameters_from_path...
+  [SUCCESS] Converged.
+  Estimated:    R=0.0000, X=0.6917
+  Error:        R_err=0.0661, X_err=0.6705
+
+--- Sample 10 ---
+Line Index: 10 (6->11)
+Base Values:  R=0.0950, X=0.1989
+Reality (Target): R=0.0298, X=0.0802 (Factors: 0.31, 0.40)
+Calling correct_parameters_from_path...
+  [SUCCESS] Converged.
+  Estimated:    R=0.0000, X=0.2489
+  Error:        R_err=0.0298, X_err=0.1687
+
+--- Sample 11 ---
+Line Index: 18 (12->13)
+Base Values:  R=0.2209, X=0.1999
+Reality (Target): R=0.0708, X=0.5363 (Factors: 0.32, 2.68)
+Calling correct_parameters_from_path...
+  [SUCCESS] Converged.
+  Estimated:    R=0.0919, X=0.1879
+  Error:        R_err=0.0211, X_err=0.3483
+
+--- Sample 12 ---
+Line Index: 18 (12->13)
+Base Values:  R=0.2209, X=0.1999
+Reality (Target): R=0.0614, X=0.0301 (Factors: 0.28, 0.15)
+Calling correct_parameters_from_path...
+  [SUCCESS] Converged.
+  Estimated:    R=0.0827, X=0.1952
+  Error:        R_err=0.0213, X_err=0.1651
+
+--- Sample 13 ---
+Line Index: 5 (3->4)
+Base Values:  R=0.0670, X=0.1710
+Reality (Target): R=0.0184, X=0.0557 (Factors: 0.27, 0.33)
+Calling correct_parameters_from_path...
+  [SUCCESS] Converged.
+  Estimated:    R=0.0569, X=0.1631
+  Error:        R_err=0.0385, X_err=0.1074
+
+--- Sample 14 ---
+Line Index: 15 (9->10)
+Base Values:  R=0.0318, X=0.0845
+Reality (Target): R=0.0043, X=0.0845 (Factors: 0.13, 1.00)
+Calling correct_parameters_from_path...
+  [SUCCESS] Converged.
+  Estimated:    R=0.0028, X=0.1125
+  Error:        R_err=0.0015, X_err=0.0280
+
+--- Sample 15 ---
+Line Index: 4 (2->5)
+Base Values:  R=0.0570, X=0.1739
+Reality (Target): R=0.0270, X=0.0411 (Factors: 0.47, 0.24)
+Calling correct_parameters_from_path...
+  [SUCCESS] Converged.
+  Estimated:    R=0.0813, X=0.3003
+  Error:        R_err=0.0543, X_err=0.2592
+
+--- Sample 16 ---
+Line Index: 16 (9->14)
+Base Values:  R=0.1271, X=0.2704
+Reality (Target): R=0.0595, X=0.0378 (Factors: 0.47, 0.14)
+Calling correct_parameters_from_path...
+  [SUCCESS] Converged.
+  Estimated:    R=0.0736, X=0.2478
+  Error:        R_err=0.0141, X_err=0.2101
+
+--- Sample 17 ---
+Line Index: 12 (6->13)
+Base Values:  R=0.0662, X=0.1303
+Reality (Target): R=0.0219, X=0.6139 (Factors: 0.33, 4.71)
+Calling correct_parameters_from_path...
+  [SUCCESS] Converged.
+  Estimated:    R=0.0103, X=0.0000
+  Error:        R_err=0.0116, X_err=0.6139
+
+--- Sample 18 ---
+Line Index: 5 (3->4)
+Base Values:  R=0.0670, X=0.1710
+Reality (Target): R=0.2716, X=0.0552 (Factors: 4.05, 0.32)
+Calling correct_parameters_from_path...
+  [SUCCESS] Converged.
+  Estimated:    R=0.0616, X=0.1763
+  Error:        R_err=0.2100, X_err=0.1211
+
+--- Sample 19 ---
+Line Index: 1 (1->5)
+Base Values:  R=0.0540, X=0.2230
+Reality (Target): R=0.0235, X=0.2230 (Factors: 0.43, 1.00)
+Calling correct_parameters_from_path...
+  [SUCCESS] Converged.
+  Estimated:    R=0.0314, X=0.0542
+  Error:        R_err=0.0080, X_err=0.1688
+
+--- Sample 20 ---
+Line Index: 11 (6->12)
+Base Values:  R=0.1229, X=0.2558
+Reality (Target): R=0.2539, X=0.7683 (Factors: 2.07, 3.00)
+Calling correct_parameters_from_path...
+  [SUCCESS] Converged.
+  Estimated:    R=0.0621, X=0.1754
+  Error:        R_err=0.1918, X_err=0.5929

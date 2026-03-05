@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "MATPOWER Power Flow (FastMCP v2)": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "fastmcp",
+        "fastmcp",
+        "run",
+        "D:\\ps_llm_agent\\mcp_server\\matpower_server.py"
+      ]
+    }
+  }
+}
