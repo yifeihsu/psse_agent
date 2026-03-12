@@ -4,22 +4,15 @@ from __future__ import annotations
 import os
 import json
 import tempfile
-import threading
 from typing import Optional, Dict, Any, List
 
 from fastmcp import FastMCP
 
 mcp = FastMCP("MATPOWER Power Flow (FastMCP v2)")
 
-# NOTE ABOUT MATLAB ENGINE (Python 3.13):
-# Importing matlab.engine can crash CPython 3.13 on some setups.
-# To keep the server robust, we avoid importing matlab.engine at module import time by
-# lazily importing it inside _get_engine(). The WLS tools use the Python engine.
-
-#
-# MATLAB Engine lazy initialization is no longer needed:
-# The server is now fully ported to pure Python for all mathematical grid functions!
-#
+# This server is fully ported to pure Python for the grid-estimation functions used here.
+# The old MATLAB-engine comments are removed because they were stale and the WLS/correction
+# tools now call Python implementations directly.
 
 # ---------- Helper: write case text to a temp .m ----------
 def _parse_matpower_case(case_text: str) -> Dict[str, Any]:
@@ -27,7 +20,7 @@ def _parse_matpower_case(case_text: str) -> Dict[str, Any]:
     import numpy as np
     
     # 1. Extract baseMVA
-    base_mva_match = re.search(r'mpc\.baseMVA\s*=\s*([\d\.]+);', case_text)
+    base_mva_match = re.search(r'mpc\.baseMVA\s*=\s*([+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?);', case_text)
     baseMVA = float(base_mva_match.group(1)) if base_mva_match else 100.0
     
     # 2. Extract matrices (bus, gen, branch)
@@ -99,14 +92,25 @@ def _load_python_case(case_path: str) -> Dict[str, Any]:
     import os
     if not os.path.isfile(case_path):
         # Try to resolve built-in cases if needed, otherwise string
-        # e.g case14.m from Transmission/ 
+        # e.g case14.m from mcp_server/ 
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-        transmission_path = os.path.join(repo_root, "Transmission", f"{case_path}.m")
-        if os.path.isfile(transmission_path):
-             case_path = transmission_path
-        elif os.path.isfile(os.path.join(repo_root, "Transmission", f"{case_path}")):
-             case_path = os.path.join(repo_root, "Transmission", f"{case_path}")
-        else:
+        
+        # Check Transmission first just in case
+        paths_to_try = [
+            os.path.join(repo_root, "mcp_server", f"{case_path}.m"),
+            os.path.join(repo_root, "mcp_server", f"{case_path}"),
+            os.path.join(repo_root, "Transmission", f"{case_path}.m"),
+            os.path.join(repo_root, "Transmission", f"{case_path}")
+        ]
+        
+        found = False
+        for p in paths_to_try:
+            if os.path.isfile(p):
+                case_path = p
+                found = True
+                break
+                
+        if not found:
              raise FileNotFoundError(f"Case file not found: {case_path}")
 
     with open(case_path, 'r', encoding='utf-8') as f:
@@ -154,10 +158,12 @@ def _wls_json(case_path: str, z_list: List[float]) -> Dict[str, Any]:  # pragma:
         )
         
         # Format identical to the previous MATLAB response
+        r_list = r.tolist() if isinstance(r, np.ndarray) else list(r)
         return {
             "success": bool(success),
             "lambdaN": lambdaN.tolist(),
-            "r": r.tolist() if isinstance(r, np.ndarray) else list(r),
+            "r": r_list,
+            "global_residual_sum": float(np.sum(np.asarray(r_list, dtype=float) ** 2)),
         }
     except Exception as e:
         import traceback
@@ -166,7 +172,6 @@ def _wls_json(case_path: str, z_list: List[float]) -> Dict[str, Any]:  # pragma:
 
 # ---------- Measurement Error Correction (LagrangianM_correct) ----------
 def _meas_correction_json(
-    eng,  # Keep for signature backward compatibility, but unused
     case_path: str,
     z_list: List[float],
     *,
@@ -212,9 +217,18 @@ def _meas_correction_json(
         
     z_arr = np.array(z_list, dtype=float)
     
+    # Training traces pass 0-based global measurement indices. Convert here so the underlying
+    # routine still receives the 1-based convention it expects.
+    suspect_group_0 = [] if suspect_group is None else [int(i) for i in suspect_group]
+    suspect_group_1 = []
+    for idx0 in suspect_group_0:
+        if idx0 < 0 or idx0 >= nz:
+            raise ValueError(f"suspect_group index {idx0} outside valid range [0, {nz-1}]")
+        suspect_group_1.append(idx0 + 1)
+
     options = {
         "enable_group_correction": enable_correction,
-        "correction_group_full_indices": suspect_group if suspect_group is not None else [],
+        "correction_group_full_indices": suspect_group_1,
         "max_correction_iterations": max_correction_iterations,
         "correction_error_tolerance": error_tolerance,
         "group_indices_are_one_based": True,
@@ -291,6 +305,7 @@ def _meas_correction_json(
         S["corrected_measurements"] = corrected
         S["applied_any_correction"] = bool(zci.get("applied_any_correction", False))
         S["iterations_performed"] = int(zci.get("iterations_performed", 0))
+        S["suspect_group_zero_based"] = suspect_group_0
         
         return S
 
@@ -436,7 +451,7 @@ def correct_measurements_from_path(
     Inputs
     - case_path: MATPOWER case name/path (e.g., 'case14').
     - z: Full measurement vector ordered as [Vm(nb), Pinj(nb), Qinj(nb), Pf(nl), Qf(nl), Pt(nl), Qt(nl)].
-    - suspect_group (optional): list of global indices indicating the group to correct.
+    - suspect_group (optional): list of 0-based global indices indicating the group to correct.
     - enable_correction (default True), max_correction_iterations (default 2), error_tolerance (default 1e-3).
     - R_variances_full (optional): full variance vector; defaults applied if omitted.
 
@@ -663,12 +678,19 @@ def _run_hse_logic(
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
+def _infer_harmonic_orders(harmonic_measurements: List[Dict[str, Any]]) -> List[int]:
+    orders = sorted({int(m["h"]) for m in harmonic_measurements if int(m.get("h", 0)) > 1})
+    if not orders:
+        raise ValueError("Could not infer harmonic_orders from harmonic_measurements.")
+    return orders
+
+
 @mcp.tool(name="run_hse_from_path")
 def run_hse_from_path(
     *,
     case_path: str,
     harmonic_measurements: List[Dict[str, Any]],
-    harmonic_orders: List[int],
+    harmonic_orders: List[int] | None = None,
     slack_bus: int = 0,
 ) -> Dict[str, Any]:
     """
@@ -680,7 +702,8 @@ def run_hse_from_path(
         { "h": int, "bus": int, "Vm": float, "Va_deg": float, "sigma": float }
       where 'bus' is 1-based index (MATPOWER convention), Vm is magnitude, Va_deg is phase in degrees.
       OR provided as direct complex if "V_real" and "V_imag" are keys.
-    - harmonic_orders: List of harmonics to consider (e.g. [5, 7, 11, ...]).
+    - harmonic_orders (optional): List of harmonics to consider (e.g. [5, 7, 11, ...]).
+      If omitted, the server infers them from the `h` fields inside harmonic_measurements.
     - slack_bus: 0-based index of slack bus (default 0).
 
     Returns:
@@ -690,7 +713,8 @@ def run_hse_from_path(
     - estimated_injections: {h: [real, imag]} at best bus.
     - est_thd: {bus_1based: thd_percent} estimated across network.
     """
-    return _run_hse_logic(case_path, harmonic_measurements, harmonic_orders, slack_bus)
+    orders = harmonic_orders if harmonic_orders else _infer_harmonic_orders(harmonic_measurements)
+    return _run_hse_logic(case_path, harmonic_measurements, orders, slack_bus)
 
 @mcp.tool(name="correct_topology_from_path")
 def correct_topology_from_path(
@@ -777,11 +801,11 @@ def wls_from_path(*, case_path: str, z: List[float]) -> Dict[str, Any]:
     Weighted least-squares state estimation with normalized Lagrange multipliers (WLS+NLM).
 
     Behavior
-    - Loads the MATPOWER case (name/path) and runs the MATLAB routine LagrangianM_singlephase via matlab.engine.
+    - Loads the MATPOWER case (name/path) and runs the pure-Python WLS port.
     - Expects a full measurement vector ordered as [Vm(nb), Pinj(nb), Qinj(nb), Pf(nl), Qf(nl), Pt(nl), Qt(nl)].
 
     Inputs
-    - case_path: Path or case name resolvable by MATLAB (e.g., 'case14').
+    - case_path: Path or case name resolvable by the server loader (e.g., 'case14').
     - z: Full measurement vector length 3*nb + 4*nl.
 
     Returns
@@ -790,8 +814,7 @@ def wls_from_path(*, case_path: str, z: List[float]) -> Dict[str, Any]:
     - lambdaN: normalized multipliers (typically length 2*nl)
     Note: large diagnostic arrays (EA, lambda_vec) are omitted to reduce payload size.
     """
-    eng = _get_engine()
-    return _wls_json(eng, case_path, z)
+    return _wls_json(case_path, z)
 
 @mcp.tool(name="wls_from_text")
 def wls_from_text(*, case_name: str, case_text: str, z: List[float]) -> Dict[str, Any]:
@@ -799,9 +822,8 @@ def wls_from_text(*, case_name: str, case_text: str, z: List[float]) -> Dict[str
     Same as wls_from_path, but accepts inline case.m contents.
     'case_name' must match the function name inside the .m file.
     """
-    eng = _get_engine()
     path = _write_case_text(case_text, case_name)
-    return _wls_json(eng, path, z)
+    return _wls_json(path, z)
 
 if __name__ == "__main__":
     # Bind to a stable HTTP port so clients (build_sft_traces.py) can call reliably

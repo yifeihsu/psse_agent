@@ -1,18 +1,47 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""\nGenerate measurement data for SFT/RFT.\n\nScenarios:\n  - Negative: no parameter error and no gross measurement error; only base sensor noise.\n  - Measurement errors: gaussian noise + one of {single_gross_outlier, multi_gross_outliers}.\n  - Parameter errors (lines only): perturb R, X, or both on ONE line; transformers are excluded.\n\nFor parameter-error scenarios we now also synthesize a small multi-snapshot series\nfor later parameter correction, exposing:\n  - z_scans: 5–10 noisy snapshots around the same operating point (each full z vector).\n  - initial_states: corresponding initial state guesses [Vm(1..nb), Va_deg(1..nb)] per scan.\n\nOutputs:\n  - samples.jsonl    (one JSON object per scenario with z_true, z_obs, labels, and for\n                      parameter_error: z_scans, initial_states)\n  - meta.json        (index slices, branch order, line mask, baseMVA, case)\n"""
+"""
+Generate measurement data for SFT/RFT.
+
+This revision aligns the dataset semantics with the revised SFT trace builder:
+  - Clean samples are emitted as scenario='no_error' (not 'negative').
+  - Measurement-error samples only use the subtypes actually modeled by the builder:
+      {single_gross_outlier, multi_gross_outliers}.
+  - Parameter-error samples now persist the erroneous MATPOWER case as a text `.m` file so
+    the parameter-correction tool can operate on the same erroneous model that generated the data.
+  - Topology-error verification models are persisted as text `.m` files that are compatible with
+    the MCP server's regex MATPOWER parser.
+  - Harmonic-anomaly samples now include `harmonic_orders`, matching the HSE tool contract.
+
+Scenarios emitted by this script:
+  - no_error
+  - measurement_error
+  - parameter_error
+  - topology_error   (IEEE-14 only)
+  - harmonic_anomaly (IEEE-14 only)
+
+This script does NOT synthesize three_phase_imbalance yet because the current stack is based on
+single-phase PYPOWER/MATPOWER style cases. It is better to add that family from a dedicated 3φ
+simulation source than to fabricate weak labels.
+
+Outputs:
+  - samples.jsonl
+  - meta.json
+  - cases_parameter_error/*.m
+  - models_topology/*.m
+"""
+
+from __future__ import annotations
 
 import json
-import math
-import random
-import sys
 import os
+import sys
 from copy import deepcopy
 from pathlib import Path
+from typing import Any, Callable, Dict, Optional
 
 import numpy as np
-import pandas as pd
 from tqdm import tqdm
 
 # Add project root to path for Harmonics and scripts imports
@@ -25,50 +54,49 @@ from pypower.idx_brch import F_BUS, T_BUS, BR_R, BR_X, TAP, BR_STATUS
 
 # Harmonics utilities (for harmonic_anomaly)
 try:
-    from scripts.trigger_hse import build_full_harmonic_z, simulate_harmonic_voltage_meter_measurements
-    from Harmonics.ieee14_verification import BUS as H_BUS, BRANCH as H_BRANCH, BASE_MVA as H_BASE_MVA
+    from Transmission.generate_hse_traces import build_trace
     HARMONICS_AVAILABLE = True
 except ImportError as e:
     HARMONICS_AVAILABLE = False
     print(f"[warn] Harmonics modules not found ({e}). Harmonic anomaly subset will be skipped.")
 
 
+MEASUREMENT_ORDER = ["Vm", "Pinj", "Qinj", "Pf", "Qf", "Pt", "Qt"]
+DEFAULT_SIGMAS = {"vm": 1e-3, "inj": 1e-2, "flow": 1e-2}
+HARMONIC_DEFAULT_CANDIDATES = [2, 3, 4, 5, 9, 10, 11, 12, 13, 14]
+
 
 # ------------------------ configuration ------------------------
 
 DEFAULTS = dict(
     case_name="14",            # "14" or "118"
-    n_total=2000,              # total scenarios
-    frac_param_err=0.50,       # fraction parameter-error vs measurement-error
-    n_negative=500,            # additional negative (clean) scenarios
+    n_total=2000,              # total scenarios counted over measurement_error + parameter_error + topology_error
+    frac_param_err=0.50,       # fraction parameter-error within n_total (topology excluded)
+    n_negative=500,            # clean no-error scenarios
     seed=42,                   # reproducibility
-    # per-unit noise levels aligned with your earlier W matrix
-    sigma_vm=1e-3,
-    sigma_inj=1e-2,
-    sigma_flow=1e-2,
-    # load scaling to diversify operating points (kept conservative for feasibility)
+    sigma_vm=DEFAULT_SIGMAS["vm"],
+    sigma_inj=DEFAULT_SIGMAS["inj"],
+    sigma_flow=DEFAULT_SIGMAS["flow"],
     load_scale_min=0.80,
     load_scale_max=1.25,
-    # parameter error magnitudes (multiplicative factors)
-    # parameter error magnitudes (multiplicative factors)
-    # List of tuples for disjoint ranges: e.g. [(0.1, 0.5), (2.0, 5.0)]
-    r_err_range=[(0.1, 0.5), (2.0, 5.0)], 
+    r_err_range=[(0.1, 0.5), (2.0, 5.0)],
     x_err_range=[(0.1, 0.5), (2.0, 5.0)],
+    max_attempt_multiplier=10,
 )
 
 
 # ------------------------ helpers: case, power flow, measurements ------------------------
 
+
 def load_case(case_name: str):
     if case_name == "14":
-        ppc = case14()
-    elif case_name == "118":
-        ppc = case118()
-    else:
-        raise ValueError("case_name must be '14' or '118'")
-    return ppc
+        return case14()
+    if case_name == "118":
+        return case118()
+    raise ValueError("case_name must be '14' or '118'")
 
-def scale_loads(ppc, alpha_p: float, alpha_q: float = None):
+
+def scale_loads(ppc, alpha_p: float, alpha_q: float | None = None):
     """Scale Pd/Qd to diversify operating points."""
     if alpha_q is None:
         alpha_q = alpha_p
@@ -77,37 +105,33 @@ def scale_loads(ppc, alpha_p: float, alpha_q: float = None):
     ppc["bus"][:, QD] *= alpha_q
     return ppc
 
+
 def solve_ac_opf(ppc):
-    """Run AC optimal power flow with quiet options; return solved ppc or None if fails."""
+    """Run AC optimal power flow with quiet options; return solved ppc or None if it fails."""
     ppopt = ppoption(VERBOSE=0, OUT_ALL=0)
     results = runopf(deepcopy(ppc), ppopt)
     return results if results.get("success") else None
+
 
 def compute_measurements_pu(ppc_solved):
     """
     Build z in per-unit using solved voltages and admittance matrices:
       z = [ Vm; Pinj; Qinj; Pf; Qf; Pt; Qt ]
-    Lines and transformers are both included in flows here; a 'line mask' is provided in meta.
 
-    This function is robust to PYPOWER/MATPOWER-style 1-based bus indexing as well
-    as pandapower-to-ppc output which is already 0-based. It detects the minimum
-    F_BUS/T_BUS and only subtracts 1 if buses are 1-based.
+    Robust to PYPOWER/MATPOWER-style 1-based bus indexing and pandapower-to-ppc output that is already 0-based.
     """
     baseMVA = ppc_solved["baseMVA"]
-    bus     = ppc_solved["bus"]
-    branch  = ppc_solved["branch"]
-    nb      = bus.shape[0]
+    bus = ppc_solved["bus"]
+    branch = ppc_solved["branch"]
+    nb = bus.shape[0]
 
-    # complex voltages
     Vm = bus[:, VM]
     Va = np.deg2rad(bus[:, VA])
-    V  = Vm * np.exp(1j * Va)
+    V = Vm * np.exp(1j * Va)
 
-    # admittances (per-unit)
     bus_int = bus.copy()
     bus_int[:, BUS_I] = np.arange(nb)
     branch_int = branch.copy()
-    # Detect indexing scheme: 1-based (MATPOWER) vs 0-based (pandapower to_ppc)
     min_f = branch_int[:, F_BUS].min() if branch_int.shape[0] else 0
     min_t = branch_int[:, T_BUS].min() if branch_int.shape[0] else 0
     if min_f >= 1 and min_t >= 1:
@@ -116,108 +140,121 @@ def compute_measurements_pu(ppc_solved):
     else:
         branch_int[:, F_BUS] = branch_int[:, F_BUS].astype(int)
         branch_int[:, T_BUS] = branch_int[:, T_BUS].astype(int)
+
     Ybus, Yf, Yt = makeYbus(baseMVA, bus_int, branch_int)
 
-    # injections S = V * conj(I)
     Ibus = Ybus.dot(V)
     Sinj = V * np.conj(Ibus)
     Pinj = Sinj.real
     Qinj = Sinj.imag
 
-    # branch-end flows (from/to)
     If = Yf.dot(V)
     It = Yt.dot(V)
-    # map “from” and “to” voltages to V indices
     if min_f >= 1 and min_t >= 1:
         fbus = branch[:, F_BUS].astype(int) - 1
         tbus = branch[:, T_BUS].astype(int) - 1
     else:
         fbus = branch[:, F_BUS].astype(int)
         tbus = branch[:, T_BUS].astype(int)
+
     Sf = V[fbus] * np.conj(If)
     St = V[tbus] * np.conj(It)
     Pf, Qf = Sf.real, Sf.imag
     Pt, Qt = St.real, St.imag
 
-    z = np.concatenate([Vm, Pinj, Qinj, Pf, Qf, Pt, Qt]).astype(float)
-    return z
+    return np.concatenate([Vm, Pinj, Qinj, Pf, Qf, Pt, Qt]).astype(float)
+
 
 def make_index_map(nb: int, nl: int):
-    """Index slices for the concatenated measurement vector."""
-    i_vm  = slice(0, nb)
-    i_p   = slice(nb, 2*nb)
-    i_q   = slice(2*nb, 3*nb)
-    i_pf  = slice(3*nb, 3*nb + nl)
-    i_qf  = slice(3*nb + nl, 3*nb + 2*nl)
-    i_pt  = slice(3*nb + 2*nl, 3*nb + 3*nl)
-    i_qt  = slice(3*nb + 3*nl, 3*nb + 4*nl)
-    return dict(Vm=i_vm, Pinj=i_p, Qinj=i_q, Pf=i_pf, Qf=i_qf, Pt=i_pt, Qt=i_qt)
+    return dict(
+        Vm=slice(0, nb),
+        Pinj=slice(nb, 2 * nb),
+        Qinj=slice(2 * nb, 3 * nb),
+        Pf=slice(3 * nb, 3 * nb + nl),
+        Qf=slice(3 * nb + nl, 3 * nb + 2 * nl),
+        Pt=slice(3 * nb + 2 * nl, 3 * nb + 3 * nl),
+        Qt=slice(3 * nb + 3 * nl, 3 * nb + 4 * nl),
+    )
+
 
 def branch_line_mask(ppc):
-    """
-    Return boolean mask for branches that are **lines** (not transformers).
-    According to MATPOWER case format, TAP=0 indicates a transmission line (transformers have non-zero ratio). 
-    """
+    """Return boolean mask for in-service transmission lines (transformers excluded)."""
     br = ppc["branch"]
-    in_service = (br[:, BR_STATUS] > 0)
-    is_line    = (br[:, TAP] == 0.0)  # transformers excluded
-    return (in_service & is_line)
+    in_service = br[:, BR_STATUS] > 0
+    is_line = br[:, TAP] == 0.0
+    return in_service & is_line
+
+
+# ------------------------ helpers: MATPOWER text export ------------------------
+
+
+def _safe_case_name(name: str) -> str:
+    safe = "".join(ch for ch in str(name) if ch.isalnum() or ch == "_")
+    return safe or "case_tmp"
+
+
+def _matrix_to_matpower_text(mat: np.ndarray) -> str:
+    rows = []
+    for row in np.asarray(mat, dtype=float):
+        vals = " ".join(f"{float(v):.12g}" for v in row)
+        rows.append(f"    {vals};")
+    return "\n".join(rows)
+
+
+def write_ppc_as_matpower_m(ppc: Dict[str, Any], path: Path, case_name: str) -> Path:
+    """Write a minimal MATPOWER case.m text file compatible with the MCP server regex parser."""
+    safe_name = _safe_case_name(case_name)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.suffix.lower() != ".m":
+        path = path.with_suffix(".m")
+
+    with path.open("w", encoding="utf-8") as f:
+        f.write(f"function mpc = {safe_name}\n")
+        f.write("mpc.version = '2';\n")
+        f.write(f"mpc.baseMVA = {float(ppc['baseMVA']):.12g};\n\n")
+        for key in ("bus", "gen", "branch"):
+            arr = np.asarray(ppc[key], dtype=float)
+            f.write(f"mpc.{key} = [\n")
+            f.write(_matrix_to_matpower_text(arr))
+            f.write("\n];\n\n")
+    return path.resolve()
 
 
 # ------------------------ helpers: node-breaker pocket + mapping ------------------------
 
-def _extract_busnum_from_name(name: str) -> int | None:
-    """Best-effort extract planning bus number from a pandapower bus name.
 
-    Handles pocket names like '1N3', '2R5', '3|L34' (leading digits), and non-pocket
-    names like 'B4' (prefix 'B' + digits). Returns None if not parseable.
-    """
+def _extract_busnum_from_name(name: str) -> int | None:
     s = str(name)
-    # case 'B4', 'B10', ...
     if s.startswith("B"):
-        digits = ''.join(ch for ch in s[1:] if ch.isdigit())
-        try:
-            return int(digits) if digits else None
-        except Exception:
-            return None
-    # leading digits (e.g., '1N3', '3|L34')
+        digits = "".join(ch for ch in s[1:] if ch.isdigit())
+        return int(digits) if digits else None
     digits = []
     for ch in s:
         if ch.isdigit():
             digits.append(ch)
         else:
             break
-    try:
-        return int(''.join(digits)) if digits else None
-    except Exception:
-        return None
+    return int("".join(digits)) if digits else None
 
 
 def _choose_random_cb_open(rng, target_bus: int | None = None):
-    """Choose exactly one CLOSED CB in pocket {1,2,3} and OPEN it.
-
-    Per requirement: never close an open CB, as open ones in this model are
-    redundant and do not change the equivalent bus-branch model.
-
-    Returns (status_map, label_dict) compatible with nodebreaker_pp14.build_nb_ieee14_pocket123.
-    """
-    # Import lazily to avoid imposing dependency when not used
+    """Choose exactly one CLOSED CB in pocket {1,2,3} and OPEN it."""
     try:
         from . import nodebreaker_pp14 as nb  # type: ignore
     except Exception:
-        import sys as _sys, os as _os
+        import sys as _sys
+        import os as _os
         _sys.path.append(_os.path.dirname(__file__))
         import nodebreaker_pp14 as nb  # type: ignore
 
     pocket = nb.detailed_substations_1_2_3()
-    # Gather all closed CB candidates (optionally restricted to one substation)
     buses = [1, 2, 3] if target_bus is None else [int(target_bus)]
     candidates = []
     for b in buses:
         for cb in pocket[b].cbs:
-            if bool(cb.closed):  # only closed -> can open
+            if bool(cb.closed):
                 candidates.append((b, cb))
-    # If none in requested bus, fallback to all pocket buses
     if not candidates and target_bus is not None:
         for b in [1, 2, 3]:
             for cb in pocket[b].cbs:
@@ -225,9 +262,9 @@ def _choose_random_cb_open(rng, target_bus: int | None = None):
                     candidates.append((b, cb))
     if not candidates:
         raise RuntimeError("No CLOSED CB available to open in pocket substations 1–3.")
+
     b, cb = rng.choice(candidates)
-    new_status = False  # open it
-    status_map = {cb.name: new_status}
+    status_map = {cb.name: False}
     label = dict(
         error_type="topology_error",
         substation=int(b),
@@ -238,112 +275,74 @@ def _choose_random_cb_open(rng, target_bus: int | None = None):
     return status_map, label
 
 
-def _scale_nb_net(net, alpha_p: float, alpha_q: float | None = None):
-    """Scale loads / gens / sgens P/Q by alpha to diversify operating points."""
-    import numpy as _np
-    if alpha_q is None:
-        alpha_q = alpha_p
-    # loads
-    if hasattr(net, 'load') and len(net.load.index):
-        net.load['p_mw'] = _np.array(net.load['p_mw'], dtype=float) * alpha_p
-        net.load['q_mvar'] = _np.array(net.load['q_mvar'], dtype=float) * alpha_q
-    # sgens
-    if hasattr(net, 'sgen') and len(net.sgen.index):
-        if 'p_mw' in net.sgen:
-            net.sgen['p_mw'] = _np.array(net.sgen['p_mw'], dtype=float) * alpha_p
-        if 'q_mvar' in net.sgen:
-            net.sgen['q_mvar'] = _np.array(net.sgen['q_mvar'], dtype=float) * alpha_q
-    # gens (treat as scheduled injections)
-    if hasattr(net, 'gen') and len(net.gen.index):
-        if 'p_mw' in net.gen:
-            net.gen['p_mw'] = _np.array(net.gen['p_mw'], dtype=float) * alpha_p
-        if 'q_mvar' in net.gen:
-            net.gen['q_mvar'] = _np.array(net.gen['q_mvar'], dtype=float) * alpha_q
-
-
 def _nb_to_operator_z(net, line_idx: dict, trafo_idx: dict, ppc_base) -> np.ndarray:
-    """Aggregate node-breaker PF results to operator's standard z order.
-
-    z = [ Vm(1..nb); Pinj(1..nb); Qinj(1..nb); Pf(1..nl); Qf(1..nl); Pt(1..nl); Qt(1..nl) ]
-    where branch order and bus count are taken from ppc_base.
-    """
+    """Aggregate node-breaker PF results to operator z order."""
     import numpy as _np
+
     baseMVA = float(ppc_base["baseMVA"])
     bus = ppc_base["bus"]
     branch = ppc_base["branch"]
     nb = bus.shape[0]
     nl = branch.shape[0]
 
-    # Build planning-bus -> list of NB bus indices mapping
-    groups: dict[int, list[int]] = {i+1: [] for i in range(nb)}
+    groups: dict[int, list[int]] = {i + 1: [] for i in range(nb)}
     for bidx, row in net.bus.iterrows():
-        name = str(row.get('name', f'bus{bidx}'))
+        name = str(row.get("name", f"bus{bidx}"))
         bnum = _extract_busnum_from_name(name)
         if bnum in groups:
             groups[bnum].append(int(bidx))
 
-    # 1) Vm: average Vm of in-service and finite entries only
     Vm = _np.zeros(nb, dtype=float)
-    for i in range(1, nb+1):
+    for i in range(1, nb + 1):
         idxs = groups.get(i, [])
         if not idxs:
-            Vm[i-1] = _np.nan
-        else:
-            vms = []
-            for j in idxs:
-                try:
-                    if bool(net.bus.at[j, 'in_service']):
-                        val = float(net.res_bus.at[j, 'vm_pu'])
-                        if _np.isfinite(val):
-                            vms.append(val)
-                except Exception:
-                    # ignore missing/invalid
-                    pass
-            Vm[i-1] = float(_np.mean(vms)) if vms else _np.nan
+            Vm[i - 1] = _np.nan
+            continue
+        vals = []
+        for j in idxs:
+            try:
+                if bool(net.bus.at[j, "in_service"]):
+                    v = float(net.res_bus.at[j, "vm_pu"])
+                    if _np.isfinite(v):
+                        vals.append(v)
+            except Exception:
+                pass
+        Vm[i - 1] = float(_np.mean(vals)) if vals else _np.nan
 
-    # 2) Pinj/Qinj: sum net injections over in-service and finite entries, convert to pu
     Pinj = _np.zeros(nb, dtype=float)
     Qinj = _np.zeros(nb, dtype=float)
-    for i in range(1, nb+1):
+    for i in range(1, nb + 1):
         idxs = groups.get(i, [])
         p = 0.0
         q = 0.0
-        if idxs:
-            for j in idxs:
-                try:
-                    if bool(net.bus.at[j, 'in_service']):
-                        pv = float(net.res_bus.at[j, 'p_mw'])
-                        qv = float(net.res_bus.at[j, 'q_mvar'])
-                        if _np.isfinite(pv):
-                            p += pv
-                        if _np.isfinite(qv):
-                            q += qv
-                except Exception:
-                    # ignore missing/invalid
-                    # ignore missing/invalid
-                    pass
-            
-            # Add shunt injections if any
+        for j in idxs:
+            try:
+                if bool(net.bus.at[j, "in_service"]):
+                    pv = float(net.res_bus.at[j, "p_mw"])
+                    qv = float(net.res_bus.at[j, "q_mvar"])
+                    if _np.isfinite(pv):
+                        p += pv
+                    if _np.isfinite(qv):
+                        q += qv
+            except Exception:
+                pass
+
             if hasattr(net, "shunt") and len(net.shunt) > 0:
-                # We need to find shunts connected to bus j
-                # This is inefficient inside the loop, but robust. 
-                # Optimization: pre-build map if needed, but n_shunt is small.
                 try:
                     shunts_at_j = net.shunt[net.shunt.bus == j].index
                     for s_idx in shunts_at_j:
-                        if bool(net.shunt.at[s_idx, 'in_service']):
-                            pv = float(net.res_shunt.at[s_idx, 'p_mw'])
-                            qv = float(net.res_shunt.at[s_idx, 'q_mvar'])
+                        if bool(net.shunt.at[s_idx, "in_service"]):
+                            pv = float(net.res_shunt.at[s_idx, "p_mw"])
+                            qv = float(net.res_shunt.at[s_idx, "q_mvar"])
                             if _np.isfinite(pv):
                                 p -= pv
                             if _np.isfinite(qv):
                                 q -= qv
                 except Exception:
                     pass
-        Pinj[i-1] = -p / baseMVA
-        Qinj[i-1] = -q / baseMVA
+        Pinj[i - 1] = -p / baseMVA
+        Qinj[i - 1] = -q / baseMVA
 
-    # 3) Branch-end flows in the MATPOWER branch order
     Pf = _np.zeros(nl, dtype=float)
     Qf = _np.zeros(nl, dtype=float)
     Pt = _np.zeros(nl, dtype=float)
@@ -352,117 +351,111 @@ def _nb_to_operator_z(net, line_idx: dict, trafo_idx: dict, ppc_base) -> np.ndar
     for k in range(nl):
         fb = int(branch[k, F_BUS])
         tb = int(branch[k, T_BUS])
-        
         name_l = f"line_{fb}-{tb}"
         name_t = f"trafo_{fb}-{tb}"
         name_l_rev = f"line_{tb}-{fb}"
         name_t_rev = f"trafo_{tb}-{fb}"
-        
+
         if name_l in line_idx:
             idx = int(line_idx[name_l])
-            pf = float(net.res_line.at[idx, 'p_from_mw'])
-            qf = float(net.res_line.at[idx, 'q_from_mvar'])
-            pt = float(net.res_line.at[idx, 'p_to_mw'])
-            qt = float(net.res_line.at[idx, 'q_to_mvar'])
-            Pf[k] = pf / baseMVA
-            Qf[k] = qf / baseMVA
-            Pt[k] = pt / baseMVA
-            Qt[k] = qt / baseMVA
+            Pf[k] = float(net.res_line.at[idx, "p_from_mw"]) / baseMVA
+            Qf[k] = float(net.res_line.at[idx, "q_from_mvar"]) / baseMVA
+            Pt[k] = float(net.res_line.at[idx, "p_to_mw"]) / baseMVA
+            Qt[k] = float(net.res_line.at[idx, "q_to_mvar"]) / baseMVA
         elif name_t in trafo_idx:
             idx = int(trafo_idx[name_t])
-            pf = float(net.res_trafo.at[idx, 'p_hv_mw'])
-            qf = float(net.res_trafo.at[idx, 'q_hv_mvar'])
-            pt = float(net.res_trafo.at[idx, 'p_lv_mw'])
-            qt = float(net.res_trafo.at[idx, 'q_lv_mvar'])
-            Pf[k] = pf / baseMVA
-            Qf[k] = qf / baseMVA
-            Pt[k] = pt / baseMVA
-            Qt[k] = qt / baseMVA
+            Pf[k] = float(net.res_trafo.at[idx, "p_hv_mw"]) / baseMVA
+            Qf[k] = float(net.res_trafo.at[idx, "q_hv_mvar"]) / baseMVA
+            Pt[k] = float(net.res_trafo.at[idx, "p_lv_mw"]) / baseMVA
+            Qt[k] = float(net.res_trafo.at[idx, "q_lv_mvar"]) / baseMVA
         elif name_l_rev in line_idx:
             idx = int(line_idx[name_l_rev])
-            pf = float(net.res_line.at[idx, 'p_to_mw'])
-            qf = float(net.res_line.at[idx, 'q_to_mvar'])
-            pt = float(net.res_line.at[idx, 'p_from_mw'])
-            qt = float(net.res_line.at[idx, 'q_from_mvar'])
-            Pf[k] = pf / baseMVA
-            Qf[k] = qf / baseMVA
-            Pt[k] = pt / baseMVA
-            Qt[k] = qt / baseMVA
+            Pf[k] = float(net.res_line.at[idx, "p_to_mw"]) / baseMVA
+            Qf[k] = float(net.res_line.at[idx, "q_to_mvar"]) / baseMVA
+            Pt[k] = float(net.res_line.at[idx, "p_from_mw"]) / baseMVA
+            Qt[k] = float(net.res_line.at[idx, "q_from_mvar"]) / baseMVA
         elif name_t_rev in trafo_idx:
             idx = int(trafo_idx[name_t_rev])
-            pf = float(net.res_trafo.at[idx, 'p_lv_mw'])
-            qf = float(net.res_trafo.at[idx, 'q_lv_mvar'])
-            pt = float(net.res_trafo.at[idx, 'p_hv_mw'])
-            qt = float(net.res_trafo.at[idx, 'q_hv_mvar'])
-            Pf[k] = pf / baseMVA
-            Qf[k] = qf / baseMVA
-            Pt[k] = pt / baseMVA
-            Qt[k] = qt / baseMVA
+            Pf[k] = float(net.res_trafo.at[idx, "p_lv_mw"]) / baseMVA
+            Qf[k] = float(net.res_trafo.at[idx, "q_lv_mvar"]) / baseMVA
+            Pt[k] = float(net.res_trafo.at[idx, "p_hv_mw"]) / baseMVA
+            Qt[k] = float(net.res_trafo.at[idx, "q_hv_mvar"]) / baseMVA
 
-
-    z = _np.concatenate([Vm, Pinj, Qinj, Pf, Qf, Pt, Qt]).astype(float)
-    return z
+    return _np.concatenate([Vm, Pinj, Qinj, Pf, Qf, Pt, Qt]).astype(float)
 
 
 # ------------------------ helpers: errors ------------------------
 
-def base_gaussian_noise(z, idx_map, sigmas, rng=None):
-    """Small zero-mean Gaussian noise consistent with W used earlier.
 
-    Uses the provided RNG if given; otherwise falls back to numpy's global RNG.
-    """
-    nb_vm = idx_map["Vm"].stop - idx_map["Vm"].start
-    nb    = nb_vm
-    # we need nl for flows
-    nl    = idx_map["Pf"].stop - idx_map["Pf"].start
+def base_gaussian_noise(z, idx_map, sigmas, rng=None):
+    """Small zero-mean Gaussian noise consistent with the W matrix."""
+    nb = idx_map["Vm"].stop - idx_map["Vm"].start
+    nl = idx_map["Pf"].stop - idx_map["Pf"].start
 
     noise = np.zeros_like(z)
-    if rng is None:
-        rnorm = np.random.randn
-    else:
-        rnorm = rng.standard_normal
-    noise[idx_map["Vm"]]  = sigmas["vm"]   * rnorm(nb)
+    rnorm = np.random.randn if rng is None else rng.standard_normal
+    noise[idx_map["Vm"]] = sigmas["vm"] * rnorm(nb)
     noise[idx_map["Pinj"]] = sigmas["inj"] * rnorm(nb)
     noise[idx_map["Qinj"]] = sigmas["inj"] * rnorm(nb)
-    noise[idx_map["Pf"]]   = sigmas["flow"]* rnorm(nl)
-    noise[idx_map["Qf"]]   = sigmas["flow"]* rnorm(nl)
-    noise[idx_map["Pt"]]   = sigmas["flow"]* rnorm(nl)
-    noise[idx_map["Qt"]]   = sigmas["flow"]* rnorm(nl)
+    noise[idx_map["Pf"]] = sigmas["flow"] * rnorm(nl)
+    noise[idx_map["Qf"]] = sigmas["flow"] * rnorm(nl)
+    noise[idx_map["Pt"]] = sigmas["flow"] * rnorm(nl)
+    noise[idx_map["Qt"]] = sigmas["flow"] * rnorm(nl)
     return noise
+
+
+def sigma_vector(idx_map, sigmas=DEFAULT_SIGMAS) -> np.ndarray:
+    n = idx_map["Qt"].stop
+    out = np.zeros(n, dtype=float)
+    out[idx_map["Vm"]] = sigmas["vm"]
+    out[idx_map["Pinj"]] = sigmas["inj"]
+    out[idx_map["Qinj"]] = sigmas["inj"]
+    out[idx_map["Pf"]] = sigmas["flow"]
+    out[idx_map["Qf"]] = sigmas["flow"]
+    out[idx_map["Pt"]] = sigmas["flow"]
+    out[idx_map["Qt"]] = sigmas["flow"]
+    return out
+
 
 def apply_measurement_error(z_true, idx_map, rng):
     """
-    Add base Gaussian noise + one additional measurement error:
-      - single_gross_outlier: one random measurement gets a large additive error
-      - multi_gross_outliers: multiple random measurements (within one channel) get large additive errors
+    Add base Gaussian noise plus one additional measurement-error subtype:
+      - single_gross_outlier
+      - multi_gross_outliers
+
+    The unreachable channel-wide bias/scale branches from the old script are intentionally removed so
+    the emitted scenario semantics match the trace builder and label space exactly.
     """
-    # build baseline as actual measurements + base sensor noise
-    sigmas = {"vm": 1e-3, "inj": 1e-2, "flow": 1e-2}
+    sigmas = DEFAULT_SIGMAS
     z_base = z_true + base_gaussian_noise(z_true, idx_map, sigmas, rng)
     z_obs = z_base.copy()
 
-    subtypes = ["single_gross_outlier", "multi_gross_outliers"]
-    subtype  = rng.choice(subtypes)
-
-    # pick a channel
-    channels = ["Vm", "Pinj", "Qinj", "Pf", "Qf", "Pt", "Qt"]
-    ch = rng.choice(channels)
+    subtype = rng.choice(["single_gross_outlier", "multi_gross_outliers"])
+    ch = rng.choice(MEASUREMENT_ORDER)
     sl = idx_map[ch]
+    ch_sigma = {
+        "Vm": sigmas["vm"],
+        "Pinj": sigmas["inj"],
+        "Qinj": sigmas["inj"],
+        "Pf": sigmas["flow"],
+        "Qf": sigmas["flow"],
+        "Pt": sigmas["flow"],
+        "Qt": sigmas["flow"],
+    }[ch]
 
     if subtype == "single_gross_outlier":
-        k = rng.integers(sl.start, sl.stop)
-        # 5–15x the nominal sigma of the channel
-        ch_sigma = {"Vm":sigmas["vm"], "Pinj":sigmas["inj"], "Qinj":sigmas["inj"],
-                    "Pf":sigmas["flow"], "Qf":sigmas["flow"], "Pt":sigmas["flow"], "Qt":sigmas["flow"]}[ch]
-        amp = rng.uniform(5.0, 15.0) * ch_sigma
-        # outlier added relative to baseline (actual measurement + base noise)
-        z_obs[k] = z_base[k] + rng.choice([-1, 1]) * amp
-        info = dict(error_type="measurement_error", subtype=subtype, channel=ch, index=int(k), amplitude=float(amp))
-
-    elif subtype == "multi_gross_outliers":
-        # choose 2-5 distinct indices within the chosen channel
-        ch_sigma = {"Vm":sigmas["vm"], "Pinj":sigmas["inj"], "Qinj":sigmas["inj"],
-                    "Pf":sigmas["flow"], "Qf":sigmas["flow"], "Pt":sigmas["flow"], "Qt":sigmas["flow"]}[ch]
+        k = int(rng.integers(sl.start, sl.stop))
+        amp = float(rng.uniform(5.0, 15.0) * ch_sigma)
+        signed_amp = float(rng.choice([-1, 1]) * amp)
+        z_obs[k] = z_base[k] + signed_amp
+        info = dict(
+            error_type="measurement_error",
+            subtype=subtype,
+            channel=ch,
+            index=k,
+            amplitude=signed_amp,
+        )
+    else:
         n_in_ch = sl.stop - sl.start
         m_max = min(5, n_in_ch)
         m_min = 2 if n_in_ch >= 2 else 1
@@ -471,39 +464,24 @@ def apply_measurement_error(z_true, idx_map, rng):
         amps = rng.uniform(5.0, 15.0, size=m) * ch_sigma
         signs = rng.choice([-1, 1], size=m)
         deltas = signs * amps
-        # outliers added relative to baseline for each selected index
         z_obs[idxs] = z_base[idxs] + deltas
-        info = dict(error_type="measurement_error", subtype=subtype, channel=ch,
-                    indices=[int(i) for i in idxs], amplitudes=[float(a) for a in deltas])
-
-    elif subtype == "channel_bias":
-        # additive bias 2–8 sigmas for the whole channel
-        ch_sigma = {"Vm":sigmas["vm"], "Pinj":sigmas["inj"], "Qinj":sigmas["inj"],
-                    "Pf":sigmas["flow"], "Qf":sigmas["flow"], "Pt":sigmas["flow"], "Qt":sigmas["flow"]}[ch]
-        bias = rng.uniform(2.0, 8.0) * ch_sigma * rng.choice([-1, 1])
-        z_obs[sl] += bias
-        info = dict(error_type="measurement_error", subtype=subtype, channel=ch, bias=float(bias))
-
-    else:  # channel_scale
-        # multiplicative 1±[1..5]%
-        scale = 1.0 + rng.choice([-1, 1]) * rng.uniform(0.01, 0.05)
-        z_obs[sl] *= scale
-        info = dict(error_type="measurement_error", subtype=subtype, channel=ch, scale=float(scale))
+        info = dict(
+            error_type="measurement_error",
+            subtype=subtype,
+            channel=ch,
+            indices=[int(i) for i in idxs],
+            amplitudes=[float(a) for a in deltas],
+        )
 
     return z_obs, info
 
+
 def apply_parameter_error_oneline(ppc_nominal, rng, r_range, x_range):
-    """
-    Create 'true' ppc with ONE **line** parameter error (transformers excluded):
-    randomly choose R-only, X-only or both; return true_ppc and ground-truth dict.
-    """
+    """Create a true ppc with ONE line-parameter error (transformers excluded)."""
     ppc_true = deepcopy(ppc_nominal)
     br = ppc_true["branch"]
 
-    # Only perturb "normal" branches: in-service lines (not transformers) with BOTH R and X non-zero.
-    # This avoids cases like R=0 lines (purely reactive) which are difficult for the current
-    # parameter-correction routine (it enforces a strictly-positive lower bound on R/X).
-    mask_line = branch_line_mask(ppc_true)  # exclude transformers :contentReference[oaicite:10]{index=10}
+    mask_line = branch_line_mask(ppc_true)
     eps = 1e-9
     mask_normal = mask_line & (np.abs(br[:, BR_R]) > eps) & (np.abs(br[:, BR_X]) > eps)
     idx_candidates = np.where(mask_normal)[0]
@@ -513,16 +491,11 @@ def apply_parameter_error_oneline(ppc_nominal, rng, r_range, x_range):
     i = int(rng.choice(idx_candidates))
     which = rng.choice(["R", "X", "RX"])
 
-    
-    def _pick_factor(rng, val_range):
-        """Helper to pick a value from a range which might be a tuple (min, max) or list of tuples."""
+    def _pick_factor(local_rng, val_range):
         if isinstance(val_range, list):
-            # disjoint ranges
-            sub_range = rng.choice(val_range)
-            return rng.uniform(*sub_range)
-        else:
-            # single tuple
-            return rng.uniform(*val_range)
+            sub_range = local_rng.choice(val_range)
+            return local_rng.uniform(*sub_range)
+        return local_rng.uniform(*val_range)
 
     r_factor = 1.0
     x_factor = 1.0
@@ -531,23 +504,295 @@ def apply_parameter_error_oneline(ppc_nominal, rng, r_range, x_range):
     if which in ("X", "RX"):
         x_factor = _pick_factor(rng, x_range)
 
-    # ensure positivity
     br[i, BR_R] = max(1e-6, br[i, BR_R] * r_factor)
     br[i, BR_X] = max(1e-6, br[i, BR_X] * x_factor)
 
     label = dict(
         error_type="parameter_error",
         subtype=which,
-        line_row=i,  # row in MATPOWER/PYPOWER branch matrix
+        line_row=int(i),
         from_bus=int(br[i, F_BUS]),
         to_bus=int(br[i, T_BUS]),
         r_factor=float(r_factor),
-        x_factor=float(x_factor)
+        x_factor=float(x_factor),
     )
     return ppc_true, label
 
 
+def make_initial_state_guess(bus_solved: np.ndarray, rng: np.random.Generator) -> list[float]:
+    """Small perturbation around the solved state for multi-scan parameter correction."""
+    vm = np.asarray(bus_solved[:, VM], dtype=float).copy()
+    va = np.asarray(bus_solved[:, VA], dtype=float).copy()
+    vm += rng.normal(0.0, 2e-4, size=vm.shape[0])
+    va += rng.normal(0.0, 5e-2, size=va.shape[0])  # degrees
+    return np.concatenate([vm, va]).astype(float).tolist()
+
+
+# ------------------------ sample builders ------------------------
+
+
+def make_no_error_record(rng, ppc_base, idx_map, load_scale_min, load_scale_max):
+    alpha = float(rng.uniform(load_scale_min, load_scale_max))
+    ppc_scaled = scale_loads(ppc_base, alpha, alpha)
+    solved = solve_ac_opf(ppc_scaled)
+    if solved is None:
+        return None
+
+    z_true = compute_measurements_pu(solved)
+    z_obs = z_true + base_gaussian_noise(z_true, idx_map, DEFAULT_SIGMAS, rng)
+    return dict(
+        id=f"ne_{rng.integers(1e12)}",
+        scenario="no_error",
+        z_true=z_true.tolist(),
+        z_obs=z_obs.tolist(),
+        label=dict(error_type="no_error"),
+        op_point=dict(load_scale=alpha),
+    )
+
+
+def make_measurement_error_record(rng, ppc_base, idx_map, load_scale_min, load_scale_max):
+    alpha = float(rng.uniform(load_scale_min, load_scale_max))
+    ppc_scaled = scale_loads(ppc_base, alpha, alpha)
+    solved = solve_ac_opf(ppc_scaled)
+    if solved is None:
+        return None
+
+    z_true = compute_measurements_pu(solved)
+    z_obs, info = apply_measurement_error(z_true, idx_map, rng)
+    return dict(
+        id=f"me_{rng.integers(1e12)}",
+        scenario="measurement_error",
+        z_true=z_true.tolist(),
+        z_obs=z_obs.tolist(),
+        label=info,
+        op_point=dict(load_scale=alpha),
+    )
+
+
+def make_parameter_error_record(
+    rng,
+    ppc_base,
+    idx_map,
+    load_scale_min,
+    load_scale_max,
+    r_err_range,
+    x_err_range,
+    num_scans_for_correction,
+    out_dir: Path,
+):
+    alpha = float(rng.uniform(load_scale_min, load_scale_max))
+    ppc_scaled = scale_loads(ppc_base, alpha, alpha)
+    ppc_true, label = apply_parameter_error_oneline(ppc_scaled, rng, r_err_range, x_err_range)
+    solved_true = solve_ac_opf(ppc_true)
+    if solved_true is None:
+        return None
+
+    z_true = compute_measurements_pu(solved_true)
+    z_obs = z_true + base_gaussian_noise(z_true, idx_map, DEFAULT_SIGMAS, rng)
+
+    sigma_R = sigma_vector(idx_map, DEFAULT_SIGMAS)
+    nz = z_true.shape[0]
+
+    z_scans = []
+    initial_states = []
+    for _ in range(int(num_scans_for_correction)):
+        z_scan = (z_true + rng.standard_normal(nz) * sigma_R).astype(float).tolist()
+        z_scans.append(z_scan)
+        initial_states.append(make_initial_state_guess(solved_true["bus"], rng))
+
+    case_basename = f"case_param_err_{rng.integers(1e12)}"
+    case_path = write_ppc_as_matpower_m(
+        ppc_true,
+        out_dir / "cases_parameter_error" / f"{case_basename}.m",
+        case_basename,
+    )
+
+    rec = dict(
+        id=f"pe_{rng.integers(1e12)}",
+        scenario="parameter_error",
+        z_true=z_true.tolist(),
+        z_obs=z_obs.tolist(),
+        z_scans=z_scans,
+        initial_states=initial_states,
+        label=label,
+        op_point=dict(load_scale=alpha),
+        parameter_error_case_path=str(case_path),
+        correction_case_path=str(case_path),
+    )
+    return rec
+
+
+def make_topology_error_record(rng, ppc_base, idx_map, out_dir: Path):
+    try:
+        try:
+            from . import nodebreaker_pp14 as nb  # type: ignore
+        except Exception:
+            import sys as _sys
+            import os as _os
+            _sys.path.append(_os.path.dirname(__file__))
+            import nodebreaker_pp14 as nb  # type: ignore
+    except Exception:
+        return None
+
+    status_map, topo_label = _choose_random_cb_open(rng, None)
+    try:
+        net, sec_bus, cb_idx, line_idx, trafo_idx = nb.build_nb_ieee14_pocket123(status_map=status_map)
+    except Exception:
+        return None
+
+    alpha = 1.0
+    try:
+        import pandapower as pp  # type: ignore
+        pp.runpp(net, init="dc")
+    except Exception:
+        return None
+
+    z_true = _nb_to_operator_z(net, line_idx, trafo_idx, ppc_base)
+    z_obs = z_true + base_gaussian_noise(z_true, idx_map, DEFAULT_SIGMAS, rng)
+
+    z_true_full_model = None
+    corrected_model_path = None
+    try:
+        try:
+            from . import nb_to_matpower as nb2mp
+        except ImportError:
+            import sys as _sys
+            import os as _os
+            _sys.path.append(_os.path.dirname(__file__))
+            import nb_to_matpower as nb2mp
+
+        net_bb, _ = nb2mp.topology_processed_busbranch(net)
+        if hasattr(nb2mp, "_prune_dangling_buses"):
+            nb2mp._prune_dangling_buses(net_bb)
+
+        import pandapower as pp  # type: ignore
+        try:
+            pp.runpp(net_bb, init="flat")
+        except Exception:
+            pass
+
+        # Export through the existing converter to get a reordered bus-branch model,
+        # then persist our own text `.m` so the MCP regex parser can load it reliably.
+        tmp_export_path = out_dir / "_tmp_topology_exports" / f"tmp_topology_{rng.integers(1e12)}.m"
+        tmp_export_path.parent.mkdir(parents=True, exist_ok=True)
+        ppc_full = nb2mp.export_to_matpower(net_bb, filename_mat=str(tmp_export_path))
+
+        res_vm = net_bb.res_bus.sort_index()["vm_pu"].values
+        res_va = net_bb.res_bus.sort_index()["va_degree"].values
+        if len(res_vm) == ppc_full["bus"].shape[0]:
+            ppc_full["bus"][:, VM] = res_vm
+            ppc_full["bus"][:, VA] = res_va
+
+        z_true_full_model = compute_measurements_pu(ppc_full)
+        nb_full = ppc_full["bus"].shape[0]
+        nl_full = ppc_full["branch"].shape[0]
+        idx_map_full = make_index_map(nb_full, nl_full)
+        z_true_full_model = z_true_full_model + base_gaussian_noise(
+            z_true_full_model, idx_map_full, DEFAULT_SIGMAS, rng
+        )
+
+        model_basename = f"case_topology_corrected_{rng.integers(1e12)}"
+        corrected_model_path = write_ppc_as_matpower_m(
+            ppc_full,
+            out_dir / "models_topology" / f"{model_basename}.m",
+            model_basename,
+        )
+    except Exception as e:
+        print(f"[warn] Failed to build topology verification model: {e}")
+        z_true_full_model = None
+        corrected_model_path = None
+
+    rec = dict(
+        id=f"to_{rng.integers(1e12)}",
+        scenario="topology_error",
+        z_true=z_true.tolist(),
+        z_obs=z_obs.tolist(),
+        label=topo_label,
+        op_point=dict(load_scale=float(alpha)),
+    )
+    if z_true_full_model is not None:
+        rec["z_true_full_model"] = z_true_full_model.tolist()
+    if corrected_model_path is not None:
+        rec["corrected_model_path"] = str(corrected_model_path)
+    return rec
+
+
+def make_harmonic_anomaly_record(rng):
+    if not HARMONICS_AVAILABLE:
+        return None
+
+    src = int(rng.choice(HARMONIC_DEFAULT_CANDIDATES))
+    thd = float(rng.uniform(0.10, 0.20))
+    trace = build_trace(
+        source_bus_1based=src,
+        target_thd=thd,
+        seed=int(rng.integers(1e9)),
+    )
+
+    harmonic_measurements = []
+    harmonic_orders = []
+    for h_str, meas_list in trace["harmonic_phasors"].items():
+        h = int(h_str)
+        harmonic_orders.append(h)
+        for m in meas_list:
+            c = m["V_complex_noisy"]
+            harmonic_measurements.append(
+                {
+                    "bus": int(m["bus_1based"]),
+                    "h": h,
+                    "V_real": float(c[0]),
+                    "V_imag": float(c[1]),
+                    "sigma": float(m["sigma"]),
+                }
+            )
+
+    return dict(
+        id=f"ha_{rng.integers(1e12)}",
+        scenario="harmonic_anomaly",
+        z_true=trace["z_scada_true"],
+        z_obs=trace["z_scada_meas"],
+        harmonic_measurements=harmonic_measurements,
+        harmonic_orders=sorted(set(int(h) for h in harmonic_orders)),
+        label=dict(error_type="harmonic_anomaly", source_bus=src, thd_target=thd),
+        op_point=dict(load_scale=1.0),
+    )
+
+
+# ------------------------ generation loop helpers ------------------------
+
+
+def _emit_records(
+    target_count: int,
+    desc: str,
+    make_record: Callable[[], Optional[Dict[str, Any]]],
+    fout,
+    *,
+    max_attempt_multiplier: int,
+) -> int:
+    target_count = int(target_count)
+    if target_count <= 0:
+        return 0
+
+    written = 0
+    attempts = 0
+    max_attempts = max(target_count * max_attempt_multiplier, target_count + 25)
+    with tqdm(total=target_count, desc=desc) as pbar:
+        while written < target_count and attempts < max_attempts:
+            attempts += 1
+            rec = make_record()
+            if rec is None:
+                continue
+            fout.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            written += 1
+            pbar.update(1)
+
+    if written < target_count:
+        print(f"[warn] {desc}: wrote {written}/{target_count} after {attempts} attempts.")
+    return written
+
+
 # ------------------------ main generator ------------------------
+
 
 def generate_dataset(
     case_name="14",
@@ -559,382 +804,145 @@ def generate_dataset(
     seed=42,
     load_scale_min=0.80,
     load_scale_max=1.25,
-
     r_err_range=[(0.1, 0.5), (2.0, 5.0)],
     x_err_range=[(0.1, 0.5), (2.0, 5.0)],
     out_dir="out_sft_measurements",
     num_scans_for_correction: int = 8,
+    max_attempt_multiplier: int = DEFAULTS["max_attempt_multiplier"],
 ):
     rng = np.random.default_rng(seed)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
     ppc_base = load_case(case_name)
-    baseMVA  = ppc_base["baseMVA"]
-    nb       = ppc_base["bus"].shape[0]
-    nl       = ppc_base["branch"].shape[0]
-    idx_map  = make_index_map(nb, nl)
+    baseMVA = ppc_base["baseMVA"]
+    nb = ppc_base["bus"].shape[0]
+    nl = ppc_base["branch"].shape[0]
+    idx_map = make_index_map(nb, nl)
 
-    # metadata
     br = ppc_base["branch"]
     branch_info = [
-        dict(i=int(i),
-             from_bus=int(br[i, F_BUS]),
-             to_bus=int(br[i, T_BUS]),
-             is_line=bool(br[i, TAP] == 0.0 and br[i, BR_STATUS] > 0))
+        dict(
+            i=int(i),
+            from_bus=int(br[i, F_BUS]),
+            to_bus=int(br[i, T_BUS]),
+            is_line=bool(br[i, TAP] == 0.0 and br[i, BR_STATUS] > 0),
+        )
         for i in range(nl)
     ]
+
+    n_topo = int(n_topology)
+    n_param = int(round(n_total * frac_param_err))
+    n_meas = max(0, int(n_total) - n_param - n_topo)
+    n_harm = int(n_harmonic)
 
     meta = dict(
         case=f"case{case_name}",
         baseMVA=float(baseMVA),
-        nb=int(nb), nl=int(nl),
-        index_map={k:[v.start, v.stop] for k, v in idx_map.items()},
+        nb=int(nb),
+        nl=int(nl),
+        index_map={k: [v.start, v.stop] for k, v in idx_map.items()},
+        measurement_order=MEASUREMENT_ORDER,
         branch_info=branch_info,
-        note="Flows (Pf/Qf/Pt/Qt) follow PYPOWER branch order."
+        sigmas=DEFAULT_SIGMAS,
+        scenarios_emitted=["no_error", "measurement_error", "parameter_error", "topology_error", "harmonic_anomaly"],
+        omitted_scenarios=["three_phase_imbalance"],
+        requested_counts={
+            "no_error": int(n_negative),
+            "measurement_error": int(n_meas),
+            "parameter_error": int(n_param),
+            "topology_error": int(n_topo),
+            "harmonic_anomaly": int(n_harm),
+        },
+        note="Measurements follow order [Vm, Pinj, Qinj, Pf, Qf, Pt, Qt]. Topology verification models and parameter-error models are stored as MATPOWER text .m files.",
     )
-    with open(out / "meta.json", "w") as f:
+
+    samples_path = out / "samples.jsonl"
+    written_counts = {k: 0 for k in meta["requested_counts"].keys()}
+
+    with samples_path.open("w", encoding="utf-8") as fout:
+        written_counts["no_error"] = _emit_records(
+            int(n_negative),
+            "No-error scenarios",
+            lambda: make_no_error_record(rng, ppc_base, idx_map, load_scale_min, load_scale_max),
+            fout,
+            max_attempt_multiplier=max_attempt_multiplier,
+        )
+
+        written_counts["measurement_error"] = _emit_records(
+            n_meas,
+            "Measurement-error scenarios",
+            lambda: make_measurement_error_record(rng, ppc_base, idx_map, load_scale_min, load_scale_max),
+            fout,
+            max_attempt_multiplier=max_attempt_multiplier,
+        )
+
+        written_counts["parameter_error"] = _emit_records(
+            n_param,
+            "Parameter-error scenarios",
+            lambda: make_parameter_error_record(
+                rng,
+                ppc_base,
+                idx_map,
+                load_scale_min,
+                load_scale_max,
+                r_err_range,
+                x_err_range,
+                num_scans_for_correction,
+                out,
+            ),
+            fout,
+            max_attempt_multiplier=max_attempt_multiplier,
+        )
+
+        if case_name != "14" and n_topo > 0:
+            print("[warn] Topology-error synthesis is only supported for case14; skipping.")
+        written_counts["topology_error"] = _emit_records(
+            n_topo if case_name == "14" else 0,
+            "Topology-error scenarios",
+            lambda: make_topology_error_record(rng, ppc_base, idx_map, out),
+            fout,
+            max_attempt_multiplier=max_attempt_multiplier,
+        )
+
+        if n_harm > 0 and (case_name != "14" or not HARMONICS_AVAILABLE):
+            print("[warn] Harmonic-anomaly synthesis is only supported for case14 with the Harmonics module; skipping.")
+        written_counts["harmonic_anomaly"] = _emit_records(
+            n_harm if case_name == "14" and HARMONICS_AVAILABLE else 0,
+            "Harmonic-anomaly scenarios",
+            lambda: make_harmonic_anomaly_record(rng),
+            fout,
+            max_attempt_multiplier=max_attempt_multiplier,
+        )
+
+    meta["written_counts"] = {k: int(v) for k, v in written_counts.items()}
+    with (out / "meta.json").open("w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
 
-    # counts
-    n_param = int(round(n_total * frac_param_err))
-    n_meas  = max(0, n_total - n_param - int(n_topology))
-    n_topo  = int(n_topology)
-    n_harm  = int(n_harmonic)
-
-    # writers
-    fout = open(out / "samples.jsonl", "w")
-
-    # -------- generate negative scenarios (clean; only base noise) --------
-    for _ in tqdm(range(n_negative), desc="Negative scenarios"):
-        alpha = rng.uniform(load_scale_min, load_scale_max)
-        ppc_scaled = scale_loads(ppc_base, alpha, alpha)
-        solved = solve_ac_opf(ppc_scaled)
-        if solved is None:
-            continue
-
-        z_true = compute_measurements_pu(solved)
-        z_obs  = z_true + base_gaussian_noise(z_true, idx_map, {"vm":1e-3, "inj":1e-2, "flow":1e-2}, rng)
-
-        rec = dict(
-            id=f"neg_{rng.integers(1e12)}",
-            scenario="negative",
-            z_true=z_true.tolist(),
-            z_obs=z_obs.tolist(),
-            label=dict(error_type="none"),
-            op_point=dict(load_scale=float(alpha))
-        )
-        fout.write(json.dumps(rec) + "\n")
-
-    # -------- generate measurement-error scenarios --------
-    for _ in tqdm(range(n_meas), desc="Measurement-error scenarios"):
-        # diversify the operating point
-        alpha = rng.uniform(load_scale_min, load_scale_max)
-        ppc_scaled = scale_loads(ppc_base, alpha, alpha)
-        solved = solve_ac_opf(ppc_scaled)
-        if solved is None:
-            continue  # skip and let the loop proceed; or retry if you prefer
-
-        z_true = compute_measurements_pu(solved)
-        z_obs, info = apply_measurement_error(z_true, idx_map, rng)
-
-        rec = dict(
-            id=f"me_{rng.integers(1e12)}",
-            scenario="measurement_error",
-            z_true=z_true.tolist(),
-            z_obs=z_obs.tolist(),
-            label=info,
-            op_point=dict(load_scale=float(alpha))
-        )
-        fout.write(json.dumps(rec) + "\n")
-
-    # -------- generate parameter-error scenarios --------
-    for _ in tqdm(range(n_param), desc="Parameter-error scenarios"):
-        alpha = rng.uniform(load_scale_min, load_scale_max)
-        ppc_scaled = scale_loads(ppc_base, alpha, alpha)
-
-        # create "true" network with one line parameter error
-        ppc_true, label = apply_parameter_error_oneline(ppc_scaled, rng, r_err_range, x_err_range)
-
-        solved_true = solve_ac_opf(ppc_true)
-        if solved_true is None:
-            continue
-
-        # measure from true physics, add only small base sensor noise
-        z_true = compute_measurements_pu(solved_true)
-        z_obs  = z_true + base_gaussian_noise(
-            z_true, idx_map, {"vm": 1e-3, "inj": 1e-2, "flow": 1e-2}, rng
-        )
-
-        # --- multi-snapshot series for parameter correction ---
-        # Follow the MATLAB logic:
-        #   multi_scan_measurements_z(:, scan) = z_true_clean_base + randn .* sigma_R;
-        #   initial_states_multi_scan(:, scan) = [Vm; angle_deg];
-        nz = z_true.shape[0]
-        # Build sigma_R consistent with base_gaussian_noise
-        sigma_R = np.zeros_like(z_true)
-        sigma_R[idx_map["Vm"]] = 1e-3
-        sigma_R[idx_map["Pinj"]] = 1e-2
-        sigma_R[idx_map["Qinj"]] = 1e-2
-        sigma_R[idx_map["Pf"]] = 1e-2
-        sigma_R[idx_map["Qf"]] = 1e-2
-        sigma_R[idx_map["Pt"]] = 1e-2
-        sigma_R[idx_map["Qt"]] = 1e-2
-
-        # Base clean measurement and state
-        z_base = z_true
-        bus_true = solved_true["bus"]
-        # [V(1..nb); angle_deg(1..nb)] using VM, VA columns
-        state0 = np.concatenate([bus_true[:, VM], bus_true[:, VA]]).astype(float).tolist()
-
-        z_scans = []
-        initial_states = []
-        for _scan in range(num_scans_for_correction):
-            noise_vec = rng.standard_normal(nz) * sigma_R
-            z_scan = (z_base + noise_vec).astype(float).tolist()
-            z_scans.append(z_scan)
-            initial_states.append(state0)
-
-        rec = dict(
-            id=f"pe_{rng.integers(1e12)}",
-            scenario="parameter_error",
-            z_true=z_true.tolist(),
-            z_obs=z_obs.tolist(),
-            z_scans=z_scans,
-            initial_states=initial_states,
-            label=label,
-            op_point=dict(load_scale=float(alpha))
-        )
-        fout.write(json.dumps(rec) + "\n")
-
-    # -------- generate topology-error scenarios (IEEE-14 only) --------
-    if case_name != "14" and n_topo > 0:
-        print("[warn] Topology-error synthesis only supported for case14; skipping.")
-    for _ in tqdm(range(n_topo), desc="Topology-error scenarios"):
-        if case_name != "14":
-            break
-        # pick a random CB in pocket {1,2,3} and flip it
-        rng_local = rng  # alias
-        status_map, topo_label = _choose_random_cb_open(rng_local, None)
-        # build node-breaker net with this modification
-        try:
-            try:
-                from . import nodebreaker_pp14 as nb  # type: ignore
-            except Exception:
-                import sys as _sys, os as _os
-                _sys.path.append(_os.path.dirname(__file__))
-                import nodebreaker_pp14 as nb  # type: ignore
-            net, sec_bus, cb_idx, line_idx, trafo_idx = nb.build_nb_ieee14_pocket123(status_map=status_map)
-        except Exception as e:
-            # cannot build NB net; skip
-            continue
-        # scale operating point
-        # alpha = rng_local.uniform(load_scale_min, load_scale_max)
-        # _scale_nb_net(net, alpha, alpha)
-        # For topology verification, we want to match the base case model used in quick_check_topology.py
-        # So we skip scaling (alpha=1.0)
-        alpha = 1.0
-        # run PF (robust init)
-        try:
-            import pandapower as pp  # type: ignore
-            pp.runpp(net, init="dc")
-        except Exception:
-            continue
-
-        # Map NB PF measurements to operator (MATPOWER) z order (fixed operator model)
-        z_true = _nb_to_operator_z(net, line_idx, trafo_idx, ppc_base)
-        z_obs  = z_true + base_gaussian_noise(z_true, idx_map, {"vm":1e-3,"inj":1e-2,"flow":1e-2}, rng_local)
-
-        # Also attach a full measurement set for the actual NB system model by
-        # converting the pandapower net directly to a PYPOWER-style ppc and
-        # computing z = [Vm, Pinj, Qinj, Pf, Qf, Pt, Qt] on that model.
-        z_true_full_model = None
-        try:
-            # Use the same logic as the topology correction to ensure model alignment
-            try:
-                from . import nb_to_matpower as nb2mp
-            except ImportError:
-                import sys, os
-                sys.path.append(os.path.dirname(__file__))
-                import nb_to_matpower as nb2mp
-            
-            # We need to rebuild the net to get the "processed" bus-branch model
-            # nb_to_matpower.topology_processed_busbranch expects a net with impedance/switch status
-            # The 'net' here already has the status_map applied.
-            
-            # 1. Convert to bus-branch using the standard logic
-            net_bb, _ = nb2mp.topology_processed_busbranch(net)
-            
-            # Prune dangling buses (sync with nb_to_matpower logic)
-            if hasattr(nb2mp, "_prune_dangling_buses"):
-                nb2mp._prune_dangling_buses(net_bb)
-            
-            # 2. Run PF on the bus-branch net (needed for results)
-            import pandapower as pp
-            try:
-                pp.runpp(net_bb, init="flat")
-            except:
-                pass
-                
-            # 3. Export to MATPOWER ppc (with reordering and tap fixes)
-            # Save the corrected model to a file
-            model_filename = f"model_{rng_local.integers(1e12)}.mat"
-            model_path = out / "models" / model_filename
-            model_path.parent.mkdir(parents=True, exist_ok=True)
-            ppc_full = nb2mp.export_to_matpower(net_bb, filename_mat=str(model_path))
-            
-            # CRITICAL FIX: Populate ppc_full with the SOLVED results from net_bb
-            # to_mpc does not copy results to VM/VA columns, it uses init values.
-            # We must map net_bb.res_bus to ppc_full['bus'].
-            # Assuming ppc_full['bus'] follows net_bb.bus order (which it should for 0..N-1 indices)
-            
-            # Ensure we extract results in the correct order
-            res_vm = net_bb.res_bus.sort_index()['vm_pu'].values
-            res_va = net_bb.res_bus.sort_index()['va_degree'].values
-            
-            if len(res_vm) == ppc_full['bus'].shape[0]:
-                # VM/VA are imported from pypower.idx_bus (0-based indices)
-                ppc_full['bus'][:, VM] = res_vm
-                ppc_full['bus'][:, VA] = res_va
-            else:
-                print(f"Warning: Result shape mismatch. net_bb: {len(res_vm)}, ppc: {ppc_full['bus'].shape[0]}")
-
-            z_true_full_model = compute_measurements_pu(ppc_full)
-            
-            # Add base Gaussian noise to the full model measurements as well.
-            # We must use an index map consistent with ppc_full (which may have different NB/NL than base).
-            if z_true_full_model is not None:
-                width_full = z_true_full_model.shape[0]
-                nb_full = ppc_full["bus"].shape[0]
-                nl_full = ppc_full["branch"].shape[0]
-                idx_map_full = make_index_map(nb_full, nl_full)
-                
-                # Double check sizes
-                expected = 3*nb_full + 4*nl_full
-                if width_full == expected:
-                    z_true_full_model += base_gaussian_noise(
-                        z_true_full_model, idx_map_full, {"vm": 1e-3, "inj": 1e-2, "flow": 1e-2}, rng_local
-                    )
-                else:
-                    print(f"Warning: z_true_full_model size {width_full} does not match expected {expected} (nb={nb_full}, nl={nl_full}).")
-
-
-
-        except Exception as e:
-            print(f"Warning: Failed to generate z_true_full_model: {e}")
-            z_true_full_model = None
-            model_path = None
-
-        rec = dict(
-            id=f"to_{rng_local.integers(1e12)}",
-            scenario="topology_error",
-            z_true=z_true.tolist(),
-            z_obs=z_obs.tolist(),
-            label=topo_label,
-            op_point=dict(load_scale=float(alpha))
-        )
-        if z_true_full_model is not None:
-            rec["z_true_full_model"] = z_true_full_model.tolist()
-        if model_path is not None:
-            # Store absolute path for easy access
-            rec["corrected_model_path"] = str(model_path.resolve())
-        fout.write(json.dumps(rec) + "\n")
-
-    # -------- generate harmonic-anomaly scenarios (IEEE-14 only) --------
-    if n_harm > 0:
-        if case_name != "14" or not HARMONICS_AVAILABLE:
-            print("[warn] Harmonic-anomaly synthesis only supported for case14 with Harmonics module. Skipping.")
-        else:
-            for _ in tqdm(range(n_harm), desc="Harmonic-anomaly scenarios"):
-                # Always generate with Harmonics on
-                # Since harmonic modeling in `ieee14_verification` is hardcoded to a specific base model,
-                # we don't scale operating loads here natively unless we also update the harmonics base load arrays.
-                # For now, default op scale is used inside build_full_harmonic_z implicitly.
-                
-                # We can randomize the seed for different noise realizations and source levels
-                h_seed = int(rng.integers(1e9))
-                n_seed = int(rng.integers(1e9))
-                
-                # Run the trigger_hse builder (which gives SCADA + Harmonic states)
-                z_full, V_by_h_true, Iinj_by_h_true = build_full_harmonic_z(
-                    bus=H_BUS,
-                    branch=H_BRANCH,
-                    base_mva=H_BASE_MVA,
-                    harmonic_on=True,
-                    rng_seed_harmonic=h_seed,
-                    rng_seed_noise=n_seed,
-                    add_noise=True,
-                    return_harmonic_states=True
-                )
-                
-                # Simulate the sparse harmonic voltage measurements needed by HSE
-                # E.g., assume 6 harmonic meters are available 
-                meter_buses = [2, 3, 4, 5, 9, 14] # 1-based
-                harmonic_orders = [5, 7, 11, 13, 17, 19]
-                Vh_meas_by_h = simulate_harmonic_voltage_meter_measurements(
-                    V_by_h_true,
-                    meter_buses_1based=meter_buses,
-                    harmonic_orders=harmonic_orders,
-                    sigma_v=5e-4,
-                    rng_seed=n_seed + 1
-                )
-                
-                # Flatten Vh_meas_by_h into a list of dictionaries for JSON serialization and tool input
-                harmonic_measurements_list = []
-                for h in harmonic_orders:
-                    buses0, Vmeas, sigma = Vh_meas_by_h.get(h, ([], [], []))
-                    for i_idx, b0 in enumerate(buses0):
-                        harmonic_measurements_list.append({
-                            "bus": int(b0) + 1,  # 1-based
-                            "h": int(h),
-                            "V_real": float(Vmeas[i_idx].real),
-                            "V_imag": float(Vmeas[i_idx].imag),
-                            "sigma": float(sigma[i_idx])
-                        })
-
-                # Create the true SCADA vector (re-run without noise) to get z_true
-                z_true, _, _ = build_full_harmonic_z(
-                    bus=H_BUS,
-                    branch=H_BRANCH,
-                    base_mva=H_BASE_MVA,
-                    harmonic_on=True,
-                    rng_seed_harmonic=h_seed,
-                    rng_seed_noise=n_seed,
-                    add_noise=False,
-                    return_harmonic_states=True
-                )
-
-                rec = dict(
-                    id=f"ha_{rng.integers(1e12)}",
-                    scenario="harmonic_anomaly",
-                    z_true=z_true,
-                    z_obs=z_full,
-                    harmonic_measurements=harmonic_measurements_list,
-                    label=dict(error_type="harmonic_anomaly", source_bus=3, thd_target=10.0), # Hardcoded to 3 in current `build_full_harmonic_z`
-                    op_point=dict(load_scale=1.0)
-                )
-                fout.write(json.dumps(rec) + "\n")
-
-    fout.close()
     print(f"\nWrote dataset to: {out.resolve()}")
+    print(f"Samples: {samples_path.resolve()}")
+    print(f"Meta: {(out / 'meta.json').resolve()}")
 
 
 # ------------------------ CLI ------------------------
 
+
 if __name__ == "__main__":
     import argparse
+
     p = argparse.ArgumentParser()
-    p.add_argument("--case", choices=["14","118"], default=DEFAULTS["case_name"])
+    p.add_argument("--case", choices=["14", "118"], default=DEFAULTS["case_name"])
     p.add_argument("--n", type=int, default=DEFAULTS["n_total"])
     p.add_argument("--frac-param", type=float, default=DEFAULTS["frac_param_err"])
-    p.add_argument("--neg", type=int, default=DEFAULTS["n_negative"], help="number of negative (clean) samples")
+    p.add_argument("--neg", type=int, default=DEFAULTS["n_negative"], help="number of clean no-error samples")
     p.add_argument("--topo", type=int, default=200, help="number of topology-error samples (IEEE-14 only)")
     p.add_argument("--harm", type=int, default=100, help="number of harmonic-anomaly samples (IEEE-14 only)")
     p.add_argument("--seed", type=int, default=DEFAULTS["seed"])
     p.add_argument("--out", type=str, default="out_sft_measurements")
     p.add_argument("--ls-min", type=float, default=DEFAULTS["load_scale_min"])
     p.add_argument("--ls-max", type=float, default=DEFAULTS["load_scale_max"])
-    # Ranges are now complex lists of tuples, removing simple CLI args for them to use defaults
+    p.add_argument("--scans", type=int, default=8, help="number of multi-scan snapshots for parameter correction")
+    p.add_argument("--attempt-mult", type=int, default=DEFAULTS["max_attempt_multiplier"], help="max attempts per requested sample = target * attempt_mult")
     args = p.parse_args()
 
     generate_dataset(
@@ -947,7 +955,7 @@ if __name__ == "__main__":
         seed=args.seed,
         load_scale_min=args.ls_min,
         load_scale_max=args.ls_max,
-        # Use defaults for ranges
-        out_dir=args.out
+        out_dir=args.out,
+        num_scans_for_correction=args.scans,
+        max_attempt_multiplier=args.attempt_mult,
     )
-

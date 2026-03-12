@@ -1,668 +1,1153 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-Build SFT-ready tool-use traces for the diagnostic agent.
+Revised SFT trace builder for the power-system diagnostic agent.
 
-- Reads scenarios from the generated dataset (measurement_error / parameter_error / negative).
-- Calls the MCP tool implemented in mcp_server/matpower_server.py (or --mock to stub):
-    - wls_from_path(case_path: str, z: List[float]) -> {success, r, lambdaN, ...}
-- Emits OpenAI-style chat JSONL with a single tool call followed by a structured final decision.
-- Keeps labels strictly structured (no chain-of-thought).
+Key upgrades over the original:
+- Aligns the prompt, available tools, and final target schema.
+- Centralizes MCP JSON parsing and mock payload generation.
+- Normalizes scenario naming (`negative` -> `no_error`).
+- Produces a more informative final JSON target with explicit evidence.
+- Uses deterministic hash-based train/valid/test splitting without rereading the output.
+- Avoids heuristic "undo bias/scale" no-error synthesis by default, because the paired
+  generator already emits explicit negative samples.
 
-Requirements: requests, numpy, pandas, tqdm
+The script still emits OpenAI-style chat JSONL suitable for SFT with tool use.
+It does not emit hidden chain-of-thought; the final assistant response is structured JSON.
 """
 
-import os, json, time, random, hashlib
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+import random
+import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
+
 import numpy as np
-import pandas as pd
 import requests
 from tqdm import tqdm
 
-# --------- MCP client (JSON-RPC over HTTP or WebSocket HTTP-bridge) ---------
+try:
+    from scripts.trigger_hse import chi2_threshold as _chi2_threshold
+except Exception:
+    _chi2_threshold = None
 
-def mcp_call_tool(endpoint: str, name: str, arguments: dict, timeout=60):
-    """
-    Minimal MCP JSON-RPC call for FastMCP HTTP bridge.
-    Expects endpoint to handle method "tools/call" with params {name, arguments} and return
-    {"result": {"isError": bool, "content": [{"type":"text","text":"{...json...}"}]}}.
-    """
-    payload = {
-        "jsonrpc": "2.0",
-        "id": int(time.time() * 1e6) % 2**31,
-        "method": "tools/call",
-        "params": {"name": name, "arguments": arguments}
-    }
-    headers = {"Accept": "application/json, text/event-stream"}
-    r = requests.post(endpoint, json=payload, headers=headers, timeout=timeout)
-    r.raise_for_status()
-    data = r.json()
-    return data.get("result", {"isError": True, "content": [{"type": "text", "text": "Invalid MCP response"}]})
 
-# --------- utilities ---------
+MEASUREMENT_ORDER = ["Vm", "Pinj", "Qinj", "Pf", "Qf", "Pt", "Qt"]
+ERROR_FAMILIES = [
+    "measurement_error",
+    "parameter_error",
+    "topology_error",
+    "three_phase_imbalance",
+    "harmonic_anomaly",
+    "no_error",
+]
 
-def sha_short(x) -> str:
-    return hashlib.sha1(json.dumps(x, sort_keys=True).encode()).hexdigest()[:8]
 
-def as_tool_return_text(obj: dict) -> str:
-    """Tool messages should be plain text; we use JSON string for structure."""
-    return json.dumps(obj, separators=(",", ":"))
-
-# --------- main builder ---------
-
-def build_sft(
-    samples_path="out_sft_measurements/samples.jsonl",
-    meta_path="out_sft_measurements/meta.json",
-    case_name: str | None = None,
-    mcp_endpoint="http://localhost:3929/tools",   # set to your FastMCP HTTP endpoint
-    out_path="sft_with_tools.jsonl",
-    mock=False,
-    seed=7,
-    add_no_error=50,
-    with_correction=True,
-    corr_max_iter=2,
-    corr_tol=1e-3
-):
-    """
-    add_no_error: number of "no_error" negative controls synthesized from clean measurements (small noise only)
-    """
-    rng = random.Random(seed)
-    np.random.seed(seed)
-
-    out = open(out_path, "w")
-    meta = json.load(open(meta_path))
-    idx_map = {k: slice(v[0], v[1]) for k, v in meta["index_map"].items()}
-    # Determine the case to use with MCP (prefer meta to ensure alignment)
-    case_path = meta.get("case") if case_name in (None, "auto") else case_name
-
-    # load all samples into memory (ok for ~1k)
-    samples = [json.loads(l) for l in open(samples_path)]
-    # optionally add a small set of negative controls (no gross errors)
-    if add_no_error > 0:
-        negs = []
-        for s in samples:
-            if s["scenario"] == "measurement_error" and s["label"]["subtype"] in ("channel_bias","channel_scale"):
-                # turn this one into "no_error" by undoing the bias/scale on z_obs (weak heuristic)
-                z_obs = np.array(s["z_obs"], dtype=float)
-                ch = s["label"]["channel"]
-                sl = idx_map[ch]
-                lab = s["label"].copy()
-                if "bias" in lab:
-                    z_obs[sl] = z_obs[sl] - lab["bias"]
-                if "scale" in lab:
-                    z_obs[sl] = z_obs[sl] / lab["scale"]
-                rec = {
-                    "id": f"ne_{rng.randrange(10**12)}",
-                    "scenario": "no_error",
-                    "z_obs": z_obs.tolist(),
-                    "z_true": z_obs.tolist(),
-                    "label": {"error_type": "no_error"},
-                    "op_point": s["op_point"]
-                }
-                negs.append(rec)
-                if len(negs) >= add_no_error:
-                    break
-        samples.extend(negs)
-
-    # build conversations
-    n_skipped = 0
-    for rec in tqdm(samples, desc="Building SFT traces"):
-        z_obs = rec["z_obs"]
-        sid = rec["id"]
-        scenario = rec["scenario"]
-
-        # 1) system prompt: agent contract + output schema
-        system_prompt = (
-            "You are a power-system diagnostic agent. "
-            "You have MCP tools: `wls_from_path` (state estimation with bad-data indicators) and `run_hse_from_path` (harmonic state estimation).\n"
-            "Procedure: (1) call `wls_from_path` on the provided snapshot; (2) inspect residuals `r` and normalized Lagrange multipliers `lambdaN`; "
-            "If the global residual J is significantly elevated without a clear single bad measurement, suspect harmonics and call `run_hse_from_path` with the available harmonic measurements.\n"
-            "(3) produce a STRICT JSON decision with keys: "
-            "{has_error:boolean, error_family:'measurement_error'|'parameter_error'|'topology_error'|'three_phase_imbalance'|'harmonic_anomaly'|'no_error', "
-            "decision_basis:{r_topk:number[], lambda_topk:number[]}, "
-            "suspect_location:{...}, "
-            "recommended_tool:null, confidence:number}.\n"
-            "If three-phase imbalance is suspected, request 3ϕ substation voltage measurements before finalizing.\n"
-            "Never include chain-of-thought, only the final JSON."
-        )
-
-        # 2) user message - reference paths or inline small arrays; use inline for simplicity
-        user_content = {
-            "case": case_path,
-            "z_obs": z_obs,        # per-unit vector with order: Vm, Pinj, Qinj, Pf, Qf, Pt, Qt
-            "meta_hint": {"nb": meta["nb"], "nl": meta["nl"]},
-            "note": "Run WLS (wls_from_path) and decide."
-        }
-        if scenario == "three_phase_imbalance":
-            user_content["note"] = (
-                "This snapshot is a 1ϕ-equivalent operator z vector (phase-A Vm + 3ϕ totals). "
-                "If imbalance is suspected, request 3ϕ VLN voltage measurements from substations."
-            )
-            user_content["has_three_phase_voltage_measurements"] = True
-
-        # 3) assistant -> tool call
-        tool_call = {
-            "type": "function",
-            "id": f"call_wls_{sha_short(sid)}",
-            "function": {
-                "name": "wls_from_path",
-                "arguments": json.dumps({"case_path": case_path, "z": z_obs})
+DECISION_SCHEMA_TEXT = {
+    "verdict": {
+        "has_error": "boolean",
+        "error_family": ERROR_FAMILIES,
+        "confidence": "number in [0,1]",
+    },
+    "evidence": {
+        "global_metrics": {
+            "global_residual_sum": "number or null",
+            "global_residual_threshold": "number or null",
+            "global_residual_ratio": "number or null",
+        },
+        "top_residuals": [
+            {
+                "index0": "int",
+                "channel": "string",
+                "channel_offset": "int",
+                "value": "number",
             }
-        }
+        ],
+        "top_lagrange": [
+            {
+                "lambda_index0": "int",
+                "line_row0": "int or null",
+                "from_bus": "int or null",
+                "to_bus": "int or null",
+                "terminal": "'from'|'to'|'unknown'",
+                "value": "number",
+            }
+        ],
+    },
+    "suspect_location": {
+        "domain": "measurement|parameter|topology|harmonic|imbalance|none",
+        "details": "object",
+    },
+    "action": {
+        "recommended_tool": "tool name or null",
+        "arguments_hint": "object or null",
+        "request_more_data": "boolean",
+        "requested_data": "array[string] or null",
+        "verification_summary": "object or null",
+    },
+    "summary": "short factual summary string",
+}
 
-        # 4) tool result (real MCP call or mock)
-        if mock:
-            # simple mock: magnify lambda when label says parameter_error; else magnify residual of the channel/index
-            if scenario == "parameter_error":
-                lam = np.zeros(meta["nl"] * 2)
-                i = rec["label"]["line_row"]
-                lam[2*i:2*i+2] = [5.0, 6.0]  # big values
-                tool_payload = {"success": True, "r": [0.1], "lambdaN": lam.tolist()}
-            elif scenario == "measurement_error":
-                # residual vector matches measurement dimension (3*nb + 4*nl)
-                r = np.zeros(meta["nb"]*3 + meta["nl"]*4)
-                lab = rec["label"]
-                ch = lab["channel"]
-                sl = idx_map[ch]
-                # spike one element for outlier; or lift the whole channel
-                if lab["subtype"] == "single_gross_outlier" and "index" in lab:
-                    r[lab["index"]] = 6.0
-                else:
-                    r[sl.start:sl.stop] = 3.5
-                tool_payload = {"success": True, "r": r.tolist(), "lambdaN": [0.2]*(meta["nl"]*2)}
-            elif scenario == "topology_error":
-                # Topology mismatch generally causes widespread residuals. Emulate with elevated flow residuals.
-                m = meta["nb"]*3 + meta["nl"]*4
-                r = np.zeros(m)
-                pf = idx_map["Pf"]; qf = idx_map["Qf"]; pt = idx_map["Pt"]; qt = idx_map["Qt"]
-                r[pf.start:pf.stop] = 4.0
-                r[qf.start:qf.stop] = 3.8
-                r[pt.start:pt.stop] = 3.6
-                r[qt.start:qt.stop] = 3.4
-                tool_payload = {"success": True, "r": r.tolist(), "lambdaN": [0.3]*(meta["nl"]*2)}
-            elif scenario == "three_phase_imbalance":
-                # Emulate widespread flow residuals (model mismatch) with moderate voltage/injection residuals.
-                m = meta["nb"] * 3 + meta["nl"] * 4
-                r = np.zeros(m)
-                pf = idx_map["Pf"]; qf = idx_map["Qf"]; pt = idx_map["Pt"]; qt = idx_map["Qt"]
-                vm = idx_map["Vm"]; pinj = idx_map["Pinj"]; qinj = idx_map["Qinj"]
-                r[vm.start:vm.stop] = 2.5
-                r[pinj.start:pinj.stop] = 2.0
-                r[qinj.start:qinj.stop] = 2.0
-                r[pf.start:pf.stop] = 4.2
-                r[qf.start:qf.stop] = 4.0
-                r[pt.start:pt.stop] = 3.8
-                r[qt.start:qt.stop] = 3.6
-                tool_payload = {"success": True, "r": r.tolist(), "lambdaN": [0.2] * (meta["nl"] * 2)}
-            elif scenario == "harmonic_anomaly":
-                # Elevated global residual (J), but no single massive spike > 6
-                m = meta["nb"] * 3 + meta["nl"] * 4
-                r = np.random.normal(0, 0.5, m)
-                vm = idx_map["Vm"]
-                r[vm.start:vm.stop] = np.random.normal(1.5, 0.5, vm.stop - vm.start) # moderate voltage stress
-                # Make J roughly 150-300
-                r *= (200.0 / np.sum(r**2))**0.5
-                tool_payload = {"success": True, "r": r.tolist(), "lambdaN": [0.1] * (meta["nl"] * 2)}
-            else:  # no_error
-                tool_payload = {"success": True, "r": [0.1], "lambdaN": [0.1]*(meta["nl"]*2)}
+SYSTEM_PROMPT = (
+    "You are a power-system state-estimation diagnostic agent.\n"
+    "You must begin with `wls_from_path` for every snapshot.\n"
+    "Available tools:\n"
+    "- `wls_from_path(case_path, z)`: weighted least-squares state estimation with bad-data indicators.\n"
+    "- `correct_measurements_from_path(case_path, z, suspect_group, ...)`: measurement correction.\n"
+    "- `correct_parameters_from_path(case_path, line_index, z_scans, initial_states, ...)`: line-parameter correction.\n"
+    "- `correct_topology_from_path(case_path, cb_name, desired_status)`: topology correction.\n"
+    "- `run_hse_from_path(case_path, harmonic_measurements, harmonic_orders?)`: harmonic state estimation.\n\n"
+    "Decision policy:\n"
+    "1. Use concentrated large normalized residuals to localize likely measurement errors.\n"
+    "2. Use large normalized Lagrange multipliers concentrated on one branch to suspect parameter errors.\n"
+    "3. Use widespread residual patterns to suspect topology mismatch or three-phase imbalance.\n"
+    "4. If the global residual is elevated without a dominant bad measurement and harmonic measurements are available, call `run_hse_from_path`.\n"
+    "5. If three-phase data are required, explicitly request three-phase substation voltages.\n\n"
+    "Return only strict JSON with this structure:\n"
+    f"{json.dumps(DECISION_SCHEMA_TEXT, ensure_ascii=False)}\n"
+    "Do not reveal chain-of-thought. Report only observable evidence and the final decision."
+)
+
+
+@dataclass(frozen=True)
+class BuilderConfig:
+    samples_path: Path
+    meta_path: Path
+    case_name: Optional[str]
+    endpoint: str
+    out_path: Path
+    mock: bool
+    seed: int
+    add_no_error: int
+    with_correction: bool
+    corr_max_iter: int
+    corr_tol: float
+    topk_r: int = 5
+    topk_lambda: int = 5
+    timeout_s: int = 60
+
+
+# ----------------------------- low-level helpers -----------------------------
+
+
+def iter_jsonl(path: Path) -> Iterator[Dict[str, Any]]:
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                yield json.loads(line)
+
+
+def write_jsonl(path: Path, rows: Iterable[Dict[str, Any]]) -> None:
+    with path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def sha_short(x: Any) -> str:
+    return hashlib.sha1(json.dumps(x, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:8]
+
+
+def json_compact(obj: Any) -> str:
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+
+def as_tool_return_text(obj: Mapping[str, Any]) -> str:
+    return json_compact(obj)
+
+
+def normalize_scenario(scenario: str) -> str:
+    if scenario in ("negative", "no_error"):
+        return "no_error"
+    return scenario
+
+
+def status_to_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if s in {"closed", "true", "1", "on", "in_service"}:
+            return True
+        if s in {"open", "false", "0", "off", "out_of_service"}:
+            return False
+    return None
+
+
+def stable_split(sample_id: str) -> str:
+    """80/10/10 deterministic hash split."""
+    h = int(hashlib.sha1(sample_id.encode("utf-8")).hexdigest()[:8], 16) % 100
+    if h < 80:
+        return "train"
+    if h < 90:
+        return "valid"
+    return "test"
+
+
+def topk_abs(values: Sequence[float], k: int) -> List[Tuple[int, float]]:
+    arr = np.asarray(values, dtype=float)
+    if arr.size == 0:
+        return []
+    order = np.argsort(-np.abs(arr))[: min(k, arr.size)]
+    return [(int(i), float(arr[i])) for i in order]
+
+
+def channel_from_index(index0: int, index_map: Mapping[str, slice]) -> Tuple[str, int]:
+    for ch in MEASUREMENT_ORDER:
+        sl = index_map[ch]
+        if sl.start <= index0 < sl.stop:
+            return ch, index0 - sl.start
+    return "unknown", index0
+
+
+def estimate_global_threshold(residuals: Sequence[float], nb: Optional[int]) -> Optional[float]:
+    if _chi2_threshold is None:
+        return None
+    r = np.asarray(residuals, dtype=float)
+    if r.size == 0 or nb is None:
+        return None
+    # Approximate dof for AC SE: m - (2*nb - 1). This is only a proxy.
+    dof = max(int(r.size - (2 * int(nb) - 1)), 1)
+    try:
+        return float(_chi2_threshold(dof))
+    except Exception:
+        return None
+
+
+def build_residual_evidence(
+    residuals: Sequence[float],
+    index_map: Mapping[str, slice],
+    k: int,
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for idx0, value in topk_abs(residuals, k):
+        ch, off = channel_from_index(idx0, index_map)
+        out.append(
+            {
+                "index0": int(idx0),
+                "channel": ch,
+                "channel_offset": int(off),
+                "value": float(value),
+            }
+        )
+    return out
+
+
+def build_lambda_evidence(
+    lambdaN: Sequence[float],
+    branch_info: Sequence[Mapping[str, Any]],
+    k: int,
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for idx0, value in topk_abs(lambdaN, k):
+        line_row0 = idx0 // 2 if idx0 >= 0 else None
+        terminal = "from" if idx0 % 2 == 0 else "to"
+        br = branch_info[line_row0] if line_row0 is not None and 0 <= line_row0 < len(branch_info) else {}
+        out.append(
+            {
+                "lambda_index0": int(idx0),
+                "line_row0": int(line_row0) if line_row0 is not None else None,
+                "from_bus": _maybe_int(br.get("from_bus")),
+                "to_bus": _maybe_int(br.get("to_bus")),
+                "terminal": terminal if br else "unknown",
+                "value": float(value),
+            }
+        )
+    return out
+
+
+def _maybe_int(x: Any) -> Optional[int]:
+    try:
+        if x is None:
+            return None
+        return int(x)
+    except Exception:
+        return None
+
+
+def _maybe_float(x: Any) -> Optional[float]:
+    try:
+        if x is None:
+            return None
+        if isinstance(x, float) and (math.isnan(x) or math.isinf(x)):
+            return None
+        return float(x)
+    except Exception:
+        return None
+
+
+import httpx
+
+def _round_or_none(x: Any, ndigits: int = 6) -> Optional[float]:
+    v = _maybe_float(x)
+    if v is None:
+        return None
+    return round(v, ndigits)
+
+
+def call_tool_json(endpoint: str, name: str, arguments: Mapping[str, Any], timeout: int = 60) -> Dict[str, Any]:
+    """
+    Directly calls the Python tool functions from mcp_server.matpower_server 
+    to bypass FastMCP v2 SSE networking issues on Windows.
+    Map the LLM-chosen tool names (from prompt) to the underlying Python functions.
+    """
+    import sys
+    import os
+    
+    # Ensure mcp_server is in path
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+        
+    import mcp_server.matpower_server as mp_tools
+    
+    try:
+        # FastMCP decorates these functions, wrapping them in a Tool object. 
+        # We must call .fn() to execute the actual original python routine locally.
+        
+        import numpy as np
+        def _make_serializable(obj):
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif isinstance(obj, dict):
+                return {k: _make_serializable(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [_make_serializable(v) for v in obj]
+            elif hasattr(np, "generic") and isinstance(obj, np.generic):
+                return obj.item()
+            else:
+                return obj
+
+        # LLM calls wls_from_path with {case_path, z}
+        if name in ("wls_from_path", "wls_from_text"):
+            if "case_text" in arguments:
+                result = mp_tools.wls_from_text.fn(
+                    case_name=arguments.get("case_path", arguments.get("case_name", "temp")),
+                    case_text=arguments["case_text"],
+                    z=arguments.get("z", arguments.get("z_obs", []))
+                )
+            else:
+                result = mp_tools.wls_from_path.fn(
+                    case_path=arguments["case_path"],
+                    z=arguments.get("z", arguments.get("z_obs", []))
+                )
+            return _make_serializable(result)
+            
+        elif name in ("correct_parameters_from_path", "correct_parameter_error"):
+            result = mp_tools.correct_parameters_from_path.fn(
+                case_path=arguments["case_path"],
+                line_index=arguments["line_index"],
+                z_scans=arguments.get("z_scans", []),
+                initial_states=arguments.get("initial_states")
+            )
+            return _make_serializable(result)
+            
+        elif name == "correct_measurements_from_path":
+            result = mp_tools.correct_measurements_from_path.fn(
+                case_path=arguments["case_path"],
+                z=arguments.get("z", arguments.get("z_obs", [])),
+                suspect_group=arguments["suspect_group"]
+            )
+            return _make_serializable(result)
+            
+        elif name == "correct_topology_from_path":
+            result = mp_tools.correct_topology_from_path.fn(
+                case_path=arguments["case_path"],
+                cb_name=arguments["cb_name"],
+                desired_status=arguments["desired_status"]
+            )
+            return _make_serializable(result)
+            
+        elif name == "run_hse_from_path":
+            result = mp_tools.run_hse_from_path.fn(
+                case_path=arguments["case_path"],
+                harmonic_measurements=arguments["harmonic_measurements"],
+                harmonic_orders=arguments.get("harmonic_orders")
+            )
+            return _make_serializable(result)
+            
         else:
+            return {"success": False, "error": f"Unknown tool name locally: {name}"}
+            
+    except Exception as e:
+        return {"success": False, "error": f"Local tool execution failed: {e}"}
+
+
+# ----------------------------- mock payloads -----------------------------
+
+
+def make_mock_wls_payload(
+    rec: Mapping[str, Any],
+    meta: Mapping[str, Any],
+    idx_map: Mapping[str, slice],
+    rng: np.random.Generator,
+) -> Dict[str, Any]:
+    scenario = normalize_scenario(str(rec.get("scenario", "")))
+    m = int(meta["nb"]) * 3 + int(meta["nl"]) * 4
+    r = np.zeros(m, dtype=float)
+    lam = np.full(int(meta["nl"]) * 2, 0.12, dtype=float)
+
+    if scenario == "measurement_error":
+        lab = rec.get("label", {})
+        ch = lab.get("channel")
+        subtype = lab.get("subtype")
+        if subtype == "single_gross_outlier" and isinstance(lab.get("index"), int):
+            r[int(lab["index"])] = 6.5
+        elif isinstance(lab.get("indices"), list):
+            for i in lab["indices"]:
+                r[int(i)] = 4.5
+        elif ch in idx_map:
+            sl = idx_map[ch]
+            r[sl.start:sl.stop] = 3.2
+        else:
+            r[rng.integers(0, m)] = 5.5
+
+    elif scenario == "parameter_error":
+        line_row0 = int(rec.get("label", {}).get("line_row", 0))
+        if 0 <= 2 * line_row0 + 1 < lam.size:
+            lam[2 * line_row0] = 5.0
+            lam[2 * line_row0 + 1] = 6.0
+        r += rng.normal(0.0, 0.15, size=m)
+
+    elif scenario == "topology_error":
+        for ch, level in (("Pf", 4.2), ("Qf", 4.0), ("Pt", 3.8), ("Qt", 3.6)):
+            sl = idx_map[ch]
+            r[sl.start:sl.stop] = level
+        lam += 0.1
+
+    elif scenario == "three_phase_imbalance":
+        for ch, level in (("Vm", 2.4), ("Pinj", 2.0), ("Qinj", 2.0), ("Pf", 4.1), ("Qf", 3.9), ("Pt", 3.8), ("Qt", 3.6)):
+            sl = idx_map[ch]
+            r[sl.start:sl.stop] = level
+
+    elif scenario == "harmonic_anomaly":
+        r = rng.normal(0.0, 0.4, size=m)
+        vm = idx_map["Vm"]
+        r[vm.start:vm.stop] = rng.normal(1.4, 0.4, size=vm.stop - vm.start)
+        norm = np.linalg.norm(r)
+        if norm > 1e-9:
+            r *= (200.0 / float(np.sum(r**2))) ** 0.5
+        lam[:] = 0.08
+
+    else:  # no_error
+        r = rng.normal(0.0, 0.08, size=m)
+        lam[:] = 0.08
+
+    payload = {
+        "success": True,
+        "r": r.tolist(),
+        "lambdaN": lam.tolist(),
+        "global_residual_sum": float(np.sum(r**2)),
+    }
+    thr = estimate_global_threshold(r, _maybe_int(meta.get("nb")))
+    if thr is not None:
+        payload["global_residual_threshold"] = float(thr)
+    return payload
+
+
+def make_mock_hse_payload(rec: Mapping[str, Any]) -> Dict[str, Any]:
+    lab = rec.get("label", {})
+    src = int(lab.get("source_bus", 3))
+    thd = float(lab.get("thd_target", 10.0))
+    return {
+        "success": True,
+        "best_candidate_bus_1based": src,
+        "estimated_thd_percent": {str(src): thd},
+        "notes": "Harmonic source identified.",
+    }
+
+
+# ----------------------------- conversation builders -----------------------------
+
+
+def make_tool_call(tool_name: str, call_id: str, arguments: Mapping[str, Any]) -> Dict[str, Any]:
+    return {
+        "type": "function",
+        "id": call_id,
+        "function": {
+            "name": tool_name,
+            "arguments": json_compact(arguments),
+        },
+    }
+
+
+def make_user_payload(rec: Mapping[str, Any], meta: Mapping[str, Any], case_path: str) -> Dict[str, Any]:
+    scenario = normalize_scenario(str(rec.get("scenario", "")))
+    payload: Dict[str, Any] = {
+        "case_path": case_path,
+        "z_obs": rec["z_obs"],
+        "measurement_order": MEASUREMENT_ORDER,
+        "index_map": meta["index_map"],
+        "meta_hint": {
+            "nb": meta["nb"],
+            "nl": meta["nl"],
+            "baseMVA": meta.get("baseMVA"),
+            "case": meta.get("case"),
+        },
+        "task": "Call wls_from_path first, then decide whether any correction or follow-up tool is required.",
+    }
+    if scenario == "harmonic_anomaly" and rec.get("harmonic_measurements"):
+        payload["harmonic_measurements_available"] = True
+        payload["harmonic_orders_available"] = bool(rec.get("harmonic_orders"))
+    if scenario == "three_phase_imbalance":
+        payload["note"] = (
+            "This snapshot is a 1φ-equivalent operator vector (phase-A voltage magnitudes plus 3φ totals). "
+            "If imbalance is suspected, request three-phase substation voltages."
+        )
+        payload["three_phase_voltages_available"] = bool(rec.get("three_phase_voltages"))
+    return payload
+
+
+def choose_measurement_suspect_group(
+    rec: Mapping[str, Any],
+    idx_map: Mapping[str, slice],
+    tool_payload: Mapping[str, Any],
+) -> List[int]:
+    r_vec = np.asarray(tool_payload.get("r", []), dtype=float)
+    if r_vec.size:
+        try:
+            return [int(np.nanargmax(np.abs(r_vec)))]
+        except Exception:
+            pass
+
+    lab = rec.get("label", {})
+    if isinstance(lab.get("index"), int):
+        return [int(lab["index"])]
+    if isinstance(lab.get("indices"), list):
+        return [int(i) for i in lab["indices"]]
+    ch = lab.get("channel")
+    if ch in idx_map:
+        sl = idx_map[ch]
+        return list(range(sl.start, sl.stop))
+    return []
+
+
+def build_global_metrics(
+    tool_payload: Mapping[str, Any],
+    meta: Mapping[str, Any],
+) -> Dict[str, Optional[float]]:
+    residuals = np.asarray(tool_payload.get("r", []), dtype=float)
+    J = _maybe_float(tool_payload.get("global_residual_sum"))
+    if J is None and residuals.size:
+        J = float(np.sum(residuals**2))
+
+    threshold = _maybe_float(tool_payload.get("global_residual_threshold"))
+    if threshold is None:
+        threshold = estimate_global_threshold(residuals, _maybe_int(meta.get("nb")))
+
+    ratio = None
+    if J is not None and threshold is not None and abs(threshold) > 1e-12:
+        ratio = J / threshold
+
+    return {
+        "global_residual_sum": _round_or_none(J),
+        "global_residual_threshold": _round_or_none(threshold),
+        "global_residual_ratio": _round_or_none(ratio),
+    }
+
+
+def build_verification_summary(
+    verify_payload: Optional[Mapping[str, Any]],
+    meta: Mapping[str, Any],
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(verify_payload, Mapping):
+        return None
+    gm = build_global_metrics(verify_payload, meta)
+    return {
+        "post_action_global_residual_sum": gm["global_residual_sum"],
+        "post_action_global_residual_threshold": gm["global_residual_threshold"],
+        "post_action_global_residual_ratio": gm["global_residual_ratio"],
+        "post_action_success": bool(verify_payload.get("success", True)),
+    }
+
+
+def build_final_target(
+    rec: Mapping[str, Any],
+    meta: Mapping[str, Any],
+    idx_map: Mapping[str, slice],
+    primary_wls: Mapping[str, Any],
+    *,
+    measurement_suspect_group: Optional[List[int]] = None,
+    verification_payload: Optional[Mapping[str, Any]] = None,
+    hse_payload: Optional[Mapping[str, Any]] = None,
+    correction_tool_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    scenario = normalize_scenario(str(rec.get("scenario", "")))
+    label = rec.get("label", {})
+    residuals = primary_wls.get("r", []) or []
+    lambdaN = primary_wls.get("lambdaN", []) or []
+
+    evidence = {
+        "global_metrics": build_global_metrics(primary_wls, meta),
+        "top_residuals": build_residual_evidence(residuals, idx_map, k=5),
+        "top_lagrange": build_lambda_evidence(lambdaN, meta.get("branch_info", []), k=5),
+    }
+
+    verdict = {
+        "has_error": scenario != "no_error",
+        "error_family": scenario if scenario in ERROR_FAMILIES else "no_error",
+        "confidence": 0.98 if scenario == "no_error" else 0.95,
+    }
+    if scenario in {"measurement_error", "parameter_error", "topology_error"}:
+        verdict["confidence"] = 0.99
+
+    suspect_location: Dict[str, Any]
+    action: Dict[str, Any]
+    summary: str
+
+    if scenario == "measurement_error":
+        details: Dict[str, Any] = {
+            "channel": label.get("channel"),
+            "index0": _maybe_int(label.get("index")),
+            "indices0": [int(i) for i in label.get("indices", [])] if isinstance(label.get("indices"), list) else None,
+            "subtype": label.get("subtype"),
+        }
+        details = {k: v for k, v in details.items() if v not in (None, [], {})}
+        suspect_location = {"domain": "measurement", "details": details}
+        action = {
+            "recommended_tool": correction_tool_name,
+            "arguments_hint": {"suspect_group": measurement_suspect_group} if correction_tool_name else None,
+            "request_more_data": False,
+            "requested_data": None,
+            "verification_summary": build_verification_summary(verification_payload, meta),
+        }
+        summary = "Residual evidence is concentrated in one measurement location/channel."
+
+    elif scenario == "parameter_error":
+        suspect_location = {
+            "domain": "parameter",
+            "details": {
+                "line_row0": _maybe_int(label.get("line_row")),
+                "from_bus": _maybe_int(label.get("from_bus")),
+                "to_bus": _maybe_int(label.get("to_bus")),
+                "subtype": label.get("subtype"),
+            },
+        }
+        action = {
+            "recommended_tool": correction_tool_name,
+            "arguments_hint": (
+                {"line_index": _maybe_int(label.get("line_row")) + 1}
+                if correction_tool_name and _maybe_int(label.get("line_row")) is not None
+                else None
+            ),
+            "request_more_data": False,
+            "requested_data": None,
+            "verification_summary": build_verification_summary(verification_payload, meta),
+        }
+        summary = "Top normalized Lagrange multipliers concentrate on one branch, consistent with a parameter issue."
+
+    elif scenario == "topology_error":
+        suspect_location = {
+            "domain": "topology",
+            "details": {
+                "substation": _maybe_int(label.get("substation")),
+                "cb_name": label.get("cb_name"),
+                "old_status": label.get("old_status"),
+                "new_status": label.get("new_status"),
+            },
+        }
+        action = {
+            "recommended_tool": correction_tool_name,
+            "arguments_hint": (
+                {
+                    "cb_name": label.get("cb_name"),
+                    "desired_status": status_to_bool(label.get("old_status")),
+                }
+                if correction_tool_name and label.get("cb_name")
+                else None
+            ),
+            "request_more_data": False,
+            "requested_data": None,
+            "verification_summary": build_verification_summary(verification_payload, meta),
+        }
+        summary = "Residuals are widespread and consistent with a model/topology mismatch."
+
+    elif scenario == "three_phase_imbalance":
+        have_three_phase = bool(rec.get("three_phase_voltages"))
+        suspect_location = {
+            "domain": "imbalance",
+            "details": {"unbalance_bus": _maybe_int(label.get("unbalance_bus"))},
+        }
+        action = {
+            "recommended_tool": None,
+            "arguments_hint": None,
+            "request_more_data": not have_three_phase,
+            "requested_data": None if have_three_phase else ["three_phase_substation_voltages"],
+            "verification_summary": None,
+        }
+        summary = "Residual pattern suggests possible three-phase imbalance rather than a single bad scalar measurement."
+
+    elif scenario == "harmonic_anomaly":
+        details = {"source_bus": _maybe_int(label.get("source_bus"))}
+        if isinstance(hse_payload, Mapping):
+            details["hse_best_candidate_bus_1based"] = _maybe_int(hse_payload.get("best_candidate_bus_1based"))
+            details["estimated_thd_percent"] = hse_payload.get("estimated_thd_percent")
+        suspect_location = {"domain": "harmonic", "details": details}
+        hse_hint = None
+        if rec.get("harmonic_measurements"):
+            hse_hint = {"harmonic_measurements": "provided_in_dialog"}
+            if rec.get("harmonic_orders"):
+                hse_hint["harmonic_orders"] = rec.get("harmonic_orders")
+        action = {
+            "recommended_tool": "run_hse_from_path",
+            "arguments_hint": hse_hint,
+            "request_more_data": not bool(rec.get("harmonic_measurements")),
+            "requested_data": None if rec.get("harmonic_measurements") else ["harmonic_measurements"],
+            "verification_summary": None,
+        }
+        summary = "The global residual is elevated without a single dominant bad measurement; harmonic follow-up is warranted."
+
+    else:
+        suspect_location = {"domain": "none", "details": {}}
+        action = {
+            "recommended_tool": None,
+            "arguments_hint": None,
+            "request_more_data": False,
+            "requested_data": None,
+            "verification_summary": None,
+        }
+        summary = "No error pattern is strong enough to justify a corrective action."
+
+    return {
+        "verdict": verdict,
+        "evidence": evidence,
+        "suspect_location": suspect_location,
+        "action": action,
+        "summary": summary,
+    }
+
+
+# ----------------------------- main builder -----------------------------
+
+
+def build_sft(config: BuilderConfig) -> None:
+    rng_std = random.Random(config.seed)
+    rng_np = np.random.default_rng(config.seed)
+
+    meta = json.loads(config.meta_path.read_text(encoding="utf-8"))
+    idx_map = {k: slice(v[0], v[1]) for k, v in meta["index_map"].items()}
+    case_path = meta.get("case") if config.case_name in (None, "auto") else config.case_name
+
+    samples = list(iter_jsonl(config.samples_path))
+
+    # Optional class-balance helper: duplicate already clean negatives instead of trying to
+    # "undo" measurement corruption heuristically.
+    if config.add_no_error > 0:
+        negatives = [s for s in samples if normalize_scenario(str(s.get("scenario", ""))) == "no_error"]
+        extra: List[Dict[str, Any]] = []
+        for _ in range(config.add_no_error):
+            if not negatives:
+                break
+            base = dict(rng_std.choice(negatives))
+            base["id"] = f"ne_{rng_std.randrange(10**12)}"
+            base["scenario"] = "no_error"
+            base["label"] = {"error_type": "no_error"}
+            extra.append(base)
+        samples.extend(extra)
+
+    config.out_path.parent.mkdir(parents=True, exist_ok=True)
+    split_paths = {
+        "train": config.out_path.with_name(config.out_path.stem + ".train.jsonl"),
+        "valid": config.out_path.with_name(config.out_path.stem + ".valid.jsonl"),
+        "test": config.out_path.with_name(config.out_path.stem + ".test.jsonl"),
+    }
+
+    n_written = 0
+    n_skipped = 0
+
+    with (
+        config.out_path.open("w", encoding="utf-8") as fout_all,
+        split_paths["train"].open("w", encoding="utf-8") as fout_train,
+        split_paths["valid"].open("w", encoding="utf-8") as fout_valid,
+        split_paths["test"].open("w", encoding="utf-8") as fout_test,
+    ):
+        split_writers = {"train": fout_train, "valid": fout_valid, "test": fout_test}
+
+        for rec in tqdm(samples, desc="Building SFT traces"):
+            sid = str(rec["id"])
+            scenario = normalize_scenario(str(rec["scenario"]))
+            z_obs = rec["z_obs"]
+
+            user_payload = make_user_payload(rec, meta, case_path)
+
+            messages: List[Dict[str, Any]] = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": json_compact(user_payload)},
+            ]
+
+            # ---- Step 1: mandatory WLS ----
+            wls_call = make_tool_call(
+                "wls_from_path",
+                f"call_wls_{sha_short(sid)}",
+                {"case_path": case_path, "z": z_obs},
+            )
+            messages.append({"role": "assistant", "tool_calls": [wls_call]})
+
             try:
-                mcp_ret = mcp_call_tool(
-                    mcp_endpoint,
-                    "wls_from_path",
-                    {"case_path": case_path, "z": z_obs}
-                )
-                # extract text from MCP 'content' and parse as JSON
-                tool_payload = (
-                    mcp_ret.get("structuredContent")
-                    if isinstance(mcp_ret.get("structuredContent"), dict)
-                    else None
-                )
-                if tool_payload is None:
-                    text_blobs = [c.get("text","") for c in mcp_ret.get("content", []) if c.get("type") == "text"]
-                    tool_payload = json.loads(text_blobs[0]) if text_blobs else {"success": False}
-            except Exception as e:
+                if config.mock:
+                    wls_payload = make_mock_wls_payload(rec, meta, idx_map, rng_np)
+                else:
+                    wls_payload = call_tool_json(
+                        config.endpoint,
+                        "wls_from_path",
+                        {"case_path": case_path, "z": z_obs},
+                        timeout=config.timeout_s,
+                    )
+            except Exception as exc:
                 n_skipped += 1
                 continue
 
-        # 5) optional correction calls (after detection logic, only when we can act without extra input)
-        extra_msgs = []
-        if scenario == "three_phase_imbalance":
-            # In this workflow, the operator requests 3ϕ voltage measurements from substations.
-            three_phase = rec.get("three_phase_voltages")
-            if isinstance(three_phase, list) and three_phase:
-                extra_msgs.extend(
-                    [
-                        {
-                            "role": "assistant",
-                            "content": (
-                                "The residual pattern is consistent with a possible three-phase imbalance. "
-                                "Please provide three-phase (A/B/C) substation voltage measurements (VLN magnitude/angle per bus) "
-                                "so I can proceed with three-phase state estimation / imbalance assessment."
-                            ),
-                        },
-                        {
-                            "role": "user",
-                            "content": json.dumps(
-                                {
-                                    "three_phase_voltages": three_phase,
-                                    "note": "Per-bus 3ϕ VLN voltage measurements (pu) from substations.",
-                                }
-                            ),
-                        },
-                    ]
-                )
-        if with_correction and not mock and scenario == "measurement_error":
-            # Choose the single index with largest |normalized residual| as suspect_group.
-            # Note: wls_from_path returns normalized residuals already (field 'r').
-            r_vec = np.asarray(tool_payload.get("r", []), dtype=float)
-            sg = None
-            if r_vec.size:
-                try:
-                    k = int(np.nanargmax(np.abs(r_vec)))
-                    sg = [k]
-                except Exception:
-                    sg = None
-            # Fallbacks when residuals are unavailable or above failed
-            if sg is None:
-                lab = rec.get("label", {})
-                if isinstance(lab.get("index"), int):
-                    sg = [int(lab["index"])]
-                elif isinstance(lab.get("indices"), list):
-                    sg = [int(i) for i in lab["indices"]]
-                else:
-                    ch = lab.get("channel")
-                    if ch in idx_map:
-                        sl = idx_map[ch]
-                        sg = list(range(sl.start, sl.stop))
-                if sg is None:
-                    sg = []
-
-            corr_call = {
-                "type": "function",
-                "id": f"call_corr_meas_{sha_short(sid)}",
-                "function": {
-                    "name": "correct_measurements_from_path",
-                    "arguments": json.dumps({
-                        "case_path": case_path,
-                        "z": z_obs,
-                        "suspect_group": sg,
-                        "enable_correction": True,
-                        "max_correction_iterations": int(corr_max_iter),
-                        "error_tolerance": float(corr_tol)
-                    })
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": wls_call["id"],
+                    "name": "wls_from_path",
+                    "content": as_tool_return_text(wls_payload),
                 }
-            }
-            # Attempt the MCP call; if it fails, still emit a visible failure payload
-            try:
-                corr_ret = mcp_call_tool(
-                    mcp_endpoint,
+            )
+
+            correction_tool_name: Optional[str] = None
+            measurement_suspect_group: Optional[List[int]] = None
+            verification_payload: Optional[Dict[str, Any]] = None
+            hse_payload: Optional[Dict[str, Any]] = None
+
+            # ---- Scenario-specific follow-up ----
+            if scenario == "measurement_error" and config.with_correction:
+                measurement_suspect_group = choose_measurement_suspect_group(rec, idx_map, wls_payload)
+                correction_tool_name = "correct_measurements_from_path"
+
+                corr_args = {
+                    "case_path": case_path,
+                    "z": z_obs,
+                    "suspect_group": measurement_suspect_group,
+                    "enable_correction": True,
+                    "max_correction_iterations": int(config.corr_max_iter),
+                    "error_tolerance": float(config.corr_tol),
+                }
+                corr_call = make_tool_call(
                     "correct_measurements_from_path",
-                    {"case_path": case_path, "z": z_obs, "suspect_group": sg,
-                     "enable_correction": True, "max_correction_iterations": int(corr_max_iter),
-                     "error_tolerance": float(corr_tol), "R_variances_full": None}
+                    f"call_corr_meas_{sha_short(sid)}",
+                    corr_args,
                 )
-                corr_payload = (
-                    corr_ret.get("structuredContent")
-                    if isinstance(corr_ret.get("structuredContent"), dict)
-                    else None
-                )
-                if corr_payload is None:
-                    _texts = [c.get("text", "") for c in corr_ret.get("content", []) if c.get("type") == "text"]
-                    corr_payload = json.loads(_texts[0]) if _texts else {"success": False}
-            except Exception as e:
-                corr_payload = {"success": False, "error": str(e)}
-            extra_msgs.extend([
-                {"role": "assistant", "tool_calls": [corr_call]},
-                {"role": "tool", "tool_call_id": corr_call["id"], "name": "correct_measurements_from_path",
-                 "content": as_tool_return_text(corr_payload)}
-            ])
+                messages.append({"role": "assistant", "tool_calls": [corr_call]})
 
-            # If we received a corrected value, substitute and verify with a second WLS
-            try:
-                # primary: use our k if defined
-                subst_entry = None
-                # k is set above
-                cms = corr_payload.get("corrected_measurements") or []
-                if k is not None:
-                    for e in cms:
-                        if int(e.get("index0", -1)) == int(k):
-                            subst_entry = e; break
-                if subst_entry is None and cms:
-                    # fallback: pick by largest |estimated_error|
-                    best = None; best_abs = -1
-                    for e in cms:
-                        try:
-                            v = abs(float(e.get("estimated_error", 0.0)))
-                            if v > best_abs:
-                                best_abs = v; best = e
-                        except Exception:
-                            continue
-                    subst_entry = best
-                if subst_entry:
-                    z2 = list(z_obs)
-                    idx0 = int(subst_entry.get("index0"))
-                    val = float(subst_entry.get("corrected"))
-                    if 0 <= idx0 < len(z2):
-                        z2[idx0] = val
-                        wls2_call = {
-                            "type": "function",
-                            "id": f"call_wls_verify_{sha_short(sid)}",
-                            "function": {
-                                "name": "wls_from_path",
-                                "arguments": json.dumps({"case_path": case_path, "z": z2})
-                            }
-                        }
-                        wls2_ret = mcp_call_tool(mcp_endpoint, "wls_from_path", {"case_path": case_path, "z": z2})
-                        wls2_payload = (
-                            wls2_ret.get("structuredContent") if isinstance(wls2_ret.get("structuredContent"), dict) else None
+                try:
+                    corr_payload = (
+                        {"success": False, "error": "mock correction not implemented"}
+                        if config.mock
+                        else call_tool_json(
+                            config.endpoint,
+                            "correct_measurements_from_path",
+                            {**corr_args, "R_variances_full": None},
+                            timeout=config.timeout_s,
                         )
-                        if wls2_payload is None:
-                            _tb = [c.get("text","") for c in wls2_ret.get("content", []) if c.get("type") == "text"]
-                            wls2_payload = json.loads(_tb[0]) if _tb else {"success": False}
-                        # emit full payload (including ea)
-                        extra_msgs.extend([
-                            {"role": "assistant", "tool_calls": [wls2_call]},
-                            {"role": "tool", "tool_call_id": wls2_call["id"], "name": "wls_from_path",
-                             "content": as_tool_return_text(wls2_payload)}
-                        ])
-            except Exception:
-                pass
-        elif with_correction and not mock and scenario == "parameter_error":
-            # Use multi-scan data (if available) to call parameter correction tool
-            lab = rec.get("label", {})
-            line_row = int(lab.get("line_row", -1))
-            z_scans = rec.get("z_scans")
-            init_states = rec.get("initial_states")
-            if line_row >= 0 and isinstance(z_scans, list) and isinstance(init_states, list):
-                # prefer 1-based line index for MATLAB; tool accepts 0/1-based
-                line_index = line_row + 1
-                param_call = {
-                    "type": "function",
-                    "id": f"call_corr_param_{sha_short(sid)}",
-                    "function": {
-                        "name": "correct_parameters_from_path",
-                        "arguments": json.dumps({
-                            "case_path": case_path,
-                            "line_index": line_index,
-                            "z_scans": z_scans,
-                            "initial_states": init_states,
-                            "R_variances_full": None
-                        })
+                    )
+                except Exception as exc:
+                    corr_payload = {"success": False, "error": str(exc)}
+
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": corr_call["id"],
+                        "name": "correct_measurements_from_path",
+                        "content": as_tool_return_text(corr_payload),
                     }
-                }
-                try:
-                    param_ret = mcp_call_tool(
-                        mcp_endpoint,
+                )
+
+                # optional verification pass
+                cms = corr_payload.get("corrected_measurements") or []
+                chosen = None
+                if cms:
+                    if measurement_suspect_group:
+                        preferred = set(int(i) for i in measurement_suspect_group)
+                        for item in cms:
+                            if int(item.get("index0", -1)) in preferred:
+                                chosen = item
+                                break
+                    if chosen is None:
+                        chosen = max(
+                            cms,
+                            key=lambda e: abs(float(e.get("estimated_error", 0.0))),
+                            default=None,
+                        )
+                if chosen is not None:
+                    z2 = list(z_obs)
+                    idx0 = int(chosen.get("index0"))
+                    corrected = float(chosen.get("corrected"))
+                    if 0 <= idx0 < len(z2):
+                        z2[idx0] = corrected
+                        verify_call = make_tool_call(
+                            "wls_from_path",
+                            f"call_wls_verify_{sha_short(sid)}",
+                            {"case_path": case_path, "z": z2},
+                        )
+                        messages.append({"role": "assistant", "tool_calls": [verify_call]})
+                        try:
+                            verification_payload = (
+                                make_mock_wls_payload({"scenario": "no_error"}, meta, idx_map, rng_np)
+                                if config.mock
+                                else call_tool_json(
+                                    config.endpoint,
+                                    "wls_from_path",
+                                    {"case_path": case_path, "z": z2},
+                                    timeout=config.timeout_s,
+                                )
+                            )
+                        except Exception as exc:
+                            verification_payload = {"success": False, "error": str(exc)}
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": verify_call["id"],
+                                "name": "wls_from_path",
+                                "content": as_tool_return_text(verification_payload),
+                            }
+                        )
+
+            elif scenario == "parameter_error" and config.with_correction:
+                line_row0 = _maybe_int(rec.get("label", {}).get("line_row"))
+                z_scans = rec.get("z_scans")
+                initial_states = rec.get("initial_states")
+                if line_row0 is not None and isinstance(z_scans, list) and isinstance(initial_states, list):
+                    correction_tool_name = "correct_parameters_from_path"
+                    correction_case_path = rec.get("parameter_error_case_path") or rec.get("correction_case_path") or case_path
+                    param_args = {
+                        "case_path": correction_case_path,
+                        "line_index": int(line_row0) + 1,  # correction tool expects 1-based branch row
+                        "z_scans": z_scans,
+                        "initial_states": initial_states,
+                        "R_variances_full": None,
+                    }
+                    param_call = make_tool_call(
                         "correct_parameters_from_path",
+                        f"call_corr_param_{sha_short(sid)}",
+                        param_args,
+                    )
+                    messages.append({"role": "assistant", "tool_calls": [param_call]})
+                    try:
+                        param_payload = (
+                            {"success": False, "error": "mock parameter correction not implemented"}
+                            if config.mock
+                            else call_tool_json(
+                                config.endpoint,
+                                "correct_parameters_from_path",
+                                param_args,
+                                timeout=config.timeout_s,
+                            )
+                        )
+                    except Exception as exc:
+                        param_payload = {"success": False, "error": str(exc)}
+                    messages.append(
                         {
-                            "case_path": case_path,
-                            "line_index": line_index,
-                            "z_scans": z_scans,
-                            "initial_states": init_states,
-                            "R_variances_full": None
+                            "role": "tool",
+                            "tool_call_id": param_call["id"],
+                            "name": "correct_parameters_from_path",
+                            "content": as_tool_return_text(param_payload),
                         }
                     )
-                    param_payload = (
-                        param_ret.get("structuredContent")
-                        if isinstance(param_ret.get("structuredContent"), dict)
-                        else None
-                    )
-                    if param_payload is None:
-                        _texts = [c.get("text", "") for c in param_ret.get("content", []) if c.get("type") == "text"]
-                        param_payload = json.loads(_texts[0]) if _texts else {"success": False}
-                except Exception as e:
-                    param_payload = {"success": False, "error": str(e)}
 
-                extra_msgs.extend([
-                    {"role": "assistant", "tool_calls": [param_call]},
-                    {"role": "tool", "tool_call_id": param_call["id"], "name": "correct_parameters_from_path",
-                     "content": as_tool_return_text(param_payload)}
-                ])
-        elif with_correction and not mock and scenario == "topology_error":
-            lab = rec.get("label", {})
-            cb_name = lab.get("cb_name")
-            desired_status = not bool(lab.get("new_status", False))  # flip back
-            if cb_name:
-                topo_call = {
-                    "type": "function",
-                    "id": f"call_corr_topo_{sha_short(sid)}",
-                    "function": {
-                        "name": "correct_topology_from_path",
-                        "arguments": json.dumps({
-                            "case_path": case_path,
-                            "cb_name": cb_name,
-                            "desired_status": desired_status
-                        })
+            elif scenario == "topology_error" and config.with_correction:
+                lab = rec.get("label", {})
+                cb_name = lab.get("cb_name")
+                desired_status = status_to_bool(lab.get("old_status"))
+                if cb_name and desired_status is not None:
+                    correction_tool_name = "correct_topology_from_path"
+                    topo_args = {
+                        "case_path": case_path,
+                        "cb_name": cb_name,
+                        "desired_status": desired_status,
                     }
-                }
-                try:
-                    topo_ret = mcp_call_tool(
-                        mcp_endpoint,
+                    topo_call = make_tool_call(
                         "correct_topology_from_path",
-                        {"case_path": case_path, "cb_name": cb_name, "desired_status": desired_status}
+                        f"call_corr_topo_{sha_short(sid)}",
+                        topo_args,
                     )
-                    topo_payload = (
-                        topo_ret.get("structuredContent")
-                        if isinstance(topo_ret.get("structuredContent"), dict)
-                        else None
+                    messages.append({"role": "assistant", "tool_calls": [topo_call]})
+                    try:
+                        topo_payload = (
+                            {"success": False, "error": "mock topology correction not implemented"}
+                            if config.mock
+                            else call_tool_json(
+                                config.endpoint,
+                                "correct_topology_from_path",
+                                topo_args,
+                                timeout=config.timeout_s,
+                            )
+                        )
+                    except Exception as exc:
+                        topo_payload = {"success": False, "error": str(exc)}
+
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": topo_call["id"],
+                            "name": "correct_topology_from_path",
+                            "content": as_tool_return_text(topo_payload),
+                        }
                     )
-                    if topo_payload is None:
-                        _texts = [c.get("text", "") for c in topo_ret.get("content", []) if c.get("type") == "text"]
-                        topo_payload = json.loads(_texts[0]) if _texts else {"success": False}
-                except Exception as e:
-                    topo_payload = {"success": False, "error": str(e)}
 
-                extra_msgs.extend([
-                    {"role": "assistant", "tool_calls": [topo_call]},
-                    {"role": "tool", "tool_call_id": topo_call["id"], "name": "correct_topology_from_path",
-                     "content": as_tool_return_text(topo_payload)}
-                ])
-
-                # Optional: re-run WLS on corrected z if provided
-                try:
-                    # NEW LOGIC: Prefer pre-generated corrected model and measurements
                     case_path_verify = case_path
                     z_verify = None
-                    
                     if "corrected_model_path" in rec and "z_true_full_model" in rec:
                         case_path_verify = rec["corrected_model_path"]
                         z_verify = rec["z_true_full_model"]
-                    elif "z_corrected" in topo_payload:
-                        # Fallback to tool output
-                        z_verify = topo_payload.get("z_corrected")
-                        
+                    elif isinstance(topo_payload.get("z_corrected"), list):
+                        z_verify = topo_payload["z_corrected"]
+
                     if isinstance(z_verify, list):
-                        wls2_call = {
-                            "type": "function",
-                            "id": f"call_wls_verify_topo_{sha_short(sid)}",
-                            "function": {
-                                "name": "wls_from_path",
-                                "arguments": json.dumps({"case_path": case_path_verify, "z": z_verify})
-                            }
-                        }
-                        wls2_ret = mcp_call_tool(mcp_endpoint, "wls_from_path", {"case_path": case_path_verify, "z": z_verify})
-                        wls2_payload = (
-                            wls2_ret.get("structuredContent")
-                            if isinstance(wls2_ret.get("structuredContent"), dict)
-                            else None
+                        verify_call = make_tool_call(
+                            "wls_from_path",
+                            f"call_wls_verify_topo_{sha_short(sid)}",
+                            {"case_path": case_path_verify, "z": z_verify},
                         )
-                        if wls2_payload is None:
-                            _tb = [c.get("text", "") for c in wls2_ret.get("content", []) if c.get("type") == "text"]
-                            wls2_payload = json.loads(_tb[0]) if _tb else {"success": False}
-                        extra_msgs.extend([
-                            {"role": "assistant", "tool_calls": [wls2_call]},
-                            {"role": "tool", "tool_call_id": wls2_call["id"], "name": "wls_from_path",
-                             "content": as_tool_return_text(wls2_payload)}
-                        ])
-                except Exception:
-                    pass
-        elif scenario == "harmonic_anomaly":
-            # the agent sees the elevated J, suspects harmonics, calls run_hse_from_path
-            # we check if harmonic measurements are provided in the trace
-            h_meas = rec.get("harmonic_measurements", [])
-            hse_call = {
-                "type": "function",
-                "id": f"call_hse_{sha_short(sid)}",
-                "function": {
-                    "name": "run_hse_from_path",
-                    "arguments": json.dumps({
-                        "case_path": case_path,
-                        "harmonic_measurements": h_meas
-                    })
-                }
-            }
-            if mock:
-                lab = rec.get("label", {})
-                source_bus = lab.get("source_bus", 3)
-                thd = lab.get("thd_target", 10.0)
-                hse_payload = {
-                    "success": True,
-                    "best_candidate": source_bus,
-                    "max_thd": thd,
-                    "source_injection_magnitude": 0.05,
-                    "candidates_tested": [3, 4, 9],
-                    "notes": "Harmonic source identified."
-                }
-            else:
-                try:
-                    hse_ret = mcp_call_tool(
-                        mcp_endpoint,
+                        messages.append({"role": "assistant", "tool_calls": [verify_call]})
+                        try:
+                            verification_payload = (
+                                make_mock_wls_payload({"scenario": "no_error"}, meta, idx_map, rng_np)
+                                if config.mock
+                                else call_tool_json(
+                                    config.endpoint,
+                                    "wls_from_path",
+                                    {"case_path": case_path_verify, "z": z_verify},
+                                    timeout=config.timeout_s,
+                                )
+                            )
+                        except Exception as exc:
+                            verification_payload = {"success": False, "error": str(exc)}
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": verify_call["id"],
+                                "name": "wls_from_path",
+                                "content": as_tool_return_text(verification_payload),
+                            }
+                        )
+
+            elif scenario == "harmonic_anomaly":
+                if rec.get("harmonic_measurements"):
+                    hse_args = {"case_path": case_path, "harmonic_measurements": rec.get("harmonic_measurements", [])}
+                    if isinstance(rec.get("harmonic_orders"), list) and rec.get("harmonic_orders"):
+                        hse_args["harmonic_orders"] = rec.get("harmonic_orders")
+                    hse_call = make_tool_call(
                         "run_hse_from_path",
-                        {"case_path": case_path, "harmonic_measurements": h_meas}
+                        f"call_hse_{sha_short(sid)}",
+                        hse_args,
                     )
-                    hse_payload = (
-                        hse_ret.get("structuredContent")
-                        if isinstance(hse_ret.get("structuredContent"), dict)
-                        else None
+                    messages.append({"role": "assistant", "tool_calls": [hse_call]})
+                    try:
+                        hse_payload = (
+                            make_mock_hse_payload(rec)
+                            if config.mock
+                            else call_tool_json(
+                                config.endpoint,
+                                "run_hse_from_path",
+                                hse_args,
+                                timeout=config.timeout_s,
+                            )
+                        )
+                    except Exception as exc:
+                        hse_payload = {"success": False, "error": str(exc)}
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": hse_call["id"],
+                            "name": "run_hse_from_path",
+                            "content": as_tool_return_text(hse_payload),
+                        }
                     )
-                    if hse_payload is None:
-                        _texts = [c.get("text", "") for c in hse_ret.get("content", []) if c.get("type") == "text"]
-                        hse_payload = json.loads(_texts[0]) if _texts else {"success": False}
-                except Exception as e:
-                    hse_payload = {"success": False, "error": str(e)}
 
-            extra_msgs.extend([
-                {"role": "assistant", "tool_calls": [hse_call]},
-                {"role": "tool", "tool_call_id": hse_call["id"], "name": "run_hse_from_path",
-                 "content": as_tool_return_text(hse_payload)}
-            ])
+            elif scenario == "three_phase_imbalance":
+                # Keep a multi-turn request/response trace if synthetic 3φ voltages are available.
+                three_phase = rec.get("three_phase_voltages")
+                if isinstance(three_phase, list) and three_phase:
+                    messages.extend(
+                        [
+                            {
+                                "role": "assistant",
+                                "content": (
+                                    "Please provide three-phase substation voltages "
+                                    "(phase A/B/C magnitude-angle or equivalent phasor format) "
+                                    "to continue imbalance assessment."
+                                ),
+                            },
+                            {
+                                "role": "user",
+                                "content": json_compact(
+                                    {
+                                        "three_phase_voltages": three_phase,
+                                        "note": "Per-bus 3φ substation voltages.",
+                                    }
+                                ),
+                            },
+                        ]
+                    )
 
-        # 6) assistant final content (GROUND TRUTH as target)
-        if scenario == "parameter_error":
-            lab = rec["label"]
-            final = {
-                "has_error": True,
-                "error_family": "parameter_error",
-                "suspect_location": {
-                    "line_row": lab["line_row"],
-                    "from_bus": lab["from_bus"],
-                    "to_bus": lab["to_bus"]
-                },
-                "recommended_tool": "correct_parameters_from_path",
-                "confidence": 0.99
-            }
-        elif scenario == "measurement_error":
-            lab = rec["label"]
-            final = {
-                "has_error": True,
-                "error_family": "measurement_error",
-                "suspect_location": {
-                    "channel": lab["channel"],
-                    **({ "index": lab["index"] } if "index" in lab else {}),
-                },
-                "recommended_tool": "correct_measurements_from_path",
-                "confidence": 0.99
-            }
-        elif scenario == "topology_error":
-            lab = rec["label"]
-            final = {
-                "has_error": True,
-                "error_family": "topology_error",
-                "suspect_location": {
-                    "substation": lab.get("substation"),
-                    "cb_name": lab.get("cb_name")
-                },
-                "recommended_tool": None,
-                "confidence": 0.99
-            }
-        elif scenario == "three_phase_imbalance":
-            lab = rec.get("label", {})
-            final = {
-                "has_error": True,
-                "error_family": "three_phase_imbalance",
-                "suspect_location": {
-                    "unbalance_bus": lab.get("unbalance_bus"),
-                },
-                "recommended_tool": None,
-                "confidence": 0.95
-            }
-        elif scenario == "harmonic_anomaly":
-            lab = rec.get("label", {})
-            final = {
-                "has_error": True,
-                "error_family": "harmonic_anomaly",
-                "suspect_location": {
-                    "source_bus": lab.get("source_bus"),
-                },
-                "recommended_tool": None,
-                "confidence": 0.95
-            }
-        else:  # no_error
-            final = {
-                "has_error": False,
-                "error_family": "no_error",
-                "suspect_location": {},
-                "recommended_tool": None,
-                "confidence": 0.98
-            }
+            final = build_final_target(
+                rec,
+                meta,
+                idx_map,
+                wls_payload,
+                measurement_suspect_group=measurement_suspect_group,
+                verification_payload=verification_payload,
+                hse_payload=hse_payload,
+                correction_tool_name=correction_tool_name,
+            )
+            messages.append({"role": "assistant", "content": json_compact(final)})
 
-        # Bundle into a single conversation
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": json.dumps(user_content)},
-            {"role": "assistant", "tool_calls": [tool_call]},
-            {
-              "role": "tool",
-              "tool_call_id": tool_call["id"],
-              "name": "wls_from_path",
-              "content": as_tool_return_text(tool_payload)
-            },
-        ]
-        messages.extend(extra_msgs)
-        messages.append({"role": "assistant", "content": json.dumps(final)})
-        convo = {"messages": messages}
-        out.write(json.dumps(convo) + "\n")
+            row = {"messages": messages}
+            line = json.dumps(row, ensure_ascii=False)
+            fout_all.write(line + "\n")
+            split_writers[stable_split(sid)].write(line + "\n")
+            n_written += 1
 
-    out.close()
-    print(f"Wrote SFT file: {out_path}")
+    print(f"Wrote combined SFT file: {config.out_path}")
+    print(f"Wrote split files: {split_paths['train']}, {split_paths['valid']}, {split_paths['test']}")
     if n_skipped:
         print(f"Skipped {n_skipped} examples due to MCP errors/timeouts.")
+    print(f"Total written: {n_written}")
 
-    # Optional: split train/valid/test with deterministic shuffle
-    rows = [json.loads(l) for l in open(out_path)]
-    rng.shuffle(rows)
-    n = len(rows)
-    a, b = int(0.8*n), int(0.9*n)
-    for name, chunk in [("train", rows[:a]), ("valid", rows[a:b]), ("test", rows[b:])]:
-        with open(f"split_{name}.jsonl", "w") as f:
-            for r in chunk: f.write(json.dumps(r) + "\n")
 
-if __name__ == "__main__":
-    import argparse
+def parse_args() -> BuilderConfig:
     p = argparse.ArgumentParser()
     p.add_argument("--samples", default="out_sft_measurements/samples.jsonl")
     p.add_argument("--meta", default="out_sft_measurements/meta.json")
-    p.add_argument("--case", default="auto", choices=["auto","case14","case118"], help="MATPOWER case name; 'auto' uses value in meta.json")
+    p.add_argument("--case", default="auto", choices=["auto", "case14", "case118"])
     p.add_argument("--endpoint", default="http://localhost:3929/tools")
-    p.add_argument("--out", default="sft_with_tools.jsonl")
+    p.add_argument("--out", default="sft_with_tools_revised.jsonl")
     p.add_argument("--mock", action="store_true")
-    p.add_argument("--no-error", type=int, default=50)
+    p.add_argument("--seed", type=int, default=7)
+    p.add_argument("--no-error", type=int, default=0, help="Extra replicated clean controls from existing negative samples.")
     p.add_argument("--no-correction", action="store_true")
     p.add_argument("--corr-iters", type=int, default=2)
     p.add_argument("--corr-tol", type=float, default=1e-3)
+    p.add_argument("--timeout", type=int, default=60)
     args = p.parse_args()
 
-    build_sft(args.samples, args.meta, None if args.case == "auto" else args.case,
-              args.endpoint, args.out, args.mock, 7, args.no_error,
-              with_correction=(not args.no_correction),
-              corr_max_iter=args.corr_iters,
-              corr_tol=args.corr_tol)
+    return BuilderConfig(
+        samples_path=Path(args.samples),
+        meta_path=Path(args.meta),
+        case_name=None if args.case == "auto" else args.case,
+        endpoint=args.endpoint,
+        out_path=Path(args.out),
+        mock=bool(args.mock),
+        seed=int(args.seed),
+        add_no_error=int(args.no_error),
+        with_correction=not bool(args.no_correction),
+        corr_max_iter=int(args.corr_iters),
+        corr_tol=float(args.corr_tol),
+        timeout_s=int(args.timeout),
+    )
+
+
+if __name__ == "__main__":
+    build_sft(parse_args())
