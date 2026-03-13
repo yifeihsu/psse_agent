@@ -155,6 +155,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-steps", type=int, default=100)
     parser.add_argument("--save-total-limit", type=int, default=2)
     parser.add_argument("--seed", type=int, default=3407)
+    parser.add_argument("--report-to", type=str, default="none", help="The integration to report the results to, e.g., 'wandb'")
     parser.add_argument("--load-in-4bit", action="store_true", default=True)
     parser.add_argument("--no-load-in-4bit", dest="load_in_4bit", action="store_false")
     parser.add_argument("--lora-r", type=int, default=16)
@@ -700,7 +701,7 @@ def main() -> None:
         bf16=is_bfloat16_supported(),
         seed=args.seed,
         output_dir=args.output_dir,
-        report_to="none",
+        report_to=args.report_to,
         max_length=None,
         packing=False,
         completion_only_loss=True,

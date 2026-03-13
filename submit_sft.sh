@@ -41,6 +41,8 @@ $PYTHON -c "import datasets; print('datasets version =', datasets.__version__)"
 nvidia-smi
 echo "==========================="
 
+export WANDB_PROJECT="psse-agent-sft"
+
 $PYTHON gpt_oss_power_sft_revised.py \
     --train-file out_traces_balanced/split_train.jsonl \
     --model-name unsloth/gpt-oss-20b \
@@ -54,4 +56,5 @@ $PYTHON gpt_oss_power_sft_revised.py \
     --gradient-accumulation-steps 4 \
     --learning-rate 2e-4 \
     --logging-steps 5 \
-    --num-train-epochs 1
+    --num-train-epochs 1 \
+    --report-to wandb
