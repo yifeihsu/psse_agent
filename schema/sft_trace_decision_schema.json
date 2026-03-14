@@ -1,0 +1,234 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PowerSystemDiagnosticDecision",
+  "type": "object",
+  "required": [
+    "verdict",
+    "evidence",
+    "suspect_location",
+    "action",
+    "summary"
+  ],
+  "properties": {
+    "verdict": {
+      "type": "object",
+      "required": [
+        "has_error",
+        "error_family",
+        "confidence"
+      ],
+      "properties": {
+        "has_error": {
+          "type": "boolean"
+        },
+        "error_family": {
+          "type": "string",
+          "enum": [
+            "measurement_error",
+            "parameter_error",
+            "topology_error",
+            "three_phase_imbalance",
+            "harmonic_anomaly",
+            "no_error"
+          ]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "evidence": {
+      "type": "object",
+      "required": [
+        "global_metrics",
+        "top_residuals",
+        "top_lagrange"
+      ],
+      "properties": {
+        "global_metrics": {
+          "type": "object",
+          "required": [
+            "global_residual_sum",
+            "global_residual_threshold",
+            "global_residual_ratio"
+          ],
+          "properties": {
+            "global_residual_sum": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "global_residual_threshold": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "global_residual_ratio": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "top_residuals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "index0",
+              "channel",
+              "channel_offset",
+              "value"
+            ],
+            "properties": {
+              "index0": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "channel": {
+                "type": "string"
+              },
+              "channel_offset": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "value": {
+                "type": "number"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "top_lagrange": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "lambda_index0",
+              "line_row0",
+              "from_bus",
+              "to_bus",
+              "terminal",
+              "value"
+            ],
+            "properties": {
+              "lambda_index0": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "line_row0": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "from_bus": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "to_bus": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "terminal": {
+                "type": "string",
+                "enum": [
+                  "from",
+                  "to",
+                  "unknown"
+                ]
+              },
+              "value": {
+                "type": "number"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "suspect_location": {
+      "type": "object",
+      "required": [
+        "domain",
+        "details"
+      ],
+      "properties": {
+        "domain": {
+          "type": "string",
+          "enum": [
+            "measurement",
+            "parameter",
+            "topology",
+            "harmonic",
+            "imbalance",
+            "none"
+          ]
+        },
+        "details": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "action": {
+      "type": "object",
+      "required": [
+        "recommended_tool",
+        "arguments_hint",
+        "request_more_data",
+        "requested_data",
+        "verification_summary"
+      ],
+      "properties": {
+        "recommended_tool": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "arguments_hint": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "request_more_data": {
+          "type": "boolean"
+        },
+        "requested_data": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "verification_summary": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}
