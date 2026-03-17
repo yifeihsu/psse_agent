@@ -1,0 +1,648 @@
+import argparse
+import copy
+import json
+import math
+import random
+from collections import Counter, defaultdict
+from pathlib import Path
+from statistics import mean
+from typing import Any
+
+
+DEFAULT_INPUT = "data/sft_with_tools.jsonl"
+DEFAULT_TRAIN = 0.70
+DEFAULT_VAL = 0.15
+DEFAULT_TEST = 0.15
+DEFAULT_REPORT = "data/preprocess_report.json"
+DEFAULT_TOKENIZER = "unsloth/llama-3-8b-Instruct-bnb-4bit"
+DEFAULT_MAX_SEQ_LENGTH = 8522
+DEFAULT_ROUND_DECIMALS = 6
+RANDOM_SEED = 42
+VALID_ERROR_FAMILIES = {
+    "measurement_error",
+    "parameter_error",
+    "topology_error",
+    "no_error",
+}
+
+
+def load_jsonl(path: str) -> list[dict]:
+    samples: list[dict] = []
+    errors = 0
+    with open(path, encoding="utf-8") as handle:
+        for line_no, line in enumerate(handle, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                samples.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                print(f"  [warn] line {line_no}: JSON error - {exc}")
+                errors += 1
+    if errors:
+        print(f"  [warn] skipped {errors} malformed lines")
+    return samples
+
+
+def save_jsonl(samples: list[dict], path: str) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        for sample in samples:
+            handle.write(json.dumps(sample, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def save_report(report: dict[str, Any], path: str) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(report, handle, indent=2, ensure_ascii=False)
+
+
+def looks_like_json(text: str) -> bool:
+    stripped = text.lstrip()
+    return bool(stripped) and stripped[0] in "{["
+
+
+def round_numeric_values(value: Any, decimals: int) -> Any:
+    if isinstance(value, float):
+        rounded = round(value, decimals)
+        return 0.0 if rounded == -0.0 else rounded
+    if isinstance(value, list):
+        return [round_numeric_values(item, decimals) for item in value]
+    if isinstance(value, dict):
+        return {key: round_numeric_values(item, decimals) for key, item in value.items()}
+    return value
+
+
+def canonicalize_json_text(text: str, decimals: int) -> str:
+    payload = json.loads(text)
+    payload = round_numeric_values(payload, decimals)
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def normalize_message(message: dict, decimals: int) -> dict:
+    normalized = copy.deepcopy(message)
+
+    content = normalized.get("content")
+    if isinstance(content, str) and looks_like_json(content):
+        normalized["content"] = canonicalize_json_text(content, decimals)
+
+    tool_calls = normalized.get("tool_calls")
+    if isinstance(tool_calls, list):
+        for tool_call in tool_calls:
+            function = tool_call.get("function", {})
+            arguments = function.get("arguments")
+            if isinstance(arguments, str) and looks_like_json(arguments):
+                function["arguments"] = canonicalize_json_text(arguments, decimals)
+
+    return normalized
+
+
+def normalize_sample(sample: dict, decimals: int) -> dict:
+    normalized = copy.deepcopy(sample)
+    messages = normalized.get("messages")
+    if isinstance(messages, list):
+        normalized["messages"] = [normalize_message(message, decimals) for message in messages]
+    return normalized
+
+
+def parse_json_text(text: str) -> Any | None:
+    try:
+        return json.loads(text)
+    except (TypeError, json.JSONDecodeError):
+        return None
+
+
+def extract_final_diagnosis(sample: dict) -> dict | None:
+    for message in reversed(sample.get("messages", [])):
+        if message.get("role") != "assistant":
+            continue
+        content = message.get("content")
+        if not isinstance(content, str) or not looks_like_json(content):
+            continue
+        payload = parse_json_text(content)
+        if isinstance(payload, dict) and "error_family" in payload:
+            return payload
+    return None
+
+
+def extract_label(sample: dict) -> str | None:
+    diagnosis = extract_final_diagnosis(sample)
+    if not diagnosis:
+        return None
+    label = diagnosis.get("error_family")
+    return label if label in VALID_ERROR_FAMILIES else None
+
+
+def extract_tool_sequence(sample: dict) -> tuple[str, ...]:
+    sequence: list[str] = []
+    for message in sample.get("messages", []):
+        for tool_call in message.get("tool_calls", []):
+            name = tool_call.get("function", {}).get("name")
+            if isinstance(name, str) and name:
+                sequence.append(name)
+    return tuple(sequence)
+
+
+def extract_user_snapshot(sample: dict) -> dict[str, Any] | None:
+    for message in sample.get("messages", []):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if not isinstance(content, str) or not looks_like_json(content):
+            continue
+        payload = parse_json_text(content)
+        if isinstance(payload, dict) and "z_obs" in payload:
+            return payload
+    return None
+
+
+def validate_sample(sample: dict, index: int) -> list[str]:
+    errors: list[str] = []
+    messages = sample.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return [f"sample {index}: missing messages list"]
+
+    if messages[0].get("role") != "system":
+        errors.append(f"sample {index}: first message is not system")
+
+    if not any(message.get("role") == "user" for message in messages):
+        errors.append(f"sample {index}: missing user message")
+
+    diagnosis = extract_final_diagnosis(sample)
+    if diagnosis is None:
+        errors.append(f"sample {index}: missing final assistant diagnosis JSON")
+    else:
+        missing_keys = sorted(
+            {
+                "has_error",
+                "error_family",
+                "suspect_location",
+                "recommended_tool",
+                "confidence",
+            }
+            - diagnosis.keys()
+        )
+        if missing_keys:
+            errors.append(f"sample {index}: diagnosis missing keys {missing_keys}")
+        label = diagnosis.get("error_family")
+        if label not in VALID_ERROR_FAMILIES:
+            errors.append(f"sample {index}: invalid error_family {label!r}")
+
+    for message_index, message in enumerate(messages, 1):
+        role = message.get("role")
+        if role not in {"system", "user", "assistant", "tool"}:
+            errors.append(f"sample {index}: message {message_index} has invalid role {role!r}")
+            continue
+
+        if role == "user":
+            payload = parse_json_text(message.get("content"))
+            if not isinstance(payload, dict):
+                errors.append(f"sample {index}: user message {message_index} is not valid JSON")
+            elif "case" not in payload or "z_obs" not in payload:
+                errors.append(f"sample {index}: user message {message_index} missing case/z_obs")
+
+        if role == "assistant" and "tool_calls" in message:
+            tool_calls = message.get("tool_calls")
+            if not isinstance(tool_calls, list) or not tool_calls:
+                errors.append(f"sample {index}: assistant message {message_index} has empty tool_calls")
+            else:
+                for tool_call in tool_calls:
+                    function = tool_call.get("function", {})
+                    name = function.get("name")
+                    if not isinstance(name, str) or not name:
+                        errors.append(f"sample {index}: assistant message {message_index} missing tool name")
+                    arguments = function.get("arguments")
+                    if not isinstance(arguments, str) or parse_json_text(arguments) is None:
+                        errors.append(
+                            f"sample {index}: assistant message {message_index} has invalid tool arguments"
+                        )
+
+        if role == "tool":
+            payload = parse_json_text(message.get("content"))
+            if payload is None:
+                errors.append(f"sample {index}: tool message {message_index} is not valid JSON")
+            if not message.get("name"):
+                errors.append(f"sample {index}: tool message {message_index} missing tool name")
+
+    return errors
+
+
+def build_dedupe_key(sample: dict, mode: str) -> str | None:
+    if mode == "none":
+        return None
+
+    if mode == "user_snapshot":
+        snapshot = extract_user_snapshot(sample)
+        if snapshot is None:
+            return None
+        payload = {"case": snapshot.get("case"), "z_obs": snapshot.get("z_obs")}
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+    if mode == "full_trace":
+        return json.dumps(sample, sort_keys=True, separators=(",", ":"))
+
+    raise ValueError(f"Unsupported dedupe mode: {mode}")
+
+
+def deduplicate_samples(samples: list[dict], mode: str) -> tuple[list[dict], int]:
+    if mode == "none":
+        return samples, 0
+
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    duplicates = 0
+
+    for sample in samples:
+        key = build_dedupe_key(sample, mode)
+        if key is None:
+            deduped.append(sample)
+            continue
+        if key in seen:
+            duplicates += 1
+            continue
+        seen.add(key)
+        deduped.append(sample)
+
+    return deduped, duplicates
+
+
+def split_counts(total: int, train_ratio: float, val_ratio: float, test_ratio: float) -> tuple[int, int, int]:
+    exact = [total * train_ratio, total * val_ratio, total * test_ratio]
+    counts = [math.floor(value) for value in exact]
+    remainder = total - sum(counts)
+    order = sorted(
+        range(3),
+        key=lambda idx: (exact[idx] - counts[idx], exact[idx]),
+        reverse=True,
+    )
+    for idx in order[:remainder]:
+        counts[idx] += 1
+    return counts[0], counts[1], counts[2]
+
+
+def stratified_split(
+    samples: list[dict],
+    train_ratio: float,
+    val_ratio: float,
+    test_ratio: float,
+    seed: int,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    rng = random.Random(seed)
+    by_stratum: dict[str, list[dict]] = defaultdict(list)
+
+    for sample in samples:
+        label = extract_label(sample) or "__missing__"
+        tool_sequence = ">".join(extract_tool_sequence(sample)) or "no_tools"
+        stratum = f"{label}::{tool_sequence}"
+        by_stratum[stratum].append(sample)
+
+    train: list[dict] = []
+    val: list[dict] = []
+    test: list[dict] = []
+
+    for group in by_stratum.values():
+        rng.shuffle(group)
+        n_train, n_val, _ = split_counts(len(group), train_ratio, val_ratio, test_ratio)
+        train.extend(group[:n_train])
+        val.extend(group[n_train : n_train + n_val])
+        test.extend(group[n_train + n_val :])
+
+    rng.shuffle(train)
+    rng.shuffle(val)
+    rng.shuffle(test)
+    return train, val, test
+
+
+def balance_training_set(samples: list[dict], mode: str, seed: int) -> tuple[list[dict], dict[str, Any]]:
+    if mode == "none":
+        return samples, {"mode": "none"}
+
+    rng = random.Random(seed)
+    by_label: dict[str, list[dict]] = defaultdict(list)
+    for sample in samples:
+        by_label[extract_label(sample) or "__missing__"].append(sample)
+
+    if not by_label:
+        return samples, {"mode": mode, "applied": False}
+
+    counts = {label: len(group) for label, group in by_label.items()}
+    target = max(counts.values()) if mode == "upsample" else min(counts.values())
+    balanced: list[dict] = []
+
+    for label, group in sorted(by_label.items()):
+        if mode == "upsample":
+            if len(group) < target:
+                balanced.extend(group)
+                balanced.extend(rng.choices(group, k=target - len(group)))
+            else:
+                balanced.extend(group)
+        elif mode == "downsample":
+            balanced.extend(rng.sample(group, target))
+        else:
+            raise ValueError(f"Unsupported balance mode: {mode}")
+
+    rng.shuffle(balanced)
+    return balanced, {
+        "mode": mode,
+        "applied": True,
+        "target_per_class": target,
+        "before": counts,
+        "after": dict(Counter(extract_label(sample) for sample in balanced)),
+    }
+
+
+def label_distribution(samples: list[dict]) -> dict[str, int]:
+    return dict(Counter(extract_label(sample) for sample in samples))
+
+
+def print_split_stats(name: str, samples: list[dict]) -> None:
+    distribution = label_distribution(samples)
+    total = len(samples)
+    print(f"\n  {name}: {total} samples")
+    for label in sorted(distribution):
+        count = distribution[label]
+        pct = (count / total * 100) if total else 0.0
+        print(f"    {label:<25} {count:>5}  ({pct:5.1f}%)")
+
+
+def format_openai_tools_for_chatml(messages: list[dict]) -> str:
+    text = ""
+    for message in messages:
+        role = message.get("role", "user")
+
+        if role == "assistant" and "tool_calls" in message:
+            calls_text = ""
+            for tool_call in message["tool_calls"]:
+                function = tool_call["function"]
+                calls_text += (
+                    f'<tool_call>\n{{"name": "{function["name"]}", '
+                    f'"arguments": {function["arguments"]}}}\n</tool_call>\n'
+                )
+            content = message.get("content") or ""
+            body = f"{content}\n{calls_text.rstrip()}" if content else calls_text.rstrip()
+            text += f"<|im_start|>{role}\n{body}<|im_end|>\n"
+        elif role == "tool" or ("tool_call_id" in message and "name" in message):
+            content = (
+                f'<tool_response>\n{{"name": "{message.get("name", "")}", '
+                f'"content": {message.get("content", "")}}}\n</tool_response>'
+            )
+            text += f"<|im_start|>user\n{content}<|im_end|>\n"
+        else:
+            content = message.get("content") or ""
+            text += f"<|im_start|>{role}\n{content}<|im_end|>\n"
+
+    text += "<|im_start|>assistant\n"
+    return text
+
+
+def percentile(sorted_values: list[int], pct: float) -> int:
+    if not sorted_values:
+        return 0
+    index = max(0, math.ceil(len(sorted_values) * pct) - 1)
+    return sorted_values[index]
+
+
+def audit_token_lengths(
+    samples: list[dict],
+    tokenizer_name: str,
+    max_seq_length: int,
+) -> tuple[dict[str, Any] | None, str | None]:
+    try:
+        from transformers import AutoTokenizer
+    except ImportError:
+        return None, "transformers is not installed; skipping token audit"
+
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    except Exception as exc:  # pragma: no cover - depends on local HF cache/network
+        return None, f"failed to load tokenizer {tokenizer_name!r}: {exc}"
+
+    lengths: list[int] = []
+    for sample in samples:
+        text = format_openai_tools_for_chatml(sample["messages"])
+        token_count = len(tokenizer(text, add_special_tokens=False)["input_ids"])
+        lengths.append(token_count)
+
+    lengths.sort()
+    if not lengths:
+        return {
+            "tokenizer": tokenizer_name,
+            "max_seq_length": max_seq_length,
+            "count": 0,
+        }, None
+
+    over_limit = sum(length > max_seq_length for length in lengths)
+    return {
+        "tokenizer": tokenizer_name,
+        "max_seq_length": max_seq_length,
+        "count": len(lengths),
+        "min": lengths[0],
+        "mean": round(mean(lengths), 2),
+        "p50": percentile(lengths, 0.50),
+        "p95": percentile(lengths, 0.95),
+        "max": lengths[-1],
+        "over_limit": over_limit,
+        "over_limit_pct": round(over_limit / len(lengths) * 100, 2),
+        "required_to_avoid_truncation": lengths[-1],
+    }, None
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Preprocess PSSE agent dataset for SFT")
+    parser.add_argument("--input", default=DEFAULT_INPUT, help="Input JSONL file")
+    parser.add_argument("--train", type=float, default=DEFAULT_TRAIN, help="Train ratio")
+    parser.add_argument("--val", type=float, default=DEFAULT_VAL, help="Validation ratio")
+    parser.add_argument("--test", type=float, default=DEFAULT_TEST, help="Test ratio")
+    parser.add_argument("--seed", type=int, default=RANDOM_SEED, help="Random seed")
+    parser.add_argument(
+        "--round-decimals",
+        type=int,
+        default=DEFAULT_ROUND_DECIMALS,
+        help="Round floats inside embedded JSON payloads",
+    )
+    parser.add_argument(
+        "--dedupe-by",
+        choices=("none", "user_snapshot", "full_trace"),
+        default="user_snapshot",
+        help="Deduplicate samples before splitting",
+    )
+    parser.add_argument(
+        "--balance-train",
+        choices=("none", "upsample", "downsample"),
+        default="none",
+        help="Optional train-only class balancing",
+    )
+    parser.add_argument(
+        "--tokenizer-name",
+        default=DEFAULT_TOKENIZER,
+        help="Tokenizer used to audit sequence lengths",
+    )
+    parser.add_argument(
+        "--max-seq-length",
+        type=int,
+        default=DEFAULT_MAX_SEQ_LENGTH,
+        help="Target max sequence length for token audit",
+    )
+    parser.add_argument(
+        "--skip-token-audit",
+        action="store_true",
+        help="Skip tokenizer-based sequence length audit",
+    )
+    parser.add_argument("--out-train", default="data/split_train.jsonl")
+    parser.add_argument("--out-val", default="data/split_val.jsonl")
+    parser.add_argument("--out-test", default="data/split_test.jsonl")
+    parser.add_argument("--report", default=DEFAULT_REPORT, help="Write preprocessing report JSON here")
+    args = parser.parse_args()
+
+    total_ratio = args.train + args.val + args.test
+    if abs(total_ratio - 1.0) > 1e-6:
+        raise ValueError(f"Ratios must sum to 1.0, got {total_ratio:.6f}")
+    if args.round_decimals < 0:
+        raise ValueError("--round-decimals must be non-negative")
+
+    print("=" * 60)
+    print("PSSE Agent Dataset Preprocessing")
+    print("=" * 60)
+
+    input_path = Path(args.input)
+    if not input_path.exists():
+        raise FileNotFoundError(f"Input file not found: {args.input}")
+
+    print(f"\nLoading: {args.input}")
+    raw_samples = load_jsonl(args.input)
+    print(f"  Loaded {len(raw_samples)} samples")
+
+    print(f"\nNormalizing embedded JSON payloads (round_decimals={args.round_decimals})...")
+    normalized_samples = [normalize_sample(sample, args.round_decimals) for sample in raw_samples]
+
+    print("\nValidating samples...")
+    validation_errors: list[str] = []
+    valid_samples: list[dict] = []
+    for index, sample in enumerate(normalized_samples, 1):
+        errors = validate_sample(sample, index)
+        if errors:
+            validation_errors.extend(errors)
+            continue
+        valid_samples.append(sample)
+
+    if validation_errors:
+        print(f"  [warn] dropped {len(normalized_samples) - len(valid_samples)} invalid samples")
+        for error in validation_errors[:10]:
+            print(f"  [warn] {error}")
+        if len(validation_errors) > 10:
+            print(f"  [warn] ... and {len(validation_errors) - 10} more validation issues")
+    else:
+        print("  Validation passed with no dropped samples")
+
+    print(f"\nDeduplicating ({args.dedupe_by})...")
+    deduped_samples, duplicate_count = deduplicate_samples(valid_samples, args.dedupe_by)
+    print(f"  Removed {duplicate_count} duplicates")
+
+    labels = [extract_label(sample) for sample in deduped_samples]
+    unlabeled = sum(label is None for label in labels)
+    if unlabeled:
+        print(f"  [warn] dropping {unlabeled} unlabeled samples")
+        deduped_samples = [sample for sample in deduped_samples if extract_label(sample) is not None]
+
+    print(f"  Retained {len(deduped_samples)} labeled samples")
+    print(f"  Class distribution: {label_distribution(deduped_samples)}")
+
+    print(
+        f"\nSplitting: {args.train:.0%} train / {args.val:.0%} val / {args.test:.0%} test"
+        f"  (seed={args.seed})"
+    )
+    train, val, test = stratified_split(
+        deduped_samples,
+        train_ratio=args.train,
+        val_ratio=args.val,
+        test_ratio=args.test,
+        seed=args.seed,
+    )
+
+    train, train_balance_report = balance_training_set(train, args.balance_train, args.seed)
+
+    print_split_stats("Train", train)
+    print_split_stats("Val", val)
+    print_split_stats("Test", test)
+
+    token_audit: dict[str, Any] = {}
+    if args.skip_token_audit:
+        print("\nSkipping token audit")
+    else:
+        print(f"\nAuditing token lengths with {args.tokenizer_name!r}...")
+        for split_name, split_samples in (("train", train), ("val", val), ("test", test), ("all", deduped_samples)):
+            audit, warning = audit_token_lengths(split_samples, args.tokenizer_name, args.max_seq_length)
+            if warning:
+                print(f"  [warn] {warning}")
+                token_audit["warning"] = warning
+                break
+            token_audit[split_name] = audit
+            print(
+                f"  {split_name:<5} count={audit['count']:<4} mean={audit['mean']:<8}"
+                f" p95={audit['p95']:<5} max={audit['max']:<5}"
+                f" over_limit={audit['over_limit']}"
+            )
+
+        overall = token_audit.get("all")
+        if overall and overall["over_limit"]:
+            print(
+                "  [warn] examples exceed max_seq_length; "
+                f"{overall['over_limit']} / {overall['count']} would truncate at {args.max_seq_length}"
+            )
+
+    print("\nSaving splits...")
+    save_jsonl(train, args.out_train)
+    save_jsonl(val, args.out_val)
+    save_jsonl(test, args.out_test)
+    print(f"  {args.out_train}  ({len(train)} samples)")
+    print(f"  {args.out_val}    ({len(val)} samples)")
+    print(f"  {args.out_test}   ({len(test)} samples)")
+
+    report = {
+        "input": args.input,
+        "config": {
+            "train_ratio": args.train,
+            "val_ratio": args.val,
+            "test_ratio": args.test,
+            "seed": args.seed,
+            "round_decimals": args.round_decimals,
+            "dedupe_by": args.dedupe_by,
+            "balance_train": args.balance_train,
+            "tokenizer_name": None if args.skip_token_audit else args.tokenizer_name,
+            "max_seq_length": None if args.skip_token_audit else args.max_seq_length,
+        },
+        "counts": {
+            "loaded": len(raw_samples),
+            "valid": len(valid_samples),
+            "duplicates_removed": duplicate_count,
+            "retained": len(deduped_samples),
+            "train": len(train),
+            "val": len(val),
+            "test": len(test),
+        },
+        "label_distribution": {
+            "all": label_distribution(deduped_samples),
+            "train": label_distribution(train),
+            "val": label_distribution(val),
+            "test": label_distribution(test),
+        },
+        "tool_sequences": dict(
+            Counter(">".join(extract_tool_sequence(sample)) for sample in deduped_samples)
+        ),
+        "train_balancing": train_balance_report,
+        "validation": {
+            "issues": len(validation_errors),
+            "sample_errors": validation_errors[:25],
+        },
+        "token_audit": token_audit,
+    }
+    save_report(report, args.report)
+    print(f"  {args.report}")
+
+    print("\n" + "=" * 60)
+    print("Done. Dataset is normalized, validated, and split for SFT.")
+    print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()

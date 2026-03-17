@@ -1,0 +1,132 @@
+{
+  "input": "data/sft_with_tools.jsonl",
+  "config": {
+    "train_ratio": 0.7,
+    "val_ratio": 0.15,
+    "test_ratio": 0.15,
+    "seed": 42,
+    "round_decimals": 6,
+    "dedupe_by": "user_snapshot",
+    "balance_train": "upsample",
+    "tokenizer_name": "unsloth/gpt-oss-20b",
+    "max_seq_length": 8522
+  },
+  "counts": {
+    "loaded": 1978,
+    "valid": 1978,
+    "duplicates_removed": 0,
+    "retained": 1978,
+    "train": 1400,
+    "val": 297,
+    "test": 296
+  },
+  "label_distribution": {
+    "all": {
+      "no_error": 500,
+      "measurement_error": 500,
+      "parameter_error": 500,
+      "topology_error": 478
+    },
+    "train": {
+      "parameter_error": 350,
+      "no_error": 350,
+      "measurement_error": 350,
+      "topology_error": 350
+    },
+    "val": {
+      "topology_error": 72,
+      "parameter_error": 75,
+      "no_error": 75,
+      "measurement_error": 75
+    },
+    "test": {
+      "parameter_error": 75,
+      "no_error": 75,
+      "measurement_error": 75,
+      "topology_error": 71
+    }
+  },
+  "tool_sequences": {
+    "wls_from_path": 500,
+    "wls_from_path>correct_measurements_from_path>wls_from_path": 475,
+    "wls_from_path>correct_measurements_from_path": 25,
+    "wls_from_path>correct_parameters_from_path": 500,
+    "wls_from_path>correct_topology_from_path>wls_from_path": 455,
+    "wls_from_path>correct_topology_from_path": 23
+  },
+  "train_balancing": {
+    "mode": "upsample",
+    "applied": true,
+    "target_per_class": 350,
+    "before": {
+      "topology_error": 335,
+      "no_error": 350,
+      "parameter_error": 350,
+      "measurement_error": 350
+    },
+    "after": {
+      "parameter_error": 350,
+      "no_error": 350,
+      "measurement_error": 350,
+      "topology_error": 350
+    }
+  },
+  "validation": {
+    "issues": 0,
+    "sample_errors": []
+  },
+  "token_audit": {
+    "train": {
+      "tokenizer": "unsloth/gpt-oss-20b",
+      "max_seq_length": 8522,
+      "count": 1400,
+      "min": 2361,
+      "mean": 5323.54,
+      "p50": 4577,
+      "p95": 8513,
+      "max": 8522,
+      "over_limit": 0,
+      "over_limit_pct": 0.0,
+      "required_to_avoid_truncation": 8522
+    },
+    "val": {
+      "tokenizer": "unsloth/gpt-oss-20b",
+      "max_seq_length": 8522,
+      "count": 297,
+      "min": 2361,
+      "mean": 5325.28,
+      "p50": 4578,
+      "p95": 8514,
+      "max": 8519,
+      "over_limit": 0,
+      "over_limit_pct": 0.0,
+      "required_to_avoid_truncation": 8519
+    },
+    "test": {
+      "tokenizer": "unsloth/gpt-oss-20b",
+      "max_seq_length": 8522,
+      "count": 296,
+      "min": 2361,
+      "mean": 5334.65,
+      "p50": 4575,
+      "p95": 8513,
+      "max": 8517,
+      "over_limit": 0,
+      "over_limit_pct": 0.0,
+      "required_to_avoid_truncation": 8517
+    },
+    "all": {
+      "tokenizer": "unsloth/gpt-oss-20b",
+      "max_seq_length": 8522,
+      "count": 1978,
+      "min": 2361,
+      "mean": 5331.17,
+      "p50": 4577,
+      "p95": 8513,
+      "max": 8522,
+      "over_limit": 0,
+      "over_limit_pct": 0.0,
+      "required_to_avoid_truncation": 8522
+    }
+  }
+}
