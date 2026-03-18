@@ -3,6 +3,8 @@
 #SBATCH --output=/scratch/yx3882/psse_agent/logs/eval_%j.log
 #SBATCH --error=/scratch/yx3882/psse_agent/logs/eval_%j.err
 #SBATCH --chdir=/scratch/yx3882/psse_agent
+#SBATCH --account=torch_pr_627_general
+#SBATCH --comment=preemption=yes;requeue=true
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
@@ -25,15 +27,13 @@ LOG_DIR=$REPO_ROOT/logs
 CACHE_ROOT=/scratch/yx3882/.cache
 
 ADAPTER_PATH=${ADAPTER_PATH:-outputs/gpt_oss_sft_power_agent_4k/lora}
-TRACE_FILE=${TRACE_FILE:-tmp_show_trace.json}
-SAMPLE_INDEX=${SAMPLE_INDEX:-0}
-INITIAL_MESSAGES=${INITIAL_MESSAGES:-2}
-MAX_STEPS=${MAX_STEPS:-6}
-MAX_NEW_TOKENS=${MAX_NEW_TOKENS:-1536}
-MAX_SEQ_LENGTH=${MAX_SEQ_LENGTH:-8192}
-REASONING_EFFORT=${REASONING_EFFORT:-low}
-OUTPUT_FILE=${OUTPUT_FILE:-outputs/gpt_oss_sft_power_agent_4k/eval_${SLURM_JOB_ID}.json}
-SHOW_REFERENCE=${SHOW_REFERENCE:-1}
+TEST_FILE=${TEST_FILE:-out_traces_balanced/sft_traces.test.jsonl}
+MAX_SAMPLES=${MAX_SAMPLES:-}
+MAX_TURNS=${MAX_TURNS:-8}
+MAX_NEW_TOKENS=${MAX_NEW_TOKENS:-4096}
+MAX_SEQ_LENGTH=${MAX_SEQ_LENGTH:-16384}
+OUTPUT_FILE=${OUTPUT_FILE:-outputs/gpt_oss_sft_power_agent_4k/eval_${SLURM_JOB_ID}.jsonl}
+VERBOSE=${VERBOSE:-1}
 
 mkdir -p "$LOG_DIR"
 mkdir -p "$CACHE_ROOT/huggingface"
@@ -52,29 +52,29 @@ echo "hostname: $(hostname)"
 echo "pwd: $(pwd)"
 echo "env python: $PYTHON"
 echo "adapter: $ADAPTER_PATH"
-echo "trace: $TRACE_FILE"
+echo "test file: $TEST_FILE"
 echo "output: $OUTPUT_FILE"
 $PYTHON -V
-$PYTHON -c "import sys; print('sys.executable =', sys.executable)"
 $PYTHON -m pip show unsloth scipy || true
 nvidia-smi
 echo "============================"
 
 ARGS=(
-  interactive_agent_eval.py
-  --adapter-path "$ADAPTER_PATH"
-  --trace-file "$TRACE_FILE"
-  --sample-index "$SAMPLE_INDEX"
-  --initial-messages "$INITIAL_MESSAGES"
-  --max-steps "$MAX_STEPS"
+  eval_sft_agent.py
+  --adapter "$ADAPTER_PATH"
+  --test-file "$TEST_FILE"
+  --max-turns "$MAX_TURNS"
   --max-new-tokens "$MAX_NEW_TOKENS"
   --max-seq-length "$MAX_SEQ_LENGTH"
-  --reasoning-effort "$REASONING_EFFORT"
-  --output-file "$OUTPUT_FILE"
+  --output "$OUTPUT_FILE"
 )
 
-if [[ "$SHOW_REFERENCE" == "1" ]]; then
-  ARGS+=(--show-reference)
+if [[ -n "$MAX_SAMPLES" ]]; then
+  ARGS+=(--max-samples "$MAX_SAMPLES")
+fi
+
+if [[ "$VERBOSE" == "1" ]]; then
+  ARGS+=(--verbose)
 fi
 
 "$PYTHON" "${ARGS[@]}"
