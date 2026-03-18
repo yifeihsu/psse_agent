@@ -280,10 +280,15 @@ def _meas_correction_json(
             return [x] if x is not None else []
             
         zci = z_corrected_info or {}
-        idxs = _flatten(zci.get("last_corrected_global_indices") or [])
-        orig_vals = _flatten(zci.get("last_original_values") or [])
-        corr_vals = _flatten(zci.get("last_corrected_values") or [])
-        err_vals = _flatten(zci.get("last_estimated_errors") or [])
+
+        def _value_or_empty(key: str):
+            value = zci.get(key)
+            return [] if value is None else value
+
+        idxs = _flatten(_value_or_empty("last_corrected_global_indices"))
+        orig_vals = _flatten(_value_or_empty("last_original_values"))
+        corr_vals = _flatten(_value_or_empty("last_corrected_values"))
+        err_vals = _flatten(_value_or_empty("last_estimated_errors"))
         
         corrected = []
         n = min(len(idxs), len(corr_vals))
@@ -828,5 +833,4 @@ def wls_from_text(*, case_name: str, case_text: str, z: List[float]) -> Dict[str
 if __name__ == "__main__":
     # Bind to a stable HTTP port so clients (build_sft_traces.py) can call reliably
     mcp.run(transport="http", host="127.0.0.1", port=3929)
-
 
