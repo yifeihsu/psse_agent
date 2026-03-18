@@ -75,10 +75,12 @@ TOOL_MAP = {
 
 def execute_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Call one of the matpower tools and return its JSON-serialisable result."""
-    fn = TOOL_MAP.get(name)
-    if fn is None:
+    tool_obj = TOOL_MAP.get(name)
+    if tool_obj is None:
         return {"success": False, "error": f"Unknown tool: {name}"}
     try:
+        # tool_obj is a FastMCP FunctionTool, we need to extract the raw python function
+        fn = getattr(tool_obj, "fn", tool_obj)
         return fn(**arguments)
     except Exception as exc:
         return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
