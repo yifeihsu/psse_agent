@@ -451,7 +451,11 @@ def main():
             errors += 1
 
         status = "✓" if result["family_correct"] else "✗"
-        print(f"{status}  gt={gt_fam:<20s}  pred={result['pred_error_family'] or 'NONE':<20s}  "
+        # Stringify lists safely for formatting
+        pred_fam_str = str(result["pred_error_family"]) if result["pred_error_family"] else "NONE"
+        gt_fam_str = str(gt_fam)
+
+        print(f"{status}  gt={gt_fam_str:<20s}  pred={pred_fam_str:<20s}  "
               f"tools={result['tool_calls']}")
 
     out_file.close()
