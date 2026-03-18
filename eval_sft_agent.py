@@ -227,6 +227,22 @@ def run_one_sample(
                            max_length=tokenizer.model_max_length or 8192)
         inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
+        # Identify stop tokens for gpt-oss tooling
+        stop_strings = ["<|end|>", "<|call|>", "<|return|>"]
+        stop_ids = []
+        for s in stop_strings:
+            tid = tokenizer.convert_tokens_to_ids(s)
+            if tid is not None and tid != getattr(tokenizer, "unk_token_id", None):
+                stop_ids.append(tid)
+        if getattr(tokenizer, "eos_token_id", None) is not None:
+            if isinstance(tokenizer.eos_token_id, list):
+                stop_ids.extend(tokenizer.eos_token_id)
+            elif tokenizer.eos_token_id not in stop_ids:
+                stop_ids.append(tokenizer.eos_token_id)
+        
+        # Deduplicate
+        stop_ids = list(set(stop_ids))
+
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
@@ -234,6 +250,7 @@ def run_one_sample(
                 use_cache=True,
                 temperature=0.0,
                 do_sample=False,
+                eos_token_id=stop_ids,
             )
 
         new_tokens = outputs[0][inputs["input_ids"].shape[-1]:]
