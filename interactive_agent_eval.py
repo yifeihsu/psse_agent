@@ -16,6 +16,8 @@ from mcp_server.matpower_server import (
     wls_from_path,
 )
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+
 
 DEFAULT_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
@@ -161,6 +163,24 @@ TOOL_MAP = {
     "correct_topology_from_path": correct_topology_from_path,
     "run_hse_from_path": run_hse_from_path,
 }
+
+
+def resolve_existing_path(raw_path: str, *, label: str) -> Path:
+    path = Path(raw_path).expanduser()
+    if path.is_absolute():
+        candidates = [path]
+    else:
+        candidates = [Path.cwd() / path]
+        script_relative = SCRIPT_DIR / path
+        if script_relative != candidates[0]:
+            candidates.append(script_relative)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+
+    searched = ", ".join(str(candidate) for candidate in candidates)
+    raise FileNotFoundError(f"{label} not found: {raw_path}. Looked in: {searched}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -379,11 +399,9 @@ def main() -> None:
     from unsloth import FastLanguageModel
 
     args = parse_args()
-    adapter_path = Path(args.adapter_path)
-    trace_file = Path(args.trace_file)
+    adapter_path = resolve_existing_path(args.adapter_path, label="LoRA adapter directory")
+    trace_file = resolve_existing_path(args.trace_file, label="Trace file")
 
-    if not adapter_path.exists():
-        raise FileNotFoundError(f"LoRA adapter directory not found: {adapter_path}")
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required for local GPT-OSS-20B 4-bit evaluation in this script.")
 
