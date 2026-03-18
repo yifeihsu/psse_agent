@@ -240,8 +240,9 @@ def run_one_sample(
         response_text = tokenizer.decode(new_tokens, skip_special_tokens=True)
 
         if verbose:
-            print(f"  [Turn {turn+1}] Generated ({len(new_tokens)} tokens):")
-            print(f"  {response_text[:300]}...")
+            print(f"\n  ======== [Turn {turn+1}] Generated ({len(new_tokens)} tokens) ========")
+            print(f"  {response_text}")
+            print("  ======================================================\n")
 
         parsed = parse_generation(response_text, tokenizer)
 
