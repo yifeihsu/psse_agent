@@ -26,13 +26,13 @@ REPO_ROOT=/scratch/yx3882/psse_agent
 LOG_DIR=$REPO_ROOT/logs
 CACHE_ROOT=/scratch/yx3882/.cache
 
-ADAPTER_PATH=${ADAPTER_PATH:-outputs/gpt_oss_sft_power_agent_4k/lora}
+ADAPTER_PATH=${ADAPTER_PATH:-outputs/gpt_oss_sft_power_agent/lora}
 TEST_FILE=${TEST_FILE:-out_traces_balanced/sft_traces.test.jsonl}
 MAX_SAMPLES=${MAX_SAMPLES:-}
 MAX_TURNS=${MAX_TURNS:-8}
 MAX_NEW_TOKENS=${MAX_NEW_TOKENS:-4096}
 MAX_SEQ_LENGTH=${MAX_SEQ_LENGTH:-16384}
-OUTPUT_FILE=${OUTPUT_FILE:-outputs/gpt_oss_sft_power_agent_4k/eval_${SLURM_JOB_ID}.jsonl}
+OUTPUT_FILE=${OUTPUT_FILE:-outputs/gpt_oss_sft_power_agent/eval_${SLURM_JOB_ID}.jsonl}
 VERBOSE=${VERBOSE:-1}
 
 mkdir -p "$LOG_DIR"
