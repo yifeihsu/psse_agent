@@ -126,11 +126,52 @@ def parse_generation(text: str, tokenizer) -> dict:
     text = text.strip()
 
     # ---------------------------------------------------------------
-    # Strategy 1: gpt-oss native tool-call format
-    #   "to=functions.wls_from_pathcommentary json{...}"
+    # Strategy 1: gpt-oss native tool-call format (Robust)
+    #   Matches "to=functions.wls_from_pathcommentary json{...}"
+    #   OR Hallucinations like "to=verifier.via=functionscommentary json{...}"
+    # ---------------------------------------------------------------
+    import re
+    
+    # Check if the generation contains a JSON block that looks like a final verdict
+    # even if it's wrapped in a tool-call hallucination like "to=...commentary json"
+    json_blocks = re.findall(r'\{.*\}', text, re.DOTALL)
+    if json_blocks:
+        # Check the last / largest JSON block to see what it is
+        for block in reversed(json_blocks):
+            try:
+                obj = json.loads(block)
+                if isinstance(obj, str):
+                    obj = json.loads(obj) # Handle double-encoded
+
+                if isinstance(obj, dict):
+                    # 1. Check if it's a Verdict
+                    if "verdict" in obj and "action" in obj:
+                        return {"type": "verdict", "content": obj}
+                    
+                    # 2. Check if it's wls_from_path
+                    if "case_path" in obj and "z" in obj:
+                        return {"type": "tool_call", "name": "wls_from_path", "arguments": obj, "id": f"call_wls_{int(time.time())}"}
+                    
+                    # 3. Check if it's correct_measurements_from_path
+                    if "suspect_group" in obj and "alpha" in obj:
+                        return {"type": "tool_call", "name": "correct_measurements_from_path", "arguments": obj, "id": f"call_corr_{int(time.time())}"}
+
+                    # 4. Check if it's run_hse_from_path
+                    if "harmonic_measurements" in obj:
+                        return {"type": "tool_call", "name": "run_hse_from_path", "arguments": obj, "id": f"call_hse_{int(time.time())}"}
+                    
+                    # 5. Check fallback OpenAI style tool calls
+                    if "name" in obj and "arguments" in obj and obj["name"] in TOOL_MAP:
+                        return {"type": "tool_call", "name": obj["name"], "arguments": obj["arguments"], "id": f"call_oi_{int(time.time())}"}
+
+            except json.JSONDecodeError:
+                continue
+
+    # ---------------------------------------------------------------
+    # Strategy 2: Strict gpt-oss format regex as a fallback
     # ---------------------------------------------------------------
     tc_match = re.match(
-        r'(?:to=)?functions\.(\w+)\s*commentary\s*json\s*(.+)',
+        r'(?:to=)?[a-zA-Z0-9_\.=]*functions\.(\w+)\s*commentary\s*json\s*(.+)',
         text, re.DOTALL,
     )
     if tc_match:
@@ -138,27 +179,13 @@ def parse_generation(text: str, tokenizer) -> dict:
         args_text = tc_match.group(2).strip()
         if name in TOOL_MAP:
             try:
-                # The args_text may be a JSON string (possibly double-encoded)
                 args = json.loads(args_text)
                 if isinstance(args, str):
-                    args = json.loads(args)  # double-encoded
+                    args = json.loads(args)
                 return {"type": "tool_call", "name": name, "arguments": args,
                         "id": f"call_{name}_{int(time.time())}"}
             except json.JSONDecodeError:
                 pass
-
-    # ---------------------------------------------------------------
-    # Strategy 2: gpt-oss native final-verdict format
-    #   "final{...}" or "analysis...final{...}"
-    # ---------------------------------------------------------------
-    final_match = re.search(r'final\s*(\{.*)', text, re.DOTALL)
-    if final_match:
-        try:
-            obj = json.loads(final_match.group(1))
-            if isinstance(obj, dict) and "verdict" in obj:
-                return {"type": "verdict", "content": obj}
-        except json.JSONDecodeError:
-            pass
 
     # ---------------------------------------------------------------
     # Strategy 3: plain JSON verdict (entire text or embedded)
