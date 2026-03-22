@@ -124,7 +124,6 @@ def parse_generation(text: str, tokenizer) -> dict:
     """
     import re
     text = text.strip()
-    print(f"DEBUG: Entering parse_generation with text length {len(text)}. Begins with: {text[:50]}")
 
     # ---------------------------------------------------------------
     # Strategy 1: gpt-oss native tool-call format (Robust)
@@ -140,13 +139,18 @@ def parse_generation(text: str, tokenizer) -> dict:
         # Check the last / largest JSON block to see what it is
         for block in reversed(json_blocks):
             try:
-                print(f"DEBUG: Found JSON block of length {len(block)}. First 50 chars: {block[:50]}")
+                # If the 16k FastMCP agent double-encoded the JSON as a string payload,
+                # removing the outer string quotes via regex means the inner JSON still has 
+                # literal backslashes escaping the quotes (e.g., '{\\\"case_path\\\": ...}'). 
+                # We need to unescape these literal backslashes so json.loads can parse it.
+                if r'\"' in block:
+                    block = block.replace(r'\"', '"').replace(r'\\', '\\')
+                    
                 obj = json.loads(block)
                 if isinstance(obj, str):
                     obj = json.loads(obj) # Handle double-encoded
 
                 if isinstance(obj, dict):
-                    print(f"DEBUG: Successfully decoded dictionary with keys: {list(obj.keys())}")
                     # 1. Check if it's a Verdict
                     if "verdict" in obj and "action" in obj:
                         return {"type": "verdict", "content": obj}
@@ -167,9 +171,7 @@ def parse_generation(text: str, tokenizer) -> dict:
                     if "name" in obj and "arguments" in obj and obj["name"] in TOOL_MAP:
                         return {"type": "tool_call", "name": obj["name"], "arguments": obj["arguments"], "id": f"call_oi_{int(time.time())}"}
                     
-                    print(f"DEBUG: Did not match any tool checks among 1-5! Returning unparseable.")
-            except json.JSONDecodeError as e:
-                print(f"DEBUG: JSONDecodeError on this block: {e}")
+            except json.JSONDecodeError:
                 continue
 
     # ---------------------------------------------------------------
