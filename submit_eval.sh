@@ -55,7 +55,7 @@ echo "adapter: $ADAPTER_PATH"
 echo "test file: $TEST_FILE"
 echo "output: $OUTPUT_FILE"
 $PYTHON -V
-$PYTHON -m pip show unsloth scipy || true
+$PYTHON -m pip list | grep -E "unsloth|scipy|transformers|torch" || true
 nvidia-smi
 echo "============================"
 
