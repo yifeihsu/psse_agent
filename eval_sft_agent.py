@@ -126,73 +126,95 @@ def parse_generation(text: str, tokenizer) -> dict:
     text = text.strip()
 
     # ---------------------------------------------------------------
-    # Strategy 1: gpt-oss native tool-call format (Robust)
-    #   Matches "to=functions.wls_from_pathcommentary json{...}"
-    #   OR Hallucinations like "to=verifier.via=functionscommentary json{...}"
+    # Strategy 1: Strict Qwen2.5-Coder FastMCP Tool Call
+    # Target format: " to=functions.TOOL_NAME<|channel|>commentary json<|message|>"{\"case_path..."
     # ---------------------------------------------------------------
-    import re
-    
-    # Check if the generation contains a JSON block that looks like a final verdict
-    # even if it's wrapped in a tool-call hallucination like "to=...commentary json"
+    if "to=functions." in text and "<|message|>" in text:
+        tool_start = text.find("to=functions.") + len("to=functions.")
+        
+        # Sometimes <|channel|> might be skipped if hallucinated, but <|message|> should be there
+        if "<|channel|>" in text:
+            tool_end = text.find("<|channel|>", tool_start)
+        else:
+            tool_end = text.find("commentary", tool_start)
+            if tool_end == -1:
+                tool_end = text.find("<|message|>", tool_start)
+                
+        tool_name = text[tool_start:tool_end].strip()
+        
+        msg_start = text.find("<|message|>") + len("<|message|>")
+        payload = text[msg_start:].strip()
+        
+        # Clean trailing tokens
+        for token in ["<|call|>", "<|end|>", "<|return|>"]:
+            if payload.endswith(token):
+                payload = payload[:-len(token)].strip()
+                
+        # Handle stringified JSON wrappers
+        if payload.startswith('"') and payload.endswith('"'):
+            payload = payload[1:-1].replace(r'\"', '"').replace(r'\\', '\\')
+            
+        try:
+            args = json.loads(payload)
+            if isinstance(args, str):
+                args = json.loads(args)
+            return {"type": "tool_call", "name": tool_name, "arguments": args, "id": f"call_{int(time.time())}"}
+        except json.JSONDecodeError as e:
+            print(f"DEBUG: Strict parser JSON decode failure: {e} on payload: {payload[:50]}...")
+            
+    # ---------------------------------------------------------------
+    # Strategy 2: Strict Verdict
+    # Target format: "<|message|>{"verdict": ..."
+    # ---------------------------------------------------------------
+    if '{"verdict"' in text:
+        if "<|message|>" in text:
+            payload = text[text.find("<|message|>") + len("<|message|>"):].strip()
+        else:
+            payload = text[text.find('{"verdict"'):].strip()
+            
+        for token in ["<|call|>", "<|end|>", "<|return|>"]:
+            if payload.endswith(token):
+                payload = payload[:-len(token)].strip()
+                
+        # Un-stringify if double-encoded
+        if payload.startswith('"') and payload.endswith('"'):
+            payload = payload[1:-1].replace(r'\"', '"').replace(r'\\', '\\')
+            
+        try:
+            args = json.loads(payload)
+            if isinstance(args, str):
+                args = json.loads(args)
+            if "verdict" in args and "action" in args:
+                return {"type": "verdict", "content": args}
+        except json.JSONDecodeError as e:
+            print(f"DEBUG: Strict verdict JSON decode failure: {e}")
+
+    # ---------------------------------------------------------------
+    # Strategy 3: Fallback Regex for Hallucinations
+    # ---------------------------------------------------------------
     json_blocks = re.findall(r'\{.*\}', text, re.DOTALL)
     if json_blocks:
-        # Check the last / largest JSON block to see what it is
         for block in reversed(json_blocks):
             try:
-                # If the 16k FastMCP agent double-encoded the JSON as a string payload,
-                # removing the outer string quotes via regex means the inner JSON still has 
-                # literal backslashes escaping the quotes (e.g., '{\\\"case_path\\\": ...}'). 
-                # We need to unescape these literal backslashes so json.loads can parse it.
                 if r'\"' in block:
                     block = block.replace(r'\"', '"').replace(r'\\', '\\')
-                    
                 obj = json.loads(block)
                 if isinstance(obj, str):
-                    obj = json.loads(obj) # Handle double-encoded
+                    obj = json.loads(obj)
 
                 if isinstance(obj, dict):
-                    # 1. Check if it's a Verdict
                     if "verdict" in obj and "action" in obj:
                         return {"type": "verdict", "content": obj}
-                    
-                    # 2. Check if it's wls_from_path
-                    if "case_path" in obj and "z" in obj:
+                    if "case_path" in obj and "z" in obj and "suspect_group" not in obj:
                         return {"type": "tool_call", "name": "wls_from_path", "arguments": obj, "id": f"call_wls_{int(time.time())}"}
-                    
-                    # 3. Check if it's correct_measurements_from_path
                     if "suspect_group" in obj and "alpha" in obj:
                         return {"type": "tool_call", "name": "correct_measurements_from_path", "arguments": obj, "id": f"call_corr_{int(time.time())}"}
-
-                    # 4. Check if it's run_hse_from_path
                     if "harmonic_measurements" in obj:
                         return {"type": "tool_call", "name": "run_hse_from_path", "arguments": obj, "id": f"call_hse_{int(time.time())}"}
-                    
-                    # 5. Check fallback OpenAI style tool calls
                     if "name" in obj and "arguments" in obj and obj["name"] in TOOL_MAP:
                         return {"type": "tool_call", "name": obj["name"], "arguments": obj["arguments"], "id": f"call_oi_{int(time.time())}"}
-                    
             except json.JSONDecodeError:
                 continue
-
-    # ---------------------------------------------------------------
-    # Strategy 2: Strict gpt-oss format regex as a fallback
-    # ---------------------------------------------------------------
-    tc_match = re.match(
-        r'(?:to=)?[a-zA-Z0-9_\.=]*functions\.(\w+)\s*commentary\s*json\s*(.+)',
-        text, re.DOTALL,
-    )
-    if tc_match:
-        name = tc_match.group(1)
-        args_text = tc_match.group(2).strip()
-        if name in TOOL_MAP:
-            try:
-                args = json.loads(args_text)
-                if isinstance(args, str):
-                    args = json.loads(args)
-                return {"type": "tool_call", "name": name, "arguments": args,
-                        "id": f"call_{name}_{int(time.time())}"}
-            except json.JSONDecodeError:
-                pass
 
     # ---------------------------------------------------------------
     # Strategy 3: plain JSON verdict (entire text or embedded)
@@ -255,6 +277,11 @@ def run_one_sample(
                 tokenize=False,
                 add_generation_prompt=True,
             )
+            # CRITICAL FIX: Qwen's template defaults to `<|start|>assistant\n` when forced. 
+            # We must strip the trailing newline to match our actual tool-call training format,
+            # which expects no newline (`<|start|>assistant to=functions...`).
+            if prompt.endswith("<|start|>assistant\n"):
+                prompt = prompt[:-1]
         except Exception as exc:
             error_msg = f"Chat template error: {exc}"
             break
@@ -290,7 +317,7 @@ def run_one_sample(
             )
 
         new_tokens = outputs[0][inputs["input_ids"].shape[-1]:]
-        response_text = tokenizer.decode(new_tokens, skip_special_tokens=True)
+        response_text = tokenizer.decode(new_tokens, skip_special_tokens=False)
 
         if verbose:
             print(f"\n  ======== [Turn {turn+1}] Generated ({len(new_tokens)} tokens) ========")
