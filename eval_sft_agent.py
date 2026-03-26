@@ -151,8 +151,13 @@ def parse_generation(text: str, tokenizer) -> dict:
                 payload = payload[:-len(token)].strip()
                 
         # Handle stringified JSON wrappers
-        if payload.startswith('"') and payload.endswith('"'):
-            payload = payload[1:-1].replace(r'\"', '"').replace(r'\\', '\\')
+        if payload.startswith('"'):
+            if payload.endswith('"'):
+                payload = payload[1:-1]
+            elif payload.endswith('}'):
+                # Model generated long payload and forgot the closing quote before the stop token
+                payload = payload[1:]
+            payload = payload.replace(r'\"', '"').replace(r'\\', '\\')
             
         try:
             args = json.loads(payload)
@@ -177,8 +182,12 @@ def parse_generation(text: str, tokenizer) -> dict:
                 payload = payload[:-len(token)].strip()
                 
         # Un-stringify if double-encoded
-        if payload.startswith('"') and payload.endswith('"'):
-            payload = payload[1:-1].replace(r'\"', '"').replace(r'\\', '\\')
+        if payload.startswith('"'):
+            if payload.endswith('"'):
+                payload = payload[1:-1]
+            elif payload.endswith('}'):
+                payload = payload[1:]
+            payload = payload.replace(r'\"', '"').replace(r'\\', '\\')
             
         try:
             args = json.loads(payload)
@@ -488,7 +497,10 @@ def main():
                 verbose=args.verbose,
             )
         except Exception as exc:
-            traceback.print_exc()
+            import sys
+            import traceback
+            print(f"CRITICAL ERROR IN RUN_ONE_SAMPLE: {exc}")
+            traceback.print_exc(file=sys.stdout)
             result = {
                 "gt_error_family": None, "pred_error_family": None,
                 "family_correct": False, "detection_correct": False,
