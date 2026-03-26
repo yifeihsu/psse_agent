@@ -1,6 +1,6 @@
 import json
-from transformers import AutoTokenizer
 from unsloth import FastLanguageModel
+from transformers import AutoTokenizer
 
 # Load the tokenizer used for evaluation
 adapter_path = "outputs/gpt_oss_sft_power_agent/lora"
@@ -20,9 +20,10 @@ except Exception as e:
     print(f"Failed to load {test_file}: {e}")
     test_sample = None
 
-if test_sample:
+if test_sample and "messages" in test_sample:
+    messages_gt = test_sample["messages"]
     print("=== Eval Script Serialized Prompt (First 2 messages) ===")
-    conversation = [test_sample[0], test_sample[1]]
+    conversation = [messages_gt[0], messages_gt[1]]
     prompt = tokenizer.apply_chat_template(
         conversation,
         tokenize=False,
@@ -33,7 +34,7 @@ if test_sample:
 
     print("=== Training Data Target Serialization (Including Assistant response) ===")
     target_prompt = tokenizer.apply_chat_template(
-        test_sample,
+        messages_gt,
         tokenize=False,
         add_generation_prompt=False,
     )
