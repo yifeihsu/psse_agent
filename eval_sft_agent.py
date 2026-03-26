@@ -358,6 +358,11 @@ def run_one_sample(
 
             # Execute the tool
             tool_result = execute_tool(tool_name, tool_args)
+            if verbose:
+                res_str = str(tool_result)
+                if len(res_str) > 150:
+                    res_str = res_str[:147] + "..."
+                print(f"  <- Tool result: {res_str}")
 
             # Add tool response to conversation
             conversation.append({
