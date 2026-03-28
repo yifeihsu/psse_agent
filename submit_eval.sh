@@ -60,7 +60,7 @@ nvidia-smi
 echo "============================"
 
 ARGS=(
-  eval_sft_agent.py
+  eval_sft_agent_revised.py
   --adapter "$ADAPTER_PATH"
   --test-file "$TEST_FILE"
   --max-turns "$MAX_TURNS"
