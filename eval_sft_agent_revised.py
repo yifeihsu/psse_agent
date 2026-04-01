@@ -850,7 +850,11 @@ def main() -> None:
         print(f"Downloading adapter from Hugging Face Hub: {args.adapter} ...")
         from huggingface_hub import snapshot_download
         try:
-            args.adapter = snapshot_download(repo_id=args.adapter)
+            downloaded_path = snapshot_download(repo_id=args.adapter)
+            if (Path(downloaded_path) / "lora").exists():
+                args.adapter = str(Path(downloaded_path) / "lora")
+            else:
+                args.adapter = downloaded_path
         except Exception as e:
             print(f"ERROR: Failed to download adapter: {e}")
             sys.exit(1)
