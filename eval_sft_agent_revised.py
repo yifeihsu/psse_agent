@@ -846,8 +846,8 @@ def run_one_sample(
 def main() -> None:
     args = parse_args()
 
-    if not Path(args.adapter).exists():
-        print(f"ERROR: Adapter not found at {args.adapter}")
+    if not Path(args.adapter).exists() and not "/" in args.adapter:
+        print(f"ERROR: Adapter not found at {args.adapter} (and not a HuggingFace Hub ID)")
         sys.exit(1)
     if not Path(args.test_file).exists():
         print(f"ERROR: Test file not found at {args.test_file}")

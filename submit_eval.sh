@@ -26,7 +26,7 @@ REPO_ROOT=/scratch/yx3882/psse_agent
 LOG_DIR=$REPO_ROOT/logs
 CACHE_ROOT=/scratch/yx3882/.cache
 
-ADAPTER_PATH=${ADAPTER_PATH:-outputs/gpt_oss_sft_power_agent/lora}
+ADAPTER_PATH=${ADAPTER_PATH:-harshith0214/psse-agent-gpt-oss-20b}
 TEST_FILE=${TEST_FILE:-out_traces_balanced/sft_traces.test.jsonl}
 MAX_SAMPLES=${MAX_SAMPLES:-}
 MAX_TURNS=${MAX_TURNS:-8}
