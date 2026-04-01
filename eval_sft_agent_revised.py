@@ -846,8 +846,16 @@ def run_one_sample(
 def main() -> None:
     args = parse_args()
 
-    if not Path(args.adapter).exists() and not "/" in args.adapter:
-        print(f"ERROR: Adapter not found at {args.adapter} (and not a HuggingFace Hub ID)")
+    if not Path(args.adapter).exists() and "/" in args.adapter:
+        print(f"Downloading adapter from Hugging Face Hub: {args.adapter} ...")
+        from huggingface_hub import snapshot_download
+        try:
+            args.adapter = snapshot_download(repo_id=args.adapter)
+        except Exception as e:
+            print(f"ERROR: Failed to download adapter: {e}")
+            sys.exit(1)
+    elif not Path(args.adapter).exists():
+        print(f"ERROR: Adapter not found locally at {args.adapter}")
         sys.exit(1)
     if not Path(args.test_file).exists():
         print(f"ERROR: Test file not found at {args.test_file}")
