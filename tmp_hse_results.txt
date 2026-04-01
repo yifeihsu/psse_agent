@@ -1,0 +1,21 @@
+
+--- HSE Trace Accuracy ---
+Total HSE Traces Evaluated: 500
+Correct Source Identifications: 500 (100.0%)
+
+--- First 15 Samples ---
+Sample  1: True=10 | Pred=10 | Top 3: [10, 9, 7] -> CORRECT
+Sample  2: True= 2 | Pred= 2 | Top 3: [2, 4, 5] -> CORRECT
+Sample  3: True=14 | Pred=14 | Top 3: [14, 9, 10] -> CORRECT
+Sample  4: True=11 | Pred=11 | Top 3: [11, 6, 10] -> CORRECT
+Sample  5: True= 5 | Pred= 5 | Top 3: [5, 4, 2] -> CORRECT
+Sample  6: True=10 | Pred=10 | Top 3: [10, 9, 7] -> CORRECT
+Sample  7: True=13 | Pred=13 | Top 3: [13, 6, 12] -> CORRECT
+Sample  8: True= 2 | Pred= 2 | Top 3: [2, 4, 5] -> CORRECT
+Sample  9: True=14 | Pred=14 | Top 3: [14, 9, 10] -> CORRECT
+Sample 10: True=11 | Pred=11 | Top 3: [11, 6, 10] -> CORRECT
+Sample 11: True=14 | Pred=14 | Top 3: [14, 9, 10] -> CORRECT
+Sample 12: True=10 | Pred=10 | Top 3: [10, 9, 7] -> CORRECT
+Sample 13: True= 4 | Pred= 4 | Top 3: [4, 5, 2] -> CORRECT
+Sample 14: True= 4 | Pred= 4 | Top 3: [4, 5, 2] -> CORRECT
+Sample 15: True=13 | Pred=13 | Top 3: [13, 6, 12] -> CORRECT

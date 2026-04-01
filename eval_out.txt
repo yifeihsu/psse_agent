@@ -1,0 +1,40 @@
+
+============================================================
+CLASS: NO_ERROR (Total: 500)
+============================================================
+Logical Flow Valid: 30 / 30
+
+[Example Required Tools Called For Output]
+Tools Used -> ['wls_from_path']
+
+============================================================
+CLASS: MEASUREMENT_ERROR (Total: 500)
+============================================================
+Logical Flow Valid: 30 / 30
+
+[Example Required Tools Called For Output]
+Tools Used -> ['wls_from_path', 'correct_measurements_from_path']
+
+============================================================
+CLASS: PARAMETER_ERROR (Total: 500)
+============================================================
+Logical Flow Valid: 30 / 30
+
+[Example Required Tools Called For Output]
+Tools Used -> ['wls_from_path', 'correct_parameters_from_path']
+
+============================================================
+CLASS: TOPOLOGY_ERROR (Total: 500)
+============================================================
+Logical Flow Valid: 30 / 30
+
+[Example Required Tools Called For Output]
+Tools Used -> ['wls_from_path', 'correct_topology_from_path', 'wls_from_path']
+
+============================================================
+CLASS: HARMONIC_ANOMALY (Total: 500)
+============================================================
+Logical Flow Valid: 30 / 30
+
+[Example Required Tools Called For Output]
+Tools Used -> ['wls_from_path', 'run_hse_from_path']
