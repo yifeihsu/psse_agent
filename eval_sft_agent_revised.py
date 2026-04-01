@@ -328,6 +328,8 @@ def infer_tool_name_from_arguments(obj: Any) -> str | None:
 
     if "name" in obj and obj.get("name") in TOOL_MAP and "arguments" in obj:
         return obj["name"]
+    if "function" in obj and obj.get("function") in TOOL_MAP and "arguments" in obj:
+        return obj["function"]
     if "tool_name" in obj and obj.get("tool_name") in TOOL_MAP:
         return obj["tool_name"]
 
@@ -490,6 +492,9 @@ def parse_generation(text: str) -> dict[str, Any]:
                     if isinstance(parsed_payload, dict) and "name" in parsed_payload and "arguments" in parsed_payload:
                         args = parsed_payload["arguments"]
                         notes.append("openai_style_tool_object")
+                    elif isinstance(parsed_payload, dict) and "function" in parsed_payload and "arguments" in parsed_payload:
+                        args = parsed_payload["arguments"]
+                        notes.append("function_arguments_object")
                     elif isinstance(parsed_payload, dict) and "tool_name" in parsed_payload and "arguments" in parsed_payload:
                         args = parsed_payload["arguments"]
                         notes.append("tool_name_arguments_object")
@@ -535,6 +540,8 @@ def parse_generation(text: str) -> dict[str, Any]:
                 args = obj
                 if isinstance(obj, dict) and "name" in obj and "arguments" in obj:
                     args = obj["arguments"]
+                elif isinstance(obj, dict) and "function" in obj and "arguments" in obj:
+                    args = obj["arguments"]
                 elif isinstance(obj, dict) and "tool_name" in obj and "arguments" in obj:
                     args = obj["arguments"]
                 return {
@@ -569,6 +576,8 @@ def parse_generation(text: str) -> dict[str, Any]:
             notes.append("embedded_json_tool_fallback")
             args = obj
             if isinstance(obj, dict) and "name" in obj and "arguments" in obj:
+                args = obj["arguments"]
+            elif isinstance(obj, dict) and "function" in obj and "arguments" in obj:
                 args = obj["arguments"]
             elif isinstance(obj, dict) and "tool_name" in obj and "arguments" in obj:
                 args = obj["arguments"]
