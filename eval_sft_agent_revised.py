@@ -680,6 +680,24 @@ def get_stop_token_ids(tokenizer: Any) -> list[int]:
     return out
 
 
+def classify_result_error(error_msg: str | None) -> str | None:
+    if not error_msg:
+        return None
+
+    s = error_msg.lower()
+    if s.startswith("unparseable output"):
+        return "unparseable_output"
+    if s.startswith("tool "):
+        if "no module named 'scipy'" in s or 'no module named "scipy"' in s:
+            return "tool_missing_scipy"
+        if "valueerror: wls input error" in s:
+            return "tool_bad_wls_input"
+        return "tool_failure"
+    if s.startswith("critical error"):
+        return "critical_error"
+    return "other_error"
+
+
 # ---------------------------------------------------------------------------
 # 6. Run one sample through the agent loop
 # ---------------------------------------------------------------------------
@@ -932,6 +950,8 @@ def main() -> None:
     errors = 0
     family_counts: Counter[str] = Counter()
     family_correct_counts: Counter[str] = Counter()
+    error_kind_counts: Counter[str] = Counter()
+    parse_note_counts: Counter[str] = Counter()
 
     with open(args.output, "w", encoding="utf-8") as out_file:
         for idx, sample in enumerate(test_samples):
@@ -984,6 +1004,11 @@ def main() -> None:
                 detection_correct += 1
             if result["error"]:
                 errors += 1
+                error_kind = classify_result_error(result["error"])
+                if error_kind is not None:
+                    error_kind_counts[error_kind] += 1
+            for note in result.get("parse_notes") or []:
+                parse_note_counts[note] += 1
 
             status = "✓" if result["family_correct"] else "✗"
             pred_fam_str = str(result["pred_error_family"]) if result["pred_error_family"] else "NONE"
@@ -1009,11 +1034,21 @@ def main() -> None:
     print(f"  Error family acc:       {family_correct}/{n}  ({100*family_correct/n:.1f}%)")
     print(f"  Parse/runtime errors:   {errors}")
     print()
+    if error_kind_counts:
+        print("  Error breakdown:")
+        for kind, count in error_kind_counts.most_common():
+            print(f"    {kind:<25s}  {count}")
+        print()
     print("  Per-family breakdown:")
     for fam in sorted(family_counts.keys()):
         total = family_counts[fam]
         correct = family_correct_counts[fam]
         print(f"    {fam:<25s}  {correct}/{total}  ({100*correct/total:.1f}%)")
+    if parse_note_counts:
+        print()
+        print("  Top parser notes:")
+        for note, count in parse_note_counts.most_common(8):
+            print(f"    {note:<35s}  {count}")
     print("=" * 60)
     print(f"\nDetailed results saved to: {args.output}")
 
