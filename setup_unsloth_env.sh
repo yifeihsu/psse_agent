@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-ENV_PREFIX=/scratch/hk4488/.conda/envs/unsloth_sft
+ENV_PREFIX=/scratch/yx3882/.conda/envs/unsloth_sft
 
 echo "============================================"
 echo " Setting up Unsloth SFT environment"

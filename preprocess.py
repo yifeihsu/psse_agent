@@ -14,8 +14,8 @@ DEFAULT_TRAIN = 0.70
 DEFAULT_VAL = 0.15
 DEFAULT_TEST = 0.15
 DEFAULT_REPORT = "data/preprocess_report.json"
-DEFAULT_TOKENIZER = "unsloth/llama-3-8b-Instruct-bnb-4bit"
-DEFAULT_MAX_SEQ_LENGTH = 8522
+DEFAULT_TOKENIZER = "unsloth/gpt-oss-20b"
+DEFAULT_MAX_SEQ_LENGTH = 16384
 DEFAULT_ROUND_DECIMALS = 6
 RANDOM_SEED = 42
 VALID_ERROR_FAMILIES = {
@@ -24,6 +24,112 @@ VALID_ERROR_FAMILIES = {
     "topology_error",
     "no_error",
 }
+
+DEFAULT_POWER_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "wls_from_path",
+            "description": "Run weighted least-squares state estimation on a power-system snapshot and return residual diagnostics.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_path": {"type": "string", "description": "Case identifier or path."},
+                    "z": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "Observed measurement vector.",
+                    },
+                },
+                "required": ["case_path", "z"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "correct_measurements_from_path",
+            "description": "Correct suspected bad measurements and optionally rerun diagnostic iterations.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_path": {"type": "string"},
+                    "z": {"type": "array", "items": {"type": "number"}},
+                    "suspect_group": {"type": "array", "items": {"type": "integer"}},
+                    "enable_correction": {"type": "boolean"},
+                    "max_correction_iterations": {"type": "integer"},
+                    "error_tolerance": {"type": "number"},
+                },
+                "required": [
+                    "case_path",
+                    "z",
+                    "suspect_group",
+                    "enable_correction",
+                    "max_correction_iterations",
+                    "error_tolerance",
+                ],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "correct_parameters_from_path",
+            "description": "Correct line-parameter errors using repeated measurement scans.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_path": {"type": "string"},
+                    "line_index": {"type": "integer"},
+                    "z_scans": {
+                        "type": "array",
+                        "items": {"type": "array", "items": {"type": "number"}},
+                    },
+                },
+                "required": ["case_path", "line_index", "z_scans"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "correct_topology_from_path",
+            "description": "Correct a suspected topology mismatch by switching a breaker/circuit breaker status.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_path": {"type": "string"},
+                    "cb_name": {"type": "string"},
+                    "desired_status": {"type": "boolean"},
+                },
+                "required": ["case_path", "cb_name", "desired_status"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_hse_from_path",
+            "description": "Run Harmonic State Estimation (HSE) to identify a single harmonic source.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_path": {"type": "string"},
+                    "harmonic_measurements": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                    },
+                    "harmonic_orders": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                    },
+                    "slack_bus": {"type": "integer"},
+                },
+                "required": ["case_path", "harmonic_measurements"],
+            },
+        },
+    },
+]
 
 
 def load_jsonl(path: str) -> list[dict]:
@@ -79,6 +185,91 @@ def canonicalize_json_text(text: str, decimals: int) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
+def maybe_parse_json_string(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if not stripped or stripped[0] not in "[{":
+        return value
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        return value
+
+
+def prune_none(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: cleaned
+            for key, item in value.items()
+            if (cleaned := prune_none(item)) is not None
+        }
+    if isinstance(value, list):
+        return [prune_none(item) for item in value if item is not None]
+    return value
+
+
+def default_schema_description(name: str | None, schema: dict[str, Any]) -> str:
+    label = (name or "value").replace("_", " ")
+    schema_type = schema.get("type")
+    if schema_type == "boolean":
+        return f"Whether to set {label}."
+    if schema_type == "array":
+        return f"List of {label}."
+    if schema_type == "object":
+        return f"{label.capitalize()} object."
+    return f"{label.capitalize()} value."
+
+
+def fill_schema_descriptions(schema: Any, name: str | None = None) -> Any:
+    if isinstance(schema, list):
+        return [fill_schema_descriptions(item, name=name) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+
+    filled = {key: fill_schema_descriptions(value, name=key) for key, value in schema.items()}
+    if any(key in filled for key in ("type", "properties", "items", "anyOf", "oneOf", "allOf")):
+        filled.setdefault("description", default_schema_description(name, filled))
+    return filled
+
+
+def sanitize_tool_schemas(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    sanitized: list[dict[str, Any]] = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            sanitized.append(tool)
+            continue
+        fixed_tool = dict(tool)
+        function_info = fixed_tool.get("function")
+        if isinstance(function_info, dict):
+            fixed_function = dict(function_info)
+            fixed_function.setdefault(
+                "description",
+                f"Call the {fixed_function.get('name', 'tool')} tool.",
+            )
+            parameters = fixed_function.get("parameters")
+            if isinstance(parameters, dict):
+                fixed_function["parameters"] = fill_schema_descriptions(
+                    parameters,
+                    name=fixed_function.get("name", "parameters"),
+                )
+            fixed_tool["function"] = fixed_function
+        sanitized.append(fixed_tool)
+    return sanitized
+
+
+def load_tools(args: argparse.Namespace) -> list[dict[str, Any]] | None:
+    if not args.include_tool_schemas:
+        return None
+    if args.tools_file:
+        with open(args.tools_file, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if not isinstance(data, list):
+            raise ValueError("--tools-file must contain a JSON list of tool schemas.")
+        return sanitize_tool_schemas(data)
+    return sanitize_tool_schemas(DEFAULT_POWER_TOOLS)
+
+
 def normalize_message(message: dict, decimals: int) -> dict:
     normalized = copy.deepcopy(message)
 
@@ -93,6 +284,8 @@ def normalize_message(message: dict, decimals: int) -> dict:
             arguments = function.get("arguments")
             if isinstance(arguments, str) and looks_like_json(arguments):
                 function["arguments"] = canonicalize_json_text(arguments, decimals)
+            elif isinstance(arguments, (dict, list)):
+                function["arguments"] = round_numeric_values(arguments, decimals)
 
     return normalized
 
@@ -212,7 +405,12 @@ def validate_sample(sample: dict, index: int) -> list[str]:
                     if not isinstance(name, str) or not name:
                         errors.append(f"sample {index}: assistant message {message_index} missing tool name")
                     arguments = function.get("arguments")
-                    if not isinstance(arguments, str) or parse_json_text(arguments) is None:
+                    arguments_ok = False
+                    if isinstance(arguments, str):
+                        arguments_ok = parse_json_text(arguments) is not None
+                    elif isinstance(arguments, (dict, list)):
+                        arguments_ok = True
+                    if not arguments_ok:
                         errors.append(
                             f"sample {index}: assistant message {message_index} has invalid tool arguments"
                         )
@@ -365,34 +563,82 @@ def print_split_stats(name: str, samples: list[dict]) -> None:
         print(f"    {label:<25} {count:>5}  ({pct:5.1f}%)")
 
 
-def format_openai_tools_for_chatml(messages: list[dict]) -> str:
-    text = ""
-    for message in messages:
-        role = message.get("role", "user")
+def normalize_messages_for_gpt_oss(messages: list[dict[str, Any]], decimals: int) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for raw_message in messages:
+        msg = prune_none(copy.deepcopy(raw_message))
+        role = msg.get("role")
+        if role is None:
+            continue
 
-        if role == "assistant" and "tool_calls" in message:
-            calls_text = ""
-            for tool_call in message["tool_calls"]:
-                function = tool_call["function"]
-                calls_text += (
-                    f'<tool_call>\n{{"name": "{function["name"]}", '
-                    f'"arguments": {function["arguments"]}}}\n</tool_call>\n'
-                )
-            content = message.get("content") or ""
-            body = f"{content}\n{calls_text.rstrip()}" if content else calls_text.rstrip()
-            text += f"<|im_start|>{role}\n{body}<|im_end|>\n"
-        elif role == "tool" or ("tool_call_id" in message and "name" in message):
-            content = (
-                f'<tool_response>\n{{"name": "{message.get("name", "")}", '
-                f'"content": {message.get("content", "")}}}\n</tool_response>'
+        if "content" in msg and not isinstance(msg["content"], str):
+            msg["content"] = json.dumps(
+                round_numeric_values(msg["content"], decimals),
+                ensure_ascii=False,
+                separators=(",", ":"),
             )
-            text += f"<|im_start|>user\n{content}<|im_end|>\n"
-        else:
-            content = message.get("content") or ""
-            text += f"<|im_start|>{role}\n{content}<|im_end|>\n"
 
-    text += "<|im_start|>assistant\n"
-    return text
+        if role == "assistant":
+            tool_calls = msg.get("tool_calls")
+            if isinstance(tool_calls, list) and tool_calls:
+                fixed_calls = []
+                for tool_call in tool_calls:
+                    tc = prune_none(copy.deepcopy(tool_call))
+                    function = tc.get("function")
+                    if isinstance(function, dict):
+                        arguments = maybe_parse_json_string(function.get("arguments"))
+                        if isinstance(arguments, (dict, list)):
+                            arguments = round_numeric_values(arguments, decimals)
+                        if arguments is None:
+                            arguments = {}
+                        function["arguments"] = arguments
+                        tc["function"] = function
+                    fixed_calls.append(tc)
+                msg["tool_calls"] = fixed_calls
+                msg.pop("content", None)
+            else:
+                msg.pop("tool_calls", None)
+                msg.setdefault("content", "")
+        elif role == "tool":
+            msg.setdefault("content", "")
+            if not isinstance(msg["content"], str):
+                msg["content"] = json.dumps(
+                    round_numeric_values(msg["content"], decimals),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+        else:
+            msg.setdefault("content", "")
+
+        normalized.append(msg)
+    return normalized
+
+
+def render_gpt_oss_text(tokenizer, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None) -> str:
+    kwargs: dict[str, Any] = {
+        "tokenize": False,
+        "add_generation_prompt": False,
+    }
+    if tools is not None:
+        kwargs["tools"] = tools
+    return tokenizer.apply_chat_template(messages, **kwargs)
+
+
+def count_tool_argument_formats(samples: list[dict]) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for sample in samples:
+        for message in sample.get("messages", []):
+            for tool_call in message.get("tool_calls", []):
+                arguments = tool_call.get("function", {}).get("arguments")
+                if isinstance(arguments, str):
+                    counts["string"] += 1
+                elif isinstance(arguments, (dict, list)):
+                    counts["structured"] += 1
+                elif arguments is None:
+                    counts["missing"] += 1
+                else:
+                    counts[type(arguments).__name__] += 1
+    return dict(counts)
 
 
 def percentile(sorted_values: list[int], pct: float) -> int:
@@ -406,6 +652,8 @@ def audit_token_lengths(
     samples: list[dict],
     tokenizer_name: str,
     max_seq_length: int,
+    tools: list[dict[str, Any]] | None,
+    decimals: int,
 ) -> tuple[dict[str, Any] | None, str | None]:
     try:
         from transformers import AutoTokenizer
@@ -413,13 +661,20 @@ def audit_token_lengths(
         return None, "transformers is not installed; skipping token audit"
 
     try:
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
     except Exception as exc:  # pragma: no cover - depends on local HF cache/network
         return None, f"failed to load tokenizer {tokenizer_name!r}: {exc}"
 
     lengths: list[int] = []
     for sample in samples:
-        text = format_openai_tools_for_chatml(sample["messages"])
+        try:
+            text = render_gpt_oss_text(
+                tokenizer,
+                normalize_messages_for_gpt_oss(sample["messages"], decimals),
+                tools,
+            )
+        except Exception as exc:
+            return None, f"failed to render GPT-OSS chat template for token audit: {exc}"
         token_count = len(tokenizer(text, add_special_tokens=False)["input_ids"])
         lengths.append(token_count)
 
@@ -488,6 +743,22 @@ def main() -> None:
         action="store_true",
         help="Skip tokenizer-based sequence length audit",
     )
+    parser.add_argument(
+        "--include-tool-schemas",
+        action="store_true",
+        default=True,
+        help="Include power-tool schemas when rendering GPT-OSS chat templates for token audit",
+    )
+    parser.add_argument(
+        "--no-include-tool-schemas",
+        dest="include_tool_schemas",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--tools-file",
+        default="",
+        help="Optional JSON file with tool schemas used for GPT-OSS token audit",
+    )
     parser.add_argument("--out-train", default="data/split_train.jsonl")
     parser.add_argument("--out-val", default="data/split_val.jsonl")
     parser.add_argument("--out-test", default="data/split_test.jsonl")
@@ -499,6 +770,8 @@ def main() -> None:
         raise ValueError(f"Ratios must sum to 1.0, got {total_ratio:.6f}")
     if args.round_decimals < 0:
         raise ValueError("--round-decimals must be non-negative")
+
+    tools = load_tools(args)
 
     print("=" * 60)
     print("PSSE Agent Dataset Preprocessing")
@@ -533,6 +806,9 @@ def main() -> None:
             print(f"  [warn] ... and {len(validation_errors) - 10} more validation issues")
     else:
         print("  Validation passed with no dropped samples")
+
+    tool_argument_formats = count_tool_argument_formats(valid_samples)
+    print(f"  Tool argument formats: {tool_argument_formats or {'none': 0}}")
 
     print(f"\nDeduplicating ({args.dedupe_by})...")
     deduped_samples, duplicate_count = deduplicate_samples(valid_samples, args.dedupe_by)
@@ -569,9 +845,16 @@ def main() -> None:
     if args.skip_token_audit:
         print("\nSkipping token audit")
     else:
-        print(f"\nAuditing token lengths with {args.tokenizer_name!r}...")
+        schema_mode = "with tool schemas" if tools is not None else "without tool schemas"
+        print(f"\nAuditing GPT-OSS token lengths with {args.tokenizer_name!r} ({schema_mode})...")
         for split_name, split_samples in (("train", train), ("val", val), ("test", test), ("all", deduped_samples)):
-            audit, warning = audit_token_lengths(split_samples, args.tokenizer_name, args.max_seq_length)
+            audit, warning = audit_token_lengths(
+                split_samples,
+                args.tokenizer_name,
+                args.max_seq_length,
+                tools,
+                args.round_decimals,
+            )
             if warning:
                 print(f"  [warn] {warning}")
                 token_audit["warning"] = warning
@@ -610,6 +893,8 @@ def main() -> None:
             "balance_train": args.balance_train,
             "tokenizer_name": None if args.skip_token_audit else args.tokenizer_name,
             "max_seq_length": None if args.skip_token_audit else args.max_seq_length,
+            "include_tool_schemas": args.include_tool_schemas,
+            "tools_file": args.tools_file or None,
         },
         "counts": {
             "loaded": len(raw_samples),
@@ -629,6 +914,7 @@ def main() -> None:
         "tool_sequences": dict(
             Counter(">".join(extract_tool_sequence(sample)) for sample in deduped_samples)
         ),
+        "tool_argument_formats": tool_argument_formats,
         "train_balancing": train_balance_report,
         "validation": {
             "issues": len(validation_errors),

@@ -135,10 +135,10 @@ DEFAULT_POWER_TOOLS: list[dict[str, Any]] = [
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="GPT-OSS SFT for power-system tool traces")
     parser.add_argument("--train-file", type=str, default="data/sft_final.jsonl")
-    parser.add_argument("--valid-file", type=str, default="data/split_valid.jsonl")
+    parser.add_argument("--valid-file", "--val-file", dest="valid_file", type=str, default="data/split_valid.jsonl")
     parser.add_argument("--model-name", type=str, default="unsloth/gpt-oss-20b")
     parser.add_argument("--output-dir", type=str, default="outputs/gpt_oss_power_agent")
     parser.add_argument("--max-seq-length", type=int, default=8192)
@@ -156,16 +156,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save-total-limit", type=int, default=2)
     parser.add_argument("--seed", type=int, default=3407)
     parser.add_argument("--report-to", type=str, default="none", help="The integration to report the results to, e.g., 'wandb'")
+    parser.add_argument("--run-name", type=str, default="")
     parser.add_argument("--load-in-4bit", action="store_true", default=True)
     parser.add_argument("--no-load-in-4bit", dest="load_in_4bit", action="store_false")
     parser.add_argument("--lora-r", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=16)
+    parser.add_argument("--lora-dropout", type=float, default=0.0)
+    parser.add_argument("--weight-decay", type=float, default=0.001)
+    parser.add_argument("--lr-scheduler-type", type=str, default="linear")
     parser.add_argument("--drop-too-long-targets", action="store_true", default=True)
     parser.add_argument("--keep-too-long-targets", dest="drop_too_long_targets", action="store_false")
     parser.add_argument("--include-tool-schemas", action="store_true", default=True)
     parser.add_argument("--no-include-tool-schemas", dest="include_tool_schemas", action="store_false")
     parser.add_argument("--tools-file", type=str, default="")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def has_nonempty_jsonl(path: str) -> bool:
@@ -209,8 +213,12 @@ def resolve_dataset_path(path: str, split_name: str, required: bool = True) -> s
             return str(candidate)
 
     suggestions: list[Path] = []
-    split_aliases = {"split_train.jsonl": "train", "split_valid.jsonl": "valid", "split_test.jsonl": "test"}
-    split_suffix = split_aliases.get(requested.name)
+    split_patterns = {
+        "split_train.jsonl": ["*.train.jsonl"],
+        "split_valid.jsonl": ["*.valid.jsonl", "*.val.jsonl"],
+        "split_val.jsonl": ["*.val.jsonl", "*.valid.jsonl"],
+        "split_test.jsonl": ["*.test.jsonl"],
+    }.get(requested.name)
 
     search_dirs: list[Path] = []
     if requested.is_absolute():
@@ -227,11 +235,14 @@ def resolve_dataset_path(path: str, split_name: str, required: bool = True) -> s
         )
     search_dirs = unique_paths(search_dirs)
 
-    if split_suffix is not None:
+    if split_patterns is not None:
         for directory in search_dirs:
             if not directory.is_dir():
                 continue
-            matches = sorted(directory.glob(f"*.{split_suffix}.jsonl"))
+            matches: list[Path] = []
+            for pattern in split_patterns:
+                matches.extend(sorted(directory.glob(pattern)))
+            matches = unique_paths(matches)
             suggestions.extend(matches)
             if len(matches) == 1:
                 resolved = matches[0]
@@ -612,8 +623,8 @@ def records_to_dataset(records: list[dict[str, Any]]):
 
 
 
-def main() -> None:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
     tools = load_tools(args)
     train_file = resolve_dataset_path(args.train_file, "train", required=True)
     valid_file = resolve_dataset_path(args.valid_file, "validation", required=False)
@@ -632,7 +643,7 @@ def main() -> None:
         r=args.lora_r,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
         lora_alpha=args.lora_alpha,
-        lora_dropout=0,
+        lora_dropout=args.lora_dropout,
         bias="none",
         use_gradient_checkpointing="unsloth",
         random_state=args.seed,
@@ -695,13 +706,14 @@ def main() -> None:
         save_steps=args.save_steps,
         save_total_limit=args.save_total_limit,
         optim="adamw_8bit",
-        weight_decay=0.001,
-        lr_scheduler_type="linear",
+        weight_decay=args.weight_decay,
+        lr_scheduler_type=args.lr_scheduler_type,
         fp16=not is_bfloat16_supported(),
         bf16=is_bfloat16_supported(),
         seed=args.seed,
         output_dir=args.output_dir,
         report_to=args.report_to,
+        run_name=args.run_name or None,
         max_length=None,
         packing=False,
         completion_only_loss=True,
