@@ -141,7 +141,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--valid-file", "--val-file", dest="valid_file", type=str, default="data/split_valid.jsonl")
     parser.add_argument("--model-name", type=str, default="unsloth/gpt-oss-20b")
     parser.add_argument("--output-dir", type=str, default="outputs/gpt_oss_power_agent")
-    parser.add_argument("--max-seq-length", type=int, default=8192)
+    parser.add_argument("--max-seq-length", type=int, default=12288)
     parser.add_argument("--dataset-num-proc", type=int, default=2)
     parser.add_argument("--per-device-train-batch-size", type=int, default=1)
     parser.add_argument("--per-device-eval-batch-size", type=int, default=1)

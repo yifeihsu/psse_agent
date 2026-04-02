@@ -11,7 +11,7 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --account=torch_pr_627_general
 #SBATCH --mail-type=END,FAIL
-#SBATCH --mail-user=hk4488@nyu.edu
+#SBATCH --mail-user=yx3882@nyu.edu
 #SBATCH --comment="preemption=yes;requeue=true"
 
 set -euo pipefail
@@ -25,7 +25,7 @@ OUTPUT_DIR=/scratch/yx3882/psse_agent/outputs/gpt_oss_sft
 TRAIN_FILE=${TRAIN_FILE:-data/split_train.jsonl}
 VALID_FILE=${VALID_FILE:-data/split_val.jsonl}
 MODEL_NAME=${MODEL_NAME:-unsloth/gpt-oss-20b-unsloth-bnb-4bit}
-MAX_SEQ_LENGTH=${MAX_SEQ_LENGTH:-16384}
+MAX_SEQ_LENGTH=${MAX_SEQ_LENGTH:-12288}
 NUM_TRAIN_EPOCHS=${NUM_TRAIN_EPOCHS:-1}
 MAX_STEPS=${MAX_STEPS:--1}
 EXTRA_TRAIN_ARGS=${EXTRA_TRAIN_ARGS:-}
