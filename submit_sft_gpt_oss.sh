@@ -45,14 +45,23 @@ export HF_HOME=/scratch/yx3882/.cache/huggingface
 export TRANSFORMERS_CACHE=/scratch/yx3882/.cache/huggingface
 export HF_DATASETS_CACHE=/scratch/yx3882/.cache/huggingface/datasets
 export TORCH_HOME=/scratch/yx3882/.cache/torch
-export WANDB_PROJECT="psse-agent-sft"
-export WANDB_API_KEY="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"
+export WANDB_PROJECT=${WANDB_PROJECT:-psse-agent-sft}
+if [[ -n "${WANDB_ENTITY:-}" ]]; then
+    export WANDB_ENTITY
+fi
 
 # ── Diagnostics ────────────────────────────────────────────────────────────
 echo "===== Job diagnostics ====="
 echo "Job ID  : $SLURM_JOB_ID"
 echo "Host    : $(hostname)"
 echo "Python  : $PYTHON"
+if [[ -n "${WANDB_API_KEY:-}" ]]; then
+    echo "WandB   : using WANDB_API_KEY from environment"
+elif [[ -f "$HOME/.netrc" ]]; then
+    echo "WandB   : using existing login from \$HOME/.netrc"
+else
+    echo "WandB   : no login detected; run 'wandb login' or export WANDB_API_KEY before sbatch"
+fi
 $PYTHON -V
 nvidia-smi
 echo "==========================="
