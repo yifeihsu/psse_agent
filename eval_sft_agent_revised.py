@@ -694,6 +694,8 @@ def classify_result_error(error_msg: str | None) -> str | None:
         return None
 
     s = error_msg.lower()
+    if s.startswith("verdict before required wls_from_path"):
+        return "missing_required_wls"
     if s.startswith("unparseable output"):
         return "unparseable_output"
     if s.startswith("tool "):
@@ -733,6 +735,8 @@ def run_one_sample(
     error_msg: str | None = None
     input_truncated = False
     last_raw_generation: str | None = None
+    wls_completed_successfully = False
+    turn_trace: list[dict[str, Any]] = []
 
     stop_ids = get_stop_token_ids(tokenizer)
     pad_token_id = getattr(tokenizer, "pad_token_id", None)
@@ -766,6 +770,11 @@ def run_one_sample(
         new_tokens = outputs[0][model_inputs["input_ids"].shape[-1] :]
         response_text = tokenizer.decode(new_tokens, skip_special_tokens=False)
         last_raw_generation = response_text
+        turn_record: dict[str, Any] = {
+            "turn": turn + 1,
+            "raw_generation": response_text,
+            "prompt_truncated": was_truncated,
+        }
 
         if verbose:
             print(f"\n  ======== [Turn {turn+1}] Generated ({len(new_tokens)} tokens) ========")
@@ -776,12 +785,21 @@ def run_one_sample(
 
         parsed = parse_generation(response_text)
         parse_notes.extend(parsed.get("notes", []))
+        turn_record["parse_type"] = parsed["type"]
+        if parsed.get("notes"):
+            turn_record["parse_notes"] = list(parsed["notes"])
+        if parsed.get("thinking"):
+            turn_record["thinking"] = parsed["thinking"]
 
         if parsed["type"] == "tool_call":
             tool_name = parsed["name"]
             tool_args = parsed["arguments"]
+            turn_record["tool_name"] = tool_name
+            turn_record["tool_arguments"] = tool_args
             if not isinstance(tool_args, dict):
                 error_msg = f"Parsed tool arguments are not a dict for {tool_name}: {type(tool_args).__name__}"
+                turn_record["error"] = error_msg
+                turn_trace.append(turn_record)
                 break
 
             tool_calls_made.append(tool_name)
@@ -811,6 +829,7 @@ def run_one_sample(
 
             tool_result = execute_tool(tool_name, tool_args)
             tool_result_str = json.dumps(tool_result, default=str, ensure_ascii=False)
+            turn_record["tool_result"] = tool_result
             conversation.append(
                 {
                     "role": "tool",
@@ -824,23 +843,40 @@ def run_one_sample(
                 preview = tool_result_str if len(tool_result_str) <= 240 else tool_result_str[:237] + "..."
                 print(f"  <- Tool result: {preview}")
 
+            if tool_name == "wls_from_path" and tool_result.get("success") is True:
+                wls_completed_successfully = True
+
             if tool_result.get("success") is False and not continue_on_tool_error:
                 error_msg = f"Tool {tool_name} failed: {tool_result.get('error', 'unknown error')}"
+                turn_record["error"] = error_msg
+                turn_trace.append(turn_record)
                 break
 
+            turn_trace.append(turn_record)
+
         elif parsed["type"] == "verdict":
+            if not wls_completed_successfully:
+                error_msg = f"Verdict before required wls_from_path at turn {turn+1}"
+                turn_record["error"] = error_msg
+                turn_record["verdict"] = parsed["content"]
+                turn_trace.append(turn_record)
+                break
             predicted_verdict = normalize_verdict(parsed["content"])
+            turn_record["verdict"] = parsed["content"]
             conversation.append(
                 {
                     "role": "assistant",
                     "content": json.dumps(parsed["content"], ensure_ascii=False),
                 }
             )
+            turn_trace.append(turn_record)
             break
 
         else:
             excerpt = parsed.get("raw", response_text)
             error_msg = f"Unparseable output at turn {turn+1}: {excerpt[:300]}"
+            turn_record["error"] = error_msg
+            turn_trace.append(turn_record)
             break
 
     gt_family = gt_verdict.get("verdict", {}).get("error_family") if gt_verdict else None
@@ -863,6 +899,9 @@ def run_one_sample(
         "input_truncated": input_truncated,
         "parse_notes": parse_notes,
         "last_raw_generation": last_raw_generation,
+        "required_wls_satisfied": wls_completed_successfully,
+        "turn_trace": turn_trace,
+        "final_conversation": conversation,
     }
 
 
