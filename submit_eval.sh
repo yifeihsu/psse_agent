@@ -11,7 +11,13 @@
 #SBATCH --mem=64G
 #SBATCH --time=08:00:00
 #SBATCH --gres=gpu:1
-#SBATCH --constraint="a100"
+
+# GPU selection is intentionally left configurable at submission time.
+# Examples:
+#   sbatch --constraint=a100 submit_eval.sh
+#   sbatch --constraint=l40s submit_eval.sh
+#   sbatch --gres=gpu:rtx_pro_6000:1 submit_eval.sh
+# Use your cluster's exact GPU labels from `sinfo -o "%P %G %f"`.
 
 set -euo pipefail
 
@@ -65,6 +71,8 @@ echo "test file: $TEST_FILE"
 echo "output: $OUTPUT_FILE"
 echo "smoke mode: $SMOKE"
 echo "max samples: ${MAX_SAMPLES:-ALL}"
+echo "slurm gres: ${SLURM_JOB_GRES:-unknown}"
+echo "cuda visible devices: ${CUDA_VISIBLE_DEVICES:-unset}"
 $PYTHON -V
 $PYTHON -m pip list | grep -E "unsloth|scipy|transformers|torch" || true
 nvidia-smi
