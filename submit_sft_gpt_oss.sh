@@ -22,8 +22,8 @@ PYTHON=$ENV_PREFIX/bin/python
 
 LOG_DIR=/scratch/yx3882/psse_agent/logs
 OUTPUT_DIR=/scratch/yx3882/psse_agent/outputs/gpt_oss_sft
-TRAIN_FILE=${TRAIN_FILE:-data/split_train.jsonl}
-VALID_FILE=${VALID_FILE:-data/split_val.jsonl}
+TRAIN_FILE=${TRAIN_FILE:-out_traces_balanced/sft_traces.train.jsonl}
+VALID_FILE=${VALID_FILE:-out_traces_balanced/sft_traces.valid.jsonl}
 MODEL_NAME=${MODEL_NAME:-unsloth/gpt-oss-20b-unsloth-bnb-4bit}
 MAX_SEQ_LENGTH=${MAX_SEQ_LENGTH:-12288}
 NUM_TRAIN_EPOCHS=${NUM_TRAIN_EPOCHS:-1}

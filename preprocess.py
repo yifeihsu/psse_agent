@@ -13,7 +13,7 @@ DEFAULT_INPUT = "data/sft_with_tools.jsonl"
 DEFAULT_TRAIN = 0.70
 DEFAULT_VAL = 0.15
 DEFAULT_TEST = 0.15
-DEFAULT_REPORT = "data/preprocess_report.json"
+DEFAULT_REPORT = "out_traces_balanced/preprocess_report.json"
 DEFAULT_TOKENIZER = "unsloth/gpt-oss-20b"
 DEFAULT_MAX_SEQ_LENGTH = 16384
 DEFAULT_ROUND_DECIMALS = 6
@@ -759,9 +759,9 @@ def main() -> None:
         default="",
         help="Optional JSON file with tool schemas used for GPT-OSS token audit",
     )
-    parser.add_argument("--out-train", default="data/split_train.jsonl")
-    parser.add_argument("--out-val", default="data/split_val.jsonl")
-    parser.add_argument("--out-test", default="data/split_test.jsonl")
+    parser.add_argument("--out-train", default="out_traces_balanced/sft_traces.train.jsonl")
+    parser.add_argument("--out-val", default="out_traces_balanced/sft_traces.valid.jsonl")
+    parser.add_argument("--out-test", default="out_traces_balanced/sft_traces.test.jsonl")
     parser.add_argument("--report", default=DEFAULT_REPORT, help="Write preprocessing report JSON here")
     args = parser.parse_args()
 

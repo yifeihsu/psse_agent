@@ -12,7 +12,7 @@ from unsloth import FastLanguageModel
 # ==========================================
 MODEL_NAME = "unsloth/gpt-oss-20b-unsloth-bnb-4bit"
 MAX_SEQ_LENGTH = 2048
-DATASET_PATH = "data/split_train.jsonl"
+DATASET_PATH = "out_traces_balanced/sft_traces.train.jsonl"
 OUTPUT_DIR = "outputs/gpt_oss_agent"
 
 # Get Unsloth optimized model

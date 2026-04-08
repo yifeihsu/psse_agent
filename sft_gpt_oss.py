@@ -14,9 +14,9 @@ import tempfile
 from pathlib import Path
 
 
-DEFAULT_TRAIN_FILE = "/scratch/yx3882/psse_agent/data/split_train.jsonl"
-DEFAULT_VAL_FILE = "/scratch/yx3882/psse_agent/data/split_val.jsonl"
-DEFAULT_TEST_FILE = "/scratch/yx3882/psse_agent/data/split_test.jsonl"
+DEFAULT_TRAIN_FILE = "/scratch/yx3882/psse_agent/out_traces_balanced/sft_traces.train.jsonl"
+DEFAULT_VAL_FILE = "/scratch/yx3882/psse_agent/out_traces_balanced/sft_traces.valid.jsonl"
+DEFAULT_TEST_FILE = "/scratch/yx3882/psse_agent/out_traces_balanced/sft_traces.test.jsonl"
 DEFAULT_MODEL_NAME = "unsloth/gpt-oss-20b-unsloth-bnb-4bit"
 DEFAULT_OUTPUT_DIR = "/scratch/yx3882/psse_agent/outputs/gpt_oss_power_sft"
 DEFAULT_MAX_SEQ_LENGTH = 12288

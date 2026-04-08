@@ -137,8 +137,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="GPT-OSS SFT for power-system tool traces")
-    parser.add_argument("--train-file", type=str, default="data/sft_final.jsonl")
-    parser.add_argument("--valid-file", "--val-file", dest="valid_file", type=str, default="data/split_valid.jsonl")
+    parser.add_argument("--train-file", type=str, default="out_traces_balanced/sft_traces.train.jsonl")
+    parser.add_argument("--valid-file", "--val-file", dest="valid_file", type=str, default="out_traces_balanced/sft_traces.valid.jsonl")
     parser.add_argument("--model-name", type=str, default="unsloth/gpt-oss-20b")
     parser.add_argument("--output-dir", type=str, default="outputs/gpt_oss_power_agent")
     parser.add_argument("--max-seq-length", type=int, default=12288)
@@ -214,10 +214,10 @@ def resolve_dataset_path(path: str, split_name: str, required: bool = True) -> s
 
     suggestions: list[Path] = []
     split_patterns = {
-        "split_train.jsonl": ["*.train.jsonl"],
-        "split_valid.jsonl": ["*.valid.jsonl", "*.val.jsonl"],
-        "split_val.jsonl": ["*.val.jsonl", "*.valid.jsonl"],
-        "split_test.jsonl": ["*.test.jsonl"],
+        "sft_traces.train.jsonl": ["*.train.jsonl"],
+        "sft_traces.valid.jsonl": ["*.valid.jsonl", "*.val.jsonl"],
+        "sft_traces.val.jsonl": ["*.val.jsonl", "*.valid.jsonl"],
+        "sft_traces.test.jsonl": ["*.test.jsonl"],
     }.get(requested.name)
 
     search_dirs: list[Path] = []

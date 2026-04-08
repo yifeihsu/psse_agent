@@ -44,7 +44,8 @@ echo "==========================="
 export WANDB_PROJECT="psse-agent-sft"
 
 $PYTHON gpt_oss_power_sft_revised.py \
-    --train-file out_traces_balanced/split_train.jsonl \
+    --train-file out_traces_balanced/sft_traces.train.jsonl \
+    --valid-file out_traces_balanced/sft_traces.valid.jsonl \
     --model-name unsloth/gpt-oss-20b \
     --output-dir outputs/gpt_oss_sft_power_agent \
     --max-seq-length 16384 \
