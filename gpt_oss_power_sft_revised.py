@@ -20,7 +20,6 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
-from datasets import DatasetDict, load_dataset
 from unsloth import FastLanguageModel, is_bfloat16_supported
 from trl import SFTConfig, SFTTrainer
 from trace_protocol import canonical_tool_schemas
@@ -179,6 +178,23 @@ def has_nonempty_jsonl(path: str) -> bool:
         return False
     with p.open("r", encoding="utf-8") as f:
         return any(line.strip() for line in f)
+
+
+def load_jsonl_rows(path: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with Path(path).open("r", encoding="utf-8") as f:
+        for line_num, line in enumerate(f, start=1):
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                row = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid JSON in {path}:{line_num}: {exc}") from exc
+            if not isinstance(row, dict):
+                raise ValueError(f"Expected JSON object in {path}:{line_num}, got {type(row).__name__}")
+            rows.append(row)
+    return rows
 
 
 def unique_paths(paths: Iterable[Path]) -> list[Path]:
@@ -604,14 +620,6 @@ def warn_on_schema_mismatch(raw_ds) -> None:
 
 
 
-def to_hf_dataset(records: list[dict[str, Any]]):
-    columns: dict[str, list[Any]] = {}
-    for key in records[0].keys():
-        columns[key] = [r[key] for r in records]
-    return DatasetDict.from_dict(columns)  # type: ignore[attr-defined]
-
-
-# datasets.Dataset.from_dict, but keep this helper to avoid accidental column drift.
 def records_to_dataset(records: list[dict[str, Any]]):
     from datasets import Dataset
 
@@ -653,7 +661,7 @@ def main(argv: list[str] | None = None) -> None:
         data_files["validation"] = valid_file
 
     print(f"Loading dataset from: {data_files}")
-    raw_ds = load_dataset("json", data_files=data_files)
+    raw_ds = {split_name: load_jsonl_rows(path) for split_name, path in data_files.items()}
     warn_on_schema_mismatch(raw_ds)
 
     train_stats = BuildStats()
