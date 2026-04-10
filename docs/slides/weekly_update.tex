@@ -156,6 +156,59 @@ python Transmission/build_sft_traces.py \
   Outputs: \texttt{sft\_with\_tools.jsonl}, \texttt{split\_train/valid/test.jsonl}
 \end{frame}
 
+\begin{frame}{Trace Generation Refresh}
+  \textbf{What changed in the trace builder}
+  \begin{itemize}
+    \item Moved to one canonical nested target:
+    \texttt{\{verdict, evidence, suspect\_location, action, summary\}}
+    \item Switched from verbose tool payloads to a compact tool protocol:
+    \texttt{wls\_from\_path}, \texttt{get\_parameter\_context}, \texttt{get\_topology\_context},
+    \texttt{get\_harmonic\_context}, \texttt{get\_verification\_snapshot}
+    \item Enforced the statistical decision boundary in every diagnostic trace:
+    \texttt{global\_residual\_sum}, \texttt{global\_residual\_threshold}, \texttt{global\_residual\_ratio}
+    \item Replaced visible local file paths with symbolic case aliases; hidden runtime hydration resolves them during eval/serving
+    \item Tightened acceptance rules:
+    \texttt{no\_error} kept only when $J / \tau < 0.9$, and clean traces no longer invent padded evidence lists
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Rebuilt Balanced Corpus: Current Status}
+  \begin{columns}[T]
+    \begin{column}{0.54\textwidth}
+      \textbf{Balanced 5-class export}
+      \begin{center}
+      \begin{tabular}{lccc}
+        \toprule
+        Family & Train & Valid & Test \\
+        \midrule
+        no\_error & 400 & 50 & 50 \\
+        measurement\_error & 400 & 50 & 50 \\
+        parameter\_error & 400 & 50 & 50 \\
+        topology\_error & 400 & 50 & 50 \\
+        harmonic\_anomaly & 400 & 50 & 50 \\
+        \midrule
+        Total & 2000 & 250 & 250 \\
+        \bottomrule
+      \end{tabular}
+      \end{center}
+      \vspace{0.4em}
+      Accepted raw traces before balancing: \textbf{2774}
+    \end{column}
+    \begin{column}{0.44\textwidth}
+      \textbf{QC / efficiency outcomes}
+      \begin{itemize}
+        \item Null residual thresholds: \textbf{0}
+        \item Null residual ratios: \textbf{0}
+        \item Clean-trace boundary violations: \textbf{0}
+        \item Max rendered length: \textbf{4074} tokens
+        \item P95 rendered length: \textbf{4054} tokens
+        \item Mean rendered length: \textbf{3491} tokens
+        \item Same compact protocol now used in builder, trainer, and evaluator
+      \end{itemize}
+    \end{column}
+  \end{columns}
+\end{frame}
+
 \begin{frame}{Next Steps}
   \begin{itemize}
     \item Expand scenario coverage and balance classes (parameter vs measurement errors vs no\_error)
@@ -166,4 +219,3 @@ python Transmission/build_sft_traces.py \
 \end{frame}
 
 \end{document}
-

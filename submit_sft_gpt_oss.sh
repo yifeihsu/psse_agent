@@ -8,7 +8,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
 #SBATCH --time=24:00:00
-#SBATCH --gres=gpu:h100:1
+#SBATCH --gres=gpu:1
+#SBATCH --constraint="a100|h100"
 #SBATCH --account=torch_pr_627_general
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=yx3882@nyu.edu
@@ -25,9 +26,13 @@ OUTPUT_DIR=/scratch/yx3882/psse_agent/outputs/gpt_oss_sft
 TRAIN_FILE=${TRAIN_FILE:-out_traces_balanced/sft_traces.train.jsonl}
 VALID_FILE=${VALID_FILE:-out_traces_balanced/sft_traces.valid.jsonl}
 MODEL_NAME=${MODEL_NAME:-unsloth/gpt-oss-20b-unsloth-bnb-4bit}
-MAX_SEQ_LENGTH=${MAX_SEQ_LENGTH:-12288}
+MAX_SEQ_LENGTH=${MAX_SEQ_LENGTH:-4096}
 NUM_TRAIN_EPOCHS=${NUM_TRAIN_EPOCHS:-1}
 MAX_STEPS=${MAX_STEPS:--1}
+SAVE_STEPS=${SAVE_STEPS:-100}
+EVAL_STEPS=${EVAL_STEPS:-100}
+SAVE_TOTAL_LIMIT=${SAVE_TOTAL_LIMIT:-4}
+RESUME_FROM_CHECKPOINT=${RESUME_FROM_CHECKPOINT:-auto}
 EXTRA_TRAIN_ARGS=${EXTRA_TRAIN_ARGS:-}
 
 mkdir -p "$LOG_DIR"
@@ -55,6 +60,9 @@ echo "===== Job diagnostics ====="
 echo "Job ID  : $SLURM_JOB_ID"
 echo "Host    : $(hostname)"
 echo "Python  : $PYTHON"
+echo "Output  : $OUTPUT_DIR"
+echo "Resume  : $RESUME_FROM_CHECKPOINT"
+echo "Save/Eval steps: $SAVE_STEPS / $EVAL_STEPS"
 if [[ -n "${WANDB_API_KEY:-}" ]]; then
     echo "WandB   : using WANDB_API_KEY from environment"
 elif [[ -f "$HOME/.netrc" ]]; then
@@ -85,7 +93,9 @@ $PYTHON gpt_oss_power_sft_revised.py \
     --num-train-epochs "$NUM_TRAIN_EPOCHS" \
     --max-steps "$MAX_STEPS" \
     --logging-steps 5 \
-    --save-steps 100 \
-    --eval-steps 100 \
+    --save-steps "$SAVE_STEPS" \
+    --eval-steps "$EVAL_STEPS" \
+    --save-total-limit "$SAVE_TOTAL_LIMIT" \
+    --resume-from-checkpoint "$RESUME_FROM_CHECKPOINT" \
     --report-to wandb \
     $EXTRA_TRAIN_ARGS

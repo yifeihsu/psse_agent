@@ -154,6 +154,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--save-steps", type=int, default=100)
     parser.add_argument("--eval-steps", type=int, default=100)
     parser.add_argument("--save-total-limit", type=int, default=2)
+    parser.add_argument(
+        "--resume-from-checkpoint",
+        type=str,
+        default="auto",
+        help="Checkpoint path to resume from, or 'auto' to use the latest checkpoint in --output-dir.",
+    )
     parser.add_argument("--seed", type=int, default=3407)
     parser.add_argument("--report-to", type=str, default="none", help="The integration to report the results to, e.g., 'wandb'")
     parser.add_argument("--run-name", type=str, default="")
@@ -195,6 +201,39 @@ def load_jsonl_rows(path: str) -> list[dict[str, Any]]:
                 raise ValueError(f"Expected JSON object in {path}:{line_num}, got {type(row).__name__}")
             rows.append(row)
     return rows
+
+
+def latest_checkpoint_dir(output_dir: str) -> str | None:
+    root = Path(output_dir)
+    if not root.exists():
+        return None
+
+    checkpoints: list[tuple[int, Path]] = []
+    for child in root.iterdir():
+        if not child.is_dir():
+            continue
+        name = child.name
+        if not name.startswith("checkpoint-"):
+            continue
+        suffix = name.removeprefix("checkpoint-")
+        if not suffix.isdigit():
+            continue
+        checkpoints.append((int(suffix), child))
+
+    if not checkpoints:
+        return None
+    checkpoints.sort(key=lambda item: item[0])
+    return str(checkpoints[-1][1])
+
+
+def resolve_resume_checkpoint(value: str, output_dir: str) -> str | None:
+    if not value:
+        return None
+    if value.lower() == "none":
+        return None
+    if value.lower() == "auto":
+        return latest_checkpoint_dir(output_dir)
+    return value
 
 
 def unique_paths(paths: Iterable[Path]) -> list[Path]:
@@ -733,8 +772,12 @@ def main(argv: list[str] | None = None) -> None:
         args=training_args,
     )
 
-    print("Starting training...")
-    trainer_stats = trainer.train()
+    resume_checkpoint = resolve_resume_checkpoint(args.resume_from_checkpoint, args.output_dir)
+    if resume_checkpoint:
+        print(f"Starting training from checkpoint: {resume_checkpoint}")
+    else:
+        print("Starting training from scratch...")
+    trainer_stats = trainer.train(resume_from_checkpoint=resume_checkpoint)
     print(f"Training metrics: {trainer_stats.metrics}")
 
     save_dir = Path(args.output_dir) / "lora"
