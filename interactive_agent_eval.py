@@ -7,6 +7,14 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from trace_protocol import (
+    canonical_tool_schemas,
+    CONTEXT_TOOL_NAMES,
+    extract_conversation_context,
+    hydrate_tool_arguments as protocol_hydrate_tool_arguments,
+    resolve_case_path_alias,
+    summarize_tool_result_for_conversation,
+)
 
 from mcp_server.matpower_server import (
     correct_measurements_from_path,
@@ -267,6 +275,11 @@ def find_reference_final(messages: list[dict[str, Any]]) -> str | None:
     return None
 
 
+def extract_reference_user_followups(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    user_messages = [dict(message) for message in messages if message.get("role") == "user"]
+    return user_messages[1:]
+
+
 def pretty_json(value: Any, *, limit: int | None = None) -> str:
     text = json.dumps(value, indent=2, ensure_ascii=False)
     if limit is not None and len(text) > limit:
@@ -333,10 +346,18 @@ def parse_generation(raw_text: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             parsed_json = None
 
+    if parsed_json is not None:
+        return {
+            "kind": "final",
+            "content": content,
+            "parsed_json": parsed_json,
+            "analysis": analysis,
+        }
+
     return {
-        "kind": "final",
+        "kind": "assistant_message",
         "content": content,
-        "parsed_json": parsed_json,
+        "parsed_json": None,
         "analysis": analysis,
     }
 
@@ -366,15 +387,56 @@ def build_tool_result_message(step: int, tool_name: str, result: Any) -> dict[st
     }
 
 
-def execute_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
+def execute_context_tool(
+    tool_name: str,
+    arguments: dict[str, Any],
+    runtime_context: dict[str, Any] | None,
+    hidden_context: dict[str, Any],
+) -> Any:
+    tool_context = ((runtime_context or {}).get("tool_context") or {})
+    payload: Any = None
+    if tool_name == "get_parameter_context":
+        payload = tool_context.get("parameter_context")
+        if isinstance(payload, dict):
+            hidden_context["parameter_context"] = payload
+    elif tool_name == "get_topology_context":
+        payload = tool_context.get("topology_context")
+        if isinstance(payload, dict):
+            hidden_context["topology_context"] = payload
+    elif tool_name == "get_harmonic_context":
+        payload = tool_context.get("harmonic_context")
+        if isinstance(payload, dict):
+            hidden_context["harmonic_context"] = payload
+    elif tool_name == "get_verification_snapshot":
+        stage = arguments.get("stage")
+        payload = (tool_context.get("verification_snapshots") or {}).get(stage)
+        if isinstance(payload, dict):
+            hidden_context["snapshot_context"] = payload
+    if isinstance(payload, dict):
+        return payload
+    return {"success": False, "error": f"Missing runtime context for {tool_name}"}
+
+
+def execute_tool(
+    tool_name: str,
+    arguments: dict[str, Any],
+    *,
+    runtime_context: dict[str, Any] | None = None,
+    hidden_context: dict[str, Any] | None = None,
+) -> Any:
+    if tool_name in CONTEXT_TOOL_NAMES:
+        return execute_context_tool(tool_name, arguments, runtime_context, hidden_context or {})
     if tool_name not in TOOL_MAP:
         return {"success": False, "error": f"Unknown tool requested by model: {tool_name}"}
     tool = TOOL_MAP[tool_name]
     try:
+        call_args = dict(arguments)
+        if "case_path" in call_args:
+            call_args["case_path"] = resolve_case_path_alias(call_args["case_path"], hidden_context or runtime_context)
         if callable(tool):
-            return tool(**arguments)
+            return tool(**call_args)
         if hasattr(tool, "fn") and callable(tool.fn):
-            return tool.fn(**arguments)
+            return tool.fn(**call_args)
         return {"success": False, "error": f"Tool {tool_name} is not directly callable and exposes no callable fn."}
     except Exception as exc:
         return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
@@ -431,14 +493,21 @@ def main() -> None:
     stop_token_ids = resolve_stop_token_ids(tokenizer)
 
     conversation = list(seed_messages)
+    reference_user_followups = extract_reference_user_followups(messages)
+    replayed_user_followups = 0
     run_steps: list[dict[str, Any]] = []
     final_result: dict[str, Any] | None = None
+    tool_schemas = canonical_tool_schemas()
+    runtime_context = trace_payload.get("runtime_context") if isinstance(trace_payload, dict) else None
+    hidden_context: dict[str, Any] = {
+        "case_aliases": dict(((runtime_context or {}).get("case_aliases") or {})),
+    }
 
     for step in range(1, args.max_steps + 1):
         print(f"\n=== Step {step} ===")
         model_inputs = tokenizer.apply_chat_template(
             conversation,
-            tools=DEFAULT_TOOL_SCHEMAS,
+            tools=tool_schemas,
             add_generation_prompt=True,
             return_tensors="pt",
             return_dict=True,
@@ -480,19 +549,61 @@ def main() -> None:
 
         if parsed["kind"] == "tool_call":
             tool_name = parsed["tool_name"]
-            arguments = parsed["arguments"]
+            arguments, hydration_notes = protocol_hydrate_tool_arguments(
+                tool_name,
+                parsed["arguments"],
+                conversation,
+                hidden_context=hidden_context,
+            )
+            step_record["hydration_notes"] = hydration_notes
 
             print(f"[Tool call] {tool_name}")
             print(pretty_json(arguments, limit=3000))
 
-            tool_result = execute_tool(tool_name, arguments)
-            step_record["tool_result"] = tool_result
+            tool_result = execute_tool(
+                tool_name,
+                arguments,
+                runtime_context=runtime_context,
+                hidden_context=hidden_context,
+            )
+            meta_context, index_map = extract_conversation_context(conversation)
+            try:
+                tool_result_compact = summarize_tool_result_for_conversation(
+                    tool_name,
+                    tool_result,
+                    meta_context,
+                    index_map,
+                )
+            except Exception:
+                tool_result_compact = tool_result
+            step_record["tool_result"] = tool_result_compact if tool_name in CONTEXT_TOOL_NAMES else tool_result
+            step_record["tool_result_compact"] = tool_result_compact
 
             print("[Tool result]")
-            print(pretty_json(tool_result, limit=5000))
+            print(pretty_json(tool_result_compact, limit=5000))
 
             conversation.append(build_tool_call_message(step, tool_name, arguments))
-            conversation.append(build_tool_result_message(step, tool_name, tool_result))
+            conversation.append(build_tool_result_message(step, tool_name, tool_result_compact))
+            run_steps.append(step_record)
+            continue
+
+        if parsed["kind"] == "assistant_message":
+            assistant_content = parsed["content"]
+            step_record["assistant_message"] = assistant_content
+            print("[Assistant message]")
+            print(assistant_content or "<empty>")
+            conversation.append({"role": "assistant", "content": assistant_content})
+            if replayed_user_followups >= len(reference_user_followups):
+                print("No reference user follow-up remains; stopping.")
+                run_steps.append(step_record)
+                final_result = step_record
+                break
+            followup_message = reference_user_followups[replayed_user_followups]
+            replayed_user_followups += 1
+            conversation.append(followup_message)
+            step_record["replayed_user_followup"] = followup_message
+            print("[Replayed user follow-up]")
+            print(pretty_json(followup_message, limit=3000))
             run_steps.append(step_record)
             continue
 

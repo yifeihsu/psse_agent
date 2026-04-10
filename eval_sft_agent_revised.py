@@ -39,7 +39,16 @@ import time
 import uuid
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
+from trace_protocol import (
+    canonical_tool_schemas,
+    CONTEXT_TOOL_NAMES,
+    extract_conversation_context,
+    hydrate_tool_arguments as protocol_hydrate_tool_arguments,
+    looks_like_json,
+    resolve_case_path_alias,
+    summarize_tool_result_for_conversation,
+)
 
 # ---------------------------------------------------------------------------
 # 0. Argument parsing
@@ -125,14 +134,55 @@ TOOL_MAP = {
 }
 
 
-def execute_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+def execute_context_tool(
+    name: str,
+    arguments: dict[str, Any],
+    runtime_context: Mapping[str, Any] | None,
+    hidden_context: dict[str, Any],
+) -> dict[str, Any]:
+    tool_context = ((runtime_context or {}).get("tool_context") or {})
+    payload: Any = None
+    if name == "get_parameter_context":
+        payload = tool_context.get("parameter_context")
+        if isinstance(payload, dict):
+            hidden_context["parameter_context"] = payload
+    elif name == "get_topology_context":
+        payload = tool_context.get("topology_context")
+        if isinstance(payload, dict):
+            hidden_context["topology_context"] = payload
+    elif name == "get_harmonic_context":
+        payload = tool_context.get("harmonic_context")
+        if isinstance(payload, dict):
+            hidden_context["harmonic_context"] = payload
+    elif name == "get_verification_snapshot":
+        stage = arguments.get("stage")
+        payload = (tool_context.get("verification_snapshots") or {}).get(stage)
+        if isinstance(payload, dict):
+            hidden_context["snapshot_context"] = payload
+    if isinstance(payload, dict):
+        return payload
+    return {"success": False, "error": f"Missing runtime context for {name}"}
+
+
+def execute_tool(
+    name: str,
+    arguments: dict[str, Any],
+    *,
+    runtime_context: Mapping[str, Any] | None = None,
+    hidden_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if name in CONTEXT_TOOL_NAMES:
+        return execute_context_tool(name, arguments, runtime_context, hidden_context or {})
     """Call one of the matpower tools and return its JSON-serialisable result."""
     tool_obj = TOOL_MAP.get(name)
     if tool_obj is None:
         return {"success": False, "error": f"Unknown tool: {name}"}
     try:
         fn = getattr(tool_obj, "fn", tool_obj)
-        return fn(**arguments)
+        call_args = dict(arguments)
+        if "case_path" in call_args:
+            call_args["case_path"] = resolve_case_path_alias(call_args["case_path"], hidden_context or runtime_context)
+        return fn(**call_args)
     except Exception as exc:  # pragma: no cover - defensive runtime wrapper
         return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
 
@@ -156,6 +206,20 @@ def extract_prompt_prefix(messages: list[dict[str, Any]]) -> list[dict[str, Any]
             break
         prefix.append(strip_none_fields(msg))
     return prefix
+
+
+def extract_reference_user_followups(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    user_messages = [strip_none_fields(dict(msg)) for msg in messages if msg.get("role") == "user"]
+    return user_messages[1:]
+
+
+def repair_tool_arguments(
+    tool_name: str,
+    arguments: Any,
+    conversation: list[dict[str, Any]],
+    hidden_context: Mapping[str, Any] | None = None,
+) -> tuple[Any, list[str]]:
+    return protocol_hydrate_tool_arguments(tool_name, arguments, conversation, hidden_context=hidden_context)
 
 
 
@@ -590,6 +654,27 @@ def parse_generation(text: str) -> dict[str, Any]:
                 "messages": messages,
             }
 
+    plain_text = strip_trailing_special_tokens(raw).strip()
+    if messages:
+        for msg in reversed(messages):
+            content = strip_trailing_special_tokens(str(msg.get("content", ""))).strip()
+            if content:
+                return {
+                    "type": "assistant_message",
+                    "content": content,
+                    "thinking": "\n\n".join(analysis_chunks).strip() or None,
+                    "notes": notes,
+                    "messages": messages,
+                }
+    if plain_text and not looks_like_json(plain_text):
+        return {
+            "type": "assistant_message",
+            "content": plain_text,
+            "thinking": None,
+            "notes": notes,
+            "messages": messages,
+        }
+
     return {
         "type": "unparseable",
         "raw": raw[:1000],
@@ -627,21 +712,32 @@ def build_model_inputs(
     model: Any,
     *,
     max_input_tokens: int,
+    tools: list[dict[str, Any]] | None,
 ) -> tuple[dict[str, Any], bool]:
     """Render the chat with the tokenizer chat template and left-truncate if needed."""
     try:
+        kwargs: dict[str, Any] = {
+            "add_generation_prompt": True,
+            "return_tensors": "pt",
+            "return_dict": True,
+        }
+        if tools is not None:
+            kwargs["tools"] = tools
         inputs = tokenizer.apply_chat_template(
             conversation,
-            add_generation_prompt=True,
-            return_tensors="pt",
-            return_dict=True,
+            **kwargs,
         )
     except TypeError:
         # Older tokenizer versions may not support return_dict on apply_chat_template.
+        prompt_kwargs: dict[str, Any] = {
+            "tokenize": False,
+            "add_generation_prompt": True,
+        }
+        if tools is not None:
+            prompt_kwargs["tools"] = tools
         prompt = tokenizer.apply_chat_template(
             conversation,
-            tokenize=False,
-            add_generation_prompt=True,
+            **prompt_kwargs,
         )
         inputs = tokenizer(prompt, return_tensors="pt")
 
@@ -721,13 +817,20 @@ def run_one_sample(
     max_turns: int,
     max_new_tokens: int,
     max_input_tokens: int,
+    tools: list[dict[str, Any]] | None,
     continue_on_tool_error: bool,
+    runtime_context: Mapping[str, Any] | None,
     verbose: bool,
 ) -> dict[str, Any]:
     import torch
 
     gt_verdict = normalize_verdict(extract_ground_truth(messages_gt))
     conversation = extract_prompt_prefix(messages_gt)
+    reference_user_followups = extract_reference_user_followups(messages_gt)
+    replayed_user_followups = 0
+    hidden_context: dict[str, Any] = {
+        "case_aliases": dict(((runtime_context or {}).get("case_aliases") or {})),
+    }
 
     tool_calls_made: list[str] = []
     parse_notes: list[str] = []
@@ -753,6 +856,7 @@ def run_one_sample(
             tokenizer,
             model,
             max_input_tokens=max_input_tokens,
+            tools=tools,
         )
         input_truncated = input_truncated or was_truncated
 
@@ -794,6 +898,16 @@ def run_one_sample(
         if parsed["type"] == "tool_call":
             tool_name = parsed["name"]
             tool_args = parsed["arguments"]
+            tool_args, repair_notes = repair_tool_arguments(
+                tool_name,
+                tool_args,
+                conversation,
+                hidden_context=hidden_context,
+            )
+            if repair_notes:
+                parse_notes.extend(repair_notes)
+                turn_record.setdefault("parse_notes", [])
+                turn_record["parse_notes"].extend(repair_notes)
             turn_record["tool_name"] = tool_name
             turn_record["tool_arguments"] = tool_args
             if not isinstance(tool_args, dict):
@@ -827,9 +941,25 @@ def run_one_sample(
                 if parsed.get("thinking"):
                     print(f"     thinking: {parsed['thinking'][:200]}")
 
-            tool_result = execute_tool(tool_name, tool_args)
-            tool_result_str = json.dumps(tool_result, default=str, ensure_ascii=False)
-            turn_record["tool_result"] = tool_result
+            tool_result = execute_tool(
+                tool_name,
+                tool_args,
+                runtime_context=runtime_context,
+                hidden_context=hidden_context,
+            )
+            meta_context, index_map = extract_conversation_context(conversation)
+            try:
+                tool_result_compact = summarize_tool_result_for_conversation(
+                    tool_name,
+                    tool_result,
+                    meta_context,
+                    index_map,
+                )
+            except Exception:
+                tool_result_compact = tool_result
+            turn_record["tool_result"] = tool_result_compact if tool_name in CONTEXT_TOOL_NAMES else tool_result
+            tool_result_str = json.dumps(tool_result_compact, default=str, ensure_ascii=False)
+            turn_record["tool_result_compact"] = tool_result_compact
             conversation.append(
                 {
                     "role": "tool",
@@ -853,6 +983,22 @@ def run_one_sample(
                 break
 
             turn_trace.append(turn_record)
+
+        elif parsed["type"] == "assistant_message":
+            assistant_content = parsed["content"]
+            turn_record["assistant_message"] = assistant_content
+            conversation.append({"role": "assistant", "content": assistant_content})
+            if replayed_user_followups >= len(reference_user_followups):
+                error_msg = f"Assistant requested follow-up data at turn {turn+1}, but no reference user payload remained"
+                turn_record["error"] = error_msg
+                turn_trace.append(turn_record)
+                break
+            followup_message = reference_user_followups[replayed_user_followups]
+            replayed_user_followups += 1
+            conversation.append(followup_message)
+            turn_record["replayed_user_followup"] = followup_message
+            turn_trace.append(turn_record)
+            continue
 
         elif parsed["type"] == "verdict":
             if not wls_completed_successfully:
@@ -978,6 +1124,7 @@ def main() -> None:
         print("Model loaded via transformers + peft.\n")
 
     max_input_tokens = resolve_max_input_tokens(args, model, tokenizer)
+    tools = canonical_tool_schemas()
     print(f"Using max input context length: {max_input_tokens}\n")
 
     # ---- Load test data ----
@@ -1014,7 +1161,9 @@ def main() -> None:
                     max_turns=args.max_turns,
                     max_new_tokens=args.max_new_tokens,
                     max_input_tokens=max_input_tokens,
+                    tools=tools,
                     continue_on_tool_error=args.continue_on_tool_error,
+                    runtime_context=sample.get("runtime_context"),
                     verbose=args.verbose,
                 )
             except Exception as exc:  # pragma: no cover - top-level eval guard

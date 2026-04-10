@@ -23,6 +23,7 @@ from typing import Any, Iterable
 from datasets import DatasetDict, load_dataset
 from unsloth import FastLanguageModel, is_bfloat16_supported
 from trl import SFTConfig, SFTTrainer
+from trace_protocol import canonical_tool_schemas
 
 
 DEFAULT_POWER_TOOLS: list[dict[str, Any]] = [
@@ -418,7 +419,7 @@ def load_tools(args: argparse.Namespace) -> list[dict[str, Any]] | None:
         if not isinstance(data, list):
             raise ValueError("--tools-file must contain a JSON list of tool schemas.")
         return sanitize_tool_schemas(data)
-    return sanitize_tool_schemas(DEFAULT_POWER_TOOLS)
+    return canonical_tool_schemas()
 
 
 def render_text(tokenizer, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None, add_generation_prompt: bool) -> str:
@@ -572,21 +573,13 @@ def report_dataset(records: list[dict[str, Any]], split_name: str, stats: BuildS
 
 
 def warn_on_schema_mismatch(raw_ds) -> None:
-    """Lightweight data QA for the uploaded dataset.
-
-    The current power-system dataset often asks for `decision_basis` in the system
-    instruction while omitting it in the final JSON. Warn early so the user can
-    decide whether to fix the dataset or prompt.
-    """
+    """Lightweight QA for the canonical nested verdict schema."""
     if len(raw_ds["train"]) == 0:
         return
 
-    system_text = raw_ds["train"][0]["messages"][0].get("content", "")
-    if "decision_basis" not in system_text:
-        return
-
     checked = min(64, len(raw_ds["train"]))
-    missing = 0
+    malformed = 0
+    missing_thresholds = 0
     for i in range(checked):
         messages = raw_ds["train"][i]["messages"]
         final = messages[-1]
@@ -596,13 +589,17 @@ def warn_on_schema_mismatch(raw_ds) -> None:
             obj = json.loads(final["content"])
         except Exception:
             continue
-        if "decision_basis" not in obj:
-            missing += 1
+        if not isinstance(obj, dict) or "verdict" not in obj or "evidence" not in obj:
+            malformed += 1
+            continue
+        gm = ((obj.get("evidence") or {}).get("global_metrics") or {})
+        if gm.get("global_residual_threshold") is None or gm.get("global_residual_ratio") is None:
+            missing_thresholds += 1
 
-    if missing:
+    if malformed or missing_thresholds:
         print(
-            f"WARNING: system prompt asks for `decision_basis`, but {missing}/{checked} sampled final JSON outputs omit it. "
-            "Either add the field to targets or relax the instruction."
+            "WARNING: sampled final JSON outputs do not fully match the canonical nested schema. "
+            f"malformed={malformed}/{checked}, missing_thresholds={missing_thresholds}/{checked}."
         )
 
 

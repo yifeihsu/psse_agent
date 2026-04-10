@@ -54,7 +54,11 @@ from IEEE_14_OpenDSS.export_measurement_series import (  # type: ignore
     extract_three_phase_voltage_measurements,
 )
 
-from Transmission.generate_measurements import compute_measurements_pu, make_index_map  # type: ignore
+from Transmission.generate_measurements import (  # type: ignore
+    MEASUREMENT_ORDER,
+    compute_measurements_pu,
+    make_index_map,
+)
 
 
 def _scale_pypower_loads(ppc: Dict[str, Any], alpha: float) -> Dict[str, Any]:
@@ -172,6 +176,7 @@ def generate_dataset(
         nb=nb,
         nl=nl,
         index_map={k: [int(v.start), int(v.stop)] for k, v in idx_map.items()},
+        measurement_order=MEASUREMENT_ORDER,
         branch_info=_branch_info_case14(),
         imbalance=dict(
             bus_order=BUS_ORDER,

@@ -40,7 +40,16 @@ import time
 import uuid
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
+from trace_protocol import (
+    canonical_tool_schemas,
+    CONTEXT_TOOL_NAMES,
+    extract_conversation_context,
+    hydrate_tool_arguments as protocol_hydrate_tool_arguments,
+    looks_like_json,
+    resolve_case_path_alias,
+    summarize_tool_result_for_conversation,
+)
 
 # ---------------------------------------------------------------------------
 # 0. Argument parsing
@@ -118,13 +127,13 @@ def parse_args() -> argparse.Namespace:
         "--repair-wls-from-user",
         action="store_true",
         default=True,
-        help="If a parsed wls_from_path call is missing/short z, repair it from the user's z_obs",
+        help="Hydrate omitted tool arguments from the visible user payloads before tool execution",
     )
     p.add_argument(
         "--no-repair-wls-from-user",
         dest="repair_wls_from_user",
         action="store_false",
-        help="Disable auto-repair of malformed wls_from_path arguments from the user payload",
+        help="Disable hydration of omitted tool arguments from user follow-up payloads",
     )
     return p.parse_args()
 
@@ -270,7 +279,7 @@ def load_tools(args: argparse.Namespace) -> list[dict[str, Any]] | None:
         if not isinstance(data, list):
             raise ValueError("--tools-file must contain a JSON list of tool schemas.")
         return sanitize_tool_schemas(data)
-    return sanitize_tool_schemas(DEFAULT_POWER_TOOLS)
+    return canonical_tool_schemas()
 
 
 def prune_none(obj: dict[str, Any]) -> dict[str, Any]:
@@ -341,39 +350,64 @@ def extract_user_snapshot(messages: list[dict[str, Any]]) -> dict[str, Any] | No
     return None
 
 
-def repair_tool_arguments(tool_name: str, arguments: Any, user_snapshot: dict[str, Any] | None) -> tuple[Any, list[str]]:
-    notes: list[str] = []
-    if not isinstance(arguments, dict) or not isinstance(user_snapshot, dict):
-        return arguments, notes
-
-    repaired = json.loads(json.dumps(arguments))
-    user_case = user_snapshot.get("case_path")
-    user_z = user_snapshot.get("z_obs")
-
-    if user_case and not repaired.get("case_path"):
-        repaired["case_path"] = user_case
-        notes.append("filled_case_path_from_user")
-
-    if tool_name in {"wls_from_path", "correct_measurements_from_path"} and isinstance(user_z, list):
-        z_val = repaired.get("z")
-        if not isinstance(z_val, list):
-            repaired["z"] = user_z
-            notes.append(f"filled_{tool_name}_z_from_user")
-        elif len(z_val) != len(user_z):
-            repaired["z"] = user_z
-            notes.append(f"replaced_{tool_name}_z_len_{len(z_val)}_with_user_len_{len(user_z)}")
-
-    return repaired, notes
+def repair_tool_arguments(
+    tool_name: str,
+    arguments: Any,
+    conversation: list[dict[str, Any]],
+    hidden_context: Mapping[str, Any] | None = None,
+) -> tuple[Any, list[str]]:
+    return protocol_hydrate_tool_arguments(tool_name, arguments, conversation, hidden_context=hidden_context)
 
 
-def execute_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+def execute_context_tool(
+    name: str,
+    arguments: dict[str, Any],
+    runtime_context: Mapping[str, Any] | None,
+    hidden_context: dict[str, Any],
+) -> dict[str, Any]:
+    tool_context = ((runtime_context or {}).get("tool_context") or {})
+    payload: Any = None
+    if name == "get_parameter_context":
+        payload = tool_context.get("parameter_context")
+        if isinstance(payload, dict):
+            hidden_context["parameter_context"] = payload
+    elif name == "get_topology_context":
+        payload = tool_context.get("topology_context")
+        if isinstance(payload, dict):
+            hidden_context["topology_context"] = payload
+    elif name == "get_harmonic_context":
+        payload = tool_context.get("harmonic_context")
+        if isinstance(payload, dict):
+            hidden_context["harmonic_context"] = payload
+    elif name == "get_verification_snapshot":
+        stage = arguments.get("stage")
+        payload = (tool_context.get("verification_snapshots") or {}).get(stage)
+        if isinstance(payload, dict):
+            hidden_context["snapshot_context"] = payload
+    if isinstance(payload, dict):
+        return payload
+    return {"success": False, "error": f"Missing runtime context for {name}"}
+
+
+def execute_tool(
+    name: str,
+    arguments: dict[str, Any],
+    *,
+    runtime_context: Mapping[str, Any] | None = None,
+    hidden_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Call one of the matpower tools and return its JSON-serialisable result."""
+    if name in CONTEXT_TOOL_NAMES:
+        return execute_context_tool(name, arguments, runtime_context, hidden_context or {})
     tool_obj = TOOL_MAP.get(name)
     if tool_obj is None:
         return {"success": False, "error": f"Unknown tool: {name}"}
     try:
         fn = getattr(tool_obj, "fn", tool_obj)
-        return fn(**arguments)
+        call_args = dict(arguments)
+        if "case_path" in call_args:
+            call_args["case_path"] = resolve_case_path_alias(call_args["case_path"], hidden_context or runtime_context)
+        return fn(**call_args)
     except Exception as exc:  # pragma: no cover - defensive runtime wrapper
         return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
 
@@ -397,6 +431,11 @@ def extract_prompt_prefix(messages: list[dict[str, Any]]) -> list[dict[str, Any]
             break
         prefix.append(strip_none_fields(msg))
     return prefix
+
+
+def extract_reference_user_followups(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    user_messages = [strip_none_fields(dict(msg)) for msg in messages if msg.get("role") == "user"]
+    return user_messages[1:]
 
 
 
@@ -831,6 +870,27 @@ def parse_generation(text: str) -> dict[str, Any]:
                 "messages": messages,
             }
 
+    plain_text = strip_trailing_special_tokens(raw).strip()
+    if messages:
+        for msg in reversed(messages):
+            content = strip_trailing_special_tokens(str(msg.get("content", ""))).strip()
+            if content:
+                return {
+                    "type": "assistant_message",
+                    "content": content,
+                    "thinking": "\n\n".join(analysis_chunks).strip() or None,
+                    "notes": notes,
+                    "messages": messages,
+                }
+    if plain_text and not looks_like_json(plain_text):
+        return {
+            "type": "assistant_message",
+            "content": plain_text,
+            "thinking": None,
+            "notes": notes,
+            "messages": messages,
+        }
+
     return {
         "type": "unparseable",
         "raw": raw[:1000],
@@ -970,13 +1030,18 @@ def run_one_sample(
     tools: list[dict[str, Any]] | None,
     continue_on_tool_error: bool,
     repair_wls_from_user: bool,
+    runtime_context: Mapping[str, Any] | None,
     verbose: bool,
 ) -> dict[str, Any]:
     import torch
 
     gt_verdict = normalize_verdict(extract_ground_truth(messages_gt))
     conversation = extract_prompt_prefix(messages_gt)
-    user_snapshot = extract_user_snapshot(messages_gt)
+    reference_user_followups = extract_reference_user_followups(messages_gt)
+    replayed_user_followups = 0
+    hidden_context: dict[str, Any] = {
+        "case_aliases": dict(((runtime_context or {}).get("case_aliases") or {})),
+    }
 
     tool_calls_made: list[str] = []
     parse_notes: list[str] = []
@@ -1049,7 +1114,12 @@ def run_one_sample(
             tool_name = parsed["name"]
             tool_args = parsed["arguments"]
             if repair_wls_from_user:
-                tool_args, repair_notes = repair_tool_arguments(tool_name, tool_args, user_snapshot)
+                tool_args, repair_notes = repair_tool_arguments(
+                    tool_name,
+                    tool_args,
+                    conversation,
+                    hidden_context=hidden_context,
+                )
                 if repair_notes:
                     parse_notes.extend(repair_notes)
                     turn_record.setdefault("parse_notes", [])
@@ -1087,9 +1157,25 @@ def run_one_sample(
                 if parsed.get("thinking"):
                     print(f"     thinking: {parsed['thinking'][:200]}")
 
-            tool_result = execute_tool(tool_name, tool_args)
-            tool_result_str = json.dumps(tool_result, default=str, ensure_ascii=False)
-            turn_record["tool_result"] = tool_result
+            tool_result = execute_tool(
+                tool_name,
+                tool_args,
+                runtime_context=runtime_context,
+                hidden_context=hidden_context,
+            )
+            meta_context, index_map = extract_conversation_context(conversation)
+            try:
+                tool_result_compact = summarize_tool_result_for_conversation(
+                    tool_name,
+                    tool_result,
+                    meta_context,
+                    index_map,
+                )
+            except Exception:
+                tool_result_compact = tool_result
+            turn_record["tool_result"] = tool_result_compact if tool_name in CONTEXT_TOOL_NAMES else tool_result
+            tool_result_str = json.dumps(tool_result_compact, default=str, ensure_ascii=False)
+            turn_record["tool_result_compact"] = tool_result_compact
             conversation.append(
                 {
                     "role": "tool",
@@ -1114,6 +1200,22 @@ def run_one_sample(
                 break
 
             turn_trace.append(turn_record)
+
+        elif parsed["type"] == "assistant_message":
+            assistant_content = parsed["content"]
+            turn_record["assistant_message"] = assistant_content
+            conversation.append({"role": "assistant", "content": assistant_content})
+            if replayed_user_followups >= len(reference_user_followups):
+                error_msg = f"Assistant requested follow-up data at turn {turn+1}, but no reference user payload remained"
+                turn_record["error"] = error_msg
+                turn_trace.append(turn_record)
+                break
+            followup_message = reference_user_followups[replayed_user_followups]
+            replayed_user_followups += 1
+            conversation.append(followup_message)
+            turn_record["replayed_user_followup"] = followup_message
+            turn_trace.append(turn_record)
+            continue
 
         elif parsed["type"] == "verdict":
             if not wls_completed_successfully:
@@ -1280,6 +1382,7 @@ def main() -> None:
                     tools=tools,
                     continue_on_tool_error=args.continue_on_tool_error,
                     repair_wls_from_user=args.repair_wls_from_user,
+                    runtime_context=sample.get("runtime_context"),
                     verbose=args.verbose,
                 )
             except Exception as exc:  # pragma: no cover - top-level eval guard

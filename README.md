@@ -55,7 +55,7 @@ The repository is organized into the following key components:
 
 - **Generate Data**: Use the scripts in `Transmission/` (e.g., `generate_measurements.py`, `generate_hse_traces.py`) to build the raw datasets.
 - **Build SFT Traces**: Convert raw data into LLM training formats using `Transmission/build_sft_traces.py`.
-- **Fine-Tune**: Use `scripts/test_unsloth.py` or equivalent to run the fine-tuning process on the generated `data/sft_final.jsonl`.
+- **Fine-Tune**: Use `gpt_oss_power_sft_revised.py`, `train_agent.py`, or the `submit_sft*.sh` wrappers to run fine-tuning on the generated JSONL traces.
 
 ## License
 Refer to `LICENSE.md` in the root directory for licensing information.
