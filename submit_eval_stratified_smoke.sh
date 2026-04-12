@@ -38,7 +38,7 @@ ADAPTER_PATH=${ADAPTER_PATH:-harshith0214/psse-agent-gpt-oss-20b}
 SOURCE_TEST_FILE=${SOURCE_TEST_FILE:-out_traces_balanced/sft_traces.test.jsonl}
 PER_FAMILY=${PER_FAMILY:-4}
 SEED=${SEED:-13}
-MAX_TURNS=${MAX_TURNS:-4}
+MAX_TURNS=${MAX_TURNS:-8}
 MAX_NEW_TOKENS=${MAX_NEW_TOKENS:-2048}
 MAX_SEQ_LENGTH=${MAX_SEQ_LENGTH:-8192}
 SMOKE_TEST_FILE=${SMOKE_TEST_FILE:-outputs/stratified_smoke_${SLURM_JOB_ID}.jsonl}
@@ -59,10 +59,10 @@ echo "smoke subset: $SMOKE_TEST_FILE"
   --shuffle-output
 
 echo
-echo "===== Run hardened eval on stratified smoke set ====="
+echo "===== Run fixed eval on stratified smoke set ====="
 echo "adapter: $ADAPTER_PATH"
 echo "eval output: $OUTPUT_FILE"
-"$PYTHON" eval_sft_agent_hardened.py \
+"$PYTHON" eval_sft_agent_fixed.py \
   --adapter "$ADAPTER_PATH" \
   --test-file "$SMOKE_TEST_FILE" \
   --max-turns "$MAX_TURNS" \

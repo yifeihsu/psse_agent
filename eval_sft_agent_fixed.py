@@ -76,7 +76,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--max-turns",
         type=int,
-        default=4,
+        default=8,
         help="Max tool-call turns before forcing stop (safety)",
     )
     p.add_argument(
@@ -159,6 +159,7 @@ TOOL_MAP = {
     "correct_topology_from_path": correct_topology_from_path,
     "run_hse_from_path": run_hse_from_path,
 }
+PARSEABLE_TOOL_NAMES = set(TOOL_MAP) | set(CONTEXT_TOOL_NAMES)
 
 
 DEFAULT_POWER_TOOLS: list[dict[str, Any]] = [
@@ -606,11 +607,11 @@ def infer_tool_name_from_arguments(obj: Any) -> str | None:
     if not isinstance(obj, dict):
         return None
 
-    if "name" in obj and obj.get("name") in TOOL_MAP and "arguments" in obj:
+    if "name" in obj and obj.get("name") in PARSEABLE_TOOL_NAMES and "arguments" in obj:
         return obj["name"]
-    if "function" in obj and obj.get("function") in TOOL_MAP and "arguments" in obj:
+    if "function" in obj and obj.get("function") in PARSEABLE_TOOL_NAMES and "arguments" in obj:
         return obj["function"]
-    if "tool_name" in obj and obj.get("tool_name") in TOOL_MAP:
+    if "tool_name" in obj and obj.get("tool_name") in PARSEABLE_TOOL_NAMES:
         return obj["tool_name"]
 
     keys = set(obj.keys())
@@ -633,7 +634,7 @@ def normalize_tool_name(recipient: str | None, inferred_obj: Any = None) -> str 
         candidate = recipient.strip()
         candidate = candidate.replace("functions.", "", 1)
         # Some malformed outputs glue "commentary" onto the tool name.
-        for tool_name in TOOL_MAP:
+        for tool_name in PARSEABLE_TOOL_NAMES:
             if candidate == tool_name:
                 return tool_name
             if candidate.startswith(tool_name):
@@ -642,7 +643,7 @@ def normalize_tool_name(recipient: str | None, inferred_obj: Any = None) -> str 
                 return tool_name
 
         candidate = re.sub(r"[^A-Za-z0-9_].*$", "", candidate)
-        if candidate in TOOL_MAP:
+        if candidate in PARSEABLE_TOOL_NAMES:
             return candidate
 
     return infer_tool_name_from_arguments(inferred_obj)
@@ -1241,6 +1242,9 @@ def run_one_sample(
             turn_record["error"] = error_msg
             turn_trace.append(turn_record)
             break
+
+    if predicted_verdict is None and error_msg is None:
+        error_msg = f"Stopped after max_turns={max_turns} without a final verdict"
 
     gt_family = gt_verdict.get("verdict", {}).get("error_family") if gt_verdict else None
     pred_family = predicted_verdict.get("verdict", {}).get("error_family") if predicted_verdict else None
