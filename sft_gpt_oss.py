@@ -103,6 +103,8 @@ def parse_args() -> argparse.Namespace:
                         help="Logging backend: 'wandb', 'tensorboard', or 'none' (default: %(default)s)")
     parser.add_argument("--run-name", default="",
                         help="WandB / experiment run name (optional)")
+    parser.add_argument("--resume-from-checkpoint", default=None,
+                        help="Path to a checkpoint directory to resume training from")
     return parser.parse_args()
 
 
@@ -324,7 +326,10 @@ def main() -> None:
     print(f"{'='*60}")
     print("Starting training …")
     print(f"{'='*60}\n")
-    trainer_stats = trainer.train()
+    resume_ckpt = args.resume_from_checkpoint
+    if resume_ckpt:
+        print(f"Resuming from checkpoint: {resume_ckpt}")
+    trainer_stats = trainer.train(resume_from_checkpoint=resume_ckpt)
     print(f"\nTraining metrics: {trainer_stats.metrics}")
 
     # ------------------------------------------------------------------
