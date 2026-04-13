@@ -28,7 +28,7 @@ import torch
 from unsloth import FastModel, is_bfloat16_supported
 from trl import SFTConfig, SFTTrainer
 from transformers import TrainerCallback
-from trace_protocol import canonical_tool_schemas, normalize_instruction_content
+from trace_protocol import canonical_tool_schemas
 
 
 DEFAULT_POWER_TOOLS: list[dict[str, Any]] = [
@@ -141,6 +141,27 @@ DEFAULT_POWER_TOOLS: list[dict[str, Any]] = [
 SCRIPT_DIR = Path(__file__).resolve().parent
 PREEMPTION_EXIT_CODE = 99
 
+SYSTEM_TEXT_REPLACEMENTS = {
+    "Use Harmony/native tool calling only.": "Use the active model chat template's native tool-calling format.",
+    "Harmony/native tool calling": "native tool calling",
+    "<|call|>": "",
+    "<|return|>": "",
+}
+
+
+def normalize_instruction_content(role: str, content: Any) -> Any:
+    if content is None:
+        return ""
+    if not isinstance(content, str):
+        return content
+    if role not in {"system", "developer"}:
+        return content
+
+    text = content
+    for source_text, replacement_text in SYSTEM_TEXT_REPLACEMENTS.items():
+        text = text.replace(source_text, replacement_text)
+    return text.strip()
+
 
 class SignalState:
     def __init__(self) -> None:
@@ -225,6 +246,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--train-file", type=str, default="out_traces_balanced/sft_traces.train.jsonl")
     parser.add_argument("--valid-file", "--val-file", dest="valid_file", type=str, default="out_traces_balanced/sft_traces.valid.jsonl")
     parser.add_argument("--model-name", type=str, default="unsloth/Gemma-4-26B-A4B-it")
+    parser.add_argument("--model-revision", type=str, default="")
     parser.add_argument("--output-dir", type=str, default="outputs/gemma4_power_agent")
     parser.add_argument("--max-seq-length", type=int, default=4096)
     parser.add_argument("--dataset-num-proc", type=int, default=2)
@@ -263,6 +285,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--include-tool-schemas", action="store_true", default=True)
     parser.add_argument("--no-include-tool-schemas", dest="include_tool_schemas", action="store_false")
     parser.add_argument("--tools-file", type=str, default="")
+    parser.add_argument(
+        "--preserve-system-text",
+        action="store_true",
+        default=False,
+        help="Do not rewrite Harmony/GPT-OSS-specific system/developer wording.",
+    )
     return parser.parse_args(argv)
 
 
@@ -492,7 +520,11 @@ def sanitize_tool_schemas(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sanitized
 
 
-def normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def normalize_messages(
+    messages: list[dict[str, Any]],
+    *,
+    preserve_system_text: bool = False,
+) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for raw_message in messages:
         msg = prune_none(raw_message)
@@ -500,10 +532,21 @@ def normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if role is None:
             continue
 
-        if "content" in msg:
-            msg["content"] = normalize_instruction_content(role, msg.get("content"))
-        if "content" in msg and not isinstance(msg["content"], str):
-            msg["content"] = json.dumps(msg["content"], ensure_ascii=False)
+        if role in {"system", "developer"}:
+            content = msg.get("content", "")
+            if not preserve_system_text:
+                content = normalize_instruction_content(role, content)
+            if not isinstance(content, str):
+                content = json.dumps(content, ensure_ascii=False)
+            msg["content"] = content
+
+        elif role == "user":
+            content = msg.get("content", "")
+            if content is None:
+                content = ""
+            if not isinstance(content, str):
+                content = json.dumps(content, ensure_ascii=False)
+            msg["content"] = content
 
         if role == "assistant":
             tool_calls = msg.get("tool_calls")
@@ -513,6 +556,7 @@ def normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     tc = prune_none(tool_call)
                     function_info = tc.get("function")
                     if isinstance(function_info, dict):
+                        function_info = dict(function_info)
                         arguments = maybe_parse_json_string(function_info.get("arguments"))
                         if arguments is None:
                             arguments = {}
@@ -523,16 +567,24 @@ def normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 msg.pop("content", None)
             else:
                 msg.pop("tool_calls", None)
-                msg.setdefault("content", "")
+                content = msg.get("content", "")
+                if content is None:
+                    content = ""
+                if not isinstance(content, str):
+                    content = json.dumps(content, ensure_ascii=False)
+                msg["content"] = content
 
         elif role == "tool":
-            # Tool outputs should stay strings for chat templates.
-            msg.setdefault("content", "")
-            if not isinstance(msg["content"], str):
-                msg["content"] = json.dumps(msg["content"], ensure_ascii=False)
-
-        elif role in {"user", "system", "developer"}:
-            msg.setdefault("content", "")
+            content = msg.get("content", "")
+            if content is None:
+                content = ""
+            parsed = maybe_parse_json_string(content)
+            if isinstance(parsed, (dict, list)):
+                msg["content"] = parsed
+            elif isinstance(content, str):
+                msg["content"] = content
+            else:
+                msg["content"] = json.dumps(content, ensure_ascii=False)
 
         normalized.append(msg)
     return normalized
@@ -571,10 +623,15 @@ def render_text(tokenizer, messages: list[dict[str, Any]], tools: list[dict[str,
     kwargs: dict[str, Any] = {
         "tokenize": False,
         "add_generation_prompt": add_generation_prompt,
+        "enable_thinking": False,
     }
     if tools is not None:
         kwargs["tools"] = tools
-    return tokenizer.apply_chat_template(messages, **kwargs)
+    try:
+        return tokenizer.apply_chat_template(messages, **kwargs)
+    except TypeError:
+        kwargs.pop("enable_thinking", None)
+        return tokenizer.apply_chat_template(messages, **kwargs)
 
 
 def tokenize_text(tokenizer: Any, text: str, **kwargs: Any) -> Any:
@@ -585,14 +642,57 @@ def tokenize_text(tokenizer: Any, text: str, **kwargs: Any) -> Any:
         return tokenizer(text, **kwargs)
 
 
-def token_ids_from_text(tokenizer: Any, text: str) -> list[int]:
-    encoded = tokenize_text(tokenizer, text, add_special_tokens=False)
-    input_ids = encoded["input_ids"]
-    if input_ids and isinstance(input_ids[0], list):
-        if len(input_ids) != 1:
-            raise ValueError(f"Expected a single encoded sample, got batch size {len(input_ids)}")
-        return input_ids[0]
-    return input_ids
+def encode_text(tokenizer: Any, text: str) -> dict[str, list[int]]:
+    try:
+        encoded = tokenize_text(
+            tokenizer,
+            text,
+            add_special_tokens=False,
+            return_attention_mask=False,
+            return_token_type_ids=True,
+        )
+    except TypeError:
+        encoded = tokenize_text(
+            tokenizer,
+            text,
+            add_special_tokens=False,
+            return_attention_mask=False,
+        )
+
+    normalized: dict[str, list[int]] = {}
+    for key, value in encoded.items():
+        if isinstance(value, list) and value and isinstance(value[0], list):
+            if len(value) != 1:
+                raise ValueError(f"Expected a single encoded sample, got batch size {len(value)}")
+            normalized[key] = value[0]
+        else:
+            normalized[key] = value
+    return normalized
+
+
+def infer_side_input_plan(model: Any, tokenizer: Any, model_name: str) -> SideInputPlan:
+    discovered: set[str] = set()
+    model_input_names = getattr(tokenizer, "model_input_names", None)
+    if isinstance(model_input_names, (list, tuple)):
+        discovered.update(str(name) for name in model_input_names)
+    try:
+        discovered.update(inspect.signature(model.forward).parameters.keys())
+    except Exception:
+        pass
+
+    lowered = model_name.lower()
+    is_gemma = "gemma" in lowered
+    is_gemma4 = "gemma-4" in lowered or "gemma4" in lowered
+
+    need_token_type_ids = "token_type_ids" in discovered or is_gemma
+    need_mm_token_type_ids = "mm_token_type_ids" in discovered or is_gemma4
+    return SideInputPlan(need_token_type_ids=need_token_type_ids, need_mm_token_type_ids=need_mm_token_type_ids)
+
+
+def slice_or_zeros(values: list[int] | None, start: int, stop: int) -> list[int]:
+    if values is None:
+        return [0] * (stop - start)
+    return values[start:stop]
 
 
 class BuildStats:
@@ -606,15 +706,29 @@ class BuildStats:
         self.original_message_lengths = Counter()
 
 
+class SideInputPlan:
+    def __init__(self, need_token_type_ids: bool, need_mm_token_type_ids: bool) -> None:
+        self.need_token_type_ids = need_token_type_ids
+        self.need_mm_token_type_ids = need_mm_token_type_ids
+
+    def as_dict(self) -> dict[str, bool]:
+        return {
+            "token_type_ids": self.need_token_type_ids,
+            "mm_token_type_ids": self.need_mm_token_type_ids,
+        }
+
+
 
 def build_processed_split(
-    raw_split,
-    tokenizer,
+    raw_split: list[dict[str, Any]],
+    tokenizer: Any,
     max_seq_length: int,
-    tools: list[dict[str, Any]] | None,
+    default_tools: list[dict[str, Any]] | None,
     drop_too_long_targets: bool,
     stats: BuildStats,
     split_name: str,
+    side_inputs: SideInputPlan,
+    preserve_system_text: bool,
 ):
     records: list[dict[str, Any]] = []
 
@@ -622,9 +736,17 @@ def build_processed_split(
         stats.original_rows += 1
         raw_messages = row["messages"]
         stats.original_message_lengths[len(raw_messages)] += 1
-        normalized = normalize_messages(raw_messages)
+        normalized = normalize_messages(raw_messages, preserve_system_text=preserve_system_text)
         expanded = explode_conversation(normalized)
         stats.expanded_rows += len(expanded)
+
+        row_tools = row.get("tools")
+        if row_tools is not None:
+            if not isinstance(row_tools, list):
+                raise ValueError(f"Expected row['tools'] to be a list in {split_name}, got {type(row_tools).__name__}")
+            tools = sanitize_tool_schemas(row_tools)
+        else:
+            tools = default_tools
 
         for sample_messages in expanded:
             target = sample_messages[-1]
@@ -635,8 +757,10 @@ def build_processed_split(
             full_text = render_text(tokenizer, sample_messages, tools, add_generation_prompt=False)
             prompt_text = render_text(tokenizer, history, tools, add_generation_prompt=True)
 
-            prompt_ids = token_ids_from_text(tokenizer, prompt_text)
-            full_ids = token_ids_from_text(tokenizer, full_text)
+            prompt_enc = encode_text(tokenizer, prompt_text)
+            full_enc = encode_text(tokenizer, full_text)
+            prompt_ids = full_enc["input_ids"][:0] + prompt_enc["input_ids"]
+            full_ids = full_enc["input_ids"]
 
             if len(full_ids) < len(prompt_ids):
                 raise ValueError(
@@ -657,39 +781,48 @@ def build_processed_split(
                     if drop_too_long_targets:
                         stats.dropped_too_long_target += 1
                         continue
-                    # As a fallback, keep the tail of the target only.
+                    slice_start = orig_length - max_seq_length
                     input_ids = full_ids[-max_seq_length:]
                     completion_mask = [1] * max_seq_length
                     truncated = True
                 else:
                     keep_prompt = max_seq_length - completion_len
-                    input_ids = full_ids[-(keep_prompt + completion_len):]
+                    slice_start = orig_length - (keep_prompt + completion_len)
+                    input_ids = full_ids[slice_start:]
                     completion_mask = [0] * keep_prompt + [1] * completion_len
                     stats.prompt_trimmed += 1
                     truncated = True
             else:
+                slice_start = 0
                 input_ids = full_ids
                 completion_mask = [0] * len(prompt_ids) + [1] * completion_len
 
+            slice_stop = slice_start + len(input_ids)
             attention_mask = [1] * len(input_ids)
             if len(input_ids) != len(completion_mask):
                 raise ValueError("input_ids/completion_mask length mismatch")
             labels = [token_id if is_completion else -100 for token_id, is_completion in zip(input_ids, completion_mask)]
 
-            records.append(
-                {
-                    "input_ids": input_ids,
-                    "attention_mask": attention_mask,
-                    "labels": labels,
-                    "completion_mask": completion_mask,
-                    "orig_length": orig_length,
-                    "used_length": len(input_ids),
-                    "completion_length": completion_len,
-                    "target_kind": target_kind,
-                    "was_truncated": truncated,
-                    "text": full_text,  # kept for debugging/preview only
-                }
-            )
+            record: dict[str, Any] = {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "labels": labels,
+                "completion_mask": completion_mask,
+                "orig_length": orig_length,
+                "used_length": len(input_ids),
+                "completion_length": completion_len,
+                "target_kind": target_kind,
+                "was_truncated": truncated,
+                "text": full_text,  # kept for debugging/preview only
+            }
+
+            if side_inputs.need_token_type_ids:
+                record["token_type_ids"] = slice_or_zeros(full_enc.get("token_type_ids"), slice_start, slice_stop)
+
+            if side_inputs.need_mm_token_type_ids:
+                record["mm_token_type_ids"] = slice_or_zeros(full_enc.get("mm_token_type_ids"), slice_start, slice_stop)
+
+            records.append(record)
             stats.used_rows += 1
 
     if not records:
@@ -808,6 +941,13 @@ class PretokenizedSFTCollator:
         batch_input_ids: list[list[int]] = []
         batch_attention_mask: list[list[int]] = []
         batch_labels: list[list[int]] = []
+        optional_side_inputs = {
+            key: any(key in feature for feature in features)
+            for key in ("token_type_ids", "mm_token_type_ids")
+        }
+        side_input_batches: dict[str, list[list[int]]] = {
+            key: [] for key, enabled in optional_side_inputs.items() if enabled
+        }
 
         for feature in features:
             input_ids = list(feature["input_ids"])
@@ -830,12 +970,21 @@ class PretokenizedSFTCollator:
             batch_input_ids.append(input_ids + ([self.pad_token_id] * pad_length))
             batch_attention_mask.append(attention_mask + ([0] * pad_length))
             batch_labels.append(labels + ([-100] * pad_length))
+            for key, batch_values in side_input_batches.items():
+                raw_values = feature.get(key)
+                values = list(raw_values) if raw_values is not None else ([0] * len(input_ids))
+                if len(values) != len(input_ids):
+                    raise ValueError(f"{key}/input_ids length mismatch in batch feature.")
+                batch_values.append(values + ([0] * pad_length))
 
-        return {
+        batch = {
             "input_ids": torch.tensor(batch_input_ids, dtype=torch.long),
             "attention_mask": torch.tensor(batch_attention_mask, dtype=torch.long),
             "labels": torch.tensor(batch_labels, dtype=torch.long),
         }
+        for key, batch_values in side_input_batches.items():
+            batch[key] = torch.tensor(batch_values, dtype=torch.long)
+        return batch
 
 
 
@@ -843,18 +992,21 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     signal_state = SignalState()
     signal_state.install()
-    tools = load_tools(args)
+    default_tools = load_tools(args)
     train_file = resolve_dataset_path(args.train_file, "train", required=True)
     valid_file = resolve_dataset_path(args.valid_file, "validation", required=False)
 
     print(f"Loading model: {args.model_name}")
-    model, tokenizer = FastModel.from_pretrained(
-        model_name=args.model_name,
-        max_seq_length=args.max_seq_length,
-        load_in_4bit=args.load_in_4bit,
-        load_in_16bit=args.load_in_16bit,
-        full_finetuning=False,
-    )
+    model_kwargs: dict[str, Any] = {
+        "model_name": args.model_name,
+        "max_seq_length": args.max_seq_length,
+        "load_in_4bit": args.load_in_4bit,
+        "load_in_16bit": args.load_in_16bit,
+        "full_finetuning": False,
+    }
+    if args.model_revision:
+        model_kwargs["revision"] = args.model_revision
+    model, tokenizer = FastModel.from_pretrained(**model_kwargs)
 
     model = FastModel.get_peft_model(
         model,
@@ -867,6 +1019,12 @@ def main(argv: list[str] | None = None) -> int:
         random_state=args.seed,
         max_seq_length=args.max_seq_length,
     )
+
+    if hasattr(model, "print_trainable_parameters"):
+        model.print_trainable_parameters()
+
+    side_inputs = infer_side_input_plan(model, tokenizer, args.model_name)
+    print(f"Gemma side-input plan: {side_inputs.as_dict()}")
 
     data_files = {"train": train_file}
     if valid_file and has_nonempty_jsonl(valid_file):
@@ -881,10 +1039,12 @@ def main(argv: list[str] | None = None) -> int:
         raw_ds["train"],
         tokenizer=tokenizer,
         max_seq_length=args.max_seq_length,
-        tools=tools,
+        default_tools=default_tools,
         drop_too_long_targets=args.drop_too_long_targets,
         stats=train_stats,
         split_name="train",
+        side_inputs=side_inputs,
+        preserve_system_text=args.preserve_system_text,
     )
     train_dataset = records_to_dataset(train_records)
     report_dataset(train_records, "train", train_stats, args.max_seq_length)
@@ -896,10 +1056,12 @@ def main(argv: list[str] | None = None) -> int:
             raw_ds["validation"],
             tokenizer=tokenizer,
             max_seq_length=args.max_seq_length,
-            tools=tools,
+            default_tools=default_tools,
             drop_too_long_targets=args.drop_too_long_targets,
             stats=eval_stats,
             split_name="validation",
+            side_inputs=side_inputs,
+            preserve_system_text=args.preserve_system_text,
         )
         eval_dataset = records_to_dataset(eval_records)
         report_dataset(eval_records, "validation", eval_stats, args.max_seq_length)
@@ -946,6 +1108,7 @@ def main(argv: list[str] | None = None) -> int:
         dataloader_persistent_workers=dataloader_num_workers > 0,
         tf32=True,
         remove_unused_columns=False,
+        dataset_kwargs={"skip_prepare_dataset": True},
         )
     )
 
