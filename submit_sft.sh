@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=gpt_oss_sft
+#SBATCH --job-name=gemma4_sft
 #SBATCH --output=/scratch/yx3882/psse_agent/logs/sft_%j.log
 #SBATCH --error=/scratch/yx3882/psse_agent/logs/sft_%j.err
 #SBATCH --chdir=/scratch/yx3882/psse_agent
@@ -46,14 +46,14 @@ export WANDB_PROJECT="psse-agent-sft"
 $PYTHON gpt_oss_power_sft_revised.py \
     --train-file out_traces_balanced/sft_traces.train.jsonl \
     --valid-file out_traces_balanced/sft_traces.valid.jsonl \
-    --model-name unsloth/gpt-oss-20b \
-    --output-dir outputs/gpt_oss_sft_power_agent \
-    --max-seq-length 16384 \
-    --dataset-num-proc 16 \
-    --load-in-4bit \
-    --lora-r 64 \
-    --lora-alpha 64 \
-    --per-device-train-batch-size 4 \
+    --model-name unsloth/Gemma-4-26B-A4B-it \
+    --output-dir outputs/gemma4_power_agent \
+    --max-seq-length 4096 \
+    --dataset-num-proc 4 \
+    --load-in-16bit \
+    --lora-r 16 \
+    --lora-alpha 16 \
+    --per-device-train-batch-size 1 \
     --gradient-accumulation-steps 4 \
     --learning-rate 2e-4 \
     --logging-steps 5 \

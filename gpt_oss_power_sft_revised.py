@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""SFT for GPT-OSS-20B on power-system tool traces.
+"""SFT for Gemma 4 on power-system tool traces.
 
 Design choices:
 1) Normalize OpenAI-style tool call arguments back into Python dicts/lists before
    applying the Transformers chat template.
-2) Expand each conversation into one training sample per assistant turn so GPT-OSS
+2) Expand each conversation into one training sample per assistant turn so Gemma 4
    always learns from the *final* assistant action of the current sample.
 3) Build explicit completion masks from prompt/completion boundaries instead of
    relying on fragile string-marker masking.
@@ -20,9 +20,9 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
-from unsloth import FastLanguageModel, is_bfloat16_supported
+from unsloth import FastModel, is_bfloat16_supported
 from trl import SFTConfig, SFTTrainer
-from trace_protocol import canonical_tool_schemas
+from trace_protocol import canonical_tool_schemas, normalize_instruction_content
 
 
 DEFAULT_POWER_TOOLS: list[dict[str, Any]] = [
@@ -136,12 +136,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="GPT-OSS SFT for power-system tool traces")
+    parser = argparse.ArgumentParser(description="Gemma 4 SFT for power-system tool traces")
     parser.add_argument("--train-file", type=str, default="out_traces_balanced/sft_traces.train.jsonl")
     parser.add_argument("--valid-file", "--val-file", dest="valid_file", type=str, default="out_traces_balanced/sft_traces.valid.jsonl")
-    parser.add_argument("--model-name", type=str, default="unsloth/gpt-oss-20b")
-    parser.add_argument("--output-dir", type=str, default="outputs/gpt_oss_power_agent")
-    parser.add_argument("--max-seq-length", type=int, default=12288)
+    parser.add_argument("--model-name", type=str, default="unsloth/Gemma-4-26B-A4B-it")
+    parser.add_argument("--output-dir", type=str, default="outputs/gemma4_power_agent")
+    parser.add_argument("--max-seq-length", type=int, default=4096)
     parser.add_argument("--dataset-num-proc", type=int, default=2)
     parser.add_argument("--per-device-train-batch-size", type=int, default=1)
     parser.add_argument("--per-device-eval-batch-size", type=int, default=1)
@@ -163,8 +163,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=3407)
     parser.add_argument("--report-to", type=str, default="none", help="The integration to report the results to, e.g., 'wandb'")
     parser.add_argument("--run-name", type=str, default="")
-    parser.add_argument("--load-in-4bit", action="store_true", default=True)
+    parser.add_argument("--load-in-4bit", action="store_true", default=False)
     parser.add_argument("--no-load-in-4bit", dest="load_in_4bit", action="store_false")
+    parser.add_argument("--load-in-16bit", action="store_true", default=True)
+    parser.add_argument("--no-load-in-16bit", dest="load_in_16bit", action="store_false")
     parser.add_argument("--lora-r", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=16)
     parser.add_argument("--lora-dropout", type=float, default=0.0)
@@ -412,6 +414,8 @@ def normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if role is None:
             continue
 
+        if "content" in msg:
+            msg["content"] = normalize_instruction_content(role, msg.get("content"))
         if "content" in msg and not isinstance(msg["content"], str):
             msg["content"] = json.dumps(msg["content"], ensure_ascii=False)
 
@@ -455,7 +459,7 @@ def assistant_turn_indices(messages: list[dict[str, Any]]) -> list[int]:
 def explode_conversation(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     """Create one training sample per assistant turn.
 
-    GPT-OSS should learn from the final assistant action of each sample. This is
+    The model should learn from the final assistant action of each sample. This is
     especially important for tool-calling traces.
     """
     expanded: list[list[dict[str, Any]]] = []
@@ -674,15 +678,15 @@ def main(argv: list[str] | None = None) -> None:
     valid_file = resolve_dataset_path(args.valid_file, "validation", required=False)
 
     print(f"Loading model: {args.model_name}")
-    model, tokenizer = FastLanguageModel.from_pretrained(
+    model, tokenizer = FastModel.from_pretrained(
         model_name=args.model_name,
-        dtype=None,
         max_seq_length=args.max_seq_length,
         load_in_4bit=args.load_in_4bit,
+        load_in_16bit=args.load_in_16bit,
         full_finetuning=False,
     )
 
-    model = FastLanguageModel.get_peft_model(
+    model = FastModel.get_peft_model(
         model,
         r=args.lora_r,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
@@ -691,8 +695,7 @@ def main(argv: list[str] | None = None) -> None:
         bias="none",
         use_gradient_checkpointing="unsloth",
         random_state=args.seed,
-        use_rslora=False,
-        loftq_config=None,
+        max_seq_length=args.max_seq_length,
     )
 
     data_files = {"train": train_file}

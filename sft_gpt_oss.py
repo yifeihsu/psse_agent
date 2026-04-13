@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Compatibility entrypoint for GPT-OSS power-system SFT.
+"""Compatibility entrypoint for power-system SFT.
 
 This wrapper preserves the older `sft_gpt_oss.py` CLI while delegating all
 training behavior to `gpt_oss_power_sft_revised.py`, which is the canonical
-GPT-OSS training path.
+Gemma 4 training path.
 """
 
 from __future__ import annotations
@@ -17,14 +17,14 @@ from pathlib import Path
 DEFAULT_TRAIN_FILE = "/scratch/yx3882/psse_agent/out_traces_balanced/sft_traces.train.jsonl"
 DEFAULT_VAL_FILE = "/scratch/yx3882/psse_agent/out_traces_balanced/sft_traces.valid.jsonl"
 DEFAULT_TEST_FILE = "/scratch/yx3882/psse_agent/out_traces_balanced/sft_traces.test.jsonl"
-DEFAULT_MODEL_NAME = "unsloth/gpt-oss-20b-unsloth-bnb-4bit"
-DEFAULT_OUTPUT_DIR = "/scratch/yx3882/psse_agent/outputs/gpt_oss_power_sft"
-DEFAULT_MAX_SEQ_LENGTH = 12288
+DEFAULT_MODEL_NAME = "unsloth/Gemma-4-26B-A4B-it"
+DEFAULT_OUTPUT_DIR = "/scratch/yx3882/psse_agent/outputs/gemma4_power_agent"
+DEFAULT_MAX_SEQ_LENGTH = 4096
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Compatibility wrapper for GPT-OSS power-system SFT"
+        description="Compatibility wrapper for power-system SFT"
     )
     parser.add_argument("--train-file", default=DEFAULT_TRAIN_FILE)
     parser.add_argument("--val-file", default=DEFAULT_VAL_FILE)
@@ -33,8 +33,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     parser.add_argument("--model-name", default=DEFAULT_MODEL_NAME)
     parser.add_argument("--max-seq-length", type=int, default=DEFAULT_MAX_SEQ_LENGTH)
-    parser.add_argument("--load-in-4bit", action="store_true", default=True)
+    parser.add_argument("--load-in-4bit", action="store_true", default=False)
     parser.add_argument("--no-load-in-4bit", dest="load_in_4bit", action="store_false")
+    parser.add_argument("--load-in-16bit", action="store_true", default=True)
+    parser.add_argument("--no-load-in-16bit", dest="load_in_16bit", action="store_false")
 
     parser.add_argument("--lora-r", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=16)
@@ -139,6 +141,10 @@ def build_forward_argv(args: argparse.Namespace, train_file: str) -> list[str]:
         forwarded.append("--load-in-4bit")
     else:
         forwarded.append("--no-load-in-4bit")
+    if args.load_in_16bit:
+        forwarded.append("--load-in-16bit")
+    else:
+        forwarded.append("--no-load-in-16bit")
     if args.drop_too_long_targets:
         forwarded.append("--drop-too-long-targets")
     else:

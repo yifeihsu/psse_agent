@@ -83,7 +83,8 @@ DECISION_SCHEMA_TEXT = {
 SYSTEM_PROMPT = (
     "You are a power-system state-estimation diagnostic agent.\n"
     "You must begin with `wls_from_path` for every snapshot.\n"
-    "Use Harmony/native tool calling only.\n"
+    "Use structured tool calls that match the provided tool schema.\n"
+    "Use the tool name and argument keys exactly as provided.\n"
     "Large numeric payloads are provided once in user messages and should not be repeated in tool arguments.\n"
     "If you need repeated scans, breaker context, harmonic measurements, or a post-action verification snapshot, "
     "retrieve them through the helper tools instead of asking the user for follow-up payloads.\n"
@@ -108,6 +109,15 @@ SYSTEM_PROMPT = (
     "Return only strict JSON with this structure:\n"
     f"{json.dumps(DECISION_SCHEMA_TEXT, ensure_ascii=False)}\n"
     "Do not reveal chain-of-thought. Report only observable evidence and the final decision."
+)
+
+SYSTEM_PROMPT_PREFIX = (
+    "You are a power-system state-estimation diagnostic agent.\n"
+    "You must begin with `wls_from_path` for every snapshot.\n"
+)
+LEGACY_SYSTEM_PROMPT_MARKERS = (
+    "Use Harmony/native tool calling only.",
+    "Return only strict JSON with this structure:",
 )
 
 
@@ -280,6 +290,24 @@ CANONICAL_POWER_TOOLS: list[dict[str, Any]] = [
 
 def json_compact(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+
+def normalize_instruction_content(role: Any, content: Any) -> Any:
+    """Rewrite repo-owned legacy system prompts to the current model-neutral form."""
+    if role not in {"system", "developer"} or not isinstance(content, str):
+        return content
+
+    text = content.strip()
+    if not text:
+        return content
+
+    if text == SYSTEM_PROMPT.strip():
+        return SYSTEM_PROMPT
+    if text.startswith(SYSTEM_PROMPT_PREFIX.strip()):
+        return SYSTEM_PROMPT
+    if any(marker in text for marker in LEGACY_SYSTEM_PROMPT_MARKERS):
+        return SYSTEM_PROMPT
+    return content
 
 
 def looks_like_json(text: str) -> bool:

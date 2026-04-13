@@ -11,8 +11,8 @@ from typing import Any
 
 DEFAULT_INPUT = "data/sft_with_tools.jsonl"
 DEFAULT_REPORT = "out_traces_balanced/preprocess_report.json"
-DEFAULT_TOKENIZER = "unsloth/gpt-oss-20b"
-DEFAULT_MAX_SEQ_LENGTH = 16384
+DEFAULT_TOKENIZER = "unsloth/Gemma-4-26B-A4B-it"
+DEFAULT_MAX_SEQ_LENGTH = 4096
 RANDOM_SEED = 42
 from trace_protocol import (
     BALANCED_SPLIT_COUNTS,
@@ -21,6 +21,7 @@ from trace_protocol import (
     canonical_tool_schemas,
     looks_like_json,
     maybe_parse_json_string,
+    normalize_instruction_content,
     normalize_error_family,
     parse_json_text,
     prune_none,
@@ -174,6 +175,8 @@ def normalize_message(message: dict, decimals: int) -> dict:
     normalized = copy.deepcopy(message)
     role = normalized.get("role")
 
+    if "content" in normalized:
+        normalized["content"] = normalize_instruction_content(role, normalized.get("content"))
     content = normalized.get("content")
     if isinstance(content, str) and looks_like_json(content):
         payload = json.loads(content)
@@ -739,7 +742,7 @@ def audit_token_lengths(
                 tools,
             )
         except Exception as exc:
-            return None, f"failed to render GPT-OSS chat template for token audit: {exc}"
+            return None, f"failed to render the chat template for token audit: {exc}"
         token_count = len(tokenizer(text, add_special_tokens=False)["input_ids"])
         lengths.append(token_count)
 
@@ -814,7 +817,7 @@ def main() -> None:
         "--include-tool-schemas",
         action="store_true",
         default=True,
-        help="Include power-tool schemas when rendering GPT-OSS chat templates for token audit",
+        help="Include power-tool schemas when rendering chat templates for token audit",
     )
     parser.add_argument(
         "--no-include-tool-schemas",
@@ -824,7 +827,7 @@ def main() -> None:
     parser.add_argument(
         "--tools-file",
         default="",
-        help="Optional JSON file with tool schemas used for GPT-OSS token audit",
+        help="Optional JSON file with tool schemas used for token audit",
     )
     parser.add_argument("--out-train", default="out_traces_balanced/sft_traces.train.jsonl")
     parser.add_argument("--out-val", default="out_traces_balanced/sft_traces.valid.jsonl")
@@ -936,7 +939,7 @@ def main() -> None:
         print("\nSkipping token audit")
     else:
         schema_mode = "with tool schemas" if tools is not None else "without tool schemas"
-        print(f"\nAuditing GPT-OSS token lengths with {args.tokenizer_name!r} ({schema_mode})...")
+        print(f"\nAuditing chat-template token lengths with {args.tokenizer_name!r} ({schema_mode})...")
         for split_name, split_samples in (("train", train), ("val", val), ("test", test), ("all", deduped_samples)):
             audit, warning = audit_token_lengths(
                 split_samples,
