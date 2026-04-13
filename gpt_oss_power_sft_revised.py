@@ -16,12 +16,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import signal
+import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
 from unsloth import FastModel, is_bfloat16_supported
 from trl import SFTConfig, SFTTrainer
+from transformers import TrainerCallback
 from trace_protocol import canonical_tool_schemas, normalize_instruction_content
 
 
@@ -133,6 +137,52 @@ DEFAULT_POWER_TOOLS: list[dict[str, Any]] = [
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+PREEMPTION_EXIT_CODE = 99
+
+
+class SignalState:
+    def __init__(self) -> None:
+        self.received: int | None = None
+
+    def install(self) -> None:
+        for signum in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGUSR1", None)):
+            if signum is None:
+                continue
+            try:
+                signal.signal(signum, self._handle_signal)
+            except Exception:
+                continue
+
+    def _handle_signal(self, signum: int, _frame: Any) -> None:
+        if self.received is not None:
+            return
+        self.received = signum
+        try:
+            signame = signal.Signals(signum).name
+        except Exception:
+            signame = str(signum)
+        print(
+            f"Received {signame}; will save a checkpoint at the end of the current step and stop training.",
+            flush=True,
+        )
+
+
+class SaveOnSignalCallback(TrainerCallback):
+    def __init__(self, signal_state: SignalState) -> None:
+        self.signal_state = signal_state
+
+    def _request_stop(self, control: Any) -> Any:
+        if self.signal_state.received is None:
+            return control
+        control.should_save = True
+        control.should_training_stop = True
+        return control
+
+    def on_step_end(self, args: Any, state: Any, control: Any, **kwargs: Any) -> Any:
+        return self._request_stop(control)
+
+    def on_epoch_end(self, args: Any, state: Any, control: Any, **kwargs: Any) -> Any:
+        return self._request_stop(control)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -172,6 +222,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lora-dropout", type=float, default=0.0)
     parser.add_argument("--weight-decay", type=float, default=0.001)
     parser.add_argument("--lr-scheduler-type", type=str, default="linear")
+    parser.add_argument("--dataloader-num-workers", type=int, default=4)
     parser.add_argument("--drop-too-long-targets", action="store_true", default=True)
     parser.add_argument("--keep-too-long-targets", dest="drop_too_long_targets", action="store_false")
     parser.add_argument("--include-tool-schemas", action="store_true", default=True)
@@ -671,8 +722,10 @@ def records_to_dataset(records: list[dict[str, Any]]):
 
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    signal_state = SignalState()
+    signal_state.install()
     tools = load_tools(args)
     train_file = resolve_dataset_path(args.train_file, "train", required=True)
     valid_file = resolve_dataset_path(args.valid_file, "validation", required=False)
@@ -739,6 +792,8 @@ def main(argv: list[str] | None = None) -> None:
         print(train_dataset[0]["text"][:2500])
         print("=== End preview ===")
 
+    cpu_count = os.cpu_count() or 1
+    dataloader_num_workers = max(0, min(args.dataloader_num_workers, cpu_count))
     training_args = SFTConfig(
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
@@ -764,6 +819,14 @@ def main(argv: list[str] | None = None) -> None:
         max_length=None,
         packing=False,
         completion_only_loss=True,
+        save_strategy="steps",
+        save_only_model=False,
+        save_safetensors=True,
+        restore_callback_states_from_checkpoint=True,
+        dataloader_num_workers=dataloader_num_workers,
+        dataloader_pin_memory=True,
+        dataloader_persistent_workers=dataloader_num_workers > 0,
+        tf32=True,
         remove_unused_columns=False,
     )
 
@@ -773,6 +836,7 @@ def main(argv: list[str] | None = None) -> None:
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         args=training_args,
+        callbacks=[SaveOnSignalCallback(signal_state)],
     )
 
     resume_checkpoint = resolve_resume_checkpoint(args.resume_from_checkpoint, args.output_dir)
@@ -789,6 +853,19 @@ def main(argv: list[str] | None = None) -> None:
     tokenizer.save_pretrained(str(save_dir))
     print(f"Saved LoRA adapter and tokenizer to: {save_dir}")
 
+    if signal_state.received is not None:
+        try:
+            signame = signal.Signals(signal_state.received).name
+        except Exception:
+            signame = str(signal_state.received)
+        print(
+            f"Training stopped after {signame}; checkpoint and adapter were saved. "
+            f"Exiting with code {PREEMPTION_EXIT_CODE} for launcher-side requeue.",
+            flush=True,
+        )
+        return PREEMPTION_EXIT_CODE
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

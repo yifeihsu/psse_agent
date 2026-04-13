@@ -10,6 +10,8 @@
 #SBATCH --time=24:00:00
 #SBATCH --gres=gpu:1
 #SBATCH --constraint="a100|h100"
+#SBATCH --requeue
+#SBATCH --signal=B:USR1@300
 #SBATCH --account=torch_pr_627_general
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=yx3882@nyu.edu
@@ -22,22 +24,28 @@ ENV_PREFIX=/scratch/yx3882/.conda/envs/unsloth_sft
 PYTHON=$ENV_PREFIX/bin/python
 
 LOG_DIR=/scratch/yx3882/psse_agent/logs
-OUTPUT_DIR=/scratch/yx3882/psse_agent/outputs/gemma4_power_agent
+OUTPUT_DIR=${OUTPUT_DIR:-/scratch/yx3882/psse_agent/outputs/gemma4_power_agent}
 TRAIN_FILE=${TRAIN_FILE:-out_traces_balanced/sft_traces.train.jsonl}
 VALID_FILE=${VALID_FILE:-out_traces_balanced/sft_traces.valid.jsonl}
 MODEL_NAME=${MODEL_NAME:-unsloth/Gemma-4-26B-A4B-it}
-MAX_SEQ_LENGTH=${MAX_SEQ_LENGTH:-4096}
+GPU_PROFILE=${GPU_PROFILE:-auto}
+MAX_SEQ_LENGTH=${MAX_SEQ_LENGTH:-}
 NUM_TRAIN_EPOCHS=${NUM_TRAIN_EPOCHS:-1}
 MAX_STEPS=${MAX_STEPS:--1}
-SAVE_STEPS=${SAVE_STEPS:-100}
-EVAL_STEPS=${EVAL_STEPS:-100}
-SAVE_TOTAL_LIMIT=${SAVE_TOTAL_LIMIT:-4}
+SAVE_STEPS=${SAVE_STEPS:-}
+EVAL_STEPS=${EVAL_STEPS:-}
+SAVE_TOTAL_LIMIT=${SAVE_TOTAL_LIMIT:-}
 RESUME_FROM_CHECKPOINT=${RESUME_FROM_CHECKPOINT:-auto}
-PER_DEVICE_TRAIN_BATCH_SIZE=${PER_DEVICE_TRAIN_BATCH_SIZE:-1}
-GRADIENT_ACCUMULATION_STEPS=${GRADIENT_ACCUMULATION_STEPS:-4}
-LORA_R=${LORA_R:-16}
-LORA_ALPHA=${LORA_ALPHA:-16}
+PER_DEVICE_TRAIN_BATCH_SIZE=${PER_DEVICE_TRAIN_BATCH_SIZE:-}
+GRADIENT_ACCUMULATION_STEPS=${GRADIENT_ACCUMULATION_STEPS:-}
+LORA_R=${LORA_R:-}
+LORA_ALPHA=${LORA_ALPHA:-}
+DATALOADER_NUM_WORKERS=${DATALOADER_NUM_WORKERS:-}
+LEARNING_RATE=${LEARNING_RATE:-}
+WARMUP_STEPS=${WARMUP_STEPS:-20}
+LOGGING_STEPS=${LOGGING_STEPS:-5}
 EXTRA_TRAIN_ARGS=${EXTRA_TRAIN_ARGS:-}
+PREEMPTION_EXIT_CODE=99
 
 mkdir -p "$LOG_DIR"
 mkdir -p "$OUTPUT_DIR"
@@ -59,14 +67,68 @@ if [[ -n "${WANDB_ENTITY:-}" ]]; then
     export WANDB_ENTITY
 fi
 
+set_default_if_unset() {
+    local var_name=$1
+    local default_value=$2
+    if [[ -z "${!var_name:-}" ]]; then
+        printf -v "$var_name" '%s' "$default_value"
+    fi
+}
+
+GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -n1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+GPU_MEM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n1 | tr -d ' ')
+GPU_PROFILE_SELECTED=$GPU_PROFILE
+if [[ "$GPU_PROFILE" == "auto" ]]; then
+    if [[ "$GPU_NAME" == *"A100"* && "${GPU_MEM_MB:-0}" -ge 70000 ]]; then
+        GPU_PROFILE_SELECTED="a100-80g"
+        set_default_if_unset MAX_SEQ_LENGTH 6144
+        set_default_if_unset PER_DEVICE_TRAIN_BATCH_SIZE 2
+        set_default_if_unset GRADIENT_ACCUMULATION_STEPS 8
+        set_default_if_unset LORA_R 32
+        set_default_if_unset LORA_ALPHA 32
+        set_default_if_unset SAVE_STEPS 25
+        set_default_if_unset EVAL_STEPS 100
+        set_default_if_unset SAVE_TOTAL_LIMIT 8
+        set_default_if_unset DATALOADER_NUM_WORKERS 8
+        set_default_if_unset LEARNING_RATE 1.5e-4
+    else
+        GPU_PROFILE_SELECTED="a100-safe"
+        set_default_if_unset MAX_SEQ_LENGTH 4096
+        set_default_if_unset PER_DEVICE_TRAIN_BATCH_SIZE 1
+        set_default_if_unset GRADIENT_ACCUMULATION_STEPS 8
+        set_default_if_unset LORA_R 16
+        set_default_if_unset LORA_ALPHA 16
+        set_default_if_unset SAVE_STEPS 25
+        set_default_if_unset EVAL_STEPS 100
+        set_default_if_unset SAVE_TOTAL_LIMIT 8
+        set_default_if_unset DATALOADER_NUM_WORKERS 4
+        set_default_if_unset LEARNING_RATE 2e-4
+    fi
+else
+    set_default_if_unset MAX_SEQ_LENGTH 4096
+    set_default_if_unset PER_DEVICE_TRAIN_BATCH_SIZE 1
+    set_default_if_unset GRADIENT_ACCUMULATION_STEPS 8
+    set_default_if_unset LORA_R 16
+    set_default_if_unset LORA_ALPHA 16
+    set_default_if_unset SAVE_STEPS 25
+    set_default_if_unset EVAL_STEPS 100
+    set_default_if_unset SAVE_TOTAL_LIMIT 8
+    set_default_if_unset DATALOADER_NUM_WORKERS 4
+    set_default_if_unset LEARNING_RATE 2e-4
+fi
+
 # ── Diagnostics ────────────────────────────────────────────────────────────
 echo "===== Job diagnostics ====="
 echo "Job ID  : $SLURM_JOB_ID"
+echo "Restart : ${SLURM_RESTART_COUNT:-0}"
 echo "Host    : $(hostname)"
 echo "Python  : $PYTHON"
+echo "GPU     : $GPU_NAME (${GPU_MEM_MB:-unknown} MiB)"
+echo "Profile : $GPU_PROFILE_SELECTED"
 echo "Output  : $OUTPUT_DIR"
 echo "Resume  : $RESUME_FROM_CHECKPOINT"
 echo "Save/Eval steps: $SAVE_STEPS / $EVAL_STEPS"
+echo "Hyperparams: seq=$MAX_SEQ_LENGTH bs=$PER_DEVICE_TRAIN_BATCH_SIZE ga=$GRADIENT_ACCUMULATION_STEPS lora_r=$LORA_R lora_alpha=$LORA_ALPHA lr=$LEARNING_RATE workers=$DATALOADER_NUM_WORKERS"
 if [[ -n "${WANDB_API_KEY:-}" ]]; then
     echo "WandB   : using WANDB_API_KEY from environment"
 elif [[ -f "$HOME/.netrc" ]]; then
@@ -77,6 +139,19 @@ fi
 $PYTHON -V
 nvidia-smi
 echo "==========================="
+
+TRAIN_PID=""
+forward_signal() {
+    local sig=$1
+    echo "[signal] Received $sig in batch launcher at $(date --iso-8601=seconds)"
+    if [[ -n "${TRAIN_PID:-}" ]] && kill -0 "$TRAIN_PID" 2>/dev/null; then
+        echo "[signal] Forwarding $sig to trainer process $TRAIN_PID"
+        kill -s "$sig" "$TRAIN_PID" || true
+    fi
+}
+
+trap 'forward_signal USR1' USR1
+trap 'forward_signal TERM' TERM
 
 # ── Train ──────────────────────────────────────────────────────────────────
 $PYTHON gpt_oss_power_sft_revised.py \
@@ -92,14 +167,31 @@ $PYTHON gpt_oss_power_sft_revised.py \
     --lora-alpha "$LORA_ALPHA" \
     --per-device-train-batch-size "$PER_DEVICE_TRAIN_BATCH_SIZE" \
     --gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS" \
-    --learning-rate 2e-4 \
-    --warmup-steps 20 \
+    --learning-rate "$LEARNING_RATE" \
+    --warmup-steps "$WARMUP_STEPS" \
     --num-train-epochs "$NUM_TRAIN_EPOCHS" \
     --max-steps "$MAX_STEPS" \
-    --logging-steps 5 \
+    --logging-steps "$LOGGING_STEPS" \
     --save-steps "$SAVE_STEPS" \
     --eval-steps "$EVAL_STEPS" \
     --save-total-limit "$SAVE_TOTAL_LIMIT" \
+    --dataloader-num-workers "$DATALOADER_NUM_WORKERS" \
     --resume-from-checkpoint "$RESUME_FROM_CHECKPOINT" \
     --report-to wandb \
-    $EXTRA_TRAIN_ARGS
+    $EXTRA_TRAIN_ARGS &
+TRAIN_PID=$!
+
+set +e
+wait "$TRAIN_PID"
+TRAIN_EXIT=$?
+set -e
+
+if [[ "$TRAIN_EXIT" -eq "$PREEMPTION_EXIT_CODE" ]]; then
+    echo "[requeue] Trainer exited with checkpoint/requeue code $PREEMPTION_EXIT_CODE"
+    if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+        scontrol requeue "$SLURM_JOB_ID" || true
+    fi
+    exit 0
+fi
+
+exit "$TRAIN_EXIT"
