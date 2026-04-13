@@ -147,6 +147,7 @@ SYSTEM_TEXT_REPLACEMENTS = {
     "<|call|>": "",
     "<|return|>": "",
 }
+CHAT_TEMPLATE_CONTENT_FALLBACK_WARNED = False
 
 
 def normalize_instruction_content(role: str, content: Any) -> Any:
@@ -631,7 +632,46 @@ def render_text(tokenizer, messages: list[dict[str, Any]], tools: list[dict[str,
         return tokenizer.apply_chat_template(messages, **kwargs)
     except TypeError:
         kwargs.pop("enable_thinking", None)
-        return tokenizer.apply_chat_template(messages, **kwargs)
+        try:
+            return tokenizer.apply_chat_template(messages, **kwargs)
+        except Exception as exc:
+            return render_text_with_stringified_content_fallback(tokenizer, messages, kwargs, exc)
+    except Exception as exc:
+        return render_text_with_stringified_content_fallback(tokenizer, messages, kwargs, exc)
+
+
+def stringify_message_content_for_template(messages: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+    coerced_messages: list[dict[str, Any]] = []
+    mutated = False
+    for raw_message in messages:
+        message = dict(raw_message)
+        content = message.get("content")
+        if content is not None and not isinstance(content, str):
+            message["content"] = json.dumps(content, ensure_ascii=False)
+            mutated = True
+        coerced_messages.append(message)
+    return coerced_messages, mutated
+
+
+def render_text_with_stringified_content_fallback(
+    tokenizer: Any,
+    messages: list[dict[str, Any]],
+    kwargs: dict[str, Any],
+    original_exc: Exception,
+) -> str:
+    coerced_messages, mutated = stringify_message_content_for_template(messages)
+    if not mutated:
+        raise original_exc
+
+    global CHAT_TEMPLATE_CONTENT_FALLBACK_WARNED
+    if not CHAT_TEMPLATE_CONTENT_FALLBACK_WARNED:
+        print(
+            "Chat template rejected structured message content; retrying with JSON-stringified content.",
+            flush=True,
+        )
+        CHAT_TEMPLATE_CONTENT_FALLBACK_WARNED = True
+
+    return tokenizer.apply_chat_template(coerced_messages, **kwargs)
 
 
 def tokenize_text(tokenizer: Any, text: str, **kwargs: Any) -> Any:
