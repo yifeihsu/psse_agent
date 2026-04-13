@@ -237,7 +237,10 @@ def build_model_inputs(
         if tools is not None:
             prompt_kwargs["tools"] = tools
         prompt = tokenizer.apply_chat_template(rendered_conversation, **prompt_kwargs)
-        inputs = tokenizer(prompt, return_tensors="pt")
+        try:
+            inputs = tokenizer(text=prompt, return_tensors="pt")
+        except TypeError:
+            inputs = tokenizer(prompt, return_tensors="pt")
 
     input_ids = inputs["input_ids"]
     attention_mask = inputs.get("attention_mask")

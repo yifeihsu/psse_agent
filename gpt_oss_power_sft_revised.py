@@ -542,6 +542,24 @@ def render_text(tokenizer, messages: list[dict[str, Any]], tools: list[dict[str,
     return tokenizer.apply_chat_template(messages, **kwargs)
 
 
+def tokenize_text(tokenizer: Any, text: str, **kwargs: Any) -> Any:
+    """Tokenize plain text for both tokenizer and processor-style objects."""
+    try:
+        return tokenizer(text=text, **kwargs)
+    except TypeError:
+        return tokenizer(text, **kwargs)
+
+
+def token_ids_from_text(tokenizer: Any, text: str) -> list[int]:
+    encoded = tokenize_text(tokenizer, text, add_special_tokens=False)
+    input_ids = encoded["input_ids"]
+    if input_ids and isinstance(input_ids[0], list):
+        if len(input_ids) != 1:
+            raise ValueError(f"Expected a single encoded sample, got batch size {len(input_ids)}")
+        return input_ids[0]
+    return input_ids
+
+
 class BuildStats:
     def __init__(self) -> None:
         self.original_rows = 0
@@ -582,8 +600,8 @@ def build_processed_split(
             full_text = render_text(tokenizer, sample_messages, tools, add_generation_prompt=False)
             prompt_text = render_text(tokenizer, history, tools, add_generation_prompt=True)
 
-            prompt_ids = tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
-            full_ids = tokenizer(full_text, add_special_tokens=False)["input_ids"]
+            prompt_ids = token_ids_from_text(tokenizer, prompt_text)
+            full_ids = token_ids_from_text(tokenizer, full_text)
 
             if len(full_ids) < len(prompt_ids):
                 raise ValueError(

@@ -123,6 +123,23 @@ def render_text(
     return tokenizer.apply_chat_template(messages, **kwargs)
 
 
+def tokenize_text(tokenizer: Any, text: str, **kwargs: Any) -> Any:
+    try:
+        return tokenizer(text=text, **kwargs)
+    except TypeError:
+        return tokenizer(text, **kwargs)
+
+
+def token_ids_from_text(tokenizer: Any, text: str) -> list[int]:
+    encoded = tokenize_text(tokenizer, text, add_special_tokens=False)
+    input_ids = encoded["input_ids"]
+    if input_ids and isinstance(input_ids[0], list):
+        if len(input_ids) != 1:
+            raise ValueError(f"Expected a single encoded sample, got batch size {len(input_ids)}")
+        return input_ids[0]
+    return input_ids
+
+
 def extract_final_verdict(messages: list[dict[str, Any]]) -> dict[str, Any] | None:
     for msg in reversed(messages):
         if msg.get("role") != "assistant":
@@ -178,8 +195,8 @@ def flatten_split(
                 full_text = render_text(tokenizer, sample_messages, tools, add_generation_prompt=False)
                 prompt_text = render_text(tokenizer, history, tools, add_generation_prompt=True)
 
-                full_ids = tokenizer(full_text, add_special_tokens=False)["input_ids"]
-                prompt_ids = tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
+                full_ids = token_ids_from_text(tokenizer, full_text)
+                prompt_ids = token_ids_from_text(tokenizer, prompt_text)
                 if len(full_ids) < len(prompt_ids):
                     raise ValueError(
                         f"Tokenized full text shorter than prompt text in {src_path} row {row_index + 1}."

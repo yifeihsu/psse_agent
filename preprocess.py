@@ -692,6 +692,23 @@ def render_gpt_oss_text(tokenizer, messages: list[dict[str, Any]], tools: list[d
     return tokenizer.apply_chat_template(messages, **kwargs)
 
 
+def tokenize_text(tokenizer: Any, text: str, **kwargs: Any) -> Any:
+    try:
+        return tokenizer(text=text, **kwargs)
+    except TypeError:
+        return tokenizer(text, **kwargs)
+
+
+def token_ids_from_text(tokenizer: Any, text: str) -> list[int]:
+    encoded = tokenize_text(tokenizer, text, add_special_tokens=False)
+    input_ids = encoded["input_ids"]
+    if input_ids and isinstance(input_ids[0], list):
+        if len(input_ids) != 1:
+            raise ValueError(f"Expected a single encoded sample, got batch size {len(input_ids)}")
+        return input_ids[0]
+    return input_ids
+
+
 def count_tool_argument_formats(samples: list[dict]) -> dict[str, int]:
     counts: Counter[str] = Counter()
     for sample in samples:
@@ -743,7 +760,7 @@ def audit_token_lengths(
             )
         except Exception as exc:
             return None, f"failed to render the chat template for token audit: {exc}"
-        token_count = len(tokenizer(text, add_special_tokens=False)["input_ids"])
+        token_count = len(token_ids_from_text(tokenizer, text))
         lengths.append(token_count)
 
     lengths.sort()
