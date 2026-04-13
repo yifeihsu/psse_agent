@@ -24,6 +24,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
+import torch
 from unsloth import FastModel, is_bfloat16_supported
 from trl import SFTConfig, SFTTrainer
 from transformers import TrainerCallback
@@ -673,11 +674,13 @@ def build_processed_split(
             attention_mask = [1] * len(input_ids)
             if len(input_ids) != len(completion_mask):
                 raise ValueError("input_ids/completion_mask length mismatch")
+            labels = [token_id if is_completion else -100 for token_id, is_completion in zip(input_ids, completion_mask)]
 
             records.append(
                 {
                     "input_ids": input_ids,
                     "attention_mask": attention_mask,
+                    "labels": labels,
                     "completion_mask": completion_mask,
                     "orig_length": orig_length,
                     "used_length": len(input_ids),
@@ -771,6 +774,68 @@ def records_to_dataset(records: list[dict[str, Any]]):
 
     columns: dict[str, list[Any]] = {key: [r[key] for r in records] for key in records[0].keys()}
     return Dataset.from_dict(columns)
+
+
+def resolve_pad_token_id(tokenizer: Any) -> int:
+    pad_token_id = getattr(tokenizer, "pad_token_id", None)
+    if pad_token_id is not None:
+        return int(pad_token_id)
+
+    inner_tokenizer = getattr(tokenizer, "tokenizer", None)
+    if inner_tokenizer is not None:
+        inner_pad_token_id = getattr(inner_tokenizer, "pad_token_id", None)
+        if inner_pad_token_id is not None:
+            return int(inner_pad_token_id)
+
+    eos_token_id = getattr(tokenizer, "eos_token_id", None)
+    if eos_token_id is None and inner_tokenizer is not None:
+        eos_token_id = getattr(inner_tokenizer, "eos_token_id", None)
+    if eos_token_id is not None:
+        return int(eos_token_id)
+
+    raise ValueError("Tokenizer does not expose pad_token_id or eos_token_id for batch padding.")
+
+
+class PretokenizedSFTCollator:
+    def __init__(self, tokenizer: Any) -> None:
+        self.pad_token_id = resolve_pad_token_id(tokenizer)
+
+    def __call__(self, features: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
+        if not features:
+            raise ValueError("PretokenizedSFTCollator received an empty batch.")
+
+        max_length = max(len(feature["input_ids"]) for feature in features)
+        batch_input_ids: list[list[int]] = []
+        batch_attention_mask: list[list[int]] = []
+        batch_labels: list[list[int]] = []
+
+        for feature in features:
+            input_ids = list(feature["input_ids"])
+            attention_mask = list(feature.get("attention_mask") or ([1] * len(input_ids)))
+            labels = feature.get("labels")
+            if labels is None:
+                completion_mask = feature.get("completion_mask")
+                if completion_mask is None or len(completion_mask) != len(input_ids):
+                    raise ValueError("Each feature must provide either labels or a same-length completion_mask.")
+                labels = [token_id if is_completion else -100 for token_id, is_completion in zip(input_ids, completion_mask)]
+            else:
+                labels = list(labels)
+
+            if len(attention_mask) != len(input_ids):
+                raise ValueError("attention_mask/input_ids length mismatch in batch feature.")
+            if len(labels) != len(input_ids):
+                raise ValueError("labels/input_ids length mismatch in batch feature.")
+
+            pad_length = max_length - len(input_ids)
+            batch_input_ids.append(input_ids + ([self.pad_token_id] * pad_length))
+            batch_attention_mask.append(attention_mask + ([0] * pad_length))
+            batch_labels.append(labels + ([-100] * pad_length))
+
+        return {
+            "input_ids": torch.tensor(batch_input_ids, dtype=torch.long),
+            "attention_mask": torch.tensor(batch_attention_mask, dtype=torch.long),
+            "labels": torch.tensor(batch_labels, dtype=torch.long),
+        }
 
 
 
@@ -871,7 +936,7 @@ def main(argv: list[str] | None = None) -> int:
         run_name=args.run_name or None,
         max_length=None,
         packing=False,
-        completion_only_loss=True,
+        completion_only_loss=False,
         save_strategy="steps",
         save_only_model=False,
         save_safetensors=True,
@@ -890,6 +955,7 @@ def main(argv: list[str] | None = None) -> int:
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         args=training_args,
+        data_collator=PretokenizedSFTCollator(tokenizer),
         callbacks=[SaveOnSignalCallback(signal_state)],
     )
 

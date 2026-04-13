@@ -50,7 +50,11 @@ PREEMPTION_EXIT_CODE=99
 mkdir -p "$LOG_DIR"
 mkdir -p "$OUTPUT_DIR"
 mkdir -p /scratch/yx3882/.cache/huggingface
+mkdir -p /scratch/yx3882/.cache/wandb
+mkdir -p /scratch/yx3882/.config/wandb
+mkdir -p /scratch/yx3882/.local/share/wandb
 mkdir -p /scratch/yx3882/.cache/torch
+mkdir -p /scratch/yx3882/psse_agent/wandb
 
 # ── Environment ────────────────────────────────────────────────────────────
 module purge
@@ -62,6 +66,12 @@ export HF_HOME=/scratch/yx3882/.cache/huggingface
 export TRANSFORMERS_CACHE=/scratch/yx3882/.cache/huggingface
 export HF_DATASETS_CACHE=/scratch/yx3882/.cache/huggingface/datasets
 export TORCH_HOME=/scratch/yx3882/.cache/torch
+export XDG_CACHE_HOME=/scratch/yx3882/.cache
+export XDG_CONFIG_HOME=/scratch/yx3882/.config
+export WANDB_DIR=/scratch/yx3882/psse_agent/wandb
+export WANDB_CACHE_DIR=/scratch/yx3882/.cache/wandb
+export WANDB_CONFIG_DIR=/scratch/yx3882/.config/wandb
+export WANDB_DATA_DIR=/scratch/yx3882/.local/share/wandb
 export WANDB_PROJECT=${WANDB_PROJECT:-psse-agent-sft}
 if [[ -n "${WANDB_ENTITY:-}" ]]; then
     export WANDB_ENTITY
