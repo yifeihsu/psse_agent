@@ -1162,6 +1162,9 @@ def main(argv: list[str] | None = None) -> int:
         callbacks=[SaveOnSignalCallback(signal_state)],
     )
 
+    # Workaround: Unsloth randomly replaces custom collators with HF collators in __init__.
+    trainer.data_collator = PretokenizedSFTCollator(tokenizer)
+
     resume_checkpoint = resolve_resume_checkpoint(args.resume_from_checkpoint, args.output_dir)
     if resume_checkpoint:
         print(f"Starting training from checkpoint: {resume_checkpoint}")
