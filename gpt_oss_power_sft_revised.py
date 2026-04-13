@@ -15,6 +15,7 @@ Design choices:
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 import signal
@@ -183,6 +184,39 @@ class SaveOnSignalCallback(TrainerCallback):
 
     def on_epoch_end(self, args: Any, state: Any, control: Any, **kwargs: Any) -> Any:
         return self._request_stop(control)
+
+
+def make_sft_config_kwargs(**kwargs: Any) -> dict[str, Any]:
+    """Filter/rename kwargs so the script works across TRL/SFTConfig versions."""
+    parameters = inspect.signature(SFTConfig.__init__).parameters
+    supported = {name for name in parameters if name != "self"}
+    normalized = dict(kwargs)
+
+    alias_pairs = [
+        ("eval_strategy", "evaluation_strategy"),
+        ("evaluation_strategy", "eval_strategy"),
+    ]
+    for source_name, target_name in alias_pairs:
+        if source_name in normalized and source_name not in supported and target_name in supported:
+            normalized[target_name] = normalized.pop(source_name)
+
+    filtered: dict[str, Any] = {}
+    dropped: list[str] = []
+    for key, value in normalized.items():
+        if value is None:
+            continue
+        if key in supported:
+            filtered[key] = value
+        else:
+            dropped.append(key)
+
+    if dropped:
+        print(
+            "SFTConfig does not support these kwargs in the current environment; dropping: "
+            + ", ".join(sorted(dropped)),
+            flush=True,
+        )
+    return filtered
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -813,6 +847,7 @@ def main(argv: list[str] | None = None) -> int:
     cpu_count = os.cpu_count() or 1
     dataloader_num_workers = max(0, min(args.dataloader_num_workers, cpu_count))
     training_args = SFTConfig(
+        **make_sft_config_kwargs(
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
@@ -846,6 +881,7 @@ def main(argv: list[str] | None = None) -> int:
         dataloader_persistent_workers=dataloader_num_workers > 0,
         tf32=True,
         remove_unused_columns=False,
+        )
     )
 
     trainer = SFTTrainer(
