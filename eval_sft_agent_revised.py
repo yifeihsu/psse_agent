@@ -1104,8 +1104,11 @@ def main() -> None:
         )
         FastLanguageModel.for_inference(model)
         print("Model loaded via Unsloth.\n")
-    except ImportError:
-        print("Unsloth not available, falling back to transformers + peft ...")
+    except Exception as exc:
+        print(
+            "Unsloth load failed, falling back to transformers + peft ... "
+            f"({type(exc).__name__}: {exc})"
+        )
         import torch
         from peft import PeftModel
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig

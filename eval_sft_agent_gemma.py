@@ -241,6 +241,11 @@ def build_model_inputs(
             inputs = tokenizer(text=prompt, return_tensors="pt")
         except TypeError:
             inputs = tokenizer(prompt, return_tensors="pt")
+    if isinstance(inputs, str):
+        try:
+            inputs = tokenizer(text=inputs, return_tensors="pt")
+        except TypeError:
+            inputs = tokenizer(inputs, return_tensors="pt")
 
     input_ids = inputs["input_ids"]
     attention_mask = inputs.get("attention_mask")
@@ -258,7 +263,18 @@ def build_model_inputs(
     return model_inputs, truncated
 
 
+def _token_id_tokenizer(tokenizer: Any) -> Any:
+    """Gemma 4 may load as a Processor; use its inner tokenizer for token-id lookups."""
+    if hasattr(tokenizer, "convert_tokens_to_ids"):
+        return tokenizer
+    inner = getattr(tokenizer, "tokenizer", None)
+    if inner is not None and hasattr(inner, "convert_tokens_to_ids"):
+        return inner
+    return tokenizer
+
+
 def get_stop_token_ids(tokenizer: Any) -> list[int]:
+    tokenizer = _token_id_tokenizer(tokenizer)
     stop_tokens = [GEMMA_TOOL_CALL_CLOSE, GEMMA_TURN_CLOSE]
     stop_ids: list[int] = []
     unk_id = getattr(tokenizer, "unk_token_id", None)
