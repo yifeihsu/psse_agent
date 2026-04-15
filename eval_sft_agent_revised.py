@@ -760,7 +760,22 @@ def build_model_inputs(
 
 
 
+def unwrap_tokenizer(tok: Any) -> Any:
+    """
+    Multi-modal models (e.g. Gemma 4) return a Processor object that wraps
+    a tokenizer. `convert_tokens_to_ids`, `apply_chat_template`, etc. all
+    live on the inner tokenizer. Unwrap it so the rest of the eval script
+    can treat the result as a plain PreTrainedTokenizer.
+    """
+    # HF ProcessorMixin stores the tokenizer in .tokenizer
+    inner = getattr(tok, "tokenizer", None)
+    if inner is not None and hasattr(inner, "convert_tokens_to_ids"):
+        return inner
+    return tok
+
+
 def get_stop_token_ids(tokenizer: Any) -> list[int]:
+    tokenizer = unwrap_tokenizer(tokenizer)
     stop_tokens = ["<|call|>", "<|return|>"]
     stop_ids: list[int] = []
 
@@ -1094,7 +1109,8 @@ def main() -> None:
             load_in_4bit=True,
         )
         FastLanguageModel.for_inference(model)
-        print("Model loaded via Unsloth.\n")
+        tokenizer = unwrap_tokenizer(tokenizer)
+        print(f"Model loaded via Unsloth. (tokenizer type: {type(tokenizer).__name__})\n")
     except ImportError:
         print("Unsloth not available, falling back to transformers + peft ...")
         import torch
@@ -1123,9 +1139,10 @@ def main() -> None:
         model.eval()
 
         tokenizer = AutoTokenizer.from_pretrained(args.adapter)
+        tokenizer = unwrap_tokenizer(tokenizer)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
-        print("Model loaded via transformers + peft.\n")
+        print(f"Model loaded via transformers + peft. (tokenizer type: {type(tokenizer).__name__})\n")
 
     max_input_tokens = resolve_max_input_tokens(args, model, tokenizer)
     tools = canonical_tool_schemas()
