@@ -760,32 +760,26 @@ def build_model_inputs(
 
 
 
-def unwrap_tokenizer(tok: Any) -> Any:
-    """
-    Multi-modal models (e.g. Gemma 4) return a Processor object that wraps
-    a tokenizer. `convert_tokens_to_ids`, `apply_chat_template`, etc. all
-    live on the inner tokenizer. Unwrap it so the rest of the eval script
-    can treat the result as a plain PreTrainedTokenizer.
-    """
-    # HF ProcessorMixin stores the tokenizer in .tokenizer
-    inner = getattr(tok, "tokenizer", None)
-    if inner is not None and hasattr(inner, "convert_tokens_to_ids"):
-        return inner
-    return tok
+def _unwrap_tokenizer(tokenizer: Any) -> Any:
+    """If the object is a Processor (e.g. Gemma4Processor), return its inner tokenizer."""
+    # Processor objects have a .tokenizer attribute; bare tokenizers do not.
+    if not hasattr(tokenizer, "convert_tokens_to_ids") and hasattr(tokenizer, "tokenizer"):
+        return tokenizer.tokenizer
+    return tokenizer
 
 
 def get_stop_token_ids(tokenizer: Any) -> list[int]:
-    tokenizer = unwrap_tokenizer(tokenizer)
+    tok = _unwrap_tokenizer(tokenizer)
     stop_tokens = ["<|call|>", "<|return|>"]
     stop_ids: list[int] = []
 
-    unk_id = getattr(tokenizer, "unk_token_id", None)
-    for tok in stop_tokens:
-        tok_id = tokenizer.convert_tokens_to_ids(tok)
+    unk_id = getattr(tok, "unk_token_id", None)
+    for token_str in stop_tokens:
+        tok_id = tok.convert_tokens_to_ids(token_str)
         if tok_id is not None and tok_id != unk_id:
             stop_ids.append(tok_id)
 
-    eos_id = getattr(tokenizer, "eos_token_id", None)
+    eos_id = getattr(tok, "eos_token_id", None)
     if isinstance(eos_id, list):
         stop_ids.extend(eos_id)
     elif eos_id is not None:
@@ -1109,8 +1103,7 @@ def main() -> None:
             load_in_4bit=True,
         )
         FastLanguageModel.for_inference(model)
-        tokenizer = unwrap_tokenizer(tokenizer)
-        print(f"Model loaded via Unsloth. (tokenizer type: {type(tokenizer).__name__})\n")
+        print("Model loaded via Unsloth.\n")
     except ImportError:
         print("Unsloth not available, falling back to transformers + peft ...")
         import torch
@@ -1139,10 +1132,16 @@ def main() -> None:
         model.eval()
 
         tokenizer = AutoTokenizer.from_pretrained(args.adapter)
-        tokenizer = unwrap_tokenizer(tokenizer)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
-        print(f"Model loaded via transformers + peft. (tokenizer type: {type(tokenizer).__name__})\n")
+        print("Model loaded via transformers + peft.\n")
+
+    # Gemma 4 (and other multimodal models) load as a Processor; unwrap to bare tokenizer.
+    tokenizer = _unwrap_tokenizer(tokenizer)
+    if not hasattr(tokenizer, "pad_token") or tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tok_type = type(tokenizer).__name__
+    print(f"Tokenizer type: {tok_type}")
 
     max_input_tokens = resolve_max_input_tokens(args, model, tokenizer)
     tools = canonical_tool_schemas()
