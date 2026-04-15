@@ -137,6 +137,36 @@ DEFAULT_POWER_TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+LORA_TARGET_SUFFIXES = (
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+)
+
+GEMMA_TOOL_CALL_OPEN = "<|tool_call>"
+GEMMA_THOUGHT_OPEN = "<|channel>thought"
+GEMMA_CHANNEL_CLOSE = "<channel|>"
+FINAL_JSON_SCHEMA_MARKER = "Return only strict JSON with this structure:"
+FIRST_TOOL_PHASE_MESSAGE = (
+    "Current phase: first tool selection.\n"
+    "Before any tool response exists, emit exactly one native Gemma tool call and nothing else.\n"
+    "Do not emit verdict JSON before the first tool response.\n"
+    "On the first assistant turn for every snapshot, call `wls_from_path`."
+)
+LATER_TOOL_PHASE_MESSAGE = (
+    "Current phase: intermediate tool use.\n"
+    "Emit exactly one native Gemma tool call and nothing else.\n"
+    "Do not emit verdict JSON while another tool call is required."
+)
+FINAL_PHASE_MESSAGE = (
+    "Current phase: final answer.\n"
+    "Return only the strict verdict JSON. Do not emit a tool call in this phase."
+)
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PREEMPTION_EXIT_CODE = 99
@@ -246,6 +276,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Gemma 4 SFT for power-system tool traces")
     parser.add_argument("--train-file", type=str, default="out_traces_balanced/sft_traces.train.jsonl")
     parser.add_argument("--valid-file", "--val-file", dest="valid_file", type=str, default="out_traces_balanced/sft_traces.valid.jsonl")
+    parser.add_argument(
+        "--max-train-rows",
+        type=int,
+        default=0,
+        help="Cap the number of training conversations loaded from the JSONL file. 0 keeps all rows.",
+    )
+    parser.add_argument(
+        "--max-valid-rows",
+        type=int,
+        default=0,
+        help="Cap the number of validation conversations loaded from the JSONL file. 0 keeps all rows.",
+    )
     parser.add_argument("--model-name", type=str, default="unsloth/Gemma-4-26B-A4B-it")
     parser.add_argument("--model-revision", type=str, default="")
     parser.add_argument("--output-dir", type=str, default="outputs/gemma4_power_agent")
@@ -278,6 +320,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lora-r", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=16)
     parser.add_argument("--lora-dropout", type=float, default=0.0)
+    parser.add_argument(
+        "--lora-target-scope",
+        type=str,
+        choices=("language_model", "all"),
+        default="language_model",
+        help="Which Gemma 4 towers receive LoRA. Use 'language_model' for text-only tool traces.",
+    )
     parser.add_argument("--weight-decay", type=float, default=0.001)
     parser.add_argument("--lr-scheduler-type", type=str, default="linear")
     parser.add_argument("--dataloader-num-workers", type=int, default=4)
@@ -286,11 +335,37 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--include-tool-schemas", action="store_true", default=True)
     parser.add_argument("--no-include-tool-schemas", dest="include_tool_schemas", action="store_false")
     parser.add_argument("--tools-file", type=str, default="")
+    parser.add_argument("--phase-gated-prompt", action="store_true", default=True)
+    parser.add_argument("--no-phase-gated-prompt", dest="phase_gated_prompt", action="store_false")
     parser.add_argument(
         "--preserve-system-text",
         action="store_true",
         default=False,
         help="Do not rewrite Harmony/GPT-OSS-specific system/developer wording.",
+    )
+    parser.add_argument(
+        "--sanity-check-samples",
+        type=int,
+        default=3,
+        help="Number of first-turn tool-call prompts to greedily decode after training; 0 disables the check.",
+    )
+    parser.add_argument(
+        "--mask-sanity-samples",
+        type=int,
+        default=3,
+        help="Number of pre-train label spans to decode and verify before training starts; 0 disables the check.",
+    )
+    parser.add_argument(
+        "--sanity-check-max-new-tokens",
+        type=int,
+        default=128,
+        help="Generation budget for each post-train sanity decode.",
+    )
+    parser.add_argument(
+        "--sanity-check-fail-on-miss",
+        action="store_true",
+        default=False,
+        help="Exit non-zero if any post-train sanity sample fails to begin with the expected tool call.",
     )
     return parser.parse_args(argv)
 
@@ -608,6 +683,55 @@ def explode_conversation(messages: list[dict[str, Any]]) -> list[list[dict[str, 
     return expanded
 
 
+def strip_final_json_schema(text: Any) -> Any:
+    if not isinstance(text, str):
+        return text
+    marker_index = text.find(FINAL_JSON_SCHEMA_MARKER)
+    if marker_index == -1:
+        return text
+    return text[:marker_index].rstrip()
+
+
+def assistant_phase_bucket(target_kind: str, assistant_turn_index: int) -> str:
+    if target_kind == "final":
+        return "final"
+    if assistant_turn_index == 0:
+        return "first_tool_call"
+    return "later_tool_call"
+
+
+def phase_gate_messages(
+    messages: list[dict[str, Any]],
+    *,
+    target_kind: str,
+    assistant_turn_index: int,
+    enabled: bool,
+) -> list[dict[str, Any]]:
+    if not enabled:
+        return [dict(message) for message in messages]
+
+    gated = [dict(message) for message in messages]
+    if not gated:
+        return gated
+
+    if target_kind == "tool_call":
+        for message in gated:
+            if message.get("role") not in {"system", "developer"}:
+                continue
+            message["content"] = strip_final_json_schema(message.get("content"))
+        phase_message = (
+            FIRST_TOOL_PHASE_MESSAGE
+            if assistant_turn_index == 0
+            else LATER_TOOL_PHASE_MESSAGE
+        )
+    else:
+        phase_message = FINAL_PHASE_MESSAGE
+
+    insert_index = max(0, len(gated) - 1)
+    gated.insert(insert_index, {"role": "developer", "content": phase_message})
+    return gated
+
+
 def load_tools(args: argparse.Namespace) -> list[dict[str, Any]] | None:
     if not args.include_tool_schemas:
         return None
@@ -729,6 +853,44 @@ def infer_side_input_plan(model: Any, tokenizer: Any, model_name: str) -> SideIn
     return SideInputPlan(need_token_type_ids=need_token_type_ids, need_mm_token_type_ids=need_mm_token_type_ids)
 
 
+def classify_lora_tower(module_name: str) -> str:
+    if module_name.startswith("model.language_model.") or ".language_model." in module_name:
+        return "language_model"
+    if module_name.startswith("model.vision_tower.") or ".vision_tower." in module_name:
+        return "vision_tower"
+    if module_name.startswith("model.audio_tower.") or ".audio_tower." in module_name:
+        return "audio_tower"
+    return "other"
+
+
+def resolve_lora_target_modules(model: Any, scope: str) -> list[str]:
+    inventory = Counter()
+    selected: list[str] = []
+
+    for module_name, _module in model.named_modules():
+        if not module_name.endswith(LORA_TARGET_SUFFIXES):
+            continue
+        tower = classify_lora_tower(module_name)
+        inventory[tower] += 1
+        if scope == "all" or tower == scope:
+            selected.append(module_name)
+
+    if not selected:
+        raise ValueError(
+            f"No LoRA target modules matched scope={scope!r}. Inventory by tower: {dict(inventory)}"
+        )
+
+    print(f"LoRA module inventory by tower: {dict(inventory)}")
+    print(f"Selected {len(selected)} LoRA target modules for scope={scope}.")
+    preview = selected[:8]
+    for module_name in preview:
+        print(f"  - {module_name}")
+    remaining = len(selected) - len(preview)
+    if remaining > 0:
+        print(f"  ... {remaining} more")
+    return selected
+
+
 def slice_or_zeros(values: list[int] | None, start: int, stop: int) -> list[int]:
     if values is None:
         return [0] * (stop - start)
@@ -769,10 +931,11 @@ def build_processed_split(
     split_name: str,
     side_inputs: SideInputPlan,
     preserve_system_text: bool,
+    phase_gated_prompt: bool,
 ):
     records: list[dict[str, Any]] = []
 
-    for row in raw_split:
+    for row_index, row in enumerate(raw_split):
         stats.original_rows += 1
         raw_messages = row["messages"]
         stats.original_message_lengths[len(raw_messages)] += 1
@@ -788,23 +951,41 @@ def build_processed_split(
         else:
             tools = default_tools
 
-        for sample_messages in expanded:
+        for sample_index, sample_messages in enumerate(expanded):
             target = sample_messages[-1]
             target_kind = "tool_call" if "tool_calls" in target else "final"
             stats.target_kind[target_kind] += 1
+            phase_bucket = assistant_phase_bucket(target_kind, sample_index)
 
-            history = sample_messages[:-1]
-            full_text = render_text(tokenizer, sample_messages, tools, add_generation_prompt=False)
+            phase_messages = phase_gate_messages(
+                sample_messages,
+                target_kind=target_kind,
+                assistant_turn_index=sample_index,
+                enabled=phase_gated_prompt,
+            )
+            history = phase_messages[:-1]
+            full_text = render_text(tokenizer, phase_messages, tools, add_generation_prompt=False)
             prompt_text = render_text(tokenizer, history, tools, add_generation_prompt=True)
 
-            prompt_enc = encode_text(tokenizer, prompt_text)
             full_enc = encode_text(tokenizer, full_text)
-            prompt_ids = full_enc["input_ids"][:0] + prompt_enc["input_ids"]
+            prompt_ids = encode_text(tokenizer, prompt_text)["input_ids"]
             full_ids = full_enc["input_ids"]
 
             if len(full_ids) < len(prompt_ids):
                 raise ValueError(
                     f"Prompt tokenization longer than full sample in {split_name}; this should not happen."
+                )
+            if full_ids[: len(prompt_ids)] != prompt_ids:
+                mismatch_at = next(
+                    (idx for idx, (full_id, prompt_id) in enumerate(zip(full_ids, prompt_ids)) if full_id != prompt_id),
+                    min(len(full_ids), len(prompt_ids)),
+                )
+                prompt_tail = prompt_text[max(0, len(prompt_text) - 160):]
+                full_tail = full_text[max(0, len(full_text) - 160):]
+                raise ValueError(
+                    "Prompt tokenization is not a literal prefix of the full sample. "
+                    f"split={split_name} row={row_index} sample={sample_index} mismatch_token_index={mismatch_at}\n"
+                    f"prompt_tail={prompt_tail!r}\nfull_tail={full_tail!r}"
                 )
 
             completion_len = len(full_ids) - len(prompt_ids)
@@ -852,6 +1033,14 @@ def build_processed_split(
                 "used_length": len(input_ids),
                 "completion_length": completion_len,
                 "target_kind": target_kind,
+                "phase_bucket": phase_bucket,
+                "assistant_turn_index": sample_index,
+                "expected_tool_name": (
+                    (((target.get("tool_calls") or [{}])[0].get("function") or {}).get("name"))
+                    if target_kind == "tool_call"
+                    else None
+                ),
+                "case_path": extract_case_path(history),
                 "was_truncated": truncated,
                 "text": full_text,  # kept for debugging/preview only
             }
@@ -886,6 +1075,26 @@ def report_dataset(records: list[dict[str, Any]], split_name: str, stats: BuildS
     used_lengths = [r["used_length"] for r in records]
     lengths_sorted = sorted(lengths)
     used_sorted = sorted(used_lengths)
+    phase_sample_counts = Counter()
+    phase_token_mass = Counter()
+    phase_completion_sums = Counter()
+    for record in records:
+        phase = record.get("phase_bucket") or assistant_phase_bucket(
+            str(record.get("target_kind")),
+            int(record.get("assistant_turn_index", 0)),
+        )
+        completion_length = int(record["completion_length"])
+        phase_sample_counts[phase] += 1
+        phase_token_mass[phase] += completion_length
+        phase_completion_sums[phase] += completion_length
+    phase_order = ("first_tool_call", "later_tool_call", "final")
+    ordered_phase_counts = {phase: phase_sample_counts[phase] for phase in phase_order if phase_sample_counts[phase]}
+    ordered_phase_tokens = {phase: phase_token_mass[phase] for phase in phase_order if phase_token_mass[phase]}
+    ordered_phase_means = {
+        phase: round(phase_completion_sums[phase] / phase_sample_counts[phase], 1)
+        for phase in phase_order
+        if phase_sample_counts[phase]
+    }
 
     print(f"\n=== {split_name} dataset summary ===")
     print(f"original conversations: {stats.original_rows}")
@@ -894,6 +1103,9 @@ def report_dataset(records: list[dict[str, Any]], split_name: str, stats: BuildS
     print(f"dropped too-long targets: {stats.dropped_too_long_target}")
     print(f"prompt-trimmed samples: {stats.prompt_trimmed}")
     print(f"assistant target kinds: {dict(stats.target_kind)}")
+    print(f"assistant phase counts: {ordered_phase_counts}")
+    print(f"supervised token mass by phase: {ordered_phase_tokens}")
+    print(f"mean completion length by phase: {ordered_phase_means}")
     print(f"original message-count distribution: {dict(stats.original_message_lengths)}")
     print(
         f"orig token lengths -> min={min(lengths)}, p50={percentile(lengths_sorted, 50)}, "
@@ -947,6 +1159,257 @@ def records_to_dataset(records: list[dict[str, Any]]):
 
     columns: dict[str, list[Any]] = {key: [r[key] for r in records] for key in records[0].keys()}
     return Dataset.from_dict(columns)
+
+
+def model_device(model: Any) -> torch.device:
+    return next(model.parameters()).device
+
+
+def decode_token_ids(tokenizer: Any, token_ids: torch.Tensor) -> str:
+    decoder = tokenizer if hasattr(tokenizer, "decode") else getattr(tokenizer, "tokenizer", None)
+    if decoder is None or not hasattr(decoder, "decode"):
+        raise ValueError("Tokenizer does not expose decode() for sanity checks.")
+    return decoder.decode(token_ids.detach().cpu(), skip_special_tokens=False)
+
+
+def build_generation_inputs(
+    tokenizer: Any,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    model: Any,
+) -> dict[str, torch.Tensor]:
+    template_kwargs: dict[str, Any] = {
+        "add_generation_prompt": True,
+        "return_tensors": "pt",
+        "return_dict": True,
+        "enable_thinking": False,
+    }
+    if tools is not None:
+        template_kwargs["tools"] = tools
+
+    try:
+        inputs = tokenizer.apply_chat_template(messages, **template_kwargs)
+    except TypeError:
+        prompt = render_text(tokenizer, messages, tools, add_generation_prompt=True)
+        inputs = tokenize_text(tokenizer, prompt, return_tensors="pt")
+    except Exception:
+        prompt = render_text(tokenizer, messages, tools, add_generation_prompt=True)
+        inputs = tokenize_text(tokenizer, prompt, return_tensors="pt")
+
+    if isinstance(inputs, str):
+        inputs = tokenize_text(tokenizer, inputs, return_tensors="pt")
+
+    if not hasattr(inputs, "items"):
+        raise ValueError(f"Unexpected chat-template output type: {type(inputs).__name__}")
+
+    device = model_device(model)
+    model_inputs: dict[str, torch.Tensor] = {}
+    for key, value in inputs.items():
+        if isinstance(value, torch.Tensor):
+            model_inputs[key] = value.to(device)
+
+    if "input_ids" not in model_inputs:
+        raise ValueError("Chat template did not produce input_ids for sanity check generation.")
+    return model_inputs
+
+
+def strip_leading_thought_blocks(text: str) -> str:
+    remaining = text.lstrip()
+    while remaining.startswith(GEMMA_THOUGHT_OPEN):
+        remaining = remaining[len(GEMMA_THOUGHT_OPEN):]
+        if remaining.startswith("\n"):
+            remaining = remaining[1:]
+        close_index = remaining.find(GEMMA_CHANNEL_CLOSE)
+        if close_index == -1:
+            break
+        remaining = remaining[close_index + len(GEMMA_CHANNEL_CLOSE):].lstrip()
+    return remaining
+
+
+def completion_token_ids(record: dict[str, Any]) -> list[int]:
+    return [
+        token_id
+        for token_id, is_completion in zip(record["input_ids"], record["completion_mask"])
+        if is_completion
+    ]
+
+
+def run_mask_alignment_sanity_check(records: list[dict[str, Any]], tokenizer: Any, sample_count: int) -> None:
+    if sample_count <= 0:
+        return
+    if not records:
+        raise ValueError("Mask sanity check requested, but no training records were built.")
+
+    print(f"=== Pre-train mask sanity ({min(sample_count, len(records))} samples) ===")
+    checked = 0
+    for record in records:
+        completion_ids = completion_token_ids(record)
+        if not completion_ids:
+            raise ValueError("Encountered a training sample with an empty completion span.")
+
+        completion_text = decode_token_ids(tokenizer, torch.tensor(completion_ids, dtype=torch.long))
+        candidate = strip_leading_thought_blocks(completion_text).lstrip()
+        case_label = record.get("case_path") or "unknown"
+
+        if record.get("target_kind") == "tool_call":
+            expected_tool = record.get("expected_tool_name")
+            if not isinstance(expected_tool, str) or not expected_tool:
+                raise ValueError("Tool-call record is missing expected_tool_name for sanity checking.")
+            expected_prefix = f"{GEMMA_TOOL_CALL_OPEN}call:{expected_tool}"
+            passed = candidate.startswith(expected_prefix)
+            expected_label = expected_prefix
+        else:
+            expected_prefix = '{"verdict"'
+            passed = candidate.startswith(expected_prefix)
+            expected_label = expected_prefix
+
+        print(
+            f"[mask {checked + 1}/{min(sample_count, len(records))}] "
+            f"case={case_label} target={record.get('target_kind')} pass={passed}"
+        )
+        print(f"  expected={expected_label!r}")
+        print(f"  output={candidate[:240]!r}")
+
+        if not passed:
+            raise ValueError(
+                "Pre-train label sanity failed: masked completion does not start with the expected target prefix. "
+                f"case={case_label} target_kind={record.get('target_kind')} expected={expected_label!r} "
+                f"got={candidate[:120]!r}"
+            )
+
+        checked += 1
+        if checked >= sample_count:
+            break
+
+    print(f"=== End pre-train mask sanity: {checked}/{checked} passed ===")
+
+
+def extract_case_path(messages: list[dict[str, Any]]) -> str | None:
+    for message in messages:
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        parsed = content
+        if isinstance(content, str):
+            try:
+                parsed = json.loads(content)
+            except Exception:
+                continue
+        if isinstance(parsed, dict):
+            case_path = parsed.get("case_path")
+            if case_path:
+                return str(case_path)
+    return None
+
+
+def collect_first_turn_sanity_examples(
+    raw_rows: list[dict[str, Any]],
+    default_tools: list[dict[str, Any]] | None,
+    preserve_system_text: bool,
+    phase_gated_prompt: bool,
+    sample_count: int,
+) -> list[dict[str, Any]]:
+    examples: list[dict[str, Any]] = []
+    if sample_count <= 0:
+        return examples
+
+    for row_index, row in enumerate(raw_rows):
+        normalized = normalize_messages(row["messages"], preserve_system_text=preserve_system_text)
+        expanded = explode_conversation(normalized)
+        if not expanded:
+            continue
+
+        sample_messages = expanded[0]
+        target = sample_messages[-1]
+        tool_calls = target.get("tool_calls")
+        if not isinstance(tool_calls, list) or not tool_calls:
+            continue
+
+        function_info = tool_calls[0].get("function")
+        if not isinstance(function_info, dict):
+            continue
+        expected_tool = function_info.get("name")
+        if not isinstance(expected_tool, str) or not expected_tool:
+            continue
+
+        row_tools = row.get("tools")
+        if row_tools is not None:
+            if not isinstance(row_tools, list):
+                raise ValueError(f"Expected row['tools'] to be a list, got {type(row_tools).__name__}")
+            tools = sanitize_tool_schemas(row_tools)
+        else:
+            tools = default_tools
+
+        phase_messages = phase_gate_messages(
+            sample_messages,
+            target_kind="tool_call",
+            assistant_turn_index=0,
+            enabled=phase_gated_prompt,
+        )
+        history = phase_messages[:-1]
+        examples.append(
+            {
+                "row_index": row_index,
+                "case_path": extract_case_path(history),
+                "history": history,
+                "tools": tools,
+                "expected_tool": expected_tool,
+            }
+        )
+        if len(examples) >= sample_count:
+            break
+
+    return examples
+
+
+def run_post_train_sanity_check(
+    *,
+    model: Any,
+    tokenizer: Any,
+    raw_rows: list[dict[str, Any]],
+    default_tools: list[dict[str, Any]] | None,
+    preserve_system_text: bool,
+    phase_gated_prompt: bool,
+    sample_count: int,
+    max_new_tokens: int,
+) -> int:
+    examples = collect_first_turn_sanity_examples(
+        raw_rows,
+        default_tools=default_tools,
+        preserve_system_text=preserve_system_text,
+        phase_gated_prompt=phase_gated_prompt,
+        sample_count=sample_count,
+    )
+    if not examples:
+        print("Post-train sanity check skipped: no first-turn tool-call examples were found.")
+        return 0
+
+    print(f"=== Post-train first-turn sanity ({len(examples)} samples) ===")
+    FastModel.for_inference(model)
+    failures = 0
+
+    for index, example in enumerate(examples, start=1):
+        model_inputs = build_generation_inputs(tokenizer, example["history"], example["tools"], model)
+        input_len = int(model_inputs["input_ids"].shape[-1])
+        with torch.inference_mode():
+            output_ids = model.generate(
+                **model_inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                use_cache=True,
+            )
+        generated_text = decode_token_ids(tokenizer, output_ids[0][input_len:])
+        candidate = strip_leading_thought_blocks(generated_text).lstrip()
+        expected_prefix = f"{GEMMA_TOOL_CALL_OPEN}call:{example['expected_tool']}"
+        passed = candidate.startswith(expected_prefix)
+        case_label = example["case_path"] or f"row{example['row_index']}"
+        print(f"[sanity {index}/{len(examples)}] case={case_label} expected={example['expected_tool']} pass={passed}")
+        print(f"  output={candidate[:240]!r}")
+        if not passed:
+            failures += 1
+
+    print(f"=== End post-train sanity: {len(examples) - failures}/{len(examples)} passed ===")
+    return failures
 
 
 def resolve_pad_token_id(tokenizer: Any) -> int:
@@ -1035,6 +1498,12 @@ def main(argv: list[str] | None = None) -> int:
     default_tools = load_tools(args)
     train_file = resolve_dataset_path(args.train_file, "train", required=True)
     valid_file = resolve_dataset_path(args.valid_file, "validation", required=False)
+    if not args.model_revision:
+        print(
+            "WARNING: --model-revision is not pinned. Gemma 4 chat-template and function-calling behavior can drift "
+            "across upstream revisions.",
+            flush=True,
+        )
 
     print(f"Loading model: {args.model_name}")
     model_kwargs: dict[str, Any] = {
@@ -1047,11 +1516,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.model_revision:
         model_kwargs["revision"] = args.model_revision
     model, tokenizer = FastModel.from_pretrained(**model_kwargs)
+    lora_target_modules = resolve_lora_target_modules(model, args.lora_target_scope)
 
     model = FastModel.get_peft_model(
         model,
         r=args.lora_r,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        target_modules=lora_target_modules,
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
         bias="none",
@@ -1072,6 +1542,14 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Loading dataset from: {data_files}")
     raw_ds = {split_name: load_jsonl_rows(path) for split_name, path in data_files.items()}
+    if args.max_train_rows > 0:
+        original_count = len(raw_ds["train"])
+        raw_ds["train"] = raw_ds["train"][: args.max_train_rows]
+        print(f"Trimmed train conversations: {len(raw_ds['train'])}/{original_count}")
+    if "validation" in raw_ds and args.max_valid_rows > 0:
+        original_count = len(raw_ds["validation"])
+        raw_ds["validation"] = raw_ds["validation"][: args.max_valid_rows]
+        print(f"Trimmed validation conversations: {len(raw_ds['validation'])}/{original_count}")
     warn_on_schema_mismatch(raw_ds)
 
     train_stats = BuildStats()
@@ -1085,7 +1563,9 @@ def main(argv: list[str] | None = None) -> int:
         split_name="train",
         side_inputs=side_inputs,
         preserve_system_text=args.preserve_system_text,
+        phase_gated_prompt=args.phase_gated_prompt,
     )
+    run_mask_alignment_sanity_check(train_records, tokenizer, args.mask_sanity_samples)
     train_dataset = records_to_dataset(train_records)
     report_dataset(train_records, "train", train_stats, args.max_seq_length)
 
@@ -1102,6 +1582,7 @@ def main(argv: list[str] | None = None) -> int:
             split_name="validation",
             side_inputs=side_inputs,
             preserve_system_text=args.preserve_system_text,
+            phase_gated_prompt=args.phase_gated_prompt,
         )
         eval_dataset = records_to_dataset(eval_records)
         report_dataset(eval_records, "validation", eval_stats, args.max_seq_length)
@@ -1178,6 +1659,23 @@ def main(argv: list[str] | None = None) -> int:
     model.save_pretrained(str(save_dir))
     tokenizer.save_pretrained(str(save_dir))
     print(f"Saved LoRA adapter and tokenizer to: {save_dir}")
+
+    sanity_failures = 0
+    if signal_state.received is None and args.sanity_check_samples > 0:
+        sanity_failures = run_post_train_sanity_check(
+            model=model,
+            tokenizer=tokenizer,
+            raw_rows=raw_ds["train"],
+            default_tools=default_tools,
+            preserve_system_text=args.preserve_system_text,
+            phase_gated_prompt=args.phase_gated_prompt,
+            sample_count=args.sanity_check_samples,
+            max_new_tokens=args.sanity_check_max_new_tokens,
+        )
+        if sanity_failures > 0:
+            print(f"WARNING: post-train first-turn sanity failed on {sanity_failures} sample(s).")
+            if args.sanity_check_fail_on_miss:
+                return 2
 
     if signal_state.received is not None:
         try:

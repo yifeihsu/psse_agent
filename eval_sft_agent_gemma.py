@@ -38,11 +38,19 @@ from eval_sft_agent_hardened import (
 
 GEMMA_TOOL_CALL_OPEN = "<|tool_call>"
 GEMMA_TOOL_CALL_CLOSE = "<tool_call|>"
+GEMMA_TOOL_RESPONSE_OPEN = "<|tool_response>"
 GEMMA_TOOL_RESPONSE_CLOSE = "<tool_response|>"
 GEMMA_TURN_CLOSE = "<turn|>"
 GEMMA_THOUGHT_OPEN = "<|channel>thought"
 GEMMA_CHANNEL_CLOSE = "<channel|>"
 GEMMA_QUOTE_TOKEN = '<|"|>'
+FINAL_JSON_SCHEMA_MARKER = "Return only strict JSON with this structure:"
+FIRST_TOOL_PHASE_MESSAGE = (
+    "Current phase: first tool selection.\n"
+    "Before any tool response exists, emit exactly one native Gemma tool call and nothing else.\n"
+    "Do not emit verdict JSON before the first tool response.\n"
+    "On the first assistant turn for every snapshot, call `wls_from_path`."
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -206,6 +214,27 @@ def normalize_gemma_messages(messages: list[dict[str, Any]]) -> list[dict[str, A
     return normalized
 
 
+def strip_final_json_schema(text: Any) -> Any:
+    if not isinstance(text, str):
+        return text
+    marker_index = text.find(FINAL_JSON_SCHEMA_MARKER)
+    if marker_index == -1:
+        return text
+    return text[:marker_index].rstrip()
+
+
+def apply_first_turn_phase_gating(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if any(message.get("role") == "tool" for message in messages):
+        return messages
+
+    gated = copy.deepcopy(messages)
+    for message in gated:
+        if message.get("role") in {"system", "developer"}:
+            message["content"] = strip_final_json_schema(message.get("content"))
+    gated.append({"role": "developer", "content": FIRST_TOOL_PHASE_MESSAGE})
+    return gated
+
+
 def build_model_inputs(
     conversation: list[dict[str, Any]],
     tokenizer: Any,
@@ -215,7 +244,7 @@ def build_model_inputs(
     tools: list[dict[str, Any]] | None,
     enable_thinking: bool,
 ) -> tuple[dict[str, Any], bool]:
-    rendered_conversation = normalize_gemma_messages(conversation)
+    rendered_conversation = normalize_gemma_messages(apply_first_turn_phase_gating(conversation))
 
     template_kwargs: dict[str, Any] = {
         "add_generation_prompt": True,
@@ -275,7 +304,7 @@ def _token_id_tokenizer(tokenizer: Any) -> Any:
 
 def get_stop_token_ids(tokenizer: Any) -> list[int]:
     tokenizer = _token_id_tokenizer(tokenizer)
-    stop_tokens = [GEMMA_TOOL_CALL_CLOSE, GEMMA_TURN_CLOSE]
+    stop_tokens = [GEMMA_TOOL_CALL_CLOSE, GEMMA_TOOL_RESPONSE_OPEN, GEMMA_TURN_CLOSE]
     stop_ids: list[int] = []
     unk_id = getattr(tokenizer, "unk_token_id", None)
 

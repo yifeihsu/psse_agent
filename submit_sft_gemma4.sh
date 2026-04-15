@@ -9,7 +9,6 @@
 #SBATCH --mem=128G
 #SBATCH --time=24:00:00
 #SBATCH --gres=gpu:1
-#SBATCH --constraint="a100|h100"
 #SBATCH --requeue
 #SBATCH --signal=B:USR1@300
 #SBATCH --account=torch_pr_627_general
@@ -40,10 +39,15 @@ PER_DEVICE_TRAIN_BATCH_SIZE=${PER_DEVICE_TRAIN_BATCH_SIZE:-}
 GRADIENT_ACCUMULATION_STEPS=${GRADIENT_ACCUMULATION_STEPS:-}
 LORA_R=${LORA_R:-}
 LORA_ALPHA=${LORA_ALPHA:-}
+LORA_TARGET_SCOPE=${LORA_TARGET_SCOPE:-language_model}
 DATALOADER_NUM_WORKERS=${DATALOADER_NUM_WORKERS:-}
 LEARNING_RATE=${LEARNING_RATE:-}
 WARMUP_STEPS=${WARMUP_STEPS:-20}
 LOGGING_STEPS=${LOGGING_STEPS:-5}
+SANITY_CHECK_SAMPLES=${SANITY_CHECK_SAMPLES:-3}
+SANITY_CHECK_MAX_NEW_TOKENS=${SANITY_CHECK_MAX_NEW_TOKENS:-128}
+SANITY_CHECK_FAIL_ON_MISS=${SANITY_CHECK_FAIL_ON_MISS:-0}
+PHASE_GATED_PROMPT=${PHASE_GATED_PROMPT:-1}
 EXTRA_TRAIN_ARGS=${EXTRA_TRAIN_ARGS:-}
 PREEMPTION_EXIT_CODE=99
 
@@ -138,7 +142,7 @@ echo "Profile : $GPU_PROFILE_SELECTED"
 echo "Output  : $OUTPUT_DIR"
 echo "Resume  : $RESUME_FROM_CHECKPOINT"
 echo "Save/Eval steps: $SAVE_STEPS / $EVAL_STEPS"
-echo "Hyperparams: seq=$MAX_SEQ_LENGTH bs=$PER_DEVICE_TRAIN_BATCH_SIZE ga=$GRADIENT_ACCUMULATION_STEPS lora_r=$LORA_R lora_alpha=$LORA_ALPHA lr=$LEARNING_RATE workers=$DATALOADER_NUM_WORKERS"
+echo "Hyperparams: seq=$MAX_SEQ_LENGTH bs=$PER_DEVICE_TRAIN_BATCH_SIZE ga=$GRADIENT_ACCUMULATION_STEPS lora_r=$LORA_R lora_alpha=$LORA_ALPHA lora_scope=$LORA_TARGET_SCOPE lr=$LEARNING_RATE workers=$DATALOADER_NUM_WORKERS sanity=$SANITY_CHECK_SAMPLES phase_gated=$PHASE_GATED_PROMPT"
 if [[ -n "${WANDB_API_KEY:-}" ]]; then
     echo "WandB   : using WANDB_API_KEY from environment"
 elif [[ -f "$HOME/.netrc" ]]; then
@@ -164,6 +168,15 @@ trap 'forward_signal USR1' USR1
 trap 'forward_signal TERM' TERM
 
 # ── Train ──────────────────────────────────────────────────────────────────
+SANITY_FAIL_ARGS=()
+if [[ "$SANITY_CHECK_FAIL_ON_MISS" != "0" ]]; then
+    SANITY_FAIL_ARGS+=(--sanity-check-fail-on-miss)
+fi
+PHASE_GATED_ARGS=()
+if [[ "$PHASE_GATED_PROMPT" == "0" ]]; then
+    PHASE_GATED_ARGS+=(--no-phase-gated-prompt)
+fi
+
 $PYTHON gpt_oss_power_sft_revised.py \
     --train-file "$TRAIN_FILE" \
     --valid-file "$VALID_FILE" \
@@ -175,6 +188,7 @@ $PYTHON gpt_oss_power_sft_revised.py \
     --include-tool-schemas \
     --lora-r "$LORA_R" \
     --lora-alpha "$LORA_ALPHA" \
+    --lora-target-scope "$LORA_TARGET_SCOPE" \
     --per-device-train-batch-size "$PER_DEVICE_TRAIN_BATCH_SIZE" \
     --gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS" \
     --learning-rate "$LEARNING_RATE" \
@@ -187,6 +201,10 @@ $PYTHON gpt_oss_power_sft_revised.py \
     --save-total-limit "$SAVE_TOTAL_LIMIT" \
     --dataloader-num-workers "$DATALOADER_NUM_WORKERS" \
     --resume-from-checkpoint "$RESUME_FROM_CHECKPOINT" \
+    --sanity-check-samples "$SANITY_CHECK_SAMPLES" \
+    --sanity-check-max-new-tokens "$SANITY_CHECK_MAX_NEW_TOKENS" \
+    "${SANITY_FAIL_ARGS[@]}" \
+    "${PHASE_GATED_ARGS[@]}" \
     --report-to wandb \
     $EXTRA_TRAIN_ARGS &
 TRAIN_PID=$!
