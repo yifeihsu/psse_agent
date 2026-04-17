@@ -18,21 +18,32 @@ import sys
 import uuid
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
-from trace_protocol import normalize_instruction_content
+from trace_protocol import (
+    CONTEXT_TOOL_NAMES,
+    canonical_tool_schemas,
+    extract_conversation_context,
+    hydrate_tool_arguments as protocol_hydrate_tool_arguments,
+    normalize_instruction_content,
+    resolve_case_path_alias,
+    summarize_tool_result_for_conversation,
+)
 
 from eval_sft_agent_hardened import (
     classify_result_error,
-    execute_tool,
     extract_ground_truth,
     extract_prompt_prefix,
-    extract_user_snapshot,
     jsonish_loads,
-    load_tools,
     normalize_verdict,
-    repair_tool_arguments,
     resolve_max_input_tokens,
+)
+from mcp_server.matpower_server import (
+    correct_measurements_from_path,
+    correct_parameters_from_path,
+    correct_topology_from_path,
+    run_hse_from_path,
+    wls_from_path,
 )
 
 
@@ -51,6 +62,23 @@ FIRST_TOOL_PHASE_MESSAGE = (
     "Do not emit verdict JSON before the first tool response.\n"
     "On the first assistant turn for every snapshot, call `wls_from_path`."
 )
+LATER_TOOL_PHASE_MESSAGE = (
+    "Current phase: intermediate tool use.\n"
+    "Emit exactly one native Gemma tool call and nothing else.\n"
+    "Do not emit verdict JSON while another tool call is required."
+)
+FINAL_PHASE_MESSAGE = (
+    "Current phase: final answer.\n"
+    "Return only the strict verdict JSON. Do not emit a tool call in this phase."
+)
+
+TOOL_MAP = {
+    "wls_from_path": wls_from_path,
+    "correct_measurements_from_path": correct_measurements_from_path,
+    "correct_parameters_from_path": correct_parameters_from_path,
+    "correct_topology_from_path": correct_topology_from_path,
+    "run_hse_from_path": run_hse_from_path,
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -223,15 +251,29 @@ def strip_final_json_schema(text: Any) -> Any:
     return text[:marker_index].rstrip()
 
 
-def apply_first_turn_phase_gating(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if any(message.get("role") == "tool" for message in messages):
-        return messages
+def infer_expected_phase(messages_gt: list[dict[str, Any]], conversation: list[dict[str, Any]]) -> str:
+    gt_assistants = [message for message in messages_gt if message.get("role") == "assistant"]
+    produced_assistants = sum(1 for message in conversation if message.get("role") == "assistant")
+    if produced_assistants >= len(gt_assistants):
+        return "final"
+    next_assistant = gt_assistants[produced_assistants]
+    if next_assistant.get("tool_calls"):
+        return "first_tool_call" if produced_assistants == 0 else "later_tool_call"
+    return "final"
 
+
+def apply_phase_gating(messages: list[dict[str, Any]], phase: str) -> list[dict[str, Any]]:
     gated = copy.deepcopy(messages)
-    for message in gated:
-        if message.get("role") in {"system", "developer"}:
-            message["content"] = strip_final_json_schema(message.get("content"))
-    gated.append({"role": "developer", "content": FIRST_TOOL_PHASE_MESSAGE})
+    if phase in {"first_tool_call", "later_tool_call"}:
+        for message in gated:
+            if message.get("role") in {"system", "developer"}:
+                message["content"] = strip_final_json_schema(message.get("content"))
+        phase_message = (
+            FIRST_TOOL_PHASE_MESSAGE if phase == "first_tool_call" else LATER_TOOL_PHASE_MESSAGE
+        )
+    else:
+        phase_message = FINAL_PHASE_MESSAGE
+    gated.append({"role": "developer", "content": phase_message})
     return gated
 
 
@@ -243,8 +285,9 @@ def build_model_inputs(
     max_input_tokens: int,
     tools: list[dict[str, Any]] | None,
     enable_thinking: bool,
+    phase: str,
 ) -> tuple[dict[str, Any], bool]:
-    rendered_conversation = normalize_gemma_messages(apply_first_turn_phase_gating(conversation))
+    rendered_conversation = normalize_gemma_messages(apply_phase_gating(conversation, phase))
 
     template_kwargs: dict[str, Any] = {
         "add_generation_prompt": True,
@@ -387,6 +430,102 @@ def manual_parse_tool_call(text: str) -> tuple[str, dict[str, Any]] | None:
     return tool_name, parse_gemma_argument_object(arguments_text)
 
 
+def extract_json_wrapped_tool_call(obj: Any) -> tuple[str, dict[str, Any]] | None:
+    if not isinstance(obj, dict):
+        return None
+
+    single_call = obj.get("tool_call")
+    if isinstance(single_call, dict):
+        obj = single_call
+
+    direct_tool_name = obj.get("tool_name")
+    direct_arguments = obj.get("arguments")
+    if isinstance(direct_tool_name, str):
+        arguments = direct_arguments if direct_arguments is not None else {}
+        if isinstance(arguments, str):
+            arguments = jsonish_loads(arguments)
+        if not isinstance(arguments, dict):
+            raise ValueError(
+                f"JSON-wrapped tool arguments are not a dict for {direct_tool_name!r}: {type(arguments).__name__}"
+            )
+        return direct_tool_name, arguments
+
+    tool_calls = obj.get("tool_calls")
+    if not isinstance(tool_calls, list) or not tool_calls:
+        if isinstance(obj.get("name"), str) and isinstance(obj.get("arguments"), dict):
+            return obj["name"], obj["arguments"]
+        return None
+
+    first_call = tool_calls[0]
+    if not isinstance(first_call, dict):
+        raise ValueError(f"JSON-wrapped tool call must be an object, got {type(first_call).__name__}")
+
+    function_field = first_call.get("function")
+    arguments: Any = None
+    tool_name: Any = None
+
+    if isinstance(function_field, dict):
+        tool_name = function_field.get("name")
+        arguments = function_field.get("arguments")
+    elif isinstance(function_field, str):
+        tool_name = function_field
+        arguments = first_call.get("args", first_call.get("arguments"))
+    else:
+        tool_name = first_call.get("name")
+        arguments = first_call.get("args", first_call.get("arguments"))
+
+    if isinstance(arguments, str):
+        arguments = jsonish_loads(arguments)
+    if arguments is None:
+        arguments = {}
+    if not isinstance(arguments, dict):
+        raise ValueError(
+            f"JSON-wrapped tool arguments are not a dict for {tool_name!r}: {type(arguments).__name__}"
+        )
+    if not isinstance(tool_name, str) or not tool_name:
+        raise ValueError("JSON-wrapped tool call is missing a function name.")
+    return tool_name, arguments
+
+
+def extract_tool_call_from_jsonish_text(text: str) -> tuple[str, dict[str, Any]] | None:
+    cleaned = text.strip()
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+
+    name_patterns = [
+        r'"tool_name"\s*:\s*"([^"]+)"',
+        r'"function"\s*:\s*"([^"]+)"',
+        r'"name"\s*:\s*"([^"]+)"',
+    ]
+    tool_name: str | None = None
+    for pattern in name_patterns:
+        match = re.search(pattern, cleaned)
+        if match:
+            tool_name = match.group(1)
+            break
+    if tool_name is None:
+        return None
+
+    arguments: dict[str, Any] = {}
+    case_match = re.search(r'"case_path"\s*:\s*"([^"]+)"', cleaned)
+    if case_match:
+        arguments["case_path"] = case_match.group(1)
+
+    line_match = re.search(r'"line_index"\s*:\s*([0-9]+)', cleaned)
+    if line_match:
+        arguments["line_index"] = int(line_match.group(1))
+
+    cb_match = re.search(r'"cb_name"\s*:\s*"([^"]+)"', cleaned)
+    if cb_match:
+        arguments["cb_name"] = cb_match.group(1)
+
+    status_match = re.search(r'"desired_status"\s*:\s*(true|false)', cleaned, flags=re.IGNORECASE)
+    if status_match:
+        arguments["desired_status"] = status_match.group(1).lower() == "true"
+
+    return tool_name, arguments
+
+
 def parse_gemma_generation(text: str, tokenizer: Any) -> dict[str, Any]:
     raw = text.strip()
     notes: list[str] = []
@@ -428,7 +567,12 @@ def parse_gemma_generation(text: str, tokenizer: Any) -> dict[str, Any]:
     body = strip_trailing_gemma_tokens(body)
 
     if GEMMA_TOOL_CALL_OPEN in body:
-        tool_name, arguments = manual_parse_tool_call(body) or (None, None)
+        try:
+            manual_result = manual_parse_tool_call(body)
+        except (ValueError, json.JSONDecodeError):
+            manual_result = None
+            notes.append("manual_tool_call_parse_failed")
+        tool_name, arguments = manual_result or (None, None)
         if tool_name is not None and isinstance(arguments, dict):
             notes.append("manual_tool_call_parser")
             return {
@@ -448,17 +592,43 @@ def parse_gemma_generation(text: str, tokenizer: Any) -> dict[str, Any]:
 
     if content:
         try:
-            verdict = jsonish_loads(content)
-            if isinstance(verdict, dict):
+            obj = jsonish_loads(content)
+            wrapped_tool_call = extract_json_wrapped_tool_call(obj)
+            if wrapped_tool_call is not None:
+                tool_name, arguments = wrapped_tool_call
+                notes.append("json_wrapped_tool_call_fallback")
                 return {
-                    "type": "verdict",
-                    "content": verdict,
+                    "type": "tool_call",
+                    "name": tool_name,
+                    "arguments": arguments,
                     "thinking": parsed.get("thinking") if parsed else manual_thinking,
                     "notes": notes,
                     "raw": raw[:1000],
                 }
+            if isinstance(obj, dict) and "verdict" in obj:
+                return {
+                    "type": "verdict",
+                    "content": obj,
+                    "thinking": parsed.get("thinking") if parsed else manual_thinking,
+                    "notes": notes,
+                    "raw": raw[:1000],
+                }
+            if isinstance(obj, dict):
+                notes.append("json_object_without_verdict")
         except Exception:
             notes.append("verdict_json_parse_failed")
+            regex_tool_call = extract_tool_call_from_jsonish_text(content)
+            if regex_tool_call is not None:
+                tool_name, arguments = regex_tool_call
+                notes.append("regex_json_tool_call_fallback")
+                return {
+                    "type": "tool_call",
+                    "name": tool_name,
+                    "arguments": arguments,
+                    "thinking": parsed.get("thinking") if parsed else manual_thinking,
+                    "notes": notes,
+                    "raw": raw[:1000],
+                }
 
     return {
         "type": "unparseable",
@@ -474,6 +644,127 @@ def resolve_turn_max_new_tokens(turn_index0: int, default_max_new_tokens: int) -
     return min(default_max_new_tokens, 768)
 
 
+def format_preview(value: Any, limit: int = 240) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, default=str, ensure_ascii=False)
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def print_verbose_generation_block(
+    turn: int,
+    token_count: int,
+    response_text: str,
+    *,
+    was_truncated: bool,
+) -> None:
+    print(f"\n  ======== [Turn {turn}] Generated ({token_count} tokens) ========")
+    lines = response_text.splitlines() or [""]
+    for line in lines:
+        print(f"  {line}")
+    if was_truncated:
+        print("  [prompt was left-truncated to fit the context window]")
+    print("  ======================================================\n")
+
+
+def load_tools(args: argparse.Namespace) -> list[dict[str, Any]] | None:
+    if not args.include_tool_schemas:
+        return None
+    if args.tools_file:
+        with open(args.tools_file, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if not isinstance(data, list):
+            raise ValueError("--tools-file must contain a JSON list of tool schemas.")
+        return data
+    return canonical_tool_schemas()
+
+
+def repair_tool_arguments(
+    tool_name: str,
+    arguments: Any,
+    conversation: list[dict[str, Any]],
+    *,
+    hidden_context: Mapping[str, Any] | None = None,
+) -> tuple[Any, list[str]]:
+    return protocol_hydrate_tool_arguments(tool_name, arguments, conversation, hidden_context=hidden_context)
+
+
+def execute_context_tool(
+    name: str,
+    arguments: dict[str, Any],
+    runtime_context: Mapping[str, Any] | None,
+    hidden_context: dict[str, Any],
+) -> dict[str, Any]:
+    tool_context = ((runtime_context or {}).get("tool_context") or {})
+    payload: Any = None
+    if name == "get_parameter_context":
+        payload = tool_context.get("parameter_context")
+        if isinstance(payload, dict):
+            hidden_context["parameter_context"] = payload
+    elif name == "get_topology_context":
+        payload = tool_context.get("topology_context")
+        if isinstance(payload, dict):
+            hidden_context["topology_context"] = payload
+    elif name == "get_harmonic_context":
+        payload = tool_context.get("harmonic_context")
+        if isinstance(payload, dict):
+            hidden_context["harmonic_context"] = payload
+    elif name == "get_verification_snapshot":
+        stage = arguments.get("stage")
+        payload = (tool_context.get("verification_snapshots") or {}).get(stage)
+        if isinstance(payload, dict):
+            hidden_context["snapshot_context"] = payload
+    if isinstance(payload, dict):
+        return payload
+    return {"success": False, "error": f"Missing runtime context for {name}"}
+
+
+def execute_tool(
+    name: str,
+    arguments: dict[str, Any],
+    *,
+    runtime_context: Mapping[str, Any] | None = None,
+    hidden_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if name in CONTEXT_TOOL_NAMES:
+        return execute_context_tool(name, arguments, runtime_context, hidden_context or {})
+
+    tool_obj = TOOL_MAP.get(name)
+    if tool_obj is None:
+        return {"success": False, "error": f"Unknown tool: {name}"}
+    try:
+        fn = getattr(tool_obj, "fn", tool_obj)
+        call_args = dict(arguments)
+        if "case_path" in call_args:
+            call_args["case_path"] = resolve_case_path_alias(call_args["case_path"], hidden_context or runtime_context)
+        return fn(**call_args)
+    except Exception as exc:  # pragma: no cover - defensive runtime wrapper
+        return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def compact_tool_arguments_for_prompt(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    keep_keys = {
+        "wls_from_path": {"case_path"},
+        "get_parameter_context": {"case_path", "line_index"},
+        "get_topology_context": {"case_path"},
+        "get_harmonic_context": {"case_path"},
+        "get_verification_snapshot": {"case_path", "stage"},
+        "correct_measurements_from_path": {
+            "case_path",
+            "suspect_group",
+            "enable_correction",
+            "max_correction_iterations",
+            "error_tolerance",
+        },
+        "correct_parameters_from_path": {"case_path", "line_index"},
+        "correct_topology_from_path": {"case_path", "cb_name", "desired_status"},
+        "run_hse_from_path": {"case_path"},
+    }.get(tool_name)
+    if keep_keys is None:
+        return dict(arguments)
+    return {key: value for key, value in arguments.items() if key in keep_keys and value is not None}
+
+
 def run_one_sample(
     messages_gt: list[dict[str, Any]],
     model: Any,
@@ -487,12 +778,14 @@ def run_one_sample(
     repair_wls_from_user: bool,
     enable_thinking: bool,
     verbose: bool,
+    runtime_context: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     import torch
 
     gt_verdict = normalize_verdict(extract_ground_truth(messages_gt))
     conversation = extract_prompt_prefix(messages_gt)
-    user_snapshot = extract_user_snapshot(messages_gt)
+    meta, index_map = extract_conversation_context(messages_gt)
+    hidden_context = dict(runtime_context or {})
 
     tool_calls_made: list[str] = []
     parse_notes: list[str] = []
@@ -517,6 +810,7 @@ def run_one_sample(
             torch.cuda.empty_cache()
         gc.collect()
 
+        phase = infer_expected_phase(messages_gt, conversation)
         model_inputs, was_truncated = build_model_inputs(
             conversation,
             tokenizer,
@@ -524,6 +818,7 @@ def run_one_sample(
             max_input_tokens=max_input_tokens,
             tools=tools,
             enable_thinking=enable_thinking,
+            phase=phase,
         )
         input_truncated = input_truncated or was_truncated
 
@@ -551,11 +846,12 @@ def run_one_sample(
         }
 
         if verbose:
-            print(f"\n  ======== [Turn {turn+1}] Generated ({len(new_tokens)} tokens) ========")
-            print(f"  {response_text}")
-            if was_truncated:
-                print("  [prompt was left-truncated to fit the context window]")
-            print("  ======================================================\n")
+            print_verbose_generation_block(
+                turn + 1,
+                len(new_tokens),
+                response_text,
+                was_truncated=was_truncated,
+            )
 
         parsed = parse_gemma_generation(response_text, tokenizer)
         parse_notes.extend(parsed.get("notes", []))
@@ -569,19 +865,28 @@ def run_one_sample(
             tool_name = parsed["name"]
             tool_args = parsed["arguments"]
             if repair_wls_from_user:
-                tool_args, repair_notes = repair_tool_arguments(tool_name, tool_args, user_snapshot)
+                tool_args, repair_notes = repair_tool_arguments(
+                    tool_name,
+                    tool_args,
+                    conversation,
+                    hidden_context=hidden_context,
+                )
                 if repair_notes:
                     parse_notes.extend(repair_notes)
                     turn_record.setdefault("parse_notes", [])
                     turn_record["parse_notes"].extend(repair_notes)
 
-            turn_record["tool_name"] = tool_name
-            turn_record["tool_arguments"] = tool_args
             if not isinstance(tool_args, dict):
                 error_msg = f"Parsed tool arguments are not a dict for {tool_name}: {type(tool_args).__name__}"
                 turn_record["error"] = error_msg
                 turn_trace.append(turn_record)
                 break
+
+            exec_tool_args = tool_args
+            render_tool_args = compact_tool_arguments_for_prompt(tool_name, exec_tool_args)
+            turn_record["tool_name"] = tool_name
+            turn_record["tool_arguments"] = exec_tool_args
+            turn_record["tool_arguments_for_prompt"] = render_tool_args
 
             tool_calls_made.append(tool_name)
             call_id = f"call_{tool_name}_{uuid.uuid4().hex[:8]}"
@@ -595,29 +900,40 @@ def run_one_sample(
                             "id": call_id,
                             "function": {
                                 "name": tool_name,
-                                "arguments": tool_args,
+                                "arguments": render_tool_args,
                             },
                         }
                     ],
                 }
             )
 
-            tool_result = execute_tool(tool_name, tool_args)
+            tool_result = execute_tool(
+                tool_name,
+                exec_tool_args,
+                runtime_context=runtime_context,
+                hidden_context=hidden_context,
+            )
             tool_result_str = json.dumps(tool_result, default=str, ensure_ascii=False)
             turn_record["tool_result"] = tool_result
+            tool_result_for_prompt = summarize_tool_result_for_conversation(
+                tool_name,
+                tool_result,
+                meta,
+                index_map,
+            )
+            turn_record["tool_result_for_prompt"] = tool_result_for_prompt
             conversation.append(
                 {
                     "role": "tool",
                     "tool_call_id": call_id,
                     "name": tool_name,
-                    "content": tool_result_str,
+                    "content": json.dumps(tool_result_for_prompt, ensure_ascii=False),
                 }
             )
 
             if verbose:
                 print(f"  -> Tool call: {tool_name}")
-                preview = tool_result_str if len(tool_result_str) <= 240 else tool_result_str[:237] + "..."
-                print(f"  <- Tool result: {preview}")
+                print(f"  <- Tool result: {format_preview(tool_result_for_prompt)}")
 
             del outputs
             if tool_name == "wls_from_path" and tool_result.get("success") is True:
@@ -648,6 +964,9 @@ def run_one_sample(
                     "content": json.dumps(parsed["content"], ensure_ascii=False),
                 }
             )
+            if verbose:
+                print("  -> Final verdict:")
+                print(f"  {format_preview(parsed['content'], limit=4000)}")
             turn_trace.append(turn_record)
             break
 
@@ -708,6 +1027,8 @@ def main() -> None:
         sys.exit(1)
 
     print(f"Loading adapter from {args.adapter} ...")
+    use_transformers_fallback = False
+    fallback_reason: str | None = None
     try:
         from unsloth import FastModel
 
@@ -722,7 +1043,14 @@ def main() -> None:
         FastModel.for_inference(model)
         print("Model loaded via Unsloth.\n")
     except ImportError:
-        print("Unsloth not available, falling back to transformers + peft ...")
+        use_transformers_fallback = True
+        fallback_reason = "Unsloth not available"
+    except Exception as exc:
+        use_transformers_fallback = True
+        fallback_reason = f"Unsloth load failed ({type(exc).__name__}: {exc})"
+
+    if use_transformers_fallback:
+        print(f"{fallback_reason}, falling back to transformers + peft ...")
         import torch
         from peft import PeftModel
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
@@ -801,6 +1129,7 @@ def main() -> None:
                     repair_wls_from_user=args.repair_wls_from_user,
                     enable_thinking=args.enable_thinking,
                     verbose=args.verbose,
+                    runtime_context=sample.get("runtime_context"),
                 )
             except Exception as exc:
                 import traceback

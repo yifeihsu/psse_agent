@@ -27,6 +27,8 @@ OUTPUT_DIR=${OUTPUT_DIR:-/scratch/yx3882/psse_agent/outputs/gemma4_power_agent}
 TRAIN_FILE=${TRAIN_FILE:-out_traces_balanced/sft_traces.train.jsonl}
 VALID_FILE=${VALID_FILE:-out_traces_balanced/sft_traces.valid.jsonl}
 MODEL_NAME=${MODEL_NAME:-unsloth/Gemma-4-26B-A4B-it}
+MODEL_REVISION=${MODEL_REVISION:-}
+ALLOW_UNPINNED_MODEL_REVISION=${ALLOW_UNPINNED_MODEL_REVISION:-0}
 GPU_PROFILE=${GPU_PROFILE:-auto}
 MAX_SEQ_LENGTH=${MAX_SEQ_LENGTH:-}
 NUM_TRAIN_EPOCHS=${NUM_TRAIN_EPOCHS:-1}
@@ -48,6 +50,8 @@ SANITY_CHECK_SAMPLES=${SANITY_CHECK_SAMPLES:-3}
 SANITY_CHECK_MAX_NEW_TOKENS=${SANITY_CHECK_MAX_NEW_TOKENS:-128}
 SANITY_CHECK_FAIL_ON_MISS=${SANITY_CHECK_FAIL_ON_MISS:-0}
 PHASE_GATED_PROMPT=${PHASE_GATED_PROMPT:-1}
+INCLUDE_TOOL_SCHEMAS=${INCLUDE_TOOL_SCHEMAS:-1}
+INJECT_EMPTY_THOUGHT_CHANNEL=${INJECT_EMPTY_THOUGHT_CHANNEL:-1}
 EXTRA_TRAIN_ARGS=${EXTRA_TRAIN_ARGS:-}
 PREEMPTION_EXIT_CODE=99
 
@@ -93,8 +97,8 @@ GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -n1 | sed 's
 GPU_MEM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n1 | tr -d ' ')
 GPU_PROFILE_SELECTED=$GPU_PROFILE
 if [[ "$GPU_PROFILE" == "auto" ]]; then
-    if [[ "$GPU_NAME" == *"A100"* && "${GPU_MEM_MB:-0}" -ge 70000 ]]; then
-        GPU_PROFILE_SELECTED="a100-80g"
+    if [[ ( "$GPU_NAME" == *"A100"* || "$GPU_NAME" == *"H100"* || "$GPU_NAME" == *"H200"* ) && "${GPU_MEM_MB:-0}" -ge 70000 ]]; then
+        GPU_PROFILE_SELECTED="highmem-accelerator"
         set_default_if_unset MAX_SEQ_LENGTH 6144
         set_default_if_unset PER_DEVICE_TRAIN_BATCH_SIZE 2
         set_default_if_unset GRADIENT_ACCUMULATION_STEPS 8
@@ -140,9 +144,11 @@ echo "Python  : $PYTHON"
 echo "GPU     : $GPU_NAME (${GPU_MEM_MB:-unknown} MiB)"
 echo "Profile : $GPU_PROFILE_SELECTED"
 echo "Output  : $OUTPUT_DIR"
+echo "Model   : $MODEL_NAME"
+echo "Revision: ${MODEL_REVISION:-<unpinned>}"
 echo "Resume  : $RESUME_FROM_CHECKPOINT"
 echo "Save/Eval steps: $SAVE_STEPS / $EVAL_STEPS"
-echo "Hyperparams: seq=$MAX_SEQ_LENGTH bs=$PER_DEVICE_TRAIN_BATCH_SIZE ga=$GRADIENT_ACCUMULATION_STEPS lora_r=$LORA_R lora_alpha=$LORA_ALPHA lora_scope=$LORA_TARGET_SCOPE lr=$LEARNING_RATE workers=$DATALOADER_NUM_WORKERS sanity=$SANITY_CHECK_SAMPLES phase_gated=$PHASE_GATED_PROMPT"
+echo "Hyperparams: seq=$MAX_SEQ_LENGTH bs=$PER_DEVICE_TRAIN_BATCH_SIZE ga=$GRADIENT_ACCUMULATION_STEPS lora_r=$LORA_R lora_alpha=$LORA_ALPHA lora_scope=$LORA_TARGET_SCOPE lr=$LEARNING_RATE workers=$DATALOADER_NUM_WORKERS sanity=$SANITY_CHECK_SAMPLES phase_gated=$PHASE_GATED_PROMPT tool_schemas=$INCLUDE_TOOL_SCHEMAS empty_thought=$INJECT_EMPTY_THOUGHT_CHANNEL"
 if [[ -n "${WANDB_API_KEY:-}" ]]; then
     echo "WandB   : using WANDB_API_KEY from environment"
 elif [[ -f "$HOME/.netrc" ]]; then
@@ -168,6 +174,12 @@ trap 'forward_signal USR1' USR1
 trap 'forward_signal TERM' TERM
 
 # ── Train ──────────────────────────────────────────────────────────────────
+if [[ -z "$MODEL_REVISION" && "$ALLOW_UNPINNED_MODEL_REVISION" != "1" ]]; then
+    echo "ERROR: MODEL_REVISION is required by gpt_oss_power_sft_revised.py to pin the Gemma 4 chat template." >&2
+    echo "Set MODEL_REVISION=<hf commit/tag> before sbatch, or set ALLOW_UNPINNED_MODEL_REVISION=1 to opt into floating upstream behavior." >&2
+    exit 2
+fi
+
 SANITY_FAIL_ARGS=()
 if [[ "$SANITY_CHECK_FAIL_ON_MISS" != "0" ]]; then
     SANITY_FAIL_ARGS+=(--sanity-check-fail-on-miss)
@@ -176,16 +188,34 @@ PHASE_GATED_ARGS=()
 if [[ "$PHASE_GATED_PROMPT" == "0" ]]; then
     PHASE_GATED_ARGS+=(--no-phase-gated-prompt)
 fi
+MODEL_REVISION_ARGS=()
+if [[ -n "$MODEL_REVISION" ]]; then
+    MODEL_REVISION_ARGS+=(--model-revision "$MODEL_REVISION")
+elif [[ "$ALLOW_UNPINNED_MODEL_REVISION" == "1" ]]; then
+    MODEL_REVISION_ARGS+=(--allow-unpinned-model-revision)
+fi
+TOOL_SCHEMA_ARGS=()
+if [[ "$INCLUDE_TOOL_SCHEMAS" == "0" ]]; then
+    TOOL_SCHEMA_ARGS+=(--no-include-tool-schemas)
+else
+    TOOL_SCHEMA_ARGS+=(--include-tool-schemas)
+fi
+EMPTY_THOUGHT_ARGS=()
+if [[ "$INJECT_EMPTY_THOUGHT_CHANNEL" == "0" ]]; then
+    EMPTY_THOUGHT_ARGS+=(--no-inject-empty-thought-channel)
+else
+    EMPTY_THOUGHT_ARGS+=(--inject-empty-thought-channel)
+fi
 
 $PYTHON gpt_oss_power_sft_revised.py \
     --train-file "$TRAIN_FILE" \
     --valid-file "$VALID_FILE" \
     --model-name "$MODEL_NAME" \
+    "${MODEL_REVISION_ARGS[@]}" \
     --output-dir "$OUTPUT_DIR" \
     --max-seq-length "$MAX_SEQ_LENGTH" \
     --dataset-num-proc 1 \
     --load-in-16bit \
-    --include-tool-schemas \
     --lora-r "$LORA_R" \
     --lora-alpha "$LORA_ALPHA" \
     --lora-target-scope "$LORA_TARGET_SCOPE" \
@@ -203,6 +233,8 @@ $PYTHON gpt_oss_power_sft_revised.py \
     --resume-from-checkpoint "$RESUME_FROM_CHECKPOINT" \
     --sanity-check-samples "$SANITY_CHECK_SAMPLES" \
     --sanity-check-max-new-tokens "$SANITY_CHECK_MAX_NEW_TOKENS" \
+    "${TOOL_SCHEMA_ARGS[@]}" \
+    "${EMPTY_THOUGHT_ARGS[@]}" \
     "${SANITY_FAIL_ARGS[@]}" \
     "${PHASE_GATED_ARGS[@]}" \
     --report-to wandb \

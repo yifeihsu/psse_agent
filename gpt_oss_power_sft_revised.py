@@ -31,111 +31,8 @@ from transformers import TrainerCallback
 from trace_protocol import canonical_tool_schemas
 
 
-DEFAULT_POWER_TOOLS: list[dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "wls_from_path",
-            "description": "Run weighted least-squares state estimation on a power-system snapshot and return residual diagnostics.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "case_path": {"type": "string", "description": "Case identifier or path."},
-                    "z": {
-                        "type": "array",
-                        "items": {"type": "number"},
-                        "description": "Observed measurement vector.",
-                    },
-                },
-                "required": ["case_path", "z"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "correct_measurements_from_path",
-            "description": "Correct suspected bad measurements and optionally rerun diagnostic iterations.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "case_path": {"type": "string"},
-                    "z": {"type": "array", "items": {"type": "number"}},
-                    "suspect_group": {"type": "array", "items": {"type": "integer"}},
-                    "enable_correction": {"type": "boolean"},
-                    "max_correction_iterations": {"type": "integer"},
-                    "error_tolerance": {"type": "number"},
-                },
-                "required": [
-                    "case_path",
-                    "z",
-                    "suspect_group",
-                    "enable_correction",
-                    "max_correction_iterations",
-                    "error_tolerance",
-                ],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "correct_parameters_from_path",
-            "description": "Correct line-parameter errors using repeated measurement scans.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "case_path": {"type": "string"},
-                    "line_index": {"type": "integer"},
-                    "z_scans": {
-                        "type": "array",
-                        "items": {"type": "array", "items": {"type": "number"}},
-                    },
-                },
-                "required": ["case_path", "line_index", "z_scans"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "correct_topology_from_path",
-            "description": "Correct a suspected topology mismatch by switching a breaker/circuit breaker status.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "case_path": {"type": "string"},
-                    "cb_name": {"type": "string"},
-                    "desired_status": {"type": "boolean"},
-                },
-            "required": ["case_path", "cb_name", "desired_status"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "run_hse_from_path",
-            "description": "Run Harmonic State Estimation (HSE) to identify a single harmonic source.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "case_path": {"type": "string"},
-                    "harmonic_measurements": {
-                        "type": "array",
-                        "items": {"type": "object"}
-                    },
-                    "harmonic_orders": {
-                        "type": "array",
-                        "items": {"type": "integer"}
-                    },
-                    "slack_bus": {"type": "integer"}
-                },
-                "required": ["case_path", "harmonic_measurements"]
-            },
-        },
-    },
-]
+# Keep the built-in fallback aligned with the canonical 9-tool protocol.
+DEFAULT_POWER_TOOLS: list[dict[str, Any]] = canonical_tool_schemas()
 
 LORA_TARGET_SUFFIXES = (
     "q_proj",
@@ -148,9 +45,15 @@ LORA_TARGET_SUFFIXES = (
 )
 
 GEMMA_TOOL_CALL_OPEN = "<|tool_call>"
+GEMMA_TURN_OPEN = "<|turn>"
+GEMMA_TURN_CLOSE = "<turn|>"
+GEMMA_THINK_OPEN = "<|think|>"
 GEMMA_THOUGHT_OPEN = "<|channel>thought"
 GEMMA_CHANNEL_CLOSE = "<channel|>"
+EMPTY_THOUGHT_CHANNEL = f"{GEMMA_THOUGHT_OPEN}\n{GEMMA_CHANNEL_CLOSE}"
 FINAL_JSON_SCHEMA_MARKER = "Return only strict JSON with this structure:"
+PROSE_TOOL_CATALOG_MARKER = "Available tools:"
+DECISION_POLICY_MARKER = "Decision policy:"
 FIRST_TOOL_PHASE_MESSAGE = (
     "Current phase: first tool selection.\n"
     "Before any tool response exists, emit exactly one native Gemma tool call and nothing else.\n"
@@ -178,6 +81,8 @@ SYSTEM_TEXT_REPLACEMENTS = {
     "<|return|>": "",
 }
 CHAT_TEMPLATE_CONTENT_FALLBACK_WARNED = False
+_TOKENIZER_TEMPLATE_CAPS: dict[int, dict[str, bool]] = {}
+_TOOL_CALL_PREFIX_CACHE: dict[tuple[int, str], tuple[str, ...]] = {}
 
 
 def normalize_instruction_content(role: str, content: Any) -> Any:
@@ -192,6 +97,56 @@ def normalize_instruction_content(role: str, content: Any) -> Any:
     for source_text, replacement_text in SYSTEM_TEXT_REPLACEMENTS.items():
         text = text.replace(source_text, replacement_text)
     return text.strip()
+
+
+def tokenizer_template_capabilities(tokenizer: Any) -> dict[str, bool]:
+    cache_key = id(tokenizer)
+    cached = _TOKENIZER_TEMPLATE_CAPS.get(cache_key)
+    if cached is not None:
+        return cached
+
+    caps = {
+        "supports_enable_thinking": False,
+        "supports_developer_role": False,
+    }
+
+    thinking_probe = [{"role": "user", "content": "probe"}]
+    try:
+        tokenizer.apply_chat_template(
+            thinking_probe,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
+        )
+        caps["supports_enable_thinking"] = True
+    except TypeError:
+        caps["supports_enable_thinking"] = False
+
+    role_probe_kwargs: dict[str, Any] = {
+        "tokenize": False,
+        "add_generation_prompt": True,
+    }
+    if caps["supports_enable_thinking"]:
+        role_probe_kwargs["enable_thinking"] = False
+
+    developer_probe = [
+        {"role": "system", "content": "system"},
+        {"role": "developer", "content": "developer"},
+        {"role": "user", "content": "user"},
+    ]
+    try:
+        tokenizer.apply_chat_template(developer_probe, **role_probe_kwargs)
+        caps["supports_developer_role"] = True
+    except Exception:
+        caps["supports_developer_role"] = False
+
+    _TOKENIZER_TEMPLATE_CAPS[cache_key] = caps
+    return caps
+
+
+def phase_instruction_role(tokenizer: Any) -> str:
+    _caps = tokenizer_template_capabilities(tokenizer)
+    return "system"
 
 
 class SignalState:
@@ -290,6 +245,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--model-name", type=str, default="unsloth/Gemma-4-26B-A4B-it")
     parser.add_argument("--model-revision", type=str, default="")
+    parser.add_argument(
+        "--require-pinned-model-revision",
+        action="store_true",
+        default=True,
+        help="Require an explicit --model-revision for Gemma 4 runs to avoid chat-template drift across upstream revisions.",
+    )
+    parser.add_argument(
+        "--allow-unpinned-model-revision",
+        dest="require_pinned_model_revision",
+        action="store_false",
+    )
     parser.add_argument("--output-dir", type=str, default="outputs/gemma4_power_agent")
     parser.add_argument("--max-seq-length", type=int, default=4096)
     parser.add_argument("--dataset-num-proc", type=int, default=2)
@@ -337,6 +303,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--tools-file", type=str, default="")
     parser.add_argument("--phase-gated-prompt", action="store_true", default=True)
     parser.add_argument("--no-phase-gated-prompt", dest="phase_gated_prompt", action="store_false")
+    parser.add_argument(
+        "--inject-empty-thought-channel",
+        action="store_true",
+        default=True,
+        help="Insert an empty Gemma thought channel after each rendered model-turn open to preserve the official no-thinking pattern during SFT.",
+    )
+    parser.add_argument(
+        "--no-inject-empty-thought-channel",
+        dest="inject_empty_thought_channel",
+        action="store_false",
+    )
     parser.add_argument(
         "--preserve-system-text",
         action="store_true",
@@ -547,6 +524,36 @@ def maybe_parse_json_string(value: Any) -> Any:
         return value
 
 
+def normalize_message_content(value: Any, *, parse_json_strings: bool) -> Any:
+    if value is None:
+        return ""
+    parsed = maybe_parse_json_string(value) if parse_json_strings else value
+    if isinstance(parsed, (dict, list)):
+        return parsed
+    if isinstance(parsed, str):
+        return parsed
+    return json.dumps(parsed, ensure_ascii=False)
+
+
+def normalize_assistant_tool_responses(tool_responses: Any) -> list[dict[str, Any]] | Any:
+    if not isinstance(tool_responses, list):
+        return tool_responses
+
+    normalized: list[dict[str, Any]] = []
+    for tool_response in tool_responses:
+        item = prune_none(tool_response)
+        if not isinstance(item, dict):
+            normalized.append({"content": normalize_message_content(item, parse_json_strings=True)})
+            continue
+
+        fixed = dict(item)
+        for key in ("content", "response", "result"):
+            if key in fixed:
+                fixed[key] = normalize_message_content(fixed.get(key), parse_json_strings=True)
+        normalized.append(fixed)
+    return normalized
+
+
 def default_schema_description(name: str | None, schema: dict[str, Any]) -> str:
     label = (name or "value").replace("_", " ")
     schema_type = schema.get("type")
@@ -617,12 +624,7 @@ def normalize_messages(
             msg["content"] = content
 
         elif role == "user":
-            content = msg.get("content", "")
-            if content is None:
-                content = ""
-            if not isinstance(content, str):
-                content = json.dumps(content, ensure_ascii=False)
-            msg["content"] = content
+            msg["content"] = normalize_message_content(msg.get("content", ""), parse_json_strings=False)
 
         if role == "assistant":
             tool_calls = msg.get("tool_calls")
@@ -640,30 +642,50 @@ def normalize_messages(
                         tc["function"] = function_info
                     fixed_calls.append(tc)
                 msg["tool_calls"] = fixed_calls
-                msg.pop("content", None)
             else:
                 msg.pop("tool_calls", None)
-                content = msg.get("content", "")
-                if content is None:
-                    content = ""
-                if not isinstance(content, str):
-                    content = json.dumps(content, ensure_ascii=False)
-                msg["content"] = content
+
+            tool_responses = msg.get("tool_responses")
+            if tool_responses is not None:
+                msg["tool_responses"] = normalize_assistant_tool_responses(tool_responses)
+
+            if "content" in msg or not msg.get("tool_calls") and not msg.get("tool_responses"):
+                msg["content"] = normalize_message_content(msg.get("content", ""), parse_json_strings=False)
 
         elif role == "tool":
-            content = msg.get("content", "")
-            if content is None:
-                content = ""
-            parsed = maybe_parse_json_string(content)
-            if isinstance(parsed, (dict, list)):
-                msg["content"] = parsed
-            elif isinstance(content, str):
-                msg["content"] = content
-            else:
-                msg["content"] = json.dumps(content, ensure_ascii=False)
+            msg["content"] = normalize_message_content(msg.get("content", ""), parse_json_strings=True)
 
         normalized.append(msg)
     return normalized
+
+
+def strip_prose_tool_catalog(text: Any) -> Any:
+    if not isinstance(text, str):
+        return text
+
+    start = text.find(PROSE_TOOL_CATALOG_MARKER)
+    if start == -1:
+        return text
+
+    end = text.find(DECISION_POLICY_MARKER, start)
+    if end == -1:
+        return text
+
+    before = text[:start].rstrip()
+    after = text[end:].lstrip()
+    if before and after:
+        return f"{before}\n\n{after}"
+    return before or after
+
+
+def strip_prose_tool_catalog_from_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    stripped: list[dict[str, Any]] = []
+    for raw_message in messages:
+        message = dict(raw_message)
+        if message.get("role") in {"system", "developer"}:
+            message["content"] = strip_prose_tool_catalog(message.get("content"))
+        stripped.append(message)
+    return stripped
 
 
 def assistant_turn_indices(messages: list[dict[str, Any]]) -> list[int]:
@@ -706,6 +728,7 @@ def phase_gate_messages(
     target_kind: str,
     assistant_turn_index: int,
     enabled: bool,
+    phase_role: str = "developer",
 ) -> list[dict[str, Any]]:
     if not enabled:
         return [dict(message) for message in messages]
@@ -727,9 +750,28 @@ def phase_gate_messages(
     else:
         phase_message = FINAL_PHASE_MESSAGE
 
-    insert_index = max(0, len(gated) - 1)
-    gated.insert(insert_index, {"role": "developer", "content": phase_message})
-    return gated
+    merged = []
+    merged_phase_instruction = False
+    for message in gated:
+        role = message.get("role")
+        if role == "developer":
+            message["role"] = "system"
+            role = "system"
+
+        if not merged_phase_instruction and role == "system":
+            content = message.get("content", "")
+            if not isinstance(content, str):
+                content = json.dumps(content, ensure_ascii=False)
+            if phase_message not in content:
+                content = f"{content.rstrip()}\n\n{phase_message}".strip() if content else phase_message
+            message["content"] = content
+            merged_phase_instruction = True
+
+        merged.append(message)
+
+    if not merged_phase_instruction:
+        merged.insert(0, {"role": "system", "content": phase_message})
+    return merged
 
 
 def load_tools(args: argparse.Namespace) -> list[dict[str, Any]] | None:
@@ -748,20 +790,56 @@ def render_text(tokenizer, messages: list[dict[str, Any]], tools: list[dict[str,
     kwargs: dict[str, Any] = {
         "tokenize": False,
         "add_generation_prompt": add_generation_prompt,
-        "enable_thinking": False,
     }
+    if tokenizer_template_capabilities(tokenizer)["supports_enable_thinking"]:
+        kwargs["enable_thinking"] = False
     if tools is not None:
         kwargs["tools"] = tools
     try:
-        return tokenizer.apply_chat_template(messages, **kwargs)
-    except TypeError:
-        kwargs.pop("enable_thinking", None)
-        try:
-            return tokenizer.apply_chat_template(messages, **kwargs)
-        except Exception as exc:
-            return render_text_with_stringified_content_fallback(tokenizer, messages, kwargs, exc)
+        rendered = tokenizer.apply_chat_template(messages, **kwargs)
     except Exception as exc:
-        return render_text_with_stringified_content_fallback(tokenizer, messages, kwargs, exc)
+        rendered = render_text_with_stringified_content_fallback(tokenizer, messages, kwargs, exc)
+    return rendered
+
+
+def inject_empty_thought_channels(text: str) -> str:
+    marker = f"{GEMMA_TURN_OPEN}model\n"
+    if marker not in text:
+        return text
+
+    pieces: list[str] = []
+    cursor = 0
+    while True:
+        turn_index = text.find(marker, cursor)
+        if turn_index == -1:
+            pieces.append(text[cursor:])
+            break
+
+        model_body_start = turn_index + len(marker)
+        pieces.append(text[cursor:model_body_start])
+        if not text.startswith(GEMMA_THOUGHT_OPEN, model_body_start):
+            pieces.append(EMPTY_THOUGHT_CHANNEL)
+        cursor = model_body_start
+    return "".join(pieces)
+
+
+def render_training_text(
+    tokenizer: Any,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    *,
+    add_generation_prompt: bool,
+    inject_empty_thought_channel: bool,
+) -> str:
+    rendered = render_text(
+        tokenizer,
+        messages,
+        tools,
+        add_generation_prompt=add_generation_prompt,
+    )
+    if inject_empty_thought_channel:
+        rendered = inject_empty_thought_channels(rendered)
+    return rendered
 
 
 def stringify_message_content_for_template(messages: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
@@ -832,6 +910,98 @@ def encode_text(tokenizer: Any, text: str) -> dict[str, list[int]]:
         else:
             normalized[key] = value
     return normalized
+
+
+def encode_text_with_offsets(tokenizer: Any, text: str) -> dict[str, Any]:
+    try:
+        encoded = tokenize_text(
+            tokenizer,
+            text,
+            add_special_tokens=False,
+            return_attention_mask=False,
+            return_token_type_ids=True,
+            return_offsets_mapping=True,
+        )
+    except Exception:
+        encoded = encode_text(tokenizer, text)
+        encoded["offset_mapping"] = None
+        return encoded
+
+    normalized: dict[str, Any] = {}
+    for key, value in encoded.items():
+        if isinstance(value, list) and value and isinstance(value[0], list):
+            if len(value) != 1:
+                raise ValueError(f"Expected a single encoded sample, got batch size {len(value)}")
+            normalized[key] = value[0]
+        else:
+            normalized[key] = value
+    return normalized
+
+
+def last_model_turn_char_start(rendered_text: str) -> int:
+    marker = f"{GEMMA_TURN_OPEN}model\n"
+    start = rendered_text.rfind(marker)
+    if start == -1:
+        raise ValueError("Unable to locate the final Gemma model-turn marker in rendered training text.")
+    return start
+
+
+def completion_start_token_index(
+    tokenizer: Any,
+    rendered_text: str,
+    full_enc: dict[str, Any],
+    *,
+    completion_char_start: int,
+) -> int:
+    offsets = full_enc.get("offset_mapping")
+    if isinstance(offsets, list) and offsets:
+        for idx, span in enumerate(offsets):
+            if not isinstance(span, (list, tuple)) or len(span) != 2:
+                continue
+            start, end = int(span[0]), int(span[1])
+            if end > completion_char_start:
+                return idx
+        raise ValueError("Rendered completion start falls outside the tokenizer offset mapping.")
+
+    prefix_text = rendered_text[:completion_char_start]
+    prefix_ids = encode_text(tokenizer, prefix_text)["input_ids"]
+    full_ids = full_enc["input_ids"]
+    if full_ids[: len(prefix_ids)] != prefix_ids:
+        raise ValueError(
+            "Unable to align the final assistant span without offset mappings. "
+            "Pin the model revision or use a tokenizer build that exposes return_offsets_mapping."
+        )
+    return len(prefix_ids)
+
+
+def assistant_completion_char_start(
+    rendered_text: str,
+    target: dict[str, Any],
+    *,
+    tokenizer: Any,
+    tools: list[dict[str, Any]] | None,
+) -> int:
+    tool_calls = target.get("tool_calls")
+    if isinstance(tool_calls, list) and tool_calls:
+        function_info = tool_calls[0].get("function")
+        if isinstance(function_info, dict):
+            tool_name = function_info.get("name")
+            if isinstance(tool_name, str) and tool_name:
+                matches = [
+                    rendered_text.rfind(prefix)
+                    for prefix in expected_tool_call_prefixes(tokenizer, tools, tool_name)
+                ]
+                matches = [idx for idx in matches if idx != -1]
+                if matches:
+                    return max(matches)
+
+    content = target.get("content")
+    if isinstance(content, str) and content:
+        content_index = rendered_text.rfind(content)
+        if content_index != -1:
+            return content_index
+
+    return last_model_turn_char_start(rendered_text)
 
 
 def infer_side_input_plan(model: Any, tokenizer: Any, model_name: str) -> SideInputPlan:
@@ -932,6 +1102,8 @@ def build_processed_split(
     side_inputs: SideInputPlan,
     preserve_system_text: bool,
     phase_gated_prompt: bool,
+    phase_role: str,
+    inject_empty_thought_channel: bool,
 ):
     records: list[dict[str, Any]] = []
 
@@ -939,10 +1111,6 @@ def build_processed_split(
         stats.original_rows += 1
         raw_messages = row["messages"]
         stats.original_message_lengths[len(raw_messages)] += 1
-        normalized = normalize_messages(raw_messages, preserve_system_text=preserve_system_text)
-        expanded = explode_conversation(normalized)
-        stats.expanded_rows += len(expanded)
-
         row_tools = row.get("tools")
         if row_tools is not None:
             if not isinstance(row_tools, list):
@@ -950,6 +1118,12 @@ def build_processed_split(
             tools = sanitize_tool_schemas(row_tools)
         else:
             tools = default_tools
+
+        normalized = normalize_messages(raw_messages, preserve_system_text=preserve_system_text)
+        if tools is not None:
+            normalized = strip_prose_tool_catalog_from_messages(normalized)
+        expanded = explode_conversation(normalized)
+        stats.expanded_rows += len(expanded)
 
         for sample_index, sample_messages in enumerate(expanded):
             target = sample_messages[-1]
@@ -962,33 +1136,31 @@ def build_processed_split(
                 target_kind=target_kind,
                 assistant_turn_index=sample_index,
                 enabled=phase_gated_prompt,
+                phase_role=phase_role,
             )
             history = phase_messages[:-1]
-            full_text = render_text(tokenizer, phase_messages, tools, add_generation_prompt=False)
-            prompt_text = render_text(tokenizer, history, tools, add_generation_prompt=True)
-
-            full_enc = encode_text(tokenizer, full_text)
-            prompt_ids = encode_text(tokenizer, prompt_text)["input_ids"]
+            full_text = render_training_text(
+                tokenizer,
+                phase_messages,
+                tools,
+                add_generation_prompt=False,
+                inject_empty_thought_channel=inject_empty_thought_channel,
+            )
+            full_enc = encode_text_with_offsets(tokenizer, full_text)
             full_ids = full_enc["input_ids"]
-
-            if len(full_ids) < len(prompt_ids):
-                raise ValueError(
-                    f"Prompt tokenization longer than full sample in {split_name}; this should not happen."
-                )
-            if full_ids[: len(prompt_ids)] != prompt_ids:
-                mismatch_at = next(
-                    (idx for idx, (full_id, prompt_id) in enumerate(zip(full_ids, prompt_ids)) if full_id != prompt_id),
-                    min(len(full_ids), len(prompt_ids)),
-                )
-                prompt_tail = prompt_text[max(0, len(prompt_text) - 160):]
-                full_tail = full_text[max(0, len(full_text) - 160):]
-                raise ValueError(
-                    "Prompt tokenization is not a literal prefix of the full sample. "
-                    f"split={split_name} row={row_index} sample={sample_index} mismatch_token_index={mismatch_at}\n"
-                    f"prompt_tail={prompt_tail!r}\nfull_tail={full_tail!r}"
-                )
-
-            completion_len = len(full_ids) - len(prompt_ids)
+            completion_char_start = assistant_completion_char_start(
+                full_text,
+                target,
+                tokenizer=tokenizer,
+                tools=tools,
+            )
+            completion_start = completion_start_token_index(
+                tokenizer,
+                full_text,
+                full_enc,
+                completion_char_start=completion_char_start,
+            )
+            completion_len = len(full_ids) - completion_start
             if completion_len <= 0:
                 raise ValueError(
                     f"Non-positive completion length in {split_name}; inspect sample rendering."
@@ -1008,15 +1180,15 @@ def build_processed_split(
                     truncated = True
                 else:
                     keep_prompt = max_seq_length - completion_len
-                    slice_start = orig_length - (keep_prompt + completion_len)
+                    slice_start = completion_start - keep_prompt
                     input_ids = full_ids[slice_start:]
-                    completion_mask = [0] * keep_prompt + [1] * completion_len
+                    completion_mask = [0] * (completion_start - slice_start) + [1] * completion_len
                     stats.prompt_trimmed += 1
                     truncated = True
             else:
                 slice_start = 0
                 input_ids = full_ids
-                completion_mask = [0] * len(prompt_ids) + [1] * completion_len
+                completion_mask = [0] * completion_start + [1] * completion_len
 
             slice_stop = slice_start + len(input_ids)
             attention_mask = [1] * len(input_ids)
@@ -1043,6 +1215,7 @@ def build_processed_split(
                 "case_path": extract_case_path(history),
                 "was_truncated": truncated,
                 "text": full_text,  # kept for debugging/preview only
+                "_tools_for_sanity": tools,
             }
 
             if side_inputs.need_token_type_ids:
@@ -1157,7 +1330,8 @@ def warn_on_schema_mismatch(raw_ds) -> None:
 def records_to_dataset(records: list[dict[str, Any]]):
     from datasets import Dataset
 
-    columns: dict[str, list[Any]] = {key: [r[key] for r in records] for key in records[0].keys()}
+    public_keys = [key for key in records[0].keys() if not key.startswith("_")]
+    columns: dict[str, list[Any]] = {key: [r[key] for r in records] for key in public_keys}
     return Dataset.from_dict(columns)
 
 
@@ -1177,27 +1351,16 @@ def build_generation_inputs(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None,
     model: Any,
+    inject_empty_thought_channel: bool,
 ) -> dict[str, torch.Tensor]:
-    template_kwargs: dict[str, Any] = {
-        "add_generation_prompt": True,
-        "return_tensors": "pt",
-        "return_dict": True,
-        "enable_thinking": False,
-    }
-    if tools is not None:
-        template_kwargs["tools"] = tools
-
-    try:
-        inputs = tokenizer.apply_chat_template(messages, **template_kwargs)
-    except TypeError:
-        prompt = render_text(tokenizer, messages, tools, add_generation_prompt=True)
-        inputs = tokenize_text(tokenizer, prompt, return_tensors="pt")
-    except Exception:
-        prompt = render_text(tokenizer, messages, tools, add_generation_prompt=True)
-        inputs = tokenize_text(tokenizer, prompt, return_tensors="pt")
-
-    if isinstance(inputs, str):
-        inputs = tokenize_text(tokenizer, inputs, return_tensors="pt")
+    prompt = render_training_text(
+        tokenizer,
+        messages,
+        tools,
+        add_generation_prompt=True,
+        inject_empty_thought_channel=inject_empty_thought_channel,
+    )
+    inputs = tokenize_text(tokenizer, prompt, return_tensors="pt")
 
     if not hasattr(inputs, "items"):
         raise ValueError(f"Unexpected chat-template output type: {type(inputs).__name__}")
@@ -1215,15 +1378,101 @@ def build_generation_inputs(
 
 def strip_leading_thought_blocks(text: str) -> str:
     remaining = text.lstrip()
-    while remaining.startswith(GEMMA_THOUGHT_OPEN):
-        remaining = remaining[len(GEMMA_THOUGHT_OPEN):]
-        if remaining.startswith("\n"):
-            remaining = remaining[1:]
-        close_index = remaining.find(GEMMA_CHANNEL_CLOSE)
-        if close_index == -1:
-            break
-        remaining = remaining[close_index + len(GEMMA_CHANNEL_CLOSE):].lstrip()
+    while True:
+        model_turn_prefix = f"{GEMMA_TURN_OPEN}model\n"
+        if remaining.startswith(model_turn_prefix):
+            remaining = remaining[len(model_turn_prefix):].lstrip()
+            continue
+
+        if remaining.startswith(GEMMA_THOUGHT_OPEN):
+            remaining = remaining[len(GEMMA_THOUGHT_OPEN):]
+            if remaining.startswith("\n"):
+                remaining = remaining[1:]
+            close_index = remaining.find(GEMMA_CHANNEL_CLOSE)
+            if close_index == -1:
+                break
+            remaining = remaining[close_index + len(GEMMA_CHANNEL_CLOSE):].lstrip()
+            continue
+
+        if remaining.startswith(GEMMA_THINK_OPEN):
+            remaining = remaining[len(GEMMA_THINK_OPEN):].lstrip()
+            thought_end_markers = (
+                GEMMA_TOOL_CALL_OPEN,
+                '{"verdict"',
+                '{"tool_name"',
+                GEMMA_TURN_OPEN,
+                GEMMA_TURN_CLOSE,
+                GEMMA_THOUGHT_OPEN,
+            )
+            marker_positions = [
+                remaining.find(marker)
+                for marker in thought_end_markers
+                if remaining.find(marker) != -1
+            ]
+            if marker_positions:
+                remaining = remaining[min(marker_positions):].lstrip()
+            continue
+
+        break
     return remaining
+
+
+def expected_tool_call_prefixes(
+    tokenizer: Any,
+    tools: list[dict[str, Any]] | None,
+    tool_name: str,
+) -> tuple[str, ...]:
+    cache_key = (id(tokenizer), tool_name)
+    cached = _TOOL_CALL_PREFIX_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    prefixes: list[str] = [
+        f'{GEMMA_TOOL_CALL_OPEN}call:{tool_name}',
+        f'{{"tool_name":"{tool_name}"',
+        f'{{"tool_name": "{tool_name}"',
+    ]
+
+    probe_history = [{"role": "user", "content": "probe"}]
+    probe_completion = probe_history + [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "arguments": {"case_path": "case14"},
+                    },
+                }
+            ],
+        }
+    ]
+    try:
+        prompt_text = render_text(tokenizer, probe_history, tools, add_generation_prompt=True)
+        full_text = render_text(tokenizer, probe_completion, tools, add_generation_prompt=False)
+        completion = full_text[len(prompt_text):] if full_text.startswith(prompt_text) else full_text
+        completion = strip_leading_thought_blocks(completion).lstrip()
+        tool_name_index = completion.find(tool_name)
+        if tool_name_index != -1:
+            prefixes.insert(0, completion[: tool_name_index + len(tool_name)])
+    except Exception:
+        pass
+
+    ordered = tuple(dict.fromkeys(prefix for prefix in prefixes if prefix))
+    _TOOL_CALL_PREFIX_CACHE[cache_key] = ordered
+    return ordered
+
+
+def matches_expected_tool_call(
+    candidate: str,
+    *,
+    tokenizer: Any,
+    tools: list[dict[str, Any]] | None,
+    tool_name: str,
+) -> bool:
+    stripped_candidate = strip_leading_thought_blocks(candidate).lstrip()
+    return any(stripped_candidate.startswith(prefix) for prefix in expected_tool_call_prefixes(tokenizer, tools, tool_name))
 
 
 def completion_token_ids(record: dict[str, Any]) -> list[int]:
@@ -1255,9 +1504,17 @@ def run_mask_alignment_sanity_check(records: list[dict[str, Any]], tokenizer: An
             expected_tool = record.get("expected_tool_name")
             if not isinstance(expected_tool, str) or not expected_tool:
                 raise ValueError("Tool-call record is missing expected_tool_name for sanity checking.")
-            expected_prefix = f"{GEMMA_TOOL_CALL_OPEN}call:{expected_tool}"
-            passed = candidate.startswith(expected_prefix)
-            expected_label = expected_prefix
+            record_tools = record.get("_tools_for_sanity")
+            if not isinstance(record_tools, list):
+                record_tools = DEFAULT_POWER_TOOLS
+            expected_prefixes = expected_tool_call_prefixes(tokenizer, record_tools, expected_tool)
+            passed = matches_expected_tool_call(
+                candidate,
+                tokenizer=tokenizer,
+                tools=record_tools,
+                tool_name=expected_tool,
+            )
+            expected_label = " or ".join(repr(prefix) for prefix in expected_prefixes)
         else:
             expected_prefix = '{"verdict"'
             passed = candidate.startswith(expected_prefix)
@@ -1307,6 +1564,7 @@ def collect_first_turn_sanity_examples(
     default_tools: list[dict[str, Any]] | None,
     preserve_system_text: bool,
     phase_gated_prompt: bool,
+    phase_role: str,
     sample_count: int,
 ) -> list[dict[str, Any]]:
     examples: list[dict[str, Any]] = []
@@ -1345,6 +1603,7 @@ def collect_first_turn_sanity_examples(
             target_kind="tool_call",
             assistant_turn_index=0,
             enabled=phase_gated_prompt,
+            phase_role=phase_role,
         )
         history = phase_messages[:-1]
         examples.append(
@@ -1370,6 +1629,8 @@ def run_post_train_sanity_check(
     default_tools: list[dict[str, Any]] | None,
     preserve_system_text: bool,
     phase_gated_prompt: bool,
+    phase_role: str,
+    inject_empty_thought_channel: bool,
     sample_count: int,
     max_new_tokens: int,
 ) -> int:
@@ -1378,6 +1639,7 @@ def run_post_train_sanity_check(
         default_tools=default_tools,
         preserve_system_text=preserve_system_text,
         phase_gated_prompt=phase_gated_prompt,
+        phase_role=phase_role,
         sample_count=sample_count,
     )
     if not examples:
@@ -1389,7 +1651,13 @@ def run_post_train_sanity_check(
     failures = 0
 
     for index, example in enumerate(examples, start=1):
-        model_inputs = build_generation_inputs(tokenizer, example["history"], example["tools"], model)
+        model_inputs = build_generation_inputs(
+            tokenizer,
+            example["history"],
+            example["tools"],
+            model,
+            inject_empty_thought_channel=inject_empty_thought_channel,
+        )
         input_len = int(model_inputs["input_ids"].shape[-1])
         with torch.inference_mode():
             output_ids = model.generate(
@@ -1400,10 +1668,16 @@ def run_post_train_sanity_check(
             )
         generated_text = decode_token_ids(tokenizer, output_ids[0][input_len:])
         candidate = strip_leading_thought_blocks(generated_text).lstrip()
-        expected_prefix = f"{GEMMA_TOOL_CALL_OPEN}call:{example['expected_tool']}"
-        passed = candidate.startswith(expected_prefix)
+        expected_prefixes = expected_tool_call_prefixes(tokenizer, example["tools"], example["expected_tool"])
+        passed = matches_expected_tool_call(
+            candidate,
+            tokenizer=tokenizer,
+            tools=example["tools"],
+            tool_name=example["expected_tool"],
+        )
         case_label = example["case_path"] or f"row{example['row_index']}"
         print(f"[sanity {index}/{len(examples)}] case={case_label} expected={example['expected_tool']} pass={passed}")
+        print(f"  expected_prefixes={expected_prefixes}")
         print(f"  output={candidate[:240]!r}")
         if not passed:
             failures += 1
@@ -1499,6 +1773,11 @@ def main(argv: list[str] | None = None) -> int:
     train_file = resolve_dataset_path(args.train_file, "train", required=True)
     valid_file = resolve_dataset_path(args.valid_file, "validation", required=False)
     if not args.model_revision:
+        if args.require_pinned_model_revision:
+            raise ValueError(
+                "--model-revision must be set explicitly for Gemma 4 SFT runs to avoid chat-template drift. "
+                "Pass --allow-unpinned-model-revision only if you intentionally want floating upstream behavior."
+            )
         print(
             "WARNING: --model-revision is not pinned. Gemma 4 chat-template and function-calling behavior can drift "
             "across upstream revisions.",
@@ -1534,7 +1813,10 @@ def main(argv: list[str] | None = None) -> int:
         model.print_trainable_parameters()
 
     side_inputs = infer_side_input_plan(model, tokenizer, args.model_name)
+    phase_role = phase_instruction_role(tokenizer)
     print(f"Gemma side-input plan: {side_inputs.as_dict()}")
+    print(f"Phase-gating role: {phase_role}")
+    print(f"Inject empty thought channel: {args.inject_empty_thought_channel}")
 
     data_files = {"train": train_file}
     if valid_file and has_nonempty_jsonl(valid_file):
@@ -1564,6 +1846,8 @@ def main(argv: list[str] | None = None) -> int:
         side_inputs=side_inputs,
         preserve_system_text=args.preserve_system_text,
         phase_gated_prompt=args.phase_gated_prompt,
+        phase_role=phase_role,
+        inject_empty_thought_channel=args.inject_empty_thought_channel,
     )
     run_mask_alignment_sanity_check(train_records, tokenizer, args.mask_sanity_samples)
     train_dataset = records_to_dataset(train_records)
@@ -1583,6 +1867,8 @@ def main(argv: list[str] | None = None) -> int:
             side_inputs=side_inputs,
             preserve_system_text=args.preserve_system_text,
             phase_gated_prompt=args.phase_gated_prompt,
+            phase_role=phase_role,
+            inject_empty_thought_channel=args.inject_empty_thought_channel,
         )
         eval_dataset = records_to_dataset(eval_records)
         report_dataset(eval_records, "validation", eval_stats, args.max_seq_length)
@@ -1669,6 +1955,8 @@ def main(argv: list[str] | None = None) -> int:
             default_tools=default_tools,
             preserve_system_text=args.preserve_system_text,
             phase_gated_prompt=args.phase_gated_prompt,
+            phase_role=phase_role,
+            inject_empty_thought_channel=args.inject_empty_thought_channel,
             sample_count=args.sanity_check_samples,
             max_new_tokens=args.sanity_check_max_new_tokens,
         )
