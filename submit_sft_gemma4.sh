@@ -175,7 +175,7 @@ trap 'forward_signal TERM' TERM
 
 # ── Train ──────────────────────────────────────────────────────────────────
 if [[ -z "$MODEL_REVISION" && "$ALLOW_UNPINNED_MODEL_REVISION" != "1" ]]; then
-    echo "ERROR: MODEL_REVISION is required by gpt_oss_power_sft_revised.py to pin the Gemma 4 chat template." >&2
+    echo "ERROR: MODEL_REVISION is required by gpt_oss_power_sft_revised_v2.py to pin the Gemma 4 chat template." >&2
     echo "Set MODEL_REVISION=<hf commit/tag> before sbatch, or set ALLOW_UNPINNED_MODEL_REVISION=1 to opt into floating upstream behavior." >&2
     exit 2
 fi
@@ -207,7 +207,7 @@ else
     EMPTY_THOUGHT_ARGS+=(--inject-empty-thought-channel)
 fi
 
-$PYTHON gpt_oss_power_sft_revised.py \
+$PYTHON gpt_oss_power_sft_revised_v2.py \
     --train-file "$TRAIN_FILE" \
     --valid-file "$VALID_FILE" \
     --model-name "$MODEL_NAME" \
