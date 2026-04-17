@@ -56,6 +56,8 @@ GEMMA_THOUGHT_OPEN = "<|channel>thought"
 GEMMA_CHANNEL_CLOSE = "<channel|>"
 GEMMA_QUOTE_TOKEN = '<|"|>'
 FINAL_JSON_SCHEMA_MARKER = "Return only strict JSON with this structure:"
+PROSE_TOOL_CATALOG_MARKER = "Available tools:"
+DECISION_POLICY_MARKER = "Decision policy:"
 FIRST_TOOL_PHASE_MESSAGE = (
     "Current phase: first tool selection.\n"
     "Before any tool response exists, emit exactly one native Gemma tool call and nothing else.\n"
@@ -79,6 +81,176 @@ TOOL_MAP = {
     "correct_topology_from_path": correct_topology_from_path,
     "run_hse_from_path": run_hse_from_path,
 }
+
+
+def maybe_parse_json_string(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if not stripped or stripped[0] not in "[{":
+        return value
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        return value
+
+
+def normalize_message_content(value: Any, *, parse_json_strings: bool) -> Any:
+    if value is None:
+        return ""
+    parsed = maybe_parse_json_string(value) if parse_json_strings else value
+    if isinstance(parsed, (dict, list)):
+        return parsed
+    if isinstance(parsed, str):
+        return parsed
+    return json.dumps(parsed, ensure_ascii=False)
+
+
+def normalize_assistant_tool_responses(tool_responses: Any) -> list[dict[str, Any]] | Any:
+    if not isinstance(tool_responses, list):
+        return tool_responses
+
+    normalized: list[dict[str, Any]] = []
+    for tool_response in tool_responses:
+        item = copy.deepcopy(tool_response)
+        if not isinstance(item, dict):
+            normalized.append(
+                {
+                    "name": "unknown",
+                    "response": normalize_message_content(item, parse_json_strings=True),
+                }
+            )
+            continue
+
+        fixed = dict(item)
+        response_value = None
+        for key in ("response", "result", "content"):
+            if key in fixed:
+                response_value = fixed.get(key)
+                break
+        if response_value is not None:
+            fixed["response"] = normalize_message_content(response_value, parse_json_strings=True)
+        for stale_key in ("result", "content"):
+            fixed.pop(stale_key, None)
+
+        if not isinstance(fixed.get("name"), str) or not fixed.get("name"):
+            for alt_key in ("tool_name", "function_name"):
+                alt_value = fixed.get(alt_key)
+                if isinstance(alt_value, str) and alt_value:
+                    fixed["name"] = alt_value
+                    break
+        fixed.setdefault("name", "unknown")
+        normalized.append(fixed)
+    return normalized
+
+
+def normalize_tool_role_content(value: Any) -> Any:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        if all(isinstance(part, dict) and "type" in part for part in value):
+            return value
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except TypeError:
+            return str(value)
+    if isinstance(value, dict):
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except TypeError:
+            return str(value)
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except TypeError:
+        return str(value)
+
+
+def strip_prose_tool_catalog(text: Any) -> Any:
+    if not isinstance(text, str):
+        return text
+    start = text.find(PROSE_TOOL_CATALOG_MARKER)
+    if start == -1:
+        return text
+    end = text.find(DECISION_POLICY_MARKER, start)
+    if end == -1:
+        return text
+    before = text[:start].rstrip()
+    after = text[end:].lstrip()
+    if before and after:
+        return f"{before}\n\n{after}"
+    return before or after
+
+
+def strip_prose_tool_catalog_from_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    stripped: list[dict[str, Any]] = []
+    for raw_message in messages:
+        message = copy.deepcopy(raw_message)
+        if message.get("role") in {"system", "developer"}:
+            message["content"] = strip_prose_tool_catalog(message.get("content"))
+        stripped.append(message)
+    return stripped
+
+
+def resolve_tool_response_name(tool_message: dict[str, Any], assistant_tool_calls: list[dict[str, Any]]) -> str:
+    explicit_name = tool_message.get("name")
+    if isinstance(explicit_name, str) and explicit_name:
+        return explicit_name
+
+    tool_call_id = tool_message.get("tool_call_id")
+    if isinstance(tool_call_id, str) and tool_call_id:
+        for tool_call in assistant_tool_calls:
+            if tool_call.get("id") != tool_call_id:
+                continue
+            function_info = tool_call.get("function")
+            if isinstance(function_info, dict):
+                resolved_name = function_info.get("name")
+                if isinstance(resolved_name, str) and resolved_name:
+                    return resolved_name
+    return "unknown"
+
+
+def collapse_openai_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    collapsed: list[dict[str, Any]] = []
+    cursor = 0
+    while cursor < len(messages):
+        message = copy.deepcopy(messages[cursor])
+        role = message.get("role")
+        tool_calls = message.get("tool_calls")
+
+        if role == "assistant" and isinstance(tool_calls, list) and tool_calls:
+            merged_tool_responses = normalize_assistant_tool_responses(message.get("tool_responses") or [])
+            if not isinstance(merged_tool_responses, list):
+                merged_tool_responses = []
+
+            scan = cursor + 1
+            found_following_tool = False
+            while scan < len(messages) and messages[scan].get("role") == "tool":
+                tool_message = messages[scan]
+                merged_tool_responses.append(
+                    {
+                        "name": resolve_tool_response_name(tool_message, tool_calls),
+                        "response": normalize_message_content(
+                            tool_message.get("content", ""),
+                            parse_json_strings=True,
+                        ),
+                    }
+                )
+                found_following_tool = True
+                scan += 1
+
+            if found_following_tool:
+                message["tool_responses"] = normalize_assistant_tool_responses(merged_tool_responses)
+                collapsed.append(message)
+                cursor = scan
+                continue
+
+        if role == "tool":
+            message["content"] = normalize_tool_role_content(message.get("content", ""))
+        collapsed.append(message)
+        cursor += 1
+    return collapsed
 
 
 def parse_args() -> argparse.Namespace:
@@ -202,10 +374,12 @@ def normalize_gemma_messages(messages: list[dict[str, Any]]) -> list[dict[str, A
         if role is None:
             continue
 
-        if "content" in msg:
-            msg["content"] = normalize_instruction_content(role, msg.get("content"))
-        if "content" in msg and not isinstance(msg["content"], str):
-            msg["content"] = json.dumps(msg["content"], ensure_ascii=False)
+        if role in {"system", "developer"}:
+            content = msg.get("content", "")
+            content = normalize_instruction_content(role, content)
+            if not isinstance(content, str):
+                content = json.dumps(content, ensure_ascii=False)
+            msg["content"] = content
 
         if role == "assistant":
             tool_calls = msg.get("tool_calls")
@@ -227,16 +401,17 @@ def normalize_gemma_messages(messages: list[dict[str, Any]]) -> list[dict[str, A
                         tc["function"] = function_info
                     fixed_calls.append(tc)
                 msg["tool_calls"] = fixed_calls
-                msg.pop("content", None)
             else:
                 msg.pop("tool_calls", None)
-                msg.setdefault("content", "")
+            tool_responses = msg.get("tool_responses")
+            if tool_responses is not None:
+                msg["tool_responses"] = normalize_assistant_tool_responses(tool_responses)
+            if "content" in msg or (not msg.get("tool_calls") and not msg.get("tool_responses")):
+                msg["content"] = normalize_message_content(msg.get("content", ""), parse_json_strings=False)
         elif role == "tool":
-            msg.setdefault("content", "")
-            if not isinstance(msg["content"], str):
-                msg["content"] = json.dumps(msg["content"], ensure_ascii=False)
+            msg["content"] = normalize_tool_role_content(msg.get("content", ""))
         elif role in {"user", "system", "developer"}:
-            msg.setdefault("content", "")
+            msg["content"] = normalize_message_content(msg.get("content", ""), parse_json_strings=False)
 
         normalized.append(msg)
     return normalized
@@ -273,8 +448,29 @@ def apply_phase_gating(messages: list[dict[str, Any]], phase: str) -> list[dict[
         )
     else:
         phase_message = FINAL_PHASE_MESSAGE
-    gated.append({"role": "developer", "content": phase_message})
-    return gated
+
+    merged: list[dict[str, Any]] = []
+    merged_phase_instruction = False
+    for message in gated:
+        role = message.get("role")
+        if role == "developer":
+            message["role"] = "system"
+            role = "system"
+
+        if not merged_phase_instruction and role == "system":
+            content = message.get("content", "")
+            if not isinstance(content, str):
+                content = json.dumps(content, ensure_ascii=False)
+            if phase_message not in content:
+                content = f"{content.rstrip()}\n\n{phase_message}".strip() if content else phase_message
+            message["content"] = content
+            merged_phase_instruction = True
+
+        merged.append(message)
+
+    if not merged_phase_instruction:
+        merged.insert(0, {"role": "system", "content": phase_message})
+    return merged
 
 
 def build_model_inputs(
@@ -287,7 +483,10 @@ def build_model_inputs(
     enable_thinking: bool,
     phase: str,
 ) -> tuple[dict[str, Any], bool]:
-    rendered_conversation = normalize_gemma_messages(apply_phase_gating(conversation, phase))
+    rendered_conversation = collapse_openai_tool_messages(copy.deepcopy(conversation))
+    if tools is not None:
+        rendered_conversation = strip_prose_tool_catalog_from_messages(rendered_conversation)
+    rendered_conversation = normalize_gemma_messages(apply_phase_gating(rendered_conversation, phase))
 
     template_kwargs: dict[str, Any] = {
         "add_generation_prompt": True,
