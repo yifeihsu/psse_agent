@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=gpt_oss_eval
+#SBATCH --job-name=gemma4_eval
 #SBATCH --output=/scratch/yx3882/psse_agent/logs/eval_%j.log
 #SBATCH --error=/scratch/yx3882/psse_agent/logs/eval_%j.err
 #SBATCH --chdir=/scratch/yx3882/psse_agent
@@ -32,17 +32,22 @@ REPO_ROOT=/scratch/yx3882/psse_agent
 LOG_DIR=$REPO_ROOT/logs
 CACHE_ROOT=/scratch/yx3882/.cache
 
-ADAPTER_PATH=${ADAPTER_PATH:-harshith0214/psse-agent-gpt-oss-20b}
+ADAPTER_PATH=${ADAPTER_PATH:-outputs/gemma4_power_agent/lora}
 TEST_FILE=${TEST_FILE:-out_traces_balanced/sft_traces.test.jsonl}
+MODEL_REVISION=${MODEL_REVISION:-d722512f8f1e4ef6629c1b24d16d65295c8c945e}
 MAX_SAMPLES=${MAX_SAMPLES:-}
-MAX_TURNS=${MAX_TURNS:-8}
-MAX_NEW_TOKENS=${MAX_NEW_TOKENS:-12000}
-MAX_SEQ_LENGTH=${MAX_SEQ_LENGTH:-16384}
-OUTPUT_FILE=${OUTPUT_FILE:-outputs/gpt_oss_sft_power_agent/eval_${SLURM_JOB_ID}.jsonl}
+MAX_TURNS=${MAX_TURNS:-6}
+MAX_NEW_TOKENS=${MAX_NEW_TOKENS:-1024}
+MAX_SEQ_LENGTH=${MAX_SEQ_LENGTH:-4096}
+OUTPUT_FILE=${OUTPUT_FILE:-outputs/gemma4_power_agent/eval_${SLURM_JOB_ID}.jsonl}
 VERBOSE=${VERBOSE:-1}
 CONTINUE_ON_TOOL_ERROR=${CONTINUE_ON_TOOL_ERROR:-0}
 SMOKE=${SMOKE:-0}
 SMOKE_SAMPLES=${SMOKE_SAMPLES:-20}
+INCLUDE_TOOL_SCHEMAS=${INCLUDE_TOOL_SCHEMAS:-1}
+INJECT_EMPTY_THOUGHT_CHANNEL=${INJECT_EMPTY_THOUGHT_CHANNEL:-1}
+LOAD_IN_4BIT=${LOAD_IN_4BIT:-0}
+LOAD_IN_16BIT=${LOAD_IN_16BIT:-1}
 EXTRA_EVAL_ARGS=${EXTRA_EVAL_ARGS:-}
 
 mkdir -p "$LOG_DIR"
@@ -57,6 +62,7 @@ export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:Tr
 export HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER:-1}
 
 cd "$REPO_ROOT"
+mkdir -p "$(dirname "$OUTPUT_FILE")"
 
 if [[ "$SMOKE" == "1" && -z "$MAX_SAMPLES" ]]; then
   MAX_SAMPLES="$SMOKE_SAMPLES"
@@ -69,8 +75,15 @@ echo "env python: $PYTHON"
 echo "adapter: $ADAPTER_PATH"
 echo "test file: $TEST_FILE"
 echo "output: $OUTPUT_FILE"
+echo "model revision: ${MODEL_REVISION:-UNPINNED}"
 echo "smoke mode: $SMOKE"
 echo "max samples: ${MAX_SAMPLES:-ALL}"
+echo "max turns: $MAX_TURNS"
+echo "max new tokens: $MAX_NEW_TOKENS"
+echo "max seq length: $MAX_SEQ_LENGTH"
+echo "include tool schemas: $INCLUDE_TOOL_SCHEMAS"
+echo "inject empty thought: $INJECT_EMPTY_THOUGHT_CHANNEL"
+echo "load_in_4bit/load_in_16bit: $LOAD_IN_4BIT / $LOAD_IN_16BIT"
 echo "slurm gres: ${SLURM_JOB_GRES:-unknown}"
 echo "cuda visible devices: ${CUDA_VISIBLE_DEVICES:-unset}"
 $PYTHON -V
@@ -105,7 +118,7 @@ PY
 echo "==========================="
 
 ARGS=(
-  eval_sft_agent_revised.py
+  eval_sft_agent_gemma_v2.py
   --adapter "$ADAPTER_PATH"
   --test-file "$TEST_FILE"
   --max-turns "$MAX_TURNS"
@@ -113,6 +126,10 @@ ARGS=(
   --max-seq-length "$MAX_SEQ_LENGTH"
   --output "$OUTPUT_FILE"
 )
+
+if [[ -n "$MODEL_REVISION" ]]; then
+  ARGS+=(--model-revision "$MODEL_REVISION")
+fi
 
 if [[ -n "$MAX_SAMPLES" ]]; then
   ARGS+=(--max-samples "$MAX_SAMPLES")
@@ -124,6 +141,30 @@ fi
 
 if [[ "$CONTINUE_ON_TOOL_ERROR" == "1" ]]; then
   ARGS+=(--continue-on-tool-error)
+fi
+
+if [[ "$INCLUDE_TOOL_SCHEMAS" == "1" ]]; then
+  ARGS+=(--include-tool-schemas)
+else
+  ARGS+=(--no-include-tool-schemas)
+fi
+
+if [[ "$INJECT_EMPTY_THOUGHT_CHANNEL" == "1" ]]; then
+  ARGS+=(--inject-empty-thought-channel)
+else
+  ARGS+=(--no-inject-empty-thought-channel)
+fi
+
+if [[ "$LOAD_IN_4BIT" == "1" ]]; then
+  ARGS+=(--load-in-4bit)
+else
+  ARGS+=(--no-load-in-4bit)
+fi
+
+if [[ "$LOAD_IN_16BIT" == "1" ]]; then
+  ARGS+=(--load-in-16bit)
+else
+  ARGS+=(--no-load-in-16bit)
 fi
 
 if [[ -n "$EXTRA_EVAL_ARGS" ]]; then
