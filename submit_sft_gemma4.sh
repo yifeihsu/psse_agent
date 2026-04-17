@@ -97,7 +97,7 @@ GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -n1 | sed 's
 GPU_MEM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n1 | tr -d ' ')
 GPU_PROFILE_SELECTED=$GPU_PROFILE
 if [[ "$GPU_PROFILE" == "auto" ]]; then
-    if [[ ( "$GPU_NAME" == *"A100"* || "$GPU_NAME" == *"H100"* || "$GPU_NAME" == *"H200"* ) && "${GPU_MEM_MB:-0}" -ge 70000 ]]; then
+    if [[ ( "$GPU_NAME" == *"A100"* || "$GPU_NAME" == *"H100"* || "$GPU_NAME" == *"H200"* || "$GPU_NAME" == *"RTX PRO 6000"* ) && "${GPU_MEM_MB:-0}" -ge 70000 ]]; then
         GPU_PROFILE_SELECTED="highmem-accelerator"
         set_default_if_unset MAX_SEQ_LENGTH 6144
         set_default_if_unset PER_DEVICE_TRAIN_BATCH_SIZE 2
