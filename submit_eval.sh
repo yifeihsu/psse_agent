@@ -40,7 +40,12 @@ export HF_DATASETS_CACHE=/scratch/hk4488/.cache/huggingface/datasets
 export TORCH_HOME=/scratch/hk4488/.cache/torch
 export WANDB_PROJECT="psse-agent-sft"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export WANDB_API_KEY="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"
+
+# Load WANDB key from file
+if [ -f /home/hk4488/.wandb_api_key ]; then
+    export WANDB_API_KEY=$(cat /home/hk4488/.wandb_api_key)
+fi
+# WANDB_API_KEY loaded from ~/.wandb_api_key (see submit scripts)
 
 # ── Diagnostics ────────────────────────────────────────────────────────────
 echo "===== Job diagnostics ====="
