@@ -17,6 +17,7 @@ import re
 import sys
 import uuid
 from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -276,6 +277,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Cap on the number of samples to evaluate",
+    )
+    p.add_argument(
+        "--concurrent-conversations",
+        type=int,
+        default=1,
+        help="Number of conversations to advance together in one batched generation step.",
     )
     p.add_argument(
         "--max-turns",
@@ -1033,6 +1040,304 @@ def compact_tool_arguments_for_prompt(tool_name: str, arguments: dict[str, Any])
     return {key: value for key, value in arguments.items() if key in keep_keys and value is not None}
 
 
+@dataclass
+class EvalSampleState:
+    sample_index: int
+    messages_gt: list[dict[str, Any]]
+    runtime_context: Mapping[str, Any] | None
+    gt_verdict: dict[str, Any] | None
+    conversation: list[dict[str, Any]]
+    meta: dict[str, Any]
+    index_map: dict[str, Any]
+    hidden_context: dict[str, Any]
+    tool_calls_made: list[str] = field(default_factory=list)
+    parse_notes: list[str] = field(default_factory=list)
+    predicted_verdict: dict[str, Any] | None = None
+    error_msg: str | None = None
+    input_truncated: bool = False
+    last_raw_generation: str | None = None
+    wls_completed_successfully: bool = False
+    turn_trace: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def finished(self) -> bool:
+        return self.error_msg is not None or self.predicted_verdict is not None
+
+
+def init_eval_sample_state(
+    sample_index: int,
+    messages_gt: list[dict[str, Any]],
+    runtime_context: Mapping[str, Any] | None,
+) -> EvalSampleState:
+    gt_verdict = normalize_verdict(extract_ground_truth(messages_gt))
+    conversation = extract_prompt_prefix(messages_gt)
+    meta, index_map = extract_conversation_context(messages_gt)
+    hidden_context = dict(runtime_context or {})
+    return EvalSampleState(
+        sample_index=sample_index,
+        messages_gt=messages_gt,
+        runtime_context=runtime_context,
+        gt_verdict=gt_verdict,
+        conversation=conversation,
+        meta=meta,
+        index_map=index_map,
+        hidden_context=hidden_context,
+    )
+
+
+def build_result_from_state(state: EvalSampleState) -> dict[str, Any]:
+    gt_family = state.gt_verdict.get("verdict", {}).get("error_family") if state.gt_verdict else None
+    pred_family = state.predicted_verdict.get("verdict", {}).get("error_family") if state.predicted_verdict else None
+
+    gt_has_error = state.gt_verdict.get("verdict", {}).get("has_error") if state.gt_verdict else None
+    pred_has_error = state.predicted_verdict.get("verdict", {}).get("has_error") if state.predicted_verdict else None
+
+    return {
+        "gt_error_family": gt_family,
+        "pred_error_family": pred_family,
+        "gt_has_error": gt_has_error,
+        "pred_has_error": pred_has_error,
+        "family_correct": gt_family == pred_family,
+        "detection_correct": gt_has_error == pred_has_error,
+        "tool_calls": state.tool_calls_made,
+        "num_turns": len(state.tool_calls_made) + (1 if state.predicted_verdict else 0),
+        "predicted_verdict": state.predicted_verdict,
+        "error": state.error_msg,
+        "input_truncated": state.input_truncated,
+        "parse_notes": state.parse_notes,
+        "last_raw_generation": state.last_raw_generation,
+        "required_wls_satisfied": state.wls_completed_successfully,
+        "turn_trace": state.turn_trace,
+        "final_conversation": state.conversation,
+    }
+
+
+def build_critical_error_result(messages_gt: list[dict[str, Any]], exc: Exception) -> dict[str, Any]:
+    gt_verdict = normalize_verdict(extract_ground_truth(messages_gt))
+    return {
+        "gt_error_family": gt_verdict.get("verdict", {}).get("error_family") if gt_verdict else None,
+        "pred_error_family": None,
+        "gt_has_error": gt_verdict.get("verdict", {}).get("has_error") if gt_verdict else None,
+        "pred_has_error": None,
+        "family_correct": False,
+        "detection_correct": False,
+        "tool_calls": [],
+        "num_turns": 0,
+        "predicted_verdict": None,
+        "error": f"CRITICAL ERROR: {exc}",
+        "input_truncated": False,
+        "parse_notes": [],
+        "last_raw_generation": None,
+    }
+
+
+def resolve_pad_token_id(tokenizer: Any) -> int | None:
+    pad_token_id = getattr(tokenizer, "pad_token_id", None)
+    if pad_token_id is None:
+        eos_id = getattr(tokenizer, "eos_token_id", None)
+        if isinstance(eos_id, list):
+            pad_token_id = eos_id[0]
+        else:
+            pad_token_id = eos_id
+    return pad_token_id
+
+
+def pad_model_inputs_for_batch(
+    model_inputs_list: list[dict[str, Any]],
+    *,
+    pad_token_id: int | None,
+) -> tuple[dict[str, Any], int]:
+    import torch
+
+    max_len = max(model_inputs["input_ids"].shape[-1] for model_inputs in model_inputs_list)
+    device = model_inputs_list[0]["input_ids"].device
+    dtype = model_inputs_list[0]["input_ids"].dtype
+    effective_pad_token_id = 0 if pad_token_id is None else pad_token_id
+
+    batch_size = len(model_inputs_list)
+    batched_input_ids = torch.full(
+        (batch_size, max_len),
+        effective_pad_token_id,
+        dtype=dtype,
+        device=device,
+    )
+
+    has_attention = any("attention_mask" in model_inputs for model_inputs in model_inputs_list)
+    batched_attention_mask = None
+    if has_attention:
+        batched_attention_mask = torch.zeros(
+            (batch_size, max_len),
+            dtype=model_inputs_list[0].get("attention_mask", model_inputs_list[0]["input_ids"]).dtype,
+            device=device,
+        )
+
+    for row_index, model_inputs in enumerate(model_inputs_list):
+        input_ids = model_inputs["input_ids"][0]
+        length = input_ids.shape[-1]
+        batched_input_ids[row_index, -length:] = input_ids
+        if batched_attention_mask is not None:
+            attention_mask = model_inputs.get("attention_mask")
+            if attention_mask is None:
+                batched_attention_mask[row_index, -length:] = 1
+            else:
+                batched_attention_mask[row_index, -length:] = attention_mask[0]
+
+    batched_inputs = {"input_ids": batched_input_ids}
+    if batched_attention_mask is not None:
+        batched_inputs["attention_mask"] = batched_attention_mask
+    return batched_inputs, max_len
+
+
+def run_state_turn(
+    state: EvalSampleState,
+    *,
+    turn_index0: int,
+    response_text: str,
+    token_count: int,
+    was_truncated: bool,
+    turn_max_new_tokens: int,
+    tokenizer: Any,
+    continue_on_tool_error: bool,
+    repair_wls_from_user: bool,
+    verbose: bool,
+) -> None:
+    state.last_raw_generation = response_text
+    turn_record: dict[str, Any] = {
+        "turn": turn_index0 + 1,
+        "raw_generation": response_text,
+        "prompt_truncated": was_truncated,
+        "turn_max_new_tokens": turn_max_new_tokens,
+    }
+
+    if verbose:
+        print_verbose_generation_block(
+            turn_index0 + 1,
+            token_count,
+            response_text,
+            was_truncated=was_truncated,
+        )
+
+    parsed = parse_gemma_generation(response_text, tokenizer)
+    state.parse_notes.extend(parsed.get("notes", []))
+    turn_record["parse_type"] = parsed["type"]
+    if parsed.get("notes"):
+        turn_record["parse_notes"] = list(parsed["notes"])
+    if parsed.get("thinking"):
+        turn_record["thinking"] = parsed["thinking"]
+
+    if parsed["type"] == "tool_call":
+        tool_name = parsed["name"]
+        tool_args = parsed["arguments"]
+        if repair_wls_from_user:
+            tool_args, repair_notes = repair_tool_arguments(
+                tool_name,
+                tool_args,
+                state.conversation,
+                hidden_context=state.hidden_context,
+            )
+            if repair_notes:
+                state.parse_notes.extend(repair_notes)
+                turn_record.setdefault("parse_notes", [])
+                turn_record["parse_notes"].extend(repair_notes)
+
+        if not isinstance(tool_args, dict):
+            state.error_msg = f"Parsed tool arguments are not a dict for {tool_name}: {type(tool_args).__name__}"
+            turn_record["error"] = state.error_msg
+            state.turn_trace.append(turn_record)
+            return
+
+        exec_tool_args = tool_args
+        render_tool_args = compact_tool_arguments_for_prompt(tool_name, exec_tool_args)
+        turn_record["tool_name"] = tool_name
+        turn_record["tool_arguments"] = exec_tool_args
+        turn_record["tool_arguments_for_prompt"] = render_tool_args
+
+        state.tool_calls_made.append(tool_name)
+        call_id = f"call_{tool_name}_{uuid.uuid4().hex[:8]}"
+
+        state.conversation.append(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "id": call_id,
+                        "function": {
+                            "name": tool_name,
+                            "arguments": render_tool_args,
+                        },
+                    }
+                ],
+            }
+        )
+
+        tool_result = execute_tool(
+            tool_name,
+            exec_tool_args,
+            runtime_context=state.runtime_context,
+            hidden_context=state.hidden_context,
+        )
+        turn_record["tool_result"] = tool_result
+        tool_result_for_prompt = summarize_tool_result_for_conversation(
+            tool_name,
+            tool_result,
+            state.meta,
+            state.index_map,
+        )
+        turn_record["tool_result_for_prompt"] = tool_result_for_prompt
+        state.conversation.append(
+            {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "name": tool_name,
+                "content": json.dumps(tool_result_for_prompt, ensure_ascii=False),
+            }
+        )
+
+        if verbose:
+            print(f"  -> Tool call: {tool_name}")
+            print(f"  <- Tool result: {format_preview(tool_result_for_prompt)}")
+
+        if tool_name == "wls_from_path" and tool_result.get("success") is True:
+            state.wls_completed_successfully = True
+
+        if tool_result.get("success") is False and not continue_on_tool_error:
+            state.error_msg = f"Tool {tool_name} failed: {tool_result.get('error', 'unknown error')}"
+            turn_record["error"] = state.error_msg
+            state.turn_trace.append(turn_record)
+            return
+
+        state.turn_trace.append(turn_record)
+        return
+
+    if parsed["type"] == "verdict":
+        if not state.wls_completed_successfully:
+            state.error_msg = f"Verdict before required wls_from_path at turn {turn_index0 + 1}"
+            turn_record["error"] = state.error_msg
+            turn_record["verdict"] = parsed["content"]
+            state.turn_trace.append(turn_record)
+            return
+
+        state.predicted_verdict = normalize_verdict(parsed["content"])
+        turn_record["verdict"] = parsed["content"]
+        state.conversation.append(
+            {
+                "role": "assistant",
+                "content": json.dumps(parsed["content"], ensure_ascii=False),
+            }
+        )
+        if verbose:
+            print("  -> Final verdict:")
+            print(f"  {format_preview(parsed['content'], limit=4000)}")
+        state.turn_trace.append(turn_record)
+        return
+
+    excerpt = parsed.get("raw", response_text)
+    state.error_msg = f"Unparseable output at turn {turn_index0 + 1}: {excerpt[:300]}"
+    turn_record["error"] = state.error_msg
+    state.turn_trace.append(turn_record)
+
+
 def run_one_sample(
     messages_gt: list[dict[str, Any]],
     model: Any,
@@ -1272,6 +1577,98 @@ def run_one_sample(
     }
 
 
+def run_sample_batch(
+    batch_samples: list[dict[str, Any]],
+    model: Any,
+    tokenizer: Any,
+    *,
+    sample_offset: int,
+    max_turns: int,
+    max_new_tokens: int,
+    max_input_tokens: int,
+    tools: list[dict[str, Any]] | None,
+    continue_on_tool_error: bool,
+    repair_wls_from_user: bool,
+    enable_thinking: bool,
+    verbose: bool,
+    inject_empty_thought_channel: bool,
+) -> list[dict[str, Any]]:
+    import torch
+
+    states = [
+        init_eval_sample_state(sample_offset + batch_index, sample["messages"], sample.get("runtime_context"))
+        for batch_index, sample in enumerate(batch_samples)
+    ]
+
+    stop_ids = get_stop_token_ids(tokenizer)
+    pad_token_id = resolve_pad_token_id(tokenizer)
+
+    for turn in range(max_turns):
+        active_states = [state for state in states if not state.finished]
+        if not active_states:
+            break
+
+        if hasattr(torch, "cuda") and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+
+        turn_max_new_tokens = resolve_turn_max_new_tokens(turn, max_new_tokens)
+
+        model_inputs_list: list[dict[str, Any]] = []
+        truncation_flags: list[bool] = []
+        for state in active_states:
+            phase = infer_expected_phase(state.messages_gt, state.conversation)
+            model_inputs, was_truncated = build_model_inputs(
+                state.conversation,
+                tokenizer,
+                model,
+                max_input_tokens=max_input_tokens,
+                tools=tools,
+                enable_thinking=enable_thinking,
+                phase=phase,
+                inject_empty_thought_channel=inject_empty_thought_channel,
+            )
+            state.input_truncated = state.input_truncated or was_truncated
+            model_inputs_list.append(model_inputs)
+            truncation_flags.append(was_truncated)
+
+        batched_inputs, padded_input_len = pad_model_inputs_for_batch(
+            model_inputs_list,
+            pad_token_id=pad_token_id,
+        )
+
+        with torch.no_grad():
+            outputs = model.generate(
+                **batched_inputs,
+                max_new_tokens=turn_max_new_tokens,
+                use_cache=True,
+                temperature=0.0,
+                do_sample=False,
+                eos_token_id=stop_ids,
+                pad_token_id=pad_token_id,
+            )
+
+        for row_index, state in enumerate(active_states):
+            new_tokens = outputs[row_index][padded_input_len:]
+            response_text = tokenizer.decode(new_tokens, skip_special_tokens=False)
+            run_state_turn(
+                state,
+                turn_index0=turn,
+                response_text=response_text,
+                token_count=len(new_tokens),
+                was_truncated=truncation_flags[row_index],
+                turn_max_new_tokens=turn_max_new_tokens,
+                tokenizer=tokenizer,
+                continue_on_tool_error=continue_on_tool_error,
+                repair_wls_from_user=repair_wls_from_user,
+                verbose=verbose,
+            )
+
+        del outputs
+
+    return [build_result_from_state(state) for state in states]
+
+
 def main() -> None:
     args = parse_args()
 
@@ -1374,7 +1771,8 @@ def main() -> None:
     print(f"Pinned base revision: {args.model_revision or 'no'}")
     print(f"Tool schemas passed to chat template: {'yes' if tools is not None else 'no'}")
     print(f"Gemma thinking enabled: {'yes' if args.enable_thinking else 'no'}")
-    print(f"Inject empty thought channel: {'yes' if args.inject_empty_thought_channel else 'no'}\n")
+    print(f"Inject empty thought channel: {'yes' if args.inject_empty_thought_channel else 'no'}")
+    print(f"Concurrent conversations: {max(1, int(args.concurrent_conversations))}\n")
 
     test_samples: list[dict[str, Any]] = []
     with open(args.test_file, "r", encoding="utf-8") as handle:
@@ -1395,80 +1793,120 @@ def main() -> None:
     error_kind_counts: Counter[str] = Counter()
     parse_note_counts: Counter[str] = Counter()
 
+    concurrent_conversations = max(1, int(args.concurrent_conversations))
+
+    def record_result(result: dict[str, Any]) -> None:
+        nonlocal family_correct, detection_correct, errors
+
+        results.append(result)
+        out_file.write(json.dumps(result, default=str, ensure_ascii=False) + "\n")
+        out_file.flush()
+
+        gt_family_local = result["gt_error_family"] or "unknown"
+        family_counts[gt_family_local] += 1
+
+        if result["family_correct"]:
+            family_correct += 1
+            family_correct_counts[gt_family_local] += 1
+        if result["detection_correct"]:
+            detection_correct += 1
+        if result["error"]:
+            errors += 1
+            error_kind = classify_result_error(result["error"])
+            if error_kind is not None:
+                error_kind_counts[error_kind] += 1
+        for note in result.get("parse_notes") or []:
+            parse_note_counts[note] += 1
+
+        status = "✓" if result["family_correct"] else "✗"
+        pred_fam_str = str(result["pred_error_family"]) if result["pred_error_family"] else "NONE"
+        extra = ""
+        if result.get("input_truncated"):
+            extra += " truncated"
+        if result.get("parse_notes"):
+            extra += f" notes={result['parse_notes'][:3]}"
+
+        print(
+            f"{status}  gt={gt_family_local:<20s}  pred={pred_fam_str:<20s}  "
+            f"tools={result['tool_calls']}{extra}"
+        )
+
     with open(args.output, "w", encoding="utf-8") as out_file:
-        for idx, sample in enumerate(test_samples):
-            messages = sample["messages"]
-            print(f"[{idx + 1}/{len(test_samples)}] ", end="", flush=True)
+        for batch_start in range(0, len(test_samples), concurrent_conversations):
+            batch_samples = test_samples[batch_start : batch_start + concurrent_conversations]
+            batch_end = batch_start + len(batch_samples)
+            if len(batch_samples) == 1:
+                print(f"[{batch_start + 1}/{len(test_samples)}] ", end="", flush=True)
+            else:
+                print(f"[{batch_start + 1}-{batch_end}/{len(test_samples)}] batch size={len(batch_samples)}")
 
             try:
-                result = run_one_sample(
-                    messages,
-                    model,
-                    tokenizer,
-                    max_turns=args.max_turns,
-                    max_new_tokens=args.max_new_tokens,
-                    max_input_tokens=max_input_tokens,
-                    tools=tools,
-                    continue_on_tool_error=args.continue_on_tool_error,
-                    repair_wls_from_user=args.repair_wls_from_user,
-                    enable_thinking=args.enable_thinking,
-                    verbose=args.verbose,
-                    runtime_context=sample.get("runtime_context"),
-                    inject_empty_thought_channel=args.inject_empty_thought_channel,
-                )
+                if len(batch_samples) == 1:
+                    sample = batch_samples[0]
+                    result_batch = [
+                        run_one_sample(
+                            sample["messages"],
+                            model,
+                            tokenizer,
+                            max_turns=args.max_turns,
+                            max_new_tokens=args.max_new_tokens,
+                            max_input_tokens=max_input_tokens,
+                            tools=tools,
+                            continue_on_tool_error=args.continue_on_tool_error,
+                            repair_wls_from_user=args.repair_wls_from_user,
+                            enable_thinking=args.enable_thinking,
+                            verbose=args.verbose,
+                            runtime_context=sample.get("runtime_context"),
+                            inject_empty_thought_channel=args.inject_empty_thought_channel,
+                        )
+                    ]
+                else:
+                    result_batch = run_sample_batch(
+                        batch_samples,
+                        model,
+                        tokenizer,
+                        sample_offset=batch_start,
+                        max_turns=args.max_turns,
+                        max_new_tokens=args.max_new_tokens,
+                        max_input_tokens=max_input_tokens,
+                        tools=tools,
+                        continue_on_tool_error=args.continue_on_tool_error,
+                        repair_wls_from_user=args.repair_wls_from_user,
+                        enable_thinking=args.enable_thinking,
+                        verbose=args.verbose,
+                        inject_empty_thought_channel=args.inject_empty_thought_channel,
+                    )
             except Exception as exc:
                 import traceback
 
                 traceback.print_exc(file=sys.stdout)
-                gt_verdict = normalize_verdict(extract_ground_truth(messages))
-                result = {
-                    "gt_error_family": gt_verdict.get("verdict", {}).get("error_family") if gt_verdict else None,
-                    "pred_error_family": None,
-                    "gt_has_error": gt_verdict.get("verdict", {}).get("has_error") if gt_verdict else None,
-                    "pred_has_error": None,
-                    "family_correct": False,
-                    "detection_correct": False,
-                    "tool_calls": [],
-                    "num_turns": 0,
-                    "predicted_verdict": None,
-                    "error": f"CRITICAL ERROR: {exc}",
-                    "input_truncated": False,
-                    "parse_notes": [],
-                    "last_raw_generation": None,
-                }
+                print("Batch evaluation failed; falling back to serial evaluation for this batch.")
+                result_batch = []
+                for sample in batch_samples:
+                    try:
+                        result_batch.append(
+                            run_one_sample(
+                                sample["messages"],
+                                model,
+                                tokenizer,
+                                max_turns=args.max_turns,
+                                max_new_tokens=args.max_new_tokens,
+                                max_input_tokens=max_input_tokens,
+                                tools=tools,
+                                continue_on_tool_error=args.continue_on_tool_error,
+                                repair_wls_from_user=args.repair_wls_from_user,
+                                enable_thinking=args.enable_thinking,
+                                verbose=args.verbose,
+                                runtime_context=sample.get("runtime_context"),
+                                inject_empty_thought_channel=args.inject_empty_thought_channel,
+                            )
+                        )
+                    except Exception as serial_exc:
+                        traceback.print_exc(file=sys.stdout)
+                        result_batch.append(build_critical_error_result(sample["messages"], serial_exc))
 
-            results.append(result)
-            out_file.write(json.dumps(result, default=str, ensure_ascii=False) + "\n")
-            out_file.flush()
-
-            gt_family = result["gt_error_family"] or "unknown"
-            family_counts[gt_family] += 1
-
-            if result["family_correct"]:
-                family_correct += 1
-                family_correct_counts[gt_family] += 1
-            if result["detection_correct"]:
-                detection_correct += 1
-            if result["error"]:
-                errors += 1
-                error_kind = classify_result_error(result["error"])
-                if error_kind is not None:
-                    error_kind_counts[error_kind] += 1
-            for note in result.get("parse_notes") or []:
-                parse_note_counts[note] += 1
-
-            status = "✓" if result["family_correct"] else "✗"
-            pred_fam_str = str(result["pred_error_family"]) if result["pred_error_family"] else "NONE"
-            extra = ""
-            if result.get("input_truncated"):
-                extra += " truncated"
-            if result.get("parse_notes"):
-                extra += f" notes={result['parse_notes'][:3]}"
-
-            print(
-                f"{status}  gt={gt_family:<20s}  pred={pred_fam_str:<20s}  "
-                f"tools={result['tool_calls']}{extra}"
-            )
+            for result in result_batch:
+                record_result(result)
 
     n = len(results)
     print("\n" + "=" * 60)

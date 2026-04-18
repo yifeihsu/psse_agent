@@ -52,6 +52,9 @@ SANITY_CHECK_FAIL_ON_MISS=${SANITY_CHECK_FAIL_ON_MISS:-0}
 PHASE_GATED_PROMPT=${PHASE_GATED_PROMPT:-1}
 INCLUDE_TOOL_SCHEMAS=${INCLUDE_TOOL_SCHEMAS:-1}
 INJECT_EMPTY_THOUGHT_CHANNEL=${INJECT_EMPTY_THOUGHT_CHANNEL:-1}
+REPEAT_FIRST_TOOL_CALL=${REPEAT_FIRST_TOOL_CALL:-1}
+REPEAT_LATER_TOOL_CALL=${REPEAT_LATER_TOOL_CALL:-1}
+REPEAT_FINAL=${REPEAT_FINAL:-1}
 EXTRA_TRAIN_ARGS=${EXTRA_TRAIN_ARGS:-}
 PREEMPTION_EXIT_CODE=99
 
@@ -148,7 +151,7 @@ echo "Model   : $MODEL_NAME"
 echo "Revision: ${MODEL_REVISION:-<unpinned>}"
 echo "Resume  : $RESUME_FROM_CHECKPOINT"
 echo "Save/Eval steps: $SAVE_STEPS / $EVAL_STEPS"
-echo "Hyperparams: seq=$MAX_SEQ_LENGTH bs=$PER_DEVICE_TRAIN_BATCH_SIZE ga=$GRADIENT_ACCUMULATION_STEPS lora_r=$LORA_R lora_alpha=$LORA_ALPHA lora_scope=$LORA_TARGET_SCOPE lr=$LEARNING_RATE workers=$DATALOADER_NUM_WORKERS sanity=$SANITY_CHECK_SAMPLES phase_gated=$PHASE_GATED_PROMPT tool_schemas=$INCLUDE_TOOL_SCHEMAS empty_thought=$INJECT_EMPTY_THOUGHT_CHANNEL"
+echo "Hyperparams: seq=$MAX_SEQ_LENGTH bs=$PER_DEVICE_TRAIN_BATCH_SIZE ga=$GRADIENT_ACCUMULATION_STEPS lora_r=$LORA_R lora_alpha=$LORA_ALPHA lora_scope=$LORA_TARGET_SCOPE lr=$LEARNING_RATE workers=$DATALOADER_NUM_WORKERS sanity=$SANITY_CHECK_SAMPLES phase_gated=$PHASE_GATED_PROMPT tool_schemas=$INCLUDE_TOOL_SCHEMAS empty_thought=$INJECT_EMPTY_THOUGHT_CHANNEL repeats=$REPEAT_FIRST_TOOL_CALL/$REPEAT_LATER_TOOL_CALL/$REPEAT_FINAL"
 if [[ -n "${WANDB_API_KEY:-}" ]]; then
     echo "WandB   : using WANDB_API_KEY from environment"
 elif [[ -f "$HOME/.netrc" ]]; then
@@ -175,7 +178,7 @@ trap 'forward_signal TERM' TERM
 
 # ── Train ──────────────────────────────────────────────────────────────────
 if [[ -z "$MODEL_REVISION" && "$ALLOW_UNPINNED_MODEL_REVISION" != "1" ]]; then
-    echo "ERROR: MODEL_REVISION is required by gpt_oss_power_sft_revised_v2.py to pin the Gemma 4 chat template." >&2
+    echo "ERROR: MODEL_REVISION is required by gpt_oss_power_sft_revised_v3.py to pin the Gemma 4 chat template." >&2
     echo "Set MODEL_REVISION=<hf commit/tag> before sbatch, or set ALLOW_UNPINNED_MODEL_REVISION=1 to opt into floating upstream behavior." >&2
     exit 2
 fi
@@ -207,7 +210,7 @@ else
     EMPTY_THOUGHT_ARGS+=(--inject-empty-thought-channel)
 fi
 
-$PYTHON gpt_oss_power_sft_revised_v2.py \
+$PYTHON gpt_oss_power_sft_revised_v3.py \
     --train-file "$TRAIN_FILE" \
     --valid-file "$VALID_FILE" \
     --model-name "$MODEL_NAME" \
@@ -233,6 +236,9 @@ $PYTHON gpt_oss_power_sft_revised_v2.py \
     --resume-from-checkpoint "$RESUME_FROM_CHECKPOINT" \
     --sanity-check-samples "$SANITY_CHECK_SAMPLES" \
     --sanity-check-max-new-tokens "$SANITY_CHECK_MAX_NEW_TOKENS" \
+    --repeat-first-tool-call "$REPEAT_FIRST_TOOL_CALL" \
+    --repeat-later-tool-call "$REPEAT_LATER_TOOL_CALL" \
+    --repeat-final "$REPEAT_FINAL" \
     "${TOOL_SCHEMA_ARGS[@]}" \
     "${EMPTY_THOUGHT_ARGS[@]}" \
     "${SANITY_FAIL_ARGS[@]}" \

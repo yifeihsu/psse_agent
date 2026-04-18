@@ -48,6 +48,7 @@ INCLUDE_TOOL_SCHEMAS=${INCLUDE_TOOL_SCHEMAS:-1}
 INJECT_EMPTY_THOUGHT_CHANNEL=${INJECT_EMPTY_THOUGHT_CHANNEL:-1}
 LOAD_IN_4BIT=${LOAD_IN_4BIT:-0}
 LOAD_IN_16BIT=${LOAD_IN_16BIT:-1}
+CONCURRENT_CONVERSATIONS=${CONCURRENT_CONVERSATIONS:-4}
 EXTRA_EVAL_ARGS=${EXTRA_EVAL_ARGS:-}
 
 mkdir -p "$LOG_DIR"
@@ -84,6 +85,7 @@ echo "max seq length: $MAX_SEQ_LENGTH"
 echo "include tool schemas: $INCLUDE_TOOL_SCHEMAS"
 echo "inject empty thought: $INJECT_EMPTY_THOUGHT_CHANNEL"
 echo "load_in_4bit/load_in_16bit: $LOAD_IN_4BIT / $LOAD_IN_16BIT"
+echo "concurrent conversations: $CONCURRENT_CONVERSATIONS"
 echo "slurm gres: ${SLURM_JOB_GRES:-unknown}"
 echo "cuda visible devices: ${CUDA_VISIBLE_DEVICES:-unset}"
 $PYTHON -V
@@ -124,6 +126,7 @@ ARGS=(
   --max-turns "$MAX_TURNS"
   --max-new-tokens "$MAX_NEW_TOKENS"
   --max-seq-length "$MAX_SEQ_LENGTH"
+  --concurrent-conversations "$CONCURRENT_CONVERSATIONS"
   --output "$OUTPUT_FILE"
 )
 
