@@ -4,7 +4,7 @@
 #SBATCH --error=/scratch/yx3882/psse_agent/logs/eval_%j.err
 #SBATCH --chdir=/scratch/yx3882/psse_agent
 #SBATCH --account=torch_pr_627_general
-#SBATCH --comment=preemption=yes;requeue=true
+#SBATCH --comment=preemption=no;requeue=false
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8

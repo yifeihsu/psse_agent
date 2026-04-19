@@ -4,6 +4,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=02:00:00
+#SBATCH --comment=preemption=no;requeue=false
 #SBATCH --output=outputs/gpt_oss_sft_power_agent/eval_smoke_hardened_%j.log
 
 set -euo pipefail

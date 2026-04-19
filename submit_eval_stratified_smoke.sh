@@ -4,7 +4,7 @@
 #SBATCH --error=/scratch/yx3882/psse_agent/logs/eval_strat_smoke_%j.err
 #SBATCH --chdir=/scratch/yx3882/psse_agent
 #SBATCH --account=torch_pr_627_general
-#SBATCH --comment=preemption=yes;requeue=true
+#SBATCH --comment=preemption=no;requeue=false
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
@@ -46,7 +46,6 @@ INCLUDE_TOOL_SCHEMAS=${INCLUDE_TOOL_SCHEMAS:-1}
 INJECT_EMPTY_THOUGHT_CHANNEL=${INJECT_EMPTY_THOUGHT_CHANNEL:-1}
 LOAD_IN_4BIT=${LOAD_IN_4BIT:-0}
 LOAD_IN_16BIT=${LOAD_IN_16BIT:-1}
-CONCURRENT_CONVERSATIONS=${CONCURRENT_CONVERSATIONS:-1}
 SMOKE_TEST_FILE=${SMOKE_TEST_FILE:-outputs/stratified_smoke_${SLURM_JOB_ID}.jsonl}
 OUTPUT_FILE=${OUTPUT_FILE:-outputs/gemma4_power_agent/eval_stratified_smoke_${SLURM_JOB_ID}.jsonl}
 
@@ -78,7 +77,6 @@ ARGS=(
   --max-turns "$MAX_TURNS"
   --max-new-tokens "$MAX_NEW_TOKENS"
   --max-seq-length "$MAX_SEQ_LENGTH"
-  --concurrent-conversations "$CONCURRENT_CONVERSATIONS"
   --output "$OUTPUT_FILE"
   --verbose
 )

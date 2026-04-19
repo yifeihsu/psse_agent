@@ -1751,14 +1751,13 @@ def main() -> None:
     print(f"  Base model: {base_model_name}")
     use_transformers_fallback = False
     fallback_reason: str | None = None
+    unsloth_stage = "initialization"
     try:
         from unsloth import FastModel
-        from peft import PeftModel
-        from transformers import AutoTokenizer
 
         unsloth_max_seq = args.max_seq_length if args.max_seq_length is not None else 4096
         unsloth_kwargs: dict[str, Any] = {
-            "model_name": base_model_name,
+            "model_name": args.adapter,
             "max_seq_length": unsloth_max_seq,
             "load_in_4bit": args.load_in_4bit,
             "load_in_16bit": args.load_in_16bit,
@@ -1766,21 +1765,20 @@ def main() -> None:
         }
         if args.model_revision:
             unsloth_kwargs["revision"] = args.model_revision
+        unsloth_stage = "FastModel.from_pretrained"
         model, tokenizer = FastModel.from_pretrained(**unsloth_kwargs)
-        model = PeftModel.from_pretrained(model, args.adapter)
-        if tokenizer_path != base_model_name:
-            tokenizer_kwargs: dict[str, Any] = {"trust_remote_code": True}
-            tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, **tokenizer_kwargs)
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
+        unsloth_stage = "FastModel.for_inference"
         FastModel.for_inference(model)
-        print("Model loaded via Unsloth + peft.\n")
+        print("Model loaded via Unsloth native adapter path.\n")
     except ImportError:
         use_transformers_fallback = True
         fallback_reason = "Unsloth not available"
     except Exception as exc:
         use_transformers_fallback = True
-        fallback_reason = f"Unsloth load failed ({type(exc).__name__}: {exc})"
+        fallback_reason = (
+            f"Unsloth load failed during {unsloth_stage} "
+            f"({type(exc).__name__}: {exc})"
+        )
 
     if use_transformers_fallback:
         print(f"{fallback_reason}, falling back to transformers + peft ...")
