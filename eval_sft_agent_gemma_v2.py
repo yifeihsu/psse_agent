@@ -304,7 +304,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--output",
-        default="eval_gemma4_results.jsonl",
+        default="outputs/gemma4_power_agent/eval_gemma4_results.jsonl",
         help="Where to write per-sample results",
     )
     p.add_argument(
@@ -1763,8 +1763,9 @@ def main() -> None:
             "load_in_16bit": args.load_in_16bit,
             "full_finetuning": False,
         }
-        if args.model_revision:
-            unsloth_kwargs["revision"] = args.model_revision
+        # args.adapter has already been resolved to a local PEFT adapter directory.
+        # Keep the base-model revision pin for the transformers fallback path, but do
+        # not forward a Hub revision into Unsloth's local-adapter loader.
         unsloth_stage = "FastModel.from_pretrained"
         model, tokenizer = FastModel.from_pretrained(**unsloth_kwargs)
         unsloth_stage = "FastModel.for_inference"
