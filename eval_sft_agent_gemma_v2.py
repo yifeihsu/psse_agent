@@ -388,6 +388,18 @@ def parse_args() -> argparse.Namespace:
         action="store_false",
         help="Disable 16-bit loading",
     )
+    p.add_argument(
+        "--gc-collect-every-n-turns",
+        type=int,
+        default=0,
+        help="Run gc.collect() every N generation turns. 0 disables periodic collection.",
+    )
+    p.add_argument(
+        "--empty-cuda-cache-every-n-turns",
+        type=int,
+        default=0,
+        help="Call torch.cuda.empty_cache() every N generation turns. 0 disables periodic cache flushes.",
+    )
     return p.parse_args()
 
 
@@ -919,6 +931,30 @@ def resolve_turn_max_new_tokens(turn_index0: int, default_max_new_tokens: int) -
     return min(default_max_new_tokens, 768)
 
 
+def maybe_run_turn_housekeeping(
+    turn_index0: int,
+    *,
+    gc_collect_every_n_turns: int,
+    empty_cuda_cache_every_n_turns: int,
+) -> None:
+    should_collect = gc_collect_every_n_turns > 0 and (turn_index0 + 1) % gc_collect_every_n_turns == 0
+    should_empty_cache = (
+        empty_cuda_cache_every_n_turns > 0
+        and (turn_index0 + 1) % empty_cuda_cache_every_n_turns == 0
+    )
+    if not should_collect and not should_empty_cache:
+        return
+
+    if should_empty_cache:
+        import torch
+
+        if hasattr(torch, "cuda") and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    if should_collect:
+        gc.collect()
+
+
 def format_preview(value: Any, limit: int = 240) -> str:
     text = value if isinstance(value, str) else json.dumps(value, default=str, ensure_ascii=False)
     if len(text) <= limit:
@@ -1353,6 +1389,8 @@ def run_one_sample(
     verbose: bool,
     runtime_context: Mapping[str, Any] | None,
     inject_empty_thought_channel: bool,
+    gc_collect_every_n_turns: int,
+    empty_cuda_cache_every_n_turns: int,
 ) -> dict[str, Any]:
     import torch
 
@@ -1380,9 +1418,11 @@ def run_one_sample(
             pad_token_id = eos_id
 
     for turn in range(max_turns):
-        if hasattr(torch, "cuda") and torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        gc.collect()
+        maybe_run_turn_housekeeping(
+            turn,
+            gc_collect_every_n_turns=gc_collect_every_n_turns,
+            empty_cuda_cache_every_n_turns=empty_cuda_cache_every_n_turns,
+        )
 
         phase = infer_expected_phase(messages_gt, conversation)
         model_inputs, was_truncated = build_model_inputs(
@@ -1399,7 +1439,7 @@ def run_one_sample(
 
         turn_max_new_tokens = resolve_turn_max_new_tokens(turn, max_new_tokens)
 
-        with torch.no_grad():
+        with torch.inference_mode():
             outputs = model.generate(
                 **model_inputs,
                 max_new_tokens=turn_max_new_tokens,
@@ -1592,6 +1632,8 @@ def run_sample_batch(
     enable_thinking: bool,
     verbose: bool,
     inject_empty_thought_channel: bool,
+    gc_collect_every_n_turns: int,
+    empty_cuda_cache_every_n_turns: int,
 ) -> list[dict[str, Any]]:
     import torch
 
@@ -1608,9 +1650,11 @@ def run_sample_batch(
         if not active_states:
             break
 
-        if hasattr(torch, "cuda") and torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        gc.collect()
+        maybe_run_turn_housekeeping(
+            turn,
+            gc_collect_every_n_turns=gc_collect_every_n_turns,
+            empty_cuda_cache_every_n_turns=empty_cuda_cache_every_n_turns,
+        )
 
         turn_max_new_tokens = resolve_turn_max_new_tokens(turn, max_new_tokens)
 
@@ -1637,7 +1681,7 @@ def run_sample_batch(
             pad_token_id=pad_token_id,
         )
 
-        with torch.no_grad():
+        with torch.inference_mode():
             outputs = model.generate(
                 **batched_inputs,
                 max_new_tokens=turn_max_new_tokens,
@@ -1693,15 +1737,28 @@ def main() -> None:
         print(f"ERROR: Test file not found at {args.test_file}")
         sys.exit(1)
 
+    adapter_cfg_path = Path(args.adapter) / "adapter_config.json"
+    if not adapter_cfg_path.exists():
+        print(f"ERROR: Adapter config not found at {adapter_cfg_path}")
+        sys.exit(1)
+
+    with open(adapter_cfg_path, "r", encoding="utf-8") as handle:
+        adapter_cfg = json.load(handle)
+    base_model_name = adapter_cfg["base_model_name_or_path"]
+    tokenizer_path = args.adapter if (Path(args.adapter) / "tokenizer_config.json").exists() else base_model_name
+
     print(f"Loading adapter from {args.adapter} ...")
+    print(f"  Base model: {base_model_name}")
     use_transformers_fallback = False
     fallback_reason: str | None = None
     try:
         from unsloth import FastModel
+        from peft import PeftModel
+        from transformers import AutoTokenizer
 
         unsloth_max_seq = args.max_seq_length if args.max_seq_length is not None else 4096
         unsloth_kwargs: dict[str, Any] = {
-            "model_name": args.adapter,
+            "model_name": base_model_name,
             "max_seq_length": unsloth_max_seq,
             "load_in_4bit": args.load_in_4bit,
             "load_in_16bit": args.load_in_16bit,
@@ -1710,8 +1767,14 @@ def main() -> None:
         if args.model_revision:
             unsloth_kwargs["revision"] = args.model_revision
         model, tokenizer = FastModel.from_pretrained(**unsloth_kwargs)
+        model = PeftModel.from_pretrained(model, args.adapter)
+        if tokenizer_path != base_model_name:
+            tokenizer_kwargs: dict[str, Any] = {"trust_remote_code": True}
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, **tokenizer_kwargs)
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
         FastModel.for_inference(model)
-        print("Model loaded via Unsloth.\n")
+        print("Model loaded via Unsloth + peft.\n")
     except ImportError:
         use_transformers_fallback = True
         fallback_reason = "Unsloth not available"
@@ -1724,12 +1787,6 @@ def main() -> None:
         import torch
         from peft import PeftModel
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-
-        adapter_cfg_path = Path(args.adapter) / "adapter_config.json"
-        with open(adapter_cfg_path, "r", encoding="utf-8") as handle:
-            adapter_cfg = json.load(handle)
-        base_model_name = adapter_cfg["base_model_name_or_path"]
-        print(f"  Base model: {base_model_name}")
 
         quantization_config = None
         if args.load_in_4bit:
@@ -1755,7 +1812,6 @@ def main() -> None:
         model = PeftModel.from_pretrained(base_model, args.adapter)
         model.eval()
 
-        tokenizer_path = args.adapter if (Path(args.adapter) / "tokenizer_config.json").exists() else base_model_name
         tokenizer_kwargs: dict[str, Any] = {"trust_remote_code": True}
         if args.model_revision and tokenizer_path == base_model_name:
             tokenizer_kwargs["revision"] = args.model_revision
@@ -1772,6 +1828,8 @@ def main() -> None:
     print(f"Tool schemas passed to chat template: {'yes' if tools is not None else 'no'}")
     print(f"Gemma thinking enabled: {'yes' if args.enable_thinking else 'no'}")
     print(f"Inject empty thought channel: {'yes' if args.inject_empty_thought_channel else 'no'}")
+    print(f"GC collect every N turns: {max(0, int(args.gc_collect_every_n_turns))}")
+    print(f"Empty CUDA cache every N turns: {max(0, int(args.empty_cuda_cache_every_n_turns))}")
     print(f"Concurrent conversations: {max(1, int(args.concurrent_conversations))}\n")
 
     test_samples: list[dict[str, Any]] = []
@@ -1858,6 +1916,8 @@ def main() -> None:
                             verbose=args.verbose,
                             runtime_context=sample.get("runtime_context"),
                             inject_empty_thought_channel=args.inject_empty_thought_channel,
+                            gc_collect_every_n_turns=args.gc_collect_every_n_turns,
+                            empty_cuda_cache_every_n_turns=args.empty_cuda_cache_every_n_turns,
                         )
                     ]
                 else:
@@ -1875,6 +1935,8 @@ def main() -> None:
                         enable_thinking=args.enable_thinking,
                         verbose=args.verbose,
                         inject_empty_thought_channel=args.inject_empty_thought_channel,
+                        gc_collect_every_n_turns=args.gc_collect_every_n_turns,
+                        empty_cuda_cache_every_n_turns=args.empty_cuda_cache_every_n_turns,
                     )
             except Exception as exc:
                 import traceback
@@ -1899,6 +1961,8 @@ def main() -> None:
                                 verbose=args.verbose,
                                 runtime_context=sample.get("runtime_context"),
                                 inject_empty_thought_channel=args.inject_empty_thought_channel,
+                                gc_collect_every_n_turns=args.gc_collect_every_n_turns,
+                                empty_cuda_cache_every_n_turns=args.empty_cuda_cache_every_n_turns,
                             )
                         )
                     except Exception as serial_exc:
