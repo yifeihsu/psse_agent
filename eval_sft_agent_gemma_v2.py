@@ -14,7 +14,9 @@ import copy
 import gc
 import json
 import re
+import shutil
 import sys
+import tempfile
 import uuid
 from collections import Counter
 from dataclasses import dataclass, field
@@ -83,6 +85,17 @@ TOOL_MAP = {
     "correct_topology_from_path": correct_topology_from_path,
     "run_hse_from_path": run_hse_from_path,
 }
+TOKENIZER_ARTIFACT_FILENAMES = frozenset(
+    {
+        "tokenizer_config.json",
+        "tokenizer.json",
+        "special_tokens_map.json",
+        "tokenizer.model",
+        "added_tokens.json",
+        "processor_config.json",
+        "chat_template.jinja",
+    }
+)
 
 
 def maybe_parse_json_string(value: Any) -> Any:
@@ -365,6 +378,18 @@ def parse_args() -> argparse.Namespace:
         help="Disable empty-thought injection even when the adapter was trained with it.",
     )
     p.add_argument(
+        "--prefer-base-tokenizer",
+        action="store_true",
+        default=True,
+        help="Prefer the pinned base tokenizer over tokenizer files saved inside the adapter directory.",
+    )
+    p.add_argument(
+        "--prefer-adapter-tokenizer",
+        dest="prefer_base_tokenizer",
+        action="store_false",
+        help="Prefer adapter-local tokenizer files when available.",
+    )
+    p.add_argument(
         "--load-in-4bit",
         action="store_true",
         default=False,
@@ -452,6 +477,39 @@ def normalize_gemma_messages(messages: list[dict[str, Any]]) -> list[dict[str, A
 
         normalized.append(msg)
     return normalized
+
+
+def adapter_tokenizer_files(adapter_path: Path) -> list[str]:
+    if not adapter_path.is_dir():
+        return []
+    return sorted(
+        child.name for child in adapter_path.iterdir() if child.name in TOKENIZER_ARTIFACT_FILENAMES
+    )
+
+
+def prepare_unsloth_adapter_path(
+    adapter_path: Path,
+    *,
+    prefer_base_tokenizer: bool,
+) -> tuple[str, tempfile.TemporaryDirectory[str] | None, list[str]]:
+    tokenizer_files = adapter_tokenizer_files(adapter_path)
+    if not prefer_base_tokenizer or not tokenizer_files:
+        return str(adapter_path), None, tokenizer_files
+
+    tempdir = tempfile.TemporaryDirectory(prefix="unsloth_adapter_notokenizer_")
+    temp_path = Path(tempdir.name)
+    for child in adapter_path.iterdir():
+        if child.name in TOKENIZER_ARTIFACT_FILENAMES:
+            continue
+        target = temp_path / child.name
+        try:
+            target.symlink_to(child.resolve(), target_is_directory=child.is_dir())
+        except Exception:
+            if child.is_dir():
+                shutil.copytree(child, target, symlinks=True)
+            else:
+                shutil.copy2(child, target)
+    return str(temp_path), tempdir, tokenizer_files
 
 
 def strip_final_json_schema(text: Any) -> Any:
@@ -1745,19 +1803,32 @@ def main() -> None:
     with open(adapter_cfg_path, "r", encoding="utf-8") as handle:
         adapter_cfg = json.load(handle)
     base_model_name = adapter_cfg["base_model_name_or_path"]
-    tokenizer_path = args.adapter if (Path(args.adapter) / "tokenizer_config.json").exists() else base_model_name
+    tokenizer_path = base_model_name
+    if not args.prefer_base_tokenizer and (Path(args.adapter) / "tokenizer_config.json").exists():
+        tokenizer_path = args.adapter
 
     print(f"Loading adapter from {args.adapter} ...")
     print(f"  Base model: {base_model_name}")
+    print(f"  Tokenizer source: {'base model' if tokenizer_path == base_model_name else 'adapter directory'}")
     use_transformers_fallback = False
     fallback_reason: str | None = None
     unsloth_stage = "initialization"
+    unsloth_tempdir: tempfile.TemporaryDirectory[str] | None = None
     try:
         from unsloth import FastModel
 
         unsloth_max_seq = args.max_seq_length if args.max_seq_length is not None else 4096
+        unsloth_model_name, unsloth_tempdir, skipped_tokenizer_files = prepare_unsloth_adapter_path(
+            Path(args.adapter),
+            prefer_base_tokenizer=args.prefer_base_tokenizer,
+        )
+        if skipped_tokenizer_files:
+            print(
+                "  Unsloth adapter load: masking adapter-local tokenizer artifacts to prefer the base tokenizer: "
+                + ", ".join(skipped_tokenizer_files)
+            )
         unsloth_kwargs: dict[str, Any] = {
-            "model_name": args.adapter,
+            "model_name": unsloth_model_name,
             "max_seq_length": unsloth_max_seq,
             "load_in_4bit": args.load_in_4bit,
             "load_in_16bit": args.load_in_16bit,
@@ -1780,6 +1851,9 @@ def main() -> None:
             f"Unsloth load failed during {unsloth_stage} "
             f"({type(exc).__name__}: {exc})"
         )
+    finally:
+        if unsloth_tempdir is not None:
+            unsloth_tempdir.cleanup()
 
     if use_transformers_fallback:
         print(f"{fallback_reason}, falling back to transformers + peft ...")
