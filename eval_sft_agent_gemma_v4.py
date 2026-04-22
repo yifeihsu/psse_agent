@@ -14,9 +14,7 @@ import copy
 import gc
 import json
 import re
-import shutil
 import sys
-import tempfile
 import time
 import uuid
 from collections import Counter
@@ -41,6 +39,11 @@ from eval_sft_agent_hardened import (
     jsonish_loads,
     normalize_verdict,
     resolve_max_input_tokens,
+)
+from gemma_adapter_loader import (
+    format_unsloth_tokenizer_load_message,
+    prepare_unsloth_adapter_path,
+    resolve_tokenizer_source,
 )
 from mcp_server.matpower_server import (
     correct_measurements_from_path,
@@ -96,17 +99,6 @@ CORE_TOOL_NAMES = frozenset(
     }
 )
 RUNTIME_HELPER_TOOL_NOTE_PREFIX = "Runtime helper tools available for this snapshot:"
-TOKENIZER_ARTIFACT_FILENAMES = frozenset(
-    {
-        "tokenizer_config.json",
-        "tokenizer.json",
-        "special_tokens_map.json",
-        "tokenizer.model",
-        "added_tokens.json",
-        "processor_config.json",
-        "chat_template.jinja",
-    }
-)
 
 
 def maybe_parse_json_string(value: Any) -> Any:
@@ -524,40 +516,6 @@ def normalize_gemma_messages(messages: list[dict[str, Any]]) -> list[dict[str, A
 
         normalized.append(msg)
     return normalized
-
-
-def adapter_tokenizer_files(adapter_path: Path) -> list[str]:
-    if not adapter_path.is_dir():
-        return []
-    return sorted(
-        child.name for child in adapter_path.iterdir() if child.name in TOKENIZER_ARTIFACT_FILENAMES
-    )
-
-
-def prepare_unsloth_adapter_path(
-    adapter_path: Path,
-    *,
-    prefer_base_tokenizer: bool,
-) -> tuple[str, tempfile.TemporaryDirectory[str] | None, list[str]]:
-    tokenizer_files = adapter_tokenizer_files(adapter_path)
-    if not prefer_base_tokenizer or not tokenizer_files:
-        return str(adapter_path), None, tokenizer_files
-
-    tempdir = tempfile.TemporaryDirectory(prefix="unsloth_adapter_notokenizer_")
-    temp_path = Path(tempdir.name)
-    for child in adapter_path.iterdir():
-        if child.name in TOKENIZER_ARTIFACT_FILENAMES:
-            continue
-        target = temp_path / child.name
-        try:
-            target.symlink_to(child.resolve(), target_is_directory=child.is_dir())
-        except Exception:
-            if child.is_dir():
-                shutil.copytree(child, target, symlinks=True)
-            else:
-                shutil.copy2(child, target)
-    return str(temp_path), tempdir, tokenizer_files
-
 
 
 def extract_tool_schema_name(schema: Mapping[str, Any]) -> str | None:
@@ -2290,36 +2248,41 @@ def main() -> None:
     with open(adapter_cfg_path, "r", encoding="utf-8") as handle:
         adapter_cfg = json.load(handle)
     base_model_name = adapter_cfg["base_model_name_or_path"]
-    tokenizer_path = base_model_name
-    if not args.prefer_base_tokenizer and (Path(args.adapter) / "tokenizer_config.json").exists():
-        tokenizer_path = args.adapter
+    adapter_path = Path(args.adapter)
+    tokenizer_name, tokenizer_source, tokenizer_files = resolve_tokenizer_source(
+        adapter_path,
+        base_model_name=base_model_name,
+        prefer_base_tokenizer=args.prefer_base_tokenizer,
+    )
 
     print(f"Loading adapter from {args.adapter} ...")
     print(f"  Base model: {base_model_name}")
-    print(f"  Tokenizer source: {'base model' if tokenizer_path == base_model_name else 'adapter directory'}")
+    print(f"  Tokenizer source: {tokenizer_source}")
     use_transformers_fallback = False
     fallback_reason: str | None = None
     unsloth_stage = "initialization"
-    unsloth_tempdir: tempfile.TemporaryDirectory[str] | None = None
+    unsloth_tempdir = None
     try:
         from unsloth import FastModel
 
         unsloth_max_seq = args.max_seq_length if args.max_seq_length is not None else 4096
         unsloth_model_name, unsloth_tempdir, skipped_tokenizer_files = prepare_unsloth_adapter_path(
-            Path(args.adapter),
+            adapter_path,
             prefer_base_tokenizer=args.prefer_base_tokenizer,
         )
-        if skipped_tokenizer_files:
-            print(
-                "  Unsloth adapter load: masking adapter-local tokenizer artifacts to prefer the base tokenizer: "
-                + ", ".join(skipped_tokenizer_files)
-            )
+        tokenizer_load_note = format_unsloth_tokenizer_load_message(
+            prefer_base_tokenizer=args.prefer_base_tokenizer,
+            tokenizer_files=skipped_tokenizer_files or tokenizer_files,
+        )
+        if tokenizer_load_note:
+            print(tokenizer_load_note)
         unsloth_kwargs: dict[str, Any] = {
             "model_name": unsloth_model_name,
             "max_seq_length": unsloth_max_seq,
             "load_in_4bit": args.load_in_4bit,
             "load_in_16bit": args.load_in_16bit,
             "full_finetuning": False,
+            "tokenizer_name": tokenizer_name,
         }
         # args.adapter has already been resolved to a local PEFT adapter directory.
         # Keep the base-model revision pin for the transformers fallback path, but do
@@ -2373,9 +2336,9 @@ def main() -> None:
         model.eval()
 
         tokenizer_kwargs: dict[str, Any] = {"trust_remote_code": True}
-        if args.model_revision and tokenizer_path == base_model_name:
+        if args.model_revision and tokenizer_name == base_model_name:
             tokenizer_kwargs["revision"] = args.model_revision
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, **tokenizer_kwargs)
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, **tokenizer_kwargs)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
         print("Model loaded via transformers + peft.\n")

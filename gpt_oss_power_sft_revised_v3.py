@@ -15,6 +15,7 @@ Design choices:
 from __future__ import annotations
 
 import argparse
+import gc
 import inspect
 import json
 import os
@@ -28,6 +29,11 @@ import torch
 from unsloth import FastModel, is_bfloat16_supported
 from trl import SFTConfig, SFTTrainer
 from transformers import TrainerCallback
+from gemma_adapter_loader import (
+    format_unsloth_tokenizer_load_message,
+    prepare_unsloth_adapter_path,
+    resolve_tokenizer_source,
+)
 from trace_protocol import canonical_tool_schemas
 
 
@@ -342,7 +348,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--sanity-check-fail-on-miss",
         action="store_true",
         default=False,
-        help="Exit non-zero if any post-train sanity sample fails to begin with the expected tool call.",
+        help="Exit non-zero if any post-train or post-save-reload sanity sample fails to begin with the expected tool call.",
+    )
+    parser.add_argument(
+        "--no-reload-sanity-check",
+        dest="reload_sanity_check",
+        action="store_false",
+        default=True,
+        help="Skip reloading the saved adapter and rerunning the first-turn sanity check after save.",
     )
     parser.add_argument(
         "--repeat-first-tool-call",
@@ -1792,6 +1805,7 @@ def run_post_train_sanity_check(
     inject_empty_thought_channel: bool,
     sample_count: int,
     max_new_tokens: int,
+    label: str = "Post-train first-turn sanity",
 ) -> int:
     examples = collect_first_turn_sanity_examples(
         raw_rows,
@@ -1802,10 +1816,10 @@ def run_post_train_sanity_check(
         sample_count=sample_count,
     )
     if not examples:
-        print("Post-train sanity check skipped: no first-turn tool-call examples were found.")
+        print(f"{label} skipped: no first-turn tool-call examples were found.")
         return 0
 
-    print(f"=== Post-train first-turn sanity ({len(examples)} samples) ===")
+    print(f"=== {label} ({len(examples)} samples) ===")
     FastModel.for_inference(model)
     failures = 0
 
@@ -1841,8 +1855,54 @@ def run_post_train_sanity_check(
         if not passed:
             failures += 1
 
-    print(f"=== End post-train sanity: {len(examples) - failures}/{len(examples)} passed ===")
+    print(f"=== End {label}: {len(examples) - failures}/{len(examples)} passed ===")
     return failures
+
+
+def load_saved_adapter_for_sanity(
+    *,
+    adapter_path: Path,
+    base_model_name: str,
+    max_seq_length: int,
+    load_in_4bit: bool,
+    load_in_16bit: bool,
+    prefer_base_tokenizer: bool,
+) -> tuple[Any, Any]:
+    tokenizer_name, tokenizer_source, tokenizer_files = resolve_tokenizer_source(
+        adapter_path,
+        base_model_name=base_model_name,
+        prefer_base_tokenizer=prefer_base_tokenizer,
+    )
+    print(f"Reloading saved adapter from {adapter_path} ...")
+    print(f"  Reload base model: {base_model_name}")
+    print(f"  Reload tokenizer source: {tokenizer_source}")
+
+    unsloth_model_name, unsloth_tempdir, prepared_tokenizer_files = prepare_unsloth_adapter_path(
+        adapter_path,
+        prefer_base_tokenizer=prefer_base_tokenizer,
+    )
+    tokenizer_load_note = format_unsloth_tokenizer_load_message(
+        prefer_base_tokenizer=prefer_base_tokenizer,
+        tokenizer_files=prepared_tokenizer_files or tokenizer_files,
+    )
+    if tokenizer_load_note:
+        print(tokenizer_load_note)
+
+    try:
+        model, tokenizer = FastModel.from_pretrained(
+            model_name=unsloth_model_name,
+            max_seq_length=max_seq_length,
+            load_in_4bit=load_in_4bit,
+            load_in_16bit=load_in_16bit,
+            full_finetuning=False,
+            tokenizer_name=tokenizer_name,
+        )
+    finally:
+        if unsloth_tempdir is not None:
+            unsloth_tempdir.cleanup()
+
+    FastModel.for_inference(model)
+    return model, tokenizer
 
 
 def resolve_pad_token_id(tokenizer: Any) -> int:
@@ -2114,6 +2174,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Saved LoRA adapter and tokenizer to: {save_dir}")
 
     sanity_failures = 0
+    reload_sanity_failures = 0
     if signal_state.received is None and args.sanity_check_samples > 0:
         sanity_failures = run_post_train_sanity_check(
             model=model,
@@ -2126,11 +2187,54 @@ def main(argv: list[str] | None = None) -> int:
             inject_empty_thought_channel=args.inject_empty_thought_channel,
             sample_count=args.sanity_check_samples,
             max_new_tokens=args.sanity_check_max_new_tokens,
+            label="Post-train first-turn sanity",
         )
         if sanity_failures > 0:
             print(f"WARNING: post-train first-turn sanity failed on {sanity_failures} sample(s).")
-            if args.sanity_check_fail_on_miss:
-                return 2
+        if args.reload_sanity_check:
+            del trainer
+            del model
+            del tokenizer
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            reload_model, reload_tokenizer = load_saved_adapter_for_sanity(
+                adapter_path=save_dir,
+                base_model_name=args.model_name,
+                max_seq_length=args.max_seq_length,
+                load_in_4bit=args.load_in_4bit,
+                load_in_16bit=args.load_in_16bit,
+                prefer_base_tokenizer=False,
+            )
+            try:
+                reload_sanity_failures = run_post_train_sanity_check(
+                    model=reload_model,
+                    tokenizer=reload_tokenizer,
+                    raw_rows=raw_ds["train"],
+                    default_tools=default_tools,
+                    preserve_system_text=args.preserve_system_text,
+                    phase_gated_prompt=args.phase_gated_prompt,
+                    phase_role=phase_role,
+                    inject_empty_thought_channel=args.inject_empty_thought_channel,
+                    sample_count=args.sanity_check_samples,
+                    max_new_tokens=args.sanity_check_max_new_tokens,
+                    label="Post-save-reload first-turn sanity",
+                )
+            finally:
+                del reload_model
+                del reload_tokenizer
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+            if reload_sanity_failures > 0:
+                print(
+                    f"WARNING: post-save-reload first-turn sanity failed on {reload_sanity_failures} sample(s)."
+                )
+
+        if args.sanity_check_fail_on_miss and (sanity_failures > 0 or reload_sanity_failures > 0):
+            return 2
 
     if signal_state.received is not None:
         try:
