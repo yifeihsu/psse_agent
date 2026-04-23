@@ -28,6 +28,7 @@ from trace_protocol import (
     extract_conversation_context,
     hydrate_tool_arguments as protocol_hydrate_tool_arguments,
     normalize_instruction_content,
+    round_tool_result_payload,
     resolve_case_path_alias,
     summarize_tool_result_for_conversation,
 )
@@ -731,6 +732,22 @@ def tokenize_rendered_text(tokenizer: Any, prompt: str) -> Any:
         return tokenizer(prompt, return_tensors="pt")
 
 
+def is_tensor_like(value: Any) -> bool:
+    return hasattr(value, "shape") and hasattr(value, "to")
+
+
+def is_sequence_aligned_tensor(value: Any, sequence_length: int) -> bool:
+    if not is_tensor_like(value):
+        return False
+    shape = getattr(value, "shape", None)
+    if shape is None or len(shape) == 0:
+        return False
+    try:
+        return int(shape[-1]) == int(sequence_length)
+    except Exception:
+        return False
+
+
 def build_model_inputs(
     conversation: list[dict[str, Any]],
     tokenizer: Any,
@@ -768,18 +785,23 @@ def build_model_inputs(
     inputs = tokenize_rendered_text(tokenizer, prompt)
 
     input_ids = inputs["input_ids"]
-    attention_mask = inputs.get("attention_mask")
+    input_sequence_length = int(input_ids.shape[-1])
     truncated = False
 
-    if max_input_tokens is not None and input_ids.shape[-1] > max_input_tokens:
-        input_ids = input_ids[:, -max_input_tokens:]
-        if attention_mask is not None:
-            attention_mask = attention_mask[:, -max_input_tokens:]
+    if max_input_tokens is not None and input_sequence_length > max_input_tokens:
         truncated = True
 
-    model_inputs = {"input_ids": input_ids.to(model.device)}
-    if attention_mask is not None:
-        model_inputs["attention_mask"] = attention_mask.to(model.device)
+    model_inputs: dict[str, Any] = {}
+    for key, value in inputs.items():
+        if not is_tensor_like(value):
+            continue
+        tensor = value
+        if truncated and is_sequence_aligned_tensor(tensor, input_sequence_length):
+            tensor = tensor[..., -max_input_tokens:]
+        model_inputs[key] = tensor.to(model.device)
+
+    if "input_ids" not in model_inputs:
+        raise ValueError("Tokenizer output did not include input_ids.")
     return model_inputs, truncated
 
 
@@ -1400,41 +1422,68 @@ def pad_model_inputs_for_batch(
     import torch
 
     max_len = max(model_inputs["input_ids"].shape[-1] for model_inputs in model_inputs_list)
-    device = model_inputs_list[0]["input_ids"].device
-    dtype = model_inputs_list[0]["input_ids"].dtype
     effective_pad_token_id = 0 if pad_token_id is None else pad_token_id
 
     batch_size = len(model_inputs_list)
-    batched_input_ids = torch.full(
-        (batch_size, max_len),
-        effective_pad_token_id,
-        dtype=dtype,
-        device=device,
-    )
 
-    has_attention = any("attention_mask" in model_inputs for model_inputs in model_inputs_list)
-    batched_attention_mask = None
-    if has_attention:
-        batched_attention_mask = torch.zeros(
-            (batch_size, max_len),
-            dtype=model_inputs_list[0].get("attention_mask", model_inputs_list[0]["input_ids"]).dtype,
-            device=device,
+    ordered_keys: list[str] = []
+    for model_inputs in model_inputs_list:
+        for key in model_inputs:
+            if key not in ordered_keys:
+                ordered_keys.append(key)
+    if "input_ids" not in ordered_keys:
+        ordered_keys.insert(0, "input_ids")
+
+    batched_inputs: dict[str, Any] = {}
+    token_lengths = [int(model_inputs["input_ids"].shape[-1]) for model_inputs in model_inputs_list]
+
+    for key in ordered_keys:
+        first_value = next((model_inputs.get(key) for model_inputs in model_inputs_list if key in model_inputs), None)
+        if first_value is None or not is_tensor_like(first_value):
+            continue
+
+        sequence_aligned = any(
+            key in model_inputs
+            and is_sequence_aligned_tensor(model_inputs[key], token_lengths[row_index])
+            for row_index, model_inputs in enumerate(model_inputs_list)
         )
-
-    for row_index, model_inputs in enumerate(model_inputs_list):
-        input_ids = model_inputs["input_ids"][0]
-        length = input_ids.shape[-1]
-        batched_input_ids[row_index, -length:] = input_ids
-        if batched_attention_mask is not None:
-            attention_mask = model_inputs.get("attention_mask")
-            if attention_mask is None:
-                batched_attention_mask[row_index, -length:] = 1
+        if sequence_aligned:
+            if key == "input_ids":
+                pad_value = effective_pad_token_id
             else:
-                batched_attention_mask[row_index, -length:] = attention_mask[0]
+                pad_value = 0
+            batched_tensor = torch.full(
+                (batch_size, max_len),
+                pad_value,
+                dtype=first_value.dtype,
+                device=first_value.device,
+            )
+            for row_index, model_inputs in enumerate(model_inputs_list):
+                length = token_lengths[row_index]
+                value = model_inputs.get(key)
+                if value is None:
+                    if key == "attention_mask":
+                        batched_tensor[row_index, -length:] = 1
+                    continue
+                if not is_sequence_aligned_tensor(value, length):
+                    raise ValueError(
+                        f"{key} length {getattr(value, 'shape', None)} does not align with input_ids length {length}."
+                    )
+                if len(value.shape) != 2 or int(value.shape[0]) != 1:
+                    raise ValueError(f"{key} must be a [1, seq_len] tensor for batch padding.")
+                batched_tensor[row_index, -length:] = value[0]
+            batched_inputs[key] = batched_tensor
+            continue
 
-    batched_inputs = {"input_ids": batched_input_ids}
-    if batched_attention_mask is not None:
-        batched_inputs["attention_mask"] = batched_attention_mask
+        values = [model_inputs.get(key) for model_inputs in model_inputs_list]
+        if all(
+            is_tensor_like(value) and len(value.shape) > 0 and int(value.shape[0]) == 1
+            for value in values
+        ):
+            tail_shape = tuple(values[0].shape[1:])
+            if all(tuple(value.shape[1:]) == tail_shape for value in values):
+                batched_inputs[key] = torch.cat(values, dim=0)
+
     return batched_inputs, max_len
 
 
@@ -1536,7 +1585,7 @@ def run_state_turn(
         )
         tool_seconds = time.perf_counter() - tool_start
         turn_record["tool_seconds"] = round(tool_seconds, 6)
-        turn_record["tool_result"] = tool_result
+        turn_record["tool_result"] = round_tool_result_payload(tool_result)
         tool_result_for_prompt = summarize_tool_result_for_conversation(
             tool_name,
             tool_result,
@@ -1779,7 +1828,7 @@ def run_one_sample(
             )
             tool_seconds = time.perf_counter() - tool_start
             turn_record["tool_seconds"] = round(tool_seconds, 6)
-            turn_record["tool_result"] = tool_result
+            turn_record["tool_result"] = round_tool_result_payload(tool_result)
             tool_result_for_prompt = summarize_tool_result_for_conversation(
                 tool_name,
                 tool_result,
