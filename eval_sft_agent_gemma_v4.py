@@ -28,7 +28,6 @@ from trace_protocol import (
     extract_conversation_context,
     hydrate_tool_arguments as protocol_hydrate_tool_arguments,
     normalize_instruction_content,
-    round_tool_result_payload,
     resolve_case_path_alias,
     summarize_tool_result_for_conversation,
 )
@@ -67,6 +66,19 @@ GEMMA_QUOTE_TOKEN = '<|"|>'
 FINAL_JSON_SCHEMA_MARKER = "Return only strict JSON with this structure:"
 PROSE_TOOL_CATALOG_MARKER = "Available tools:"
 DECISION_POLICY_MARKER = "Decision policy:"
+TOOL_RESULT_FLOAT_DECIMALS = 6
+
+
+def round_tool_result_payload(value: Any) -> Any:
+    if isinstance(value, float):
+        return round(value, TOOL_RESULT_FLOAT_DECIMALS)
+    if isinstance(value, list):
+        return [round_tool_result_payload(item) for item in value]
+    if isinstance(value, dict):
+        return {key: round_tool_result_payload(item) for key, item in value.items()}
+    return value
+
+
 FIRST_TOOL_PHASE_MESSAGE = (
     "Current phase: first tool selection.\n"
     "Before any tool response exists, emit exactly one native Gemma tool call and nothing else.\n"
