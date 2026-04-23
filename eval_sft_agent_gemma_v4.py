@@ -781,7 +781,8 @@ def build_model_inputs(
     rendered_conversation = collapse_openai_tool_messages(copy.deepcopy(conversation))
     if effective_tools is not None:
         rendered_conversation = strip_prose_tool_catalog_from_messages(rendered_conversation)
-    rendered_conversation = normalize_gemma_messages(apply_phase_gating(rendered_conversation, phase))
+    rendered_conversation = normalize_gemma_messages(rendered_conversation)
+    rendered_conversation = apply_phase_gating(rendered_conversation, phase)
     rendered_conversation = inject_runtime_tool_availability_note(
         rendered_conversation,
         runtime_context,
