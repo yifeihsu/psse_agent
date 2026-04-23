@@ -15,6 +15,7 @@ Design choices:
 from __future__ import annotations
 
 import argparse
+import difflib
 import gc
 import inspect
 import json
@@ -329,8 +330,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--sanity-check-samples",
         type=int,
-        default=3,
-        help="Number of first-turn tool-call prompts to greedily decode after training; 0 disables the check.",
+        default=50,
+        help="Number of rows for the post-save eval-parity first-turn wls_from_path sanity check; 0 disables the check.",
     )
     parser.add_argument(
         "--mask-sanity-samples",
@@ -342,13 +343,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--sanity-check-max-new-tokens",
         type=int,
         default=128,
-        help="Generation budget for each post-train sanity decode.",
+        help="Generation budget for each post-save eval-parity sanity decode.",
     )
     parser.add_argument(
         "--sanity-check-fail-on-miss",
         action="store_true",
         default=False,
-        help="Exit non-zero if any post-train or post-save-reload sanity sample fails to begin with the expected tool call.",
+        help="Exit non-zero if any post-save eval-parity sanity sample fails to begin with wls_from_path.",
     )
     parser.add_argument(
         "--no-reload-sanity-check",
@@ -1518,6 +1519,22 @@ def decode_token_ids(tokenizer: Any, token_ids: torch.Tensor) -> str:
     return decoder.decode(token_ids.detach().cpu(), skip_special_tokens=False)
 
 
+def render_generation_prompt(
+    tokenizer: Any,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    *,
+    inject_empty_thought_channel: bool,
+) -> str:
+    return render_training_text(
+        tokenizer,
+        messages,
+        tools,
+        add_generation_prompt=True,
+        inject_empty_thought_channel=inject_empty_thought_channel,
+    )
+
+
 def build_generation_inputs(
     tokenizer: Any,
     messages: list[dict[str, Any]],
@@ -1525,11 +1542,10 @@ def build_generation_inputs(
     model: Any,
     inject_empty_thought_channel: bool,
 ) -> dict[str, torch.Tensor]:
-    prompt = render_training_text(
+    prompt = render_generation_prompt(
         tokenizer,
         messages,
         tools,
-        add_generation_prompt=True,
         inject_empty_thought_channel=inject_empty_thought_channel,
     )
     inputs = tokenize_text(tokenizer, prompt, return_tensors="pt")
@@ -1791,6 +1807,261 @@ def collect_first_turn_sanity_examples(
             break
 
     return examples
+
+
+def resolve_row_tools_for_sanity(
+    row: dict[str, Any],
+    default_tools: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    row_tools = row.get("tools")
+    if row_tools is None:
+        return default_tools
+    if not isinstance(row_tools, list):
+        raise ValueError(f"Expected row['tools'] to be a list, got {type(row_tools).__name__}")
+    return sanitize_tool_schemas(row_tools)
+
+
+def collect_eval_parity_sanity_examples(
+    raw_rows: list[dict[str, Any]],
+    default_tools: list[dict[str, Any]] | None,
+    sample_count: int,
+) -> list[dict[str, Any]]:
+    if sample_count <= 0:
+        return []
+
+    import eval_sft_agent_gemma_v4 as gemma_eval
+
+    examples: list[dict[str, Any]] = []
+    for row_index, row in enumerate(raw_rows):
+        messages_gt = row["messages"]
+        conversation = gemma_eval.extract_prompt_prefix(messages_gt)
+        phase = gemma_eval.infer_expected_phase(messages_gt, conversation)
+        if phase != "first_tool_call":
+            continue
+
+        examples.append(
+            {
+                "row_index": row_index,
+                "case_path": extract_case_path(conversation),
+                "messages_gt": messages_gt,
+                "conversation": conversation,
+                "phase": phase,
+                "tools": resolve_row_tools_for_sanity(row, default_tools),
+                "runtime_context": row.get("runtime_context"),
+            }
+        )
+        if len(examples) >= sample_count:
+            break
+
+    return examples
+
+
+def write_prompt_diff(
+    *,
+    from_label: str,
+    from_text: str,
+    to_label: str,
+    to_text: str,
+    diff_path: Path,
+) -> None:
+    diff_lines = difflib.unified_diff(
+        from_text.splitlines(keepends=True),
+        to_text.splitlines(keepends=True),
+        fromfile=from_label,
+        tofile=to_label,
+    )
+    diff_path.write_text("".join(diff_lines), encoding="utf-8")
+
+
+def dump_turn1_prompt_diagnostics(
+    *,
+    raw_rows: list[dict[str, Any]],
+    default_tools: list[dict[str, Any]] | None,
+    tokenizer: Any,
+    preserve_system_text: bool,
+    phase_gated_prompt: bool,
+    phase_role: str,
+    inject_empty_thought_channel: bool,
+    output_dir: Path,
+) -> None:
+    sft_examples = collect_first_turn_sanity_examples(
+        raw_rows,
+        default_tools=default_tools,
+        preserve_system_text=preserve_system_text,
+        phase_gated_prompt=phase_gated_prompt,
+        phase_role=phase_role,
+        sample_count=1,
+    )
+    eval_examples = collect_eval_parity_sanity_examples(
+        raw_rows,
+        default_tools=default_tools,
+        sample_count=1,
+    )
+    if not sft_examples or not eval_examples:
+        print("Turn-1 prompt diagnostic skipped: no comparable first-turn samples were found.")
+        return
+
+    import eval_sft_agent_gemma_v4 as gemma_eval
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    sft_example = sft_examples[0]
+    eval_example = eval_examples[0]
+
+    sft_prompt = render_generation_prompt(
+        tokenizer,
+        sft_example["history"],
+        sft_example["tools"],
+        inject_empty_thought_channel=inject_empty_thought_channel,
+    )
+    eval_mutated_prompt = gemma_eval.render_model_prompt(
+        eval_example["conversation"],
+        tokenizer,
+        tools=eval_example["tools"],
+        enable_thinking=False,
+        phase=eval_example["phase"],
+        inject_empty_thought_channel=inject_empty_thought_channel,
+        runtime_context=eval_example["runtime_context"],
+        filter_unavailable_helper_tools=True,
+        inject_runtime_helper_note=True,
+    )
+    eval_parity_prompt = gemma_eval.render_model_prompt(
+        eval_example["conversation"],
+        tokenizer,
+        tools=eval_example["tools"],
+        enable_thinking=False,
+        phase=eval_example["phase"],
+        inject_empty_thought_channel=inject_empty_thought_channel,
+        runtime_context=eval_example["runtime_context"],
+        filter_unavailable_helper_tools=False,
+        inject_runtime_helper_note=False,
+    )
+
+    sft_path = output_dir / "turn1_sample1.sft_sanity.prompt.txt"
+    eval_mutated_path = output_dir / "turn1_sample1.eval_with_mutations.prompt.txt"
+    eval_parity_path = output_dir / "turn1_sample1.eval_parity.prompt.txt"
+    mutated_diff_path = output_dir / "turn1_sample1.sft_vs_eval_with_mutations.diff"
+    parity_diff_path = output_dir / "turn1_sample1.sft_vs_eval_parity.diff"
+
+    sft_path.write_text(sft_prompt, encoding="utf-8")
+    eval_mutated_path.write_text(eval_mutated_prompt, encoding="utf-8")
+    eval_parity_path.write_text(eval_parity_prompt, encoding="utf-8")
+    write_prompt_diff(
+        from_label=sft_path.name,
+        from_text=sft_prompt,
+        to_label=eval_mutated_path.name,
+        to_text=eval_mutated_prompt,
+        diff_path=mutated_diff_path,
+    )
+    write_prompt_diff(
+        from_label=sft_path.name,
+        from_text=sft_prompt,
+        to_label=eval_parity_path.name,
+        to_text=eval_parity_prompt,
+        diff_path=parity_diff_path,
+    )
+
+    print("Dumped turn-1 prompt diagnostics:")
+    print(f"  SFT sanity prompt: {sft_path}")
+    print(f"  Eval prompt with eval-only mutations: {eval_mutated_path}")
+    print(f"  Diff: {mutated_diff_path}")
+    print(f"  Eval-parity prompt used by sanity: {eval_parity_path}")
+    print(f"  Diff: {parity_diff_path}")
+
+
+def run_eval_parity_sanity_check(
+    *,
+    model: Any,
+    tokenizer: Any,
+    raw_rows: list[dict[str, Any]],
+    default_tools: list[dict[str, Any]] | None,
+    inject_empty_thought_channel: bool,
+    sample_count: int,
+    max_new_tokens: int,
+    max_input_tokens: int,
+    prompt_dump_dir: Path | None = None,
+    preserve_system_text: bool = False,
+    phase_gated_prompt: bool = True,
+    phase_role: str = "system",
+    label: str = "Post-save eval-parity first-turn sanity",
+) -> int:
+    examples = collect_eval_parity_sanity_examples(
+        raw_rows,
+        default_tools=default_tools,
+        sample_count=sample_count,
+    )
+    if not examples:
+        print(f"{label} skipped: no first-turn tool-call examples were found.")
+        return 0
+
+    if prompt_dump_dir is not None:
+        dump_turn1_prompt_diagnostics(
+            raw_rows=raw_rows,
+            default_tools=default_tools,
+            tokenizer=tokenizer,
+            preserve_system_text=preserve_system_text,
+            phase_gated_prompt=phase_gated_prompt,
+            phase_role=phase_role,
+            inject_empty_thought_channel=inject_empty_thought_channel,
+            output_dir=prompt_dump_dir,
+        )
+
+    import eval_sft_agent_gemma_v4 as gemma_eval
+
+    print(f"=== {label} ({len(examples)} rows) ===")
+    FastModel.for_inference(model)
+    stop_ids = gemma_eval.get_stop_token_ids(tokenizer)
+    pad_token_id = gemma_eval.resolve_pad_token_id(tokenizer)
+    failures = 0
+
+    for index, example in enumerate(examples, start=1):
+        model_inputs, was_truncated = gemma_eval.build_model_inputs(
+            example["conversation"],
+            tokenizer,
+            model,
+            max_input_tokens=max_input_tokens,
+            tools=example["tools"],
+            enable_thinking=False,
+            phase=example["phase"],
+            inject_empty_thought_channel=inject_empty_thought_channel,
+            runtime_context=example["runtime_context"],
+            filter_unavailable_helper_tools=False,
+            inject_runtime_helper_note=False,
+        )
+        input_len = int(model_inputs["input_ids"].shape[-1])
+        with torch.inference_mode():
+            output_ids = model.generate(
+                **model_inputs,
+                max_new_tokens=max_new_tokens,
+                temperature=0.0,
+                do_sample=False,
+                use_cache=True,
+                eos_token_id=stop_ids,
+                pad_token_id=pad_token_id,
+            )
+        generated_text, _, _ = gemma_eval.decode_generated_response(
+            tokenizer,
+            output_ids[0][input_len:],
+            pad_token_id=pad_token_id,
+        )
+        candidate = strip_leading_thought_blocks(generated_text).lstrip()
+        passed = matches_expected_tool_call(
+            candidate,
+            tokenizer=tokenizer,
+            tools=example["tools"],
+            tool_name="wls_from_path",
+        )
+        case_label = example["case_path"] or f"row{example['row_index']}"
+        truncation_note = " truncated" if was_truncated else ""
+        print(
+            f"[eval-parity sanity {index}/{len(examples)}] "
+            f"case={case_label} asks=wls_from_path pass={passed}{truncation_note}"
+        )
+        print(f"  output={candidate[:240]!r}")
+        if not passed:
+            failures += 1
+
+    print(f"=== End {label}: {len(examples) - failures}/{len(examples)} passed ===")
+    return failures
 
 
 def run_post_train_sanity_check(
@@ -2176,21 +2447,23 @@ def main(argv: list[str] | None = None) -> int:
     sanity_failures = 0
     reload_sanity_failures = 0
     if signal_state.received is None and args.sanity_check_samples > 0:
-        sanity_failures = run_post_train_sanity_check(
+        sanity_failures = run_eval_parity_sanity_check(
             model=model,
             tokenizer=tokenizer,
             raw_rows=raw_ds["train"],
             default_tools=default_tools,
-            preserve_system_text=args.preserve_system_text,
-            phase_gated_prompt=args.phase_gated_prompt,
-            phase_role=phase_role,
             inject_empty_thought_channel=args.inject_empty_thought_channel,
             sample_count=args.sanity_check_samples,
             max_new_tokens=args.sanity_check_max_new_tokens,
-            label="Post-train first-turn sanity",
+            max_input_tokens=args.max_seq_length,
+            prompt_dump_dir=Path(args.output_dir) / "prompt_diagnostics",
+            preserve_system_text=args.preserve_system_text,
+            phase_gated_prompt=args.phase_gated_prompt,
+            phase_role=phase_role,
+            label="Post-save eval-parity first-turn sanity",
         )
         if sanity_failures > 0:
-            print(f"WARNING: post-train first-turn sanity failed on {sanity_failures} sample(s).")
+            print(f"WARNING: post-save eval-parity sanity failed on {sanity_failures} sample(s).")
         if args.reload_sanity_check:
             del trainer
             del model
@@ -2208,18 +2481,16 @@ def main(argv: list[str] | None = None) -> int:
                 prefer_base_tokenizer=False,
             )
             try:
-                reload_sanity_failures = run_post_train_sanity_check(
+                reload_sanity_failures = run_eval_parity_sanity_check(
                     model=reload_model,
                     tokenizer=reload_tokenizer,
                     raw_rows=raw_ds["train"],
                     default_tools=default_tools,
-                    preserve_system_text=args.preserve_system_text,
-                    phase_gated_prompt=args.phase_gated_prompt,
-                    phase_role=phase_role,
                     inject_empty_thought_channel=args.inject_empty_thought_channel,
                     sample_count=args.sanity_check_samples,
                     max_new_tokens=args.sanity_check_max_new_tokens,
-                    label="Post-save-reload first-turn sanity",
+                    max_input_tokens=args.max_seq_length,
+                    label="Post-save-reload eval-parity first-turn sanity",
                 )
             finally:
                 del reload_model
@@ -2230,7 +2501,7 @@ def main(argv: list[str] | None = None) -> int:
 
             if reload_sanity_failures > 0:
                 print(
-                    f"WARNING: post-save-reload first-turn sanity failed on {reload_sanity_failures} sample(s)."
+                    f"WARNING: post-save-reload eval-parity sanity failed on {reload_sanity_failures} sample(s)."
                 )
 
         if args.sanity_check_fail_on_miss and (sanity_failures > 0 or reload_sanity_failures > 0):

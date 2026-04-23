@@ -408,7 +408,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--filter-unavailable-helper-tools",
         action="store_true",
-        default=True,
+        default=False,
         help="Hide helper tool schemas that are not backed by runtime context for the current sample.",
     )
     p.add_argument(
@@ -416,6 +416,18 @@ def parse_args() -> argparse.Namespace:
         dest="filter_unavailable_helper_tools",
         action="store_false",
         help="Always expose every helper tool schema, even when a sample lacks that runtime context.",
+    )
+    p.add_argument(
+        "--inject-runtime-helper-note",
+        action="store_true",
+        default=False,
+        help="Inject a per-sample note listing runtime-backed helper tools.",
+    )
+    p.add_argument(
+        "--no-inject-runtime-helper-note",
+        dest="inject_runtime_helper_note",
+        action="store_false",
+        help="Do not inject the runtime helper availability note.",
     )
     p.add_argument(
         "--continue-on-missing-context-tool",
@@ -760,6 +772,43 @@ def is_sequence_aligned_tensor(value: Any, sequence_length: int) -> bool:
         return False
 
 
+def render_model_prompt(
+    conversation: list[dict[str, Any]],
+    tokenizer: Any,
+    *,
+    tools: list[dict[str, Any]] | None,
+    enable_thinking: bool,
+    phase: str,
+    inject_empty_thought_channel: bool,
+    runtime_context: Mapping[str, Any] | None = None,
+    filter_unavailable_helper_tools: bool = False,
+    inject_runtime_helper_note: bool = False,
+) -> str:
+    effective_tools = (
+        filter_tool_schemas_for_runtime_context(tools, runtime_context)
+        if filter_unavailable_helper_tools
+        else tools
+    )
+    rendered_conversation = collapse_openai_tool_messages(copy.deepcopy(conversation))
+    if effective_tools is not None:
+        rendered_conversation = strip_prose_tool_catalog_from_messages(rendered_conversation)
+    rendered_conversation = normalize_gemma_messages(rendered_conversation)
+    rendered_conversation = apply_phase_gating(rendered_conversation, phase)
+    if inject_runtime_helper_note:
+        rendered_conversation = inject_runtime_tool_availability_note(
+            rendered_conversation,
+            runtime_context,
+        )
+
+    return render_eval_text(
+        tokenizer,
+        rendered_conversation,
+        effective_tools,
+        enable_thinking=enable_thinking,
+        inject_empty_thought_channel=inject_empty_thought_channel,
+    )
+
+
 def build_model_inputs(
     conversation: list[dict[str, Any]],
     tokenizer: Any,
@@ -771,29 +820,19 @@ def build_model_inputs(
     phase: str,
     inject_empty_thought_channel: bool,
     runtime_context: Mapping[str, Any] | None = None,
-    filter_unavailable_helper_tools: bool = True,
+    filter_unavailable_helper_tools: bool = False,
+    inject_runtime_helper_note: bool = False,
 ) -> tuple[dict[str, Any], bool]:
-    effective_tools = (
-        filter_tool_schemas_for_runtime_context(tools, runtime_context)
-        if filter_unavailable_helper_tools
-        else tools
-    )
-    rendered_conversation = collapse_openai_tool_messages(copy.deepcopy(conversation))
-    if effective_tools is not None:
-        rendered_conversation = strip_prose_tool_catalog_from_messages(rendered_conversation)
-    rendered_conversation = normalize_gemma_messages(rendered_conversation)
-    rendered_conversation = apply_phase_gating(rendered_conversation, phase)
-    rendered_conversation = inject_runtime_tool_availability_note(
-        rendered_conversation,
-        runtime_context,
-    )
-
-    prompt = render_eval_text(
+    prompt = render_model_prompt(
+        conversation,
         tokenizer,
-        rendered_conversation,
-        effective_tools,
+        tools=tools,
         enable_thinking=enable_thinking,
+        phase=phase,
         inject_empty_thought_channel=inject_empty_thought_channel,
+        runtime_context=runtime_context,
+        filter_unavailable_helper_tools=filter_unavailable_helper_tools,
+        inject_runtime_helper_note=inject_runtime_helper_note,
     )
     inputs = tokenize_rendered_text(tokenizer, prompt)
 
@@ -1683,6 +1722,7 @@ def run_one_sample(
     gc_collect_every_n_turns: int,
     empty_cuda_cache_every_n_turns: int,
     filter_unavailable_helper_tools: bool,
+    inject_runtime_helper_note: bool,
 ) -> dict[str, Any]:
     import torch
 
@@ -1733,6 +1773,7 @@ def run_one_sample(
             inject_empty_thought_channel=inject_empty_thought_channel,
             runtime_context=runtime_context,
             filter_unavailable_helper_tools=filter_unavailable_helper_tools,
+            inject_runtime_helper_note=inject_runtime_helper_note,
         )
         input_truncated = input_truncated or was_truncated
 
@@ -1957,6 +1998,7 @@ def run_sample_batch(
     gc_collect_every_n_turns: int,
     empty_cuda_cache_every_n_turns: int,
     filter_unavailable_helper_tools: bool,
+    inject_runtime_helper_note: bool,
 ) -> list[dict[str, Any]]:
     import torch
 
@@ -2002,6 +2044,7 @@ def run_sample_batch(
                 inject_empty_thought_channel=inject_empty_thought_channel,
                 runtime_context=state.runtime_context,
                 filter_unavailable_helper_tools=filter_unavailable_helper_tools,
+                inject_runtime_helper_note=inject_runtime_helper_note,
             )
             state.input_truncated = state.input_truncated or was_truncated
             model_inputs_list.append(model_inputs)
@@ -2078,6 +2121,7 @@ def run_samples_with_rolling_scheduler(
     gc_collect_every_n_turns: int,
     empty_cuda_cache_every_n_turns: int,
     filter_unavailable_helper_tools: bool,
+    inject_runtime_helper_note: bool,
     on_result: Any,
 ) -> None:
     import traceback
@@ -2156,6 +2200,7 @@ def run_samples_with_rolling_scheduler(
                     inject_empty_thought_channel=inject_empty_thought_channel,
                     runtime_context=state.runtime_context,
                     filter_unavailable_helper_tools=filter_unavailable_helper_tools,
+                    inject_runtime_helper_note=inject_runtime_helper_note,
                 )
                 state.input_truncated = state.input_truncated or was_truncated
                 model_inputs_list.append(model_inputs)
@@ -2416,6 +2461,7 @@ def main() -> None:
     print(f"GC collect every N turns: {max(0, int(args.gc_collect_every_n_turns))}")
     print(f"Empty CUDA cache every N turns: {max(0, int(args.empty_cuda_cache_every_n_turns))}")
     print(f"Filter unavailable helper tools: {'yes' if args.filter_unavailable_helper_tools else 'no'}")
+    print(f"Inject runtime helper note: {'yes' if args.inject_runtime_helper_note else 'no'}")
     print(f"Continue on missing context tool: {'yes' if args.continue_on_missing_context_tool else 'no'}")
     print(f"Rolling batch scheduler: {'yes' if args.rolling_batch_scheduler else 'no'}")
     print(f"Concurrent conversations: {max(1, int(args.concurrent_conversations))}\n")
@@ -2500,6 +2546,7 @@ def main() -> None:
                 gc_collect_every_n_turns=args.gc_collect_every_n_turns,
                 empty_cuda_cache_every_n_turns=args.empty_cuda_cache_every_n_turns,
                 filter_unavailable_helper_tools=args.filter_unavailable_helper_tools,
+                inject_runtime_helper_note=args.inject_runtime_helper_note,
                 on_result=record_result,
             )
         else:
@@ -2533,6 +2580,7 @@ def main() -> None:
                                 gc_collect_every_n_turns=args.gc_collect_every_n_turns,
                                 empty_cuda_cache_every_n_turns=args.empty_cuda_cache_every_n_turns,
                                 filter_unavailable_helper_tools=args.filter_unavailable_helper_tools,
+                                inject_runtime_helper_note=args.inject_runtime_helper_note,
                             )
                         ]
                     else:
@@ -2554,6 +2602,7 @@ def main() -> None:
                             gc_collect_every_n_turns=args.gc_collect_every_n_turns,
                             empty_cuda_cache_every_n_turns=args.empty_cuda_cache_every_n_turns,
                             filter_unavailable_helper_tools=args.filter_unavailable_helper_tools,
+                            inject_runtime_helper_note=args.inject_runtime_helper_note,
                         )
                 except Exception as exc:
                     import traceback
@@ -2582,6 +2631,7 @@ def main() -> None:
                                     gc_collect_every_n_turns=args.gc_collect_every_n_turns,
                                     empty_cuda_cache_every_n_turns=args.empty_cuda_cache_every_n_turns,
                                     filter_unavailable_helper_tools=args.filter_unavailable_helper_tools,
+                                    inject_runtime_helper_note=args.inject_runtime_helper_note,
                                 )
                             )
                         except Exception as serial_exc:
