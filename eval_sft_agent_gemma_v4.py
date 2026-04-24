@@ -409,19 +409,25 @@ def parse_args() -> argparse.Namespace:
         "--filter-unavailable-helper-tools",
         action="store_true",
         default=False,
-        help="Hide helper tool schemas that are not backed by runtime context for the current sample.",
+        help=(
+            "Hide helper tool schemas that are not backed by runtime context for the current sample. "
+            "Disabled by default to preserve SFT prompt distribution."
+        ),
     )
     p.add_argument(
         "--no-filter-unavailable-helper-tools",
         dest="filter_unavailable_helper_tools",
         action="store_false",
-        help="Always expose every helper tool schema, even when a sample lacks that runtime context.",
+        help="Always expose every helper tool schema, matching the SFT prompt distribution.",
     )
     p.add_argument(
         "--inject-runtime-helper-note",
         action="store_true",
         default=False,
-        help="Inject a per-sample note listing runtime-backed helper tools.",
+        help=(
+            "Inject a per-sample note listing runtime-backed helper tools. "
+            "Disabled by default to preserve SFT prompt distribution."
+        ),
     )
     p.add_argument(
         "--no-inject-runtime-helper-note",
@@ -2462,6 +2468,10 @@ def main() -> None:
     print(f"Empty CUDA cache every N turns: {max(0, int(args.empty_cuda_cache_every_n_turns))}")
     print(f"Filter unavailable helper tools: {'yes' if args.filter_unavailable_helper_tools else 'no'}")
     print(f"Inject runtime helper note: {'yes' if args.inject_runtime_helper_note else 'no'}")
+    print(
+        "SFT prompt parity: "
+        f"{'yes' if not args.filter_unavailable_helper_tools and not args.inject_runtime_helper_note else 'no'}"
+    )
     print(f"Continue on missing context tool: {'yes' if args.continue_on_missing_context_tool else 'no'}")
     print(f"Rolling batch scheduler: {'yes' if args.rolling_batch_scheduler else 'no'}")
     print(f"Concurrent conversations: {max(1, int(args.concurrent_conversations))}\n")
