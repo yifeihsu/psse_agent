@@ -14,6 +14,7 @@ ERROR_FAMILIES = [
     "measurement_error",
     "parameter_error",
     "topology_error",
+    "three_phase_imbalance",
     "harmonic_anomaly",
     "no_error",
 ]
@@ -24,6 +25,7 @@ CONTEXT_TOOL_NAMES = {
     "get_verification_snapshot",
 }
 USER_FLOAT_DECIMALS = 6
+TOOL_RESULT_FLOAT_DECIMALS = 6
 DIAGNOSTIC_FLOAT_DECIMALS = 4
 CONFIDENCE_DECIMALS = 2
 TOPK_EVIDENCE = 5
@@ -37,7 +39,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 DECISION_SCHEMA_TEXT = {
     "verdict": {
         "has_error": "boolean",
-        "error_family": "scalar enum: measurement_error|parameter_error|topology_error|harmonic_anomaly|no_error",
+        "error_family": "scalar enum: measurement_error|parameter_error|topology_error|three_phase_imbalance|harmonic_anomaly|no_error",
+        "error_families": "optional array of error families for multi-error snapshots",
         "confidence": "number in [0,1]",
     },
     "evidence": {
@@ -66,11 +69,13 @@ DECISION_SCHEMA_TEXT = {
         ],
     },
     "suspect_location": {
-        "domain": "measurement|parameter|topology|harmonic|none",
+        "domain": "measurement|parameter|topology|imbalance|harmonic|none",
         "details": "object",
     },
+    "suspect_locations": "optional array of suspect_location objects for multi-error snapshots",
     "action": {
         "applied_tool": "tool name already used in this trace, or null",
+        "applied_tools": "optional array of tool names already used in this trace for multi-error snapshots",
         "arguments_hint": "object or null; use tool-schema field names, where line_index is 1-based",
         "request_more_data": "boolean",
         "requested_data": "array[string] or null",
@@ -101,13 +106,16 @@ SYSTEM_PROMPT = (
     "Decision policy:\n"
     "1. Use concentrated large normalized residuals to localize likely measurement errors.\n"
     "2. Use large normalized Lagrange multipliers concentrated on one branch to suspect parameter errors.\n"
-    "3. Use widespread residual patterns to suspect topology mismatch.\n"
+    "3. Use widespread residual patterns to suspect topology mismatch or three-phase imbalance.\n"
     "4. If parameter context, breaker context, harmonic measurements, or verification snapshots are needed, call the matching helper tool.\n"
-    "5. If the global residual is elevated without a dominant bad measurement and harmonic measurements are available, call `run_hse_from_path`.\n"
-    "6. Prefer compact tool use over asking the user to restate numeric payloads.\n\n"
+    "5. If three-phase imbalance is suspected, request three-phase substation VLN voltages before finalizing.\n"
+    "6. If the global residual is elevated without a dominant bad measurement and harmonic measurements are available, call `run_hse_from_path`.\n"
+    "7. Prefer compact tool use over asking the user to restate numeric payloads.\n\n"
     "Indexing convention: fields ending in `0` are 0-based; `line_index` follows the tool schema and is 1-based.\n\n"
     "Return only strict JSON with this structure:\n"
     f"{json.dumps(DECISION_SCHEMA_TEXT, ensure_ascii=False)}\n"
+    "For multi-error snapshots, keep `error_family` as the primary family and also report all families in "
+    "`error_families`, `suspect_locations`, and `applied_tools`.\n"
     "Do not reveal chain-of-thought. Report only observable evidence and the final decision."
 )
 
@@ -367,6 +375,16 @@ def round_assistant_payload(value: Any, path: tuple[str, ...] = ()) -> Any:
 
 def round_tool_arguments(arguments: Mapping[str, Any]) -> dict[str, Any]:
     return round_user_payload(dict(arguments))
+
+
+def round_tool_result_payload(value: Any) -> Any:
+    if isinstance(value, float):
+        return _round_float(value, TOOL_RESULT_FLOAT_DECIMALS)
+    if isinstance(value, list):
+        return [round_tool_result_payload(item) for item in value]
+    if isinstance(value, dict):
+        return {key: round_tool_result_payload(item) for key, item in value.items()}
+    return value
 
 
 def default_schema_description(name: str | None, schema: dict[str, Any]) -> str:

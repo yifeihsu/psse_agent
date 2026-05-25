@@ -1,5 +1,5 @@
 """
-Fixed evaluator for the fine-tuned PSSE diagnostic agent.
+Hardened evaluator for the fine-tuned PSSE diagnostic agent.
 
 Main fixes versus the original evaluator:
   * Uses the model chat template directly for tokenization, matching SFT formatting.
@@ -17,17 +17,17 @@ Main fixes versus the original evaluator:
   * Uses a smaller default token budget on post-tool turns to reduce runaway verbose finals.
 
 Usage examples:
-  python eval_sft_agent_fixed.py \
-    --adapter outputs/gpt_oss_sft_power_agent_4k/lora \
+  python eval_sft_agent_hardened.py \
+    --adapter outputs/gemma4_power_agent/lora \
     --test-file out_traces_balanced/sft_traces.test.jsonl \
     --max-seq-length 4096 \
-    --output eval_4k_revised.jsonl
+    --output outputs/gemma4_power_agent/eval_4k_hardened.jsonl
 
-  python eval_sft_agent_fixed.py \
-    --adapter outputs/gpt_oss_sft_power_agent_16k/lora \
+  python eval_sft_agent_hardened.py \
+    --adapter outputs/gemma4_power_agent/lora \
     --test-file out_traces_balanced/sft_traces.test.jsonl \
     --max-seq-length 16384 \
-    --output eval_16k_revised.jsonl
+    --output outputs/gemma4_power_agent/eval_16k_hardened.jsonl
 """
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--output",
-        default="eval_results.jsonl",
+        default="outputs/gemma4_power_agent/eval_results.jsonl",
         help="Where to write per-sample results",
     )
     p.add_argument(
@@ -430,6 +430,12 @@ FAMILY_SYNONYMS = {
     "threephaseimbalance": "three_phase_imbalance",
     "harmonicanomaly": "harmonic_anomaly",
 }
+REQUIRED_TOOL_BY_FAMILY = {
+    "measurement_error": "correct_measurements_from_path",
+    "parameter_error": "correct_parameters_from_path",
+    "topology_error": "correct_topology_from_path",
+    "harmonic_anomaly": "run_hse_from_path",
+}
 
 
 
@@ -468,6 +474,70 @@ def normalize_error_family(value: Any) -> str | None:
     return FAMILY_SYNONYMS.get(s, FAMILY_SYNONYMS.get(key, s))
 
 
+def normalize_error_families(value: Any) -> list[str]:
+    raw_values = value if isinstance(value, list) else [value]
+    families: list[str] = []
+    for item in raw_values:
+        family = normalize_error_family(item)
+        if family is not None and family != "no_error" and family not in families:
+            families.append(family)
+    return families
+
+
+def verdict_error_families(verdict_obj: dict[str, Any] | None) -> list[str]:
+    if not isinstance(verdict_obj, dict):
+        return []
+    verdict = verdict_obj.get("verdict")
+    if not isinstance(verdict, dict):
+        return []
+    families = normalize_error_families(verdict.get("error_families"))
+    if not families:
+        families = normalize_error_families(verdict.get("error_family"))
+    return families
+
+
+def applied_tools_from_verdict(verdict_obj: dict[str, Any] | None) -> list[str]:
+    if not isinstance(verdict_obj, dict):
+        return []
+    action = verdict_obj.get("action")
+    if not isinstance(action, dict):
+        return []
+    raw = action.get("applied_tools")
+    tools: list[str] = []
+    if isinstance(raw, list):
+        tools.extend(str(item) for item in raw if item)
+    elif action.get("applied_tool"):
+        tools.append(str(action["applied_tool"]))
+    return tools
+
+
+def required_tools_for_families(families: list[str]) -> list[str]:
+    return [tool for family in families if (tool := REQUIRED_TOOL_BY_FAMILY.get(family))]
+
+
+def multi_metric_fields(
+    gt_verdict: dict[str, Any] | None,
+    predicted_verdict: dict[str, Any] | None,
+    tool_calls_made: list[str],
+) -> dict[str, Any]:
+    gt_families = verdict_error_families(gt_verdict)
+    pred_families = verdict_error_families(predicted_verdict)
+    required_tools = required_tools_for_families(gt_families)
+    required_called = [tool for tool in required_tools if tool in tool_calls_made]
+    required_missing = [tool for tool in required_tools if tool not in tool_calls_made]
+    coverage = (len(required_called) / len(required_tools)) if required_tools else None
+    return {
+        "gt_error_families": gt_families,
+        "pred_error_families": pred_families,
+        "family_set_correct": predicted_verdict is not None and set(gt_families) == set(pred_families),
+        "required_tools": required_tools,
+        "required_tools_called": required_called,
+        "required_tools_missing": required_missing,
+        "required_tool_coverage": coverage,
+        "predicted_applied_tools": applied_tools_from_verdict(predicted_verdict),
+    }
+
+
 
 def normalize_verdict(verdict_obj: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(verdict_obj, dict):
@@ -480,6 +550,8 @@ def normalize_verdict(verdict_obj: dict[str, Any] | None) -> dict[str, Any] | No
     norm_verdict = norm.setdefault("verdict", {})
     norm_verdict["has_error"] = normalize_bool(norm_verdict.get("has_error"))
     norm_verdict["error_family"] = normalize_error_family(norm_verdict.get("error_family"))
+    if "error_families" in norm_verdict:
+        norm_verdict["error_families"] = normalize_error_families(norm_verdict.get("error_families"))
     return norm
 
 
@@ -1286,6 +1358,7 @@ def run_one_sample(
 
     gt_has_error = gt_verdict.get("verdict", {}).get("has_error") if gt_verdict else None
     pred_has_error = predicted_verdict.get("verdict", {}).get("has_error") if predicted_verdict else None
+    multi_metrics = multi_metric_fields(gt_verdict, predicted_verdict, tool_calls_made)
 
     return {
         "gt_error_family": gt_family,
@@ -1294,6 +1367,7 @@ def run_one_sample(
         "pred_has_error": pred_has_error,
         "family_correct": gt_family == pred_family,
         "detection_correct": gt_has_error == pred_has_error,
+        **multi_metrics,
         "tool_calls": tool_calls_made,
         "num_turns": len(tool_calls_made) + (1 if predicted_verdict else 0),
         "predicted_verdict": predicted_verdict,
@@ -1402,6 +1476,11 @@ def main() -> None:
     errors = 0
     family_counts: Counter[str] = Counter()
     family_correct_counts: Counter[str] = Counter()
+    family_set_correct = 0
+    required_tool_coverages: list[float] = []
+    multi_tp: Counter[str] = Counter()
+    multi_fp: Counter[str] = Counter()
+    multi_fn: Counter[str] = Counter()
     error_kind_counts: Counter[str] = Counter()
     parse_note_counts: Counter[str] = Counter()
 
@@ -1435,6 +1514,7 @@ def main() -> None:
                     "pred_has_error": None,
                     "family_correct": False,
                     "detection_correct": False,
+                    **multi_metric_fields(gt_verdict, None, []),
                     "tool_calls": [],
                     "num_turns": 0,
                     "predicted_verdict": None,
@@ -1454,6 +1534,20 @@ def main() -> None:
             if result["family_correct"]:
                 family_correct += 1
                 family_correct_counts[gt_fam] += 1
+            if result.get("family_set_correct"):
+                family_set_correct += 1
+            coverage = result.get("required_tool_coverage")
+            if coverage is not None:
+                required_tool_coverages.append(float(coverage))
+            gt_family_set = set(result.get("gt_error_families") or [])
+            pred_family_set = set(result.get("pred_error_families") or [])
+            for fam in gt_family_set | pred_family_set:
+                if fam in gt_family_set and fam in pred_family_set:
+                    multi_tp[fam] += 1
+                elif fam in pred_family_set:
+                    multi_fp[fam] += 1
+                else:
+                    multi_fn[fam] += 1
             if result["detection_correct"]:
                 detection_correct += 1
             if result["error"]:
@@ -1486,6 +1580,10 @@ def main() -> None:
     print(f"  Total samples:          {n}")
     print(f"  Error detection acc:    {detection_correct}/{n}  ({100*detection_correct/n:.1f}%)")
     print(f"  Error family acc:       {family_correct}/{n}  ({100*family_correct/n:.1f}%)")
+    print(f"  Error family-set acc:   {family_set_correct}/{n}  ({100*family_set_correct/n:.1f}%)")
+    if required_tool_coverages:
+        mean_coverage = sum(required_tool_coverages) / len(required_tool_coverages)
+        print(f"  Required-tool coverage: {100*mean_coverage:.1f}% over {len(required_tool_coverages)} samples")
     print(f"  Parse/runtime errors:   {errors}")
     print()
     if error_kind_counts:
@@ -1498,6 +1596,17 @@ def main() -> None:
         total = family_counts[fam]
         correct = family_correct_counts[fam]
         print(f"    {fam:<25s}  {correct}/{total}  ({100*correct/total:.1f}%)")
+    if multi_tp or multi_fp or multi_fn:
+        print()
+        print("  Multi-label per-family PRF:")
+        for fam in sorted(set(multi_tp) | set(multi_fp) | set(multi_fn)):
+            tp = multi_tp[fam]
+            fp = multi_fp[fam]
+            fn = multi_fn[fam]
+            precision = tp / (tp + fp) if tp + fp else 0.0
+            recall = tp / (tp + fn) if tp + fn else 0.0
+            f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+            print(f"    {fam:<25s}  P={precision:.3f}  R={recall:.3f}  F1={f1:.3f}")
     if parse_note_counts:
         print()
         print("  Top parser notes:")

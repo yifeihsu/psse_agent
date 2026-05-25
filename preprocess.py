@@ -31,6 +31,7 @@ from trace_protocol import (
 )
 
 VALID_ERROR_FAMILIES = set(ERROR_FAMILIES)
+MULTI_ERROR_MIN_FAMILIES = 2
 
 
 def load_jsonl(path: str) -> list[dict]:
@@ -239,6 +240,33 @@ def extract_label(sample: dict) -> str | None:
     return label if label in VALID_ERROR_FAMILIES else None
 
 
+def extract_error_families(sample: dict) -> list[str]:
+    diagnosis = extract_final_diagnosis(sample)
+    if not diagnosis:
+        return []
+    verdict = diagnosis.get("verdict", {})
+    raw = verdict.get("error_families") if isinstance(verdict, dict) else None
+    families: list[str] = []
+    if isinstance(raw, list):
+        for item in raw:
+            family = normalize_error_family(item)
+            if family in VALID_ERROR_FAMILIES and family != "no_error" and family not in families:
+                families.append(family)
+    if not families:
+        family = extract_label(sample)
+        if family and family != "no_error":
+            families.append(family)
+    return [family for family in ERROR_FAMILIES if family in families and family != "no_error"]
+
+
+def extract_multi_combo(sample: dict) -> str | None:
+    families = extract_error_families(sample)
+    if len(families) < MULTI_ERROR_MIN_FAMILIES:
+        return None
+    ordered = [family for family in ERROR_FAMILIES if family in families and family != "no_error"]
+    return "+".join(ordered)
+
+
 def extract_tool_sequence(sample: dict) -> tuple[str, ...]:
     sequence: list[str] = []
     for message in sample.get("messages", []):
@@ -290,6 +318,15 @@ def validate_sample(sample: dict, index: int) -> list[str]:
             label = normalize_error_family(verdict.get("error_family"))
             if label not in VALID_ERROR_FAMILIES:
                 errors.append(f"sample {index}: invalid error_family {verdict.get('error_family')!r}")
+            raw_families = verdict.get("error_families")
+            if raw_families is not None:
+                if not isinstance(raw_families, list):
+                    errors.append(f"sample {index}: verdict.error_families must be a list when present")
+                else:
+                    parsed_families = [normalize_error_family(item) for item in raw_families]
+                    invalid = [item for item in parsed_families if item not in VALID_ERROR_FAMILIES or item == "no_error"]
+                    if invalid:
+                        errors.append(f"sample {index}: invalid error_families {raw_families!r}")
             if not isinstance(verdict.get("has_error"), bool):
                 errors.append(f"sample {index}: verdict.has_error must be boolean")
             if verdict.get("confidence") is None:
@@ -505,6 +542,57 @@ def exact_balanced_split(samples: list[dict], seed: int) -> tuple[list[dict], li
     )
 
 
+def multi_combo_exact_split(samples: list[dict], seed: int) -> tuple[list[dict], list[dict], list[dict], dict[str, Any]]:
+    rng = random.Random(seed)
+    by_combo: dict[str, list[dict]] = defaultdict(list)
+    for sample in samples:
+        combo = extract_multi_combo(sample)
+        if combo is not None:
+            by_combo[combo].append(sample)
+
+    train: list[dict] = []
+    val: list[dict] = []
+    test: list[dict] = []
+    selected_counts: dict[str, int] = {}
+    missing: dict[str, int] = {}
+
+    target_combos = sorted(by_combo.keys())
+    if not target_combos:
+        raise ValueError("No multi-error combos found for multi-combo exact split.")
+
+    for combo in target_combos:
+        group = list(by_combo.get(combo, []))
+        if len(group) < BALANCED_TOTAL_PER_CLASS:
+            missing[combo] = len(group)
+            continue
+        rng.shuffle(group)
+        group.sort(key=sample_priority_tuple, reverse=True)
+        selected = group[:BALANCED_TOTAL_PER_CLASS]
+        train_group, val_group, test_group = distribute_selected_group_exact(selected, seed + len(combo))
+        train.extend(train_group)
+        val.extend(val_group)
+        test.extend(test_group)
+        selected_counts[combo] = len(selected)
+
+    if missing:
+        details = ", ".join(f"{combo}={count}" for combo, count in sorted(missing.items()))
+        raise ValueError(f"Need at least {BALANCED_TOTAL_PER_CLASS} accepted samples per multi-error combo; found {details}")
+
+    rng.shuffle(train)
+    rng.shuffle(val)
+    rng.shuffle(test)
+    return (
+        train,
+        val,
+        test,
+        {
+            "mode": "multi_combo_exact",
+            "selected_per_combo": selected_counts,
+            "split_counts_per_combo": dict(BALANCED_SPLIT_COUNTS),
+        },
+    )
+
+
 def balance_training_set(samples: list[dict], mode: str, seed: int) -> tuple[list[dict], dict[str, Any]]:
     if mode == "none":
         return samples, {"mode": "none"}
@@ -545,6 +633,10 @@ def balance_training_set(samples: list[dict], mode: str, seed: int) -> tuple[lis
 
 def label_distribution(samples: list[dict]) -> dict[str, int]:
     return dict(Counter(extract_label(sample) for sample in samples))
+
+
+def combo_distribution(samples: list[dict]) -> dict[str, int]:
+    return dict(Counter(combo for sample in samples if (combo := extract_multi_combo(sample)) is not None))
 
 
 def final_payload(sample: dict) -> dict[str, Any] | None:
@@ -621,6 +713,66 @@ def dataset_qa(samples: list[dict]) -> dict[str, Any]:
         "post_action_resolved_by_family": dict(post_action_resolved),
         "post_action_improved_by_family": dict(post_action_improved),
         "evidence_lengths": dict(evidence_lengths),
+    }
+
+
+def multi_label_qa(samples: list[dict]) -> dict[str, Any]:
+    invalid_family_lists = 0
+    missing_applied_tools = 0
+    missing_suspect_locations = 0
+    valid_multi_family = 0
+    exact_two_family = 0
+    family_count_distribution: Counter[str] = Counter()
+    required_tools_by_family = {
+        "measurement_error": "correct_measurements_from_path",
+        "parameter_error": "correct_parameters_from_path",
+        "topology_error": "correct_topology_from_path",
+        "harmonic_anomaly": "run_hse_from_path",
+    }
+    per_combo = Counter()
+    missing_tool_counts = Counter()
+
+    for sample in samples:
+        payload = final_payload(sample)
+        if not payload:
+            continue
+        families = extract_error_families(sample)
+        combo = extract_multi_combo(sample)
+        if combo is None:
+            continue
+        per_combo[combo] += 1
+        family_count_distribution[str(len(families))] += 1
+        if len(families) == 2:
+            exact_two_family += 1
+        if len(families) >= MULTI_ERROR_MIN_FAMILIES:
+            valid_multi_family += 1
+        else:
+            invalid_family_lists += 1
+
+        action = payload.get("action") if isinstance(payload, dict) else {}
+        applied = action.get("applied_tools") if isinstance(action, dict) else None
+        if not isinstance(applied, list):
+            applied = [action.get("applied_tool")] if isinstance(action, dict) and action.get("applied_tool") else []
+        for family in families:
+            required = required_tools_by_family.get(family)
+            if required and required not in applied:
+                missing_applied_tools += 1
+                missing_tool_counts[required] += 1
+
+        locations = payload.get("suspect_locations")
+        if not isinstance(locations, list) or len(locations) < len(families):
+            missing_suspect_locations += 1
+
+    return {
+        "multi_error_count": sum(per_combo.values()),
+        "valid_multi_family": valid_multi_family,
+        "exact_two_family": exact_two_family,
+        "family_count_distribution": dict(family_count_distribution),
+        "invalid_family_lists": invalid_family_lists,
+        "missing_applied_tools": missing_applied_tools,
+        "missing_suspect_locations": missing_suspect_locations,
+        "combo_distribution": dict(per_combo),
+        "missing_tool_counts": dict(missing_tool_counts),
     }
 
 
@@ -809,6 +961,12 @@ def main() -> None:
         action="store_false",
     )
     parser.add_argument(
+        "--balance-mode",
+        choices=("exact-balanced", "multi-combo-exact", "stratified"),
+        default=None,
+        help="Split/balancing strategy. Defaults to exact-balanced unless --no-exact-balanced is used.",
+    )
+    parser.add_argument(
         "--dedupe-by",
         choices=("none", "user_snapshot", "full_trace"),
         default="user_snapshot",
@@ -907,13 +1065,22 @@ def main() -> None:
     print(f"  Retained {len(deduped_samples)} labeled samples")
     print(f"  Class distribution: {label_distribution(deduped_samples)}")
 
-    if args.exact_balanced:
+    balance_mode = args.balance_mode or ("exact-balanced" if args.exact_balanced else "stratified")
+
+    if balance_mode == "exact-balanced":
         print(
             "\nSelecting exact balanced splits: "
             f"{BALANCED_SPLIT_COUNTS['train']}/{BALANCED_SPLIT_COUNTS['valid']}/{BALANCED_SPLIT_COUNTS['test']} "
             f"per class (seed={args.seed})"
         )
         train, val, test, split_report = exact_balanced_split(deduped_samples, args.seed)
+    elif balance_mode == "multi-combo-exact":
+        print(
+            "\nSelecting exact multi-error combo splits: "
+            f"{BALANCED_SPLIT_COUNTS['train']}/{BALANCED_SPLIT_COUNTS['valid']}/{BALANCED_SPLIT_COUNTS['test']} "
+            f"per combo (seed={args.seed})"
+        )
+        train, val, test, split_report = multi_combo_exact_split(deduped_samples, args.seed)
     else:
         print("\nUsing fallback stratified ratio split (seed=%s)" % args.seed)
         train, val, test = stratified_split(
@@ -928,7 +1095,7 @@ def main() -> None:
     print_split_stats("Train", train)
     print_split_stats("Val", val)
     print_split_stats("Test", test)
-    if args.exact_balanced:
+    if balance_mode == "exact-balanced":
         for split_name, split_samples in (("train", train), ("valid", val), ("test", test)):
             distribution = label_distribution(split_samples)
             expected = BALANCED_SPLIT_COUNTS[split_name]
@@ -936,6 +1103,16 @@ def main() -> None:
                 if distribution.get(label, 0) != expected:
                     raise ValueError(
                         f"Exact balance failed for {split_name}/{label}: expected {expected}, got {distribution.get(label, 0)}"
+                    )
+    elif balance_mode == "multi-combo-exact":
+        expected_combos = split_report.get("selected_per_combo", {}).keys()
+        for split_name, split_samples in (("train", train), ("valid", val), ("test", test)):
+            distribution = combo_distribution(split_samples)
+            expected = BALANCED_SPLIT_COUNTS[split_name]
+            for combo in expected_combos:
+                if distribution.get(combo, 0) != expected:
+                    raise ValueError(
+                        f"Multi-combo exact balance failed for {split_name}/{combo}: expected {expected}, got {distribution.get(combo, 0)}"
                     )
 
     qa_report = {
@@ -950,6 +1127,21 @@ def main() -> None:
         raise ValueError("Dataset QA failed: borderline no_error traces remain in accepted samples.")
     if qa_report["all"]["no_error_nonempty_evidence"]:
         raise ValueError("Dataset QA failed: accepted no_error traces still contain significant evidence lists.")
+
+    multi_qa_report = {
+        "all": multi_label_qa(deduped_samples),
+        "train": multi_label_qa(train),
+        "val": multi_label_qa(val),
+        "test": multi_label_qa(test),
+    }
+    if balance_mode == "multi-combo-exact":
+        all_multi_qa = multi_qa_report["all"]
+        if all_multi_qa["invalid_family_lists"]:
+            raise ValueError("Multi-label QA failed: invalid multi-error family lists remain.")
+        if all_multi_qa["missing_applied_tools"]:
+            raise ValueError("Multi-label QA failed: required multi-error applied_tools are missing.")
+        if all_multi_qa["missing_suspect_locations"]:
+            raise ValueError("Multi-label QA failed: required multi-error suspect_locations are missing.")
 
     token_audit: dict[str, Any] = {}
     if args.skip_token_audit:
@@ -996,7 +1188,8 @@ def main() -> None:
         "config": {
             "seed": args.seed,
             "round_decimals": args.round_decimals,
-            "exact_balanced": args.exact_balanced,
+            "exact_balanced": balance_mode == "exact-balanced",
+            "balance_mode": balance_mode,
             "dedupe_by": args.dedupe_by,
             "tokenizer_name": None if args.skip_token_audit else args.tokenizer_name,
             "max_seq_length": None if args.skip_token_audit else args.max_seq_length,
@@ -1018,6 +1211,12 @@ def main() -> None:
             "val": label_distribution(val),
             "test": label_distribution(test),
         },
+        "combo_distribution": {
+            "all": combo_distribution(deduped_samples),
+            "train": combo_distribution(train),
+            "val": combo_distribution(val),
+            "test": combo_distribution(test),
+        },
         "tool_sequences": dict(
             Counter(">".join(extract_tool_sequence(sample)) for sample in deduped_samples)
         ),
@@ -1028,6 +1227,7 @@ def main() -> None:
             "sample_errors": validation_errors[:25],
         },
         "dataset_qa": qa_report,
+        "multi_label_qa": multi_qa_report,
         "token_audit": token_audit,
     }
     save_report(report, args.report)

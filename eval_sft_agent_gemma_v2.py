@@ -38,6 +38,7 @@ from eval_sft_agent_hardened import (
     extract_ground_truth,
     extract_prompt_prefix,
     jsonish_loads,
+    multi_metric_fields,
     normalize_verdict,
     resolve_max_input_tokens,
 )
@@ -1185,6 +1186,7 @@ def build_result_from_state(state: EvalSampleState) -> dict[str, Any]:
 
     gt_has_error = state.gt_verdict.get("verdict", {}).get("has_error") if state.gt_verdict else None
     pred_has_error = state.predicted_verdict.get("verdict", {}).get("has_error") if state.predicted_verdict else None
+    multi_metrics = multi_metric_fields(state.gt_verdict, state.predicted_verdict, state.tool_calls_made)
 
     return {
         "gt_error_family": gt_family,
@@ -1193,6 +1195,7 @@ def build_result_from_state(state: EvalSampleState) -> dict[str, Any]:
         "pred_has_error": pred_has_error,
         "family_correct": gt_family == pred_family,
         "detection_correct": gt_has_error == pred_has_error,
+        **multi_metrics,
         "tool_calls": state.tool_calls_made,
         "num_turns": len(state.tool_calls_made) + (1 if state.predicted_verdict else 0),
         "predicted_verdict": state.predicted_verdict,
@@ -1215,6 +1218,7 @@ def build_critical_error_result(messages_gt: list[dict[str, Any]], exc: Exceptio
         "pred_has_error": None,
         "family_correct": False,
         "detection_correct": False,
+        **multi_metric_fields(gt_verdict, None, []),
         "tool_calls": [],
         "num_turns": 0,
         "predicted_verdict": None,
@@ -1654,6 +1658,7 @@ def run_one_sample(
 
     gt_has_error = gt_verdict.get("verdict", {}).get("has_error") if gt_verdict else None
     pred_has_error = predicted_verdict.get("verdict", {}).get("has_error") if predicted_verdict else None
+    multi_metrics = multi_metric_fields(gt_verdict, predicted_verdict, tool_calls_made)
 
     return {
         "gt_error_family": gt_family,
@@ -1662,6 +1667,7 @@ def run_one_sample(
         "pred_has_error": pred_has_error,
         "family_correct": gt_family == pred_family,
         "detection_correct": gt_has_error == pred_has_error,
+        **multi_metrics,
         "tool_calls": tool_calls_made,
         "num_turns": len(tool_calls_made) + (1 if predicted_verdict else 0),
         "predicted_verdict": predicted_verdict,
@@ -1921,13 +1927,18 @@ def main() -> None:
     errors = 0
     family_counts: Counter[str] = Counter()
     family_correct_counts: Counter[str] = Counter()
+    family_set_correct = 0
+    required_tool_coverages: list[float] = []
+    multi_tp: Counter[str] = Counter()
+    multi_fp: Counter[str] = Counter()
+    multi_fn: Counter[str] = Counter()
     error_kind_counts: Counter[str] = Counter()
     parse_note_counts: Counter[str] = Counter()
 
     concurrent_conversations = max(1, int(args.concurrent_conversations))
 
     def record_result(result: dict[str, Any]) -> None:
-        nonlocal family_correct, detection_correct, errors
+        nonlocal family_correct, family_set_correct, detection_correct, errors
 
         results.append(result)
         out_file.write(json.dumps(result, default=str, ensure_ascii=False) + "\n")
@@ -1939,6 +1950,20 @@ def main() -> None:
         if result["family_correct"]:
             family_correct += 1
             family_correct_counts[gt_family_local] += 1
+        if result.get("family_set_correct"):
+            family_set_correct += 1
+        coverage = result.get("required_tool_coverage")
+        if coverage is not None:
+            required_tool_coverages.append(float(coverage))
+        gt_family_set = set(result.get("gt_error_families") or [])
+        pred_family_set = set(result.get("pred_error_families") or [])
+        for family in gt_family_set | pred_family_set:
+            if family in gt_family_set and family in pred_family_set:
+                multi_tp[family] += 1
+            elif family in pred_family_set:
+                multi_fp[family] += 1
+            else:
+                multi_fn[family] += 1
         if result["detection_correct"]:
             detection_correct += 1
         if result["error"]:
@@ -2052,6 +2077,10 @@ def main() -> None:
     print(f"  Total samples:          {n}")
     print(f"  Error detection acc:    {detection_correct}/{n}  ({100 * detection_correct / n:.1f}%)")
     print(f"  Error family acc:       {family_correct}/{n}  ({100 * family_correct / n:.1f}%)")
+    print(f"  Error family-set acc:   {family_set_correct}/{n}  ({100 * family_set_correct / n:.1f}%)")
+    if required_tool_coverages:
+        mean_coverage = sum(required_tool_coverages) / len(required_tool_coverages)
+        print(f"  Required-tool coverage: {100 * mean_coverage:.1f}% over {len(required_tool_coverages)} samples")
     print(f"  Parse/runtime errors:   {errors}")
     print()
     if error_kind_counts:
@@ -2064,6 +2093,17 @@ def main() -> None:
         total = family_counts[family]
         correct = family_correct_counts[family]
         print(f"    {family:<25s}  {correct}/{total}  ({100 * correct / total:.1f}%)")
+    if multi_tp or multi_fp or multi_fn:
+        print()
+        print("  Multi-label per-family PRF:")
+        for family in sorted(set(multi_tp) | set(multi_fp) | set(multi_fn)):
+            tp = multi_tp[family]
+            fp = multi_fp[family]
+            fn = multi_fn[family]
+            precision = tp / (tp + fp) if tp + fp else 0.0
+            recall = tp / (tp + fn) if tp + fn else 0.0
+            f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+            print(f"    {family:<25s}  P={precision:.3f}  R={recall:.3f}  F1={f1:.3f}")
     if parse_note_counts:
         print()
         print("  Top parser notes:")

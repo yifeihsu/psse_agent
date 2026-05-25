@@ -30,6 +30,9 @@ class TraceProtocolTests(unittest.TestCase):
     def test_schema_describes_scalar_error_family_and_index_bases(self) -> None:
         self.assertIsInstance(DECISION_SCHEMA_TEXT["verdict"]["error_family"], str)
         self.assertIn("scalar enum", DECISION_SCHEMA_TEXT["verdict"]["error_family"])
+        self.assertIn("error_families", DECISION_SCHEMA_TEXT["verdict"])
+        self.assertIn("suspect_locations", DECISION_SCHEMA_TEXT)
+        self.assertIn("applied_tools", DECISION_SCHEMA_TEXT["action"])
         self.assertIn("0-based", DECISION_SCHEMA_TEXT["evidence"]["top_residuals"][0]["index0"])
         self.assertIn("applied_tool", DECISION_SCHEMA_TEXT["action"])
         self.assertIn("1-based", DECISION_SCHEMA_TEXT["action"]["arguments_hint"])
@@ -278,6 +281,41 @@ class TraceProtocolTests(unittest.TestCase):
             "summary": "bad measurement",
         }
         self.assertEqual(rejection_reason(missing_verification), "measurement_error_missing_verification")
+
+    def test_rejection_reason_accepts_backward_compatible_multi_error_target(self) -> None:
+        multi_target = {
+            "verdict": {
+                "has_error": True,
+                "error_family": "measurement_error",
+                "error_families": ["measurement_error", "parameter_error"],
+                "confidence": 0.96,
+            },
+            "evidence": {
+                "global_metrics": {
+                    "global_residual_sum": 180.0,
+                    "global_residual_threshold": 100.0,
+                    "global_residual_ratio": 1.8,
+                },
+                "top_residuals": [{"index0": 7, "channel": "Pf", "channel_offset": 0, "value": 4.1}],
+                "top_lagrange": [{"lambda_index0": 2, "line_row0": 1, "value": 5.2}],
+            },
+            "suspect_location": {"domain": "measurement", "details": {"index0": 7}},
+            "suspect_locations": [
+                {"domain": "measurement", "details": {"index0": 7}},
+                {"domain": "parameter", "details": {"line_row0": 1}},
+            ],
+            "action": {
+                "applied_tool": "correct_parameters_from_path",
+                "applied_tools": ["correct_measurements_from_path", "correct_parameters_from_path"],
+                "request_more_data": False,
+                "verification_summary": None,
+            },
+            "summary": "multi",
+        }
+        self.assertIsNone(rejection_reason(multi_target))
+
+        multi_target["action"]["applied_tools"] = ["correct_measurements_from_path"]
+        self.assertEqual(rejection_reason(multi_target), "multi_error_missing_applied_tools")
 
 
 if __name__ == "__main__":
