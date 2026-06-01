@@ -66,12 +66,19 @@ KNOWN_CASE_DIRS = [
     REPO_ROOT / "out_sft_measurements" / "cases_parameter_error",
     REPO_ROOT / "out_sft_measurements" / "models_topology",
 ]
-MULTI_ERROR_TOOL_ORDER = [
+REPORT_FAMILY_ORDER = [
     "measurement_error",
     "parameter_error",
     "topology_error",
     "harmonic_anomaly",
 ]
+CORRECTION_TOOL_ORDER = [
+    "topology_error",
+    "parameter_error",
+    "measurement_error",
+    "harmonic_anomaly",
+]
+MULTI_ERROR_TOOL_ORDER = REPORT_FAMILY_ORDER
 TOOL_BY_FAMILY = {
     "measurement_error": "correct_measurements_from_path",
     "parameter_error": "correct_parameters_from_path",
@@ -200,7 +207,27 @@ def multi_error_families(rec: Mapping[str, Any]) -> list[str]:
         family = normalize_error_family(value)
         if family is not None and family != "no_error" and family not in out:
             out.append(family)
-    return [family for family in MULTI_ERROR_TOOL_ORDER if family in out]
+    return [family for family in REPORT_FAMILY_ORDER if family in out]
+
+
+def correction_family_order(
+    rec: Mapping[str, Any],
+    wls_payload: Mapping[str, Any],
+    meta: Mapping[str, Any],
+    idx_map: Mapping[str, slice],
+    *,
+    policy: str = "structural_first",
+) -> list[str]:
+    del wls_payload, meta, idx_map
+    families = multi_error_families(rec)
+    if policy == "structural_first":
+        return [family for family in CORRECTION_TOOL_ORDER if family in families]
+    if policy == "measurement_first":
+        return [family for family in REPORT_FAMILY_ORDER if family in families]
+    if policy == "evidence_driven":
+        # Placeholder for future evidence ranking; structural-first is the safe physical default.
+        return [family for family in CORRECTION_TOOL_ORDER if family in families]
+    raise ValueError(f"Unknown correction policy: {policy}")
 
 
 def primary_error_family(rec: Mapping[str, Any]) -> Optional[str]:
@@ -626,22 +653,54 @@ def make_imbalance_followup_payload(rec: Mapping[str, Any]) -> Dict[str, Any]:
     )
 
 
-def make_verification_snapshot_payload(case_path: str, z_obs: Sequence[float], note: str, stage: str) -> Dict[str, Any]:
-    return round_user_payload(
-        {
-            "case_path": case_path,
-            "z_obs": list(z_obs),
-            "note": note,
-            "stage": stage,
-        }
-    )
+def make_verification_snapshot_payload(
+    case_path: str,
+    z_obs: Sequence[float],
+    note: str,
+    stage: str,
+    *,
+    remaining_families: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    payload: dict[str, Any] = {
+        "case_path": case_path,
+        "z_obs": list(z_obs),
+        "note": note,
+        "stage": stage,
+    }
+    if remaining_families is not None:
+        payload["remaining_families"] = list(remaining_families)
+    return round_user_payload(payload)
+
+
+def measurement_indices_from_label(rec: Mapping[str, Any]) -> List[int]:
+    label = rec.get("label", {})
+    if not isinstance(label, Mapping):
+        return []
+    if isinstance(label.get("index"), int):
+        return [int(label["index"])]
+    if isinstance(label.get("indices"), list):
+        out: list[int] = []
+        for item in label["indices"]:
+            try:
+                out.append(int(item))
+            except Exception:
+                pass
+        return out
+    return []
 
 
 def choose_measurement_suspect_group(
     rec: Mapping[str, Any],
     idx_map: Mapping[str, slice],
     tool_payload: Mapping[str, Any],
+    *,
+    prefer_label: bool = True,
 ) -> List[int]:
+    if prefer_label:
+        gold = measurement_indices_from_label(rec)
+        if gold:
+            return gold
+
     r_vec = np.asarray(tool_payload.get("r", []), dtype=float)
     if r_vec.size:
         try:
@@ -650,15 +709,118 @@ def choose_measurement_suspect_group(
             pass
 
     lab = rec.get("label", {})
-    if isinstance(lab.get("index"), int):
-        return [int(lab["index"])]
-    if isinstance(lab.get("indices"), list):
-        return [int(i) for i in lab["indices"]]
-    ch = lab.get("channel")
+    ch = lab.get("channel") if isinstance(lab, Mapping) else None
     if ch in idx_map:
         sl = idx_map[ch]
         return list(range(sl.start, sl.stop))
     return []
+
+
+def apply_measurement_corrections_to_snapshot(
+    z_obs: Sequence[float],
+    corr_payload: Mapping[str, Any],
+    suspect_group: Optional[Sequence[int]],
+) -> List[float]:
+    z2 = list(z_obs)
+    suspect_set = {int(i) for i in (suspect_group or [])}
+    corrected_items = corr_payload.get("corrected_measurements") or []
+    if not isinstance(corrected_items, list):
+        return z2
+    for item in corrected_items:
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            idx0 = int(item.get("index0"))
+        except Exception:
+            continue
+        if suspect_set and idx0 not in suspect_set:
+            continue
+        if 0 <= idx0 < len(z2) and item.get("corrected") is not None:
+            try:
+                z2[idx0] = float(item["corrected"])
+            except Exception:
+                pass
+    return z2
+
+
+def apply_measurement_label_to_snapshot(
+    z_obs: Sequence[float],
+    label: Mapping[str, Any],
+) -> List[float]:
+    z2 = list(z_obs)
+    if isinstance(label.get("index"), int) and label.get("amplitude") is not None:
+        idx0 = int(label["index"])
+        if 0 <= idx0 < len(z2):
+            try:
+                z2[idx0] = float(z2[idx0]) + float(label["amplitude"])
+            except Exception:
+                pass
+    indices = label.get("indices")
+    amplitudes = label.get("amplitudes")
+    if isinstance(indices, list) and isinstance(amplitudes, list):
+        for idx, amp in zip(indices, amplitudes):
+            try:
+                idx0 = int(idx)
+                if 0 <= idx0 < len(z2):
+                    z2[idx0] = float(z2[idx0]) + float(amp)
+            except Exception:
+                pass
+    return z2
+
+
+def get_explicit_verification_snapshot(rec: Mapping[str, Any], stage: str) -> Optional[dict[str, Any]]:
+    snapshots = rec.get("verification_snapshots")
+    if not isinstance(snapshots, Mapping):
+        return None
+    item = snapshots.get(stage)
+    if not isinstance(item, Mapping):
+        return None
+    return dict(item)
+
+
+def bind_verification_snapshot_case(
+    *,
+    snapshot: Mapping[str, Any],
+    stage: str,
+    sid: str,
+    base_case_visible: str,
+    base_case_backend: Any,
+    runtime_context: dict[str, Any],
+    current_case_visible: Optional[str] = None,
+    current_case_backend: Any = None,
+) -> str:
+    if snapshot.get("case_path_policy") == "preserve_current_case":
+        visible = current_case_visible or base_case_visible
+        if visible not in runtime_context.get("case_aliases", {}):
+            runtime_context.setdefault("case_aliases", {})[visible] = runtime_case_reference(
+                current_case_backend or base_case_backend
+            )
+        return visible
+
+    raw_case = snapshot.get("case_path")
+    visible = make_case_alias(base_case_visible, stage, sid)
+    runtime_context["case_aliases"][visible] = runtime_case_reference(
+        raw_case or current_case_backend or base_case_backend
+    )
+    return visible
+
+
+def verification_z_obs_from_snapshot(snapshot: Mapping[str, Any], current_z_obs: Sequence[float]) -> List[float]:
+    if snapshot.get("z_obs_policy") == "preserve_current_z_obs":
+        return list(current_z_obs)
+    if isinstance(snapshot.get("z_obs"), list):
+        return list(snapshot["z_obs"])
+    return list(current_z_obs)
+
+
+def explicit_snapshot_compatible_with_current_z(
+    snapshot: Mapping[str, Any],
+    current_z_obs: Sequence[float],
+) -> bool:
+    z_obs = snapshot.get("z_obs")
+    if snapshot.get("z_obs_policy") == "preserve_current_z_obs" or not isinstance(z_obs, list):
+        return True
+    return len(z_obs) == len(current_z_obs)
 
 
 def build_verification_summary(
@@ -703,6 +865,17 @@ def build_verification_summary(
     )
 
 
+def wls_global_residual_ratio(
+    payload: Optional[Mapping[str, Any]],
+    meta: Mapping[str, Any],
+    idx_map: Mapping[str, slice],
+) -> Optional[float]:
+    if not isinstance(payload, Mapping):
+        return None
+    compact = summarize_wls_payload(payload, meta, idx_map)
+    return _maybe_float((compact.get("global_metrics") or {}).get("global_residual_ratio"))
+
+
 def build_final_target(
     rec: Mapping[str, Any],
     meta: Mapping[str, Any],
@@ -712,9 +885,11 @@ def build_final_target(
     measurement_suspect_group: Optional[List[int]] = None,
     verification_payload: Optional[Mapping[str, Any]] = None,
     verification_payloads: Optional[Mapping[str, Mapping[str, Any]]] = None,
+    verification_pre_payloads: Optional[Mapping[str, Mapping[str, Any]]] = None,
     hse_payload: Optional[Mapping[str, Any]] = None,
     correction_tool_name: Optional[str] = None,
     applied_tools: Optional[List[str]] = None,
+    correction_steps: Optional[List[Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     scenario = normalize_scenario(str(rec.get("scenario", "")))
     label = rec.get("label", {})
@@ -797,7 +972,7 @@ def build_final_target(
                 payload,
                 meta,
                 idx_map,
-                pre_action_payload=primary_wls,
+                pre_action_payload=dict(verification_pre_payloads or {}).get(family, primary_wls),
             )
             if summary is not None:
                 verification_by_family[family] = summary
@@ -841,12 +1016,15 @@ def build_final_target(
                 "suspect_locations": suspect_locations,
                 "action": {
                     "applied_tool": tool_list[-1] if tool_list else correction_tool_name,
+                    "first_applied_tool": tool_list[0] if tool_list else None,
+                    "last_applied_tool": tool_list[-1] if tool_list else correction_tool_name,
                     "applied_tools": tool_list,
                     "arguments_hint": hint_by_family or None,
                     "request_more_data": False,
                     "requested_data": None,
                     "verification_summary": primary_verification,
                     "verification_summaries": verification_by_family or None,
+                    "correction_steps": list(correction_steps or []),
                 },
                 "summary": "Multiple error mechanisms are present in this snapshot: " + ", ".join(families) + ".",
             }
@@ -1099,130 +1277,248 @@ def append_multi_error_actions(
     rng_np: np.random.Generator,
 ) -> dict[str, Any]:
     families = multi_error_families(rec)
+    correction_order = correction_family_order(rec, wls_payload, meta, idx_map)
     applied_tools: list[str] = []
     verification_payloads: dict[str, Mapping[str, Any]] = {}
+    verification_pre_payloads: dict[str, Mapping[str, Any]] = {}
+    correction_steps: list[dict[str, Any]] = []
     measurement_suspect_group: Optional[List[int]] = None
     hse_payload: Optional[Mapping[str, Any]] = None
+    current_case_visible = base_case_visible
+    current_case_backend: Any = base_case_backend
+    current_z_obs: list[float] = list(rec.get("z_obs", []))
+    previous_wls_payload: Mapping[str, Any] = wls_payload
+    corrected_families: list[str] = []
 
-    if "measurement_error" in families and config.with_correction:
-        meas_rec = component_record(rec, "measurement_error")
-        measurement_suspect_group = choose_measurement_suspect_group(meas_rec, idx_map, wls_payload)
-        corr_call_args = {"case_path": base_case_visible, "suspect_group": measurement_suspect_group}
-        corr_call = make_tool_call(
-            "correct_measurements_from_path",
-            f"call_corr_meas_{sha_short(sid)}",
-            corr_call_args,
+    def _remaining_after(family: str, explicit_remaining: Any = None) -> list[str]:
+        if isinstance(explicit_remaining, list):
+            return [str(item) for item in explicit_remaining]
+        return [
+            candidate
+            for candidate in correction_order
+            if candidate != family and candidate not in corrected_families
+        ]
+
+    def _append_verification_wls(
+        *,
+        family: str,
+        tool_name: str,
+        verify_stage: str,
+        verification_case_visible: str,
+        z_verify: Sequence[float],
+        note: str,
+        remaining_families: Optional[Sequence[str]] = None,
+    ) -> Mapping[str, Any]:
+        nonlocal current_z_obs, previous_wls_payload
+        pre_payload = previous_wls_payload
+        current_z_obs = list(z_verify)
+        verification_snapshot = make_verification_snapshot_payload(
+            verification_case_visible,
+            current_z_obs,
+            note,
+            verify_stage,
+            remaining_families=remaining_families,
         )
-        messages.append({"role": "assistant", "tool_calls": [corr_call]})
+        runtime_context["tool_context"].setdefault("verification_snapshots", {})[verify_stage] = verification_snapshot
+        hidden_context["snapshot_context"] = verification_snapshot
+        append_helper_tool_result(
+            messages,
+            meta,
+            idx_map,
+            tool_name="get_verification_snapshot",
+            call_id=f"call_ctx_verify_{family}_{sha_short(sid)}",
+            arguments={"case_path": verification_case_visible, "stage": verify_stage},
+            payload=verification_snapshot,
+        )
+        verify_call = make_tool_call(
+            "wls_from_path",
+            f"call_wls_verify_{family}_{sha_short(sid)}",
+            {"case_path": verification_case_visible},
+        )
+        messages.append({"role": "assistant", "tool_calls": [verify_call]})
         try:
-            corr_payload = (
-                {"success": False, "error": "mock correction not implemented"}
+            verify_payload = (
+                make_mock_wls_payload({"scenario": "no_error"}, meta, idx_map, rng_np)
                 if config.mock
                 else call_backend_tool(
                     config.endpoint,
-                    "correct_measurements_from_path",
-                    corr_call_args,
+                    "wls_from_path",
+                    {"case_path": verification_case_visible},
                     messages,
                     hidden_context,
                     timeout=config.timeout_s,
                 )
             )
         except Exception as exc:
-            corr_payload = {"success": False, "error": str(exc)}
+            verify_payload = {"success": False, "error": str(exc)}
+        verification_pre_payloads[family] = pre_payload
+        verification_payloads[family] = verify_payload
+        previous_wls_payload = verify_payload
+        summary = build_verification_summary(
+            verify_payload,
+            meta,
+            idx_map,
+            pre_action_payload=pre_payload,
+        ) or {}
+        correction_steps.append(
+            round_assistant_payload(
+                {
+                    "step": len(correction_steps) + 1,
+                    "family": family,
+                    "tool": tool_name,
+                    "pre_global_residual_ratio": wls_global_residual_ratio(pre_payload, meta, idx_map),
+                    "post_global_residual_ratio": wls_global_residual_ratio(verify_payload, meta, idx_map),
+                    "post_action_improved": bool(summary.get("post_action_improved", False)),
+                    "post_action_resolved": bool(summary.get("post_action_resolved", False)),
+                    "remaining_candidate_families": list(remaining_families or []),
+                }
+            )
+        )
         messages.append(
             {
                 "role": "tool",
-                "tool_call_id": corr_call["id"],
-                "name": "correct_measurements_from_path",
+                "tool_call_id": verify_call["id"],
+                "name": "wls_from_path",
                 "content": as_tool_return_text(
-                    summarize_tool_result_for_conversation(
-                        "correct_measurements_from_path",
-                        corr_payload,
-                        meta,
-                        idx_map,
-                    )
+                    summarize_tool_result_for_conversation("wls_from_path", verify_payload, meta, idx_map)
                 ),
             }
         )
-        applied_tools.append("correct_measurements_from_path")
+        return verify_payload
 
-        corrected = corr_payload.get("corrected_measurements") or []
-        chosen = None
-        if corrected:
-            preferred = set(int(i) for i in measurement_suspect_group or [])
-            for item in corrected:
-                if int(item.get("index0", -1)) in preferred:
-                    chosen = item
-                    break
-            if chosen is None:
-                chosen = max(corrected, key=lambda item: abs(float(item.get("estimated_error", 0.0))), default=None)
-        if chosen is not None:
-            z2 = list(rec["z_obs"])
-            idx0 = int(chosen.get("index0"))
-            if 0 <= idx0 < len(z2):
-                z2[idx0] = float(chosen.get("corrected"))
-                verify_stage = "post_measurement_correction"
-                verification_case_visible = make_case_alias(base_case_visible, "measurement_verify", sid)
-                runtime_context["case_aliases"][verification_case_visible] = runtime_case_reference(base_case_backend)
-                verification_snapshot = make_verification_snapshot_payload(
-                    verification_case_visible,
-                    z2,
-                    "Post-correction verification snapshot.",
-                    verify_stage,
-                )
-                runtime_context["tool_context"].setdefault("verification_snapshots", {})[verify_stage] = verification_snapshot
-                hidden_context["snapshot_context"] = verification_snapshot
-                append_helper_tool_result(
-                    messages,
-                    meta,
-                    idx_map,
-                    tool_name="get_verification_snapshot",
-                    call_id=f"call_ctx_verify_meas_{sha_short(sid)}",
-                    arguments={"case_path": verification_case_visible, "stage": verify_stage},
-                    payload=verification_snapshot,
-                )
-                verify_call = make_tool_call(
-                    "wls_from_path",
-                    f"call_wls_verify_meas_{sha_short(sid)}",
-                    {"case_path": verification_case_visible},
-                )
-                messages.append({"role": "assistant", "tool_calls": [verify_call]})
-                try:
-                    verify_payload = (
-                        make_mock_wls_payload({"scenario": "no_error"}, meta, idx_map, rng_np)
-                        if config.mock
-                        else call_backend_tool(
-                            config.endpoint,
-                            "wls_from_path",
-                            {"case_path": verification_case_visible},
-                            messages,
-                            hidden_context,
-                            timeout=config.timeout_s,
-                        )
+    for family in correction_order:
+        if family == "topology_error" and config.with_correction:
+            topo_rec = component_record(rec, "topology_error")
+            topo_label = topo_rec.get("label", {})
+            cb_name = topo_label.get("cb_name")
+            desired_status = status_to_bool(topo_label.get("old_status"))
+            if not cb_name or desired_status is None:
+                continue
+
+            topology_context = make_topology_followup_payload(topo_rec, current_case_visible)
+            runtime_context["tool_context"]["topology_context"] = topology_context
+            hidden_context["topology_context"] = topology_context
+            append_helper_tool_result(
+                messages,
+                meta,
+                idx_map,
+                tool_name="get_topology_context",
+                call_id=f"call_ctx_topo_{sha_short(sid)}",
+                arguments={"case_path": current_case_visible},
+                payload=topology_context,
+            )
+            topo_args = {"case_path": current_case_visible, "cb_name": cb_name, "desired_status": desired_status}
+            topo_call = make_tool_call(
+                "correct_topology_from_path",
+                f"call_corr_topo_{sha_short(sid)}",
+                topo_args,
+            )
+            messages.append({"role": "assistant", "tool_calls": [topo_call]})
+            try:
+                topo_payload = (
+                    {"success": False, "error": "mock topology correction not implemented"}
+                    if config.mock
+                    else call_backend_tool(
+                        config.endpoint,
+                        "correct_topology_from_path",
+                        topo_args,
+                        messages,
+                        hidden_context,
+                        timeout=config.timeout_s,
                     )
-                except Exception as exc:
-                    verify_payload = {"success": False, "error": str(exc)}
-                verification_payloads["measurement_error"] = verify_payload
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": verify_call["id"],
-                        "name": "wls_from_path",
-                        "content": as_tool_return_text(
-                            summarize_tool_result_for_conversation("wls_from_path", verify_payload, meta, idx_map)
-                        ),
-                    }
+                )
+            except Exception as exc:
+                topo_payload = {"success": False, "error": str(exc)}
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": topo_call["id"],
+                    "name": "correct_topology_from_path",
+                    "content": as_tool_return_text(
+                        summarize_tool_result_for_conversation(
+                            "correct_topology_from_path",
+                            topo_payload,
+                            meta,
+                            idx_map,
+                        )
+                    ),
+                }
+            )
+            applied_tools.append("correct_topology_from_path")
+
+            if topo_payload.get("success", True):
+                verify_stage = "post_topology_correction"
+                explicit = get_explicit_verification_snapshot(rec, verify_stage)
+                note = "Post-topology-correction verification snapshot."
+                remaining = None
+                if explicit is not None:
+                    verification_case_visible = bind_verification_snapshot_case(
+                        snapshot=explicit,
+                        stage=verify_stage,
+                        sid=sid,
+                        base_case_visible=base_case_visible,
+                        base_case_backend=base_case_backend,
+                        runtime_context=runtime_context,
+                        current_case_visible=current_case_visible,
+                        current_case_backend=current_case_backend,
+                    )
+                    z_verify = verification_z_obs_from_snapshot(explicit, current_z_obs)
+                    note = str(explicit.get("note") or note)
+                    remaining = explicit.get("remaining_families")
+                    if explicit.get("case_path_policy") != "preserve_current_case":
+                        current_case_visible = verification_case_visible
+                        current_case_backend = explicit.get("case_path") or current_case_backend
+                elif rec.get("corrected_model_path"):
+                    verification_case_visible = make_case_alias(base_case_visible, "topology_verify", sid)
+                    current_case_visible = verification_case_visible
+                    current_case_backend = rec["corrected_model_path"]
+                    runtime_context["case_aliases"][verification_case_visible] = runtime_case_reference(
+                        current_case_backend
+                    )
+                    z_verify = current_z_obs
+                elif isinstance(topo_payload.get("z_corrected"), list):
+                    verification_case_visible = current_case_visible
+                    z_verify = list(topo_payload["z_corrected"])
+                    if "measurement_error" in families and "measurement_error" not in corrected_families:
+                        z_verify = apply_measurement_label_to_snapshot(
+                            z_verify,
+                            component_label(rec, "measurement_error"),
+                        )
+                else:
+                    z_verify = None
+                    verification_case_visible = current_case_visible
+
+                if isinstance(z_verify, list):
+                    remaining_list = _remaining_after("topology_error", remaining)
+                    _append_verification_wls(
+                        family="topology_error",
+                        tool_name="correct_topology_from_path",
+                        verify_stage=verify_stage,
+                        verification_case_visible=verification_case_visible,
+                        z_verify=z_verify,
+                        note=note,
+                        remaining_families=remaining_list,
+                    )
+            corrected_families.append("topology_error")
+
+        elif family == "parameter_error" and config.with_correction:
+            param_rec = component_record(rec, "parameter_error")
+            line_row0 = _maybe_int(param_rec.get("label", {}).get("line_row"))
+            if line_row0 is None or not isinstance(rec.get("z_scans"), list) or not isinstance(rec.get("initial_states"), list):
+                continue
+
+            correction_case_backend = (
+                rec.get("parameter_error_case_path")
+                or rec.get("correction_case_path")
+                or current_case_backend
+            )
+            correction_case_visible = current_case_visible
+            if correction_case_backend != current_case_backend:
+                correction_case_visible = make_case_alias(base_case_visible, "parameter_case", sid)
+                runtime_context["case_aliases"][correction_case_visible] = runtime_case_reference(
+                    correction_case_backend
                 )
 
-    if "parameter_error" in families and config.with_correction:
-        param_rec = component_record(rec, "parameter_error")
-        line_row0 = _maybe_int(param_rec.get("label", {}).get("line_row"))
-        if line_row0 is not None and isinstance(rec.get("z_scans"), list) and isinstance(rec.get("initial_states"), list):
-            correction_case_backend = rec.get("parameter_error_case_path") or rec.get("correction_case_path") or base_case_backend
-            correction_case_visible = base_case_visible
-            if correction_case_backend != base_case_backend:
-                correction_case_visible = make_case_alias(base_case_visible, "parameter_case", sid)
-                runtime_context["case_aliases"][correction_case_visible] = runtime_case_reference(correction_case_backend)
             parameter_context = make_parameter_followup_payload(param_rec, correction_case_visible)
             runtime_context["tool_context"]["parameter_context"] = parameter_context
             hidden_context["parameter_context"] = parameter_context
@@ -1232,7 +1528,7 @@ def append_multi_error_actions(
                 idx_map,
                 tool_name="get_parameter_context",
                 call_id=f"call_ctx_param_{sha_short(sid)}",
-                arguments={"case_path": base_case_visible, "line_index": line_row0 + 1},
+                arguments={"case_path": correction_case_visible, "line_index": line_row0 + 1},
                 payload=parameter_context,
             )
             param_args = {"case_path": correction_case_visible, "line_index": line_row0 + 1}
@@ -1274,180 +1570,154 @@ def append_multi_error_actions(
             )
             applied_tools.append("correct_parameters_from_path")
 
-            if param_payload.get("success", True) and isinstance(rec.get("z_true"), list):
+            if param_payload.get("success", True):
                 verify_stage = "post_parameter_correction"
-                verification_case_visible = make_case_alias(base_case_visible, "parameter_verify", sid)
-                runtime_context["case_aliases"][verification_case_visible] = runtime_case_reference(base_case_backend)
-                verification_snapshot = make_verification_snapshot_payload(
-                    verification_case_visible,
-                    rec["z_true"],
-                    "Post-parameter-correction verification snapshot.",
-                    verify_stage,
-                )
-                runtime_context["tool_context"].setdefault("verification_snapshots", {})[verify_stage] = verification_snapshot
-                hidden_context["snapshot_context"] = verification_snapshot
-                append_helper_tool_result(
-                    messages,
-                    meta,
-                    idx_map,
-                    tool_name="get_verification_snapshot",
-                    call_id=f"call_ctx_verify_param_{sha_short(sid)}",
-                    arguments={"case_path": verification_case_visible, "stage": verify_stage},
-                    payload=verification_snapshot,
-                )
-                verify_call = make_tool_call(
-                    "wls_from_path",
-                    f"call_wls_verify_param_{sha_short(sid)}",
-                    {"case_path": verification_case_visible},
-                )
-                messages.append({"role": "assistant", "tool_calls": [verify_call]})
-                try:
-                    verify_payload = (
-                        make_mock_wls_payload({"scenario": "no_error"}, meta, idx_map, rng_np)
-                        if config.mock
-                        else call_backend_tool(
-                            config.endpoint,
-                            "wls_from_path",
-                            {"case_path": verification_case_visible},
-                            messages,
-                            hidden_context,
-                            timeout=config.timeout_s,
-                        )
+                explicit = get_explicit_verification_snapshot(rec, verify_stage)
+                note = "Post-parameter-correction verification snapshot."
+                remaining = None
+                if explicit is not None:
+                    verification_case_visible = bind_verification_snapshot_case(
+                        snapshot=explicit,
+                        stage=verify_stage,
+                        sid=sid,
+                        base_case_visible=base_case_visible,
+                        base_case_backend=base_case_backend,
+                        runtime_context=runtime_context,
+                        current_case_visible=current_case_visible,
+                        current_case_backend=current_case_backend,
                     )
-                except Exception as exc:
-                    verify_payload = {"success": False, "error": str(exc)}
-                verification_payloads["parameter_error"] = verify_payload
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": verify_call["id"],
-                        "name": "wls_from_path",
-                        "content": as_tool_return_text(
-                            summarize_tool_result_for_conversation("wls_from_path", verify_payload, meta, idx_map)
-                        ),
-                    }
-                )
+                    if (
+                        explicit.get("z_obs_policy") == "preserve_current_z_obs"
+                        and correction_case_backend != current_case_backend
+                        and len(current_z_obs) != len(rec.get("z_obs", []))
+                        and isinstance(rec.get("z_obs"), list)
+                    ):
+                        z_verify = list(rec["z_obs"])
+                    else:
+                        z_verify = verification_z_obs_from_snapshot(explicit, current_z_obs)
+                    note = str(explicit.get("note") or note)
+                    remaining = explicit.get("remaining_families")
+                    if explicit.get("case_path_policy") != "preserve_current_case":
+                        current_case_visible = verification_case_visible
+                        current_case_backend = explicit.get("case_path") or current_case_backend
+                else:
+                    correction_case_backend = rec.get("parameter_error_case_path") or rec.get("correction_case_path")
+                    if correction_case_backend:
+                        verification_case_visible = make_case_alias(base_case_visible, "parameter_verify", sid)
+                        current_case_visible = verification_case_visible
+                        current_case_backend = correction_case_backend
+                        runtime_context["case_aliases"][verification_case_visible] = runtime_case_reference(
+                            current_case_backend
+                        )
+                    else:
+                        verification_case_visible = current_case_visible
+                    z_verify = current_z_obs
 
-    if "topology_error" in families and config.with_correction:
-        topo_rec = component_record(rec, "topology_error")
-        topo_label = topo_rec.get("label", {})
-        cb_name = topo_label.get("cb_name")
-        desired_status = status_to_bool(topo_label.get("old_status"))
-        if cb_name and desired_status is not None:
-            topology_context = make_topology_followup_payload(topo_rec, base_case_visible)
-            runtime_context["tool_context"]["topology_context"] = topology_context
-            hidden_context["topology_context"] = topology_context
-            append_helper_tool_result(
-                messages,
-                meta,
+                remaining_list = _remaining_after("parameter_error", remaining)
+                _append_verification_wls(
+                    family="parameter_error",
+                    tool_name="correct_parameters_from_path",
+                    verify_stage=verify_stage,
+                    verification_case_visible=verification_case_visible,
+                    z_verify=z_verify,
+                    note=note,
+                    remaining_families=remaining_list,
+                )
+            corrected_families.append("parameter_error")
+
+        elif family == "measurement_error" and config.with_correction:
+            meas_rec = component_record(rec, "measurement_error")
+            measurement_suspect_group = choose_measurement_suspect_group(
+                meas_rec,
                 idx_map,
-                tool_name="get_topology_context",
-                call_id=f"call_ctx_topo_{sha_short(sid)}",
-                arguments={"case_path": base_case_visible},
-                payload=topology_context,
+                previous_wls_payload,
+                prefer_label="topology_error" not in corrected_families,
             )
-            topo_args = {"case_path": base_case_visible, "cb_name": cb_name, "desired_status": desired_status}
-            topo_call = make_tool_call(
-                "correct_topology_from_path",
-                f"call_corr_topo_{sha_short(sid)}",
-                topo_args,
+            corr_call_args = {"case_path": current_case_visible, "suspect_group": measurement_suspect_group}
+            corr_call = make_tool_call(
+                "correct_measurements_from_path",
+                f"call_corr_meas_{sha_short(sid)}",
+                corr_call_args,
             )
-            messages.append({"role": "assistant", "tool_calls": [topo_call]})
+            messages.append({"role": "assistant", "tool_calls": [corr_call]})
             try:
-                topo_payload = (
-                    {"success": False, "error": "mock topology correction not implemented"}
+                corr_payload = (
+                    {"success": False, "error": "mock correction not implemented"}
                     if config.mock
                     else call_backend_tool(
                         config.endpoint,
-                        "correct_topology_from_path",
-                        topo_args,
+                        "correct_measurements_from_path",
+                        corr_call_args,
                         messages,
                         hidden_context,
                         timeout=config.timeout_s,
                     )
                 )
             except Exception as exc:
-                topo_payload = {"success": False, "error": str(exc)}
+                corr_payload = {"success": False, "error": str(exc)}
             messages.append(
                 {
                     "role": "tool",
-                    "tool_call_id": topo_call["id"],
-                    "name": "correct_topology_from_path",
+                    "tool_call_id": corr_call["id"],
+                    "name": "correct_measurements_from_path",
                     "content": as_tool_return_text(
                         summarize_tool_result_for_conversation(
-                            "correct_topology_from_path",
-                            topo_payload,
+                            "correct_measurements_from_path",
+                            corr_payload,
                             meta,
                             idx_map,
                         )
                     ),
                 }
             )
-            applied_tools.append("correct_topology_from_path")
+            applied_tools.append("correct_measurements_from_path")
 
-            case_path_verify = make_case_alias(base_case_visible, "topology_verify", sid)
-            z_verify = None
-            if "corrected_model_path" in rec and "z_true_full_model" in rec:
-                runtime_context["case_aliases"][case_path_verify] = runtime_case_reference(rec["corrected_model_path"])
-                z_verify = rec["z_true_full_model"]
-            elif isinstance(topo_payload.get("z_corrected"), list):
-                runtime_context["case_aliases"][case_path_verify] = runtime_case_reference(base_case_backend)
-                z_verify = topo_payload["z_corrected"]
-            if isinstance(z_verify, list):
-                verify_stage = "post_topology_correction"
-                verification_snapshot = make_verification_snapshot_payload(
-                    case_path_verify,
-                    z_verify,
-                    "Post-topology-correction verification snapshot.",
-                    verify_stage,
+            verify_stage = "post_measurement_correction"
+            explicit = get_explicit_verification_snapshot(rec, verify_stage)
+            note = "Post-measurement-correction verification snapshot."
+            remaining = None
+            if explicit is not None and explicit_snapshot_compatible_with_current_z(explicit, current_z_obs):
+                verification_case_visible = bind_verification_snapshot_case(
+                    snapshot=explicit,
+                    stage=verify_stage,
+                    sid=sid,
+                    base_case_visible=base_case_visible,
+                    base_case_backend=base_case_backend,
+                    runtime_context=runtime_context,
+                    current_case_visible=current_case_visible,
+                    current_case_backend=current_case_backend,
                 )
-                runtime_context["tool_context"].setdefault("verification_snapshots", {})[verify_stage] = verification_snapshot
-                hidden_context["snapshot_context"] = verification_snapshot
-                append_helper_tool_result(
-                    messages,
-                    meta,
-                    idx_map,
-                    tool_name="get_verification_snapshot",
-                    call_id=f"call_ctx_verify_topo_{sha_short(sid)}",
-                    arguments={"case_path": case_path_verify, "stage": verify_stage},
-                    payload=verification_snapshot,
-                )
-                verify_call = make_tool_call(
-                    "wls_from_path",
-                    f"call_wls_verify_topo_{sha_short(sid)}",
-                    {"case_path": case_path_verify},
-                )
-                messages.append({"role": "assistant", "tool_calls": [verify_call]})
-                try:
-                    verify_payload = (
-                        make_mock_wls_payload({"scenario": "no_error"}, meta, idx_map, rng_np)
-                        if config.mock
-                        else call_backend_tool(
-                            config.endpoint,
-                            "wls_from_path",
-                            {"case_path": case_path_verify},
-                            messages,
-                            hidden_context,
-                            timeout=config.timeout_s,
-                        )
-                    )
-                except Exception as exc:
-                    verify_payload = {"success": False, "error": str(exc)}
-                verification_payloads["topology_error"] = verify_payload
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": verify_call["id"],
-                        "name": "wls_from_path",
-                        "content": as_tool_return_text(
-                            summarize_tool_result_for_conversation("wls_from_path", verify_payload, meta, idx_map)
-                        ),
-                    }
+                z_verify = verification_z_obs_from_snapshot(explicit, current_z_obs)
+                note = str(explicit.get("note") or note)
+                remaining = explicit.get("remaining_families")
+            else:
+                verification_case_visible = current_case_visible
+                z_verify = apply_measurement_corrections_to_snapshot(
+                    current_z_obs,
+                    corr_payload,
+                    measurement_suspect_group,
                 )
 
-    if "harmonic_anomaly" in families:
-        if rec.get("harmonic_measurements"):
-            harmonic_context = make_harmonic_followup_payload(rec, base_case_visible)
+            remaining_list = _remaining_after("measurement_error", remaining)
+            _append_verification_wls(
+                family="measurement_error",
+                tool_name="correct_measurements_from_path",
+                verify_stage=verify_stage,
+                verification_case_visible=verification_case_visible,
+                z_verify=z_verify,
+                note=note,
+                remaining_families=remaining_list,
+            )
+            corrected_families.append("measurement_error")
+
+        elif family == "harmonic_anomaly":
+            if not rec.get("harmonic_measurements"):
+                continue
+            harmonic_case_visible = current_case_visible
+            if "topology_error" in corrected_families:
+                harmonic_case_visible = make_case_alias(base_case_visible, "harmonic_channel", sid)
+                runtime_context["case_aliases"][harmonic_case_visible] = runtime_case_reference(base_case_backend)
+            harmonic_context = make_harmonic_followup_payload(rec, harmonic_case_visible)
             runtime_context["tool_context"]["harmonic_context"] = harmonic_context
             hidden_context["harmonic_context"] = harmonic_context
             append_helper_tool_result(
@@ -1456,10 +1726,10 @@ def append_multi_error_actions(
                 idx_map,
                 tool_name="get_harmonic_context",
                 call_id=f"call_ctx_harm_{sha_short(sid)}",
-                arguments={"case_path": base_case_visible},
+                arguments={"case_path": harmonic_case_visible},
                 payload=harmonic_context,
             )
-            hse_args = {"case_path": base_case_visible}
+            hse_args = {"case_path": harmonic_case_visible}
             hse_call = make_tool_call("run_hse_from_path", f"call_hse_{sha_short(sid)}", hse_args)
             messages.append({"role": "assistant", "tool_calls": [hse_call]})
             try:
@@ -1488,12 +1758,33 @@ def append_multi_error_actions(
                 }
             )
             applied_tools.append("run_hse_from_path")
+            correction_steps.append(
+                round_assistant_payload(
+                    {
+                        "step": len(correction_steps) + 1,
+                        "family": "harmonic_anomaly",
+                        "tool": "run_hse_from_path",
+                        "pre_global_residual_ratio": wls_global_residual_ratio(
+                            previous_wls_payload,
+                            meta,
+                            idx_map,
+                        ),
+                        "post_global_residual_ratio": None,
+                        "post_action_improved": None,
+                        "post_action_resolved": None,
+                        "remaining_candidate_families": [],
+                    }
+                )
+            )
+            corrected_families.append("harmonic_anomaly")
 
     return {
         "measurement_suspect_group": measurement_suspect_group,
         "verification_payloads": verification_payloads,
+        "verification_pre_payloads": verification_pre_payloads,
         "hse_payload": hse_payload,
         "applied_tools": applied_tools,
+        "correction_steps": correction_steps,
         "correction_tool_name": applied_tools[-1] if applied_tools else None,
     }
 
@@ -1586,8 +1877,10 @@ def build_sft(config: BuilderConfig) -> None:
             measurement_suspect_group: Optional[List[int]] = None
             verification_payload: Optional[Dict[str, Any]] = None
             verification_payloads: dict[str, Mapping[str, Any]] = {}
+            verification_pre_payloads: dict[str, Mapping[str, Any]] = {}
             hse_payload: Optional[Dict[str, Any]] = None
             applied_tools: list[str] = []
+            correction_steps: list[Mapping[str, Any]] = []
 
             if not wls_payload.get("success", True):
                 rejected_rows.append({"id": sid, "scenario": scenario, "reason": "initial_wls_failed"})
@@ -1610,8 +1903,10 @@ def build_sft(config: BuilderConfig) -> None:
                 )
                 measurement_suspect_group = multi_result["measurement_suspect_group"]
                 verification_payloads = dict(multi_result["verification_payloads"])
+                verification_pre_payloads = dict(multi_result["verification_pre_payloads"])
                 hse_payload = multi_result["hse_payload"]
                 applied_tools = list(multi_result["applied_tools"])
+                correction_steps = list(multi_result["correction_steps"])
                 correction_tool_name = multi_result["correction_tool_name"]
 
             elif scenario == "measurement_error" and config.with_correction:
@@ -1661,85 +1956,70 @@ def build_sft(config: BuilderConfig) -> None:
                     }
                 )
 
-                cms = corr_payload.get("corrected_measurements") or []
-                chosen = None
-                if cms:
-                    if measurement_suspect_group:
-                        preferred = set(int(i) for i in measurement_suspect_group)
-                        for item in cms:
-                            if int(item.get("index0", -1)) in preferred:
-                                chosen = item
-                                break
-                    if chosen is None:
-                        chosen = max(
-                            cms,
-                            key=lambda e: abs(float(e.get("estimated_error", 0.0))),
-                            default=None,
-                        )
-                if chosen is not None:
-                    z2 = list(rec["z_obs"])
-                    idx0 = int(chosen.get("index0"))
-                    corrected = float(chosen.get("corrected"))
-                    if 0 <= idx0 < len(z2):
-                        z2[idx0] = corrected
-                        verify_stage = "post_measurement_correction"
-                        verification_case_visible = make_case_alias(base_case_visible, "measurement_verify", sid)
-                        runtime_context["case_aliases"][verification_case_visible] = runtime_case_reference(
-                            base_case_backend
-                        )
-                        verification_snapshot = make_verification_snapshot_payload(
-                            verification_case_visible,
-                            z2,
-                            "Post-correction verification snapshot.",
-                            verify_stage,
-                        )
-                        runtime_context["tool_context"].setdefault("verification_snapshots", {})[verify_stage] = verification_snapshot
-                        hidden_context["snapshot_context"] = verification_snapshot
-                        append_helper_tool_result(
-                            messages,
-                            meta,
-                            idx_map,
-                            tool_name="get_verification_snapshot",
-                            call_id=f"call_ctx_verify_meas_{sha_short(sid)}",
-                            arguments={"case_path": verification_case_visible, "stage": verify_stage},
-                            payload=verification_snapshot,
-                        )
-                        verify_call = make_tool_call(
-                            "wls_from_path",
-                            f"call_wls_verify_{sha_short(sid)}",
-                            {"case_path": verification_case_visible},
-                        )
-                        messages.append({"role": "assistant", "tool_calls": [verify_call]})
-                        try:
-                            verification_payload = (
-                                make_mock_wls_payload({"scenario": "no_error"}, meta, idx_map, rng_np)
-                                if config.mock
-                                else call_backend_tool(
-                                    config.endpoint,
-                                    "wls_from_path",
-                                    {"case_path": verification_case_visible},
-                                    messages,
-                                    hidden_context,
-                                    timeout=config.timeout_s,
-                                )
+                z2 = apply_measurement_corrections_to_snapshot(
+                    rec["z_obs"],
+                    corr_payload,
+                    measurement_suspect_group,
+                )
+                if z2 != list(rec["z_obs"]):
+                    verify_stage = "post_measurement_correction"
+                    verification_case_visible = make_case_alias(base_case_visible, "measurement_verify", sid)
+                    runtime_context["case_aliases"][verification_case_visible] = runtime_case_reference(
+                        base_case_backend
+                    )
+                    verification_snapshot = make_verification_snapshot_payload(
+                        verification_case_visible,
+                        z2,
+                        "Post-measurement-correction verification snapshot.",
+                        verify_stage,
+                    )
+                    runtime_context["tool_context"].setdefault("verification_snapshots", {})[verify_stage] = verification_snapshot
+                    hidden_context["snapshot_context"] = verification_snapshot
+                    append_helper_tool_result(
+                        messages,
+                        meta,
+                        idx_map,
+                        tool_name="get_verification_snapshot",
+                        call_id=f"call_ctx_verify_meas_{sha_short(sid)}",
+                        arguments={"case_path": verification_case_visible, "stage": verify_stage},
+                        payload=verification_snapshot,
+                    )
+                    verify_call = make_tool_call(
+                        "wls_from_path",
+                        f"call_wls_verify_{sha_short(sid)}",
+                        {"case_path": verification_case_visible},
+                    )
+                    messages.append({"role": "assistant", "tool_calls": [verify_call]})
+                    try:
+                        verification_payload = (
+                            make_mock_wls_payload({"scenario": "no_error"}, meta, idx_map, rng_np)
+                            if config.mock
+                            else call_backend_tool(
+                                config.endpoint,
+                                "wls_from_path",
+                                {"case_path": verification_case_visible},
+                                messages,
+                                hidden_context,
+                                timeout=config.timeout_s,
                             )
-                        except Exception as exc:
-                            verification_payload = {"success": False, "error": str(exc)}
-                        messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": verify_call["id"],
-                                "name": "wls_from_path",
-                                "content": as_tool_return_text(
-                                    summarize_tool_result_for_conversation(
-                                        "wls_from_path",
-                                        verification_payload,
-                                        meta,
-                                        idx_map,
-                                    )
-                                ),
-                            }
                         )
+                    except Exception as exc:
+                        verification_payload = {"success": False, "error": str(exc)}
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": verify_call["id"],
+                            "name": "wls_from_path",
+                            "content": as_tool_return_text(
+                                summarize_tool_result_for_conversation(
+                                    "wls_from_path",
+                                    verification_payload,
+                                    meta,
+                                    idx_map,
+                                )
+                            ),
+                        }
+                    )
 
             elif scenario == "parameter_error" and config.with_correction:
                 line_row0 = _maybe_int(rec.get("label", {}).get("line_row"))
@@ -2064,9 +2344,11 @@ def build_sft(config: BuilderConfig) -> None:
                 measurement_suspect_group=measurement_suspect_group,
                 verification_payload=verification_payload,
                 verification_payloads=verification_payloads,
+                verification_pre_payloads=verification_pre_payloads,
                 hse_payload=hse_payload,
                 correction_tool_name=correction_tool_name,
                 applied_tools=applied_tools,
+                correction_steps=correction_steps,
             )
             reject_reason = rejection_reason(final)
             if reject_reason is not None:

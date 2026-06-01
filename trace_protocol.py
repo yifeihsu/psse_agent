@@ -75,11 +75,14 @@ DECISION_SCHEMA_TEXT = {
     "suspect_locations": "optional array of suspect_location objects for multi-error snapshots",
     "action": {
         "applied_tool": "tool name already used in this trace, or null",
+        "first_applied_tool": "optional first tool name already used in a multi-error trace",
+        "last_applied_tool": "optional last tool name already used in a multi-error trace",
         "applied_tools": "optional array of tool names already used in this trace for multi-error snapshots",
         "arguments_hint": "object or null; use tool-schema field names, where line_index is 1-based",
         "request_more_data": "boolean",
         "requested_data": "array[string] or null",
         "verification_summary": "object or null; when present it includes post_action_global_residual_sum, post_action_global_residual_threshold, post_action_global_residual_ratio, post_action_executed, post_action_improved, post_action_resolved",
+        "correction_steps": "optional ordered array of multi-error correction steps with family, tool, pre/post residual ratios, improvement flags, and remaining_candidate_families",
     },
     "summary": "short factual summary string",
 }
@@ -104,13 +107,14 @@ SYSTEM_PROMPT = (
     "- `correct_topology_from_path(case_path, cb_name, desired_status)`: correct a topology mismatch after retrieving breaker context.\n"
     "- `run_hse_from_path(case_path)`: run harmonic state estimation after retrieving harmonic measurements.\n\n"
     "Decision policy:\n"
-    "1. Use concentrated large normalized residuals to localize likely measurement errors.\n"
+    "1. Use widespread residual patterns to suspect topology mismatch or three-phase imbalance.\n"
     "2. Use large normalized Lagrange multipliers concentrated on one branch to suspect parameter errors.\n"
-    "3. Use widespread residual patterns to suspect topology mismatch or three-phase imbalance.\n"
+    "3. Use concentrated large normalized residuals to localize likely measurement errors.\n"
     "4. If parameter context, breaker context, harmonic measurements, or verification snapshots are needed, call the matching helper tool.\n"
     "5. If three-phase imbalance is suspected, request three-phase substation VLN voltages before finalizing.\n"
     "6. If the global residual is elevated without a dominant bad measurement and harmonic measurements are available, call `run_hse_from_path`.\n"
-    "7. Prefer compact tool use over asking the user to restate numeric payloads.\n\n"
+    "7. In multi-error traces, prefer structural correction before measurement cleanup: topology, then parameter, then measurement, then harmonic follow-up.\n"
+    "8. Prefer compact tool use over asking the user to restate numeric payloads.\n\n"
     "Indexing convention: fields ending in `0` are 0-based; `line_index` follows the tool schema and is 1-based.\n\n"
     "Return only strict JSON with this structure:\n"
     f"{json.dumps(DECISION_SCHEMA_TEXT, ensure_ascii=False)}\n"

@@ -70,6 +70,7 @@ DEFAULT_COMBOS = [
     ("parameter_error", "harmonic_anomaly"),
     ("topology_error", "harmonic_anomaly"),
 ]
+SCADA_STRUCTURAL_FAMILIES = {"parameter_error", "topology_error"}
 
 
 def combo_key(families: Sequence[str]) -> str:
@@ -93,6 +94,67 @@ def canonicalize_combo(families: Sequence[str]) -> tuple[str, ...]:
     if all(family == "measurement_error" for family in ordered):
         raise ValueError("A multi-error combo cannot contain only measurement errors.")
     return ordered
+
+
+def combo_requires_structural_coupling(families: Sequence[str]) -> bool:
+    return SCADA_STRUCTURAL_FAMILIES.issubset(set(canonicalize_combo(families)))
+
+
+def coupling_metadata(families: Sequence[str]) -> dict[str, Any]:
+    if combo_requires_structural_coupling(families):
+        return {
+            "coupling_mode": "curriculum_independent_components",
+            "physically_coupled": False,
+            "note": (
+                "This sample combines independently generated structural components. "
+                "Use for tool-use curriculum, not final physical concurrent-fault benchmarking."
+            ),
+        }
+    return {
+        "coupling_mode": "scada_coupled_or_separate_harmonic_channel",
+        "physically_coupled": True,
+        "note": (
+            "The SCADA-visible part is coupled by construction, or the harmonic anomaly "
+            "is represented in the separate harmonic measurement channel."
+        ),
+    }
+
+
+def _stage_snapshot(
+    *,
+    case_path: str | None,
+    remaining_families: Sequence[str],
+    note: str,
+    z_obs: Sequence[float] | None = None,
+    case_path_policy: str | None = None,
+    z_obs_policy: str | None = None,
+) -> dict[str, Any]:
+    snapshot: dict[str, Any] = {
+        "case_path": case_path,
+        "remaining_families": list(remaining_families),
+        "note": note,
+    }
+    if z_obs is not None:
+        snapshot["z_obs"] = np.asarray(z_obs, dtype=float).tolist()
+    if case_path_policy:
+        snapshot["case_path_policy"] = case_path_policy
+    if z_obs_policy:
+        snapshot["z_obs_policy"] = z_obs_policy
+    return snapshot
+
+
+def _remaining_after_correction(families: Sequence[str], corrected_family: str) -> list[str]:
+    correction_order = [
+        "topology_error",
+        "parameter_error",
+        "measurement_error",
+        "harmonic_anomaly",
+    ]
+    ordered = [family for family in correction_order if family in set(families)]
+    if corrected_family not in ordered:
+        return []
+    idx = ordered.index(corrected_family)
+    return ordered[idx + 1 :]
 
 
 def parse_combo_spec(spec: str) -> tuple[str, ...]:
@@ -169,6 +231,51 @@ def _apply_measurement_outlier(
     return z_multi, label
 
 
+def _index_map_for_vector_length(vector_len: int, nb: int) -> dict[str, slice] | None:
+    remainder = int(vector_len) - 3 * int(nb)
+    if remainder < 0 or remainder % 4 != 0:
+        return None
+    return make_index_map(int(nb), remainder // 4)
+
+
+def _project_measurement_label_to_snapshot(
+    z_obs: Sequence[float],
+    label: Mapping[str, Any],
+    source_idx_map: Mapping[str, slice],
+    target_idx_map: Mapping[str, slice],
+) -> list[float]:
+    z_multi = np.asarray(z_obs, dtype=float).copy()
+    channel = label.get("channel")
+    if not isinstance(channel, str) or channel not in source_idx_map or channel not in target_idx_map:
+        return z_multi.tolist()
+
+    src_sl = source_idx_map[channel]
+    dst_sl = target_idx_map[channel]
+
+    def _project_index(index0: Any) -> int | None:
+        try:
+            offset = int(index0) - int(src_sl.start)
+        except Exception:
+            return None
+        projected = int(dst_sl.start) + offset
+        if projected < int(dst_sl.start) or projected >= int(dst_sl.stop) or projected >= len(z_multi):
+            return None
+        return projected
+
+    if isinstance(label.get("index"), int) and label.get("amplitude") is not None:
+        projected = _project_index(label["index"])
+        if projected is not None:
+            z_multi[projected] += float(label["amplitude"])
+    indices = label.get("indices")
+    amplitudes = label.get("amplitudes")
+    if isinstance(indices, list) and isinstance(amplitudes, list):
+        for index0, amplitude in zip(indices, amplitudes):
+            projected = _project_index(index0)
+            if projected is not None:
+                z_multi[projected] += float(amplitude)
+    return z_multi.tolist()
+
+
 def _make_parameter_context(
     rng: np.random.Generator,
     ppc_base: Mapping[str, Any],
@@ -242,6 +349,7 @@ def make_multi_error_record(
     scans: int,
     load_scale_min: float,
     load_scale_max: float,
+    mode: str = "curriculum",
 ) -> dict[str, Any] | None:
     factories = _make_component_factories(
         rng,
@@ -256,6 +364,11 @@ def make_multi_error_record(
     labels: dict[str, dict[str, Any]] = {}
 
     families = canonicalize_combo(families)
+    if mode == "physical" and combo_requires_structural_coupling(families):
+        raise NotImplementedError(
+            "Physical parameter+topology coupling is not implemented yet. "
+            "Use --mode curriculum for tool-use traces, or exclude P+T combos."
+        )
     primary_family = next(family for family in ERROR_PRIORITY if family in families)
     base_family = next((family for family in ERROR_PRIORITY if family in families and family != "measurement_error"), None)
     if base_family is None:
@@ -274,6 +387,7 @@ def make_multi_error_record(
     base_component = components[base_family]
     z_true = np.asarray(base_component["z_true"], dtype=float)
     z_obs = np.asarray(base_component["z_obs"], dtype=float)
+    z_obs_before_measurement_outlier = z_obs.copy()
 
     if "measurement_error" in families:
         z_obs, measurement_label = _apply_measurement_outlier(z_obs, idx_map, rng)
@@ -284,6 +398,51 @@ def make_multi_error_record(
         item = dict(labels[family])
         item["error_type"] = family
         ordered_errors.append(item)
+
+    verification_snapshots: dict[str, Any] = {}
+    if "measurement_error" in families:
+        verification_snapshots["post_measurement_correction"] = _stage_snapshot(
+            case_path=None,
+            z_obs=z_obs_before_measurement_outlier,
+            case_path_policy="preserve_current_case",
+            remaining_families=_remaining_after_correction(families, "measurement_error"),
+            note="Gross measurement component removed; other active families may remain.",
+        )
+    if "parameter_error" in families:
+        parameter_component = components.get("parameter_error", {})
+        parameter_case_path = (
+            parameter_component.get("parameter_error_case_path")
+            or parameter_component.get("correction_case_path")
+        )
+        verification_snapshots["post_parameter_correction"] = _stage_snapshot(
+            case_path=str(parameter_case_path) if parameter_case_path else None,
+            z_obs_policy="preserve_current_z_obs",
+            remaining_families=_remaining_after_correction(families, "parameter_error"),
+            note="Parameter model corrected; preserve any uncorrected measurement components.",
+        )
+    if "topology_error" in families:
+        topology_component = components.get("topology_error", {})
+        if topology_component.get("corrected_model_path") is not None:
+            topology_z_obs = topology_component.get("z_true_full_model")
+            if topology_z_obs is not None and "measurement_error" in labels:
+                target_idx_map = _index_map_for_vector_length(
+                    len(topology_z_obs),
+                    int(ppc_base["bus"].shape[0]),
+                )
+                if target_idx_map is not None:
+                    topology_z_obs = _project_measurement_label_to_snapshot(
+                        topology_z_obs,
+                        labels["measurement_error"],
+                        idx_map,
+                        target_idx_map,
+                    )
+            verification_snapshots["post_topology_correction"] = _stage_snapshot(
+                case_path=topology_component.get("corrected_model_path"),
+                z_obs=topology_z_obs,
+                z_obs_policy=None if topology_z_obs is not None else "preserve_current_z_obs",
+                remaining_families=_remaining_after_correction(families, "topology_error"),
+                note="Topology model corrected; preserve remaining data/model faults.",
+            )
 
     record: dict[str, Any] = {
         "id": f"multi_{combo_key(families).replace('+', '_')}_{rng.integers(1_000_000_000_000)}",
@@ -296,6 +455,7 @@ def make_multi_error_record(
             "error_families": list(families),
             "primary_error_family": primary_family,
             "errors": ordered_errors,
+            **coupling_metadata(families),
         },
         "op_point": {
             "base_family": base_family,
@@ -305,6 +465,8 @@ def make_multi_error_record(
             },
         },
     }
+    if verification_snapshots:
+        record["verification_snapshots"] = verification_snapshots
     for family, component in components.items():
         _copy_auxiliary_fields(record, family, component)
     return record
@@ -322,10 +484,19 @@ def generate_dataset(
     load_scale_min: float,
     load_scale_max: float,
     combos: Sequence[Sequence[str]] | None = None,
+    mode: str = "curriculum",
 ) -> None:
     if case_name != "14":
         raise ValueError("V1 multi-error generation supports IEEE-14 only.")
     combo_list = [canonicalize_combo(combo) for combo in combos] if combos is not None else resolve_combos(None)
+    if mode == "physical":
+        unsupported = [combo_key(combo) for combo in combo_list if combo_requires_structural_coupling(combo)]
+        if unsupported:
+            raise NotImplementedError(
+                "Physical parameter+topology coupling is not implemented yet. "
+                f"Unsupported physical combos: {', '.join(unsupported)}. "
+                "Use --mode curriculum for tool-use traces, or exclude P+T combos."
+            )
     if any("harmonic_anomaly" in combo for combo in combo_list) and not HARMONICS_AVAILABLE:
         raise RuntimeError("Harmonics modules are required for configured combos containing harmonic_anomaly.")
 
@@ -359,6 +530,7 @@ def generate_dataset(
             "combos": [combo_key(combo) for combo in combo_list],
             "combo_families": {combo_key(combo): list(combo) for combo in combo_list},
             "line_candidate_count": int(np.sum(line_mask)),
+            "mode": mode,
         },
         "requested_counts": {combo_key(combo): int(count) for combo, count in requested_counts.items()},
         "note": (
@@ -388,6 +560,7 @@ def generate_dataset(
                         scans=scans,
                         load_scale_min=load_scale_min,
                         load_scale_max=load_scale_max,
+                        mode=mode,
                     )
                     if record is None:
                         continue
@@ -449,6 +622,15 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=1442)
     parser.add_argument("--scans", type=int, default=8)
     parser.add_argument("--attempt-mult", type=int, default=20)
+    parser.add_argument(
+        "--mode",
+        choices=["curriculum", "physical"],
+        default="curriculum",
+        help=(
+            "curriculum: allow independently generated component combinations; "
+            "physical: require all SCADA-visible faults to come from one coupled physical snapshot."
+        ),
+    )
     parser.add_argument("--ls-min", type=float, default=DEFAULTS["load_scale_min"])
     parser.add_argument("--ls-max", type=float, default=DEFAULTS["load_scale_max"])
     args = parser.parse_args()
@@ -464,6 +646,7 @@ def main() -> None:
         load_scale_min=args.ls_min,
         load_scale_max=args.ls_max,
         combos=resolve_combos(args.combo),
+        mode=args.mode,
     )
 
 

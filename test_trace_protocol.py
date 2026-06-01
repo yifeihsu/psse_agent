@@ -1,7 +1,21 @@
 import json
 import unittest
 
-from Transmission.build_sft_traces import build_verification_summary, rejection_reason
+from Transmission.build_sft_traces import (
+    apply_measurement_corrections_to_snapshot,
+    build_verification_summary,
+    choose_measurement_suspect_group,
+    correction_family_order,
+    explicit_snapshot_compatible_with_current_z,
+    get_explicit_verification_snapshot,
+    rejection_reason,
+    verification_z_obs_from_snapshot,
+)
+from Transmission.generate_multi_error_measurements import (
+    _project_measurement_label_to_snapshot,
+    combo_requires_structural_coupling,
+    coupling_metadata,
+)
 from trace_protocol import (
     DECISION_SCHEMA_TEXT,
     chi2_threshold,
@@ -33,10 +47,125 @@ class TraceProtocolTests(unittest.TestCase):
         self.assertIn("error_families", DECISION_SCHEMA_TEXT["verdict"])
         self.assertIn("suspect_locations", DECISION_SCHEMA_TEXT)
         self.assertIn("applied_tools", DECISION_SCHEMA_TEXT["action"])
+        self.assertIn("first_applied_tool", DECISION_SCHEMA_TEXT["action"])
+        self.assertIn("last_applied_tool", DECISION_SCHEMA_TEXT["action"])
+        self.assertIn("correction_steps", DECISION_SCHEMA_TEXT["action"])
         self.assertIn("0-based", DECISION_SCHEMA_TEXT["evidence"]["top_residuals"][0]["index0"])
         self.assertIn("applied_tool", DECISION_SCHEMA_TEXT["action"])
         self.assertIn("1-based", DECISION_SCHEMA_TEXT["action"]["arguments_hint"])
         self.assertIn("object or null", DECISION_SCHEMA_TEXT["action"]["verification_summary"])
+
+    def test_measurement_suspect_group_prefers_gold_label_indices(self) -> None:
+        rec = {"label": {"indices": [2, 4], "channel": "Vm"}}
+        idx_map = {"Vm": slice(0, 5)}
+        tool_payload = {"r": [0.1, 0.2, 0.3, 30.0, 0.4]}
+
+        self.assertEqual(
+            choose_measurement_suspect_group(rec, idx_map, tool_payload),
+            [2, 4],
+        )
+
+    def test_apply_measurement_corrections_updates_all_suspect_indices(self) -> None:
+        z_obs = [1.0, 2.0, 3.0, 4.0]
+        corr_payload = {
+            "corrected_measurements": [
+                {"index0": 0, "corrected": 10.0},
+                {"index0": 2, "corrected": 30.0},
+                {"index0": 3, "corrected": 40.0},
+            ]
+        }
+
+        self.assertEqual(
+            apply_measurement_corrections_to_snapshot(z_obs, corr_payload, [0, 2]),
+            [10.0, 2.0, 30.0, 4.0],
+        )
+
+    def test_verification_summary_compares_against_previous_step_payload(self) -> None:
+        meta = {"branch_info": []}
+        idx_map = {"Vm": slice(0, 1)}
+        post_payload = {"global_residual_sum": 200.0, "global_residual_threshold": 100.0}
+
+        improved = build_verification_summary(
+            post_payload,
+            meta,
+            idx_map,
+            pre_action_payload={"global_residual_sum": 300.0, "global_residual_threshold": 100.0},
+        )
+        not_improved = build_verification_summary(
+            post_payload,
+            meta,
+            idx_map,
+            pre_action_payload={"global_residual_sum": 150.0, "global_residual_threshold": 100.0},
+        )
+
+        self.assertTrue(improved["post_action_improved"])
+        self.assertFalse(not_improved["post_action_improved"])
+
+    def test_parameter_topology_combo_is_marked_curriculum_only(self) -> None:
+        self.assertTrue(combo_requires_structural_coupling(["parameter_error", "topology_error"]))
+        metadata = coupling_metadata(["measurement_error", "parameter_error", "topology_error"])
+
+        self.assertEqual(metadata["coupling_mode"], "curriculum_independent_components")
+        self.assertFalse(metadata["physically_coupled"])
+
+    def test_correction_family_order_is_structural_first_by_default(self) -> None:
+        rec = {
+            "scenario": "multi_error",
+            "label": {
+                "error_families": ["measurement_error", "parameter_error", "topology_error", "harmonic_anomaly"]
+            },
+        }
+
+        self.assertEqual(
+            correction_family_order(rec, {}, {}, {}),
+            ["topology_error", "parameter_error", "measurement_error", "harmonic_anomaly"],
+        )
+        self.assertEqual(
+            correction_family_order(rec, {}, {}, {}, policy="measurement_first"),
+            ["measurement_error", "parameter_error", "topology_error", "harmonic_anomaly"],
+        )
+
+    def test_explicit_structural_snapshot_can_preserve_current_z_obs(self) -> None:
+        rec = {
+            "verification_snapshots": {
+                "post_topology_correction": {
+                    "case_path": "corrected_topology.m",
+                    "z_obs_policy": "preserve_current_z_obs",
+                    "remaining_families": ["measurement_error"],
+                }
+            }
+        }
+        snapshot = get_explicit_verification_snapshot(rec, "post_topology_correction")
+
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(verification_z_obs_from_snapshot(snapshot, [1.0, 2.0]), [1.0, 2.0])
+
+    def test_explicit_snapshot_rejects_stale_materialized_vector_length(self) -> None:
+        snapshot = {"case_path": "corrected_topology.m", "z_obs": [1.0, 2.0, 3.0]}
+
+        self.assertFalse(explicit_snapshot_compatible_with_current_z(snapshot, [1.0, 2.0]))
+        self.assertTrue(
+            explicit_snapshot_compatible_with_current_z(
+                {"case_path": "corrected_topology.m", "z_obs_policy": "preserve_current_z_obs"},
+                [1.0, 2.0],
+            )
+        )
+
+    def test_measurement_label_projection_preserves_channel_offset_on_compacted_topology_vector(self) -> None:
+        source_idx_map = {"Pf": slice(42, 62)}
+        target_idx_map = {"Pf": slice(42, 61)}
+        label = {
+            "error_type": "measurement_error",
+            "channel": "Pf",
+            "index": 47,
+            "amplitude": 0.5,
+        }
+        z_obs = [0.0] * 118
+
+        projected = _project_measurement_label_to_snapshot(z_obs, label, source_idx_map, target_idx_map)
+
+        self.assertEqual(projected[47], 0.5)
+        self.assertEqual(sum(projected), 0.5)
 
     def test_hydrate_tool_arguments_uses_visible_user_payloads(self) -> None:
         messages = [

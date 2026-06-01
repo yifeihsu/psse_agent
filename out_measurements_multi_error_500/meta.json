@@ -222,7 +222,8 @@
         "harmonic_anomaly"
       ]
     },
-    "line_candidate_count": 17
+    "line_candidate_count": 17,
+    "mode": "curriculum"
   },
   "requested_counts": {
     "measurement+parameter": 84,

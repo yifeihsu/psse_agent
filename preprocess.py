@@ -1162,6 +1162,9 @@ def main() -> None:
                 token_audit["warning"] = warning
                 break
             token_audit[split_name] = audit
+            if audit["count"] == 0:
+                print(f"  {split_name:<5} count=0")
+                continue
             print(
                 f"  {split_name:<5} count={audit['count']:<4} mean={audit['mean']:<8}"
                 f" p95={audit['p95']:<5} max={audit['max']:<5}"

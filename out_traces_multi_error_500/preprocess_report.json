@@ -7,7 +7,7 @@
     "balance_mode": "stratified",
     "dedupe_by": "user_snapshot",
     "tokenizer_name": "unsloth/Gemma-4-26B-A4B-it",
-    "max_seq_length": 6144,
+    "max_seq_length": 7168,
     "include_tool_schemas": true,
     "tools_file": null
   },
@@ -77,10 +77,10 @@
     }
   },
   "tool_sequences": {
-    "wls_from_path>correct_measurements_from_path>get_verification_snapshot>wls_from_path>get_parameter_context>correct_parameters_from_path>get_verification_snapshot>wls_from_path": 84,
-    "wls_from_path>correct_measurements_from_path>get_verification_snapshot>wls_from_path>get_topology_context>correct_topology_from_path>get_verification_snapshot>wls_from_path": 84,
+    "wls_from_path>get_parameter_context>correct_parameters_from_path>get_verification_snapshot>wls_from_path>correct_measurements_from_path>get_verification_snapshot>wls_from_path": 84,
+    "wls_from_path>get_topology_context>correct_topology_from_path>get_verification_snapshot>wls_from_path>correct_measurements_from_path>get_verification_snapshot>wls_from_path": 84,
     "wls_from_path>correct_measurements_from_path>get_verification_snapshot>wls_from_path>get_harmonic_context>run_hse_from_path": 83,
-    "wls_from_path>get_parameter_context>correct_parameters_from_path>get_verification_snapshot>wls_from_path>get_topology_context>correct_topology_from_path>get_verification_snapshot>wls_from_path": 83,
+    "wls_from_path>get_topology_context>correct_topology_from_path>get_verification_snapshot>wls_from_path>get_parameter_context>correct_parameters_from_path>get_verification_snapshot>wls_from_path": 83,
     "wls_from_path>get_parameter_context>correct_parameters_from_path>get_verification_snapshot>wls_from_path>get_harmonic_context>run_hse_from_path": 83,
     "wls_from_path>get_topology_context>correct_topology_from_path>get_verification_snapshot>wls_from_path>get_harmonic_context>run_hse_from_path": 83
   },
@@ -102,13 +102,13 @@
       "no_error_ratio_violations": 0,
       "no_error_nonempty_evidence": 0,
       "post_action_resolved_by_family": {
-        "measurement_error": 2,
-        "parameter_error": 62,
+        "measurement_error": 63,
+        "parameter_error": 59,
         "topology_error": 36
       },
       "post_action_improved_by_family": {
-        "measurement_error": 251,
-        "parameter_error": 162,
+        "measurement_error": 224,
+        "parameter_error": 109,
         "topology_error": 83
       },
       "evidence_lengths": {
@@ -133,14 +133,14 @@
       "no_error_ratio_violations": 0,
       "no_error_nonempty_evidence": 0,
       "post_action_resolved_by_family": {
-        "parameter_error": 48,
+        "parameter_error": 45,
         "topology_error": 28,
-        "measurement_error": 2
+        "measurement_error": 53
       },
       "post_action_improved_by_family": {
-        "measurement_error": 201,
+        "measurement_error": 178,
         "topology_error": 67,
-        "parameter_error": 130
+        "parameter_error": 87
       },
       "evidence_lengths": {
         "top_residuals:5": 343,
@@ -164,12 +164,13 @@
       "no_error_ratio_violations": 0,
       "no_error_nonempty_evidence": 0,
       "post_action_resolved_by_family": {
-        "parameter_error": 8,
+        "measurement_error": 5,
+        "parameter_error": 6,
         "topology_error": 5
       },
       "post_action_improved_by_family": {
-        "measurement_error": 26,
-        "parameter_error": 16,
+        "parameter_error": 11,
+        "measurement_error": 23,
         "topology_error": 8
       },
       "evidence_lengths": {
@@ -193,13 +194,14 @@
       "no_error_ratio_violations": 0,
       "no_error_nonempty_evidence": 0,
       "post_action_resolved_by_family": {
+        "measurement_error": 5,
         "topology_error": 3,
-        "parameter_error": 6
+        "parameter_error": 8
       },
       "post_action_improved_by_family": {
-        "measurement_error": 24,
+        "measurement_error": 23,
         "topology_error": 8,
-        "parameter_error": 16
+        "parameter_error": 11
       },
       "evidence_lengths": {
         "top_residuals:5": 42,
@@ -300,55 +302,55 @@
   "token_audit": {
     "train": {
       "tokenizer": "unsloth/Gemma-4-26B-A4B-it",
-      "max_seq_length": 6144,
+      "max_seq_length": 7168,
       "count": 402,
-      "min": 5118,
-      "mean": 5981.89,
-      "p50": 6026,
-      "p95": 6453,
-      "max": 6544,
-      "over_limit": 101,
-      "over_limit_pct": 25.12,
-      "required_to_avoid_truncation": 6544
+      "min": 5468,
+      "mean": 6176.22,
+      "p50": 6175,
+      "p95": 6554,
+      "max": 6779,
+      "over_limit": 0,
+      "over_limit_pct": 0.0,
+      "required_to_avoid_truncation": 6779
     },
     "val": {
       "tokenizer": "unsloth/Gemma-4-26B-A4B-it",
-      "max_seq_length": 6144,
+      "max_seq_length": 7168,
       "count": 50,
-      "min": 5121,
-      "mean": 5976.3,
-      "p50": 6019,
-      "p95": 6448,
-      "max": 6481,
-      "over_limit": 14,
-      "over_limit_pct": 28.0,
-      "required_to_avoid_truncation": 6481
+      "min": 5477,
+      "mean": 6166.32,
+      "p50": 6179,
+      "p95": 6591,
+      "max": 6739,
+      "over_limit": 0,
+      "over_limit_pct": 0.0,
+      "required_to_avoid_truncation": 6739
     },
     "test": {
       "tokenizer": "unsloth/Gemma-4-26B-A4B-it",
-      "max_seq_length": 6144,
+      "max_seq_length": 7168,
       "count": 48,
-      "min": 5245,
-      "mean": 6034.29,
-      "p50": 6067,
-      "p95": 6483,
-      "max": 6496,
-      "over_limit": 15,
-      "over_limit_pct": 31.25,
-      "required_to_avoid_truncation": 6496
+      "min": 5573,
+      "mean": 6195.31,
+      "p50": 6184,
+      "p95": 6435,
+      "max": 6776,
+      "over_limit": 0,
+      "over_limit_pct": 0.0,
+      "required_to_avoid_truncation": 6776
     },
     "all": {
       "tokenizer": "unsloth/Gemma-4-26B-A4B-it",
-      "max_seq_length": 6144,
+      "max_seq_length": 7168,
       "count": 500,
-      "min": 5118,
-      "mean": 5986.36,
-      "p50": 6028,
-      "p95": 6457,
-      "max": 6544,
-      "over_limit": 130,
-      "over_limit_pct": 26.0,
-      "required_to_avoid_truncation": 6544
+      "min": 5468,
+      "mean": 6177.06,
+      "p50": 6179,
+      "p95": 6553,
+      "max": 6779,
+      "over_limit": 0,
+      "over_limit_pct": 0.0,
+      "required_to_avoid_truncation": 6779
     }
   }
 }
