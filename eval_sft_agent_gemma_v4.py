@@ -1168,9 +1168,7 @@ def parse_gemma_generation(text: str, tokenizer: Any) -> dict[str, Any]:
 
 
 def resolve_turn_max_new_tokens(turn_index0: int, default_max_new_tokens: int) -> int:
-    if turn_index0 == 0:
-        return default_max_new_tokens
-    return min(default_max_new_tokens, 768)
+    return default_max_new_tokens
 
 
 def maybe_run_turn_housekeeping(
