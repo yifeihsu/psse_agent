@@ -253,6 +253,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--model-name", type=str, default="unsloth/Gemma-4-26B-A4B-it")
     parser.add_argument("--model-revision", type=str, default="")
     parser.add_argument(
+        "--init-adapter",
+        type=str,
+        default="",
+        help=(
+            "Optional local LoRA adapter directory to use as initialization for a fresh SFT run. "
+            "This is distinct from --resume-from-checkpoint, which restores Trainer state."
+        ),
+    )
+    parser.add_argument(
         "--require-pinned-model-revision",
         action="store_true",
         default=True,
@@ -1198,6 +1207,23 @@ def resolve_lora_target_modules(model: Any, scope: str) -> list[str]:
     if remaining > 0:
         print(f"  ... {remaining} more")
     return selected
+
+
+def ensure_adapter_parameters_trainable(model: Any) -> None:
+    trainable_params = sum(int(param.numel()) for param in model.parameters() if param.requires_grad)
+    if trainable_params > 0:
+        return
+
+    if hasattr(model, "enable_adapter_layers"):
+        model.enable_adapter_layers()
+
+    for name, param in model.named_parameters():
+        if "lora_" in name:
+            param.requires_grad_(True)
+
+    trainable_params = sum(int(param.numel()) for param in model.parameters() if param.requires_grad)
+    if trainable_params <= 0:
+        raise ValueError("Loaded init adapter has no trainable parameters.")
 
 
 def slice_or_zeros(values: list[int] | None, start: int, stop: int) -> list[int]:
@@ -2274,30 +2300,72 @@ def main(argv: list[str] | None = None) -> int:
             flush=True,
         )
 
-    print(f"Loading model: {args.model_name}")
-    model_kwargs: dict[str, Any] = {
-        "model_name": args.model_name,
-        "max_seq_length": args.max_seq_length,
-        "load_in_4bit": args.load_in_4bit,
-        "load_in_16bit": args.load_in_16bit,
-        "full_finetuning": False,
-    }
-    if args.model_revision:
-        model_kwargs["revision"] = args.model_revision
-    model, tokenizer = FastModel.from_pretrained(**model_kwargs)
-    lora_target_modules = resolve_lora_target_modules(model, args.lora_target_scope)
+    if args.init_adapter:
+        init_adapter_path = Path(args.init_adapter).expanduser()
+        adapter_cfg_path = init_adapter_path / "adapter_config.json"
+        if not adapter_cfg_path.exists():
+            raise ValueError(f"--init-adapter must point to a LoRA adapter directory with adapter_config.json: {init_adapter_path}")
+        with adapter_cfg_path.open("r", encoding="utf-8") as handle:
+            adapter_cfg = json.load(handle)
+        base_model_name = str(adapter_cfg.get("base_model_name_or_path") or args.model_name)
+        tokenizer_name, tokenizer_source, tokenizer_files = resolve_tokenizer_source(
+            init_adapter_path,
+            base_model_name=base_model_name,
+            prefer_base_tokenizer=False,
+        )
+        unsloth_model_name, unsloth_tempdir, prepared_tokenizer_files = prepare_unsloth_adapter_path(
+            init_adapter_path,
+            prefer_base_tokenizer=False,
+        )
+        tokenizer_load_note = format_unsloth_tokenizer_load_message(
+            prefer_base_tokenizer=False,
+            tokenizer_files=prepared_tokenizer_files or tokenizer_files,
+        )
+        print(f"Loading init adapter from: {init_adapter_path}")
+        print(f"  Adapter base model: {base_model_name}")
+        print(f"  Tokenizer source: {tokenizer_source}")
+        if args.model_revision:
+            print("  Note: local init-adapter loading uses the adapter config base model; --model-revision is not forwarded to Unsloth.")
+        if tokenizer_load_note:
+            print(tokenizer_load_note)
+        try:
+            model, tokenizer = FastModel.from_pretrained(
+                model_name=unsloth_model_name,
+                max_seq_length=args.max_seq_length,
+                load_in_4bit=args.load_in_4bit,
+                load_in_16bit=args.load_in_16bit,
+                full_finetuning=False,
+                tokenizer_name=tokenizer_name,
+            )
+        finally:
+            if unsloth_tempdir is not None:
+                unsloth_tempdir.cleanup()
+        ensure_adapter_parameters_trainable(model)
+    else:
+        print(f"Loading model: {args.model_name}")
+        model_kwargs: dict[str, Any] = {
+            "model_name": args.model_name,
+            "max_seq_length": args.max_seq_length,
+            "load_in_4bit": args.load_in_4bit,
+            "load_in_16bit": args.load_in_16bit,
+            "full_finetuning": False,
+        }
+        if args.model_revision:
+            model_kwargs["revision"] = args.model_revision
+        model, tokenizer = FastModel.from_pretrained(**model_kwargs)
+        lora_target_modules = resolve_lora_target_modules(model, args.lora_target_scope)
 
-    model = FastModel.get_peft_model(
-        model,
-        r=args.lora_r,
-        target_modules=lora_target_modules,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=args.lora_dropout,
-        bias="none",
-        use_gradient_checkpointing="unsloth",
-        random_state=args.seed,
-        max_seq_length=args.max_seq_length,
-    )
+        model = FastModel.get_peft_model(
+            model,
+            r=args.lora_r,
+            target_modules=lora_target_modules,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            bias="none",
+            use_gradient_checkpointing="unsloth",
+            random_state=args.seed,
+            max_seq_length=args.max_seq_length,
+        )
 
     if hasattr(model, "print_trainable_parameters"):
         model.print_trainable_parameters()

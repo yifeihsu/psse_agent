@@ -28,6 +28,7 @@ TRAIN_FILE=${TRAIN_FILE:-out_traces_balanced/sft_traces.train.jsonl}
 VALID_FILE=${VALID_FILE:-out_traces_balanced/sft_traces.valid.jsonl}
 MODEL_NAME=${MODEL_NAME:-unsloth/gemma-4-26B-A4B-it}
 MODEL_REVISION=${MODEL_REVISION:-}
+INIT_ADAPTER=${INIT_ADAPTER:-}
 ALLOW_UNPINNED_MODEL_REVISION=${ALLOW_UNPINNED_MODEL_REVISION:-0}
 GPU_PROFILE=${GPU_PROFILE:-auto}
 MAX_SEQ_LENGTH=${MAX_SEQ_LENGTH:-}
@@ -149,6 +150,7 @@ echo "Profile : $GPU_PROFILE_SELECTED"
 echo "Output  : $OUTPUT_DIR"
 echo "Model   : $MODEL_NAME"
 echo "Revision: ${MODEL_REVISION:-<unpinned>}"
+echo "Init adapter: ${INIT_ADAPTER:-<none>}"
 echo "Resume  : $RESUME_FROM_CHECKPOINT"
 echo "Save/Eval steps: $SAVE_STEPS / $EVAL_STEPS"
 echo "Hyperparams: seq=$MAX_SEQ_LENGTH bs=$PER_DEVICE_TRAIN_BATCH_SIZE ga=$GRADIENT_ACCUMULATION_STEPS lora_r=$LORA_R lora_alpha=$LORA_ALPHA lora_scope=$LORA_TARGET_SCOPE lr=$LEARNING_RATE workers=$DATALOADER_NUM_WORKERS sanity=$SANITY_CHECK_SAMPLES phase_gated=$PHASE_GATED_PROMPT tool_schemas=$INCLUDE_TOOL_SCHEMAS empty_thought=$INJECT_EMPTY_THOUGHT_CHANNEL repeats=$REPEAT_FIRST_TOOL_CALL/$REPEAT_LATER_TOOL_CALL/$REPEAT_FINAL"
@@ -197,6 +199,10 @@ if [[ -n "$MODEL_REVISION" ]]; then
 elif [[ "$ALLOW_UNPINNED_MODEL_REVISION" == "1" ]]; then
     MODEL_REVISION_ARGS+=(--allow-unpinned-model-revision)
 fi
+INIT_ADAPTER_ARGS=()
+if [[ -n "$INIT_ADAPTER" ]]; then
+    INIT_ADAPTER_ARGS+=(--init-adapter "$INIT_ADAPTER")
+fi
 TOOL_SCHEMA_ARGS=()
 if [[ "$INCLUDE_TOOL_SCHEMAS" == "0" ]]; then
     TOOL_SCHEMA_ARGS+=(--no-include-tool-schemas)
@@ -215,6 +221,7 @@ $PYTHON gpt_oss_power_sft_revised_v3.py \
     --valid-file "$VALID_FILE" \
     --model-name "$MODEL_NAME" \
     "${MODEL_REVISION_ARGS[@]}" \
+    "${INIT_ADAPTER_ARGS[@]}" \
     --output-dir "$OUTPUT_DIR" \
     --max-seq-length "$MAX_SEQ_LENGTH" \
     --dataset-num-proc 1 \
