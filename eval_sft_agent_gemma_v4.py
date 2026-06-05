@@ -338,6 +338,18 @@ def parse_args() -> argparse.Namespace:
         help="Where to write per-sample results",
     )
     p.add_argument(
+        "--resume-output",
+        action="store_true",
+        default=False,
+        help="Append to an existing output JSONL and skip already-completed prefix samples.",
+    )
+    p.add_argument(
+        "--truncate-partial-output",
+        action="store_true",
+        default=False,
+        help="When resuming, drop a malformed trailing JSONL line left by a preempted write.",
+    )
+    p.add_argument(
         "--continue-on-tool-error",
         action="store_true",
         help="Let the model continue after a tool returns success=false (default: stop and mark runtime error)",
@@ -1393,6 +1405,7 @@ def build_result_from_state(state: EvalSampleState) -> dict[str, Any]:
     multi_metrics = multi_metric_fields(state.gt_verdict, state.predicted_verdict, state.tool_calls_made)
 
     return {
+        "sample_index": state.sample_index,
         "gt_error_family": gt_family,
         "pred_error_family": pred_family,
         "gt_has_error": gt_has_error,
@@ -1414,9 +1427,15 @@ def build_result_from_state(state: EvalSampleState) -> dict[str, Any]:
     }
 
 
-def build_critical_error_result(messages_gt: list[dict[str, Any]], exc: Exception) -> dict[str, Any]:
+def build_critical_error_result(
+    messages_gt: list[dict[str, Any]],
+    exc: Exception,
+    *,
+    sample_index: int | None = None,
+) -> dict[str, Any]:
     gt_verdict = normalize_verdict(extract_ground_truth(messages_gt))
     return {
+        "sample_index": sample_index,
         "gt_error_family": gt_verdict.get("verdict", {}).get("error_family") if gt_verdict else None,
         "pred_error_family": None,
         "gt_has_error": gt_verdict.get("verdict", {}).get("has_error") if gt_verdict else None,
@@ -2117,6 +2136,7 @@ def run_samples_with_rolling_scheduler(
     model: Any,
     tokenizer: Any,
     *,
+    sample_offset: int,
     concurrent_conversations: int,
     max_turns: int,
     max_new_tokens: int,
@@ -2149,7 +2169,7 @@ def run_samples_with_rolling_scheduler(
             sample = test_samples[pending_index]
             active_states.append(
                 init_eval_sample_state(
-                    pending_index,
+                    sample_offset + pending_index,
                     sample["messages"],
                     sample.get("runtime_context"),
                 )
@@ -2333,6 +2353,70 @@ def run_samples_with_rolling_scheduler(
         top_up()
 
 
+def load_completed_results_for_resume(
+    output_path: str,
+    *,
+    truncate_partial_output: bool,
+) -> list[dict[str, Any]]:
+    path = Path(output_path)
+    if not path.exists() or path.stat().st_size == 0:
+        return []
+
+    raw_lines = path.read_text(encoding="utf-8").splitlines()
+    completed: list[dict[str, Any]] = []
+    valid_lines: list[str] = []
+
+    for line_no, line in enumerate(raw_lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            result = json.loads(line)
+        except json.JSONDecodeError as exc:
+            trailing_nonempty = any(item.strip() for item in raw_lines[line_no:])
+            if trailing_nonempty:
+                raise RuntimeError(
+                    f"Cannot resume {output_path}: malformed JSONL at line {line_no}, "
+                    "with non-empty lines after it."
+                ) from exc
+            if not truncate_partial_output:
+                raise RuntimeError(
+                    f"Cannot resume {output_path}: malformed trailing JSONL at line {line_no}. "
+                    "Rerun with --truncate-partial-output to drop that partial row."
+                ) from exc
+            path.write_text(("\n".join(valid_lines) + "\n") if valid_lines else "", encoding="utf-8")
+            print(f"Truncated malformed trailing output line {line_no} from {output_path}.")
+            return completed
+
+        if not isinstance(result, dict):
+            raise RuntimeError(f"Cannot resume {output_path}: line {line_no} is not a JSON object.")
+        completed.append(result)
+        valid_lines.append(line)
+
+    return completed
+
+
+def validate_completed_results_for_resume(
+    completed_results: list[dict[str, Any]],
+    *,
+    total_samples: int,
+    output_path: str,
+) -> int:
+    completed_count = len(completed_results)
+    if completed_count > total_samples:
+        raise RuntimeError(
+            f"Cannot resume {output_path}: it already has {completed_count} results, "
+            f"but this run only has {total_samples} requested samples."
+        )
+    for row_index, completed_result in enumerate(completed_results):
+        completed_sample_index = completed_result.get("sample_index")
+        if completed_sample_index is not None and completed_sample_index != row_index:
+            raise RuntimeError(
+                f"Cannot resume {output_path}: row {row_index + 1} has sample_index="
+                f"{completed_sample_index}, so the file is not prefix ordered."
+            )
+    return completed_count
+
+
 def main() -> None:
     args = parse_args()
 
@@ -2506,12 +2590,24 @@ def main() -> None:
 
     concurrent_conversations = max(1, int(args.concurrent_conversations))
 
-    def record_result(result: dict[str, Any]) -> None:
+    completed_count = 0
+    if args.resume_output:
+        completed_results = load_completed_results_for_resume(
+            args.output,
+            truncate_partial_output=args.truncate_partial_output,
+        )
+        completed_count = validate_completed_results_for_resume(
+            completed_results,
+            total_samples=len(test_samples),
+            output_path=args.output,
+        )
+    else:
+        completed_results = []
+
+    def accumulate_result(result: dict[str, Any]) -> None:
         nonlocal family_correct, family_set_correct, detection_correct, errors
 
         results.append(result)
-        out_file.write(json.dumps(result, default=str, ensure_ascii=False) + "\n")
-        out_file.flush()
 
         gt_family_local = result["gt_error_family"] or "unknown"
         family_counts[gt_family_local] += 1
@@ -2543,6 +2639,12 @@ def main() -> None:
         for note in result.get("parse_notes") or []:
             parse_note_counts[note] += 1
 
+    def record_result(result: dict[str, Any], out_file: Any) -> None:
+        accumulate_result(result)
+        out_file.write(json.dumps(result, default=str, ensure_ascii=False) + "\n")
+        out_file.flush()
+
+        gt_family_local = result["gt_error_family"] or "unknown"
         status = "✓" if result["family_correct"] else "✗"
         pred_fam_str = str(result["pred_error_family"]) if result["pred_error_family"] else "NONE"
         extra = ""
@@ -2556,35 +2658,73 @@ def main() -> None:
             f"tools={result['tool_calls']}{extra}"
         )
 
-    with open(args.output, "w", encoding="utf-8") as out_file:
+    next_ordered_write_index = completed_count
+    ordered_result_buffer: dict[int, dict[str, Any]] = {}
+
+    def record_result_ordered(result: dict[str, Any], out_file: Any) -> None:
+        nonlocal next_ordered_write_index
+
+        sample_index = result.get("sample_index")
+        if not isinstance(sample_index, int):
+            raise RuntimeError("Rolling resume output requires each result to include integer sample_index.")
+        if sample_index < next_ordered_write_index:
+            raise RuntimeError(f"Duplicate or stale sample_index in eval result: {sample_index}")
+        if sample_index in ordered_result_buffer:
+            raise RuntimeError(f"Duplicate buffered sample_index in eval result: {sample_index}")
+
+        ordered_result_buffer[sample_index] = result
+        while next_ordered_write_index in ordered_result_buffer:
+            record_result(ordered_result_buffer.pop(next_ordered_write_index), out_file)
+            next_ordered_write_index += 1
+
+    for completed_result in completed_results:
+        accumulate_result(completed_result)
+
+    if completed_count:
+        print(
+            f"Resume enabled: found {completed_count} completed result rows in {args.output}; "
+            f"{len(test_samples) - completed_count} samples remain."
+        )
+
+    pending_samples = test_samples[completed_count:]
+    output_mode = "a" if args.resume_output and completed_count else "w"
+    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+
+    with open(args.output, output_mode, encoding="utf-8") as out_file:
         if args.rolling_batch_scheduler and concurrent_conversations > 1:
             print(
                 f"Using rolling microbatch scheduler with capacity {concurrent_conversations}.\n"
             )
-            run_samples_with_rolling_scheduler(
-                test_samples,
-                model,
-                tokenizer,
-                concurrent_conversations=concurrent_conversations,
-                max_turns=args.max_turns,
-                max_new_tokens=args.max_new_tokens,
-                max_input_tokens=max_input_tokens,
-                tools=tools,
-                continue_on_tool_error=args.continue_on_tool_error,
-                continue_on_missing_context_tool=args.continue_on_missing_context_tool,
-                repair_wls_from_user=args.repair_wls_from_user,
-                enable_thinking=args.enable_thinking,
-                verbose=args.verbose,
-                inject_empty_thought_channel=args.inject_empty_thought_channel,
-                gc_collect_every_n_turns=args.gc_collect_every_n_turns,
-                empty_cuda_cache_every_n_turns=args.empty_cuda_cache_every_n_turns,
-                filter_unavailable_helper_tools=args.filter_unavailable_helper_tools,
-                inject_runtime_helper_note=args.inject_runtime_helper_note,
-                on_result=record_result,
-            )
+            if pending_samples:
+                run_samples_with_rolling_scheduler(
+                    pending_samples,
+                    model,
+                    tokenizer,
+                    sample_offset=completed_count,
+                    concurrent_conversations=concurrent_conversations,
+                    max_turns=args.max_turns,
+                    max_new_tokens=args.max_new_tokens,
+                    max_input_tokens=max_input_tokens,
+                    tools=tools,
+                    continue_on_tool_error=args.continue_on_tool_error,
+                    continue_on_missing_context_tool=args.continue_on_missing_context_tool,
+                    repair_wls_from_user=args.repair_wls_from_user,
+                    enable_thinking=args.enable_thinking,
+                    verbose=args.verbose,
+                    inject_empty_thought_channel=args.inject_empty_thought_channel,
+                    gc_collect_every_n_turns=args.gc_collect_every_n_turns,
+                    empty_cuda_cache_every_n_turns=args.empty_cuda_cache_every_n_turns,
+                    filter_unavailable_helper_tools=args.filter_unavailable_helper_tools,
+                    inject_runtime_helper_note=args.inject_runtime_helper_note,
+                    on_result=lambda result: record_result_ordered(result, out_file),
+                )
+                if ordered_result_buffer:
+                    pending = sorted(ordered_result_buffer)
+                    raise RuntimeError(f"Rolling scheduler finished with unwritten result indices: {pending[:10]}")
         else:
-            for batch_start in range(0, len(test_samples), concurrent_conversations):
-                batch_samples = test_samples[batch_start : batch_start + concurrent_conversations]
+            for pending_batch_start in range(0, len(pending_samples), concurrent_conversations):
+                batch_start = completed_count + pending_batch_start
+                batch_samples = pending_samples[pending_batch_start : pending_batch_start + concurrent_conversations]
                 batch_end = batch_start + len(batch_samples)
                 if len(batch_samples) == 1:
                     print(f"[{batch_start + 1}/{len(test_samples)}] ", end="", flush=True)
@@ -2616,6 +2756,7 @@ def main() -> None:
                                 inject_runtime_helper_note=args.inject_runtime_helper_note,
                             )
                         ]
+                        result_batch[0].setdefault("sample_index", batch_start)
                     else:
                         result_batch = run_sample_batch(
                             batch_samples,
@@ -2667,18 +2808,28 @@ def main() -> None:
                                     inject_runtime_helper_note=args.inject_runtime_helper_note,
                                 )
                             )
+                            result_batch[-1].setdefault("sample_index", batch_start + len(result_batch) - 1)
                         except Exception as serial_exc:
                             traceback.print_exc(file=sys.stdout)
-                            result_batch.append(build_critical_error_result(sample["messages"], serial_exc))
+                            result_batch.append(
+                                build_critical_error_result(
+                                    sample["messages"],
+                                    serial_exc,
+                                    sample_index=batch_start + len(result_batch),
+                                )
+                            )
 
                 for result in result_batch:
-                    record_result(result)
+                    record_result(result, out_file)
 
     n = len(results)
     print("\n" + "=" * 60)
     print(f"{'EVALUATION SUMMARY':^60}")
     print("=" * 60)
     print(f"  Total samples:          {n}")
+    if n == 0:
+        print("  No samples were evaluated.")
+        return
     print(f"  Error detection acc:    {detection_correct}/{n}  ({100 * detection_correct / n:.1f}%)")
     print(f"  Error family acc:       {family_correct}/{n}  ({100 * family_correct / n:.1f}%)")
     print(f"  Error family-set acc:   {family_set_correct}/{n}  ({100 * family_set_correct / n:.1f}%)")

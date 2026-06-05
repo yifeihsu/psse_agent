@@ -4,7 +4,8 @@
 #SBATCH --error=/scratch/yx3882/psse_agent/logs/eval_%j.err
 #SBATCH --chdir=/scratch/yx3882/psse_agent
 #SBATCH --account=torch_pr_627_general
-#SBATCH --comment=preemption=yes;requeue=false
+#SBATCH --requeue
+#SBATCH --comment="preemption=yes;requeue=true"
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
@@ -60,6 +61,8 @@ FILTER_UNAVAILABLE_HELPER_TOOLS=${FILTER_UNAVAILABLE_HELPER_TOOLS:-0}
 INJECT_RUNTIME_HELPER_NOTE=${INJECT_RUNTIME_HELPER_NOTE:-0}
 CONTINUE_ON_MISSING_CONTEXT_TOOL=${CONTINUE_ON_MISSING_CONTEXT_TOOL:-1}
 ROLLING_BATCH_SCHEDULER=${ROLLING_BATCH_SCHEDULER:-1}
+RESUME_OUTPUT=${RESUME_OUTPUT:-1}
+TRUNCATE_PARTIAL_OUTPUT=${TRUNCATE_PARTIAL_OUTPUT:-1}
 ALLOW_SLOW_PANDAPOWER=${ALLOW_SLOW_PANDAPOWER:-0}
 CPU_THREADS=${CPU_THREADS:-${SLURM_CPUS_PER_TASK:-16}}
 EXTRA_EVAL_ARGS=${EXTRA_EVAL_ARGS:-}
@@ -197,6 +200,8 @@ echo "filter unavailable helper tools: $FILTER_UNAVAILABLE_HELPER_TOOLS"
 echo "inject runtime helper note: $INJECT_RUNTIME_HELPER_NOTE"
 echo "continue on missing context tool: $CONTINUE_ON_MISSING_CONTEXT_TOOL"
 echo "rolling batch scheduler: $ROLLING_BATCH_SCHEDULER"
+echo "resume output: $RESUME_OUTPUT"
+echo "truncate partial output: $TRUNCATE_PARTIAL_OUTPUT"
 echo "load_in_4bit/load_in_16bit: $LOAD_IN_4BIT / $LOAD_IN_16BIT"
 echo "concurrent conversations: $CONCURRENT_CONVERSATIONS"
 echo "gc collect every N turns: $GC_COLLECT_EVERY_N_TURNS"
@@ -309,6 +314,14 @@ if [[ "$ROLLING_BATCH_SCHEDULER" == "1" ]]; then
   ARGS+=(--rolling-batch-scheduler)
 else
   ARGS+=(--no-rolling-batch-scheduler)
+fi
+
+if [[ "$RESUME_OUTPUT" == "1" ]]; then
+  ARGS+=(--resume-output)
+fi
+
+if [[ "$TRUNCATE_PARTIAL_OUTPUT" == "1" ]]; then
+  ARGS+=(--truncate-partial-output)
 fi
 
 if [[ "$LOAD_IN_4BIT" == "1" ]]; then
