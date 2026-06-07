@@ -120,6 +120,14 @@ def coupling_metadata(families: Sequence[str]) -> dict[str, Any]:
     }
 
 
+def choose_base_family(families: Sequence[str]) -> str | None:
+    canonical = canonicalize_combo(families)
+    family_set = set(canonical)
+    if SCADA_STRUCTURAL_FAMILIES.issubset(family_set):
+        return "topology_error"
+    return next((family for family in ERROR_PRIORITY if family in family_set and family != "measurement_error"), None)
+
+
 def _stage_snapshot(
     *,
     case_path: str | None,
@@ -370,7 +378,7 @@ def make_multi_error_record(
             "Use --mode curriculum for tool-use traces, or exclude P+T combos."
         )
     primary_family = next(family for family in ERROR_PRIORITY if family in families)
-    base_family = next((family for family in ERROR_PRIORITY if family in families and family != "measurement_error"), None)
+    base_family = choose_base_family(families)
     if base_family is None:
         return None
 

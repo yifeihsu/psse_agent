@@ -1,61 +1,202 @@
 # PS-LLM-Agent
 
-PS-LLM-Agent is a platform for generating power system operational data and using that data to train and fine-tune Large Language Models (LLMs). The project features comprehensive tool-use capabilities through a Model Context Protocol (MCP) server that interfaces with MATPOWER, enabling LLMs to perform complex power system calculations like State Estimation, Topology Error Processing, and Harmonics Analysis.
+PS-LLM-Agent is a power-system diagnostic agent project built around MATPOWER-backed tool use and Gemma 4 supervised fine-tuning. The active root-level pipeline in this repo is:
 
-## Repository Structure
+`preprocess.py` -> `submit_sft_gemma4.sh` / `gpt_oss_power_sft_revised_v3.py` -> `submit_eval.sh` / `submit_eval_stratified_smoke.sh`
 
-The repository is organized into the following key components:
+The current training and evaluation flow targets Gemma 4 tool-calling traces stored as JSONL conversations in `out_traces_balanced/`.
 
-- **`Transmission/`**: Core MATLAB and Python scripts for generating foundational transmission data, including State Estimation (SE) measurements, topology scenarios (e.g., node-breaker models), and Harmonics State Estimation (HSE) traces.
-- **`Harmonics/`**: Scripts focusing on harmonics data processing and analysis.
-- **`IEEE_14_OpenDSS/`**: OpenDSS models and scripts tailored for the IEEE 14-bus test system.
-- **`mcp_server/`**: A Model Context Protocol (MCP) server that wraps MATPOWER functionalities, exposing power system tools directly to LLM agents.
-- **`scripts/`**: Utility scripts for various tasks, including running fine-tuning (e.g., Unsloth), verifying parameters, testing server integrations, and generating data splits.
-- **`data/`**: The generated datasets, predominantly in JSONL format, used for Supervised Fine-Tuning (SFT) of the LLMs (e.g., `sft_final.jsonl`, `sft_with_tools.jsonl`).
-- **`docs/`**: Project documentation, presentation slides, and parameter range specifications.
+## Active Workflow
 
-## Key Features
+1. Generate or collect raw diagnostic traces.
+2. Normalize and split them with `preprocess.py`.
+3. Fine-tune Gemma 4 with `submit_sft_gemma4.sh` or `gpt_oss_power_sft_revised_v3.py`.
+4. Evaluate the LoRA adapter with `submit_eval.sh`.
+5. Run a smaller stratified smoke test with `submit_eval_stratified_smoke.sh` when you want a faster check.
 
-1. **Synthetic Data Generation**: Robust tools combining Python and MATLAB (MATPOWER) to generate realistic power system scenarios, including normal operations, topological errors, and harmonic distortions.
-2. **LLM Tool-Use (MCP)**: A fully functional MATPOWER MCP server that allows an LLM agent to execute load flows and state estimation directly during inference.
-3. **Supervised Fine-Tuning (SFT) Ready**: Scripts seamlessly convert MATPOWER executions and measurements into structured conversational traces (`.jsonl`) optimized for fine-tuning open-source models (via `unsloth`).
+## Repository Layout
 
-## Getting Started
+- `Transmission/`: MATLAB and Python data-generation code for SE, topology, parameter-error, and HSE scenarios.
+- `Harmonics/`: Harmonics-specific generation and verification utilities.
+- `mcp_server/`: MATPOWER-backed tool implementations used by evaluation and external MCP-style agent runs.
+- `data/`: Source JSONL datasets such as `data/sft_with_tools.jsonl`.
+- `out_traces_balanced/`: Preprocessed train/valid/test traces used for SFT.
+- `outputs/`: Fine-tuning checkpoints, LoRA adapters, and evaluation outputs.
+- `docs/`: Notes, slides, and supporting documentation.
 
-### Prerequisites
-- **Python 3.10+** (Recommended)
-- **MATLAB** (with MATPOWER installed and accessible via the MATLAB Engine API for Python)
-- **Gurobi** (optional but recommended for certain continuous optimization tasks)
+## Active Root Scripts
 
-### Setup
+- `preprocess.py`: Normalizes traces, optionally deduplicates them, audits token length, and writes balanced train/valid/test splits.
+- `gpt_oss_power_sft_revised_v3.py`: Canonical Gemma 4 SFT entrypoint.
+- `submit_sft_gemma4.sh`: Slurm wrapper for training with auto-tuned defaults by GPU class.
+- `eval_sft_agent_gemma_v2.py`: Main Gemma 4 evaluator.
+- `submit_eval.sh`: Full-test-set Slurm evaluation wrapper.
+- `make_stratified_smoke.py`: Builds a small balanced evaluation subset from the test split.
+- `submit_eval_stratified_smoke.sh`: Fast smoke-test wrapper built on `make_stratified_smoke.py`.
+- `eval_sft_agent_hardened.py`: Shared hardened evaluation/runtime logic reused by the Gemma evaluator.
+- `trace_protocol.py`: Shared tool schemas and trace-format helpers.
+- `interactive_agent_eval.py`: Manual interactive runner for probing an adapter with the MATPOWER tools.
+- `export_hf_prompt_completion.py`: Exports chat traces into flat prompt/completion JSONL files for other HF-style workflows.
+- `setup_unsloth_env.sh`: One-time environment bootstrap for the cluster workflow used by the submit scripts.
 
-1. **Clone the repository:**
-   ```bash
-   git clone <repository_url>
-   cd ps_llm_agent
-   ```
+## Requirements
 
-2. **Install Python dependencies:**
-   A virtual environment is highly recommended.
-   ```bash
-   pip install -r requirements.txt # (If provided, otherwise install package dependencies manually)
-   # Key dependencies often include: matlabengine, numpy, pandas, unsloth, etc.
-   ```
+- Python 3.11 is the target environment used by `setup_unsloth_env.sh`.
+- MATLAB with MATPOWER available to the Python-side tool wrappers in `mcp_server/`.
+- A CUDA GPU for training or evaluation.
+- Slurm if you want to use the provided `submit_*.sh` wrappers.
 
-3. **Start the MCP Server:**
-   To allow an LLM to interact with MATPOWER:
-   ```bash
-   cd mcp_server
-   python run_http_server.py
-   # Standard stdio version:
-   # python matpower_server.py
-   ```
+The submit scripts are currently configured for the NYU Greene-style environment:
 
-### Data Generation & Fine-Tuning
+- repo checkout at `/scratch/yx3882/psse_agent`
+- conda env at `/scratch/yx3882/.conda/envs/unsloth_sft`
+- module bootstrap via `anaconda3/2025.06`
 
-- **Generate Data**: Use the scripts in `Transmission/` (e.g., `generate_measurements.py`, `generate_hse_traces.py`) to build the raw datasets.
-- **Build SFT Traces**: Convert raw data into LLM training formats using `Transmission/build_sft_traces.py`.
-- **Fine-Tune**: Use `gpt_oss_power_sft_revised.py`, `train_agent.py`, or the `submit_sft*.sh` wrappers to run fine-tuning on the generated JSONL traces.
+If you run elsewhere, either edit the submit scripts or call the Python entrypoints directly.
+
+## Environment Setup
+
+One-time cluster setup:
+
+```bash
+bash setup_unsloth_env.sh
+```
+
+The script creates `/scratch/yx3882/.conda/envs/unsloth_sft` and installs the training stack used by the current Gemma 4 pipeline:
+
+- `torch`
+- `transformers`
+- `datasets`
+- `trl`
+- `peft`
+- `bitsandbytes`
+- `unsloth`
+- `wandb`
+
+## Data Preparation
+
+The active preprocessing path starts from `data/sft_with_tools.jsonl` and writes balanced splits to:
+
+- `out_traces_balanced/sft_traces.train.jsonl`
+- `out_traces_balanced/sft_traces.valid.jsonl`
+- `out_traces_balanced/sft_traces.test.jsonl`
+
+Basic usage:
+
+```bash
+python preprocess.py \
+  --input data/sft_with_tools.jsonl \
+  --exact-balanced \
+  --dedupe-by user_snapshot
+```
+
+Useful notes:
+
+- `--exact-balanced` selects exactly 500 samples per error family and splits them 400/50/50 into train/valid/test.
+- `--dedupe-by user_snapshot` is a reasonable default when you want to avoid near-duplicate operating points across splits.
+- The preprocessing report is written to `out_traces_balanced/preprocess_report.json` by default.
+
+## Training
+
+The active trainer is `gpt_oss_power_sft_revised_v3.py`, and the recommended cluster wrapper is `submit_sft_gemma4.sh`.
+
+Important:
+
+- Training requires a pinned `MODEL_REVISION` unless you explicitly opt out with `ALLOW_UNPINNED_MODEL_REVISION=1`.
+- The default model is `unsloth/gemma-4-31B-it`.
+- The default output directory is `outputs/gemma4_power_agent`.
+
+Recommended Slurm launch:
+
+```bash
+export MODEL_REVISION=d722512f8f1e4ef6629c1b24d16d65295c8c945e
+sbatch --constraint='a100|h100|h200' submit_sft_gemma4.sh
+```
+
+Common overrides:
+
+```bash
+export MODEL_REVISION=d722512f8f1e4ef6629c1b24d16d65295c8c945e
+export OUTPUT_DIR=/scratch/yx3882/psse_agent/outputs/gemma4_power_agent_exp1
+export MAX_SEQ_LENGTH=6144
+export PER_DEVICE_TRAIN_BATCH_SIZE=2
+export GRADIENT_ACCUMULATION_STEPS=8
+export WANDB_PROJECT=psse-agent-sft
+sbatch --gres=gpu:rtx_pro_6000:1 submit_sft_gemma4.sh
+```
+
+Direct Python launch is also possible if your local environment already matches the needed dependencies:
+
+```bash
+python gpt_oss_power_sft_revised_v3.py \
+  --train-file out_traces_balanced/sft_traces.train.jsonl \
+  --valid-file out_traces_balanced/sft_traces.valid.jsonl \
+  --model-name unsloth/gemma-4-31B-it \
+  --model-revision d722512f8f1e4ef6629c1b24d16d65295c8c945e \
+  --output-dir outputs/gemma4_power_agent \
+  --max-seq-length 4096 \
+  --load-in-16bit \
+  --lora-r 16 \
+  --lora-alpha 16 \
+  --lora-target-scope language_model
+```
+
+## Evaluation
+
+### Full evaluation
+
+`submit_eval.sh` runs `eval_sft_agent_gemma_v2.py` on the test split and writes results to `outputs/gemma4_power_agent/`.
+
+Example:
+
+```bash
+export MODEL_REVISION=d722512f8f1e4ef6629c1b24d16d65295c8c945e
+export ADAPTER_PATH=outputs/gemma4_power_agent/lora
+sbatch --constraint=a100 submit_eval.sh
+```
+
+Useful overrides:
+
+```bash
+export MAX_SAMPLES=100
+export MAX_TURNS=6
+export MAX_NEW_TOKENS=1024
+export GPU_PROFILE=portable
+sbatch submit_eval.sh
+```
+
+### Stratified smoke evaluation
+
+`submit_eval_stratified_smoke.sh` first builds a small balanced subset from the test split with `make_stratified_smoke.py`, then evaluates on that subset.
+
+Example:
+
+```bash
+export MODEL_REVISION=d722512f8f1e4ef6629c1b24d16d65295c8c945e
+export ADAPTER_PATH=outputs/gemma4_power_agent/lora
+export PER_FAMILY=4
+sbatch submit_eval_stratified_smoke.sh
+```
+
+This is the quickest regression check when you only want a small per-family sample instead of the full test set.
+
+## MATPOWER / MCP Usage
+
+The evaluation scripts call the MATPOWER-backed Python tool functions in `mcp_server/matpower_server.py` directly. You do not need to start the HTTP server for the training or evaluation pipeline.
+
+If you want an external MCP-style server for agent experiments, use:
+
+```bash
+cd mcp_server
+python run_http_server.py
+```
+
+## Notes
+
+- `submit_sft_gemma4.sh` and `submit_eval.sh` auto-select defaults based on detected GPU memory and model family.
+- Evaluation outputs now default to `outputs/gemma4_power_agent/` to keep the repo root clean.
+- `README_DATASET.md` contains dataset-focused notes; this README is intended to document the active root-level Gemma 4 pipeline.
 
 ## License
-Refer to `LICENSE.md` in the root directory for licensing information.
+
+Refer to `LICENSE.md`.

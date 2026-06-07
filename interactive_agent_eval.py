@@ -12,6 +12,7 @@ from trace_protocol import (
     CONTEXT_TOOL_NAMES,
     extract_conversation_context,
     hydrate_tool_arguments as protocol_hydrate_tool_arguments,
+    round_tool_result_payload,
     resolve_case_path_alias,
     summarize_tool_result_for_conversation,
 )
@@ -576,8 +577,9 @@ def main() -> None:
                 )
             except Exception:
                 tool_result_compact = tool_result
-            step_record["tool_result"] = tool_result_compact if tool_name in CONTEXT_TOOL_NAMES else tool_result
-            step_record["tool_result_compact"] = tool_result_compact
+            stored_tool_result = tool_result_compact if tool_name in CONTEXT_TOOL_NAMES else tool_result
+            step_record["tool_result"] = round_tool_result_payload(stored_tool_result)
+            step_record["tool_result_compact"] = round_tool_result_payload(tool_result_compact)
 
             print("[Tool result]")
             print(pretty_json(tool_result_compact, limit=5000))

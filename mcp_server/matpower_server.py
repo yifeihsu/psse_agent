@@ -721,6 +721,52 @@ def run_hse_from_path(
     orders = harmonic_orders if harmonic_orders else _infer_harmonic_orders(harmonic_measurements)
     return _run_hse_logic(case_path, harmonic_measurements, orders, slack_bus)
 
+
+def _run_three_phase_nlm_logic(
+    *,
+    case_path: str,
+    nlm_diagnostic: Dict[str, Any] | None = None,
+    target_branch_row0: int | None = None,
+    target_dss_element: str | None = None,
+) -> Dict[str, Any]:
+    try:
+        import sys as _sys
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+        if repo_root not in _sys.path:
+            _sys.path.append(repo_root)
+        from three_phase_nlm.nlm_runner import run_ieee14_hif_nlm  # type: ignore
+
+        return run_ieee14_hif_nlm(
+            target_dss_element=target_dss_element,
+            target_branch_row0=target_branch_row0,
+            supplied_diagnostic=nlm_diagnostic,
+        )
+    except Exception as e:
+        return {"success": False, "error": f"three-phase NLM adapter failed for {case_path}: {e}"}
+
+
+@mcp.tool(name="run_three_phase_nlm_from_path")
+def run_three_phase_nlm_from_path(
+    *,
+    case_path: str,
+    nlm_diagnostic: Dict[str, Any] | None = None,
+    target_branch_row0: int | None = None,
+    target_dss_element: str | None = None,
+) -> Dict[str, Any]:
+    """
+    Return compact three-phase NLM HIF localization evidence for the current snapshot.
+
+    The trace runtime can hydrate `nlm_diagnostic` from the hidden sample record.
+    When it is absent, the adapter returns an explicit metadata fallback instead
+    of attempting to infer HIF location from the 122-entry operator vector.
+    """
+    return _run_three_phase_nlm_logic(
+        case_path=case_path,
+        nlm_diagnostic=nlm_diagnostic,
+        target_branch_row0=target_branch_row0,
+        target_dss_element=target_dss_element,
+    )
+
 @mcp.tool(name="correct_topology_from_path")
 def correct_topology_from_path(
     *,
@@ -833,4 +879,3 @@ def wls_from_text(*, case_name: str, case_text: str, z: List[float]) -> Dict[str
 if __name__ == "__main__":
     # Bind to a stable HTTP port so clients (build_sft_traces.py) can call reliably
     mcp.run(transport="http", host="127.0.0.1", port=3929)
-

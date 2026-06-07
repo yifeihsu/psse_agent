@@ -29,6 +29,7 @@
             "topology_error",
             "three_phase_imbalance",
             "harmonic_anomaly",
+            "high_impedance_fault",
             "no_error"
           ]
         },
@@ -155,6 +156,64 @@
             },
             "additionalProperties": false
           }
+        },
+        "top_hif_groups": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "rank",
+              "branch_row0",
+              "line_index1",
+              "dss_element",
+              "from_bus",
+              "to_bus",
+              "score"
+            ],
+            "properties": {
+              "rank": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "branch_row0": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line_index1": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "dss_element": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "from_bus": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "to_bus": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "score": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
         }
       },
       "additionalProperties": false
@@ -173,6 +232,7 @@
             "parameter",
             "topology",
             "harmonic",
+            "fault",
             "imbalance",
             "none"
           ]
@@ -186,13 +246,37 @@
     "action": {
       "type": "object",
       "required": [
-        "recommended_tool",
+        "applied_tool",
         "arguments_hint",
         "request_more_data",
         "requested_data",
         "verification_summary"
       ],
       "properties": {
+        "applied_tool": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "first_applied_tool": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_applied_tool": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "applied_tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "recommended_tool": {
           "type": [
             "string",
@@ -222,6 +306,18 @@
             "object",
             "null"
           ]
+        },
+        "verification_summaries": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "correction_steps": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "additionalProperties": false

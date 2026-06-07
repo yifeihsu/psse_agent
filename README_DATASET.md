@@ -274,7 +274,7 @@ ls -lh data/
 
 ## 📈 Next Steps After Preprocessing
 
-1. **Fine-tune your model** using the [fine-tuning notebook](./gpt_oss_finetuning_clean.ipynb)
+1. **Fine-tune your model** with `submit_sft_gemma4.sh` or `gpt_oss_power_sft_revised_v3.py`
 2. **Evaluate performance** on the test set
 3. **Analyze errors** by error family
 4. **Iterate**: Adjust preprocessing parameters based on results

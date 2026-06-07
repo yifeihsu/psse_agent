@@ -16,6 +16,14 @@
 #SBATCH --mail-user=yx3882@nyu.edu
 #SBATCH --comment="preemption=yes;requeue=true"
 
+# GPU selection is intentionally left configurable at submission time.
+# Examples:
+#   sbatch --constraint='a100|h100|h200' submit_sft_gemma4.sh
+#   sbatch --gres=gpu:rtx_pro_6000:1 submit_sft_gemma4.sh
+# If your cluster exposes RTX PRO 6000 as a feature label instead of a GRES
+# label, you can also use:
+#   sbatch --constraint=rtx_pro_6000 submit_sft_gemma4.sh
+
 set -euo pipefail
 
 # ── Paths ──────────────────────────────────────────────────────────────────
@@ -26,7 +34,7 @@ LOG_DIR=/scratch/yx3882/psse_agent/logs
 OUTPUT_DIR=${OUTPUT_DIR:-/scratch/yx3882/psse_agent/outputs/gemma4_power_agent}
 TRAIN_FILE=${TRAIN_FILE:-out_traces_balanced/sft_traces.train.jsonl}
 VALID_FILE=${VALID_FILE:-out_traces_balanced/sft_traces.valid.jsonl}
-MODEL_NAME=${MODEL_NAME:-unsloth/gemma-4-26B-A4B-it}
+MODEL_NAME=${MODEL_NAME:-unsloth/gemma-4-31B-it}
 MODEL_REVISION=${MODEL_REVISION:-}
 INIT_ADAPTER=${INIT_ADAPTER:-}
 ALLOW_UNPINNED_MODEL_REVISION=${ALLOW_UNPINNED_MODEL_REVISION:-0}

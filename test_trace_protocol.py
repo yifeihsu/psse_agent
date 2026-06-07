@@ -1,8 +1,15 @@
 import json
 import unittest
+from pathlib import Path
+
+import numpy as np
 
 from Transmission.build_sft_traces import (
+    BuilderConfig,
+    HARDENING_TEMPLATES,
     apply_measurement_corrections_to_snapshot,
+    build_final_target,
+    build_tool_precondition_hardening_trace,
     build_verification_summary,
     choose_measurement_suspect_group,
     correction_family_order,
@@ -13,11 +20,13 @@ from Transmission.build_sft_traces import (
 )
 from Transmission.generate_multi_error_measurements import (
     _project_measurement_label_to_snapshot,
+    choose_base_family,
     combo_requires_structural_coupling,
     coupling_metadata,
 )
 from trace_protocol import (
     DECISION_SCHEMA_TEXT,
+    canonical_tool_schemas,
     chi2_threshold,
     extract_conversation_context,
     hydrate_tool_arguments,
@@ -38,6 +47,28 @@ def make_initial_user_message() -> dict:
 
 
 class TraceProtocolTests(unittest.TestCase):
+    def _mock_builder_config(self) -> BuilderConfig:
+        return BuilderConfig(
+            samples_path=Path("samples.jsonl"),
+            meta_path=Path("meta.json"),
+            imbalance_samples_path=None,
+            imbalance_meta_path=None,
+            hif_samples_path=None,
+            hif_meta_path=None,
+            case_name=None,
+            endpoint="http://localhost:3929/tools",
+            out_path=Path("out.jsonl"),
+            analysis_out_path=None,
+            mock=True,
+            seed=7,
+            add_no_error=0,
+            with_correction=True,
+            corr_max_iter=2,
+            corr_tol=1e-3,
+            allow_hif_metadata_fallback=False,
+            hardening_examples=0,
+        )
+
     def test_chi2_threshold_matches_ieee14_reference(self) -> None:
         self.assertAlmostEqual(chi2_threshold(95), 118.7516, places=3)
 
@@ -47,6 +78,8 @@ class TraceProtocolTests(unittest.TestCase):
         self.assertIn("error_families", DECISION_SCHEMA_TEXT["verdict"])
         self.assertIn("suspect_locations", DECISION_SCHEMA_TEXT)
         self.assertIn("applied_tools", DECISION_SCHEMA_TEXT["action"])
+        self.assertIn("high_impedance_fault", DECISION_SCHEMA_TEXT["verdict"]["error_family"])
+        self.assertIn("top_hif_groups", DECISION_SCHEMA_TEXT["evidence"])
         self.assertIn("first_applied_tool", DECISION_SCHEMA_TEXT["action"])
         self.assertIn("last_applied_tool", DECISION_SCHEMA_TEXT["action"])
         self.assertIn("correction_steps", DECISION_SCHEMA_TEXT["action"])
@@ -54,6 +87,17 @@ class TraceProtocolTests(unittest.TestCase):
         self.assertIn("applied_tool", DECISION_SCHEMA_TEXT["action"])
         self.assertIn("1-based", DECISION_SCHEMA_TEXT["action"]["arguments_hint"])
         self.assertIn("object or null", DECISION_SCHEMA_TEXT["action"]["verification_summary"])
+
+    def test_verification_snapshot_schema_is_stage_only(self) -> None:
+        schemas = canonical_tool_schemas()
+        verify_schema = next(
+            tool for tool in schemas if tool.get("function", {}).get("name") == "get_verification_snapshot"
+        )
+        params = verify_schema["function"]["parameters"]
+
+        self.assertEqual(params.get("required"), [])
+        self.assertIn("stage", params.get("properties", {}))
+        self.assertNotIn("case_path", params.get("properties", {}))
 
     def test_measurement_suspect_group_prefers_gold_label_indices(self) -> None:
         rec = {"label": {"indices": [2, 4], "channel": "Vm"}}
@@ -107,6 +151,8 @@ class TraceProtocolTests(unittest.TestCase):
 
         self.assertEqual(metadata["coupling_mode"], "curriculum_independent_components")
         self.assertFalse(metadata["physically_coupled"])
+        self.assertEqual(choose_base_family(["parameter_error", "topology_error"]), "topology_error")
+        self.assertEqual(choose_base_family(["measurement_error", "parameter_error"]), "parameter_error")
 
     def test_correction_family_order_is_structural_first_by_default(self) -> None:
         rec = {
@@ -124,6 +170,88 @@ class TraceProtocolTests(unittest.TestCase):
             correction_family_order(rec, {}, {}, {}, policy="measurement_first"),
             ["measurement_error", "parameter_error", "topology_error", "harmonic_anomaly"],
         )
+
+    def test_tool_precondition_hardening_templates_recover_via_measurement_correction(self) -> None:
+        meta = {
+            "case": "case14",
+            "nb": 2,
+            "nl": 1,
+            "baseMVA": 100.0,
+            "branch_info": [{"from_bus": 1, "to_bus": 2}],
+            "index_map": {
+                "Vm": [0, 2],
+                "Va": [2, 4],
+                "Pinj": [4, 6],
+                "Qinj": [6, 8],
+                "Pf": [8, 9],
+                "Qf": [9, 10],
+                "Pt": [10, 10],
+                "Qt": [10, 10],
+            },
+        }
+        idx_map = {k: slice(v[0], v[1]) for k, v in meta["index_map"].items()}
+        rec = {
+            "id": "meas_hardening_source",
+            "scenario": "measurement_error",
+            "z_obs": [1.0, 9.0, 1.0, 1.0, 0.1, 0.2, 0.1, 0.2, 0.3, 0.4],
+            "z_true": [1.0, 1.1, 1.0, 1.0, 0.1, 0.2, 0.1, 0.2, 0.3, 0.4],
+            "label": {
+                "error_type": "measurement_error",
+                "channel": "Vm",
+                "index": 1,
+                "subtype": "single_gross_outlier",
+            },
+        }
+
+        for template in HARDENING_TEMPLATES:
+            with self.subTest(template=template):
+                row, reason = build_tool_precondition_hardening_trace(
+                    config=self._mock_builder_config(),
+                    rec=rec,
+                    template=template,
+                    sid=f"{rec['id']}::{template}",
+                    meta=meta,
+                    idx_map=idx_map,
+                    base_case_backend="case14",
+                    base_case_visible="case14",
+                    rng_np=np.random.default_rng(123),
+                )
+
+                self.assertIsNone(reason)
+                self.assertIsNotNone(row)
+                messages = row["messages"]
+                tool_names = [
+                    call["function"]["name"]
+                    for message in messages
+                    for call in message.get("tool_calls", [])
+                ]
+                self.assertEqual(tool_names[0], "wls_from_path")
+                self.assertIn("correct_measurements_from_path", tool_names)
+                self.assertIn("get_verification_snapshot", tool_names)
+                self.assertNotIn("correct_parameters_from_path", tool_names)
+                self.assertNotIn("run_hse_from_path", tool_names)
+
+                if template == "parameter_helper_unavailable":
+                    self.assertIn("get_parameter_context", tool_names)
+                elif template == "harmonic_helper_unavailable":
+                    self.assertIn("get_harmonic_context", tool_names)
+                else:
+                    self.assertEqual(tool_names.count("get_verification_snapshot"), 2)
+
+                missing_context_tools = [
+                    message
+                    for message in messages
+                    if message.get("role") == "tool"
+                    and "Missing runtime context" in str(message.get("content", ""))
+                ]
+                self.assertEqual(len(missing_context_tools), 1)
+                missing_summary = json.loads(missing_context_tools[0]["content"])
+                self.assertFalse(missing_summary["success"])
+
+                final = json.loads(messages[-1]["content"])
+                self.assertEqual(final["verdict"]["error_family"], "measurement_error")
+                self.assertEqual(final["action"]["applied_tool"], "correct_measurements_from_path")
+                self.assertEqual(row["trace_metadata"]["trace_kind"], "tool_precondition_hardening")
 
     def test_explicit_structural_snapshot_can_preserve_current_z_obs(self) -> None:
         rec = {
@@ -320,6 +448,109 @@ class TraceProtocolTests(unittest.TestCase):
         self.assertEqual(compact["case_path"], "case14::parameter_case::abc12345")
         self.assertEqual(compact["scans"], 2)
         self.assertEqual(compact["measurement_vector_length"], 2)
+
+    def test_hif_tool_schema_hydration_and_summary(self) -> None:
+        schemas = canonical_tool_schemas()
+        names = [tool["function"]["name"] for tool in schemas]
+        self.assertIn("run_three_phase_nlm_from_path", names)
+
+        messages = [make_initial_user_message()]
+        hidden_context = {
+            "hif_context": {
+                "case_path": "case14",
+                "label": {"branch_row0": 2, "dss_element": "Line.2-3"},
+                "nlm_diagnostic": {
+                    "success": True,
+                    "converged": True,
+                    "top_hif_groups": [
+                        {
+                            "rank": 1,
+                            "branch_row0": 2,
+                            "line_index1": 3,
+                            "dss_element": "Line.2-3",
+                            "from_bus": 2,
+                            "to_bus": 3,
+                            "score": 31.25,
+                        }
+                    ],
+                },
+            }
+        }
+
+        args, notes = hydrate_tool_arguments(
+            "run_three_phase_nlm_from_path",
+            {"case_path": "case14"},
+            messages,
+            hidden_context=hidden_context,
+        )
+        self.assertEqual(args["target_branch_row0"], 2)
+        self.assertEqual(args["target_dss_element"], "Line.2-3")
+        self.assertIn("hydrated_hif_nlm_diagnostic", notes)
+
+        compact = summarize_tool_result_for_conversation(
+            "run_three_phase_nlm_from_path",
+            args["nlm_diagnostic"],
+            {},
+            {},
+        )
+        self.assertTrue(compact["success"])
+        self.assertEqual(compact["top_hif_groups"][0]["branch_row0"], 2)
+
+    def test_hif_final_target_uses_visible_nlm_not_hidden_label(self) -> None:
+        meta = {
+            "nb": 14,
+            "nl": 20,
+            "branch_info": [{"from_bus": i + 1, "to_bus": i + 2} for i in range(20)],
+        }
+        idx_map = {
+            "Vm": slice(0, 14),
+            "Pinj": slice(14, 28),
+            "Qinj": slice(28, 42),
+            "Pf": slice(42, 62),
+            "Qf": slice(62, 82),
+            "Pt": slice(82, 102),
+            "Qt": slice(102, 122),
+        }
+        rec = {
+            "scenario": "high_impedance_fault",
+            "label": {
+                "branch_row0": 2,
+                "line_index1": 3,
+                "dss_element": "Line.2-3",
+                "from_bus": 2,
+                "to_bus": 3,
+                "phase": "A",
+            },
+        }
+        nlm_payload = {
+            "success": True,
+            "converged": True,
+            "top_hif_groups": [
+                {
+                    "rank": 1,
+                    "branch_row0": 4,
+                    "line_index1": 5,
+                    "dss_element": "Line.2-5",
+                    "from_bus": 2,
+                    "to_bus": 5,
+                    "score": 19.0,
+                }
+            ],
+        }
+        primary_wls = {
+            "success": True,
+            "r": [0.0] * 122,
+            "lambdaN": [],
+            "global_residual_sum": 10.0,
+            "global_residual_threshold": 118.0,
+        }
+
+        final = build_final_target(rec, meta, idx_map, primary_wls, nlm_payload=nlm_payload)
+        details = final["suspect_location"]["details"]
+
+        self.assertEqual(details["branch_row0"], 4)
+        self.assertEqual(details["dss_element"], "Line.2-5")
+        self.assertNotIn("phase", details)
 
     def test_verification_alias_contract_covers_snapshot_and_backend_patterns(self) -> None:
         messages = [make_initial_user_message()]

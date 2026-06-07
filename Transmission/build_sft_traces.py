@@ -53,6 +53,7 @@ from trace_protocol import (
     round_tool_arguments,
     round_user_payload,
     summarize_hse_payload,
+    summarize_three_phase_nlm_payload,
     summarize_tool_result_for_conversation,
     summarize_wls_payload,
 )
@@ -71,6 +72,7 @@ REPORT_FAMILY_ORDER = [
     "parameter_error",
     "topology_error",
     "harmonic_anomaly",
+    "high_impedance_fault",
 ]
 CORRECTION_TOOL_ORDER = [
     "topology_error",
@@ -84,7 +86,14 @@ TOOL_BY_FAMILY = {
     "parameter_error": "correct_parameters_from_path",
     "topology_error": "correct_topology_from_path",
     "harmonic_anomaly": "run_hse_from_path",
+    "high_impedance_fault": "run_three_phase_nlm_from_path",
 }
+HARDENING_MAX_EXAMPLES = 150
+HARDENING_TEMPLATES = (
+    "parameter_helper_unavailable",
+    "harmonic_helper_unavailable",
+    "verification_snapshot_unavailable",
+)
 
 
 @dataclass(frozen=True)
@@ -93,6 +102,8 @@ class BuilderConfig:
     meta_path: Path
     imbalance_samples_path: Optional[Path]
     imbalance_meta_path: Optional[Path]
+    hif_samples_path: Optional[Path]
+    hif_meta_path: Optional[Path]
     case_name: Optional[str]
     endpoint: str
     out_path: Path
@@ -103,6 +114,8 @@ class BuilderConfig:
     with_correction: bool
     corr_max_iter: int
     corr_tol: float
+    allow_hif_metadata_fallback: bool
+    hardening_examples: int
     timeout_s: int = 60
 
 
@@ -308,6 +321,17 @@ def load_sample_sources(config: BuilderConfig) -> tuple[dict[str, Any], list[dic
         ]
         samples.extend(imbalance_samples)
 
+    if config.hif_samples_path and config.hif_meta_path:
+        hif_meta = json.loads(config.hif_meta_path.read_text(encoding="utf-8"))
+        if _meta_core(base_meta) != _meta_core(hif_meta):
+            raise ValueError("Primary and HIF metadata do not match on core measurement fields.")
+        hif_samples = [
+            rec
+            for rec in iter_jsonl(config.hif_samples_path)
+            if normalize_scenario(str(rec.get("scenario", ""))) == "high_impedance_fault"
+        ]
+        samples.extend(hif_samples)
+
     return base_meta, samples
 
 
@@ -389,6 +413,15 @@ def call_tool_json(endpoint: str, name: str, arguments: Mapping[str, Any], timeo
                 case_path=arguments["case_path"],
                 harmonic_measurements=arguments["harmonic_measurements"],
                 harmonic_orders=arguments.get("harmonic_orders")
+            )
+            return _make_serializable(result)
+
+        elif name == "run_three_phase_nlm_from_path":
+            result = mp_tools.run_three_phase_nlm_from_path.fn(
+                case_path=arguments["case_path"],
+                nlm_diagnostic=arguments.get("nlm_diagnostic"),
+                target_branch_row0=arguments.get("target_branch_row0"),
+                target_dss_element=arguments.get("target_dss_element"),
             )
             return _make_serializable(result)
             
@@ -507,6 +540,18 @@ def make_mock_wls_payload(
             r *= (200.0 / float(np.sum(r**2))) ** 0.5
         lam[:] = 0.08
 
+    elif scenario == "high_impedance_fault":
+        lab = rec.get("label", {})
+        row0 = _maybe_int(lab.get("branch_row0")) if isinstance(lab, Mapping) else None
+        r = rng.normal(0.0, 0.35, size=m)
+        if row0 is not None:
+            for ch, level in (("Pf", 4.8), ("Qf", 4.3), ("Pt", 4.5), ("Qt", 4.0)):
+                sl = idx_map[ch]
+                idx = sl.start + int(row0)
+                if 0 <= idx < len(r):
+                    r[idx] = level
+        lam[:] = 0.15
+
     else:  # no_error
         r = rng.normal(0.0, 0.08, size=m)
         lam[:] = 0.08
@@ -531,6 +576,48 @@ def make_mock_hse_payload(rec: Mapping[str, Any]) -> Dict[str, Any]:
         "estimated_thd_percent": {str(src): thd},
         "notes": "Harmonic source identified.",
     }
+
+
+def make_mock_measurement_correction_payload(
+    rec: Mapping[str, Any],
+    suspect_group: Sequence[int],
+) -> Dict[str, Any]:
+    z_obs = list(rec.get("z_obs", []))
+    z_true = list(rec.get("z_true", z_obs))
+    corrected = []
+    for raw_idx in suspect_group:
+        idx = _maybe_int(raw_idx)
+        if idx is None or idx < 0 or idx >= len(z_obs) or idx >= len(z_true):
+            continue
+        corrected.append(
+            {
+                "index0": idx,
+                "corrected": float(z_true[idx]),
+                "estimated_error": float(z_obs[idx]) - float(z_true[idx]),
+            }
+        )
+    return {
+        "success": bool(corrected),
+        "applied_any_correction": bool(corrected),
+        "iterations_performed": 1 if corrected else 0,
+        "corrected_measurements": corrected,
+    }
+
+
+def make_mock_three_phase_nlm_payload(rec: Mapping[str, Any]) -> Dict[str, Any]:
+    payload = rec.get("nlm_diagnostic")
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    lab = rec.get("label", {})
+    try:
+        from three_phase_nlm.nlm_runner import metadata_hif_diagnostic
+
+        return metadata_hif_diagnostic(
+            target_dss_element=lab.get("dss_element") if isinstance(lab, Mapping) else None,
+            target_branch_row0=_maybe_int(lab.get("branch_row0")) if isinstance(lab, Mapping) else None,
+        )
+    except Exception as exc:
+        return {"success": False, "error": str(exc), "top_hif_groups": []}
 
 
 # ----------------------------- conversation builders -----------------------------
@@ -576,6 +663,36 @@ def append_helper_tool_result(
     )
 
 
+def append_missing_context_tool_result(
+    messages: List[Dict[str, Any]],
+    meta: Mapping[str, Any],
+    idx_map: Mapping[str, slice],
+    *,
+    tool_name: str,
+    call_id: str,
+    arguments: Mapping[str, Any],
+) -> Dict[str, Any]:
+    payload = {
+        "success": False,
+        "error": f"Missing runtime context for {tool_name}",
+        "available_context_tools": [],
+        "note": "Tool-precondition hardening example; recover without calling dependent tools.",
+    }
+    for key in ("case_path", "stage", "line_index"):
+        if key in arguments:
+            payload[key] = arguments[key]
+    append_helper_tool_result(
+        messages,
+        meta,
+        idx_map,
+        tool_name=tool_name,
+        call_id=call_id,
+        arguments=arguments,
+        payload=payload,
+    )
+    return payload
+
+
 def make_user_payload(rec: Mapping[str, Any], meta: Mapping[str, Any], case_path: str) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "case_path": case_path,
@@ -595,6 +712,11 @@ def make_user_payload(rec: Mapping[str, Any], meta: Mapping[str, Any], case_path
         payload["note"] = (
             "This snapshot is a 1φ-equivalent operator vector (phase-A voltage magnitudes plus 3φ totals). "
             "If imbalance is suspected, request three-phase substation voltages."
+        )
+    if normalize_scenario(str(rec.get("scenario", ""))) == "high_impedance_fault":
+        payload["note"] = (
+            "This snapshot is a 1φ-equivalent operator vector from a copied IEEE-14 OpenDSS scenario. "
+            "If a hidden high-impedance fault is suspected, use the three-phase NLM localization tool."
         )
     return round_user_payload(payload)
 
@@ -640,6 +762,17 @@ def make_harmonic_followup_payload(rec: Mapping[str, Any], case_path: str) -> Di
             "harmonic_measurements": rec.get("harmonic_measurements", []),
             "harmonic_orders": rec.get("harmonic_orders", []),
             "note": "Harmonic measurements for HSE follow-up.",
+        }
+    )
+
+
+def make_hif_context_payload(rec: Mapping[str, Any], case_path: str) -> Dict[str, Any]:
+    return round_user_payload(
+        {
+            "case_path": case_path,
+            "nlm_diagnostic": rec.get("nlm_diagnostic", {}),
+            "label": rec.get("label", {}),
+            "note": "Compact three-phase NLM HIF localization context bound from the generated sample.",
         }
     )
 
@@ -887,6 +1020,7 @@ def build_final_target(
     verification_payloads: Optional[Mapping[str, Mapping[str, Any]]] = None,
     verification_pre_payloads: Optional[Mapping[str, Mapping[str, Any]]] = None,
     hse_payload: Optional[Mapping[str, Any]] = None,
+    nlm_payload: Optional[Mapping[str, Any]] = None,
     correction_tool_name: Optional[str] = None,
     applied_tools: Optional[List[str]] = None,
     correction_steps: Optional[List[Mapping[str, Any]]] = None,
@@ -905,6 +1039,8 @@ def build_final_target(
         "top_residuals": primary_summary["top_residuals"],
         "top_lagrange": primary_summary["top_lagrange"],
     }
+    if isinstance(nlm_payload, Mapping):
+        evidence["top_hif_groups"] = summarize_three_phase_nlm_payload(nlm_payload).get("top_hif_groups", [])
 
     families = multi_error_families(rec)
     if scenario == "multi_error" and families:
@@ -1158,6 +1294,42 @@ def build_final_target(
         }
         summary = "The global residual is elevated without a single dominant bad measurement; harmonic follow-up is warranted."
 
+    elif scenario == "high_impedance_fault":
+        compact_nlm = summarize_three_phase_nlm_payload(nlm_payload or rec.get("nlm_diagnostic", {}))
+        top_groups = compact_nlm.get("top_hif_groups", [])
+        if not evidence.get("top_hif_groups"):
+            evidence["top_hif_groups"] = top_groups
+        top1 = top_groups[0] if top_groups else {}
+        branch_row0 = _maybe_int(top1.get("branch_row0"))
+        line_index1 = _maybe_int(top1.get("line_index1"))
+        from_bus = _maybe_int(top1.get("from_bus"))
+        to_bus = _maybe_int(top1.get("to_bus"))
+        details = {
+            "fault_type": "high_impedance_fault",
+            "branch_row0": branch_row0,
+            "line_index1": line_index1,
+            "from_bus": from_bus,
+            "to_bus": to_bus,
+            "dss_element": top1.get("dss_element"),
+        }
+        suspected_phase = compact_nlm.get("suspected_phase")
+        if suspected_phase is not None:
+            details["phase"] = suspected_phase
+        if compact_nlm.get("phase_scores") is not None:
+            details["phase_scores"] = compact_nlm.get("phase_scores")
+        suspect_location = {
+            "domain": "fault",
+            "details": {k: v for k, v in details.items() if v not in (None, [], {})},
+        }
+        action = {
+            "applied_tool": "run_three_phase_nlm_from_path",
+            "arguments_hint": {"case_path": "case14"},
+            "request_more_data": False,
+            "requested_data": None,
+            "verification_summary": None,
+        }
+        summary = "Three-phase NLM line-group evidence is most consistent with a hidden high-impedance fault."
+
     else:
         suspect_location = {"domain": "none", "details": {}}
         action = {
@@ -1254,6 +1426,12 @@ def rejection_reason(final_target: Mapping[str, Any]) -> Optional[str]:
         details = final_target.get("suspect_location", {}).get("details", {})
         if not details or details.get("hse_best_candidate_bus_1based") is None:
             return "harmonic_anomaly_missing_hse_result"
+    elif family == "high_impedance_fault":
+        if action.get("applied_tool") != "run_three_phase_nlm_from_path":
+            return "high_impedance_fault_missing_nlm_tool"
+        hif_groups = evidence.get("top_hif_groups", [])
+        if not isinstance(hif_groups, list) or not hif_groups:
+            return "high_impedance_fault_missing_nlm_evidence"
     elif family == "three_phase_imbalance":
         if bool(action.get("request_more_data")):
             return "three_phase_imbalance_missing_followup"
@@ -1327,7 +1505,7 @@ def append_multi_error_actions(
             idx_map,
             tool_name="get_verification_snapshot",
             call_id=f"call_ctx_verify_{family}_{sha_short(sid)}",
-            arguments={"case_path": verification_case_visible, "stage": verify_stage},
+            arguments={"stage": verify_stage},
             payload=verification_snapshot,
         )
         verify_call = make_tool_call(
@@ -1642,7 +1820,7 @@ def append_multi_error_actions(
             messages.append({"role": "assistant", "tool_calls": [corr_call]})
             try:
                 corr_payload = (
-                    {"success": False, "error": "mock correction not implemented"}
+                    make_mock_measurement_correction_payload(meas_rec, measurement_suspect_group)
                     if config.mock
                     else call_backend_tool(
                         config.endpoint,
@@ -1789,6 +1967,232 @@ def append_multi_error_actions(
     }
 
 
+def build_tool_precondition_hardening_trace(
+    *,
+    config: BuilderConfig,
+    rec: Mapping[str, Any],
+    template: str,
+    sid: str,
+    meta: Mapping[str, Any],
+    idx_map: Mapping[str, slice],
+    base_case_backend: Any,
+    base_case_visible: str,
+    rng_np: np.random.Generator,
+) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    scenario = normalize_scenario(str(rec.get("scenario", "")))
+    if template not in HARDENING_TEMPLATES:
+        return None, "unknown_hardening_template"
+    if scenario != "measurement_error":
+        return None, "hardening_requires_measurement_error_source"
+    if not config.with_correction:
+        return None, "hardening_requires_correction_enabled"
+
+    runtime_context: Dict[str, Any] = {
+        "case_aliases": {base_case_visible: runtime_case_reference(base_case_backend)},
+        "tool_context": {},
+    }
+    hidden_context: Dict[str, Any] = {
+        "case_aliases": runtime_context["case_aliases"],
+    }
+    messages: List[Dict[str, Any]] = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": json_compact(make_user_payload(rec, meta, base_case_visible))},
+    ]
+
+    wls_call_args = {"case_path": base_case_visible}
+    wls_call = make_tool_call("wls_from_path", f"call_wls_harden_{sha_short(sid)}", wls_call_args)
+    messages.append({"role": "assistant", "tool_calls": [wls_call]})
+    try:
+        wls_payload = (
+            make_mock_wls_payload(rec, meta, idx_map, rng_np)
+            if config.mock
+            else call_backend_tool(
+                config.endpoint,
+                "wls_from_path",
+                wls_call_args,
+                messages,
+                hidden_context,
+                timeout=config.timeout_s,
+            )
+        )
+    except Exception as exc:
+        return None, f"hardening_initial_wls_failed:{exc}"
+    if not wls_payload.get("success", True):
+        return None, "hardening_initial_wls_failed"
+    messages.append(
+        {
+            "role": "tool",
+            "tool_call_id": wls_call["id"],
+            "name": "wls_from_path",
+            "content": as_tool_return_text(
+                summarize_tool_result_for_conversation("wls_from_path", wls_payload, meta, idx_map)
+            ),
+        }
+    )
+
+    if template == "parameter_helper_unavailable":
+        append_missing_context_tool_result(
+            messages,
+            meta,
+            idx_map,
+            tool_name="get_parameter_context",
+            call_id=f"call_ctx_param_missing_{sha_short(sid)}",
+            arguments={"case_path": base_case_visible},
+        )
+    elif template == "harmonic_helper_unavailable":
+        append_missing_context_tool_result(
+            messages,
+            meta,
+            idx_map,
+            tool_name="get_harmonic_context",
+            call_id=f"call_ctx_harm_missing_{sha_short(sid)}",
+            arguments={"case_path": base_case_visible},
+        )
+    elif template == "verification_snapshot_unavailable":
+        append_missing_context_tool_result(
+            messages,
+            meta,
+            idx_map,
+            tool_name="get_verification_snapshot",
+            call_id=f"call_ctx_verify_missing_{sha_short(sid)}",
+            arguments={"stage": "post_measurement_correction"},
+        )
+
+    measurement_suspect_group = choose_measurement_suspect_group(rec, idx_map, wls_payload)
+    if not measurement_suspect_group:
+        return None, "hardening_missing_measurement_suspect_group"
+
+    corr_call_args = {
+        "case_path": base_case_visible,
+        "suspect_group": measurement_suspect_group,
+    }
+    corr_call = make_tool_call(
+        "correct_measurements_from_path",
+        f"call_corr_meas_harden_{sha_short(sid)}",
+        corr_call_args,
+    )
+    messages.append({"role": "assistant", "tool_calls": [corr_call]})
+    try:
+        corr_payload = (
+            make_mock_measurement_correction_payload(rec, measurement_suspect_group)
+            if config.mock
+            else call_backend_tool(
+                config.endpoint,
+                "correct_measurements_from_path",
+                corr_call_args,
+                messages,
+                hidden_context,
+                timeout=config.timeout_s,
+            )
+        )
+    except Exception as exc:
+        corr_payload = {"success": False, "error": str(exc)}
+    messages.append(
+        {
+            "role": "tool",
+            "tool_call_id": corr_call["id"],
+            "name": "correct_measurements_from_path",
+            "content": as_tool_return_text(
+                summarize_tool_result_for_conversation(
+                    "correct_measurements_from_path",
+                    corr_payload,
+                    meta,
+                    idx_map,
+                )
+            ),
+        }
+    )
+
+    z_verify = apply_measurement_corrections_to_snapshot(
+        rec["z_obs"],
+        corr_payload,
+        measurement_suspect_group,
+    )
+    if z_verify == list(rec.get("z_obs", [])):
+        return None, "hardening_measurement_correction_noop"
+
+    verify_stage = "post_measurement_correction"
+    verification_case_visible = make_case_alias(base_case_visible, "measurement_verify_hardening", sid)
+    runtime_context["case_aliases"][verification_case_visible] = runtime_case_reference(base_case_backend)
+    verification_snapshot = make_verification_snapshot_payload(
+        verification_case_visible,
+        z_verify,
+        "Post-measurement-correction verification snapshot.",
+        verify_stage,
+    )
+    runtime_context["tool_context"].setdefault("verification_snapshots", {})[verify_stage] = verification_snapshot
+    hidden_context["snapshot_context"] = verification_snapshot
+    append_helper_tool_result(
+        messages,
+        meta,
+        idx_map,
+        tool_name="get_verification_snapshot",
+        call_id=f"call_ctx_verify_meas_harden_{sha_short(sid)}",
+        arguments={"stage": verify_stage},
+        payload=verification_snapshot,
+    )
+
+    verify_call = make_tool_call(
+        "wls_from_path",
+        f"call_wls_verify_harden_{sha_short(sid)}",
+        {"case_path": verification_case_visible},
+    )
+    messages.append({"role": "assistant", "tool_calls": [verify_call]})
+    try:
+        verification_payload = (
+            make_mock_wls_payload({"scenario": "no_error"}, meta, idx_map, rng_np)
+            if config.mock
+            else call_backend_tool(
+                config.endpoint,
+                "wls_from_path",
+                {"case_path": verification_case_visible},
+                messages,
+                hidden_context,
+                timeout=config.timeout_s,
+            )
+        )
+    except Exception as exc:
+        verification_payload = {"success": False, "error": str(exc)}
+    messages.append(
+        {
+            "role": "tool",
+            "tool_call_id": verify_call["id"],
+            "name": "wls_from_path",
+            "content": as_tool_return_text(
+                summarize_tool_result_for_conversation("wls_from_path", verification_payload, meta, idx_map)
+            ),
+        }
+    )
+
+    final = build_final_target(
+        rec,
+        meta,
+        idx_map,
+        wls_payload,
+        measurement_suspect_group=measurement_suspect_group,
+        verification_payload=verification_payload,
+        correction_tool_name="correct_measurements_from_path",
+        applied_tools=["correct_measurements_from_path"],
+    )
+    reject_reason = rejection_reason(final)
+    if reject_reason is not None:
+        return None, f"hardening_final_rejected:{reject_reason}"
+
+    messages.append({"role": "assistant", "content": json_compact(final)})
+    return (
+        {
+            "messages": messages,
+            "runtime_context": runtime_context,
+            "trace_metadata": {
+                "trace_kind": "tool_precondition_hardening",
+                "template": template,
+                "source_id": str(rec.get("id")),
+            },
+        },
+        None,
+    )
+
+
 # ----------------------------- main builder -----------------------------
 
 
@@ -1817,7 +2221,16 @@ def build_sft(config: BuilderConfig) -> None:
     config.out_path.parent.mkdir(parents=True, exist_ok=True)
     n_written = 0
     n_skipped = 0
+    n_hardening_written = 0
+    hardening_rejections = 0
     rejected_rows: list[dict[str, Any]] = []
+    hardening_target = max(0, int(config.hardening_examples))
+    if hardening_target > HARDENING_MAX_EXAMPLES:
+        print(
+            f"Requested {hardening_target} hardening examples; "
+            f"capping at {HARDENING_MAX_EXAMPLES}."
+        )
+        hardening_target = HARDENING_MAX_EXAMPLES
 
     with config.out_path.open("w", encoding="utf-8") as fout_all:
         for rec in tqdm(samples, desc="Building SFT traces"):
@@ -1879,6 +2292,7 @@ def build_sft(config: BuilderConfig) -> None:
             verification_payloads: dict[str, Mapping[str, Any]] = {}
             verification_pre_payloads: dict[str, Mapping[str, Any]] = {}
             hse_payload: Optional[Dict[str, Any]] = None
+            nlm_payload: Optional[Dict[str, Any]] = None
             applied_tools: list[str] = []
             correction_steps: list[Mapping[str, Any]] = []
 
@@ -1926,7 +2340,7 @@ def build_sft(config: BuilderConfig) -> None:
 
                 try:
                     corr_payload = (
-                        {"success": False, "error": "mock correction not implemented"}
+                        make_mock_measurement_correction_payload(rec, measurement_suspect_group)
                         if config.mock
                         else call_backend_tool(
                             config.endpoint,
@@ -1981,7 +2395,7 @@ def build_sft(config: BuilderConfig) -> None:
                         idx_map,
                         tool_name="get_verification_snapshot",
                         call_id=f"call_ctx_verify_meas_{sha_short(sid)}",
-                        arguments={"case_path": verification_case_visible, "stage": verify_stage},
+                        arguments={"stage": verify_stage},
                         payload=verification_snapshot,
                     )
                     verify_call = make_tool_call(
@@ -2101,7 +2515,7 @@ def build_sft(config: BuilderConfig) -> None:
                             idx_map,
                             tool_name="get_verification_snapshot",
                             call_id=f"call_ctx_verify_param_{sha_short(sid)}",
-                            arguments={"case_path": verification_case_visible, "stage": verify_stage},
+                            arguments={"stage": verify_stage},
                             payload=verification_snapshot,
                         )
                         verify_call = make_tool_call(
@@ -2225,7 +2639,7 @@ def build_sft(config: BuilderConfig) -> None:
                             idx_map,
                             tool_name="get_verification_snapshot",
                             call_id=f"call_ctx_verify_topo_{sha_short(sid)}",
-                            arguments={"case_path": case_path_verify, "stage": verify_stage},
+                            arguments={"stage": verify_stage},
                             payload=verification_snapshot,
                         )
                         verify_call = make_tool_call(
@@ -2317,6 +2731,61 @@ def build_sft(config: BuilderConfig) -> None:
                         }
                     )
 
+            elif scenario == "high_impedance_fault":
+                hif_context = make_hif_context_payload(rec, base_case_visible)
+                runtime_context["tool_context"]["hif_context"] = hif_context
+                hidden_context["hif_context"] = hif_context
+                nlm_args = {"case_path": base_case_visible}
+                nlm_call = make_tool_call(
+                    "run_three_phase_nlm_from_path",
+                    f"call_nlm_hif_{sha_short(sid)}",
+                    nlm_args,
+                )
+                messages.append({"role": "assistant", "tool_calls": [nlm_call]})
+                try:
+                    nlm_payload = (
+                        make_mock_three_phase_nlm_payload(rec)
+                        if config.mock
+                        else call_backend_tool(
+                            config.endpoint,
+                            "run_three_phase_nlm_from_path",
+                            nlm_args,
+                            messages,
+                            hidden_context,
+                            timeout=config.timeout_s,
+                        )
+                    )
+                except Exception as exc:
+                    nlm_payload = {"success": False, "error": str(exc)}
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": nlm_call["id"],
+                        "name": "run_three_phase_nlm_from_path",
+                        "content": as_tool_return_text(
+                            summarize_tool_result_for_conversation(
+                                "run_three_phase_nlm_from_path",
+                                nlm_payload,
+                                meta,
+                                idx_map,
+                            )
+                        ),
+                    }
+                )
+                if (
+                    isinstance(nlm_payload, Mapping)
+                    and nlm_payload.get("method") == "metadata_fallback"
+                    and not config.allow_hif_metadata_fallback
+                ):
+                    rejected_rows.append(
+                        {
+                            "id": sid,
+                            "scenario": scenario,
+                            "reason": "high_impedance_fault_metadata_fallback",
+                        }
+                    )
+                    continue
+
             elif scenario == "three_phase_imbalance":
                 three_phase = rec.get("three_phase_voltages")
                 if isinstance(three_phase, list) and three_phase:
@@ -2346,6 +2815,7 @@ def build_sft(config: BuilderConfig) -> None:
                 verification_payloads=verification_payloads,
                 verification_pre_payloads=verification_pre_payloads,
                 hse_payload=hse_payload,
+                nlm_payload=nlm_payload,
                 correction_tool_name=correction_tool_name,
                 applied_tools=applied_tools,
                 correction_steps=correction_steps,
@@ -2369,6 +2839,71 @@ def build_sft(config: BuilderConfig) -> None:
             fout_all.write(line + "\n")
             n_written += 1
 
+        if hardening_target:
+            if not config.with_correction:
+                rejected_rows.append(
+                    {
+                        "id": "tool_precondition_hardening",
+                        "scenario": "tool_precondition_hardening",
+                        "reason": "hardening_requires_correction_enabled",
+                    }
+                )
+            else:
+                measurement_sources = [
+                    s
+                    for s in samples
+                    if normalize_scenario(str(s.get("scenario", ""))) == "measurement_error"
+                ]
+                rng_std.shuffle(measurement_sources)
+                if not measurement_sources:
+                    rejected_rows.append(
+                        {
+                            "id": "tool_precondition_hardening",
+                            "scenario": "tool_precondition_hardening",
+                            "reason": "no_measurement_error_sources_for_hardening",
+                        }
+                    )
+                else:
+                    max_attempts = max(hardening_target * 10, len(HARDENING_TEMPLATES))
+                    with tqdm(total=hardening_target, desc="Building hardening traces") as pbar:
+                        for attempt in range(max_attempts):
+                            if n_hardening_written >= hardening_target:
+                                break
+                            source_idx = (attempt // len(HARDENING_TEMPLATES)) % len(measurement_sources)
+                            source = measurement_sources[source_idx]
+                            template = HARDENING_TEMPLATES[attempt % len(HARDENING_TEMPLATES)]
+                            hardening_sid = (
+                                f"{source.get('id', 'sample')}::hardening::{template}::{attempt}"
+                            )
+                            row, reason = build_tool_precondition_hardening_trace(
+                                config=config,
+                                rec=source,
+                                template=template,
+                                sid=hardening_sid,
+                                meta=meta,
+                                idx_map=idx_map,
+                                base_case_backend=base_case_backend,
+                                base_case_visible=base_case_visible,
+                                rng_np=rng_np,
+                            )
+                            if row is None:
+                                hardening_rejections += 1
+                                if hardening_rejections <= 50:
+                                    rejected_rows.append(
+                                        {
+                                            "id": hardening_sid,
+                                            "scenario": "tool_precondition_hardening",
+                                            "template": template,
+                                            "source_id": str(source.get("id")),
+                                            "reason": reason or "unknown_hardening_rejection",
+                                        }
+                                    )
+                                continue
+                            fout_all.write(json.dumps(row, ensure_ascii=False) + "\n")
+                            n_written += 1
+                            n_hardening_written += 1
+                            pbar.update(1)
+
     print(f"Wrote combined SFT file: {config.out_path}")
     if config.analysis_out_path is not None:
         config.analysis_out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2379,6 +2914,10 @@ def build_sft(config: BuilderConfig) -> None:
     print(f"Rejected traces: {len(rejected_rows)}")
     if n_skipped:
         print(f"Skipped {n_skipped} examples due to MCP errors/timeouts.")
+    if hardening_target:
+        print(f"Hardening traces written: {n_hardening_written}/{hardening_target}")
+        if hardening_rejections:
+            print(f"Hardening trace build rejections: {hardening_rejections}")
     print(f"Total written: {n_written}")
 
 
@@ -2388,6 +2927,8 @@ def parse_args() -> BuilderConfig:
     p.add_argument("--meta", default="out_measurements_balanced/meta.json")
     p.add_argument("--imbalance-samples", default="")
     p.add_argument("--imbalance-meta", default="")
+    p.add_argument("--hif-samples", default="")
+    p.add_argument("--hif-meta", default="")
     p.add_argument("--case", default="auto", choices=["auto", "case14", "case118"])
     p.add_argument("--endpoint", default="http://localhost:3929/tools")
     p.add_argument("--out", default="data/sft_with_tools.jsonl")
@@ -2398,6 +2939,20 @@ def parse_args() -> BuilderConfig:
     p.add_argument("--no-correction", action="store_true")
     p.add_argument("--corr-iters", type=int, default=2)
     p.add_argument("--corr-tol", type=float, default=1e-3)
+    p.add_argument(
+        "--allow-hif-metadata-fallback",
+        action="store_true",
+        help="Allow oracle-backed HIF metadata fallback traces for smoke tests only.",
+    )
+    p.add_argument(
+        "--hardening-examples",
+        type=int,
+        default=0,
+        help=(
+            "Optional small recovery set for failed helper preconditions. "
+            f"Default 0; capped at {HARDENING_MAX_EXAMPLES}."
+        ),
+    )
     p.add_argument("--timeout", type=int, default=60)
     args = p.parse_args()
 
@@ -2406,6 +2961,8 @@ def parse_args() -> BuilderConfig:
         meta_path=Path(args.meta),
         imbalance_samples_path=Path(args.imbalance_samples) if args.imbalance_samples else None,
         imbalance_meta_path=Path(args.imbalance_meta) if args.imbalance_meta else None,
+        hif_samples_path=Path(args.hif_samples) if args.hif_samples else None,
+        hif_meta_path=Path(args.hif_meta) if args.hif_meta else None,
         case_name=None if args.case == "auto" else args.case,
         endpoint=args.endpoint,
         out_path=Path(args.out),
@@ -2416,6 +2973,8 @@ def parse_args() -> BuilderConfig:
         with_correction=not bool(args.no_correction),
         corr_max_iter=int(args.corr_iters),
         corr_tol=float(args.corr_tol),
+        allow_hif_metadata_fallback=bool(args.allow_hif_metadata_fallback),
+        hardening_examples=max(0, int(args.hardening_examples)),
         timeout_s=int(args.timeout),
     )
 

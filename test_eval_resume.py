@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 
 from eval_sft_agent_gemma_v4 import (
+    CONTROLLER_STATE_KEY,
+    execute_tool,
     load_completed_results_for_resume,
     validate_completed_results_for_resume,
 )
@@ -57,6 +59,115 @@ class EvalResumeTests(unittest.TestCase):
                 total_samples=1,
                 output_path="eval.jsonl",
             )
+
+    def test_verification_snapshot_can_be_requested_by_stage_only(self) -> None:
+        runtime_context = {
+            "tool_context": {
+                "verification_snapshots": {
+                    "post_measurement_correction": {
+                        "case_path": "case14::post_measurement_correction::abc123",
+                        "z_obs": [1.0, 2.0],
+                        "stage": "post_measurement_correction",
+                    }
+                }
+            }
+        }
+        hidden_context = {
+            CONTROLLER_STATE_KEY: {
+                "wls_completed": True,
+                "pending_verification_stage": "post_measurement_correction",
+            }
+        }
+
+        result = execute_tool(
+            "get_verification_snapshot",
+            {"stage": "post_measurement_correction"},
+            runtime_context=runtime_context,
+            hidden_context=hidden_context,
+        )
+
+        self.assertEqual(result["case_path"], "case14::post_measurement_correction::abc123")
+        self.assertEqual(hidden_context["snapshot_context"]["z_obs"], [1.0, 2.0])
+        self.assertTrue(hidden_context[CONTROLLER_STATE_KEY]["awaiting_verification_wls"])
+
+    def test_verification_snapshot_empty_args_use_active_stage(self) -> None:
+        runtime_context = {
+            "tool_context": {
+                "verification_snapshots": {
+                    "post_topology_correction": {
+                        "case_path": "case14::post_topology_correction::abc123",
+                        "z_obs": [3.0],
+                        "stage": "post_topology_correction",
+                    }
+                }
+            }
+        }
+        hidden_context = {
+            CONTROLLER_STATE_KEY: {
+                "wls_completed": True,
+                "pending_verification_stage": "post_topology_correction",
+            }
+        }
+
+        result = execute_tool(
+            "get_verification_snapshot",
+            {},
+            runtime_context=runtime_context,
+            hidden_context=hidden_context,
+        )
+
+        self.assertEqual(result["stage"], "post_topology_correction")
+        self.assertEqual(result["case_path"], "case14::post_topology_correction::abc123")
+
+    def test_controller_blocks_correction_without_required_helper_context(self) -> None:
+        runtime_context = {"tool_context": {"parameter_context": {"case_path": "case14"}}}
+        hidden_context = {CONTROLLER_STATE_KEY: {"wls_completed": True}}
+
+        result = execute_tool(
+            "correct_parameters_from_path",
+            {"case_path": "case14", "line_index": 1},
+            runtime_context=runtime_context,
+            hidden_context=hidden_context,
+        )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["tool_error_type"], "controller_precondition")
+        self.assertIn("get_parameter_context", result["allowed_tools"])
+
+    def test_controller_blocks_repeated_verification_snapshot_before_wls(self) -> None:
+        runtime_context = {
+            "tool_context": {
+                "verification_snapshots": {
+                    "post_measurement_correction": {
+                        "case_path": "case14::post_measurement_correction::abc123",
+                        "z_obs": [1.0],
+                        "stage": "post_measurement_correction",
+                    }
+                }
+            }
+        }
+        hidden_context = {
+            CONTROLLER_STATE_KEY: {
+                "wls_completed": True,
+                "pending_verification_stage": "post_measurement_correction",
+            }
+        }
+
+        execute_tool(
+            "get_verification_snapshot",
+            {"stage": "post_measurement_correction"},
+            runtime_context=runtime_context,
+            hidden_context=hidden_context,
+        )
+        repeated = execute_tool(
+            "get_verification_snapshot",
+            {"stage": "post_measurement_correction"},
+            runtime_context=runtime_context,
+            hidden_context=hidden_context,
+        )
+
+        self.assertFalse(repeated["success"])
+        self.assertIn("wls_from_path", repeated["allowed_tools"])
 
 
 if __name__ == "__main__":

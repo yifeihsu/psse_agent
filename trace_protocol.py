@@ -16,6 +16,7 @@ ERROR_FAMILIES = [
     "topology_error",
     "three_phase_imbalance",
     "harmonic_anomaly",
+    "high_impedance_fault",
     "no_error",
 ]
 CONTEXT_TOOL_NAMES = {
@@ -39,7 +40,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 DECISION_SCHEMA_TEXT = {
     "verdict": {
         "has_error": "boolean",
-        "error_family": "scalar enum: measurement_error|parameter_error|topology_error|three_phase_imbalance|harmonic_anomaly|no_error",
+        "error_family": "scalar enum: measurement_error|parameter_error|topology_error|three_phase_imbalance|harmonic_anomaly|high_impedance_fault|no_error",
         "error_families": "optional array of error families for multi-error snapshots",
         "confidence": "number in [0,1]",
     },
@@ -67,9 +68,20 @@ DECISION_SCHEMA_TEXT = {
                 "value": "number",
             }
         ],
+        "top_hif_groups": [
+            {
+                "rank": "1-based ranking from three-phase NLM line-group evidence",
+                "branch_row0": "0-based IEEE-14 branch row",
+                "line_index1": "1-based IEEE-14 branch row",
+                "dss_element": "OpenDSS element name",
+                "from_bus": "int or null",
+                "to_bus": "int or null",
+                "score": "number",
+            }
+        ],
     },
     "suspect_location": {
-        "domain": "measurement|parameter|topology|imbalance|harmonic|none",
+        "domain": "measurement|parameter|topology|imbalance|harmonic|fault|none",
         "details": "object",
     },
     "suspect_locations": "optional array of suspect_location objects for multi-error snapshots",
@@ -101,20 +113,24 @@ SYSTEM_PROMPT = (
     "- `get_parameter_context(case_path, line_index?)`: retrieve repeated scans and initial states for parameter correction.\n"
     "- `get_topology_context(case_path)`: retrieve compact breaker context for topology correction.\n"
     "- `get_harmonic_context(case_path)`: retrieve harmonic measurements for HSE.\n"
-    "- `get_verification_snapshot(case_path, stage)`: retrieve a compact post-action verification snapshot.\n"
+    "- `get_verification_snapshot(stage?)`: retrieve the current post-action verification snapshot by stage; do not invent snapshot aliases.\n"
     "- `correct_measurements_from_path(case_path, suspect_group, ...)`: correct suspected bad measurements using the current snapshot.\n"
     "- `correct_parameters_from_path(case_path, line_index)`: correct line parameters after retrieving parameter context.\n"
     "- `correct_topology_from_path(case_path, cb_name, desired_status)`: correct a topology mismatch after retrieving breaker context.\n"
-    "- `run_hse_from_path(case_path)`: run harmonic state estimation after retrieving harmonic measurements.\n\n"
+    "- `run_hse_from_path(case_path)`: run harmonic state estimation after retrieving harmonic measurements.\n"
+    "- `run_three_phase_nlm_from_path(case_path)`: run compact three-phase NLM HIF localization evidence.\n\n"
     "Decision policy:\n"
     "1. Use widespread residual patterns to suspect topology mismatch or three-phase imbalance.\n"
     "2. Use large normalized Lagrange multipliers concentrated on one branch to suspect parameter errors.\n"
     "3. Use concentrated large normalized residuals to localize likely measurement errors.\n"
     "4. If parameter context, breaker context, harmonic measurements, or verification snapshots are needed, call the matching helper tool.\n"
     "5. If three-phase imbalance is suspected, request three-phase substation VLN voltages before finalizing.\n"
-    "6. If the global residual is elevated without a dominant bad measurement and harmonic measurements are available, call `run_hse_from_path`.\n"
-    "7. In multi-error traces, prefer structural correction before measurement cleanup: topology, then parameter, then measurement, then harmonic follow-up.\n"
-    "8. Prefer compact tool use over asking the user to restate numeric payloads.\n\n"
+    "6. If a localized gross residual remains, correct the measurement error before running or finalizing harmonic HSE; HSE does not replace SCADA measurement cleanup.\n"
+    "7. If the global residual is elevated without a dominant bad measurement and harmonic measurements are available, call `run_hse_from_path`.\n"
+    "8. If a hidden high-impedance fault is suspected, call `run_three_phase_nlm_from_path` and use top_hif_groups evidence.\n"
+    "9. In multi-error traces, prefer structural correction before measurement cleanup: topology, then parameter, then measurement, then harmonic follow-up.\n"
+    "10. After a correction tool succeeds, request the verification snapshot by `stage` only, then run WLS on the returned `case_path` exactly once.\n"
+    "11. Prefer compact tool use over asking the user to restate numeric payloads.\n\n"
     "Indexing convention: fields ending in `0` are 0-based; `line_index` follows the tool schema and is 1-based.\n\n"
     "Return only strict JSON with this structure:\n"
     f"{json.dumps(DECISION_SCHEMA_TEXT, ensure_ascii=False)}\n"
@@ -205,16 +221,18 @@ CANONICAL_POWER_TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "get_verification_snapshot",
             "description": (
-                "Retrieve a post-action verification snapshot. "
-                "Returns a compact summary while the runtime binds the full z_obs for the next WLS call."
+                "Retrieve the active post-action verification snapshot by stage. "
+                "Do not synthesize a snapshot case alias; use the returned case_path for the next WLS call."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "case_path": {"type": "string", "description": "Case identifier or path."},
-                    "stage": {"type": "string", "description": "Verification stage identifier."},
+                    "stage": {
+                        "type": "string",
+                        "description": "Optional verification stage identifier, e.g. post_measurement_correction.",
+                    },
                 },
-                "required": ["case_path", "stage"],
+                "required": [],
             },
         },
     },
@@ -287,6 +305,23 @@ CANONICAL_POWER_TOOLS: list[dict[str, Any]] = [
             "description": (
                 "Run harmonic state estimation after the user provides harmonic measurements. "
                 "Do not repeat the full harmonic payload in the tool call."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_path": {"type": "string", "description": "Case identifier or path."},
+                },
+                "required": ["case_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_three_phase_nlm_from_path",
+            "description": (
+                "Run compact three-phase NLM high-impedance-fault localization evidence. "
+                "Do not repeat OpenDSS models or measurement arrays in the tool arguments."
             ),
             "parameters": {
                 "type": "object",
@@ -701,6 +736,40 @@ def summarize_hse_payload(tool_payload: Mapping[str, Any]) -> dict[str, Any]:
     return round_assistant_payload(prune_none(summary))
 
 
+def summarize_three_phase_nlm_payload(tool_payload: Mapping[str, Any]) -> dict[str, Any]:
+    groups = list(tool_payload.get("top_hif_groups") or [])[:TOPK_EVIDENCE]
+    compact_groups = []
+    for item in groups:
+        if not isinstance(item, Mapping):
+            continue
+        compact_groups.append(
+            {
+                "rank": _maybe_int(item.get("rank")),
+                "branch_row0": _maybe_int(item.get("branch_row0")),
+                "line_index1": _maybe_int(item.get("line_index1")),
+                "dss_element": item.get("dss_element"),
+                "from_bus": _maybe_int(item.get("from_bus")),
+                "to_bus": _maybe_int(item.get("to_bus")),
+                "score": _maybe_float(item.get("score")),
+            }
+        )
+    summary = {
+        "success": bool(tool_payload.get("success", True)),
+        "converged": bool(tool_payload.get("converged", tool_payload.get("success", True))),
+        "top_hif_groups": compact_groups,
+        "detected": bool(tool_payload.get("detected", False)),
+    }
+    if tool_payload.get("suspected_phase") is not None:
+        summary["suspected_phase"] = str(tool_payload.get("suspected_phase"))
+    if isinstance(tool_payload.get("phase_scores"), Mapping):
+        summary["phase_scores"] = tool_payload.get("phase_scores")
+    if tool_payload.get("error"):
+        summary["error"] = str(tool_payload["error"])
+    if tool_payload.get("method"):
+        summary["method"] = str(tool_payload["method"])
+    return round_assistant_payload(prune_none(summary))
+
+
 def summarize_parameter_context_payload(tool_payload: Mapping[str, Any]) -> dict[str, Any]:
     z_scans = tool_payload.get("z_scans") or []
     initial_states = tool_payload.get("initial_states") or []
@@ -712,6 +781,8 @@ def summarize_parameter_context_payload(tool_payload: Mapping[str, Any]) -> dict
         "suspect_line": tool_payload.get("suspect_line"),
         "note": tool_payload.get("note"),
     }
+    if tool_payload.get("success") is False:
+        summary["success"] = False
     if tool_payload.get("error"):
         summary["error"] = str(tool_payload["error"])
     return round_assistant_payload(prune_none(summary))
@@ -722,6 +793,8 @@ def summarize_topology_context_payload(tool_payload: Mapping[str, Any]) -> dict[
         "breaker_context": tool_payload.get("breaker_context"),
         "note": tool_payload.get("note"),
     }
+    if tool_payload.get("success") is False:
+        summary["success"] = False
     if tool_payload.get("error"):
         summary["error"] = str(tool_payload["error"])
     return round_assistant_payload(prune_none(summary))
@@ -735,6 +808,8 @@ def summarize_harmonic_context_payload(tool_payload: Mapping[str, Any]) -> dict[
         "harmonic_orders": tool_payload.get("harmonic_orders"),
         "note": tool_payload.get("note"),
     }
+    if tool_payload.get("success") is False:
+        summary["success"] = False
     if tool_payload.get("error"):
         summary["error"] = str(tool_payload["error"])
     return round_assistant_payload(prune_none(summary))
@@ -748,6 +823,8 @@ def summarize_verification_snapshot_payload(tool_payload: Mapping[str, Any]) -> 
         "note": tool_payload.get("note"),
         "stage": tool_payload.get("stage"),
     }
+    if tool_payload.get("success") is False:
+        summary["success"] = False
     if tool_payload.get("error"):
         summary["error"] = str(tool_payload["error"])
     return round_assistant_payload(prune_none(summary))
@@ -771,6 +848,8 @@ def summarize_tool_result_for_conversation(
         return summarize_topology_correction_payload(tool_result)
     if tool_name == "run_hse_from_path":
         return summarize_hse_payload(tool_result)
+    if tool_name == "run_three_phase_nlm_from_path":
+        return summarize_three_phase_nlm_payload(tool_result)
     if tool_name == "get_parameter_context":
         return summarize_parameter_context_payload(tool_result)
     if tool_name == "get_topology_context":
@@ -939,6 +1018,28 @@ def hydrate_tool_arguments(
             if "harmonic_orders" not in hydrated and isinstance(source.get("harmonic_orders"), list):
                 hydrated["harmonic_orders"] = source["harmonic_orders"]
                 notes.append("hydrated_hse_orders")
+
+    if tool_name == "run_three_phase_nlm_from_path":
+        source = hidden.get("hif_context")
+        source_from_hidden = isinstance(source, dict)
+        if not source_from_hidden:
+            source = latest_user_payload_with_keys(messages, ("nlm_diagnostic",))
+        if isinstance(source, dict):
+            if source.get("case_path") and (source_from_hidden or not hydrated.get("case_path")):
+                hydrated["case_path"] = source["case_path"]
+                notes.append("hydrated_hif_case_path")
+            if "nlm_diagnostic" not in hydrated and isinstance(source.get("nlm_diagnostic"), dict):
+                hydrated["nlm_diagnostic"] = source["nlm_diagnostic"]
+                notes.append("hydrated_hif_nlm_diagnostic")
+            label = source.get("label")
+            if "target_branch_row0" not in hydrated and isinstance(label, Mapping):
+                target = _maybe_int(label.get("branch_row0"))
+                if target is not None:
+                    hydrated["target_branch_row0"] = target
+                    notes.append("hydrated_hif_target_branch")
+            if "target_dss_element" not in hydrated and isinstance(label, Mapping) and label.get("dss_element"):
+                hydrated["target_dss_element"] = label.get("dss_element")
+                notes.append("hydrated_hif_target_element")
 
     if tool_name == "correct_topology_from_path":
         source = hidden.get("topology_context")

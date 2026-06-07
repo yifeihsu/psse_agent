@@ -20,7 +20,7 @@ import uuid
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from trace_protocol import (
     CONTEXT_TOOL_NAMES,
@@ -68,6 +68,13 @@ FINAL_JSON_SCHEMA_MARKER = "Return only strict JSON with this structure:"
 PROSE_TOOL_CATALOG_MARKER = "Available tools:"
 DECISION_POLICY_MARKER = "Decision policy:"
 TOOL_RESULT_FLOAT_DECIMALS = 6
+CONTROLLER_STATE_KEY = "_eval_controller_state"
+TOOL_PRECONDITION_ERROR_PREFIX = "Tool precondition failed for "
+VERIFICATION_STAGE_BY_CORRECTION_TOOL = {
+    "correct_measurements_from_path": "post_measurement_correction",
+    "correct_parameters_from_path": "post_parameter_correction",
+    "correct_topology_from_path": "post_topology_correction",
+}
 
 
 def round_tool_result_payload(value: Any) -> Any:
@@ -639,13 +646,19 @@ def inject_runtime_tool_availability_note(
     return injected
 
 
-def is_missing_runtime_context_tool_error(tool_result: Mapping[str, Any] | None) -> bool:
+def recoverable_runtime_tool_error_type(tool_result: Mapping[str, Any] | None) -> str | None:
     if not isinstance(tool_result, Mapping):
-        return False
+        return None
     if tool_result.get("success") is not False:
-        return False
+        return None
     error = tool_result.get("error")
-    return isinstance(error, str) and error.startswith("Missing runtime context for ")
+    if not isinstance(error, str):
+        return None
+    if error.startswith("Missing runtime context for "):
+        return "missing_runtime_context"
+    if error.startswith(TOOL_PRECONDITION_ERROR_PREFIX):
+        return "controller_precondition"
+    return None
 
 
 def strip_final_json_schema(text: Any) -> Any:
@@ -1252,13 +1265,174 @@ def repair_tool_arguments(
     return protocol_hydrate_tool_arguments(tool_name, arguments, conversation, hidden_context=hidden_context)
 
 
+def controller_state(hidden_context: dict[str, Any]) -> dict[str, Any]:
+    state = hidden_context.setdefault(CONTROLLER_STATE_KEY, {})
+    if isinstance(state, dict):
+        return state
+    state = {}
+    hidden_context[CONTROLLER_STATE_KEY] = state
+    return state
+
+
+def tool_context_from_runtime(runtime_context: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    tool_context = ((runtime_context or {}).get("tool_context") or {})
+    return tool_context if isinstance(tool_context, Mapping) else {}
+
+
+def precondition_failure(tool_name: str, message: str, allowed_tools: Sequence[str] | None = None) -> dict[str, Any]:
+    if allowed_tools:
+        message = f"{message} Allowed next tools: {', '.join(allowed_tools)}."
+    return {
+        "success": False,
+        "error": f"{TOOL_PRECONDITION_ERROR_PREFIX}{tool_name}: {message}",
+        "tool_error_type": "controller_precondition",
+        "allowed_tools": list(allowed_tools or []),
+    }
+
+
+def post_wls_allowed_tools(runtime_context: Mapping[str, Any] | None) -> list[str]:
+    tool_context = tool_context_from_runtime(runtime_context)
+    allowed = ["correct_measurements_from_path"]
+    if isinstance(tool_context.get("parameter_context"), Mapping):
+        allowed.append("get_parameter_context")
+    if isinstance(tool_context.get("topology_context"), Mapping):
+        allowed.append("get_topology_context")
+    if isinstance(tool_context.get("harmonic_context"), Mapping):
+        allowed.append("get_harmonic_context")
+    allowed.append("final_json")
+    return allowed
+
+
+def runtime_tool_precondition_error(
+    name: str,
+    arguments: Mapping[str, Any],
+    *,
+    runtime_context: Mapping[str, Any] | None,
+    hidden_context: dict[str, Any],
+) -> dict[str, Any] | None:
+    state = controller_state(hidden_context)
+
+    if not state.get("wls_completed") and name != "wls_from_path":
+        return precondition_failure(name, "Run wls_from_path before any helper, correction, or finalization step.", ["wls_from_path"])
+
+    awaiting_verification_wls = bool(state.get("awaiting_verification_wls"))
+    pending_verification_stage = state.get("pending_verification_stage")
+    if awaiting_verification_wls and name != "wls_from_path":
+        return precondition_failure(
+            name,
+            "A verification snapshot has already been returned; run wls_from_path on its returned case_path before any other action.",
+            ["wls_from_path"],
+        )
+    if pending_verification_stage and not awaiting_verification_wls and name != "get_verification_snapshot":
+        return precondition_failure(
+            name,
+            f"The active verification stage is {pending_verification_stage}; request that snapshot before any other action.",
+            ["get_verification_snapshot"],
+        )
+
+    if name == "correct_parameters_from_path" and not isinstance(hidden_context.get("parameter_context"), Mapping):
+        return precondition_failure(
+            name,
+            "Parameter correction requires a successful get_parameter_context call first.",
+            ["get_parameter_context"],
+        )
+    if name == "correct_topology_from_path" and not isinstance(hidden_context.get("topology_context"), Mapping):
+        return precondition_failure(
+            name,
+            "Topology correction requires a successful get_topology_context call first.",
+            ["get_topology_context"],
+        )
+    if name == "run_hse_from_path" and not isinstance(hidden_context.get("harmonic_context"), Mapping):
+        return precondition_failure(
+            name,
+            "HSE requires a successful get_harmonic_context call first.",
+            ["get_harmonic_context"],
+        )
+    if name == "get_verification_snapshot":
+        requested_stage = arguments.get("stage")
+        if not pending_verification_stage:
+            return precondition_failure(
+                name,
+                "No correction has produced a pending verification snapshot.",
+                post_wls_allowed_tools(runtime_context),
+            )
+        if requested_stage and requested_stage != pending_verification_stage:
+            return precondition_failure(
+                name,
+                f"The active verification stage is {pending_verification_stage}, not {requested_stage}.",
+                ["get_verification_snapshot"],
+            )
+
+    return None
+
+
+def verification_stage_for_context_call(
+    arguments: Mapping[str, Any],
+    runtime_context: Mapping[str, Any] | None,
+    hidden_context: dict[str, Any],
+) -> str | None:
+    requested_stage = arguments.get("stage")
+    if isinstance(requested_stage, str) and requested_stage:
+        return requested_stage
+    state = controller_state(hidden_context)
+    pending_stage = state.get("pending_verification_stage")
+    if isinstance(pending_stage, str) and pending_stage:
+        return pending_stage
+    snapshots = tool_context_from_runtime(runtime_context).get("verification_snapshots")
+    if isinstance(snapshots, Mapping) and len(snapshots) == 1:
+        return str(next(iter(snapshots.keys())))
+    return None
+
+
+def update_runtime_controller_after_tool(
+    name: str,
+    result: Mapping[str, Any],
+    *,
+    hidden_context: dict[str, Any],
+) -> None:
+    if result.get("success") is False:
+        return
+    state = controller_state(hidden_context)
+
+    if name == "wls_from_path":
+        state["wls_completed"] = True
+        if state.get("awaiting_verification_wls"):
+            state.pop("awaiting_verification_wls", None)
+            state.pop("pending_verification_stage", None)
+        return
+
+    verify_stage = VERIFICATION_STAGE_BY_CORRECTION_TOOL.get(name)
+    if verify_stage is not None:
+        state["pending_verification_stage"] = verify_stage
+        state.pop("awaiting_verification_wls", None)
+        return
+
+    if name == "get_verification_snapshot":
+        stage = result.get("stage") or state.get("pending_verification_stage")
+        if isinstance(stage, str) and stage:
+            state["pending_verification_stage"] = stage
+        state["awaiting_verification_wls"] = True
+
+
+def pending_verification_error(hidden_context: Mapping[str, Any]) -> str | None:
+    state = hidden_context.get(CONTROLLER_STATE_KEY)
+    if not isinstance(state, Mapping):
+        return None
+    if state.get("awaiting_verification_wls"):
+        return "Verdict before required verification WLS after get_verification_snapshot."
+    pending_stage = state.get("pending_verification_stage")
+    if pending_stage:
+        return f"Verdict before required get_verification_snapshot for {pending_stage}."
+    return None
+
+
 def execute_context_tool(
     name: str,
     arguments: dict[str, Any],
     runtime_context: Mapping[str, Any] | None,
     hidden_context: dict[str, Any],
 ) -> dict[str, Any]:
-    tool_context = ((runtime_context or {}).get("tool_context") or {})
+    tool_context = tool_context_from_runtime(runtime_context)
     payload: Any = None
     if name == "get_parameter_context":
         payload = tool_context.get("parameter_context")
@@ -1273,7 +1447,7 @@ def execute_context_tool(
         if isinstance(payload, dict):
             hidden_context["harmonic_context"] = payload
     elif name == "get_verification_snapshot":
-        stage = arguments.get("stage")
+        stage = verification_stage_for_context_call(arguments, runtime_context, hidden_context)
         payload = (tool_context.get("verification_snapshots") or {}).get(stage)
         if isinstance(payload, dict):
             hidden_context["snapshot_context"] = payload
@@ -1289,8 +1463,20 @@ def execute_tool(
     runtime_context: Mapping[str, Any] | None = None,
     hidden_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    hidden = hidden_context if hidden_context is not None else {}
+    precondition_error = runtime_tool_precondition_error(
+        name,
+        arguments,
+        runtime_context=runtime_context,
+        hidden_context=hidden,
+    )
+    if precondition_error is not None:
+        return precondition_error
+
     if name in CONTEXT_TOOL_NAMES:
-        return execute_context_tool(name, arguments, runtime_context, hidden_context or {})
+        result = execute_context_tool(name, arguments, runtime_context, hidden)
+        update_runtime_controller_after_tool(name, result, hidden_context=hidden)
+        return result
 
     tool_obj = TOOL_MAP.get(name)
     if tool_obj is None:
@@ -1299,8 +1485,10 @@ def execute_tool(
         fn = getattr(tool_obj, "fn", tool_obj)
         call_args = dict(arguments)
         if "case_path" in call_args:
-            call_args["case_path"] = resolve_case_path_alias(call_args["case_path"], hidden_context or runtime_context)
-        return fn(**call_args)
+            call_args["case_path"] = resolve_case_path_alias(call_args["case_path"], hidden or runtime_context)
+        result = fn(**call_args)
+        update_runtime_controller_after_tool(name, result, hidden_context=hidden)
+        return result
     except Exception as exc:  # pragma: no cover - defensive runtime wrapper
         return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
 
@@ -1311,7 +1499,7 @@ def compact_tool_arguments_for_prompt(tool_name: str, arguments: dict[str, Any])
         "get_parameter_context": {"case_path", "line_index"},
         "get_topology_context": {"case_path"},
         "get_harmonic_context": {"case_path"},
-        "get_verification_snapshot": {"case_path", "stage"},
+        "get_verification_snapshot": {"stage"},
         "correct_measurements_from_path": {
             "case_path",
             "suspect_group",
@@ -1688,11 +1876,11 @@ def run_state_turn(
         if tool_name == "wls_from_path" and tool_result.get("success") is True:
             state.wls_completed_successfully = True
 
-        missing_context_tool_error = is_missing_runtime_context_tool_error(tool_result)
+        recoverable_tool_error_type = recoverable_runtime_tool_error_type(tool_result)
         if tool_result.get("success") is False:
-            if missing_context_tool_error and continue_on_missing_context_tool:
+            if recoverable_tool_error_type is not None and continue_on_missing_context_tool:
                 turn_record["continued_after_tool_error"] = True
-                turn_record["tool_error_type"] = "missing_runtime_context"
+                turn_record["tool_error_type"] = recoverable_tool_error_type
             elif not continue_on_tool_error:
                 state.error_msg = f"Tool {tool_name} failed: {tool_result.get('error', 'unknown error')}"
                 turn_record["error"] = state.error_msg
@@ -1705,6 +1893,13 @@ def run_state_turn(
     if parsed["type"] == "verdict":
         if not state.wls_completed_successfully:
             state.error_msg = f"Verdict before required wls_from_path at turn {turn_index0 + 1}"
+            turn_record["error"] = state.error_msg
+            turn_record["verdict"] = parsed["content"]
+            state.turn_trace.append(turn_record)
+            return
+        pending_error = pending_verification_error(state.hidden_context)
+        if pending_error is not None:
+            state.error_msg = pending_error
             turn_record["error"] = state.error_msg
             turn_record["verdict"] = parsed["content"]
             state.turn_trace.append(turn_record)
@@ -1934,11 +2129,11 @@ def run_one_sample(
             if tool_name == "wls_from_path" and tool_result.get("success") is True:
                 wls_completed_successfully = True
 
-            missing_context_tool_error = is_missing_runtime_context_tool_error(tool_result)
+            recoverable_tool_error_type = recoverable_runtime_tool_error_type(tool_result)
             if tool_result.get("success") is False:
-                if missing_context_tool_error and continue_on_missing_context_tool:
+                if recoverable_tool_error_type is not None and continue_on_missing_context_tool:
                     turn_record["continued_after_tool_error"] = True
-                    turn_record["tool_error_type"] = "missing_runtime_context"
+                    turn_record["tool_error_type"] = recoverable_tool_error_type
                 elif not continue_on_tool_error:
                     error_msg = f"Tool {tool_name} failed: {tool_result.get('error', 'unknown error')}"
                     turn_record["error"] = error_msg
@@ -1951,6 +2146,13 @@ def run_one_sample(
         if parsed["type"] == "verdict":
             if not wls_completed_successfully:
                 error_msg = f"Verdict before required wls_from_path at turn {turn + 1}"
+                turn_record["error"] = error_msg
+                turn_record["verdict"] = parsed["content"]
+                turn_trace.append(turn_record)
+                break
+            pending_error = pending_verification_error(hidden_context)
+            if pending_error is not None:
+                error_msg = pending_error
                 turn_record["error"] = error_msg
                 turn_record["verdict"] = parsed["content"]
                 turn_trace.append(turn_record)
