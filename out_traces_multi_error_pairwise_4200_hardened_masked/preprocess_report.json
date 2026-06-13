@@ -1,0 +1,376 @@
+{
+  "input": "data/sft_with_tools_multi_error_pairwise_4200_hardened_masked.jsonl",
+  "config": {
+    "seed": 42,
+    "round_decimals": 6,
+    "exact_balanced": false,
+    "balance_mode": "multi-combo-exact",
+    "dedupe_by": "user_snapshot",
+    "tokenizer_name": "unsloth/Gemma-4-26B-A4B-it",
+    "max_seq_length": 8192,
+    "include_tool_schemas": true,
+    "tools_file": null
+  },
+  "counts": {
+    "loaded": 4245,
+    "valid": 4245,
+    "duplicates_removed": 0,
+    "retained": 4245,
+    "train": 2490,
+    "val": 300,
+    "test": 300
+  },
+  "label_distribution": {
+    "all": {
+      "measurement_error": 2145,
+      "parameter_error": 1400,
+      "topology_error": 700
+    },
+    "train": {
+      "parameter_error": 800,
+      "measurement_error": 1290,
+      "topology_error": 400
+    },
+    "val": {
+      "parameter_error": 100,
+      "measurement_error": 150,
+      "topology_error": 50
+    },
+    "test": {
+      "measurement_error": 150,
+      "topology_error": 50,
+      "parameter_error": 100
+    }
+  },
+  "combo_distribution": {
+    "all": {
+      "measurement_error+parameter_error": 700,
+      "measurement_error+topology_error": 700,
+      "measurement_error+harmonic_anomaly": 655,
+      "parameter_error+topology_error": 700,
+      "parameter_error+harmonic_anomaly": 700,
+      "topology_error+harmonic_anomaly": 700
+    },
+    "train": {
+      "parameter_error+harmonic_anomaly": 400,
+      "measurement_error+harmonic_anomaly": 400,
+      "parameter_error+topology_error": 400,
+      "measurement_error+topology_error": 400,
+      "measurement_error+parameter_error": 400,
+      "topology_error+harmonic_anomaly": 400
+    },
+    "val": {
+      "parameter_error+topology_error": 50,
+      "measurement_error+topology_error": 50,
+      "parameter_error+harmonic_anomaly": 50,
+      "topology_error+harmonic_anomaly": 50,
+      "measurement_error+harmonic_anomaly": 50,
+      "measurement_error+parameter_error": 50
+    },
+    "test": {
+      "measurement_error+parameter_error": 50,
+      "measurement_error+harmonic_anomaly": 50,
+      "topology_error+harmonic_anomaly": 50,
+      "measurement_error+topology_error": 50,
+      "parameter_error+harmonic_anomaly": 50,
+      "parameter_error+topology_error": 50
+    }
+  },
+  "tool_sequences": {
+    "wls_from_path>get_parameter_context>correct_parameters_from_path>get_verification_snapshot>wls_from_path>correct_measurements_from_path>get_verification_snapshot>wls_from_path": 700,
+    "wls_from_path>get_topology_context>correct_topology_from_path>get_verification_snapshot>wls_from_path>correct_measurements_from_path>get_verification_snapshot>wls_from_path": 700,
+    "wls_from_path>correct_measurements_from_path>get_verification_snapshot>wls_from_path>get_harmonic_context>run_hse_from_path": 655,
+    "wls_from_path>get_topology_context>correct_topology_from_path>get_verification_snapshot>wls_from_path>get_parameter_context>correct_parameters_from_path": 700,
+    "wls_from_path>get_parameter_context>correct_parameters_from_path>get_verification_snapshot>wls_from_path>get_harmonic_context>run_hse_from_path": 700,
+    "wls_from_path>get_topology_context>correct_topology_from_path>get_verification_snapshot>wls_from_path>get_harmonic_context>run_hse_from_path": 700,
+    "wls_from_path>get_parameter_context>correct_measurements_from_path>get_verification_snapshot>wls_from_path": 30,
+    "wls_from_path>get_harmonic_context>correct_measurements_from_path>get_verification_snapshot>wls_from_path": 30,
+    "wls_from_path>get_verification_snapshot>correct_measurements_from_path>get_verification_snapshot>wls_from_path": 30
+  },
+  "tool_argument_formats": {
+    "string": 30280
+  },
+  "split_strategy": {
+    "mode": "multi_combo_exact",
+    "selected_per_combo": {
+      "measurement_error+harmonic_anomaly": 500,
+      "measurement_error+parameter_error": 500,
+      "measurement_error+topology_error": 500,
+      "parameter_error+harmonic_anomaly": 500,
+      "parameter_error+topology_error": 500,
+      "topology_error+harmonic_anomaly": 500
+    },
+    "split_counts_per_combo": {
+      "train": 400,
+      "valid": 50,
+      "test": 50
+    },
+    "hardening_train_count": 90
+  },
+  "validation": {
+    "issues": 0,
+    "sample_errors": []
+  },
+  "dataset_qa": {
+    "all": {
+      "count": 4245,
+      "thresholds_null": 0,
+      "ratios_null": 0,
+      "no_error_ratio_violations": 0,
+      "no_error_nonempty_evidence": 0,
+      "post_action_resolved_by_family": {
+        "measurement_error": 993,
+        "parameter_error": 312,
+        "topology_error": 307
+      },
+      "post_action_improved_by_family": {
+        "measurement_error": 2141,
+        "parameter_error": 639,
+        "topology_error": 700
+      },
+      "evidence_lengths": {
+        "top_residuals:5": 3542,
+        "top_lagrange:4": 176,
+        "top_lagrange:5": 3272,
+        "top_residuals:2": 160,
+        "top_lagrange:0": 198,
+        "top_lagrange:1": 201,
+        "top_lagrange:2": 219,
+        "top_lagrange:3": 179,
+        "top_residuals:4": 149,
+        "top_residuals:1": 141,
+        "top_residuals:3": 165,
+        "top_residuals:0": 88
+      }
+    },
+    "train": {
+      "count": 2490,
+      "thresholds_null": 0,
+      "ratios_null": 0,
+      "no_error_ratio_violations": 0,
+      "no_error_nonempty_evidence": 0,
+      "post_action_resolved_by_family": {
+        "measurement_error": 801,
+        "parameter_error": 249,
+        "topology_error": 245
+      },
+      "post_action_improved_by_family": {
+        "parameter_error": 381,
+        "measurement_error": 1290,
+        "topology_error": 400
+      },
+      "evidence_lengths": {
+        "top_residuals:0": 55,
+        "top_lagrange:0": 128,
+        "top_residuals:5": 2038,
+        "top_lagrange:2": 139,
+        "top_lagrange:5": 1882,
+        "top_residuals:4": 97,
+        "top_lagrange:4": 99,
+        "top_lagrange:3": 110,
+        "top_residuals:3": 99,
+        "top_lagrange:1": 132,
+        "top_residuals:1": 90,
+        "top_residuals:2": 111
+      }
+    },
+    "val": {
+      "count": 300,
+      "thresholds_null": 0,
+      "ratios_null": 0,
+      "no_error_ratio_violations": 0,
+      "no_error_nonempty_evidence": 0,
+      "post_action_resolved_by_family": {
+        "measurement_error": 96,
+        "parameter_error": 32,
+        "topology_error": 31
+      },
+      "post_action_improved_by_family": {
+        "measurement_error": 150,
+        "parameter_error": 47,
+        "topology_error": 50
+      },
+      "evidence_lengths": {
+        "top_residuals:5": 242,
+        "top_lagrange:5": 224,
+        "top_lagrange:4": 17,
+        "top_residuals:3": 12,
+        "top_lagrange:2": 19,
+        "top_lagrange:0": 16,
+        "top_residuals:2": 12,
+        "top_lagrange:1": 12,
+        "top_residuals:4": 15,
+        "top_residuals:1": 12,
+        "top_residuals:0": 7,
+        "top_lagrange:3": 12
+      }
+    },
+    "test": {
+      "count": 300,
+      "thresholds_null": 0,
+      "ratios_null": 0,
+      "no_error_ratio_violations": 0,
+      "no_error_nonempty_evidence": 0,
+      "post_action_resolved_by_family": {
+        "measurement_error": 96,
+        "topology_error": 31,
+        "parameter_error": 31
+      },
+      "post_action_improved_by_family": {
+        "measurement_error": 150,
+        "topology_error": 50,
+        "parameter_error": 48
+      },
+      "evidence_lengths": {
+        "top_residuals:5": 258,
+        "top_lagrange:5": 236,
+        "top_residuals:4": 8,
+        "top_lagrange:2": 18,
+        "top_lagrange:1": 15,
+        "top_residuals:2": 5,
+        "top_residuals:0": 5,
+        "top_lagrange:0": 10,
+        "top_residuals:3": 14,
+        "top_lagrange:4": 10,
+        "top_residuals:1": 10,
+        "top_lagrange:3": 11
+      }
+    }
+  },
+  "multi_label_qa": {
+    "all": {
+      "multi_error_count": 4155,
+      "valid_multi_family": 4155,
+      "exact_two_family": 4155,
+      "family_count_distribution": {
+        "2": 4155
+      },
+      "invalid_family_lists": 0,
+      "missing_applied_tools": 0,
+      "missing_suspect_locations": 0,
+      "combo_distribution": {
+        "measurement_error+parameter_error": 700,
+        "measurement_error+topology_error": 700,
+        "measurement_error+harmonic_anomaly": 655,
+        "parameter_error+topology_error": 700,
+        "parameter_error+harmonic_anomaly": 700,
+        "topology_error+harmonic_anomaly": 700
+      },
+      "missing_tool_counts": {}
+    },
+    "train": {
+      "multi_error_count": 2400,
+      "valid_multi_family": 2400,
+      "exact_two_family": 2400,
+      "family_count_distribution": {
+        "2": 2400
+      },
+      "invalid_family_lists": 0,
+      "missing_applied_tools": 0,
+      "missing_suspect_locations": 0,
+      "combo_distribution": {
+        "parameter_error+harmonic_anomaly": 400,
+        "measurement_error+harmonic_anomaly": 400,
+        "parameter_error+topology_error": 400,
+        "measurement_error+topology_error": 400,
+        "measurement_error+parameter_error": 400,
+        "topology_error+harmonic_anomaly": 400
+      },
+      "missing_tool_counts": {}
+    },
+    "val": {
+      "multi_error_count": 300,
+      "valid_multi_family": 300,
+      "exact_two_family": 300,
+      "family_count_distribution": {
+        "2": 300
+      },
+      "invalid_family_lists": 0,
+      "missing_applied_tools": 0,
+      "missing_suspect_locations": 0,
+      "combo_distribution": {
+        "parameter_error+topology_error": 50,
+        "measurement_error+topology_error": 50,
+        "parameter_error+harmonic_anomaly": 50,
+        "topology_error+harmonic_anomaly": 50,
+        "measurement_error+harmonic_anomaly": 50,
+        "measurement_error+parameter_error": 50
+      },
+      "missing_tool_counts": {}
+    },
+    "test": {
+      "multi_error_count": 300,
+      "valid_multi_family": 300,
+      "exact_two_family": 300,
+      "family_count_distribution": {
+        "2": 300
+      },
+      "invalid_family_lists": 0,
+      "missing_applied_tools": 0,
+      "missing_suspect_locations": 0,
+      "combo_distribution": {
+        "measurement_error+parameter_error": 50,
+        "measurement_error+harmonic_anomaly": 50,
+        "topology_error+harmonic_anomaly": 50,
+        "measurement_error+topology_error": 50,
+        "parameter_error+harmonic_anomaly": 50,
+        "parameter_error+topology_error": 50
+      },
+      "missing_tool_counts": {}
+    }
+  },
+  "token_audit": {
+    "train": {
+      "tokenizer": "unsloth/Gemma-4-26B-A4B-it",
+      "max_seq_length": 8192,
+      "count": 2490,
+      "min": 5145,
+      "mean": 6511.05,
+      "p50": 6555,
+      "p95": 7050,
+      "max": 7181,
+      "over_limit": 0,
+      "over_limit_pct": 0.0,
+      "required_to_avoid_truncation": 7181
+    },
+    "val": {
+      "tokenizer": "unsloth/Gemma-4-26B-A4B-it",
+      "max_seq_length": 8192,
+      "count": 300,
+      "min": 5750,
+      "mean": 6536.96,
+      "p50": 6559,
+      "p95": 7051,
+      "max": 7165,
+      "over_limit": 0,
+      "over_limit_pct": 0.0,
+      "required_to_avoid_truncation": 7165
+    },
+    "test": {
+      "tokenizer": "unsloth/Gemma-4-26B-A4B-it",
+      "max_seq_length": 8192,
+      "count": 300,
+      "min": 5804,
+      "mean": 6548.32,
+      "p50": 6566,
+      "p95": 7054,
+      "max": 7110,
+      "over_limit": 0,
+      "over_limit_pct": 0.0,
+      "required_to_avoid_truncation": 7110
+    },
+    "all": {
+      "tokenizer": "unsloth/Gemma-4-26B-A4B-it",
+      "max_seq_length": 8192,
+      "count": 4245,
+      "min": 5145,
+      "mean": 6537.91,
+      "p50": 6563,
+      "p95": 7061,
+      "max": 7239,
+      "over_limit": 0,
+      "over_limit_pct": 0.0,
+      "required_to_avoid_truncation": 7239
+    }
+  }
+}

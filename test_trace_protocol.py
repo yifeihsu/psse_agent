@@ -19,6 +19,7 @@ from Transmission.build_sft_traces import (
     measurement_correction_policy_payload,
     multi_error_semantic_rejection_reason,
     rejection_reason,
+    trace_metadata_for_record,
     verification_z_obs_from_snapshot,
 )
 from Transmission.generate_multi_error_measurements import (
@@ -89,6 +90,7 @@ class TraceProtocolTests(unittest.TestCase):
         self.assertIn("first_applied_tool", DECISION_SCHEMA_TEXT["action"])
         self.assertIn("last_applied_tool", DECISION_SCHEMA_TEXT["action"])
         self.assertIn("verification_summaries", DECISION_SCHEMA_TEXT["action"])
+        self.assertIn("last_verified_summary", DECISION_SCHEMA_TEXT["action"])
         self.assertIn("tool_steps", DECISION_SCHEMA_TEXT["action"])
         self.assertIn("correction_steps", DECISION_SCHEMA_TEXT["action"])
         self.assertIn("0-based", DECISION_SCHEMA_TEXT["evidence"]["top_residuals"][0]["index0"])
@@ -96,6 +98,8 @@ class TraceProtocolTests(unittest.TestCase):
         self.assertIn("1-based", DECISION_SCHEMA_TEXT["action"]["arguments_hint"])
         self.assertIn("object or null", DECISION_SCHEMA_TEXT["action"]["verification_summary"])
         self.assertIn("diagnosis_status", DECISION_SCHEMA_TEXT["action"])
+        self.assertIn("curriculum_only", DECISION_SCHEMA_TEXT["action"]["diagnosis_status"])
+        self.assertIn("sequence_only", DECISION_SCHEMA_TEXT["action"]["diagnosis_status"])
         self.assertIn("remaining_candidate_families", DECISION_SCHEMA_TEXT["action"])
 
     def test_scada_harmonic_prompt_scope_excludes_hif_and_imbalance_tools(self) -> None:
@@ -210,6 +214,29 @@ class TraceProtocolTests(unittest.TestCase):
         self.assertEqual(choose_base_family(["parameter_error", "topology_error"]), "topology_error")
         self.assertEqual(choose_base_family(["measurement_error", "parameter_error"]), "parameter_error")
         self.assertEqual(choose_base_family(["measurement_error", "harmonic_anomaly"]), "clean_scada")
+
+    def test_parameter_topology_trace_metadata_marks_sequence_only_curriculum(self) -> None:
+        rec = {
+            "scenario": "multi_error",
+            "label": {
+                "combo": "parameter+topology",
+                "error_families": ["parameter_error", "topology_error"],
+                "coupling_mode": "curriculum_independent_components",
+                "physically_coupled": False,
+                "errors": [
+                    {"error_type": "parameter_error", "line_row": 5},
+                    {"error_type": "topology_error", "cb_name": "CB_2"},
+                ],
+            },
+        }
+
+        metadata = trace_metadata_for_record(rec)
+
+        self.assertEqual(metadata["trace_kind"], "multi_error")
+        self.assertEqual(metadata["trace_type"], "representative_multi_error")
+        self.assertFalse(metadata["physically_coupled"])
+        self.assertTrue(metadata["curriculum_only"])
+        self.assertEqual(metadata["sequence_only_families"], ["parameter_error"])
 
     def test_correction_family_order_is_structural_first_by_default(self) -> None:
         rec = {
@@ -706,6 +733,95 @@ class TraceProtocolTests(unittest.TestCase):
         self.assertTrue(summary["post_action_resolved"])
         self.assertEqual(summary["post_action_global_residual_ratio"], 0.8)
 
+    def test_single_error_final_target_includes_family_keyed_verification_summaries(self) -> None:
+        meta = {"branch_info": []}
+        idx_map = {"Vm": slice(0, 1)}
+        rec = {
+            "scenario": "measurement_error",
+            "label": {"channel": "Vm", "index": 0, "subtype": "single_gross_outlier"},
+        }
+        primary_wls = {"success": True, "global_residual_sum": 240.0, "global_residual_threshold": 100.0}
+        verification_payload = {"success": True, "global_residual_sum": 80.0, "global_residual_threshold": 100.0}
+
+        final = build_final_target(
+            rec,
+            meta,
+            idx_map,
+            primary_wls,
+            measurement_suspect_group=[0],
+            verification_payload=verification_payload,
+            correction_tool_name="correct_measurements_from_path",
+            applied_tools=["correct_measurements_from_path"],
+        )
+
+        action = final["action"]
+        self.assertEqual(action["verification_summaries"]["measurement_error"], action["verification_summary"])
+
+    def test_parameter_topology_final_target_marks_curriculum_and_last_verified_summary(self) -> None:
+        meta = {"branch_info": []}
+        idx_map = {"Vm": slice(0, 1)}
+        rec = {
+            "scenario": "multi_error",
+            "label": {
+                "error_families": ["parameter_error", "topology_error"],
+                "primary_error_family": "parameter_error",
+                "physically_coupled": False,
+                "errors": [
+                    {"error_type": "parameter_error", "line_row": 5},
+                    {"error_type": "topology_error", "cb_name": "CB_2", "old_status": "closed"},
+                ],
+            },
+        }
+        primary_wls = {"success": True, "global_residual_sum": 260.0, "global_residual_threshold": 100.0}
+        topology_wls = {"success": True, "global_residual_sum": 88.5, "global_residual_threshold": 100.0}
+
+        final = build_final_target(
+            rec,
+            meta,
+            idx_map,
+            primary_wls,
+            verification_payloads={"topology_error": topology_wls},
+            verification_pre_payloads={"topology_error": primary_wls},
+            applied_tools=["correct_topology_from_path", "correct_parameters_from_path"],
+            correction_steps=[
+                {
+                    "step": 1,
+                    "family": "topology_error",
+                    "tool": "correct_topology_from_path",
+                    "verification_policy": "verified_wls",
+                },
+                {
+                    "step": 2,
+                    "family": "parameter_error",
+                    "tool": "correct_parameters_from_path",
+                    "verification_policy": "sequence_only",
+                },
+            ],
+            tool_steps=[
+                {
+                    "step": 1,
+                    "family": "topology_error",
+                    "tool": "correct_topology_from_path",
+                    "verification_policy": "verified_wls",
+                },
+                {
+                    "step": 2,
+                    "family": "parameter_error",
+                    "tool": "correct_parameters_from_path",
+                    "verification_policy": "sequence_only",
+                },
+            ],
+        )
+
+        action = final["action"]
+        self.assertEqual(action["diagnosis_status"], "curriculum_only")
+        self.assertTrue(action["curriculum_only"])
+        self.assertFalse(action["physically_coupled"])
+        self.assertEqual(action["sequence_only_families"], ["parameter_error"])
+        self.assertIsNone(action["verification_summary"])
+        self.assertEqual(action["last_verified_summary"]["family"], "topology_error")
+        self.assertEqual(action["last_verified_summary"]["post_action_global_residual_ratio"], 0.885)
+
     def test_rejection_reason_enforces_strict_clean_boundary(self) -> None:
         borderline_no_error = {
             "verdict": {"has_error": False, "error_family": "no_error", "confidence": 0.99},
@@ -837,6 +953,39 @@ class TraceProtocolTests(unittest.TestCase):
         self.assertTrue(policy["structural_tools_before_measurement"])
         self.assertEqual(policy["structural_checks_completed"], ["parameter_error"])
         self.assertIsNone(multi_error_semantic_rejection_reason(rec, {"action": action}))
+
+    def test_measurement_policy_inherits_action_request_more_data_for_partial_residual(self) -> None:
+        rec = {
+            "scenario": "multi_error",
+            "label": {
+                "error_families": ["measurement_error", "parameter_error"],
+                "errors": [
+                    {
+                        "error_type": "measurement_error",
+                        "subtype": "single_gross_outlier",
+                        "channel": "Pf",
+                        "index": 49,
+                    },
+                    {"error_type": "parameter_error", "line_row": 2},
+                ],
+            },
+        }
+        action = {
+            "applied_tools": ["correct_parameters_from_path", "correct_measurements_from_path"],
+            "request_more_data": True,
+            "diagnosis_status": "partial",
+        }
+
+        policy = measurement_correction_policy_payload(
+            rec,
+            ["measurement_error", "parameter_error"],
+            action,
+            [49],
+        )
+
+        self.assertTrue(policy["allowed"])
+        self.assertTrue(policy["request_more_data"])
+        self.assertIn("final residual remains above threshold", policy["reason"])
 
     def test_multi_error_semantic_rejects_measurement_before_structural_cleanup(self) -> None:
         rec = {

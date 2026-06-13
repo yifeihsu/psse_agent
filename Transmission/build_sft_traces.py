@@ -261,6 +261,43 @@ def trace_type_for_record(rec: Mapping[str, Any]) -> str:
     return scenario
 
 
+def parameter_topology_curriculum_only(rec: Mapping[str, Any], families: Optional[Sequence[str]] = None) -> bool:
+    family_set = set(families if families is not None else multi_error_families(rec))
+    label = rec.get("label", {})
+    return (
+        "parameter_error" in family_set
+        and "topology_error" in family_set
+        and isinstance(label, Mapping)
+        and label.get("physically_coupled") is False
+    )
+
+
+def trace_metadata_for_record(rec: Mapping[str, Any]) -> dict[str, Any]:
+    scenario = normalize_scenario(str(rec.get("scenario", "")))
+    metadata: dict[str, Any] = {
+        "trace_kind": scenario,
+        "trace_type": trace_type_for_record(rec),
+    }
+    if scenario != "multi_error":
+        return metadata
+
+    families = multi_error_families(rec)
+    label = rec.get("label", {})
+    metadata["error_families"] = families
+    if isinstance(label, Mapping):
+        if label.get("combo") is not None:
+            metadata["combo"] = label.get("combo")
+        if label.get("coupling_mode") is not None:
+            metadata["coupling_mode"] = label.get("coupling_mode")
+        if label.get("physically_coupled") is not None:
+            metadata["physically_coupled"] = bool(label.get("physically_coupled"))
+
+    if parameter_topology_curriculum_only(rec, families):
+        metadata["curriculum_only"] = True
+        metadata["sequence_only_families"] = ["parameter_error"]
+    return metadata
+
+
 def multi_error_families(rec: Mapping[str, Any]) -> list[str]:
     label = rec.get("label", {})
     raw_values: list[Any] = []
@@ -1312,6 +1349,8 @@ def measurement_correction_policy_payload(
     structural_before_measurement, completed_structural = _tools_before_measurement(tool_list, family_list)
     structural_ok = not structural_families or structural_before_measurement
     allowed = uses_measurement_tool and residual_pattern == "localized" and structural_ok
+    action_requests_more_data = bool(action.get("request_more_data"))
+    diagnosis_status = str(action.get("diagnosis_status") or "")
 
     if not uses_measurement_tool:
         reason = "Measurement correction was not applied."
@@ -1321,6 +1360,15 @@ def measurement_correction_policy_payload(
         reason = "Measurement correction requires a localized suspect group."
     elif structural_families and not structural_before_measurement:
         reason = "Topology and parameter evidence must be checked before measurement cleanup."
+    elif allowed and action_requests_more_data and diagnosis_status == "partial" and structural_families:
+        reason = (
+            "Structural correction was applied first; remaining residuals were localized, "
+            "but the final residual remains above threshold."
+        )
+    elif allowed and action_requests_more_data and diagnosis_status == "partial":
+        reason = (
+            "Measurement correction was applied to a localized residual, but the final residual remains above threshold."
+        )
     elif structural_families:
         reason = "Structural SCADA corrections were applied first; remaining residuals are localized."
     elif "harmonic_anomaly" in family_list:
@@ -1338,7 +1386,9 @@ def measurement_correction_policy_payload(
             "structural_tools_before_measurement": (
                 structural_before_measurement if structural_families else None
             ),
-            "request_more_data": bool(residual_pattern == "distributed" and uses_measurement_tool),
+            "request_more_data": bool(
+                action_requests_more_data or (residual_pattern == "distributed" and uses_measurement_tool)
+            ),
         }
     )
 
@@ -1569,6 +1619,14 @@ def build_final_target(
             if summary is not None:
                 verification_by_family[family] = summary
         primary_verification = verification_by_family.get(primary_family)
+        last_verified_summary = None
+        for step in tool_steps or []:
+            if not isinstance(step, Mapping) or step.get("verification_policy") != "verified_wls":
+                continue
+            step_family = str(step.get("family") or "")
+            summary = verification_by_family.get(step_family)
+            if summary is not None:
+                last_verified_summary = {"family": step_family, **dict(summary)}
         if primary_verification is None and isinstance(verification_payload, Mapping):
             primary_verification = build_verification_summary(
                 verification_payload,
@@ -1607,10 +1665,17 @@ def build_final_target(
             "requested_data": None,
             "verification_summary": primary_verification,
             "verification_summaries": verification_by_family or None,
+            "last_verified_summary": last_verified_summary,
             "tool_steps": list(tool_steps or []),
             "correction_steps": list(correction_steps or []),
         }
         apply_residual_status_to_action(action_payload, primary_verification)
+        if parameter_topology_curriculum_only(rec, families):
+            action_payload["diagnosis_status"] = "curriculum_only"
+            action_payload["curriculum_only"] = True
+            action_payload["physically_coupled"] = False
+            action_payload["sequence_only_families"] = ["parameter_error"]
+            action_payload.setdefault("remaining_candidate_families", [])
         action_payload["measurement_correction_policy"] = measurement_correction_policy_payload(
             rec,
             families,
@@ -1857,6 +1922,8 @@ def build_final_target(
         action.setdefault("correction_steps", [])
 
     verification_for_status = verification if isinstance(verification, Mapping) else None
+    if family_list and verification_for_status is not None:
+        action.setdefault("verification_summaries", {family: verification_for_status})
     verdict["confidence"] = confidence_for_residual_status(
         float(verdict["confidence"]),
         verification_for_status,
@@ -3456,10 +3523,7 @@ def build_sft(config: BuilderConfig) -> None:
                 "messages": messages,
                 "runtime_context": runtime_context,
                 "trace_type": trace_type_for_record(rec),
-                "trace_metadata": {
-                    "trace_kind": scenario,
-                    "trace_type": trace_type_for_record(rec),
-                },
+                "trace_metadata": trace_metadata_for_record(rec),
             }
             row_tools = tool_schemas_for_record(rec)
             if row_tools is not None:

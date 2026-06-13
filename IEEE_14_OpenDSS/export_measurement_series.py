@@ -101,7 +101,21 @@ def extract_three_phase_voltage_measurements(buses=None):
     return out
 
 
-def extract_measurement_series(*, buses=None, branch_names=None):
+def _normalize_branch_overrides(branch_element_overrides):
+    if not branch_element_overrides:
+        return {}
+    return {str(key).lower(): value for key, value in dict(branch_element_overrides).items()}
+
+
+def _branch_terminal_pq(elem, terminal):
+    dss.Circuit.SetActiveElement(elem)
+    pqs = element_pq_3ph_per_terminal()
+    if len(pqs) > int(terminal):
+        return pqs[int(terminal)]
+    return (0.0, 0.0)
+
+
+def extract_measurement_series(*, buses=None, branch_names=None, branch_element_overrides=None):
     """
     Extract the 1ϕ-equivalent (phase-A) operator measurement vector from the *currently solved* circuit.
 
@@ -111,6 +125,9 @@ def extract_measurement_series(*, buses=None, branch_names=None):
     - Vm uses phase-1 (phase A) VLN magnitude per bus.
     - Pinj/Qinj follow MATPOWER makeSbus convention in per-unit on 100 MVA.
     - Branch flows use BRANCH_ORDER to match MATPOWER case14 branch rows.
+    - branch_element_overrides can map an external branch name to replacement
+      OpenDSS elements, e.g. for hidden midspan HIF buses:
+      {"Line.2-3": {"from": "Line.2-3_hif_a", "to": "Line.2-3_hif_b"}}.
     """
     buses = BUS_ORDER if buses is None else list(buses)
     branch_names = BRANCH_ORDER if branch_names is None else list(branch_names)
@@ -180,12 +197,22 @@ def extract_measurement_series(*, buses=None, branch_names=None):
     Pt = []
     Qt = []
 
+    overrides = _normalize_branch_overrides(branch_element_overrides)
     for elem in branch_names:
-        dss.Circuit.SetActiveElement(elem)
-        pqs = element_pq_3ph_per_terminal()
-        # from terminal = 0, to terminal = 1 (if present)
-        p_from, q_from = (pqs[0] if len(pqs) > 0 else (0.0, 0.0))
-        p_to, q_to = (pqs[1] if len(pqs) > 1 else (0.0, 0.0))
+        override = overrides.get(str(elem).lower())
+        if isinstance(override, dict):
+            from_elem = override.get("from", elem)
+            to_elem = override.get("to", elem)
+            from_terminal = int(override.get("from_terminal", 0))
+            to_terminal = int(override.get("to_terminal", 1))
+            p_from, q_from = _branch_terminal_pq(from_elem, from_terminal)
+            p_to, q_to = _branch_terminal_pq(to_elem, to_terminal)
+        else:
+            dss.Circuit.SetActiveElement(elem)
+            pqs = element_pq_3ph_per_terminal()
+            # from terminal = 0, to terminal = 1 (if present)
+            p_from, q_from = (pqs[0] if len(pqs) > 0 else (0.0, 0.0))
+            p_to, q_to = (pqs[1] if len(pqs) > 1 else (0.0, 0.0))
         Pf.append(p_from)
         Qf.append(q_from)
         Pt.append(p_to)

@@ -27,15 +27,64 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import torch
-from unsloth import FastModel, is_bfloat16_supported
-from trl import SFTConfig, SFTTrainer
-from transformers import TrainerCallback
-from gemma_adapter_loader import (
-    format_unsloth_tokenizer_load_message,
-    prepare_unsloth_adapter_path,
-    resolve_tokenizer_source,
-)
-from trace_protocol import canonical_tool_schemas
+
+try:  # Heavy trainer deps are optional at import time so pure SFT logic is testable locally.
+    from unsloth import FastModel, is_bfloat16_supported
+except Exception as exc:  # pragma: no cover - exercised outside the training environment.
+    FastModel = None  # type: ignore[assignment]
+    UNSLOTH_IMPORT_ERROR = exc
+
+    def is_bfloat16_supported() -> bool:  # type: ignore[no-redef]
+        return bool(torch.cuda.is_available() and torch.cuda.is_bf16_supported())
+else:
+    UNSLOTH_IMPORT_ERROR = None
+
+try:
+    from trl import SFTConfig, SFTTrainer
+except Exception as exc:  # pragma: no cover - exercised outside the training environment.
+    SFTConfig = None  # type: ignore[assignment]
+    SFTTrainer = None  # type: ignore[assignment]
+    TRL_IMPORT_ERROR = exc
+else:
+    TRL_IMPORT_ERROR = None
+
+try:
+    from transformers import TrainerCallback
+except Exception as exc:  # pragma: no cover - exercised outside the training environment.
+    TRANSFORMERS_IMPORT_ERROR = exc
+
+    class TrainerCallback:  # type: ignore[no-redef]
+        pass
+else:
+    TRANSFORMERS_IMPORT_ERROR = None
+
+try:
+    from gemma_adapter_loader import (
+        format_unsloth_tokenizer_load_message,
+        prepare_unsloth_adapter_path,
+        resolve_tokenizer_source,
+    )
+except Exception as exc:  # pragma: no cover - exercised outside the training environment.
+    GEMMA_ADAPTER_LOADER_IMPORT_ERROR = exc
+
+    def _missing_gemma_adapter_loader(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError(f"gemma_adapter_loader is unavailable: {GEMMA_ADAPTER_LOADER_IMPORT_ERROR}")
+
+    format_unsloth_tokenizer_load_message = _missing_gemma_adapter_loader  # type: ignore[assignment]
+    prepare_unsloth_adapter_path = _missing_gemma_adapter_loader  # type: ignore[assignment]
+    resolve_tokenizer_source = _missing_gemma_adapter_loader  # type: ignore[assignment]
+else:
+    GEMMA_ADAPTER_LOADER_IMPORT_ERROR = None
+
+try:
+    from trace_protocol import canonical_tool_schemas
+except Exception as exc:  # pragma: no cover - exercised outside the repo runtime.
+    TRACE_PROTOCOL_IMPORT_ERROR = exc
+
+    def canonical_tool_schemas() -> list[dict[str, Any]]:  # type: ignore[no-redef]
+        return []
+else:
+    TRACE_PROTOCOL_IMPORT_ERROR = None
 
 
 # Keep the built-in fallback aligned with the canonical 9-tool protocol.
@@ -289,8 +338,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--resume-from-checkpoint",
         type=str,
-        default="auto",
-        help="Checkpoint path to resume from, or 'auto' to use the latest checkpoint in --output-dir.",
+        default="",
+        help="Checkpoint path to resume from, or 'auto' to use the latest checkpoint in --output-dir. Empty starts a fresh run.",
     )
     parser.add_argument("--seed", type=int, default=3407)
     parser.add_argument("--report-to", type=str, default="none", help="The integration to report the results to, e.g., 'wandb'")
@@ -335,6 +384,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         default=False,
         help="Do not rewrite Harmony/GPT-OSS-specific system/developer wording.",
+    )
+    parser.add_argument(
+        "--keep-debug-text",
+        action="store_true",
+        default=False,
+        help="Keep rendered debug text in the Hugging Face Dataset. Disabled by default to reduce memory use.",
     )
     parser.add_argument(
         "--sanity-check-samples",
@@ -437,13 +492,125 @@ def latest_checkpoint_dir(output_dir: str) -> str | None:
 
 
 def resolve_resume_checkpoint(value: str, output_dir: str) -> str | None:
+    value = (value or "").strip()
     if not value:
         return None
-    if value.lower() == "none":
+    if value.lower() in {"none", "false", "0"}:
         return None
     if value.lower() == "auto":
         return latest_checkpoint_dir(output_dir)
     return value
+
+
+def validate_resume_policy(args: argparse.Namespace) -> None:
+    resume_value = (args.resume_from_checkpoint or "").strip().lower()
+    if not args.init_adapter or resume_value != "auto":
+        return
+
+    latest_checkpoint = latest_checkpoint_dir(args.output_dir)
+    if latest_checkpoint is None:
+        return
+
+    raise ValueError(
+        "--init-adapter was provided with --resume-from-checkpoint=auto, and an existing Trainer checkpoint "
+        f"was found at {latest_checkpoint}. This would resume old Trainer state instead of starting a fresh "
+        "continued-SFT run from the init adapter. Use an empty --resume-from-checkpoint, choose a new "
+        "--output-dir, or pass an explicit checkpoint path only if you intend to resume that Trainer run."
+    )
+
+
+def require_training_dependencies() -> None:
+    missing: list[str] = []
+    if FastModel is None:
+        missing.append(f"unsloth ({UNSLOTH_IMPORT_ERROR})")
+    if SFTConfig is None or SFTTrainer is None:
+        missing.append(f"trl ({TRL_IMPORT_ERROR})")
+    if TRANSFORMERS_IMPORT_ERROR is not None:
+        missing.append(f"transformers ({TRANSFORMERS_IMPORT_ERROR})")
+    if GEMMA_ADAPTER_LOADER_IMPORT_ERROR is not None:
+        missing.append(f"gemma_adapter_loader ({GEMMA_ADAPTER_LOADER_IMPORT_ERROR})")
+    if missing:
+        raise RuntimeError(
+            "Training dependencies are unavailable. Install/run in the training environment. Missing: "
+            + "; ".join(missing)
+        )
+
+
+def write_run_config(
+    args: argparse.Namespace,
+    *,
+    train_file: str,
+    valid_file: str | None,
+    adapter_base_model_name_or_path: str,
+    tokenizer_source: str,
+    tokenizer_name: str | None,
+    resume_checkpoint: str | None,
+    dataset_summary: dict[str, Any],
+) -> Path:
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    run_config_path = output_dir / "run_config.json"
+    payload = {
+        "requested_model_name": args.model_name,
+        "requested_model_revision": args.model_revision,
+        "adapter_base_model_name_or_path": adapter_base_model_name_or_path,
+        "tokenizer_source": tokenizer_source,
+        "tokenizer_name": tokenizer_name,
+        "init_adapter": args.init_adapter or "",
+        "init_adapter_note": (
+            "When --init-adapter is used, Unsloth loads the adapter config base model; "
+            "--model-revision is not forwarded to Unsloth for that local adapter load."
+            if args.init_adapter
+            else ""
+        ),
+        "output_dir": args.output_dir,
+        "train_file": train_file,
+        "valid_file": valid_file or "",
+        "resume_from_checkpoint_arg": args.resume_from_checkpoint or "",
+        "resolved_resume_checkpoint": resume_checkpoint or "",
+        "dataset_summary": dataset_summary,
+        "sft_args": {
+            "max_seq_length": args.max_seq_length,
+            "dataset_num_proc": args.dataset_num_proc,
+            "per_device_train_batch_size": args.per_device_train_batch_size,
+            "per_device_eval_batch_size": args.per_device_eval_batch_size,
+            "gradient_accumulation_steps": args.gradient_accumulation_steps,
+            "warmup_steps": args.warmup_steps,
+            "max_steps": args.max_steps,
+            "num_train_epochs": args.num_train_epochs,
+            "learning_rate": args.learning_rate,
+            "logging_steps": args.logging_steps,
+            "save_steps": args.save_steps,
+            "eval_steps": args.eval_steps,
+            "save_total_limit": args.save_total_limit,
+            "weight_decay": args.weight_decay,
+            "lr_scheduler_type": args.lr_scheduler_type,
+            "dataloader_num_workers": args.dataloader_num_workers,
+            "drop_too_long_targets": args.drop_too_long_targets,
+            "load_in_4bit": args.load_in_4bit,
+            "load_in_16bit": args.load_in_16bit,
+            "lora_r": args.lora_r,
+            "lora_alpha": args.lora_alpha,
+            "lora_dropout": args.lora_dropout,
+            "lora_target_scope": args.lora_target_scope,
+            "report_to": args.report_to,
+            "run_name": args.run_name,
+            "seed": args.seed,
+        },
+        "prompt_args": {
+            "include_tool_schemas": args.include_tool_schemas,
+            "tools_file": args.tools_file,
+            "phase_gated_prompt": args.phase_gated_prompt,
+            "inject_empty_thought_channel": args.inject_empty_thought_channel,
+            "preserve_system_text": args.preserve_system_text,
+            "keep_debug_text": args.keep_debug_text,
+            "repeat_first_tool_call": args.repeat_first_tool_call,
+            "repeat_later_tool_call": args.repeat_later_tool_call,
+            "repeat_final": args.repeat_final,
+        },
+    }
+    run_config_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return run_config_path
 
 
 def unique_paths(paths: Iterable[Path]) -> list[Path]:
@@ -840,11 +1007,21 @@ def assistant_turn_indices(messages: list[dict[str, Any]]) -> list[int]:
     return [i for i, msg in enumerate(messages) if msg.get("role") == "assistant"]
 
 
+def is_false_marker(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value is False
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value == 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"false", "0", "no", "n", "off"}
+    return False
+
+
 def assistant_turn_trainable(message: dict[str, Any]) -> bool:
     return (
-        message.get("trainable") is not False
-        and message.get("loss_mask") is not False
-        and message.get("train_on_assistant") is not False
+        not is_false_marker(message.get("trainable"))
+        and not is_false_marker(message.get("loss_mask"))
+        and not is_false_marker(message.get("train_on_assistant"))
     )
 
 
@@ -864,6 +1041,165 @@ def explode_conversation(messages: list[dict[str, Any]]) -> list[list[dict[str, 
 
 
 TRAINING_CONTROL_MESSAGE_KEYS = {"trainable", "loss_mask", "train_on_assistant", "training_note"}
+
+
+HARDENING_TRACE_TYPE = "hardening_recovery"
+HARDENING_TRACE_KIND = "tool_precondition_hardening"
+MASK_CONTROL_KEYS = ("trainable", "loss_mask", "train_on_assistant")
+
+
+def row_trace_metadata(row: dict[str, Any]) -> dict[str, Any]:
+    metadata = row.get("trace_metadata")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def is_hardening_row(row: dict[str, Any]) -> bool:
+    metadata = row_trace_metadata(row)
+    return row.get("trace_type") == HARDENING_TRACE_TYPE or metadata.get("trace_kind") == HARDENING_TRACE_KIND
+
+
+def row_debug_id(row: dict[str, Any], row_index: int) -> str:
+    for key in ("id", "trace_id", "sample_id", "case_id"):
+        value = row.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return f"row_index={row_index}"
+
+
+def assistant_has_false_mask_marker(message: dict[str, Any]) -> bool:
+    return any(is_false_marker(message.get(key)) for key in MASK_CONTROL_KEYS)
+
+
+def assistant_has_tool_call(message: dict[str, Any]) -> bool:
+    tool_calls = message.get("tool_calls")
+    return isinstance(tool_calls, list) and bool(tool_calls)
+
+
+def assistant_tool_name(message: dict[str, Any]) -> str | None:
+    tool_calls = message.get("tool_calls")
+    if not isinstance(tool_calls, list) or not tool_calls:
+        return None
+    first_call = tool_calls[0]
+    if not isinstance(first_call, dict):
+        return None
+    function_info = first_call.get("function")
+    if not isinstance(function_info, dict):
+        return None
+    name = function_info.get("name")
+    return name if isinstance(name, str) else None
+
+
+def message_has_tool_result(message: dict[str, Any]) -> bool:
+    if message.get("role") == "tool":
+        return True
+    tool_responses = message.get("tool_responses")
+    return isinstance(tool_responses, list) and bool(tool_responses)
+
+
+def audit_hardening_masks(rows: list[dict[str, Any]], split_name: str) -> None:
+    hardening_rows = 0
+    hardening_assistant_turns = 0
+    hardening_masked_assistant_turns = 0
+    all_masked_assistant_turns = 0
+    missing_masks: list[str] = []
+
+    for row_index, row in enumerate(rows):
+        messages = row.get("messages")
+        if not isinstance(messages, list):
+            continue
+
+        masked_in_row = 0
+        assistant_turns_in_row = 0
+        for message in messages:
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                continue
+            assistant_turns_in_row += 1
+            if assistant_has_false_mask_marker(message):
+                masked_in_row += 1
+                all_masked_assistant_turns += 1
+
+        if not is_hardening_row(row):
+            continue
+
+        hardening_rows += 1
+        hardening_assistant_turns += assistant_turns_in_row
+        hardening_masked_assistant_turns += masked_in_row
+        if masked_in_row == 0:
+            missing_masks.append(row_debug_id(row, row_index))
+
+    print(f"\n=== {split_name} hardening mask audit ===")
+    print(f"hardening conversations: {hardening_rows}")
+    print(f"hardening assistant turns: {hardening_assistant_turns}")
+    print(f"masked hardening assistant turns: {hardening_masked_assistant_turns}")
+    print(f"all masked assistant turns: {all_masked_assistant_turns}")
+
+    if missing_masks:
+        examples = ", ".join(missing_masks[:5])
+        raise ValueError(
+            f"{split_name} hardening mask audit failed: {len(missing_masks)} hardening row(s) have zero "
+            f"masked assistant turns. Example row ids: {examples}"
+        )
+
+
+def audit_hardening_recovery_targets(rows: list[dict[str, Any]], split_name: str) -> None:
+    hardening_rows_with_masks = 0
+    recovery_target_rows = 0
+    bad_rows: list[str] = []
+
+    for row_index, row in enumerate(rows):
+        if not is_hardening_row(row):
+            continue
+
+        messages = row.get("messages")
+        if not isinstance(messages, list):
+            continue
+
+        normalized = normalize_messages(messages, preserve_system_text=True)
+        assistant_indices = assistant_turn_indices(normalized)
+        masked_indices = [
+            idx
+            for idx in assistant_indices
+            if not assistant_turn_trainable(normalized[idx])
+        ]
+        if not masked_indices:
+            continue
+
+        hardening_rows_with_masks += 1
+        has_recovery_target = False
+        for masked_idx in masked_indices:
+            for later_idx in assistant_indices:
+                if later_idx <= masked_idx:
+                    continue
+                candidate = normalized[later_idx]
+                if not assistant_turn_trainable(candidate):
+                    continue
+                if not assistant_has_tool_call(candidate):
+                    continue
+                has_tool_result_after_masked_call = any(
+                    message_has_tool_result(message)
+                    for message in normalized[masked_idx:later_idx]
+                )
+                if has_tool_result_after_masked_call:
+                    has_recovery_target = True
+                    break
+            if has_recovery_target:
+                break
+
+        if has_recovery_target:
+            recovery_target_rows += 1
+        else:
+            bad_rows.append(row_debug_id(row, row_index))
+
+    print(f"\n=== {split_name} hardening recovery audit ===")
+    print(f"hardening conversations with masked turns: {hardening_rows_with_masks}")
+    print(f"hardening conversations with recovery tool targets: {recovery_target_rows}")
+
+    if bad_rows:
+        examples = ", ".join(bad_rows[:5])
+        raise ValueError(
+            f"{split_name} hardening recovery audit failed: {len(bad_rows)} hardening row(s) have masked turns "
+            f"but no trainable recovery tool target with a tool result in the prefix. Example row ids: {examples}"
+        )
 
 
 def strip_training_control_fields(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1263,6 +1599,8 @@ class BuildStats:
         self.prompt_trimmed = 0
         self.dropped_too_long_target = 0
         self.skipped_untrainable_assistant_turns = 0
+        self.hardening_prompt_trimmed = 0
+        self.hardening_too_long_target = 0
         self.target_kind = Counter()
         self.original_message_lengths = Counter()
 
@@ -1298,6 +1636,7 @@ def build_processed_split(
 
     for row_index, row in enumerate(raw_split):
         stats.original_rows += 1
+        row_is_hardening = is_hardening_row(row)
         raw_messages = row["messages"]
         stats.original_message_lengths[len(raw_messages)] += 1
         row_tools = row.get("tools")
@@ -1367,6 +1706,12 @@ def build_processed_split(
 
             if orig_length > max_seq_length:
                 if completion_len > max_seq_length:
+                    if row_is_hardening:
+                        stats.hardening_too_long_target += 1
+                        raise ValueError(
+                            f"Hardening row {row_debug_id(row, row_index)} in {split_name} has a target assistant "
+                            f"turn longer than --max-seq-length ({completion_len} > {max_seq_length})."
+                        )
                     if drop_too_long_targets:
                         stats.dropped_too_long_target += 1
                         continue
@@ -1375,6 +1720,12 @@ def build_processed_split(
                     completion_mask = [1] * max_seq_length
                     truncated = True
                 else:
+                    if row_is_hardening:
+                        stats.hardening_prompt_trimmed += 1
+                        raise ValueError(
+                            f"Hardening row {row_debug_id(row, row_index)} in {split_name} would be prompt-trimmed "
+                            f"({orig_length} > {max_seq_length}). Increase --max-seq-length or shorten the trace."
+                        )
                     keep_prompt = max_seq_length - completion_len
                     slice_start = completion_start - keep_prompt
                     input_ids = full_ids[slice_start:]
@@ -1410,6 +1761,7 @@ def build_processed_split(
                 ),
                 "case_path": extract_case_path(history),
                 "was_truncated": truncated,
+                "is_hardening_recovery": row_is_hardening,
                 "text": full_text,  # kept for debugging/preview only
                 "_tools_for_sanity": tools,
             }
@@ -1472,6 +1824,8 @@ def report_dataset(records: list[dict[str, Any]], split_name: str, stats: BuildS
     print(f"skipped untrainable assistant turns: {stats.skipped_untrainable_assistant_turns}")
     print(f"dropped too-long targets: {stats.dropped_too_long_target}")
     print(f"prompt-trimmed samples: {stats.prompt_trimmed}")
+    print(f"hardening prompt-trimmed samples: {stats.hardening_prompt_trimmed}")
+    print(f"hardening too-long targets: {stats.hardening_too_long_target}")
     print(f"assistant target kinds: {dict(stats.target_kind)}")
     print(f"assistant phase counts: {ordered_phase_counts}")
     print(f"supervised token mass by phase: {ordered_phase_tokens}")
@@ -1557,10 +1911,14 @@ def report_repeated_phase_mix(records: list[dict[str, Any]], label: str) -> None
     print("=== end repeated phase mix ===")
 
 
-def records_to_dataset(records: list[dict[str, Any]]):
+def records_to_dataset(records: list[dict[str, Any]], *, keep_debug_text: bool = False):
     from datasets import Dataset
 
-    public_keys = [key for key in records[0].keys() if not key.startswith("_")]
+    public_keys = [
+        key
+        for key in records[0].keys()
+        if not key.startswith("_") and (keep_debug_text or key != "text")
+    ]
     columns: dict[str, list[Any]] = {key: [r[key] for r in records] for key in public_keys}
     return Dataset.from_dict(columns)
 
@@ -2314,6 +2672,8 @@ class PretokenizedSFTCollator:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    validate_resume_policy(args)
+    require_training_dependencies()
     signal_state = SignalState()
     signal_state.install()
     default_tools = load_tools(args)
@@ -2331,6 +2691,10 @@ def main(argv: list[str] | None = None) -> int:
             flush=True,
         )
 
+    adapter_base_model_name_or_path = args.model_name
+    tokenizer_source_for_config = args.model_name
+    tokenizer_name_for_config: str | None = args.model_name
+
     if args.init_adapter:
         init_adapter_path = Path(args.init_adapter).expanduser()
         adapter_cfg_path = init_adapter_path / "adapter_config.json"
@@ -2344,6 +2708,9 @@ def main(argv: list[str] | None = None) -> int:
             base_model_name=base_model_name,
             prefer_base_tokenizer=False,
         )
+        adapter_base_model_name_or_path = base_model_name
+        tokenizer_source_for_config = tokenizer_source
+        tokenizer_name_for_config = tokenizer_name
         unsloth_model_name, unsloth_tempdir, prepared_tokenizer_files = prepare_unsloth_adapter_path(
             init_adapter_path,
             prefer_base_tokenizer=False,
@@ -2422,6 +2789,11 @@ def main(argv: list[str] | None = None) -> int:
         raw_ds["validation"] = raw_ds["validation"][: args.max_valid_rows]
         print(f"Trimmed validation conversations: {len(raw_ds['validation'])}/{original_count}")
     warn_on_schema_mismatch(raw_ds)
+    audit_hardening_masks(raw_ds["train"], "train")
+    audit_hardening_recovery_targets(raw_ds["train"], "train")
+    if "validation" in raw_ds:
+        audit_hardening_masks(raw_ds["validation"], "validation")
+        audit_hardening_recovery_targets(raw_ds["validation"], "validation")
 
     train_stats = BuildStats()
     train_records = build_processed_split(
@@ -2448,9 +2820,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     if len(repeated_train_records) != len(train_records):
         report_repeated_phase_mix(repeated_train_records, "train")
-    train_dataset = records_to_dataset(repeated_train_records)
+    train_dataset = records_to_dataset(repeated_train_records, keep_debug_text=args.keep_debug_text)
 
     eval_dataset = None
+    eval_records: list[dict[str, Any]] = []
     if "validation" in raw_ds:
         eval_stats = BuildStats()
         eval_records = build_processed_split(
@@ -2467,12 +2840,12 @@ def main(argv: list[str] | None = None) -> int:
             phase_role=phase_role,
             inject_empty_thought_channel=args.inject_empty_thought_channel,
         )
-        eval_dataset = records_to_dataset(eval_records)
+        eval_dataset = records_to_dataset(eval_records, keep_debug_text=args.keep_debug_text)
         report_dataset(eval_records, "validation", eval_stats, args.max_seq_length)
 
-    if len(train_dataset) > 0:
+    if train_records:
         print("=== Preview of first rendered sample ===")
-        print(train_dataset[0]["text"][:2500])
+        print(train_records[0]["text"][:2500])
         print("=== End preview ===")
 
     cpu_count = os.cpu_count() or 1
@@ -2534,6 +2907,23 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Starting training from checkpoint: {resume_checkpoint}")
     else:
         print("Starting training from scratch...")
+    run_config_path = write_run_config(
+        args,
+        train_file=train_file,
+        valid_file=valid_file,
+        adapter_base_model_name_or_path=adapter_base_model_name_or_path,
+        tokenizer_source=tokenizer_source_for_config,
+        tokenizer_name=tokenizer_name_for_config,
+        resume_checkpoint=resume_checkpoint,
+        dataset_summary={
+            "raw_train_conversations": len(raw_ds["train"]),
+            "raw_validation_conversations": len(raw_ds.get("validation", [])),
+            "processed_train_samples": len(train_records),
+            "repeated_train_samples": len(repeated_train_records),
+            "processed_validation_samples": len(eval_records),
+        },
+    )
+    print(f"Wrote run config: {run_config_path}")
     trainer_stats = trainer.train(resume_from_checkpoint=resume_checkpoint)
     print(f"Training metrics: {trainer_stats.metrics}")
 

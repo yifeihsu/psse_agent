@@ -1,0 +1,651 @@
+{
+  "source": "data/sft_with_tools_multi_error_pairwise_4200_hardened_masked.jsonl",
+  "multi_preview_count": 12,
+  "hardening_preview_count": 6,
+  "combined_count": 18,
+  "combo_counts": {
+    "measurement_error+parameter_error": 2,
+    "measurement_error+topology_error": 2,
+    "measurement_error+harmonic_anomaly": 2,
+    "parameter_error+topology_error": 2,
+    "parameter_error+harmonic_anomaly": 2,
+    "topology_error+harmonic_anomaly": 2
+  },
+  "hardening_template_counts": {
+    "parameter_helper_unavailable": 2,
+    "harmonic_helper_unavailable": 2,
+    "verification_snapshot_unavailable": 2
+  },
+  "rows": [
+    {
+      "source_row": 1,
+      "bucket": "multi",
+      "trace_kind": "multi_error",
+      "trace_type": "representative_multi_error",
+      "template": null,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_parameter_context",
+        "correct_parameters_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path"
+      ],
+      "num_messages": 19,
+      "error_families": [
+        "measurement_error",
+        "parameter_error"
+      ],
+      "primary_error_family": "measurement_error",
+      "confidence": 0.86,
+      "applied_tools": [
+        "correct_parameters_from_path",
+        "correct_measurements_from_path"
+      ],
+      "combo": "measurement_error+parameter_error",
+      "diagnosis_status": "partial",
+      "request_more_data": true,
+      "measurement_policy_request_more_data": true,
+      "curriculum_only": false,
+      "physically_coupled": true,
+      "sequence_only_families": null,
+      "has_last_verified_summary": true,
+      "has_verification_summaries": true
+    },
+    {
+      "source_row": 2,
+      "bucket": "multi",
+      "trace_kind": "multi_error",
+      "trace_type": "representative_multi_error",
+      "template": null,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_parameter_context",
+        "correct_parameters_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path"
+      ],
+      "num_messages": 19,
+      "error_families": [
+        "measurement_error",
+        "parameter_error"
+      ],
+      "primary_error_family": "measurement_error",
+      "confidence": 0.96,
+      "applied_tools": [
+        "correct_parameters_from_path",
+        "correct_measurements_from_path"
+      ],
+      "combo": "measurement_error+parameter_error",
+      "diagnosis_status": "complete",
+      "request_more_data": false,
+      "measurement_policy_request_more_data": false,
+      "curriculum_only": false,
+      "physically_coupled": true,
+      "sequence_only_families": null,
+      "has_last_verified_summary": true,
+      "has_verification_summaries": true
+    },
+    {
+      "source_row": 701,
+      "bucket": "multi",
+      "trace_kind": "multi_error",
+      "trace_type": "representative_multi_error",
+      "template": null,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_topology_context",
+        "correct_topology_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path"
+      ],
+      "num_messages": 19,
+      "error_families": [
+        "measurement_error",
+        "topology_error"
+      ],
+      "primary_error_family": "measurement_error",
+      "confidence": 0.96,
+      "applied_tools": [
+        "correct_topology_from_path",
+        "correct_measurements_from_path"
+      ],
+      "combo": "measurement_error+topology_error",
+      "diagnosis_status": "complete",
+      "request_more_data": false,
+      "measurement_policy_request_more_data": false,
+      "curriculum_only": false,
+      "physically_coupled": true,
+      "sequence_only_families": null,
+      "has_last_verified_summary": true,
+      "has_verification_summaries": true
+    },
+    {
+      "source_row": 702,
+      "bucket": "multi",
+      "trace_kind": "multi_error",
+      "trace_type": "representative_multi_error",
+      "template": null,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_topology_context",
+        "correct_topology_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path"
+      ],
+      "num_messages": 19,
+      "error_families": [
+        "measurement_error",
+        "topology_error"
+      ],
+      "primary_error_family": "measurement_error",
+      "confidence": 0.96,
+      "applied_tools": [
+        "correct_topology_from_path",
+        "correct_measurements_from_path"
+      ],
+      "combo": "measurement_error+topology_error",
+      "diagnosis_status": "complete",
+      "request_more_data": false,
+      "measurement_policy_request_more_data": false,
+      "curriculum_only": false,
+      "physically_coupled": true,
+      "sequence_only_families": null,
+      "has_last_verified_summary": true,
+      "has_verification_summaries": true
+    },
+    {
+      "source_row": 1401,
+      "bucket": "multi",
+      "trace_kind": "multi_error",
+      "trace_type": "representative_multi_error",
+      "template": null,
+      "tool_sequence": [
+        "wls_from_path",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "get_harmonic_context",
+        "run_hse_from_path"
+      ],
+      "num_messages": 15,
+      "error_families": [
+        "measurement_error",
+        "harmonic_anomaly"
+      ],
+      "primary_error_family": "measurement_error",
+      "confidence": 0.92,
+      "applied_tools": [
+        "correct_measurements_from_path",
+        "run_hse_from_path"
+      ],
+      "combo": "measurement_error+harmonic_anomaly",
+      "diagnosis_status": "near_threshold",
+      "request_more_data": false,
+      "measurement_policy_request_more_data": false,
+      "curriculum_only": false,
+      "physically_coupled": true,
+      "sequence_only_families": null,
+      "has_last_verified_summary": true,
+      "has_verification_summaries": true
+    },
+    {
+      "source_row": 1402,
+      "bucket": "multi",
+      "trace_kind": "multi_error",
+      "trace_type": "representative_multi_error",
+      "template": null,
+      "tool_sequence": [
+        "wls_from_path",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "get_harmonic_context",
+        "run_hse_from_path"
+      ],
+      "num_messages": 15,
+      "error_families": [
+        "measurement_error",
+        "harmonic_anomaly"
+      ],
+      "primary_error_family": "measurement_error",
+      "confidence": 0.92,
+      "applied_tools": [
+        "correct_measurements_from_path",
+        "run_hse_from_path"
+      ],
+      "combo": "measurement_error+harmonic_anomaly",
+      "diagnosis_status": "near_threshold",
+      "request_more_data": false,
+      "measurement_policy_request_more_data": false,
+      "curriculum_only": false,
+      "physically_coupled": true,
+      "sequence_only_families": null,
+      "has_last_verified_summary": true,
+      "has_verification_summaries": true
+    },
+    {
+      "source_row": 1864,
+      "bucket": "multi",
+      "trace_kind": "multi_error",
+      "trace_type": "representative_multi_error",
+      "template": null,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_topology_context",
+        "correct_topology_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "get_parameter_context",
+        "correct_parameters_from_path"
+      ],
+      "num_messages": 17,
+      "error_families": [
+        "parameter_error",
+        "topology_error"
+      ],
+      "primary_error_family": "parameter_error",
+      "confidence": 0.96,
+      "applied_tools": [
+        "correct_topology_from_path",
+        "correct_parameters_from_path"
+      ],
+      "combo": "parameter_error+topology_error",
+      "diagnosis_status": "curriculum_only",
+      "request_more_data": false,
+      "measurement_policy_request_more_data": false,
+      "curriculum_only": true,
+      "physically_coupled": false,
+      "sequence_only_families": [
+        "parameter_error"
+      ],
+      "has_last_verified_summary": true,
+      "has_verification_summaries": true
+    },
+    {
+      "source_row": 1865,
+      "bucket": "multi",
+      "trace_kind": "multi_error",
+      "trace_type": "representative_multi_error",
+      "template": null,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_topology_context",
+        "correct_topology_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "get_parameter_context",
+        "correct_parameters_from_path"
+      ],
+      "num_messages": 17,
+      "error_families": [
+        "parameter_error",
+        "topology_error"
+      ],
+      "primary_error_family": "parameter_error",
+      "confidence": 0.96,
+      "applied_tools": [
+        "correct_topology_from_path",
+        "correct_parameters_from_path"
+      ],
+      "combo": "parameter_error+topology_error",
+      "diagnosis_status": "curriculum_only",
+      "request_more_data": false,
+      "measurement_policy_request_more_data": false,
+      "curriculum_only": true,
+      "physically_coupled": false,
+      "sequence_only_families": [
+        "parameter_error"
+      ],
+      "has_last_verified_summary": true,
+      "has_verification_summaries": true
+    },
+    {
+      "source_row": 2564,
+      "bucket": "multi",
+      "trace_kind": "multi_error",
+      "trace_type": "representative_multi_error",
+      "template": null,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_parameter_context",
+        "correct_parameters_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "get_harmonic_context",
+        "run_hse_from_path"
+      ],
+      "num_messages": 17,
+      "error_families": [
+        "parameter_error",
+        "harmonic_anomaly"
+      ],
+      "primary_error_family": "parameter_error",
+      "confidence": 0.92,
+      "applied_tools": [
+        "correct_parameters_from_path",
+        "run_hse_from_path"
+      ],
+      "combo": "parameter_error+harmonic_anomaly",
+      "diagnosis_status": "near_threshold",
+      "request_more_data": false,
+      "measurement_policy_request_more_data": false,
+      "curriculum_only": false,
+      "physically_coupled": true,
+      "sequence_only_families": null,
+      "has_last_verified_summary": true,
+      "has_verification_summaries": true
+    },
+    {
+      "source_row": 2565,
+      "bucket": "multi",
+      "trace_kind": "multi_error",
+      "trace_type": "representative_multi_error",
+      "template": null,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_parameter_context",
+        "correct_parameters_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "get_harmonic_context",
+        "run_hse_from_path"
+      ],
+      "num_messages": 17,
+      "error_families": [
+        "parameter_error",
+        "harmonic_anomaly"
+      ],
+      "primary_error_family": "parameter_error",
+      "confidence": 0.92,
+      "applied_tools": [
+        "correct_parameters_from_path",
+        "run_hse_from_path"
+      ],
+      "combo": "parameter_error+harmonic_anomaly",
+      "diagnosis_status": "near_threshold",
+      "request_more_data": false,
+      "measurement_policy_request_more_data": false,
+      "curriculum_only": false,
+      "physically_coupled": true,
+      "sequence_only_families": null,
+      "has_last_verified_summary": true,
+      "has_verification_summaries": true
+    },
+    {
+      "source_row": 3264,
+      "bucket": "multi",
+      "trace_kind": "multi_error",
+      "trace_type": "representative_multi_error",
+      "template": null,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_topology_context",
+        "correct_topology_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "get_harmonic_context",
+        "run_hse_from_path"
+      ],
+      "num_messages": 17,
+      "error_families": [
+        "topology_error",
+        "harmonic_anomaly"
+      ],
+      "primary_error_family": "topology_error",
+      "confidence": 0.96,
+      "applied_tools": [
+        "correct_topology_from_path",
+        "run_hse_from_path"
+      ],
+      "combo": "topology_error+harmonic_anomaly",
+      "diagnosis_status": "complete",
+      "request_more_data": false,
+      "measurement_policy_request_more_data": false,
+      "curriculum_only": false,
+      "physically_coupled": true,
+      "sequence_only_families": null,
+      "has_last_verified_summary": true,
+      "has_verification_summaries": true
+    },
+    {
+      "source_row": 3265,
+      "bucket": "multi",
+      "trace_kind": "multi_error",
+      "trace_type": "representative_multi_error",
+      "template": null,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_topology_context",
+        "correct_topology_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "get_harmonic_context",
+        "run_hse_from_path"
+      ],
+      "num_messages": 17,
+      "error_families": [
+        "topology_error",
+        "harmonic_anomaly"
+      ],
+      "primary_error_family": "topology_error",
+      "confidence": 0.96,
+      "applied_tools": [
+        "correct_topology_from_path",
+        "run_hse_from_path"
+      ],
+      "combo": "topology_error+harmonic_anomaly",
+      "diagnosis_status": "complete",
+      "request_more_data": false,
+      "measurement_policy_request_more_data": false,
+      "curriculum_only": false,
+      "physically_coupled": true,
+      "sequence_only_families": null,
+      "has_last_verified_summary": true,
+      "has_verification_summaries": true
+    },
+    {
+      "source_row": 4156,
+      "bucket": "hardening",
+      "trace_kind": "tool_precondition_hardening",
+      "trace_type": "hardening_recovery",
+      "template": "parameter_helper_unavailable",
+      "tool_sequence": [
+        "wls_from_path",
+        "get_parameter_context",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path"
+      ],
+      "num_messages": 13,
+      "error_families": [
+        "measurement_error"
+      ],
+      "primary_error_family": "measurement_error",
+      "confidence": 0.92,
+      "applied_tools": [
+        "correct_measurements_from_path"
+      ],
+      "combo": "measurement_error",
+      "diagnosis_status": "near_threshold",
+      "request_more_data": false,
+      "measurement_policy_request_more_data": false,
+      "curriculum_only": false,
+      "physically_coupled": null,
+      "sequence_only_families": null,
+      "has_last_verified_summary": false,
+      "has_verification_summaries": true
+    },
+    {
+      "source_row": 4157,
+      "bucket": "hardening",
+      "trace_kind": "tool_precondition_hardening",
+      "trace_type": "hardening_recovery",
+      "template": "harmonic_helper_unavailable",
+      "tool_sequence": [
+        "wls_from_path",
+        "get_harmonic_context",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path"
+      ],
+      "num_messages": 13,
+      "error_families": [
+        "measurement_error"
+      ],
+      "primary_error_family": "measurement_error",
+      "confidence": 0.92,
+      "applied_tools": [
+        "correct_measurements_from_path"
+      ],
+      "combo": "measurement_error",
+      "diagnosis_status": "near_threshold",
+      "request_more_data": false,
+      "measurement_policy_request_more_data": false,
+      "curriculum_only": false,
+      "physically_coupled": null,
+      "sequence_only_families": null,
+      "has_last_verified_summary": false,
+      "has_verification_summaries": true
+    },
+    {
+      "source_row": 4158,
+      "bucket": "hardening",
+      "trace_kind": "tool_precondition_hardening",
+      "trace_type": "hardening_recovery",
+      "template": "verification_snapshot_unavailable",
+      "tool_sequence": [
+        "wls_from_path",
+        "get_verification_snapshot",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path"
+      ],
+      "num_messages": 13,
+      "error_families": [
+        "measurement_error"
+      ],
+      "primary_error_family": "measurement_error",
+      "confidence": 0.92,
+      "applied_tools": [
+        "correct_measurements_from_path"
+      ],
+      "combo": "measurement_error",
+      "diagnosis_status": "near_threshold",
+      "request_more_data": false,
+      "measurement_policy_request_more_data": false,
+      "curriculum_only": false,
+      "physically_coupled": null,
+      "sequence_only_families": null,
+      "has_last_verified_summary": false,
+      "has_verification_summaries": true
+    },
+    {
+      "source_row": 4159,
+      "bucket": "hardening",
+      "trace_kind": "tool_precondition_hardening",
+      "trace_type": "hardening_recovery",
+      "template": "parameter_helper_unavailable",
+      "tool_sequence": [
+        "wls_from_path",
+        "get_parameter_context",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path"
+      ],
+      "num_messages": 13,
+      "error_families": [
+        "measurement_error"
+      ],
+      "primary_error_family": "measurement_error",
+      "confidence": 0.99,
+      "applied_tools": [
+        "correct_measurements_from_path"
+      ],
+      "combo": "measurement_error",
+      "diagnosis_status": "complete",
+      "request_more_data": false,
+      "measurement_policy_request_more_data": false,
+      "curriculum_only": false,
+      "physically_coupled": null,
+      "sequence_only_families": null,
+      "has_last_verified_summary": false,
+      "has_verification_summaries": true
+    },
+    {
+      "source_row": 4160,
+      "bucket": "hardening",
+      "trace_kind": "tool_precondition_hardening",
+      "trace_type": "hardening_recovery",
+      "template": "harmonic_helper_unavailable",
+      "tool_sequence": [
+        "wls_from_path",
+        "get_harmonic_context",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path"
+      ],
+      "num_messages": 13,
+      "error_families": [
+        "measurement_error"
+      ],
+      "primary_error_family": "measurement_error",
+      "confidence": 0.99,
+      "applied_tools": [
+        "correct_measurements_from_path"
+      ],
+      "combo": "measurement_error",
+      "diagnosis_status": "complete",
+      "request_more_data": false,
+      "measurement_policy_request_more_data": false,
+      "curriculum_only": false,
+      "physically_coupled": null,
+      "sequence_only_families": null,
+      "has_last_verified_summary": false,
+      "has_verification_summaries": true
+    },
+    {
+      "source_row": 4161,
+      "bucket": "hardening",
+      "trace_kind": "tool_precondition_hardening",
+      "trace_type": "hardening_recovery",
+      "template": "verification_snapshot_unavailable",
+      "tool_sequence": [
+        "wls_from_path",
+        "get_verification_snapshot",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path"
+      ],
+      "num_messages": 13,
+      "error_families": [
+        "measurement_error"
+      ],
+      "primary_error_family": "measurement_error",
+      "confidence": 0.99,
+      "applied_tools": [
+        "correct_measurements_from_path"
+      ],
+      "combo": "measurement_error",
+      "diagnosis_status": "complete",
+      "request_more_data": false,
+      "measurement_policy_request_more_data": false,
+      "curriculum_only": false,
+      "physically_coupled": null,
+      "sequence_only_families": null,
+      "has_last_verified_summary": false,
+      "has_verification_summaries": true
+    }
+  ]
+}

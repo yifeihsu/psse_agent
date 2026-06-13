@@ -2,7 +2,7 @@
 
 PS-LLM-Agent is a power-system diagnostic agent project built around MATPOWER-backed tool use and Gemma 4 supervised fine-tuning. The active root-level pipeline in this repo is:
 
-`preprocess.py` -> `submit_sft_gemma4.sh` / `gpt_oss_power_sft_revised_v3.py` -> `submit_eval.sh` / `submit_eval_stratified_smoke.sh`
+`preprocess.py` -> `submit_sft_gemma4.sh` / `gpt_oss_power_sft_revised_v3.py` -> `submit_eval_v3.sh` / `eval_sft_agent_gemma_v4.py`
 
 The current training and evaluation flow targets Gemma 4 tool-calling traces stored as JSONL conversations in `out_traces_balanced/`.
 
@@ -11,8 +11,7 @@ The current training and evaluation flow targets Gemma 4 tool-calling traces sto
 1. Generate or collect raw diagnostic traces.
 2. Normalize and split them with `preprocess.py`.
 3. Fine-tune Gemma 4 with `submit_sft_gemma4.sh` or `gpt_oss_power_sft_revised_v3.py`.
-4. Evaluate the LoRA adapter with `submit_eval.sh`.
-5. Run a smaller stratified smoke test with `submit_eval_stratified_smoke.sh` when you want a faster check.
+4. Evaluate the LoRA adapter with `submit_eval_v3.sh` or `eval_sft_agent_gemma_v4.py`.
 
 ## Repository Layout
 
@@ -29,10 +28,9 @@ The current training and evaluation flow targets Gemma 4 tool-calling traces sto
 - `preprocess.py`: Normalizes traces, optionally deduplicates them, audits token length, and writes balanced train/valid/test splits.
 - `gpt_oss_power_sft_revised_v3.py`: Canonical Gemma 4 SFT entrypoint.
 - `submit_sft_gemma4.sh`: Slurm wrapper for training with auto-tuned defaults by GPU class.
-- `eval_sft_agent_gemma_v2.py`: Main Gemma 4 evaluator.
-- `submit_eval.sh`: Full-test-set Slurm evaluation wrapper.
-- `make_stratified_smoke.py`: Builds a small balanced evaluation subset from the test split.
-- `submit_eval_stratified_smoke.sh`: Fast smoke-test wrapper built on `make_stratified_smoke.py`.
+- `eval_sft_agent_gemma_v4.py`: Main Gemma 4 evaluator.
+- `submit_eval_v3.sh`: Slurm evaluation wrapper with resume support and current runtime defaults.
+- `make_stratified_smoke.py`: Builds a small balanced evaluation subset from the test split when you want a faster check.
 - `eval_sft_agent_hardened.py`: Shared hardened evaluation/runtime logic reused by the Gemma evaluator.
 - `trace_protocol.py`: Shared tool schemas and trace-format helpers.
 - `interactive_agent_eval.py`: Manual interactive runner for probing an adapter with the MATPOWER tools.
@@ -145,14 +143,14 @@ python gpt_oss_power_sft_revised_v3.py \
 
 ### Full evaluation
 
-`submit_eval.sh` runs `eval_sft_agent_gemma_v2.py` on the test split and writes results to `outputs/gemma4_power_agent/`.
+`submit_eval_v3.sh` runs `eval_sft_agent_gemma_v4.py` on the test split and writes results to `outputs/gemma4_power_agent/`.
 
 Example:
 
 ```bash
 export MODEL_REVISION=d722512f8f1e4ef6629c1b24d16d65295c8c945e
 export ADAPTER_PATH=outputs/gemma4_power_agent/lora
-sbatch --constraint=a100 submit_eval.sh
+sbatch --constraint=a100 submit_eval_v3.sh
 ```
 
 Useful overrides:
@@ -162,20 +160,24 @@ export MAX_SAMPLES=100
 export MAX_TURNS=6
 export MAX_NEW_TOKENS=1024
 export GPU_PROFILE=portable
-sbatch submit_eval.sh
+sbatch submit_eval_v3.sh
 ```
 
-### Stratified smoke evaluation
+### Smaller smoke evaluation
 
-`submit_eval_stratified_smoke.sh` first builds a small balanced subset from the test split with `make_stratified_smoke.py`, then evaluates on that subset.
-
-Example:
+Build a small balanced subset from the test split with `make_stratified_smoke.py`, then pass that file to `submit_eval_v3.sh`.
 
 ```bash
-export MODEL_REVISION=d722512f8f1e4ef6629c1b24d16d65295c8c945e
-export ADAPTER_PATH=outputs/gemma4_power_agent/lora
-export PER_FAMILY=4
-sbatch submit_eval_stratified_smoke.sh
+python make_stratified_smoke.py \
+  --input out_traces_balanced/sft_traces.test.jsonl \
+  --output outputs/stratified_smoke.jsonl \
+  --per-family 4 \
+  --seed 13 \
+  --shuffle-output
+
+export TEST_FILE=outputs/stratified_smoke.jsonl
+export SMOKE=1
+sbatch submit_eval_v3.sh
 ```
 
 This is the quickest regression check when you only want a small per-family sample instead of the full test set.
@@ -193,7 +195,7 @@ python run_http_server.py
 
 ## Notes
 
-- `submit_sft_gemma4.sh` and `submit_eval.sh` auto-select defaults based on detected GPU memory and model family.
+- `submit_sft_gemma4.sh` and `submit_eval_v3.sh` auto-select defaults based on detected GPU memory and model family.
 - Evaluation outputs now default to `outputs/gemma4_power_agent/` to keep the repo root clean.
 - `README_DATASET.md` contains dataset-focused notes; this README is intended to document the active root-level Gemma 4 pipeline.
 

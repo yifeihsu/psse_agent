@@ -15,9 +15,9 @@
 
 # GPU selection is intentionally left configurable at submission time.
 # Examples:
-#   sbatch --constraint=a100 submit_eval.sh
-#   sbatch --constraint=l40s submit_eval.sh
-#   sbatch --gres=gpu:rtx_pro_6000:1 submit_eval.sh
+#   sbatch --constraint=a100 submit_eval_v3.sh
+#   sbatch --constraint=l40s submit_eval_v3.sh
+#   sbatch --gres=gpu:rtx_pro_6000:1 submit_eval_v3.sh
 # Use your cluster's exact GPU labels from `sinfo -o "%P %G %f"`.
 
 set -euo pipefail

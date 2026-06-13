@@ -165,6 +165,19 @@
     }
   ],
   "imbalance": {
+    "eligible_load_buses": [
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6",
+      "b9",
+      "b10",
+      "b11",
+      "b12",
+      "b13",
+      "b14"
+    ],
     "bus_order": [
       "b1",
       "b2",
