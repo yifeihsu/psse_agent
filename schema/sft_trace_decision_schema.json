@@ -313,11 +313,77 @@
             "null"
           ]
         },
+        "tool_steps": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
         "correction_steps": {
           "type": "array",
           "items": {
             "type": "object"
           }
+        },
+        "diagnosis_status": {
+          "type": "string",
+          "enum": [
+            "complete",
+            "near_threshold",
+            "elevated",
+            "partial",
+            "unknown",
+            "not_applicable"
+          ]
+        },
+        "remaining_candidate_families": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "measurement_correction_policy": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "allowed": {
+              "type": "boolean"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "residual_pattern": {
+              "type": "string",
+              "enum": [
+                "localized",
+                "distributed",
+                "unknown",
+                "not_applicable"
+              ]
+            },
+            "suspect_group_size": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "structural_checks_completed": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "structural_tools_before_measurement": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "request_more_data": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

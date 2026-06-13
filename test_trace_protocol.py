@@ -15,6 +15,9 @@ from Transmission.build_sft_traces import (
     correction_family_order,
     explicit_snapshot_compatible_with_current_z,
     get_explicit_verification_snapshot,
+    measurement_indices_for_index_space,
+    measurement_correction_policy_payload,
+    multi_error_semantic_rejection_reason,
     rejection_reason,
     verification_z_obs_from_snapshot,
 )
@@ -26,11 +29,13 @@ from Transmission.generate_multi_error_measurements import (
 )
 from trace_protocol import (
     DECISION_SCHEMA_TEXT,
+    SCADA_HARMONIC_SYSTEM_PROMPT,
     canonical_tool_schemas,
     chi2_threshold,
     extract_conversation_context,
     hydrate_tool_arguments,
     resolve_case_path_alias,
+    scada_harmonic_tool_schemas,
     summarize_tool_result_for_conversation,
 )
 
@@ -55,6 +60,7 @@ class TraceProtocolTests(unittest.TestCase):
             imbalance_meta_path=None,
             hif_samples_path=None,
             hif_meta_path=None,
+            hardening_source_samples_path=None,
             case_name=None,
             endpoint="http://localhost:3929/tools",
             out_path=Path("out.jsonl"),
@@ -82,11 +88,24 @@ class TraceProtocolTests(unittest.TestCase):
         self.assertIn("top_hif_groups", DECISION_SCHEMA_TEXT["evidence"])
         self.assertIn("first_applied_tool", DECISION_SCHEMA_TEXT["action"])
         self.assertIn("last_applied_tool", DECISION_SCHEMA_TEXT["action"])
+        self.assertIn("verification_summaries", DECISION_SCHEMA_TEXT["action"])
+        self.assertIn("tool_steps", DECISION_SCHEMA_TEXT["action"])
         self.assertIn("correction_steps", DECISION_SCHEMA_TEXT["action"])
         self.assertIn("0-based", DECISION_SCHEMA_TEXT["evidence"]["top_residuals"][0]["index0"])
         self.assertIn("applied_tool", DECISION_SCHEMA_TEXT["action"])
         self.assertIn("1-based", DECISION_SCHEMA_TEXT["action"]["arguments_hint"])
         self.assertIn("object or null", DECISION_SCHEMA_TEXT["action"]["verification_summary"])
+        self.assertIn("diagnosis_status", DECISION_SCHEMA_TEXT["action"])
+        self.assertIn("remaining_candidate_families", DECISION_SCHEMA_TEXT["action"])
+
+    def test_scada_harmonic_prompt_scope_excludes_hif_and_imbalance_tools(self) -> None:
+        tool_names = {tool["function"]["name"] for tool in scada_harmonic_tool_schemas()}
+
+        self.assertIn("run_hse_from_path", tool_names)
+        self.assertNotIn("run_three_phase_nlm_from_path", tool_names)
+        self.assertNotIn("high_impedance_fault", SCADA_HARMONIC_SYSTEM_PROMPT)
+        self.assertNotIn("three_phase_imbalance", SCADA_HARMONIC_SYSTEM_PROMPT)
+        self.assertNotIn("top_hif_groups", SCADA_HARMONIC_SYSTEM_PROMPT)
 
     def test_verification_snapshot_schema_is_stage_only(self) -> None:
         schemas = canonical_tool_schemas()
@@ -107,6 +126,36 @@ class TraceProtocolTests(unittest.TestCase):
         self.assertEqual(
             choose_measurement_suspect_group(rec, idx_map, tool_payload),
             [2, 4],
+        )
+
+    def test_measurement_suspect_group_uses_projected_index_space_after_topology(self) -> None:
+        rec = {
+            "label": {
+                "index": 77,
+                "channel": "Qf",
+                "index_spaces": {
+                    "post_topology_correction_indices0": [76],
+                    "post_topology_correction": {
+                        "index_space": "post_topology_correction",
+                        "original_indices0": [77],
+                        "current_indices0": [76],
+                    },
+                },
+            }
+        }
+        idx_map = {"Qf": slice(62, 82)}
+        tool_payload = {"r": [0.0] * 122}
+
+        self.assertEqual(measurement_indices_for_index_space(rec, "post_topology_correction"), [76])
+        self.assertEqual(
+            choose_measurement_suspect_group(
+                rec,
+                idx_map,
+                tool_payload,
+                prefer_label=False,
+                index_space="post_topology_correction",
+            ),
+            [76],
         )
 
     def test_apply_measurement_corrections_updates_all_suspect_indices(self) -> None:
@@ -141,9 +190,16 @@ class TraceProtocolTests(unittest.TestCase):
             idx_map,
             pre_action_payload={"global_residual_sum": 150.0, "global_residual_threshold": 100.0},
         )
+        weakly_improved = build_verification_summary(
+            {"global_residual_sum": 292.0, "global_residual_threshold": 100.0},
+            meta,
+            idx_map,
+            pre_action_payload={"global_residual_sum": 300.0, "global_residual_threshold": 100.0},
+        )
 
         self.assertTrue(improved["post_action_improved"])
         self.assertFalse(not_improved["post_action_improved"])
+        self.assertFalse(weakly_improved["post_action_improved"])
 
     def test_parameter_topology_combo_is_marked_curriculum_only(self) -> None:
         self.assertTrue(combo_requires_structural_coupling(["parameter_error", "topology_error"]))
@@ -153,6 +209,7 @@ class TraceProtocolTests(unittest.TestCase):
         self.assertFalse(metadata["physically_coupled"])
         self.assertEqual(choose_base_family(["parameter_error", "topology_error"]), "topology_error")
         self.assertEqual(choose_base_family(["measurement_error", "parameter_error"]), "parameter_error")
+        self.assertEqual(choose_base_family(["measurement_error", "harmonic_anomaly"]), "clean_scada")
 
     def test_correction_family_order_is_structural_first_by_default(self) -> None:
         rec = {
@@ -247,11 +304,53 @@ class TraceProtocolTests(unittest.TestCase):
                 self.assertEqual(len(missing_context_tools), 1)
                 missing_summary = json.loads(missing_context_tools[0]["content"])
                 self.assertFalse(missing_summary["success"])
+                self.assertEqual(missing_summary["allowed_next_tools"], ["correct_measurements_from_path"])
+                self.assertEqual(missing_summary["available_context_tools"], ["correct_measurements_from_path"])
+
+                masked_bad_calls = [
+                    message
+                    for message in messages
+                    if message.get("role") == "assistant"
+                    and message.get("trainable") is False
+                    and message.get("train_on_assistant") is False
+                    and message.get("loss_mask") is False
+                    and message.get("tool_calls")
+                ]
+                self.assertEqual(len(masked_bad_calls), 1)
+                self.assertIn(
+                    masked_bad_calls[0]["tool_calls"][0]["function"]["name"],
+                    {"get_parameter_context", "get_harmonic_context", "get_verification_snapshot"},
+                )
 
                 final = json.loads(messages[-1]["content"])
                 self.assertEqual(final["verdict"]["error_family"], "measurement_error")
+                self.assertEqual(final["verdict"]["error_families"], ["measurement_error"])
+                self.assertEqual(len(final["suspect_locations"]), 1)
                 self.assertEqual(final["action"]["applied_tool"], "correct_measurements_from_path")
+                self.assertEqual(final["action"]["applied_tools"], ["correct_measurements_from_path"])
+                self.assertIn("measurement_error", final["action"]["arguments_hint"])
+                self.assertIn("diagnosis_status", final["action"])
+                self.assertIn("remaining_candidate_families", final["action"])
+                self.assertTrue(final["action"]["measurement_correction_policy"]["allowed"])
+                self.assertEqual(
+                    final["action"]["measurement_correction_policy"]["residual_pattern"],
+                    "localized",
+                )
+                self.assertEqual(final["action"]["tool_steps"][0]["family"], "measurement_error")
+                self.assertIn("pre_global_residual_ratio", final["action"]["tool_steps"][0])
+                self.assertIn("post_global_residual_ratio", final["action"]["tool_steps"][0])
+                self.assertIn("post_action_improved", final["action"]["tool_steps"][0])
+                self.assertIn("post_action_resolved", final["action"]["tool_steps"][0])
+                self.assertEqual(final["action"]["correction_steps"][0]["family"], "measurement_error")
+                self.assertIn("pre_global_residual_ratio", final["action"]["correction_steps"][0])
                 self.assertEqual(row["trace_metadata"]["trace_kind"], "tool_precondition_hardening")
+                self.assertEqual(row["trace_type"], "hardening_recovery")
+                self.assertEqual(row["trace_metadata"]["trace_type"], "hardening_recovery")
+                self.assertIn("tools", row)
+                self.assertNotIn(
+                    "run_three_phase_nlm_from_path",
+                    {tool["function"]["name"] for tool in row["tools"]},
+                )
 
     def test_explicit_structural_snapshot_can_preserve_current_z_obs(self) -> None:
         rec = {
@@ -676,6 +775,196 @@ class TraceProtocolTests(unittest.TestCase):
 
         multi_target["action"]["applied_tools"] = ["correct_measurements_from_path"]
         self.assertEqual(rejection_reason(multi_target), "multi_error_missing_applied_tools")
+
+    def test_multi_error_semantic_rejects_unresolved_measurement_harmonic(self) -> None:
+        rec = {
+            "scenario": "multi_error",
+            "label": {
+                "error_families": ["measurement_error", "harmonic_anomaly"],
+                "errors": [
+                    {"error_type": "measurement_error", "channel": "Pf", "index": 49},
+                    {"error_type": "harmonic_anomaly", "source_bus": 14},
+                ],
+            },
+        }
+        final = {
+            "action": {
+                "correction_steps": [
+                    {
+                        "family": "measurement_error",
+                        "pre_global_residual_ratio": 514.0,
+                        "post_global_residual_ratio": 512.0,
+                    }
+                ]
+            }
+        }
+
+        self.assertEqual(
+            multi_error_semantic_rejection_reason(rec, final),
+            "measurement_harmonic_unresolved_after_measurement_correction",
+        )
+
+    def test_measurement_policy_allows_structural_first_localized_cleanup(self) -> None:
+        rec = {
+            "scenario": "multi_error",
+            "label": {
+                "error_families": ["measurement_error", "parameter_error"],
+                "errors": [
+                    {
+                        "error_type": "measurement_error",
+                        "subtype": "single_gross_outlier",
+                        "channel": "Pf",
+                        "index": 49,
+                    },
+                    {"error_type": "parameter_error", "line_row": 2},
+                ],
+            },
+        }
+        action = {
+            "applied_tools": ["get_parameter_context", "correct_parameters_from_path", "correct_measurements_from_path"],
+            "arguments_hint": {"measurement_error": {"suspect_group": [49]}},
+        }
+
+        policy = measurement_correction_policy_payload(
+            rec,
+            ["measurement_error", "parameter_error"],
+            action,
+            [49],
+        )
+
+        self.assertTrue(policy["allowed"])
+        self.assertEqual(policy["residual_pattern"], "localized")
+        self.assertTrue(policy["structural_tools_before_measurement"])
+        self.assertEqual(policy["structural_checks_completed"], ["parameter_error"])
+        self.assertIsNone(multi_error_semantic_rejection_reason(rec, {"action": action}))
+
+    def test_multi_error_semantic_rejects_measurement_before_structural_cleanup(self) -> None:
+        rec = {
+            "scenario": "multi_error",
+            "label": {
+                "error_families": ["measurement_error", "parameter_error"],
+                "errors": [
+                    {"error_type": "measurement_error", "subtype": "single_gross_outlier", "index": 10},
+                    {"error_type": "parameter_error", "line_row": 1},
+                ],
+            },
+        }
+        final = {
+            "action": {
+                "applied_tools": ["correct_measurements_from_path", "correct_parameters_from_path"],
+                "arguments_hint": {"measurement_error": {"suspect_group": [10]}},
+            }
+        }
+
+        self.assertEqual(
+            multi_error_semantic_rejection_reason(rec, final),
+            "measurement_before_structural_correction",
+        )
+
+    def test_multi_error_semantic_rejects_distributed_measurement_cleanup(self) -> None:
+        rec = {
+            "scenario": "multi_error",
+            "label": {
+                "error_families": ["measurement_error", "harmonic_anomaly"],
+                "errors": [
+                    {
+                        "error_type": "measurement_error",
+                        "subtype": "distributed_meter_bias",
+                        "indices": [1, 2, 3, 4, 5, 6],
+                    },
+                    {"error_type": "harmonic_anomaly", "source_bus": 14},
+                ],
+            },
+        }
+        final = {
+            "action": {
+                "applied_tools": ["correct_measurements_from_path", "run_hse_from_path"],
+                "arguments_hint": {"measurement_error": {"suspect_group": [1, 2, 3, 4, 5, 6]}},
+                "measurement_correction_policy": {
+                    "allowed": False,
+                    "residual_pattern": "distributed",
+                },
+            }
+        }
+
+        self.assertEqual(
+            multi_error_semantic_rejection_reason(rec, final),
+            "measurement_distributed_subtype_requires_dedicated_policy",
+        )
+
+    def test_multi_error_semantic_requires_topology_projected_measurement_indices(self) -> None:
+        rec = {
+            "scenario": "multi_error",
+            "label": {
+                "error_families": ["measurement_error", "topology_error"],
+                "errors": [
+                    {
+                        "error_type": "measurement_error",
+                        "channel": "Qf",
+                        "index": 77,
+                        "index_spaces": {
+                            "post_topology_correction_indices0": [76],
+                            "post_topology_correction": {
+                                "index_space": "post_topology_correction",
+                                "original_indices0": [77],
+                                "current_indices0": [76],
+                            },
+                        },
+                    },
+                    {"error_type": "topology_error", "cb_name": "CB_1_N2_B2"},
+                ],
+            },
+        }
+        final = {
+            "action": {
+                "arguments_hint": {"measurement_error": {"suspect_group": [76]}},
+                "correction_steps": [],
+            }
+        }
+
+        self.assertIsNone(multi_error_semantic_rejection_reason(rec, final))
+        final["action"]["arguments_hint"]["measurement_error"]["suspect_group"] = [77]
+        self.assertEqual(
+            multi_error_semantic_rejection_reason(rec, final),
+            "measurement_topology_suspect_group_mismatch",
+        )
+
+    def test_multi_error_semantic_marks_curriculum_parameter_topology_sequence_only(self) -> None:
+        rec = {
+            "scenario": "multi_error",
+            "label": {
+                "error_families": ["parameter_error", "topology_error"],
+                "physically_coupled": False,
+                "errors": [
+                    {"error_type": "parameter_error", "line_row": 5},
+                    {"error_type": "topology_error", "cb_name": "CB_2"},
+                ],
+            },
+        }
+        final = {
+            "action": {
+                "tool_steps": [
+                    {
+                        "family": "topology_error",
+                        "tool": "correct_topology_from_path",
+                        "verification_policy": "verified_wls",
+                    },
+                    {
+                        "family": "parameter_error",
+                        "tool": "correct_parameters_from_path",
+                        "verification_policy": "sequence_only",
+                    },
+                ],
+                "correction_steps": [],
+            }
+        }
+
+        self.assertIsNone(multi_error_semantic_rejection_reason(rec, final))
+        final["action"]["tool_steps"][-1]["verification_policy"] = "verified_wls"
+        self.assertEqual(
+            multi_error_semantic_rejection_reason(rec, final),
+            "parameter_topology_requires_sequence_only_verification_policy",
+        )
 
 
 if __name__ == "__main__":

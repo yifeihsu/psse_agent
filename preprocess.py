@@ -277,6 +277,11 @@ def extract_tool_sequence(sample: dict) -> tuple[str, ...]:
     return tuple(sequence)
 
 
+def is_hardening_sample(sample: dict) -> bool:
+    metadata = sample.get("trace_metadata")
+    return isinstance(metadata, dict) and metadata.get("trace_kind") == "tool_precondition_hardening"
+
+
 def extract_user_snapshot(sample: dict) -> dict[str, Any] | None:
     for message in sample.get("messages", []):
         if message.get("role") != "user":
@@ -385,6 +390,11 @@ def build_dedupe_key(sample: dict, mode: str) -> str | None:
         if snapshot is None:
             return None
         payload = {"case_path": snapshot.get("case_path") or snapshot.get("case"), "z_obs": snapshot.get("z_obs")}
+        if is_hardening_sample(sample):
+            metadata = sample.get("trace_metadata") or {}
+            payload["trace_kind"] = metadata.get("trace_kind")
+            payload["template"] = metadata.get("template")
+            payload["source_id"] = metadata.get("source_id")
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     if mode == "full_trace":
@@ -545,7 +555,11 @@ def exact_balanced_split(samples: list[dict], seed: int) -> tuple[list[dict], li
 def multi_combo_exact_split(samples: list[dict], seed: int) -> tuple[list[dict], list[dict], list[dict], dict[str, Any]]:
     rng = random.Random(seed)
     by_combo: dict[str, list[dict]] = defaultdict(list)
+    hardening_samples: list[dict] = []
     for sample in samples:
+        if is_hardening_sample(sample):
+            hardening_samples.append(sample)
+            continue
         combo = extract_multi_combo(sample)
         if combo is not None:
             by_combo[combo].append(sample)
@@ -578,6 +592,8 @@ def multi_combo_exact_split(samples: list[dict], seed: int) -> tuple[list[dict],
         details = ", ".join(f"{combo}={count}" for combo, count in sorted(missing.items()))
         raise ValueError(f"Need at least {BALANCED_TOTAL_PER_CLASS} accepted samples per multi-error combo; found {details}")
 
+    rng.shuffle(hardening_samples)
+    train.extend(hardening_samples)
     rng.shuffle(train)
     rng.shuffle(val)
     rng.shuffle(test)
@@ -589,6 +605,7 @@ def multi_combo_exact_split(samples: list[dict], seed: int) -> tuple[list[dict],
             "mode": "multi_combo_exact",
             "selected_per_combo": selected_counts,
             "split_counts_per_combo": dict(BALANCED_SPLIT_COUNTS),
+            "hardening_train_count": len(hardening_samples),
         },
     )
 

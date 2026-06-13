@@ -1,0 +1,758 @@
+{
+  "source_measurements": "out_traces_multi_error_pairwise_4200_preview_gated/source_samples_40_per_combo.jsonl",
+  "preview_build": "out_traces_multi_error_pairwise_4200_preview_gated/sft_traces.preview_build.jsonl",
+  "preview_build_rejected": "out_traces_multi_error_pairwise_4200_preview_gated/sft_traces.preview_build.rejected.jsonl",
+  "accepted_preview_build_count": 228,
+  "rejected_preview_build_count": 18,
+  "rejection_reasons": {
+    "measurement_harmonic_weak_measurement_correction": 18
+  },
+  "accepted_counts": {
+    "hardening:harmonic_helper_unavailable": 2,
+    "hardening:parameter_helper_unavailable": 2,
+    "hardening:verification_snapshot_unavailable": 2,
+    "measurement_error+harmonic_anomaly": 22,
+    "measurement_error+parameter_error": 40,
+    "measurement_error+topology_error": 40,
+    "parameter_error+harmonic_anomaly": 40,
+    "parameter_error+topology_error": 40,
+    "topology_error+harmonic_anomaly": 40
+  },
+  "policy_counts": {
+    "allowed=False,residual_pattern=not_applicable": 120,
+    "allowed=True,residual_pattern=localized": 108
+  },
+  "diagnosis_status_counts": {
+    "partial": 2,
+    "complete": 83,
+    "near_threshold": 76,
+    "elevated": 27,
+    "not_applicable": 40
+  },
+  "multi_preview_count": 12,
+  "hardening_preview_count": 6,
+  "combined_count": 18,
+  "combo_counts": {
+    "measurement_error+parameter_error": 2,
+    "measurement_error+topology_error": 2,
+    "measurement_error+harmonic_anomaly": 2,
+    "parameter_error+topology_error": 2,
+    "parameter_error+harmonic_anomaly": 2,
+    "topology_error+harmonic_anomaly": 2
+  },
+  "hardening_template_counts": {
+    "parameter_helper_unavailable": 2,
+    "harmonic_helper_unavailable": 2,
+    "verification_snapshot_unavailable": 2
+  },
+  "rows": [
+    {
+      "source_row": 1,
+      "trace_type": "representative_multi_error",
+      "trace_kind": "multi_error",
+      "num_messages": 19,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_parameter_context",
+        "correct_parameters_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path"
+      ],
+      "schema_tool_count": 9,
+      "schema_has_hif_tool": false,
+      "diagnosis_status": "partial",
+      "request_more_data": true,
+      "requested_data": [
+        "additional_measurement_scans_or_structural_validation"
+      ],
+      "post_action_global_residual_ratio": 1.5654,
+      "measurement_correction_policy": {
+        "allowed": true,
+        "reason": "Structural SCADA corrections were applied first; remaining residuals are localized.",
+        "residual_pattern": "localized",
+        "suspect_group_size": 1,
+        "structural_checks_completed": [
+          "parameter_error"
+        ],
+        "structural_tools_before_measurement": true,
+        "request_more_data": false
+      },
+      "combo": "measurement_error+parameter_error",
+      "error_families": [
+        "measurement_error",
+        "parameter_error"
+      ],
+      "primary_error_family": "measurement_error",
+      "confidence": 0.86,
+      "applied_tools": [
+        "correct_parameters_from_path",
+        "correct_measurements_from_path"
+      ]
+    },
+    {
+      "source_row": 2,
+      "trace_type": "representative_multi_error",
+      "trace_kind": "multi_error",
+      "num_messages": 19,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_parameter_context",
+        "correct_parameters_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path"
+      ],
+      "schema_tool_count": 9,
+      "schema_has_hif_tool": false,
+      "diagnosis_status": "complete",
+      "request_more_data": false,
+      "requested_data": null,
+      "post_action_global_residual_ratio": 0.9452,
+      "measurement_correction_policy": {
+        "allowed": true,
+        "reason": "Structural SCADA corrections were applied first; remaining residuals are localized.",
+        "residual_pattern": "localized",
+        "suspect_group_size": 3,
+        "structural_checks_completed": [
+          "parameter_error"
+        ],
+        "structural_tools_before_measurement": true,
+        "request_more_data": false
+      },
+      "combo": "measurement_error+parameter_error",
+      "error_families": [
+        "measurement_error",
+        "parameter_error"
+      ],
+      "primary_error_family": "measurement_error",
+      "confidence": 0.96,
+      "applied_tools": [
+        "correct_parameters_from_path",
+        "correct_measurements_from_path"
+      ]
+    },
+    {
+      "source_row": 41,
+      "trace_type": "representative_multi_error",
+      "trace_kind": "multi_error",
+      "num_messages": 19,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_topology_context",
+        "correct_topology_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path"
+      ],
+      "schema_tool_count": 9,
+      "schema_has_hif_tool": false,
+      "diagnosis_status": "complete",
+      "request_more_data": false,
+      "requested_data": null,
+      "post_action_global_residual_ratio": 0.9035,
+      "measurement_correction_policy": {
+        "allowed": true,
+        "reason": "Structural SCADA corrections were applied first; remaining residuals are localized.",
+        "residual_pattern": "localized",
+        "suspect_group_size": 1,
+        "structural_checks_completed": [
+          "topology_error"
+        ],
+        "structural_tools_before_measurement": true,
+        "request_more_data": false
+      },
+      "combo": "measurement_error+topology_error",
+      "error_families": [
+        "measurement_error",
+        "topology_error"
+      ],
+      "primary_error_family": "measurement_error",
+      "confidence": 0.96,
+      "applied_tools": [
+        "correct_topology_from_path",
+        "correct_measurements_from_path"
+      ]
+    },
+    {
+      "source_row": 42,
+      "trace_type": "representative_multi_error",
+      "trace_kind": "multi_error",
+      "num_messages": 19,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_topology_context",
+        "correct_topology_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path"
+      ],
+      "schema_tool_count": 9,
+      "schema_has_hif_tool": false,
+      "diagnosis_status": "complete",
+      "request_more_data": false,
+      "requested_data": null,
+      "post_action_global_residual_ratio": 0.7532,
+      "measurement_correction_policy": {
+        "allowed": true,
+        "reason": "Structural SCADA corrections were applied first; remaining residuals are localized.",
+        "residual_pattern": "localized",
+        "suspect_group_size": 1,
+        "structural_checks_completed": [
+          "topology_error"
+        ],
+        "structural_tools_before_measurement": true,
+        "request_more_data": false
+      },
+      "combo": "measurement_error+topology_error",
+      "error_families": [
+        "measurement_error",
+        "topology_error"
+      ],
+      "primary_error_family": "measurement_error",
+      "confidence": 0.96,
+      "applied_tools": [
+        "correct_topology_from_path",
+        "correct_measurements_from_path"
+      ]
+    },
+    {
+      "source_row": 81,
+      "trace_type": "representative_multi_error",
+      "trace_kind": "multi_error",
+      "num_messages": 15,
+      "tool_sequence": [
+        "wls_from_path",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "get_harmonic_context",
+        "run_hse_from_path"
+      ],
+      "schema_tool_count": 9,
+      "schema_has_hif_tool": false,
+      "diagnosis_status": "near_threshold",
+      "request_more_data": false,
+      "requested_data": null,
+      "post_action_global_residual_ratio": 1.1567,
+      "measurement_correction_policy": {
+        "allowed": true,
+        "reason": "The SCADA bad-data residual is localized; harmonic HSE is a diagnostic follow-up.",
+        "residual_pattern": "localized",
+        "suspect_group_size": 1,
+        "structural_checks_completed": [],
+        "structural_tools_before_measurement": null,
+        "request_more_data": false
+      },
+      "combo": "measurement_error+harmonic_anomaly",
+      "error_families": [
+        "measurement_error",
+        "harmonic_anomaly"
+      ],
+      "primary_error_family": "measurement_error",
+      "confidence": 0.92,
+      "applied_tools": [
+        "correct_measurements_from_path",
+        "run_hse_from_path"
+      ]
+    },
+    {
+      "source_row": 82,
+      "trace_type": "representative_multi_error",
+      "trace_kind": "multi_error",
+      "num_messages": 15,
+      "tool_sequence": [
+        "wls_from_path",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "get_harmonic_context",
+        "run_hse_from_path"
+      ],
+      "schema_tool_count": 9,
+      "schema_has_hif_tool": false,
+      "diagnosis_status": "near_threshold",
+      "request_more_data": false,
+      "requested_data": null,
+      "post_action_global_residual_ratio": 1.1457,
+      "measurement_correction_policy": {
+        "allowed": true,
+        "reason": "The SCADA bad-data residual is localized; harmonic HSE is a diagnostic follow-up.",
+        "residual_pattern": "localized",
+        "suspect_group_size": 5,
+        "structural_checks_completed": [],
+        "structural_tools_before_measurement": null,
+        "request_more_data": false
+      },
+      "combo": "measurement_error+harmonic_anomaly",
+      "error_families": [
+        "measurement_error",
+        "harmonic_anomaly"
+      ],
+      "primary_error_family": "measurement_error",
+      "confidence": 0.92,
+      "applied_tools": [
+        "correct_measurements_from_path",
+        "run_hse_from_path"
+      ]
+    },
+    {
+      "source_row": 103,
+      "trace_type": "representative_multi_error",
+      "trace_kind": "multi_error",
+      "num_messages": 17,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_topology_context",
+        "correct_topology_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "get_parameter_context",
+        "correct_parameters_from_path"
+      ],
+      "schema_tool_count": 9,
+      "schema_has_hif_tool": false,
+      "diagnosis_status": "not_applicable",
+      "request_more_data": false,
+      "requested_data": null,
+      "post_action_global_residual_ratio": null,
+      "measurement_correction_policy": {
+        "allowed": false,
+        "reason": "No measurement correction is indicated for this target.",
+        "residual_pattern": "not_applicable",
+        "suspect_group_size": 0,
+        "structural_checks_completed": [],
+        "structural_tools_before_measurement": null,
+        "request_more_data": false
+      },
+      "combo": "parameter_error+topology_error",
+      "error_families": [
+        "parameter_error",
+        "topology_error"
+      ],
+      "primary_error_family": "parameter_error",
+      "confidence": 0.96,
+      "applied_tools": [
+        "correct_topology_from_path",
+        "correct_parameters_from_path"
+      ]
+    },
+    {
+      "source_row": 104,
+      "trace_type": "representative_multi_error",
+      "trace_kind": "multi_error",
+      "num_messages": 17,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_topology_context",
+        "correct_topology_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "get_parameter_context",
+        "correct_parameters_from_path"
+      ],
+      "schema_tool_count": 9,
+      "schema_has_hif_tool": false,
+      "diagnosis_status": "not_applicable",
+      "request_more_data": false,
+      "requested_data": null,
+      "post_action_global_residual_ratio": null,
+      "measurement_correction_policy": {
+        "allowed": false,
+        "reason": "No measurement correction is indicated for this target.",
+        "residual_pattern": "not_applicable",
+        "suspect_group_size": 0,
+        "structural_checks_completed": [],
+        "structural_tools_before_measurement": null,
+        "request_more_data": false
+      },
+      "combo": "parameter_error+topology_error",
+      "error_families": [
+        "parameter_error",
+        "topology_error"
+      ],
+      "primary_error_family": "parameter_error",
+      "confidence": 0.96,
+      "applied_tools": [
+        "correct_topology_from_path",
+        "correct_parameters_from_path"
+      ]
+    },
+    {
+      "source_row": 143,
+      "trace_type": "representative_multi_error",
+      "trace_kind": "multi_error",
+      "num_messages": 17,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_parameter_context",
+        "correct_parameters_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "get_harmonic_context",
+        "run_hse_from_path"
+      ],
+      "schema_tool_count": 9,
+      "schema_has_hif_tool": false,
+      "diagnosis_status": "near_threshold",
+      "request_more_data": false,
+      "requested_data": null,
+      "post_action_global_residual_ratio": 1.0785,
+      "measurement_correction_policy": {
+        "allowed": false,
+        "reason": "No measurement correction is indicated for this target.",
+        "residual_pattern": "not_applicable",
+        "suspect_group_size": 0,
+        "structural_checks_completed": [],
+        "structural_tools_before_measurement": null,
+        "request_more_data": false
+      },
+      "combo": "parameter_error+harmonic_anomaly",
+      "error_families": [
+        "parameter_error",
+        "harmonic_anomaly"
+      ],
+      "primary_error_family": "parameter_error",
+      "confidence": 0.92,
+      "applied_tools": [
+        "correct_parameters_from_path",
+        "run_hse_from_path"
+      ]
+    },
+    {
+      "source_row": 144,
+      "trace_type": "representative_multi_error",
+      "trace_kind": "multi_error",
+      "num_messages": 17,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_parameter_context",
+        "correct_parameters_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "get_harmonic_context",
+        "run_hse_from_path"
+      ],
+      "schema_tool_count": 9,
+      "schema_has_hif_tool": false,
+      "diagnosis_status": "near_threshold",
+      "request_more_data": false,
+      "requested_data": null,
+      "post_action_global_residual_ratio": 1.1262,
+      "measurement_correction_policy": {
+        "allowed": false,
+        "reason": "No measurement correction is indicated for this target.",
+        "residual_pattern": "not_applicable",
+        "suspect_group_size": 0,
+        "structural_checks_completed": [],
+        "structural_tools_before_measurement": null,
+        "request_more_data": false
+      },
+      "combo": "parameter_error+harmonic_anomaly",
+      "error_families": [
+        "parameter_error",
+        "harmonic_anomaly"
+      ],
+      "primary_error_family": "parameter_error",
+      "confidence": 0.92,
+      "applied_tools": [
+        "correct_parameters_from_path",
+        "run_hse_from_path"
+      ]
+    },
+    {
+      "source_row": 183,
+      "trace_type": "representative_multi_error",
+      "trace_kind": "multi_error",
+      "num_messages": 17,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_topology_context",
+        "correct_topology_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "get_harmonic_context",
+        "run_hse_from_path"
+      ],
+      "schema_tool_count": 9,
+      "schema_has_hif_tool": false,
+      "diagnosis_status": "complete",
+      "request_more_data": false,
+      "requested_data": null,
+      "post_action_global_residual_ratio": 0.9878,
+      "measurement_correction_policy": {
+        "allowed": false,
+        "reason": "No measurement correction is indicated for this target.",
+        "residual_pattern": "not_applicable",
+        "suspect_group_size": 0,
+        "structural_checks_completed": [],
+        "structural_tools_before_measurement": null,
+        "request_more_data": false
+      },
+      "combo": "topology_error+harmonic_anomaly",
+      "error_families": [
+        "topology_error",
+        "harmonic_anomaly"
+      ],
+      "primary_error_family": "topology_error",
+      "confidence": 0.96,
+      "applied_tools": [
+        "correct_topology_from_path",
+        "run_hse_from_path"
+      ]
+    },
+    {
+      "source_row": 184,
+      "trace_type": "representative_multi_error",
+      "trace_kind": "multi_error",
+      "num_messages": 17,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_topology_context",
+        "correct_topology_from_path",
+        "get_verification_snapshot",
+        "wls_from_path",
+        "get_harmonic_context",
+        "run_hse_from_path"
+      ],
+      "schema_tool_count": 9,
+      "schema_has_hif_tool": false,
+      "diagnosis_status": "complete",
+      "request_more_data": false,
+      "requested_data": null,
+      "post_action_global_residual_ratio": 0.9926,
+      "measurement_correction_policy": {
+        "allowed": false,
+        "reason": "No measurement correction is indicated for this target.",
+        "residual_pattern": "not_applicable",
+        "suspect_group_size": 0,
+        "structural_checks_completed": [],
+        "structural_tools_before_measurement": null,
+        "request_more_data": false
+      },
+      "combo": "topology_error+harmonic_anomaly",
+      "error_families": [
+        "topology_error",
+        "harmonic_anomaly"
+      ],
+      "primary_error_family": "topology_error",
+      "confidence": 0.96,
+      "applied_tools": [
+        "correct_topology_from_path",
+        "run_hse_from_path"
+      ]
+    },
+    {
+      "source_row": 223,
+      "trace_type": "hardening_recovery",
+      "trace_kind": "tool_precondition_hardening",
+      "num_messages": 13,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_parameter_context",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path"
+      ],
+      "schema_tool_count": 9,
+      "schema_has_hif_tool": false,
+      "diagnosis_status": "near_threshold",
+      "request_more_data": false,
+      "requested_data": null,
+      "post_action_global_residual_ratio": 1.1012,
+      "measurement_correction_policy": {
+        "allowed": true,
+        "reason": "The residual pattern is sparse and localized.",
+        "residual_pattern": "localized",
+        "suspect_group_size": 4,
+        "structural_checks_completed": [],
+        "structural_tools_before_measurement": null,
+        "request_more_data": false
+      },
+      "template": "parameter_helper_unavailable",
+      "source_id": "me_943146347624",
+      "masked_bad_turns": 1,
+      "train_on_false_turns": 1,
+      "loss_mask_false_turns": 1,
+      "confidence": 0.92
+    },
+    {
+      "source_row": 226,
+      "trace_type": "hardening_recovery",
+      "trace_kind": "tool_precondition_hardening",
+      "num_messages": 13,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_parameter_context",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path"
+      ],
+      "schema_tool_count": 9,
+      "schema_has_hif_tool": false,
+      "diagnosis_status": "complete",
+      "request_more_data": false,
+      "requested_data": null,
+      "post_action_global_residual_ratio": 0.8037,
+      "measurement_correction_policy": {
+        "allowed": true,
+        "reason": "The residual pattern is sparse and localized.",
+        "residual_pattern": "localized",
+        "suspect_group_size": 1,
+        "structural_checks_completed": [],
+        "structural_tools_before_measurement": null,
+        "request_more_data": false
+      },
+      "template": "parameter_helper_unavailable",
+      "source_id": "me_715713031599",
+      "masked_bad_turns": 1,
+      "train_on_false_turns": 1,
+      "loss_mask_false_turns": 1,
+      "confidence": 0.99
+    },
+    {
+      "source_row": 224,
+      "trace_type": "hardening_recovery",
+      "trace_kind": "tool_precondition_hardening",
+      "num_messages": 13,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_harmonic_context",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path"
+      ],
+      "schema_tool_count": 9,
+      "schema_has_hif_tool": false,
+      "diagnosis_status": "near_threshold",
+      "request_more_data": false,
+      "requested_data": null,
+      "post_action_global_residual_ratio": 1.1012,
+      "measurement_correction_policy": {
+        "allowed": true,
+        "reason": "The residual pattern is sparse and localized.",
+        "residual_pattern": "localized",
+        "suspect_group_size": 4,
+        "structural_checks_completed": [],
+        "structural_tools_before_measurement": null,
+        "request_more_data": false
+      },
+      "template": "harmonic_helper_unavailable",
+      "source_id": "me_943146347624",
+      "masked_bad_turns": 1,
+      "train_on_false_turns": 1,
+      "loss_mask_false_turns": 1,
+      "confidence": 0.92
+    },
+    {
+      "source_row": 227,
+      "trace_type": "hardening_recovery",
+      "trace_kind": "tool_precondition_hardening",
+      "num_messages": 13,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_harmonic_context",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path"
+      ],
+      "schema_tool_count": 9,
+      "schema_has_hif_tool": false,
+      "diagnosis_status": "complete",
+      "request_more_data": false,
+      "requested_data": null,
+      "post_action_global_residual_ratio": 0.8037,
+      "measurement_correction_policy": {
+        "allowed": true,
+        "reason": "The residual pattern is sparse and localized.",
+        "residual_pattern": "localized",
+        "suspect_group_size": 1,
+        "structural_checks_completed": [],
+        "structural_tools_before_measurement": null,
+        "request_more_data": false
+      },
+      "template": "harmonic_helper_unavailable",
+      "source_id": "me_715713031599",
+      "masked_bad_turns": 1,
+      "train_on_false_turns": 1,
+      "loss_mask_false_turns": 1,
+      "confidence": 0.99
+    },
+    {
+      "source_row": 225,
+      "trace_type": "hardening_recovery",
+      "trace_kind": "tool_precondition_hardening",
+      "num_messages": 13,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_verification_snapshot",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path"
+      ],
+      "schema_tool_count": 9,
+      "schema_has_hif_tool": false,
+      "diagnosis_status": "near_threshold",
+      "request_more_data": false,
+      "requested_data": null,
+      "post_action_global_residual_ratio": 1.1012,
+      "measurement_correction_policy": {
+        "allowed": true,
+        "reason": "The residual pattern is sparse and localized.",
+        "residual_pattern": "localized",
+        "suspect_group_size": 4,
+        "structural_checks_completed": [],
+        "structural_tools_before_measurement": null,
+        "request_more_data": false
+      },
+      "template": "verification_snapshot_unavailable",
+      "source_id": "me_943146347624",
+      "masked_bad_turns": 1,
+      "train_on_false_turns": 1,
+      "loss_mask_false_turns": 1,
+      "confidence": 0.92
+    },
+    {
+      "source_row": 228,
+      "trace_type": "hardening_recovery",
+      "trace_kind": "tool_precondition_hardening",
+      "num_messages": 13,
+      "tool_sequence": [
+        "wls_from_path",
+        "get_verification_snapshot",
+        "correct_measurements_from_path",
+        "get_verification_snapshot",
+        "wls_from_path"
+      ],
+      "schema_tool_count": 9,
+      "schema_has_hif_tool": false,
+      "diagnosis_status": "complete",
+      "request_more_data": false,
+      "requested_data": null,
+      "post_action_global_residual_ratio": 0.8037,
+      "measurement_correction_policy": {
+        "allowed": true,
+        "reason": "The residual pattern is sparse and localized.",
+        "residual_pattern": "localized",
+        "suspect_group_size": 1,
+        "structural_checks_completed": [],
+        "structural_tools_before_measurement": null,
+        "request_more_data": false
+      },
+      "template": "verification_snapshot_unavailable",
+      "source_id": "me_715713031599",
+      "masked_bad_turns": 1,
+      "train_on_false_turns": 1,
+      "loss_mask_false_turns": 1,
+      "confidence": 0.99
+    }
+  ]
+}

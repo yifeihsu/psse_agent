@@ -94,10 +94,29 @@ DECISION_SCHEMA_TEXT = {
         "request_more_data": "boolean",
         "requested_data": "array[string] or null",
         "verification_summary": "object or null; when present it includes post_action_global_residual_sum, post_action_global_residual_threshold, post_action_global_residual_ratio, post_action_executed, post_action_improved, post_action_resolved",
+        "verification_summaries": "optional object keyed by error family for multi-error snapshots",
+        "tool_steps": "optional ordered array of tool-use steps with family, tool, tool_role, verification_policy, and residual summaries when applicable",
         "correction_steps": "optional ordered array of multi-error correction steps with family, tool, pre/post residual ratios, improvement flags, and remaining_candidate_families",
+        "diagnosis_status": "complete|near_threshold|elevated|partial|unknown|not_applicable",
+        "remaining_candidate_families": "array[string], e.g. ['unexplained_residual'] when diagnosis_status is partial",
+        "measurement_correction_policy": "object explaining whether measurement correction was allowed, why, residual_pattern localized|distributed|unknown|not_applicable, suspect_group_size, structural_checks_completed, structural_tools_before_measurement, and request_more_data",
     },
     "summary": "short factual summary string",
 }
+
+
+def decision_schema_text_for_prompt(*, include_extended_diagnostics: bool = True) -> dict[str, Any]:
+    schema = copy.deepcopy(DECISION_SCHEMA_TEXT)
+    if include_extended_diagnostics:
+        return schema
+    schema["verdict"][
+        "error_family"
+    ] = "scalar enum: measurement_error|parameter_error|topology_error|harmonic_anomaly|no_error"
+    schema["suspect_location"]["domain"] = "measurement|parameter|topology|harmonic|none"
+    evidence = schema.get("evidence")
+    if isinstance(evidence, dict):
+        evidence.pop("top_hif_groups", None)
+    return schema
 
 
 SYSTEM_PROMPT = (
@@ -125,15 +144,57 @@ SYSTEM_PROMPT = (
     "3. Use concentrated large normalized residuals to localize likely measurement errors.\n"
     "4. If parameter context, breaker context, harmonic measurements, or verification snapshots are needed, call the matching helper tool.\n"
     "5. If three-phase imbalance is suspected, request three-phase substation VLN voltages before finalizing.\n"
-    "6. If a localized gross residual remains, correct the measurement error before running or finalizing harmonic HSE; HSE does not replace SCADA measurement cleanup.\n"
-    "7. If the global residual is elevated without a dominant bad measurement and harmonic measurements are available, call `run_hse_from_path`.\n"
-    "8. If a hidden high-impedance fault is suspected, call `run_three_phase_nlm_from_path` and use top_hif_groups evidence.\n"
-    "9. In multi-error traces, prefer structural correction before measurement cleanup: topology, then parameter, then measurement, then harmonic follow-up.\n"
-    "10. After a correction tool succeeds, request the verification snapshot by `stage` only, then run WLS on the returned `case_path` exactly once.\n"
-    "11. Prefer compact tool use over asking the user to restate numeric payloads.\n\n"
+    "6. Measurement correction is only valid for localized bad-data patterns; do not use `correct_measurements_from_path` as a generic residual-reduction tool.\n"
+    "7. If residuals are distributed across many channels or branches, check topology and parameter evidence before measurement cleanup.\n"
+    "8. After topology or parameter correction, use measurement correction only if the remaining residuals are localized; otherwise request more data or report an unresolved model/data inconsistency.\n"
+    "9. If a localized gross residual remains, correct the measurement error before running or finalizing harmonic HSE; HSE does not replace SCADA measurement cleanup.\n"
+    "10. If the global residual is elevated without a dominant bad measurement and harmonic measurements are available, call `run_hse_from_path`.\n"
+    "11. If a hidden high-impedance fault is suspected, call `run_three_phase_nlm_from_path` and use top_hif_groups evidence.\n"
+    "12. In multi-error traces, prefer structural correction before measurement cleanup: topology, then parameter, then measurement, then harmonic follow-up.\n"
+    "13. After a correction tool succeeds, request the verification snapshot by `stage` only, then run WLS on the returned `case_path` exactly once.\n"
+    "14. Prefer compact tool use over asking the user to restate numeric payloads.\n\n"
     "Indexing convention: fields ending in `0` are 0-based; `line_index` follows the tool schema and is 1-based.\n\n"
     "Return only strict JSON with this structure:\n"
     f"{json.dumps(DECISION_SCHEMA_TEXT, ensure_ascii=False)}\n"
+    "For multi-error snapshots, keep `error_family` as the primary family and also report all families in "
+    "`error_families`, `suspect_locations`, and `applied_tools`.\n"
+    "Do not reveal chain-of-thought. Report only observable evidence and the final decision."
+)
+
+SCADA_HARMONIC_SYSTEM_PROMPT = (
+    "You are a power-system state-estimation diagnostic agent.\n"
+    "You must begin with `wls_from_path` for every snapshot.\n"
+    "Use structured tool calls that match the provided tool schema.\n"
+    "Use the tool name and argument keys exactly as provided.\n"
+    "Large numeric payloads are provided once in user messages and should not be repeated in tool arguments.\n"
+    "If you need repeated scans, breaker context, harmonic measurements, or a post-action verification snapshot, "
+    "retrieve them through the helper tools instead of asking the user for follow-up payloads.\n"
+    "Available tools:\n"
+    "- `wls_from_path(case_path)`: run weighted least-squares state estimation on the current user snapshot.\n"
+    "- `get_parameter_context(case_path, line_index?)`: retrieve repeated scans and initial states for parameter correction.\n"
+    "- `get_topology_context(case_path)`: retrieve compact breaker context for topology correction.\n"
+    "- `get_harmonic_context(case_path)`: retrieve harmonic measurements for HSE.\n"
+    "- `get_verification_snapshot(stage?)`: retrieve the current post-action verification snapshot by stage; do not invent snapshot aliases.\n"
+    "- `correct_measurements_from_path(case_path, suspect_group, ...)`: correct suspected bad measurements using the current snapshot.\n"
+    "- `correct_parameters_from_path(case_path, line_index)`: correct line parameters after retrieving parameter context.\n"
+    "- `correct_topology_from_path(case_path, cb_name, desired_status)`: correct a topology mismatch after retrieving breaker context.\n"
+    "- `run_hse_from_path(case_path)`: run harmonic state estimation after retrieving harmonic measurements.\n\n"
+    "Decision policy:\n"
+    "1. Use widespread residual patterns to suspect topology mismatch.\n"
+    "2. Use large normalized Lagrange multipliers concentrated on one branch to suspect parameter errors.\n"
+    "3. Use concentrated large normalized residuals to localize likely measurement errors.\n"
+    "4. If parameter context, breaker context, harmonic measurements, or verification snapshots are needed, call the matching helper tool.\n"
+    "5. Measurement correction is only valid for localized bad-data patterns; do not use `correct_measurements_from_path` as a generic residual-reduction tool.\n"
+    "6. If residuals are distributed across many channels or branches, check topology and parameter evidence before measurement cleanup.\n"
+    "7. After topology or parameter correction, use measurement correction only if the remaining residuals are localized; otherwise request more data or report an unresolved model/data inconsistency.\n"
+    "8. If a localized gross residual remains, correct the measurement error before running or finalizing harmonic HSE; HSE does not replace SCADA measurement cleanup.\n"
+    "9. If the global residual is elevated without a dominant bad measurement and harmonic measurements are available, call `run_hse_from_path`.\n"
+    "10. In multi-error traces, prefer structural correction before measurement cleanup: topology, then parameter, then measurement, then harmonic follow-up.\n"
+    "11. After a correction tool succeeds, request the verification snapshot by `stage` only, then run WLS on the returned `case_path` exactly once.\n"
+    "12. Prefer compact tool use over asking the user to restate numeric payloads.\n\n"
+    "Indexing convention: fields ending in `0` are 0-based; `line_index` follows the tool schema and is 1-based.\n\n"
+    "Return only strict JSON with this structure:\n"
+    f"{json.dumps(decision_schema_text_for_prompt(include_extended_diagnostics=False), ensure_ascii=False)}\n"
     "For multi-error snapshots, keep `error_family` as the primary family and also report all families in "
     "`error_families`, `suspect_locations`, and `applied_tools`.\n"
     "Do not reveal chain-of-thought. Report only observable evidence and the final decision."
@@ -350,6 +411,8 @@ def normalize_instruction_content(role: Any, content: Any) -> Any:
 
     if text == SYSTEM_PROMPT.strip():
         return SYSTEM_PROMPT
+    if text == SCADA_HARMONIC_SYSTEM_PROMPT.strip():
+        return SCADA_HARMONIC_SYSTEM_PROMPT
     if text.startswith(SYSTEM_PROMPT_PREFIX.strip()):
         return SYSTEM_PROMPT
     if any(marker in text for marker in LEGACY_SYSTEM_PROMPT_MARKERS):
@@ -470,6 +533,34 @@ def sanitize_tool_schemas(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def canonical_tool_schemas() -> list[dict[str, Any]]:
     return sanitize_tool_schemas(CANONICAL_POWER_TOOLS)
+
+
+SCADA_HARMONIC_TOOL_NAMES = {
+    "wls_from_path",
+    "get_parameter_context",
+    "get_topology_context",
+    "get_harmonic_context",
+    "get_verification_snapshot",
+    "correct_measurements_from_path",
+    "correct_parameters_from_path",
+    "correct_topology_from_path",
+    "run_hse_from_path",
+}
+
+
+def scoped_tool_schemas(tool_names: Iterable[str]) -> list[dict[str, Any]]:
+    allowed = set(tool_names)
+    return sanitize_tool_schemas(
+        [
+            tool
+            for tool in CANONICAL_POWER_TOOLS
+            if str(tool.get("function", {}).get("name")) in allowed
+        ]
+    )
+
+
+def scada_harmonic_tool_schemas() -> list[dict[str, Any]]:
+    return scoped_tool_schemas(SCADA_HARMONIC_TOOL_NAMES)
 
 
 def _normal_quantile(probability: float) -> float:
@@ -779,6 +870,8 @@ def summarize_parameter_context_payload(tool_payload: Mapping[str, Any]) -> dict
         "measurement_vector_length": len(z_scans[0]) if isinstance(z_scans, list) and z_scans else None,
         "state_vector_length": len(initial_states[0]) if isinstance(initial_states, list) and initial_states else None,
         "suspect_line": tool_payload.get("suspect_line"),
+        "available_context_tools": tool_payload.get("available_context_tools"),
+        "allowed_next_tools": tool_payload.get("allowed_next_tools"),
         "note": tool_payload.get("note"),
     }
     if tool_payload.get("success") is False:
@@ -806,6 +899,8 @@ def summarize_harmonic_context_payload(tool_payload: Mapping[str, Any]) -> dict[
         "case_path": tool_payload.get("case_path"),
         "measurement_count": len(measurements) if isinstance(measurements, list) else None,
         "harmonic_orders": tool_payload.get("harmonic_orders"),
+        "available_context_tools": tool_payload.get("available_context_tools"),
+        "allowed_next_tools": tool_payload.get("allowed_next_tools"),
         "note": tool_payload.get("note"),
     }
     if tool_payload.get("success") is False:
@@ -820,6 +915,8 @@ def summarize_verification_snapshot_payload(tool_payload: Mapping[str, Any]) -> 
     summary = {
         "case_path": tool_payload.get("case_path"),
         "measurement_count": len(z_obs) if isinstance(z_obs, list) else None,
+        "available_context_tools": tool_payload.get("available_context_tools"),
+        "allowed_next_tools": tool_payload.get("allowed_next_tools"),
         "note": tool_payload.get("note"),
         "stage": tool_payload.get("stage"),
     }

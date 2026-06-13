@@ -34,6 +34,7 @@ from Transmission.generate_measurements import (  # noqa: E402
     load_case,
     make_harmonic_anomaly_record,
     make_index_map,
+    make_no_error_record,
     make_parameter_error_record,
     make_topology_error_record,
 )
@@ -125,6 +126,8 @@ def choose_base_family(families: Sequence[str]) -> str | None:
     family_set = set(canonical)
     if SCADA_STRUCTURAL_FAMILIES.issubset(family_set):
         return "topology_error"
+    if family_set == {"measurement_error", "harmonic_anomaly"}:
+        return "clean_scada"
     return next((family for family in ERROR_PRIORITY if family in family_set and family != "measurement_error"), None)
 
 
@@ -246,19 +249,21 @@ def _index_map_for_vector_length(vector_len: int, nb: int) -> dict[str, slice] |
     return make_index_map(int(nb), remainder // 4)
 
 
-def _project_measurement_label_to_snapshot(
+def _project_measurement_label_to_snapshot_with_mapping(
     z_obs: Sequence[float],
     label: Mapping[str, Any],
     source_idx_map: Mapping[str, slice],
     target_idx_map: Mapping[str, slice],
-) -> list[float]:
+) -> tuple[list[float], dict[str, Any] | None]:
     z_multi = np.asarray(z_obs, dtype=float).copy()
     channel = label.get("channel")
     if not isinstance(channel, str) or channel not in source_idx_map or channel not in target_idx_map:
-        return z_multi.tolist()
+        return z_multi.tolist(), None
 
     src_sl = source_idx_map[channel]
     dst_sl = target_idx_map[channel]
+    original_indices: list[int] = []
+    current_indices: list[int] = []
 
     def _project_index(index0: Any) -> int | None:
         try:
@@ -274,6 +279,8 @@ def _project_measurement_label_to_snapshot(
         projected = _project_index(label["index"])
         if projected is not None:
             z_multi[projected] += float(label["amplitude"])
+            original_indices.append(int(label["index"]))
+            current_indices.append(int(projected))
     indices = label.get("indices")
     amplitudes = label.get("amplitudes")
     if isinstance(indices, list) and isinstance(amplitudes, list):
@@ -281,7 +288,34 @@ def _project_measurement_label_to_snapshot(
             projected = _project_index(index0)
             if projected is not None:
                 z_multi[projected] += float(amplitude)
-    return z_multi.tolist()
+                original_indices.append(int(index0))
+                current_indices.append(int(projected))
+    if not current_indices:
+        return z_multi.tolist(), None
+    source_vector_length = max(int(sl.stop) for sl in source_idx_map.values())
+    return z_multi.tolist(), {
+        "channel": channel,
+        "index_space": "post_topology_correction",
+        "source_vector_length": source_vector_length,
+        "target_vector_length": int(len(z_multi)),
+        "original_indices0": original_indices,
+        "current_indices0": current_indices,
+    }
+
+
+def _project_measurement_label_to_snapshot(
+    z_obs: Sequence[float],
+    label: Mapping[str, Any],
+    source_idx_map: Mapping[str, slice],
+    target_idx_map: Mapping[str, slice],
+) -> list[float]:
+    projected, _mapping = _project_measurement_label_to_snapshot_with_mapping(
+        z_obs,
+        label,
+        source_idx_map,
+        target_idx_map,
+    )
+    return projected
 
 
 def _make_parameter_context(
@@ -392,7 +426,18 @@ def make_multi_error_record(
         labels[family] = dict(component.get("label", {}))
         labels[family]["error_type"] = family
 
-    base_component = components[base_family]
+    if base_family == "clean_scada":
+        base_component = make_no_error_record(
+            rng,
+            ppc_base,
+            idx_map,
+            load_scale_min,
+            load_scale_max,
+        )
+        if base_component is None:
+            return None
+    else:
+        base_component = components[base_family]
     z_true = np.asarray(base_component["z_true"], dtype=float)
     z_obs = np.asarray(base_component["z_obs"], dtype=float)
     z_obs_before_measurement_outlier = z_obs.copy()
@@ -400,12 +445,6 @@ def make_multi_error_record(
     if "measurement_error" in families:
         z_obs, measurement_label = _apply_measurement_outlier(z_obs, idx_map, rng)
         labels["measurement_error"] = measurement_label
-
-    ordered_errors = []
-    for family in families:
-        item = dict(labels[family])
-        item["error_type"] = family
-        ordered_errors.append(item)
 
     verification_snapshots: dict[str, Any] = {}
     if "measurement_error" in families:
@@ -437,13 +476,23 @@ def make_multi_error_record(
                     len(topology_z_obs),
                     int(ppc_base["bus"].shape[0]),
                 )
-                if target_idx_map is not None:
-                    topology_z_obs = _project_measurement_label_to_snapshot(
-                        topology_z_obs,
-                        labels["measurement_error"],
-                        idx_map,
-                        target_idx_map,
-                    )
+                if target_idx_map is None:
+                    return None
+                topology_z_obs, projection = _project_measurement_label_to_snapshot_with_mapping(
+                    topology_z_obs,
+                    labels["measurement_error"],
+                    idx_map,
+                    target_idx_map,
+                )
+                if projection is None:
+                    return None
+                labels["measurement_error"]["index_spaces"] = {
+                    "original_indices0": projection["original_indices0"],
+                    "post_topology_correction_indices0": projection["current_indices0"],
+                    "post_topology_correction": projection,
+                }
+            elif "measurement_error" in labels:
+                return None
             verification_snapshots["post_topology_correction"] = _stage_snapshot(
                 case_path=topology_component.get("corrected_model_path"),
                 z_obs=topology_z_obs,
@@ -451,6 +500,25 @@ def make_multi_error_record(
                 remaining_families=_remaining_after_correction(families, "topology_error"),
                 note="Topology model corrected; preserve remaining data/model faults.",
             )
+            if (
+                "measurement_error" in labels
+                and isinstance(labels["measurement_error"].get("index_spaces"), Mapping)
+            ):
+                verification_snapshots["post_topology_correction"]["measurement_index_projection"] = (
+                    labels["measurement_error"]["index_spaces"]["post_topology_correction"]
+                )
+
+    ordered_errors = []
+    for family in families:
+        item = dict(labels[family])
+        item["error_type"] = family
+        ordered_errors.append(item)
+    component_op_points = {
+        family: component.get("op_point", {})
+        for family, component in components.items()
+    }
+    if base_family == "clean_scada":
+        component_op_points["clean_scada"] = base_component.get("op_point", {})
 
     record: dict[str, Any] = {
         "id": f"multi_{combo_key(families).replace('+', '_')}_{rng.integers(1_000_000_000_000)}",
@@ -467,10 +535,7 @@ def make_multi_error_record(
         },
         "op_point": {
             "base_family": base_family,
-            "component_op_points": {
-                family: component.get("op_point", {})
-                for family, component in components.items()
-            },
+            "component_op_points": component_op_points,
         },
     }
     if verification_snapshots:

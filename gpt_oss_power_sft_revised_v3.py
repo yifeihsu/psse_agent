@@ -250,7 +250,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=0,
         help="Cap the number of validation conversations loaded from the JSONL file. 0 keeps all rows.",
     )
-    parser.add_argument("--model-name", type=str, default="unsloth/Gemma-4-26B-A4B-it")
+    parser.add_argument("--model-name", type=str, default="unsloth/gemma-4-31B-it")
     parser.add_argument("--model-revision", type=str, default="")
     parser.add_argument(
         "--init-adapter",
@@ -840,6 +840,14 @@ def assistant_turn_indices(messages: list[dict[str, Any]]) -> list[int]:
     return [i for i, msg in enumerate(messages) if msg.get("role") == "assistant"]
 
 
+def assistant_turn_trainable(message: dict[str, Any]) -> bool:
+    return (
+        message.get("trainable") is not False
+        and message.get("loss_mask") is not False
+        and message.get("train_on_assistant") is not False
+    )
+
+
 def explode_conversation(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     """Create one training sample per assistant turn.
 
@@ -849,8 +857,23 @@ def explode_conversation(messages: list[dict[str, Any]]) -> list[list[dict[str, 
     expanded: list[list[dict[str, Any]]] = []
     turns = assistant_turn_indices(messages)
     for idx in turns:
+        if not assistant_turn_trainable(messages[idx]):
+            continue
         expanded.append(messages[: idx + 1])
     return expanded
+
+
+TRAINING_CONTROL_MESSAGE_KEYS = {"trainable", "loss_mask", "train_on_assistant", "training_note"}
+
+
+def strip_training_control_fields(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    stripped: list[dict[str, Any]] = []
+    for raw_message in messages:
+        message = dict(raw_message)
+        for key in TRAINING_CONTROL_MESSAGE_KEYS:
+            message.pop(key, None)
+        stripped.append(message)
+    return stripped
 
 
 def strip_final_json_schema(text: Any) -> Any:
@@ -1239,6 +1262,7 @@ class BuildStats:
         self.used_rows = 0
         self.prompt_trimmed = 0
         self.dropped_too_long_target = 0
+        self.skipped_untrainable_assistant_turns = 0
         self.target_kind = Counter()
         self.original_message_lengths = Counter()
 
@@ -1287,16 +1311,22 @@ def build_processed_split(
         normalized = normalize_messages(raw_messages, preserve_system_text=preserve_system_text)
         if tools is not None:
             normalized = strip_prose_tool_catalog_from_messages(normalized)
+        stats.skipped_untrainable_assistant_turns += sum(
+            1
+            for idx in assistant_turn_indices(normalized)
+            if not assistant_turn_trainable(normalized[idx])
+        )
         expanded = explode_conversation(normalized)
         stats.expanded_rows += len(expanded)
 
         for sample_index, sample_messages in enumerate(expanded):
-            target = sample_messages[-1]
+            render_sample_messages = strip_training_control_fields(sample_messages)
+            target = render_sample_messages[-1]
             target_kind = "tool_call" if "tool_calls" in target else "final"
             stats.target_kind[target_kind] += 1
             phase_bucket = assistant_phase_bucket(target_kind, sample_index)
 
-            render_messages = collapse_openai_tool_messages(sample_messages)
+            render_messages = collapse_openai_tool_messages(render_sample_messages)
             phase_messages = phase_gate_messages(
                 render_messages,
                 target_kind=target_kind,
@@ -1439,6 +1469,7 @@ def report_dataset(records: list[dict[str, Any]], split_name: str, stats: BuildS
     print(f"original conversations: {stats.original_rows}")
     print(f"expanded assistant-turn samples: {stats.expanded_rows}")
     print(f"usable samples: {stats.used_rows}")
+    print(f"skipped untrainable assistant turns: {stats.skipped_untrainable_assistant_turns}")
     print(f"dropped too-long targets: {stats.dropped_too_long_target}")
     print(f"prompt-trimmed samples: {stats.prompt_trimmed}")
     print(f"assistant target kinds: {dict(stats.target_kind)}")

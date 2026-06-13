@@ -4,6 +4,7 @@ import unittest
 from preprocess import (
     combo_distribution,
     dataset_qa,
+    deduplicate_samples,
     exact_balanced_split,
     extract_label,
     multi_combo_exact_split,
@@ -88,6 +89,16 @@ def make_multi_sample(families: list[str], idx: int) -> dict:
             {"role": "assistant", "content": json.dumps(payload, ensure_ascii=False)},
         ]
     }
+
+
+def make_hardening_sample(template: str, idx: int) -> dict:
+    sample = make_sample("measurement_error", idx)
+    sample["trace_metadata"] = {
+        "trace_kind": "tool_precondition_hardening",
+        "template": template,
+        "source_id": f"me_{idx}",
+    }
+    return sample
 
 
 class PreprocessBalancingTests(unittest.TestCase):
@@ -189,9 +200,9 @@ class PreprocessBalancingTests(unittest.TestCase):
         ]
         samples = []
         total = sum(BALANCED_SPLIT_COUNTS.values())
-        for combo in combos:
+        for combo_idx, combo in enumerate(combos):
             for idx in range(total):
-                samples.append(make_multi_sample(combo, idx))
+                samples.append(make_multi_sample(combo, combo_idx * total + idx))
 
         train, valid, test, meta = multi_combo_exact_split(samples, seed=42)
 
@@ -211,6 +222,39 @@ class PreprocessBalancingTests(unittest.TestCase):
         self.assertEqual(qa["missing_applied_tools"], 0)
         self.assertEqual(qa["missing_suspect_locations"], 0)
         self.assertEqual(qa["family_count_distribution"]["3"], sum(BALANCED_SPLIT_COUNTS.values()))
+
+    def test_multi_combo_exact_split_keeps_hardening_examples_in_train(self) -> None:
+        combos = [
+            ["measurement_error", "parameter_error"],
+            ["measurement_error", "topology_error"],
+        ]
+        samples = []
+        total = sum(BALANCED_SPLIT_COUNTS.values())
+        for combo_idx, combo in enumerate(combos):
+            for idx in range(total):
+                samples.append(make_multi_sample(combo, combo_idx * total + idx))
+
+        hardening = [
+            make_hardening_sample("parameter_helper_unavailable", 1),
+            make_hardening_sample("harmonic_helper_unavailable", 1),
+            make_hardening_sample("verification_snapshot_unavailable", 1),
+        ]
+        deduped, duplicates = deduplicate_samples(samples + hardening, "user_snapshot")
+        self.assertEqual(duplicates, 0)
+
+        train, valid, test, meta = multi_combo_exact_split(deduped, seed=42)
+
+        self.assertEqual(meta["hardening_train_count"], len(hardening))
+        self.assertEqual(
+            len(train),
+            BALANCED_SPLIT_COUNTS["train"] * len(combos) + len(hardening),
+        )
+        self.assertEqual(len(valid), BALANCED_SPLIT_COUNTS["valid"] * len(combos))
+        self.assertEqual(len(test), BALANCED_SPLIT_COUNTS["test"] * len(combos))
+        self.assertEqual(
+            sum(1 for sample in train if sample.get("trace_metadata", {}).get("trace_kind") == "tool_precondition_hardening"),
+            len(hardening),
+        )
 
 
 if __name__ == "__main__":

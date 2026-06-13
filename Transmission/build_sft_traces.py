@@ -40,6 +40,7 @@ from trace_protocol import (
     ERROR_FAMILIES,
     MEASUREMENT_ORDER,
     NO_ERROR_RATIO_MAX,
+    SCADA_HARMONIC_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     build_global_metrics,
     build_lambda_evidence,
@@ -52,6 +53,7 @@ from trace_protocol import (
     round_assistant_payload,
     round_tool_arguments,
     round_user_payload,
+    scada_harmonic_tool_schemas,
     summarize_hse_payload,
     summarize_three_phase_nlm_payload,
     summarize_tool_result_for_conversation,
@@ -94,6 +96,28 @@ HARDENING_TEMPLATES = (
     "harmonic_helper_unavailable",
     "verification_snapshot_unavailable",
 )
+HARDENING_ALLOWED_NEXT_TOOLS = {
+    "get_parameter_context": ["correct_measurements_from_path"],
+    "get_harmonic_context": ["correct_measurements_from_path"],
+    "get_verification_snapshot": ["correct_measurements_from_path"],
+}
+STRUCTURAL_SCADA_FAMILIES = ("topology_error", "parameter_error")
+SPARSE_MEASUREMENT_SUBTYPES = {"single_gross_outlier", "multi_gross_outliers"}
+DISTRIBUTED_MEASUREMENT_SUBTYPES = {
+    "distributed_meter_bias",
+    "meter_group_bias",
+    "correlated_channel_bias",
+    "distributed_measurement_error",
+}
+MEASUREMENT_CORRECTION_MAX_SUSPECT_GROUP_SIZE = 5
+MEANINGFUL_IMPROVEMENT_RELATIVE_DROP = 0.05
+NEAR_THRESHOLD_RESIDUAL_RATIO_MAX = 1.2
+NEAR_THRESHOLD_CONFIDENCE = 0.92
+ELEVATED_RESIDUAL_CONFIDENCE = 0.9
+MEASUREMENT_HARMONIC_POST_RATIO_MAX = 1.5
+MEASUREMENT_HARMONIC_POST_TO_PRE_RATIO_MAX = 0.5
+UNRESOLVED_FINAL_RATIO_CONFIDENCE_THRESHOLD = 1.5
+UNRESOLVED_FINAL_RATIO_CONFIDENCE = 0.86
 
 
 @dataclass(frozen=True)
@@ -104,6 +128,7 @@ class BuilderConfig:
     imbalance_meta_path: Optional[Path]
     hif_samples_path: Optional[Path]
     hif_meta_path: Optional[Path]
+    hardening_source_samples_path: Optional[Path]
     case_name: Optional[str]
     endpoint: str
     out_path: Path
@@ -202,6 +227,38 @@ def status_to_bool(value: Any) -> Optional[bool]:
         if s in {"open", "false", "0", "off", "out_of_service"}:
             return False
     return None
+
+
+def scoped_to_scada_harmonic_phase(rec: Mapping[str, Any]) -> bool:
+    scenario = normalize_scenario(str(rec.get("scenario", "")))
+    if scenario in {"high_impedance_fault", "three_phase_imbalance"}:
+        return False
+    families = multi_error_families(rec)
+    if families:
+        return not any(family in {"high_impedance_fault", "three_phase_imbalance"} for family in families)
+    return scenario in {
+        "multi_error",
+        "measurement_error",
+        "parameter_error",
+        "topology_error",
+        "harmonic_anomaly",
+        "no_error",
+    }
+
+
+def system_prompt_for_record(rec: Mapping[str, Any]) -> str:
+    return SCADA_HARMONIC_SYSTEM_PROMPT if scoped_to_scada_harmonic_phase(rec) else SYSTEM_PROMPT
+
+
+def tool_schemas_for_record(rec: Mapping[str, Any]) -> Optional[list[dict[str, Any]]]:
+    return scada_harmonic_tool_schemas() if scoped_to_scada_harmonic_phase(rec) else None
+
+
+def trace_type_for_record(rec: Mapping[str, Any]) -> str:
+    scenario = normalize_scenario(str(rec.get("scenario", "")))
+    if scenario == "multi_error":
+        return "representative_multi_error"
+    return scenario
 
 
 def multi_error_families(rec: Mapping[str, Any]) -> list[str]:
@@ -643,9 +700,16 @@ def append_helper_tool_result(
     call_id: str,
     arguments: Mapping[str, Any],
     payload: Mapping[str, Any],
+    trainable: bool = True,
 ) -> None:
     helper_call = make_tool_call(tool_name, call_id, arguments)
-    messages.append({"role": "assistant", "tool_calls": [helper_call]})
+    assistant_message: Dict[str, Any] = {"role": "assistant", "tool_calls": [helper_call]}
+    if not trainable:
+        assistant_message["trainable"] = False
+        assistant_message["train_on_assistant"] = False
+        assistant_message["loss_mask"] = False
+        assistant_message["training_note"] = "intentional_bad_precondition_call"
+    messages.append(assistant_message)
     messages.append(
         {
             "role": "tool",
@@ -672,10 +736,12 @@ def append_missing_context_tool_result(
     call_id: str,
     arguments: Mapping[str, Any],
 ) -> Dict[str, Any]:
+    allowed_next_tools = list(HARDENING_ALLOWED_NEXT_TOOLS.get(tool_name, ["correct_measurements_from_path"]))
     payload = {
         "success": False,
         "error": f"Missing runtime context for {tool_name}",
-        "available_context_tools": [],
+        "available_context_tools": allowed_next_tools,
+        "allowed_next_tools": allowed_next_tools,
         "note": "Tool-precondition hardening example; recover without calling dependent tools.",
     }
     for key in ("case_path", "stage", "line_index"):
@@ -689,6 +755,7 @@ def append_missing_context_tool_result(
         call_id=call_id,
         arguments=arguments,
         payload=payload,
+        trainable=False,
     )
     return payload
 
@@ -822,13 +889,44 @@ def measurement_indices_from_label(rec: Mapping[str, Any]) -> List[int]:
     return []
 
 
+def measurement_indices_for_index_space(rec: Mapping[str, Any], index_space: Optional[str]) -> List[int]:
+    if not index_space:
+        return measurement_indices_from_label(rec)
+    label = rec.get("label", {})
+    if not isinstance(label, Mapping):
+        return []
+    spaces = label.get("index_spaces")
+    if not isinstance(spaces, Mapping):
+        return []
+    if index_space == "post_topology_correction":
+        values = spaces.get("post_topology_correction_indices0")
+    else:
+        values = spaces.get(f"{index_space}_indices0")
+    if not isinstance(values, list):
+        nested = spaces.get(index_space)
+        values = nested.get("current_indices0") if isinstance(nested, Mapping) else None
+    if not isinstance(values, list):
+        return []
+    out: list[int] = []
+    for item in values:
+        try:
+            out.append(int(item))
+        except Exception:
+            pass
+    return out
+
+
 def choose_measurement_suspect_group(
     rec: Mapping[str, Any],
     idx_map: Mapping[str, slice],
     tool_payload: Mapping[str, Any],
     *,
     prefer_label: bool = True,
+    index_space: Optional[str] = None,
 ) -> List[int]:
+    space_indices = measurement_indices_for_index_space(rec, index_space)
+    if space_indices:
+        return space_indices
     if prefer_label:
         gold = measurement_indices_from_label(rec)
         if gold:
@@ -984,7 +1082,13 @@ def build_verification_summary(
         pre_compact = summarize_wls_payload(pre_action_payload, meta, idx_map)
         pre_ratio = _maybe_float((pre_compact.get("global_metrics") or {}).get("global_residual_ratio"))
     executed = bool(compact.get("success", True))
-    improved = bool(executed and pre_ratio is not None and post_ratio is not None and post_ratio < pre_ratio)
+    improved = bool(
+        executed
+        and pre_ratio is not None
+        and post_ratio is not None
+        and pre_ratio > 0.0
+        and (pre_ratio - post_ratio) / pre_ratio >= MEANINGFUL_IMPROVEMENT_RELATIVE_DROP
+    )
     resolved = bool(executed and post_ratio is not None and post_ratio < 1.0)
     return round_assistant_payload(
         {
@@ -1009,6 +1113,339 @@ def wls_global_residual_ratio(
     return _maybe_float((compact.get("global_metrics") or {}).get("global_residual_ratio"))
 
 
+def residual_diagnosis_status(verification: Optional[Mapping[str, Any]]) -> str:
+    if not isinstance(verification, Mapping):
+        return "not_applicable"
+    post_ratio = _maybe_float(verification.get("post_action_global_residual_ratio"))
+    if post_ratio is None:
+        return "unknown"
+    if post_ratio <= 1.0:
+        return "complete"
+    if post_ratio <= NEAR_THRESHOLD_RESIDUAL_RATIO_MAX:
+        return "near_threshold"
+    if post_ratio > UNRESOLVED_FINAL_RATIO_CONFIDENCE_THRESHOLD:
+        return "partial"
+    return "elevated"
+
+
+def apply_residual_status_to_action(
+    action: dict[str, Any],
+    verification: Optional[Mapping[str, Any]],
+) -> None:
+    status = residual_diagnosis_status(verification)
+    action["diagnosis_status"] = status
+    if status == "partial":
+        action["request_more_data"] = True
+        action["requested_data"] = ["additional_measurement_scans_or_structural_validation"]
+        action["remaining_candidate_families"] = ["unexplained_residual"]
+    elif status in {"near_threshold", "elevated"}:
+        action.setdefault("remaining_candidate_families", [])
+    else:
+        action.setdefault("remaining_candidate_families", [])
+
+
+def confidence_for_residual_status(
+    confidence: float,
+    verification: Optional[Mapping[str, Any]],
+) -> float:
+    status = residual_diagnosis_status(verification)
+    if status == "partial":
+        return min(confidence, UNRESOLVED_FINAL_RATIO_CONFIDENCE)
+    if status == "elevated":
+        return min(confidence, ELEVATED_RESIDUAL_CONFIDENCE)
+    if status == "near_threshold":
+        return min(confidence, NEAR_THRESHOLD_CONFIDENCE)
+    return confidence
+
+
+def build_correction_step_payload(
+    *,
+    step: int,
+    family: str,
+    tool_name: Optional[str],
+    verification: Optional[Mapping[str, Any]],
+    pre_action_payload: Optional[Mapping[str, Any]],
+    meta: Mapping[str, Any],
+    idx_map: Mapping[str, slice],
+    tool_role: str = "correction",
+    verification_policy: str = "verified_wls",
+    remaining_families: Optional[Sequence[str]] = None,
+) -> dict[str, Any]:
+    pre_ratio = wls_global_residual_ratio(pre_action_payload, meta, idx_map)
+    post_ratio = (
+        _maybe_float(verification.get("post_action_global_residual_ratio"))
+        if isinstance(verification, Mapping)
+        else None
+    )
+    improved = (
+        bool(verification.get("post_action_improved"))
+        if isinstance(verification, Mapping)
+        else None
+    )
+    resolved = (
+        bool(verification.get("post_action_resolved"))
+        if isinstance(verification, Mapping)
+        else None
+    )
+    return round_assistant_payload(
+        {
+            "step": step,
+            "family": family,
+            "tool": tool_name,
+            "tool_role": tool_role,
+            "verification_policy": verification_policy,
+            "pre_global_residual_ratio": pre_ratio,
+            "post_global_residual_ratio": post_ratio,
+            "post_action_improved": improved,
+            "post_action_resolved": resolved,
+            "remaining_candidate_families": list(remaining_families or []),
+        }
+    )
+
+
+def _float_from_step(step: Mapping[str, Any], key: str) -> Optional[float]:
+    try:
+        value = step.get(key)
+    except Exception:
+        return None
+    return _maybe_float(value)
+
+
+def _step_for_family(final_target: Mapping[str, Any], family: str) -> Optional[Mapping[str, Any]]:
+    action = final_target.get("action") if isinstance(final_target, Mapping) else None
+    steps = action.get("correction_steps") if isinstance(action, Mapping) else None
+    if not isinstance(steps, list):
+        return None
+    for step in steps:
+        if isinstance(step, Mapping) and step.get("family") == family:
+            return step
+    return None
+
+
+def _final_measurement_suspect_group(final_target: Mapping[str, Any]) -> list[int]:
+    action = final_target.get("action") if isinstance(final_target, Mapping) else None
+    hint = action.get("arguments_hint") if isinstance(action, Mapping) else None
+    if not isinstance(hint, Mapping):
+        return []
+    meas_hint = hint.get("measurement_error")
+    if not isinstance(meas_hint, Mapping) and "suspect_group" in hint:
+        meas_hint = hint
+    if not isinstance(meas_hint, Mapping):
+        return []
+    group = meas_hint.get("suspect_group")
+    if not isinstance(group, list):
+        return []
+    out: list[int] = []
+    for item in group:
+        try:
+            out.append(int(item))
+        except Exception:
+            pass
+    return out
+
+
+def _action_tool_list(action: Mapping[str, Any]) -> list[str]:
+    raw = action.get("applied_tools")
+    if isinstance(raw, list):
+        return [str(item) for item in raw if item is not None]
+    tool = action.get("applied_tool")
+    return [str(tool)] if tool else []
+
+
+def _measurement_label_for_policy(rec: Mapping[str, Any], families: Sequence[str]) -> Mapping[str, Any]:
+    if len(families) >= 2:
+        return component_label(rec, "measurement_error")
+    label = rec.get("label", {})
+    return label if isinstance(label, Mapping) else {}
+
+
+def _tools_before_measurement(tool_list: Sequence[str], families: Sequence[str]) -> tuple[bool, list[str]]:
+    if "correct_measurements_from_path" not in tool_list:
+        return False, []
+    measurement_idx = tool_list.index("correct_measurements_from_path")
+    completed: list[str] = []
+    for family in STRUCTURAL_SCADA_FAMILIES:
+        if family not in families:
+            continue
+        tool = TOOL_BY_FAMILY[family]
+        if tool not in tool_list or tool_list.index(tool) > measurement_idx:
+            return False, completed
+        completed.append(family)
+    return True, completed
+
+
+def measurement_correction_policy_payload(
+    rec: Mapping[str, Any],
+    families: Sequence[str],
+    action: Mapping[str, Any],
+    measurement_suspect_group: Optional[Sequence[int]],
+) -> dict[str, Any]:
+    family_list = [str(family) for family in families]
+    tool_list = _action_tool_list(action)
+    structural_families = [family for family in STRUCTURAL_SCADA_FAMILIES if family in family_list]
+    uses_measurement_tool = "correct_measurements_from_path" in tool_list
+
+    if "measurement_error" not in family_list:
+        return {
+            "allowed": False,
+            "reason": "No measurement correction is indicated for this target.",
+            "residual_pattern": "not_applicable",
+            "suspect_group_size": 0,
+            "structural_checks_completed": [],
+            "structural_tools_before_measurement": None,
+            "request_more_data": False,
+        }
+
+    label = _measurement_label_for_policy(rec, family_list)
+    subtype = str(label.get("subtype") or "")
+    suspect_group = [int(i) for i in (measurement_suspect_group or [])]
+    suspect_group_size = len(suspect_group)
+    distributed_subtype = subtype in DISTRIBUTED_MEASUREMENT_SUBTYPES
+    sparse_subtype = not subtype or subtype in SPARSE_MEASUREMENT_SUBTYPES
+    residual_pattern = (
+        "distributed"
+        if distributed_subtype or suspect_group_size > MEASUREMENT_CORRECTION_MAX_SUSPECT_GROUP_SIZE
+        else "localized"
+        if suspect_group_size > 0 and sparse_subtype
+        else "unknown"
+    )
+    structural_before_measurement, completed_structural = _tools_before_measurement(tool_list, family_list)
+    structural_ok = not structural_families or structural_before_measurement
+    allowed = uses_measurement_tool and residual_pattern == "localized" and structural_ok
+
+    if not uses_measurement_tool:
+        reason = "Measurement correction was not applied."
+    elif residual_pattern == "distributed":
+        reason = "Measurement correction is not allowed for distributed or oversized residual groups."
+    elif residual_pattern == "unknown":
+        reason = "Measurement correction requires a localized suspect group."
+    elif structural_families and not structural_before_measurement:
+        reason = "Topology and parameter evidence must be checked before measurement cleanup."
+    elif structural_families:
+        reason = "Structural SCADA corrections were applied first; remaining residuals are localized."
+    elif "harmonic_anomaly" in family_list:
+        reason = "The SCADA bad-data residual is localized; harmonic HSE is a diagnostic follow-up."
+    else:
+        reason = "The residual pattern is sparse and localized."
+
+    return round_assistant_payload(
+        {
+            "allowed": allowed,
+            "reason": reason,
+            "residual_pattern": residual_pattern,
+            "suspect_group_size": suspect_group_size,
+            "structural_checks_completed": completed_structural,
+            "structural_tools_before_measurement": (
+                structural_before_measurement if structural_families else None
+            ),
+            "request_more_data": bool(residual_pattern == "distributed" and uses_measurement_tool),
+        }
+    )
+
+
+def measurement_policy_rejection_reason(
+    rec: Mapping[str, Any],
+    final_target: Mapping[str, Any],
+) -> Optional[str]:
+    action = final_target.get("action") if isinstance(final_target, Mapping) else None
+    if not isinstance(action, Mapping):
+        return None
+    verdict = final_target.get("verdict") if isinstance(final_target, Mapping) else None
+
+    families = multi_error_families(rec)
+    if not families:
+        if isinstance(verdict, Mapping):
+            raw_families = verdict.get("error_families")
+            if isinstance(raw_families, list):
+                families = [str(family) for family in raw_families]
+            else:
+                family = normalize_error_family(verdict.get("error_family"))
+                families = [] if family in (None, "no_error") else [family]
+
+    if "measurement_error" not in families:
+        return None
+
+    tool_list = _action_tool_list(action)
+    if "correct_measurements_from_path" not in tool_list:
+        return None
+
+    label = _measurement_label_for_policy(rec, families)
+    subtype = str(label.get("subtype") or "")
+    if subtype in DISTRIBUTED_MEASUREMENT_SUBTYPES:
+        return "measurement_distributed_subtype_requires_dedicated_policy"
+
+    suspect_group = _final_measurement_suspect_group(final_target)
+    if len(suspect_group) > MEASUREMENT_CORRECTION_MAX_SUSPECT_GROUP_SIZE:
+        return "measurement_suspect_group_too_large"
+
+    structural_before_measurement, _ = _tools_before_measurement(tool_list, families)
+    if any(family in families for family in STRUCTURAL_SCADA_FAMILIES) and not structural_before_measurement:
+        return "measurement_before_structural_correction"
+
+    policy = action.get("measurement_correction_policy")
+    if isinstance(policy, Mapping):
+        if policy.get("allowed") is not True:
+            return "measurement_policy_not_allowed"
+        if policy.get("residual_pattern") != "localized":
+            return "measurement_policy_not_localized"
+
+    return None
+
+
+def multi_error_semantic_rejection_reason(
+    rec: Mapping[str, Any],
+    final_target: Mapping[str, Any],
+) -> Optional[str]:
+    families = multi_error_families(rec)
+    if len(families) < 2:
+        return None
+    family_set = set(families)
+
+    measurement_reason = measurement_policy_rejection_reason(rec, final_target)
+    if measurement_reason is not None:
+        return measurement_reason
+
+    if family_set == {"measurement_error", "harmonic_anomaly"}:
+        step = _step_for_family(final_target, "measurement_error")
+        if step is None:
+            return "measurement_harmonic_missing_measurement_correction_step"
+        pre_ratio = _float_from_step(step, "pre_global_residual_ratio")
+        post_ratio = _float_from_step(step, "post_global_residual_ratio")
+        if pre_ratio is None or post_ratio is None:
+            return "measurement_harmonic_missing_measurement_verification_ratio"
+        if post_ratio > MEASUREMENT_HARMONIC_POST_RATIO_MAX:
+            return "measurement_harmonic_unresolved_after_measurement_correction"
+        if pre_ratio > 0.0 and post_ratio / pre_ratio > MEASUREMENT_HARMONIC_POST_TO_PRE_RATIO_MAX:
+            return "measurement_harmonic_weak_measurement_correction"
+
+    if {"measurement_error", "topology_error"}.issubset(family_set):
+        meas_rec = component_record(rec, "measurement_error")
+        current_indices = measurement_indices_for_index_space(meas_rec, "post_topology_correction")
+        if not current_indices:
+            return "measurement_topology_missing_index_projection"
+        suspect_group = _final_measurement_suspect_group(final_target)
+        if sorted(suspect_group) != sorted(current_indices):
+            return "measurement_topology_suspect_group_mismatch"
+
+    if {"parameter_error", "topology_error"}.issubset(family_set):
+        label = rec.get("label", {})
+        physically_coupled = label.get("physically_coupled") if isinstance(label, Mapping) else None
+        if physically_coupled is False:
+            action = final_target.get("action") if isinstance(final_target, Mapping) else None
+            tool_steps = action.get("tool_steps") if isinstance(action, Mapping) else None
+            parameter_steps = [
+                step
+                for step in tool_steps or []
+                if isinstance(step, Mapping) and step.get("family") == "parameter_error"
+            ]
+            if not parameter_steps:
+                return "parameter_topology_missing_sequence_only_parameter_step"
+            if parameter_steps[-1].get("verification_policy") != "sequence_only":
+                return "parameter_topology_requires_sequence_only_verification_policy"
+
+    return None
+
+
 def build_final_target(
     rec: Mapping[str, Any],
     meta: Mapping[str, Any],
@@ -1024,6 +1461,7 @@ def build_final_target(
     correction_tool_name: Optional[str] = None,
     applied_tools: Optional[List[str]] = None,
     correction_steps: Optional[List[Mapping[str, Any]]] = None,
+    tool_steps: Optional[List[Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     scenario = normalize_scenario(str(rec.get("scenario", "")))
     label = rec.get("label", {})
@@ -1052,14 +1490,32 @@ def build_final_target(
         def _location_for_family(family: str) -> dict[str, Any]:
             family_label = component_label(rec, family)
             if family == "measurement_error":
+                index_spaces = family_label.get("index_spaces") if isinstance(family_label, Mapping) else None
+                current_indices = None
+                original_indices = None
+                index_space = None
+                if isinstance(index_spaces, Mapping):
+                    topology_projection = index_spaces.get("post_topology_correction")
+                    if isinstance(topology_projection, Mapping):
+                        current_indices = topology_projection.get("current_indices0")
+                        original_indices = topology_projection.get("original_indices0")
+                        index_space = topology_projection.get("index_space")
+                label_indices = (
+                    [int(i) for i in family_label.get("indices", [])]
+                    if isinstance(family_label.get("indices"), list)
+                    else None
+                )
+                indices0 = [int(i) for i in current_indices] if isinstance(current_indices, list) else label_indices
                 details = {
                     "channel": family_label.get("channel"),
-                    "index0": _maybe_int(family_label.get("index")),
-                    "indices0": (
-                        [int(i) for i in family_label.get("indices", [])]
-                        if isinstance(family_label.get("indices"), list)
+                    "index0": _maybe_int(family_label.get("index")) if current_indices is None else None,
+                    "indices0": indices0,
+                    "original_indices0": (
+                        [int(i) for i in original_indices]
+                        if isinstance(original_indices, list)
                         else None
                     ),
+                    "index_space": index_space,
                     "subtype": family_label.get("subtype"),
                 }
                 return {"domain": "measurement", "details": {k: v for k, v in details.items() if v not in (None, [], {})}}
@@ -1139,29 +1595,41 @@ def build_final_target(
         if "harmonic_anomaly" in families:
             hint_by_family["harmonic_anomaly"] = {"harmonic_measurements": "bound_via_get_harmonic_context"}
 
+        confidence = confidence_for_residual_status(0.96, primary_verification)
+
+        action_payload = {
+            "applied_tool": tool_list[-1] if tool_list else correction_tool_name,
+            "first_applied_tool": tool_list[0] if tool_list else None,
+            "last_applied_tool": tool_list[-1] if tool_list else correction_tool_name,
+            "applied_tools": tool_list,
+            "arguments_hint": hint_by_family or None,
+            "request_more_data": False,
+            "requested_data": None,
+            "verification_summary": primary_verification,
+            "verification_summaries": verification_by_family or None,
+            "tool_steps": list(tool_steps or []),
+            "correction_steps": list(correction_steps or []),
+        }
+        apply_residual_status_to_action(action_payload, primary_verification)
+        action_payload["measurement_correction_policy"] = measurement_correction_policy_payload(
+            rec,
+            families,
+            action_payload,
+            measurement_suspect_group,
+        )
+
         return round_assistant_payload(
             {
                 "verdict": {
                     "has_error": True,
                     "error_family": primary_family,
                     "error_families": families,
-                    "confidence": 0.96,
+                    "confidence": confidence,
                 },
                 "evidence": evidence,
                 "suspect_location": primary_location,
                 "suspect_locations": suspect_locations,
-                "action": {
-                    "applied_tool": tool_list[-1] if tool_list else correction_tool_name,
-                    "first_applied_tool": tool_list[0] if tool_list else None,
-                    "last_applied_tool": tool_list[-1] if tool_list else correction_tool_name,
-                    "applied_tools": tool_list,
-                    "arguments_hint": hint_by_family or None,
-                    "request_more_data": False,
-                    "requested_data": None,
-                    "verification_summary": primary_verification,
-                    "verification_summaries": verification_by_family or None,
-                    "correction_steps": list(correction_steps or []),
-                },
+                "action": action_payload,
                 "summary": "Multiple error mechanisms are present in this snapshot: " + ", ".join(families) + ".",
             }
         )
@@ -1189,7 +1657,11 @@ def build_final_target(
         suspect_location = {"domain": "measurement", "details": details}
         action = {
             "applied_tool": correction_tool_name,
-            "arguments_hint": {"suspect_group": measurement_suspect_group} if correction_tool_name else None,
+            "arguments_hint": (
+                {"measurement_error": {"suspect_group": measurement_suspect_group}}
+                if correction_tool_name
+                else None
+            ),
             "request_more_data": False,
             "requested_data": None,
             "verification_summary": build_verification_summary(
@@ -1215,7 +1687,7 @@ def build_final_target(
         action = {
             "applied_tool": correction_tool_name,
             "arguments_hint": (
-                {"line_index": _maybe_int(label.get("line_row")) + 1}
+                {"parameter_error": {"line_index": _maybe_int(label.get("line_row")) + 1}}
                 if correction_tool_name and _maybe_int(label.get("line_row")) is not None
                 else None
             ),
@@ -1244,9 +1716,11 @@ def build_final_target(
             "applied_tool": correction_tool_name,
             "arguments_hint": (
                 {
-                    "cb_name": label.get("cb_name"),
-                    "desired_status": status_to_bool(label.get("old_status")),
-                    "desired_status_text": label.get("old_status"),
+                    "topology_error": {
+                        "cb_name": label.get("cb_name"),
+                        "desired_status": status_to_bool(label.get("old_status")),
+                        "desired_status_text": label.get("old_status"),
+                    }
                 }
                 if correction_tool_name and label.get("cb_name")
                 else None
@@ -1287,7 +1761,7 @@ def build_final_target(
         suspect_location = {"domain": "harmonic", "details": details}
         action = {
             "applied_tool": "run_hse_from_path",
-            "arguments_hint": {"harmonic_measurements": "bound_via_get_harmonic_context"},
+            "arguments_hint": {"harmonic_anomaly": {"harmonic_measurements": "bound_via_get_harmonic_context"}},
             "request_more_data": False,
             "requested_data": None,
             "verification_summary": None,
@@ -1323,7 +1797,7 @@ def build_final_target(
         }
         action = {
             "applied_tool": "run_three_phase_nlm_from_path",
-            "arguments_hint": {"case_path": "case14"},
+            "arguments_hint": {"high_impedance_fault": {"case_path": "case14"}},
             "request_more_data": False,
             "requested_data": None,
             "verification_summary": None,
@@ -1341,13 +1815,69 @@ def build_final_target(
         }
         summary = "No error pattern is strong enough to justify a corrective action."
 
+    family = normalize_error_family(verdict.get("error_family")) or "no_error"
+    family_list = [] if family == "no_error" else [family]
+    verdict["error_families"] = family_list
+
+    tool_list = list(applied_tools or [])
+    if not tool_list and action.get("applied_tool"):
+        tool_list = [str(action["applied_tool"])]
+    action["first_applied_tool"] = tool_list[0] if tool_list else None
+    action["last_applied_tool"] = tool_list[-1] if tool_list else None
+    action["applied_tools"] = tool_list
+    verification = action.get("verification_summary")
+
+    if family_list:
+        tool_role = "diagnostic" if family in {"harmonic_anomaly", "high_impedance_fault"} else "correction"
+        verification_policy = "verified_wls" if action.get("verification_summary") is not None else "not_applicable"
+        step_payload = (
+            build_correction_step_payload(
+                step=1,
+                family=family,
+                tool_name=tool_list[-1] if tool_list else action.get("applied_tool"),
+                verification=verification if isinstance(verification, Mapping) else None,
+                pre_action_payload=primary_wls,
+                meta=meta,
+                idx_map=idx_map,
+                tool_role=tool_role,
+                verification_policy=verification_policy,
+            )
+            if tool_list
+            else None
+        )
+        action.setdefault("tool_steps", [step_payload] if step_payload is not None else [])
+        action.setdefault(
+            "correction_steps",
+            [step_payload]
+            if step_payload is not None and family in {"measurement_error", "parameter_error", "topology_error"}
+            else [],
+        )
+    else:
+        action.setdefault("tool_steps", [])
+        action.setdefault("correction_steps", [])
+
+    verification_for_status = verification if isinstance(verification, Mapping) else None
+    verdict["confidence"] = confidence_for_residual_status(
+        float(verdict["confidence"]),
+        verification_for_status,
+    )
+    apply_residual_status_to_action(action, verification_for_status)
+
+    action["measurement_correction_policy"] = measurement_correction_policy_payload(
+        rec,
+        family_list,
+        action,
+        measurement_suspect_group,
+    )
+
     return round_assistant_payload(
         {
-        "verdict": verdict,
-        "evidence": evidence,
-        "suspect_location": suspect_location,
-        "action": action,
-        "summary": summary,
+            "verdict": verdict,
+            "evidence": evidence,
+            "suspect_location": suspect_location,
+            "suspect_locations": [suspect_location] if family_list else [],
+            "action": action,
+            "summary": summary,
         }
     )
 
@@ -1378,9 +1908,7 @@ def rejection_reason(final_target: Mapping[str, Any]) -> Optional[str]:
             parsed = normalize_error_family(item)
             if parsed is not None and parsed != "no_error" and parsed not in multi_families:
                 multi_families.append(parsed)
-    if multi_families:
-        if len(multi_families) < 2:
-            return "multi_error_requires_at_least_two_families"
+    if len(multi_families) >= 2:
         applied = action.get("applied_tools") if isinstance(action, Mapping) else None
         if not isinstance(applied, list):
             applied = [action.get("applied_tool")] if isinstance(action, Mapping) and action.get("applied_tool") else []
@@ -1460,6 +1988,7 @@ def append_multi_error_actions(
     verification_payloads: dict[str, Mapping[str, Any]] = {}
     verification_pre_payloads: dict[str, Mapping[str, Any]] = {}
     correction_steps: list[dict[str, Any]] = []
+    tool_steps: list[dict[str, Any]] = []
     measurement_suspect_group: Optional[List[int]] = None
     hse_payload: Optional[Mapping[str, Any]] = None
     current_case_visible = base_case_visible
@@ -1467,6 +1996,41 @@ def append_multi_error_actions(
     current_z_obs: list[float] = list(rec.get("z_obs", []))
     previous_wls_payload: Mapping[str, Any] = wls_payload
     corrected_families: list[str] = []
+    label = rec.get("label", {})
+    curriculum_structural_combo = (
+        isinstance(label, Mapping)
+        and label.get("physically_coupled") is False
+        and {"parameter_error", "topology_error"}.issubset(set(families))
+    )
+
+    def _append_tool_step(
+        *,
+        family: str,
+        tool_name: str,
+        tool_role: str,
+        verification_policy: str,
+        pre_ratio: Optional[float] = None,
+        post_ratio: Optional[float] = None,
+        post_action_improved: Optional[bool] = None,
+        post_action_resolved: Optional[bool] = None,
+        remaining_families: Optional[Sequence[str]] = None,
+    ) -> None:
+        tool_steps.append(
+            round_assistant_payload(
+                {
+                    "step": len(tool_steps) + 1,
+                    "family": family,
+                    "tool": tool_name,
+                    "tool_role": tool_role,
+                    "verification_policy": verification_policy,
+                    "pre_global_residual_ratio": pre_ratio,
+                    "post_global_residual_ratio": post_ratio,
+                    "post_action_improved": post_action_improved,
+                    "post_action_resolved": post_action_resolved,
+                    "remaining_candidate_families": list(remaining_families or []),
+                }
+            )
+        )
 
     def _remaining_after(family: str, explicit_remaining: Any = None) -> list[str]:
         if isinstance(explicit_remaining, list):
@@ -1538,19 +2102,33 @@ def append_multi_error_actions(
             idx_map,
             pre_action_payload=pre_payload,
         ) or {}
-        correction_steps.append(
-            round_assistant_payload(
-                {
-                    "step": len(correction_steps) + 1,
-                    "family": family,
-                    "tool": tool_name,
-                    "pre_global_residual_ratio": wls_global_residual_ratio(pre_payload, meta, idx_map),
-                    "post_global_residual_ratio": wls_global_residual_ratio(verify_payload, meta, idx_map),
-                    "post_action_improved": bool(summary.get("post_action_improved", False)),
-                    "post_action_resolved": bool(summary.get("post_action_resolved", False)),
-                    "remaining_candidate_families": list(remaining_families or []),
-                }
-            )
+        pre_ratio = wls_global_residual_ratio(pre_payload, meta, idx_map)
+        post_ratio = wls_global_residual_ratio(verify_payload, meta, idx_map)
+        improved = bool(summary.get("post_action_improved", False))
+        resolved = bool(summary.get("post_action_resolved", False))
+        step_payload = round_assistant_payload(
+            {
+                "step": len(correction_steps) + 1,
+                "family": family,
+                "tool": tool_name,
+                "pre_global_residual_ratio": pre_ratio,
+                "post_global_residual_ratio": post_ratio,
+                "post_action_improved": improved,
+                "post_action_resolved": resolved,
+                "remaining_candidate_families": list(remaining_families or []),
+            }
+        )
+        correction_steps.append(step_payload)
+        _append_tool_step(
+            family=family,
+            tool_name=tool_name,
+            tool_role="correction",
+            verification_policy="verified_wls",
+            pre_ratio=pre_ratio,
+            post_ratio=post_ratio,
+            post_action_improved=improved,
+            post_action_resolved=resolved,
+            remaining_families=remaining_families,
         )
         messages.append(
             {
@@ -1753,6 +2331,37 @@ def append_multi_error_actions(
                 explicit = get_explicit_verification_snapshot(rec, verify_stage)
                 note = "Post-parameter-correction verification snapshot."
                 remaining = None
+                remaining_list = _remaining_after("parameter_error", remaining)
+                sequence_only_parameter = curriculum_structural_combo and "topology_error" in corrected_families
+                if sequence_only_parameter:
+                    pre_ratio = wls_global_residual_ratio(previous_wls_payload, meta, idx_map)
+                    step_payload = round_assistant_payload(
+                        {
+                            "step": len(correction_steps) + 1,
+                            "family": "parameter_error",
+                            "tool": "correct_parameters_from_path",
+                            "pre_global_residual_ratio": pre_ratio,
+                            "post_global_residual_ratio": None,
+                            "post_action_improved": None,
+                            "post_action_resolved": None,
+                            "verification_policy": "sequence_only",
+                            "remaining_candidate_families": remaining_list,
+                        }
+                    )
+                    correction_steps.append(step_payload)
+                    _append_tool_step(
+                        family="parameter_error",
+                        tool_name="correct_parameters_from_path",
+                        tool_role="correction",
+                        verification_policy="sequence_only",
+                        pre_ratio=pre_ratio,
+                        post_ratio=None,
+                        post_action_improved=None,
+                        post_action_resolved=None,
+                        remaining_families=remaining_list,
+                    )
+                    corrected_families.append("parameter_error")
+                    continue
                 if explicit is not None:
                     verification_case_visible = bind_verification_snapshot_case(
                         snapshot=explicit,
@@ -1805,11 +2414,15 @@ def append_multi_error_actions(
 
         elif family == "measurement_error" and config.with_correction:
             meas_rec = component_record(rec, "measurement_error")
+            measurement_index_space = (
+                "post_topology_correction" if "topology_error" in corrected_families else None
+            )
             measurement_suspect_group = choose_measurement_suspect_group(
                 meas_rec,
                 idx_map,
                 previous_wls_payload,
                 prefer_label="topology_error" not in corrected_families,
+                index_space=measurement_index_space,
             )
             corr_call_args = {"case_path": current_case_visible, "suspect_group": measurement_suspect_group}
             corr_call = make_tool_call(
@@ -1936,23 +2549,16 @@ def append_multi_error_actions(
                 }
             )
             applied_tools.append("run_hse_from_path")
-            correction_steps.append(
-                round_assistant_payload(
-                    {
-                        "step": len(correction_steps) + 1,
-                        "family": "harmonic_anomaly",
-                        "tool": "run_hse_from_path",
-                        "pre_global_residual_ratio": wls_global_residual_ratio(
-                            previous_wls_payload,
-                            meta,
-                            idx_map,
-                        ),
-                        "post_global_residual_ratio": None,
-                        "post_action_improved": None,
-                        "post_action_resolved": None,
-                        "remaining_candidate_families": [],
-                    }
-                )
+            _append_tool_step(
+                family="harmonic_anomaly",
+                tool_name="run_hse_from_path",
+                tool_role="diagnostic",
+                verification_policy="not_applicable",
+                pre_ratio=wls_global_residual_ratio(previous_wls_payload, meta, idx_map),
+                post_ratio=None,
+                post_action_improved=None,
+                post_action_resolved=None,
+                remaining_families=[],
             )
             corrected_families.append("harmonic_anomaly")
 
@@ -1963,6 +2569,7 @@ def append_multi_error_actions(
         "hse_payload": hse_payload,
         "applied_tools": applied_tools,
         "correction_steps": correction_steps,
+        "tool_steps": tool_steps,
         "correction_tool_name": applied_tools[-1] if applied_tools else None,
     }
 
@@ -1995,7 +2602,7 @@ def build_tool_precondition_hardening_trace(
         "case_aliases": runtime_context["case_aliases"],
     }
     messages: List[Dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt_for_record(rec)},
         {"role": "user", "content": json_compact(make_user_payload(rec, meta, base_case_visible))},
     ]
 
@@ -2183,8 +2790,11 @@ def build_tool_precondition_hardening_trace(
         {
             "messages": messages,
             "runtime_context": runtime_context,
+            "tools": tool_schemas_for_record(rec),
+            "trace_type": "hardening_recovery",
             "trace_metadata": {
                 "trace_kind": "tool_precondition_hardening",
+                "trace_type": "hardening_recovery",
                 "template": template,
                 "source_id": str(rec.get("id")),
             },
@@ -2201,6 +2811,9 @@ def build_sft(config: BuilderConfig) -> None:
     rng_np = np.random.default_rng(config.seed)
 
     meta, samples = load_sample_sources(config)
+    hardening_source_samples: list[dict[str, Any]] = []
+    if config.hardening_source_samples_path is not None:
+        hardening_source_samples = list(iter_jsonl(config.hardening_source_samples_path))
     idx_map = {k: slice(v[0], v[1]) for k, v in meta["index_map"].items()}
     base_case_backend = meta.get("case") if config.case_name in (None, "auto") else config.case_name
     base_case_visible = visible_case_id(base_case_backend)
@@ -2246,7 +2859,7 @@ def build_sft(config: BuilderConfig) -> None:
 
             user_payload = make_user_payload(rec, meta, base_case_visible)
             messages: List[Dict[str, Any]] = [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt_for_record(rec)},
                 {"role": "user", "content": json_compact(user_payload)},
             ]
 
@@ -2295,6 +2908,7 @@ def build_sft(config: BuilderConfig) -> None:
             nlm_payload: Optional[Dict[str, Any]] = None
             applied_tools: list[str] = []
             correction_steps: list[Mapping[str, Any]] = []
+            tool_steps: list[Mapping[str, Any]] = []
 
             if not wls_payload.get("success", True):
                 rejected_rows.append({"id": sid, "scenario": scenario, "reason": "initial_wls_failed"})
@@ -2321,6 +2935,7 @@ def build_sft(config: BuilderConfig) -> None:
                 hse_payload = multi_result["hse_payload"]
                 applied_tools = list(multi_result["applied_tools"])
                 correction_steps = list(multi_result["correction_steps"])
+                tool_steps = list(multi_result["tool_steps"])
                 correction_tool_name = multi_result["correction_tool_name"]
 
             elif scenario == "measurement_error" and config.with_correction:
@@ -2819,8 +3434,11 @@ def build_sft(config: BuilderConfig) -> None:
                 correction_tool_name=correction_tool_name,
                 applied_tools=applied_tools,
                 correction_steps=correction_steps,
+                tool_steps=tool_steps,
             )
             reject_reason = rejection_reason(final)
+            if reject_reason is None and scenario == "multi_error":
+                reject_reason = multi_error_semantic_rejection_reason(rec, final)
             if reject_reason is not None:
                 rejected_rows.append(
                     {
@@ -2834,7 +3452,18 @@ def build_sft(config: BuilderConfig) -> None:
 
             messages.append({"role": "assistant", "content": json_compact(final)})
 
-            row = {"messages": messages, "runtime_context": runtime_context}
+            row = {
+                "messages": messages,
+                "runtime_context": runtime_context,
+                "trace_type": trace_type_for_record(rec),
+                "trace_metadata": {
+                    "trace_kind": scenario,
+                    "trace_type": trace_type_for_record(rec),
+                },
+            }
+            row_tools = tool_schemas_for_record(rec)
+            if row_tools is not None:
+                row["tools"] = row_tools
             line = json.dumps(row, ensure_ascii=False)
             fout_all.write(line + "\n")
             n_written += 1
@@ -2849,9 +3478,10 @@ def build_sft(config: BuilderConfig) -> None:
                     }
                 )
             else:
+                hardening_source_pool = hardening_source_samples if hardening_source_samples else samples
                 measurement_sources = [
                     s
-                    for s in samples
+                    for s in hardening_source_pool
                     if normalize_scenario(str(s.get("scenario", ""))) == "measurement_error"
                 ]
                 rng_std.shuffle(measurement_sources)
@@ -2929,6 +3559,14 @@ def parse_args() -> BuilderConfig:
     p.add_argument("--imbalance-meta", default="")
     p.add_argument("--hif-samples", default="")
     p.add_argument("--hif-meta", default="")
+    p.add_argument(
+        "--hardening-source-samples",
+        default="",
+        help=(
+            "Optional JSONL source for tool-precondition hardening examples. "
+            "Rows from this file are not emitted as normal SFT traces."
+        ),
+    )
     p.add_argument("--case", default="auto", choices=["auto", "case14", "case118"])
     p.add_argument("--endpoint", default="http://localhost:3929/tools")
     p.add_argument("--out", default="data/sft_with_tools.jsonl")
@@ -2963,6 +3601,7 @@ def parse_args() -> BuilderConfig:
         imbalance_meta_path=Path(args.imbalance_meta) if args.imbalance_meta else None,
         hif_samples_path=Path(args.hif_samples) if args.hif_samples else None,
         hif_meta_path=Path(args.hif_meta) if args.hif_meta else None,
+        hardening_source_samples_path=Path(args.hardening_source_samples) if args.hardening_source_samples else None,
         case_name=None if args.case == "auto" else args.case,
         endpoint=args.endpoint,
         out_path=Path(args.out),
