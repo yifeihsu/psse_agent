@@ -24,11 +24,14 @@ from typing import Any, Mapping, Sequence
 
 from trace_protocol import (
     CONTEXT_TOOL_NAMES,
+    SCADA_HARMONIC_SYSTEM_PROMPT,
+    SYSTEM_PROMPT_PREFIX,
     canonical_tool_schemas,
     extract_conversation_context,
     hydrate_tool_arguments as protocol_hydrate_tool_arguments,
     normalize_instruction_content,
     resolve_case_path_alias,
+    scada_harmonic_tool_schemas,
     summarize_tool_result_for_conversation,
 )
 
@@ -40,6 +43,7 @@ from eval_sft_agent_hardened import (
     multi_metric_fields,
     normalize_verdict,
     resolve_max_input_tokens,
+    verdict_error_families,
 )
 from gemma_adapter_loader import (
     format_unsloth_tokenizer_load_message,
@@ -120,6 +124,7 @@ CORE_TOOL_NAMES = frozenset(
     }
 )
 RUNTIME_HELPER_TOOL_NOTE_PREFIX = "Runtime helper tools available for this snapshot:"
+SCADA_HARMONIC_TOOL_SCOPE = "scada_harmonic"
 
 
 def maybe_parse_json_string(value: Any) -> Any:
@@ -204,6 +209,31 @@ def normalize_tool_role_content(value: Any) -> Any:
         return json.dumps(value, ensure_ascii=False)
     except TypeError:
         return str(value)
+
+
+def apply_tool_scope_to_messages(messages: list[dict[str, Any]], tool_scope: str) -> list[dict[str, Any]]:
+    if tool_scope != SCADA_HARMONIC_TOOL_SCOPE:
+        return copy.deepcopy(messages)
+
+    scoped_messages: list[dict[str, Any]] = []
+    replaced = False
+    for raw_message in messages:
+        message = copy.deepcopy(raw_message)
+        if not replaced and message.get("role") in {"system", "developer"}:
+            content = message.get("content", "")
+            if isinstance(content, str):
+                stripped = content.strip()
+                if (
+                    stripped.startswith(SYSTEM_PROMPT_PREFIX.strip())
+                    or "run_three_phase_nlm_from_path" in stripped
+                    or "three_phase_imbalance" in stripped
+                    or "high_impedance_fault" in stripped
+                    or "top_hif_groups" in stripped
+                ):
+                    message["content"] = SCADA_HARMONIC_SYSTEM_PROMPT
+                    replaced = True
+        scoped_messages.append(message)
+    return scoped_messages
 
 
 def strip_prose_tool_catalog(text: Any) -> Any:
@@ -382,6 +412,15 @@ def parse_args() -> argparse.Namespace:
         "--tools-file",
         default="",
         help="Optional JSON file containing a list of tool schemas",
+    )
+    p.add_argument(
+        "--tool-scope",
+        choices=["canonical", "scada_harmonic"],
+        default="canonical",
+        help=(
+            "Tool/prompt scope to use when --tools-file is not supplied. "
+            "Use scada_harmonic for M/P/T/H-only multi-error evaluation."
+        ),
     )
     p.add_argument(
         "--repair-wls-from-user",
@@ -1252,6 +1291,8 @@ def load_tools(args: argparse.Namespace) -> list[dict[str, Any]] | None:
         if not isinstance(data, list):
             raise ValueError("--tools-file must contain a JSON list of tool schemas.")
         return data
+    if args.tool_scope == SCADA_HARMONIC_TOOL_SCOPE:
+        return scada_harmonic_tool_schemas()
     return canonical_tool_schemas()
 
 
@@ -1287,6 +1328,7 @@ def precondition_failure(tool_name: str, message: str, allowed_tools: Sequence[s
         "error": f"{TOOL_PRECONDITION_ERROR_PREFIX}{tool_name}: {message}",
         "tool_error_type": "controller_precondition",
         "allowed_tools": list(allowed_tools or []),
+        "allowed_next_tools": list(allowed_tools or []),
     }
 
 
@@ -1301,6 +1343,62 @@ def post_wls_allowed_tools(runtime_context: Mapping[str, Any] | None) -> list[st
         allowed.append("get_harmonic_context")
     allowed.append("final_json")
     return allowed
+
+
+def successful_tools_from_controller(hidden_context: Mapping[str, Any]) -> set[str]:
+    state = hidden_context.get(CONTROLLER_STATE_KEY)
+    if not isinstance(state, Mapping):
+        return set()
+    raw_tools = state.get("successful_tools")
+    if not isinstance(raw_tools, Sequence) or isinstance(raw_tools, (str, bytes)):
+        return set()
+    return {str(tool) for tool in raw_tools}
+
+
+def controller_allowed_next_tools(
+    runtime_context: Mapping[str, Any] | None,
+    hidden_context: Mapping[str, Any],
+) -> list[str]:
+    state = hidden_context.get(CONTROLLER_STATE_KEY)
+    if not isinstance(state, Mapping) or not state.get("wls_completed"):
+        return ["wls_from_path"]
+    if state.get("awaiting_verification_wls"):
+        return ["wls_from_path"]
+    pending_stage = state.get("pending_verification_stage")
+    if pending_stage:
+        return ["get_verification_snapshot"]
+
+    tool_context = tool_context_from_runtime(runtime_context)
+    successful_tools = successful_tools_from_controller(hidden_context)
+    allowed: list[str] = []
+
+    if isinstance(tool_context.get("topology_context"), Mapping):
+        if not isinstance(hidden_context.get("topology_context"), Mapping):
+            allowed.append("get_topology_context")
+        elif "correct_topology_from_path" not in successful_tools:
+            allowed.append("correct_topology_from_path")
+
+    if isinstance(tool_context.get("parameter_context"), Mapping):
+        if not isinstance(hidden_context.get("parameter_context"), Mapping):
+            allowed.append("get_parameter_context")
+        elif "correct_parameters_from_path" not in successful_tools:
+            allowed.append("correct_parameters_from_path")
+
+    if "correct_measurements_from_path" not in successful_tools:
+        allowed.append("correct_measurements_from_path")
+
+    if isinstance(tool_context.get("harmonic_context"), Mapping):
+        if not isinstance(hidden_context.get("harmonic_context"), Mapping):
+            allowed.append("get_harmonic_context")
+        elif "run_hse_from_path" not in successful_tools:
+            allowed.append("run_hse_from_path")
+
+    allowed.append("final_json")
+    deduped: list[str] = []
+    for tool in allowed:
+        if tool not in deduped:
+            deduped.append(tool)
+    return deduped
 
 
 def runtime_tool_precondition_error(
@@ -1393,6 +1491,9 @@ def update_runtime_controller_after_tool(
     if result.get("success") is False:
         return
     state = controller_state(hidden_context)
+    successful_tools = state.setdefault("successful_tools", [])
+    if isinstance(successful_tools, list) and name not in successful_tools:
+        successful_tools.append(name)
 
     if name == "wls_from_path":
         state["wls_completed"] = True
@@ -1414,7 +1515,55 @@ def update_runtime_controller_after_tool(
         state["awaiting_verification_wls"] = True
 
 
-def pending_verification_error(hidden_context: Mapping[str, Any]) -> str | None:
+def action_marks_parameter_sequence_only(verdict_obj: Mapping[str, Any] | None) -> bool:
+    if not isinstance(verdict_obj, Mapping):
+        return False
+    action = verdict_obj.get("action")
+    if not isinstance(action, Mapping):
+        return False
+
+    diagnosis_status = action.get("diagnosis_status")
+    if isinstance(diagnosis_status, str) and diagnosis_status in {"curriculum_only", "sequence_only"}:
+        return True
+
+    sequence_only_families = action.get("sequence_only_families")
+    if isinstance(sequence_only_families, Sequence) and not isinstance(sequence_only_families, (str, bytes)):
+        if "parameter_error" in {str(item) for item in sequence_only_families}:
+            return True
+
+    tool_steps = action.get("tool_steps")
+    if isinstance(tool_steps, Sequence) and not isinstance(tool_steps, (str, bytes)):
+        for raw_step in tool_steps:
+            if not isinstance(raw_step, Mapping):
+                continue
+            if (
+                raw_step.get("family") == "parameter_error"
+                and raw_step.get("verification_policy") == "sequence_only"
+            ):
+                return True
+    return False
+
+
+def accepts_sequence_only_parameter_topology_verdict(
+    pending_stage: Any,
+    gt_verdict: Mapping[str, Any] | None,
+    candidate_verdict: Mapping[str, Any] | None,
+) -> bool:
+    if pending_stage != "post_parameter_correction":
+        return False
+    if set(verdict_error_families(gt_verdict)) != {"parameter_error", "topology_error"}:
+        return False
+    if set(verdict_error_families(candidate_verdict)) != {"parameter_error", "topology_error"}:
+        return False
+    return action_marks_parameter_sequence_only(candidate_verdict)
+
+
+def pending_verification_error(
+    hidden_context: Mapping[str, Any],
+    *,
+    gt_verdict: Mapping[str, Any] | None = None,
+    candidate_verdict: Mapping[str, Any] | None = None,
+) -> str | None:
     state = hidden_context.get(CONTROLLER_STATE_KEY)
     if not isinstance(state, Mapping):
         return None
@@ -1422,6 +1571,12 @@ def pending_verification_error(hidden_context: Mapping[str, Any]) -> str | None:
         return "Verdict before required verification WLS after get_verification_snapshot."
     pending_stage = state.get("pending_verification_stage")
     if pending_stage:
+        if accepts_sequence_only_parameter_topology_verdict(
+            pending_stage,
+            gt_verdict,
+            candidate_verdict,
+        ):
+            return None
         return f"Verdict before required get_verification_snapshot for {pending_stage}."
     return None
 
@@ -1453,7 +1608,18 @@ def execute_context_tool(
             hidden_context["snapshot_context"] = payload
     if isinstance(payload, dict):
         return payload
-    return {"success": False, "error": f"Missing runtime context for {name}", "available_context_tools": available_helper_tools_from_runtime_context(runtime_context)}
+    available_context_tools = available_helper_tools_from_runtime_context(runtime_context)
+    allowed_next_tools = [
+        tool
+        for tool in controller_allowed_next_tools(runtime_context, hidden_context)
+        if tool != name
+    ]
+    return {
+        "success": False,
+        "error": f"Missing runtime context for {name}",
+        "available_context_tools": available_context_tools,
+        "allowed_next_tools": allowed_next_tools,
+    }
 
 
 def execute_tool(
@@ -1897,7 +2063,11 @@ def run_state_turn(
             turn_record["verdict"] = parsed["content"]
             state.turn_trace.append(turn_record)
             return
-        pending_error = pending_verification_error(state.hidden_context)
+        pending_error = pending_verification_error(
+            state.hidden_context,
+            gt_verdict=state.gt_verdict,
+            candidate_verdict=parsed["content"],
+        )
         if pending_error is not None:
             state.error_msg = pending_error
             turn_record["error"] = state.error_msg
@@ -2150,7 +2320,11 @@ def run_one_sample(
                 turn_record["verdict"] = parsed["content"]
                 turn_trace.append(turn_record)
                 break
-            pending_error = pending_verification_error(hidden_context)
+            pending_error = pending_verification_error(
+                hidden_context,
+                gt_verdict=gt_verdict,
+                candidate_verdict=parsed["content"],
+            )
             if pending_error is not None:
                 error_msg = pending_error
                 turn_record["error"] = error_msg
@@ -2752,6 +2926,7 @@ def main() -> None:
     print(f"Using max input context length: {max_input_tokens} (resolver={resolved_max_input_tokens}, cap={args.max_seq_length})")
     print(f"Pinned base revision: {args.model_revision or 'no'}")
     print(f"Tool schemas passed to chat template: {'yes' if tools is not None else 'no'}")
+    print(f"Tool/prompt scope: {args.tool_scope}")
     print(f"Gemma thinking enabled: {'yes' if args.enable_thinking else 'no'}")
     print(f"Inject empty thought channel: {'yes' if args.inject_empty_thought_channel else 'no'}")
     print(f"GC collect every N turns: {max(0, int(args.gc_collect_every_n_turns))}")
@@ -2771,7 +2946,11 @@ def main() -> None:
         for line in handle:
             line = line.strip()
             if line:
-                test_samples.append(json.loads(line))
+                sample = json.loads(line)
+                messages = sample.get("messages")
+                if isinstance(messages, list):
+                    sample["messages"] = apply_tool_scope_to_messages(messages, args.tool_scope)
+                test_samples.append(sample)
     if args.max_samples:
         test_samples = test_samples[: args.max_samples]
     print(f"Loaded {len(test_samples)} test samples.\n")

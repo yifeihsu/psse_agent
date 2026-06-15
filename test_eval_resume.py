@@ -1,14 +1,19 @@
 import json
 import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
 
 from eval_sft_agent_gemma_v4 import (
     CONTROLLER_STATE_KEY,
+    apply_tool_scope_to_messages,
     execute_tool,
+    load_tools,
     load_completed_results_for_resume,
+    pending_verification_error,
     validate_completed_results_for_resume,
 )
+from trace_protocol import SCADA_HARMONIC_SYSTEM_PROMPT, SYSTEM_PROMPT
 
 
 class EvalResumeTests(unittest.TestCase):
@@ -168,6 +173,117 @@ class EvalResumeTests(unittest.TestCase):
 
         self.assertFalse(repeated["success"])
         self.assertIn("wls_from_path", repeated["allowed_tools"])
+
+    def test_scada_harmonic_eval_scope_excludes_hif_tools_and_prompt_text(self) -> None:
+        args = Namespace(include_tool_schemas=True, tools_file="", tool_scope="scada_harmonic")
+        tool_names = {tool["function"]["name"] for tool in load_tools(args)}
+        scoped_messages = apply_tool_scope_to_messages(
+            [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": "{}"}],
+            "scada_harmonic",
+        )
+
+        self.assertIn("run_hse_from_path", tool_names)
+        self.assertNotIn("run_three_phase_nlm_from_path", tool_names)
+        self.assertEqual(scoped_messages[0]["content"], SCADA_HARMONIC_SYSTEM_PROMPT)
+        self.assertNotIn("high_impedance_fault", scoped_messages[0]["content"])
+        self.assertNotIn("three_phase_imbalance", scoped_messages[0]["content"])
+        self.assertNotIn("top_hif_groups", scoped_messages[0]["content"])
+
+    def test_sequence_only_parameter_topology_final_skips_post_parameter_verification(self) -> None:
+        hidden_context = {
+            CONTROLLER_STATE_KEY: {
+                "wls_completed": True,
+                "pending_verification_stage": "post_parameter_correction",
+            }
+        }
+        gt_verdict = {
+            "verdict": {
+                "has_error": True,
+                "error_family": "parameter_error",
+                "error_families": ["parameter_error", "topology_error"],
+            }
+        }
+        predicted = {
+            "verdict": {
+                "has_error": True,
+                "error_family": "parameter_error",
+                "error_families": ["parameter_error", "topology_error"],
+            },
+            "action": {
+                "diagnosis_status": "curriculum_only",
+                "tool_steps": [
+                    {"family": "topology_error", "verification_policy": "verified_wls"},
+                    {"family": "parameter_error", "verification_policy": "sequence_only"},
+                ],
+            },
+        }
+
+        self.assertIsNone(
+            pending_verification_error(
+                hidden_context,
+                gt_verdict=gt_verdict,
+                candidate_verdict=predicted,
+            )
+        )
+
+    def test_sequence_only_exception_does_not_apply_to_normal_parameter_case(self) -> None:
+        hidden_context = {
+            CONTROLLER_STATE_KEY: {
+                "wls_completed": True,
+                "pending_verification_stage": "post_parameter_correction",
+            }
+        }
+        gt_verdict = {
+            "verdict": {
+                "has_error": True,
+                "error_family": "parameter_error",
+                "error_families": ["parameter_error"],
+            }
+        }
+        predicted = {
+            "verdict": {
+                "has_error": True,
+                "error_family": "parameter_error",
+                "error_families": ["parameter_error"],
+            },
+            "action": {"diagnosis_status": "sequence_only"},
+        }
+
+        self.assertEqual(
+            pending_verification_error(
+                hidden_context,
+                gt_verdict=gt_verdict,
+                candidate_verdict=predicted,
+            ),
+            "Verdict before required get_verification_snapshot for post_parameter_correction.",
+        )
+
+    def test_missing_context_error_includes_allowed_next_tools(self) -> None:
+        runtime_context = {
+            "tool_context": {
+                "parameter_context": {"case_path": "case14::parameter_channel::abc"},
+            }
+        }
+        hidden_context = {
+            CONTROLLER_STATE_KEY: {
+                "wls_completed": True,
+                "successful_tools": ["wls_from_path"],
+            }
+        }
+
+        result = execute_tool(
+            "get_harmonic_context",
+            {"case_path": "case14"},
+            runtime_context=runtime_context,
+            hidden_context=hidden_context,
+        )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["available_context_tools"], ["get_parameter_context"])
+        self.assertIn("get_parameter_context", result["allowed_next_tools"])
+        self.assertIn("correct_measurements_from_path", result["allowed_next_tools"])
+        self.assertIn("final_json", result["allowed_next_tools"])
+        self.assertNotIn("get_harmonic_context", result["allowed_next_tools"])
 
 
 if __name__ == "__main__":

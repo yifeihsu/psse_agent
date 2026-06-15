@@ -12,6 +12,8 @@
 #SBATCH --mem=64G
 #SBATCH --time=08:00:00
 #SBATCH --gres=gpu:1
+#SBATCH --mail-type=BEGIN,END,FAIL,REQUEUE,TIME_LIMIT_90
+#SBATCH --mail-user=yx3882@nyu.edu
 
 # GPU selection is intentionally left configurable at submission time.
 # Examples:
@@ -38,6 +40,7 @@ ADAPTER_PATH=${ADAPTER_PATH:-outputs/gemma4_power_agent/lora}
 TEST_FILE=${TEST_FILE:-out_traces_balanced/sft_traces.test.jsonl}
 EVAL_SCRIPT=${EVAL_SCRIPT:-eval_sft_agent_gemma_v4.py}
 MODEL_REVISION=${MODEL_REVISION:-d722512f8f1e4ef6629c1b24d16d65295c8c945e}
+TOOL_SCOPE=${TOOL_SCOPE:-scada_harmonic}
 MAX_SAMPLES=${MAX_SAMPLES:-}
 MAX_TURNS=${MAX_TURNS:-6}
 MAX_NEW_TOKENS=${MAX_NEW_TOKENS:-1024}
@@ -188,6 +191,7 @@ echo "test file: $TEST_FILE"
 echo "eval script: $EVAL_SCRIPT"
 echo "output: $OUTPUT_FILE"
 echo "model revision: ${MODEL_REVISION:-UNPINNED}"
+echo "tool scope: $TOOL_SCOPE"
 echo "smoke mode: $SMOKE"
 echo "max samples: ${MAX_SAMPLES:-ALL}"
 echo "max turns: $MAX_TURNS"
@@ -251,6 +255,7 @@ ARGS=(
   "$EVAL_SCRIPT"
   --adapter "$ADAPTER_PATH"
   --test-file "$TEST_FILE"
+  --tool-scope "$TOOL_SCOPE"
   --max-turns "$MAX_TURNS"
   --max-new-tokens "$MAX_NEW_TOKENS"
   --max-seq-length "$MAX_SEQ_LENGTH"
