@@ -57,6 +57,25 @@ def _parse_matpower_case(case_text: str) -> Dict[str, Any]:
         "branch": branch
     }
 
+
+def _branch_info_from_ppc(ppc: Dict[str, Any]) -> List[Dict[str, Any]]:
+    branch = ppc.get("branch")
+    if branch is None:
+        return []
+    out: List[Dict[str, Any]] = []
+    for i, row in enumerate(branch):
+        tap = float(row[8]) if len(row) > 8 else 0.0
+        status = float(row[10]) if len(row) > 10 else 1.0
+        out.append(
+            {
+                "i": int(i),
+                "from_bus": int(row[0]),
+                "to_bus": int(row[1]),
+                "is_line": bool(tap == 0.0 and status > 0),
+            }
+        )
+    return out
+
 # ---------- Helper: write case text to a temp .m ----------
 def _write_case_text(case_text: str, case_name: str) -> str:
     safe = "".join(c for c in case_name if c.isalnum() or c == "_") or "case_tmp"
@@ -164,6 +183,7 @@ def _wls_json(case_path: str, z_list: List[float]) -> Dict[str, Any]:  # pragma:
             "lambdaN": lambdaN.tolist(),
             "r": r_list,
             "global_residual_sum": float(np.sum(np.asarray(r_list, dtype=float) ** 2)),
+            "branch_info": _branch_info_from_ppc(ppc),
         }
     except Exception as e:
         import traceback

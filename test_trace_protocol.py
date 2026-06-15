@@ -1,4 +1,7 @@
+import contextlib
+import io
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -27,6 +30,11 @@ from Transmission.generate_multi_error_measurements import (
     choose_base_family,
     combo_requires_structural_coupling,
     coupling_metadata,
+    make_multi_error_record,
+)
+from Transmission.generate_measurements import (
+    load_case,
+    make_index_map,
 )
 from trace_protocol import (
     DECISION_SCHEMA_TEXT,
@@ -84,6 +92,7 @@ class TraceProtocolTests(unittest.TestCase):
         self.assertIn("scalar enum", DECISION_SCHEMA_TEXT["verdict"]["error_family"])
         self.assertIn("error_families", DECISION_SCHEMA_TEXT["verdict"])
         self.assertIn("suspect_locations", DECISION_SCHEMA_TEXT)
+        self.assertIn("evidence_by_stage", DECISION_SCHEMA_TEXT)
         self.assertIn("applied_tools", DECISION_SCHEMA_TEXT["action"])
         self.assertIn("high_impedance_fault", DECISION_SCHEMA_TEXT["verdict"]["error_family"])
         self.assertIn("top_hif_groups", DECISION_SCHEMA_TEXT["evidence"])
@@ -237,6 +246,133 @@ class TraceProtocolTests(unittest.TestCase):
         self.assertFalse(metadata["physically_coupled"])
         self.assertTrue(metadata["curriculum_only"])
         self.assertEqual(metadata["sequence_only_families"], ["parameter_error"])
+
+    def test_physical_parameter_topology_record_has_verified_snapshots(self) -> None:
+        ppc_base = load_case("14")
+        idx_map = make_index_map(ppc_base["bus"].shape[0], ppc_base["branch"].shape[0])
+        with tempfile.TemporaryDirectory() as tmp:
+            with contextlib.redirect_stdout(io.StringIO()):
+                rec = make_multi_error_record(
+                    np.random.default_rng(20260615),
+                    ppc_base,
+                    idx_map,
+                    Path(tmp),
+                    ["parameter_error", "topology_error"],
+                    scans=2,
+                    load_scale_min=0.8,
+                    load_scale_max=1.25,
+                    mode="physical",
+                )
+
+        self.assertIsNotNone(rec)
+        assert rec is not None
+        self.assertTrue(rec["label"]["physically_coupled"])
+        self.assertEqual(
+            rec["label"]["coupling_mode"],
+            "physical_parameter_on_topology_corrected_model",
+        )
+        self.assertEqual(rec["op_point"]["base_family"], "coupled_parameter_topology")
+        snapshots = rec["verification_snapshots"]
+        self.assertIn("post_topology_correction", snapshots)
+        self.assertIn("post_parameter_correction", snapshots)
+        self.assertEqual(
+            snapshots["post_topology_correction"]["remaining_families"],
+            ["parameter_error"],
+        )
+        self.assertEqual(snapshots["post_parameter_correction"]["remaining_families"], [])
+        self.assertEqual(
+            len(snapshots["post_topology_correction"]["z_obs"]),
+            len(rec["z_scans"][0]),
+        )
+        parameter_error = next(
+            item for item in rec["label"]["errors"] if item["error_type"] == "parameter_error"
+        )
+        self.assertEqual(parameter_error["index_space"], "post_topology_correction")
+
+    def test_physical_parameter_topology_final_target_has_staged_evidence(self) -> None:
+        messages = [make_initial_user_message()]
+        meta, idx_map = extract_conversation_context(messages)
+        initial_branch_info = list(meta["branch_info"])
+        active_branch_info = list(initial_branch_info)
+        active_branch_info[1] = {"i": 1, "from_bus": 2, "to_bus": 4, "is_line": True}
+        rec = {
+            "scenario": "multi_error",
+            "label": {
+                "error_families": ["parameter_error", "topology_error"],
+                "physically_coupled": True,
+                "errors": [
+                    {
+                        "error_type": "parameter_error",
+                        "line_row": 1,
+                        "from_bus": 2,
+                        "to_bus": 4,
+                        "subtype": "RX",
+                    },
+                    {
+                        "error_type": "topology_error",
+                        "substation": 3,
+                        "cb_name": "CB_3_L34_B2",
+                        "old_status": "closed",
+                        "new_status": "open",
+                    },
+                ],
+            },
+        }
+        primary_wls = {
+            "success": True,
+            "r": [0.0] * 122,
+            "lambdaN": [0.0, 0.0, 4.5, 6.0],
+            "global_residual_sum": 200.0,
+            "branch_info": initial_branch_info,
+        }
+        post_topology_wls = {
+            "success": True,
+            "r": [0.0] * 122,
+            "lambdaN": [0.0, 0.0, 5.0, 8.0],
+            "global_residual_sum": 150.0,
+            "branch_info": active_branch_info,
+        }
+        post_parameter_wls = {
+            "success": True,
+            "r": [0.0] * 122,
+            "lambdaN": [0.0] * 4,
+            "global_residual_sum": 20.0,
+            "branch_info": active_branch_info,
+        }
+
+        final = build_final_target(
+            rec,
+            meta,
+            idx_map,
+            primary_wls,
+            verification_payloads={
+                "topology_error": post_topology_wls,
+                "parameter_error": post_parameter_wls,
+            },
+            verification_pre_payloads={
+                "topology_error": primary_wls,
+                "parameter_error": post_topology_wls,
+            },
+            applied_tools=["correct_topology_from_path", "correct_parameters_from_path"],
+            tool_steps=[
+                {"family": "topology_error", "tool": "correct_topology_from_path", "verification_policy": "verified_wls"},
+                {"family": "parameter_error", "tool": "correct_parameters_from_path", "verification_policy": "verified_wls"},
+            ],
+            correction_steps=[],
+        )
+
+        self.assertEqual(final["evidence"]["top_lagrange"][0]["from_bus"], 2)
+        self.assertEqual(final["evidence"]["top_lagrange"][0]["to_bus"], 3)
+        staged = final["evidence_by_stage"]
+        self.assertEqual(staged["initial"]["top_lagrange"][0]["to_bus"], 3)
+        self.assertEqual(staged["post_topology_correction"]["top_lagrange"][0]["line_row0"], 1)
+        self.assertEqual(staged["post_topology_correction"]["top_lagrange"][0]["from_bus"], 2)
+        self.assertEqual(staged["post_topology_correction"]["top_lagrange"][0]["to_bus"], 4)
+        self.assertEqual(staged["post_parameter_correction"]["top_lagrange"], [])
+        parameter_location = next(
+            loc for loc in final["suspect_locations"] if loc.get("domain") == "parameter"
+        )
+        self.assertEqual(parameter_location["details"]["to_bus"], 4)
 
     def test_correction_family_order_is_structural_first_by_default(self) -> None:
         rec = {
@@ -514,6 +650,26 @@ class TraceProtocolTests(unittest.TestCase):
         raw_len = len(json.dumps(raw_payload, ensure_ascii=False))
         compact_len = len(json.dumps(compact, ensure_ascii=False))
         self.assertLess(compact_len, raw_len * 0.2)
+
+    def test_wls_summary_prefers_active_case_branch_info(self) -> None:
+        messages = [make_initial_user_message()]
+        meta, index_map = extract_conversation_context(messages)
+        raw_payload = {
+            "success": True,
+            "r": [0.0] * 122,
+            "lambdaN": [0.1, 0.2, 4.6, -4.9] + [0.1] * 36,
+            "global_residual_sum": 25.0,
+            "branch_info": [
+                {"i": 0, "from_bus": 10, "to_bus": 11, "is_line": True},
+                {"i": 1, "from_bus": 20, "to_bus": 21, "is_line": True},
+            ],
+        }
+
+        compact = summarize_tool_result_for_conversation("wls_from_path", raw_payload, meta, index_map)
+
+        self.assertEqual(compact["top_lagrange"][0]["line_row0"], 1)
+        self.assertEqual(compact["top_lagrange"][0]["from_bus"], 20)
+        self.assertEqual(compact["top_lagrange"][0]["to_bus"], 21)
 
     def test_helper_context_hydration_and_alias_resolution(self) -> None:
         messages = [make_initial_user_message()]
@@ -1113,6 +1269,43 @@ class TraceProtocolTests(unittest.TestCase):
         self.assertEqual(
             multi_error_semantic_rejection_reason(rec, final),
             "parameter_topology_requires_sequence_only_verification_policy",
+        )
+
+    def test_multi_error_semantic_requires_verified_physical_parameter_topology(self) -> None:
+        rec = {
+            "scenario": "multi_error",
+            "label": {
+                "error_families": ["parameter_error", "topology_error"],
+                "physically_coupled": True,
+                "errors": [
+                    {"error_type": "parameter_error", "line_row": 5},
+                    {"error_type": "topology_error", "cb_name": "CB_2"},
+                ],
+            },
+        }
+        final = {
+            "action": {
+                "tool_steps": [
+                    {
+                        "family": "topology_error",
+                        "tool": "correct_topology_from_path",
+                        "verification_policy": "verified_wls",
+                    },
+                    {
+                        "family": "parameter_error",
+                        "tool": "correct_parameters_from_path",
+                        "verification_policy": "verified_wls",
+                    },
+                ],
+                "correction_steps": [],
+            }
+        }
+
+        self.assertIsNone(multi_error_semantic_rejection_reason(rec, final))
+        final["action"]["tool_steps"][-1]["verification_policy"] = "sequence_only"
+        self.assertEqual(
+            multi_error_semantic_rejection_reason(rec, final),
+            "parameter_topology_physical_coupling_rejects_sequence_only",
         )
 
 

@@ -1492,6 +1492,18 @@ def multi_error_semantic_rejection_reason(
                 return "parameter_topology_missing_sequence_only_parameter_step"
             if parameter_steps[-1].get("verification_policy") != "sequence_only":
                 return "parameter_topology_requires_sequence_only_verification_policy"
+        elif physically_coupled is True:
+            action = final_target.get("action") if isinstance(final_target, Mapping) else None
+            tool_steps = action.get("tool_steps") if isinstance(action, Mapping) else None
+            parameter_steps = [
+                step
+                for step in tool_steps or []
+                if isinstance(step, Mapping) and step.get("family") == "parameter_error"
+            ]
+            if not parameter_steps:
+                return "parameter_topology_missing_verified_parameter_step"
+            if parameter_steps[-1].get("verification_policy") == "sequence_only":
+                return "parameter_topology_physical_coupling_rejects_sequence_only"
 
     return None
 
@@ -1532,6 +1544,28 @@ def build_final_target(
 
     families = multi_error_families(rec)
     if scenario == "multi_error" and families:
+        def _stage_evidence_from_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
+            return {
+                "global_metrics": summary.get("global_metrics", {}),
+                "top_residuals": list(summary.get("top_residuals") or []),
+                "top_lagrange": list(summary.get("top_lagrange") or []),
+            }
+
+        stage_by_family = {
+            "topology_error": "post_topology_correction",
+            "parameter_error": "post_parameter_correction",
+            "measurement_error": "post_measurement_correction",
+        }
+        evidence_by_stage: dict[str, Any] = {
+            "initial": _stage_evidence_from_summary(primary_summary),
+        }
+        for family, payload in dict(verification_payloads or {}).items():
+            stage = stage_by_family.get(family)
+            if stage is None:
+                continue
+            compact_stage = summarize_wls_payload(payload, meta, idx_map)
+            evidence_by_stage[stage] = _stage_evidence_from_summary(compact_stage)
+
         primary_family = primary_error_family(rec) or families[0]
         tool_list = list(applied_tools or [])
         if not tool_list:
@@ -1692,6 +1726,7 @@ def build_final_target(
                     "confidence": confidence,
                 },
                 "evidence": evidence,
+                "evidence_by_stage": evidence_by_stage,
                 "suspect_location": primary_location,
                 "suspect_locations": suspect_locations,
                 "action": action_payload,
@@ -2351,7 +2386,7 @@ def append_multi_error_actions(
                 idx_map,
                 tool_name="get_parameter_context",
                 call_id=f"call_ctx_param_{sha_short(sid)}",
-                arguments={"case_path": correction_case_visible, "line_index": line_row0 + 1},
+                arguments={"case_path": current_case_visible, "line_index": line_row0 + 1},
                 payload=parameter_context,
             )
             param_args = {"case_path": correction_case_visible, "line_index": line_row0 + 1}

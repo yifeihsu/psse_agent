@@ -80,6 +80,13 @@ DECISION_SCHEMA_TEXT = {
             }
         ],
     },
+    "evidence_by_stage": {
+        "optional": "multi-error only; maps stage name to compact WLS evidence observed at that stage",
+        "initial": "same compact evidence shape as evidence",
+        "post_topology_correction": "optional compact evidence after topology correction",
+        "post_parameter_correction": "optional compact evidence after parameter correction",
+        "post_measurement_correction": "optional compact evidence after measurement correction",
+    },
     "suspect_location": {
         "domain": "measurement|parameter|topology|imbalance|harmonic|fault|none",
         "details": "object",
@@ -731,10 +738,12 @@ def summarize_wls_payload(
 ) -> dict[str, Any]:
     residuals = tool_payload.get("r", []) or []
     lambda_values = tool_payload.get("lambdaN", []) or []
+    active_branch_info = tool_payload.get("branch_info")
+    branch_info = active_branch_info if isinstance(active_branch_info, list) else meta.get("branch_info", [])
     summary: dict[str, Any] = {
         "success": bool(tool_payload.get("success", True)),
         "top_residuals": [] if force_empty_evidence else build_residual_evidence(residuals, index_map),
-        "top_lagrange": [] if force_empty_evidence else build_lambda_evidence(lambda_values, meta.get("branch_info", [])),
+        "top_lagrange": [] if force_empty_evidence else build_lambda_evidence(lambda_values, branch_info),
     }
     have_global_inputs = bool(residuals) or tool_payload.get("global_residual_sum") is not None or tool_payload.get("global_residual_threshold") is not None
     if have_global_inputs:
