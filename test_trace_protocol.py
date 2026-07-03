@@ -832,7 +832,105 @@ class TraceProtocolTests(unittest.TestCase):
 
         self.assertEqual(details["branch_row0"], 4)
         self.assertEqual(details["dss_element"], "Line.2-5")
+        self.assertEqual(details["top_hif_groups"][0]["branch_row0"], 4)
+        self.assertEqual(details["localization_certainty"], "single_top_candidate")
         self.assertNotIn("phase", details)
+
+    def test_hif_final_target_marks_near_tied_top2_as_ambiguous(self) -> None:
+        meta = {
+            "nb": 14,
+            "nl": 20,
+            "branch_info": [{"from_bus": i + 1, "to_bus": i + 2} for i in range(20)],
+        }
+        idx_map = {
+            "Vm": slice(0, 14),
+            "Pinj": slice(14, 28),
+            "Qinj": slice(28, 42),
+            "Pf": slice(42, 62),
+            "Qf": slice(62, 82),
+            "Pt": slice(82, 102),
+            "Qt": slice(102, 122),
+        }
+        rec = {"scenario": "high_impedance_fault", "label": {"branch_row0": 13}}
+        nlm_payload = {
+            "success": True,
+            "converged": True,
+            "method": "legacy_three_phase_nlm",
+            "top_hif_groups": [
+                {
+                    "rank": 1,
+                    "branch_row0": 14,
+                    "line_index1": 15,
+                    "dss_element": "Line.7-9",
+                    "from_bus": 7,
+                    "to_bus": 9,
+                    "score": 632.750583,
+                },
+                {
+                    "rank": 2,
+                    "branch_row0": 13,
+                    "line_index1": 14,
+                    "dss_element": "Line.7-8",
+                    "from_bus": 7,
+                    "to_bus": 8,
+                    "score": 632.750562,
+                },
+            ],
+        }
+        primary_wls = {
+            "success": True,
+            "r": [0.0] * 122,
+            "lambdaN": [],
+            "global_residual_sum": 10.0,
+            "global_residual_threshold": 118.0,
+        }
+
+        final = build_final_target(rec, meta, idx_map, primary_wls, nlm_payload=nlm_payload)
+        details = final["suspect_location"]["details"]
+
+        self.assertEqual(details["branch_row0"], 14)
+        self.assertEqual(details["localization_certainty"], "ambiguous_top2")
+        self.assertEqual(details["top_hif_groups"][1]["branch_row0"], 13)
+        self.assertGreater(details["top_score_relative_margin"], 0.0)
+
+    def test_imbalance_final_target_uses_visible_vuf_not_label_bus(self) -> None:
+        meta = {
+            "nb": 14,
+            "nl": 20,
+            "branch_info": [{"from_bus": i + 1, "to_bus": i + 2} for i in range(20)],
+        }
+        idx_map = {
+            "Vm": slice(0, 14),
+            "Pinj": slice(14, 28),
+            "Qinj": slice(28, 42),
+            "Pf": slice(42, 62),
+            "Qf": slice(62, 82),
+            "Pt": slice(82, 102),
+            "Qt": slice(102, 122),
+        }
+        rec = {
+            "scenario": "three_phase_imbalance",
+            "label": {"unbalance_bus": 5},
+            "three_phase_voltages": [
+                {"bus": "b1", "vln_pu": [1.0, 1.0, 1.0], "ang_deg": [0.0, -120.0, 120.0]},
+                {"bus": "b3", "vln_pu": [1.08, 0.97, 0.94], "ang_deg": [0.0, -120.0, 120.0]},
+                {"bus": "b5", "vln_pu": [1.0, 1.0, 1.0], "ang_deg": [0.0, -120.0, 120.0]},
+            ],
+        }
+        primary_wls = {
+            "success": True,
+            "r": [0.0] * 122,
+            "lambdaN": [],
+            "global_residual_sum": 10.0,
+            "global_residual_threshold": 118.0,
+        }
+
+        final = build_final_target(rec, meta, idx_map, primary_wls)
+        details = final["suspect_location"]["details"]
+
+        self.assertNotIn("unbalance_bus", details)
+        self.assertIsNone(details["source_bus_estimate"])
+        self.assertEqual(details["observed_top_vuf_buses"][0]["bus"], 3)
 
     def test_verification_alias_contract_covers_snapshot_and_backend_patterns(self) -> None:
         messages = [make_initial_user_message()]

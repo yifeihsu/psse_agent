@@ -118,6 +118,8 @@ MEASUREMENT_HARMONIC_POST_RATIO_MAX = 1.5
 MEASUREMENT_HARMONIC_POST_TO_PRE_RATIO_MAX = 0.5
 UNRESOLVED_FINAL_RATIO_CONFIDENCE_THRESHOLD = 1.5
 UNRESOLVED_FINAL_RATIO_CONFIDENCE = 0.86
+HIF_AMBIGUOUS_ABS_MARGIN = 1e-3
+HIF_AMBIGUOUS_REL_MARGIN = 1e-4
 
 
 @dataclass(frozen=True)
@@ -388,6 +390,74 @@ def _maybe_float(x: Any) -> Optional[float]:
         return None
 
 
+def hif_localization_certainty(top_groups: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    if len(top_groups) < 2:
+        return {"localization_certainty": "single_top_candidate"}
+    score1 = _maybe_float(top_groups[0].get("score"))
+    score2 = _maybe_float(top_groups[1].get("score"))
+    if score1 is None or score2 is None:
+        return {"localization_certainty": "topk_unscored"}
+    margin = float(score1 - score2)
+    abs_margin = abs(margin)
+    rel_margin = abs_margin / max(abs(score1), abs(score2), 1.0)
+    certainty = (
+        "ambiguous_top2"
+        if abs_margin <= HIF_AMBIGUOUS_ABS_MARGIN or rel_margin <= HIF_AMBIGUOUS_REL_MARGIN
+        else "top1_separated"
+    )
+    return {
+        "localization_certainty": certainty,
+        "top_score_margin": margin,
+        "top_score_relative_margin": rel_margin,
+    }
+
+
+def visible_vuf_evidence(
+    three_phase_voltages: Any,
+    *,
+    top_k: int = 5,
+) -> list[dict[str, Any]]:
+    if not isinstance(three_phase_voltages, list):
+        return []
+    a = np.exp(1j * 2.0 * np.pi / 3.0)
+    rows: list[dict[str, Any]] = []
+    for item in three_phase_voltages:
+        if not isinstance(item, Mapping):
+            continue
+        vln_pu = item.get("vln_pu")
+        ang_deg = item.get("ang_deg")
+        if not isinstance(vln_pu, list) or not isinstance(ang_deg, list) or len(vln_pu) < 3 or len(ang_deg) < 3:
+            continue
+        try:
+            phases = np.array(
+                [
+                    float(vln_pu[idx]) * np.exp(1j * np.deg2rad(float(ang_deg[idx])))
+                    for idx in range(3)
+                ],
+                dtype=complex,
+            )
+        except Exception:
+            continue
+        if not np.all(np.isfinite(phases.real)) or not np.all(np.isfinite(phases.imag)):
+            continue
+        va, vb, vc = phases
+        v1 = (va + a * vb + (a**2) * vc) / 3.0
+        v2 = (va + (a**2) * vb + a * vc) / 3.0
+        denom = abs(v1)
+        if denom <= 1e-12:
+            continue
+        bus_raw = item.get("bus")
+        bus = _maybe_int(str(bus_raw).lstrip("bB")) if bus_raw is not None else None
+        rows.append(
+            {
+                "bus": bus,
+                "vuf": float(abs(v2) / denom),
+            }
+        )
+    rows.sort(key=lambda row: float(row.get("vuf", 0.0)), reverse=True)
+    return rows[: int(top_k)]
+
+
 def _meta_core(meta: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "case": meta.get("case"),
@@ -419,11 +489,13 @@ def load_sample_sources(config: BuilderConfig) -> tuple[dict[str, Any], list[dic
         hif_meta = json.loads(config.hif_meta_path.read_text(encoding="utf-8"))
         if _meta_core(base_meta) != _meta_core(hif_meta):
             raise ValueError("Primary and HIF metadata do not match on core measurement fields.")
-        hif_samples = [
-            rec
-            for rec in iter_jsonl(config.hif_samples_path)
-            if normalize_scenario(str(rec.get("scenario", ""))) == "high_impedance_fault"
-        ]
+        hif_samples = []
+        for rec in iter_jsonl(config.hif_samples_path):
+            if normalize_scenario(str(rec.get("scenario", ""))) != "high_impedance_fault":
+                continue
+            rec = dict(rec)
+            rec["_source_dir"] = str(config.hif_samples_path.parent)
+            hif_samples.append(rec)
         samples.extend(hif_samples)
 
     return base_meta, samples
@@ -516,6 +588,11 @@ def call_tool_json(endpoint: str, name: str, arguments: Mapping[str, Any], timeo
                 nlm_diagnostic=arguments.get("nlm_diagnostic"),
                 target_branch_row0=arguments.get("target_branch_row0"),
                 target_dss_element=arguments.get("target_dss_element"),
+                pristine_model_dir=arguments.get("pristine_model_dir"),
+                faulted_model_dir=arguments.get("faulted_model_dir"),
+                phase=arguments.get("phase"),
+                r_hif_ohm=arguments.get("r_hif_ohm"),
+                load_scale=arguments.get("load_scale", 1.0),
             )
             return _make_serializable(result)
             
@@ -870,12 +947,42 @@ def make_harmonic_followup_payload(rec: Mapping[str, Any], case_path: str) -> Di
     )
 
 
+def sanitize_hif_nlm_diagnostic(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        return {}
+    cleaned = dict(payload)
+    cleaned.pop("legacy_log_tail", None)
+    groups = cleaned.get("top_hif_groups")
+    if isinstance(groups, list):
+        cleaned_groups = []
+        for group in groups:
+            if not isinstance(group, Mapping):
+                continue
+            item = dict(group)
+            item.pop("legacy_line_group_index0", None)
+            cleaned_groups.append(item)
+        cleaned["top_hif_groups"] = cleaned_groups
+    return cleaned
+
+
 def make_hif_context_payload(rec: Mapping[str, Any], case_path: str) -> Dict[str, Any]:
+    label = rec.get("label", {})
+    nlm_diagnostic = sanitize_hif_nlm_diagnostic(rec.get("nlm_diagnostic"))
+    source_dir = rec.get("_source_dir")
+    scenario_model_dir = rec.get("scenario_model_dir")
+    faulted_model_dir = None
+    if source_dir and scenario_model_dir:
+        faulted_model_dir = str((Path(str(source_dir)) / str(scenario_model_dir)).resolve())
     return round_user_payload(
         {
             "case_path": case_path,
-            "nlm_diagnostic": rec.get("nlm_diagnostic", {}),
-            "label": rec.get("label", {}),
+            "nlm_diagnostic": nlm_diagnostic,
+            "label": label,
+            "pristine_model_dir": str(REPO_ROOT / "IEEE_14_OpenDSS"),
+            "faulted_model_dir": faulted_model_dir,
+            "phase": label.get("phase") if isinstance(label, Mapping) else None,
+            "r_hif_ohm": label.get("r_hif_ohm") if isinstance(label, Mapping) else None,
+            "load_scale": rec.get("op_point", {}).get("load_scale") if isinstance(rec.get("op_point"), Mapping) else None,
             "note": "Compact three-phase NLM HIF localization context bound from the generated sample.",
         }
     )
@@ -1838,9 +1945,14 @@ def build_final_target(
 
     elif scenario == "three_phase_imbalance":
         have_three_phase = bool(rec.get("three_phase_voltages"))
+        observed_vuf = visible_vuf_evidence(rec.get("three_phase_voltages"))
         suspect_location = {
             "domain": "imbalance",
-            "details": {"unbalance_bus": _maybe_int(label.get("unbalance_bus"))},
+            "details": {
+                "observed_top_vuf_buses": observed_vuf,
+                "source_bus_estimate": None,
+                "localization_basis": "visible_three_phase_voltage_vuf" if observed_vuf else None,
+            },
         }
         action = {
             "applied_tool": None,
@@ -1849,7 +1961,10 @@ def build_final_target(
             "requested_data": None if have_three_phase else ["three_phase_substation_voltages"],
             "verification_summary": None,
         }
-        summary = "Residual pattern suggests possible three-phase imbalance rather than a single bad scalar measurement."
+        summary = (
+            "Visible three-phase voltage phasors show voltage-unbalance evidence; "
+            "no source bus is estimated without a dedicated imbalance-localization tool."
+        )
 
     elif scenario == "harmonic_anomaly":
         details = {"source_bus": _maybe_int(label.get("source_bus"))}
@@ -1869,11 +1984,18 @@ def build_final_target(
         summary = "The global residual is elevated without a single dominant bad measurement; harmonic follow-up is warranted."
 
     elif scenario == "high_impedance_fault":
-        compact_nlm = summarize_three_phase_nlm_payload(nlm_payload or rec.get("nlm_diagnostic", {}))
+        raw_nlm_payload = nlm_payload or rec.get("nlm_diagnostic", {})
+        compact_nlm = summarize_three_phase_nlm_payload(raw_nlm_payload)
         top_groups = compact_nlm.get("top_hif_groups", [])
         if not evidence.get("top_hif_groups"):
             evidence["top_hif_groups"] = top_groups
+        raw_top_groups = []
+        if isinstance(raw_nlm_payload, Mapping) and isinstance(raw_nlm_payload.get("top_hif_groups"), list):
+            raw_top_groups = [
+                group for group in raw_nlm_payload.get("top_hif_groups", []) if isinstance(group, Mapping)
+            ]
         top1 = top_groups[0] if top_groups else {}
+        certainty = hif_localization_certainty(raw_top_groups or [group for group in top_groups if isinstance(group, Mapping)])
         branch_row0 = _maybe_int(top1.get("branch_row0"))
         line_index1 = _maybe_int(top1.get("line_index1"))
         from_bus = _maybe_int(top1.get("from_bus"))
@@ -1885,6 +2007,8 @@ def build_final_target(
             "from_bus": from_bus,
             "to_bus": to_bus,
             "dss_element": top1.get("dss_element"),
+            "top_hif_groups": top_groups,
+            **certainty,
         }
         suspected_phase = compact_nlm.get("suspected_phase")
         if suspected_phase is not None:
@@ -1903,6 +2027,11 @@ def build_final_target(
             "verification_summary": None,
         }
         summary = "Three-phase NLM line-group evidence is most consistent with a hidden high-impedance fault."
+        if certainty.get("localization_certainty") == "ambiguous_top2":
+            summary = (
+                "Three-phase NLM line-group evidence indicates a hidden high-impedance fault, "
+                "with near-tied top line candidates."
+            )
 
     else:
         suspect_location = {"domain": "none", "details": {}}

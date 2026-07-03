@@ -28,6 +28,7 @@ CONTEXT_TOOL_NAMES = {
 USER_FLOAT_DECIMALS = 6
 TOOL_RESULT_FLOAT_DECIMALS = 6
 DIAGNOSTIC_FLOAT_DECIMALS = 4
+SCORE_MARGIN_FLOAT_DECIMALS = 8
 CONFIDENCE_DECIMALS = 2
 TOPK_EVIDENCE = 5
 EVIDENCE_ABS_THRESHOLD = 3.0
@@ -474,7 +475,12 @@ def round_user_payload(value: Any) -> Any:
 
 def round_assistant_payload(value: Any, path: tuple[str, ...] = ()) -> Any:
     if isinstance(value, float):
-        decimals = CONFIDENCE_DECIMALS if path and path[-1] == "confidence" else DIAGNOSTIC_FLOAT_DECIMALS
+        if path and path[-1] == "confidence":
+            decimals = CONFIDENCE_DECIMALS
+        elif path and path[-1] in {"top_score_margin", "top_score_relative_margin"}:
+            decimals = SCORE_MARGIN_FLOAT_DECIMALS
+        else:
+            decimals = DIAGNOSTIC_FLOAT_DECIMALS
         return _round_float(value, decimals)
     if isinstance(value, list):
         return [round_assistant_payload(item, path) for item in value]
@@ -1147,6 +1153,16 @@ def hydrate_tool_arguments(
             if "target_dss_element" not in hydrated and isinstance(label, Mapping) and label.get("dss_element"):
                 hydrated["target_dss_element"] = label.get("dss_element")
                 notes.append("hydrated_hif_target_element")
+            for key in (
+                "pristine_model_dir",
+                "faulted_model_dir",
+                "phase",
+                "r_hif_ohm",
+                "load_scale",
+            ):
+                if key not in hydrated and source.get(key) is not None:
+                    hydrated[key] = source.get(key)
+                    notes.append(f"hydrated_hif_{key}")
 
     if tool_name == "correct_topology_from_path":
         source = hidden.get("topology_context")

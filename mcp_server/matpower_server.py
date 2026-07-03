@@ -748,6 +748,11 @@ def _run_three_phase_nlm_logic(
     nlm_diagnostic: Dict[str, Any] | None = None,
     target_branch_row0: int | None = None,
     target_dss_element: str | None = None,
+    pristine_model_dir: str | None = None,
+    faulted_model_dir: str | None = None,
+    phase: str | None = None,
+    r_hif_ohm: float | None = None,
+    load_scale: float = 1.0,
 ) -> Dict[str, Any]:
     try:
         import sys as _sys
@@ -757,9 +762,14 @@ def _run_three_phase_nlm_logic(
         from three_phase_nlm.nlm_runner import run_ieee14_hif_nlm  # type: ignore
 
         return run_ieee14_hif_nlm(
+            pristine_model_dir=pristine_model_dir,
+            faulted_model_dir=faulted_model_dir,
             target_dss_element=target_dss_element,
             target_branch_row0=target_branch_row0,
             supplied_diagnostic=nlm_diagnostic,
+            phase=phase,
+            r_hif_ohm=r_hif_ohm,
+            load_scale=load_scale,
         )
     except Exception as e:
         return {"success": False, "error": f"three-phase NLM adapter failed for {case_path}: {e}"}
@@ -772,6 +782,11 @@ def run_three_phase_nlm_from_path(
     nlm_diagnostic: Dict[str, Any] | None = None,
     target_branch_row0: int | None = None,
     target_dss_element: str | None = None,
+    pristine_model_dir: str | None = None,
+    faulted_model_dir: str | None = None,
+    phase: str | None = None,
+    r_hif_ohm: float | None = None,
+    load_scale: float = 1.0,
 ) -> Dict[str, Any]:
     """
     Return compact three-phase NLM HIF localization evidence for the current snapshot.
@@ -785,6 +800,11 @@ def run_three_phase_nlm_from_path(
         nlm_diagnostic=nlm_diagnostic,
         target_branch_row0=target_branch_row0,
         target_dss_element=target_dss_element,
+        pristine_model_dir=pristine_model_dir,
+        faulted_model_dir=faulted_model_dir,
+        phase=phase,
+        r_hif_ohm=r_hif_ohm,
+        load_scale=load_scale,
     )
 
 @mcp.tool(name="correct_topology_from_path")
