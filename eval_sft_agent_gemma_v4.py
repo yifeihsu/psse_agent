@@ -55,6 +55,7 @@ from mcp_server.matpower_server import (
     correct_parameters_from_path,
     correct_topology_from_path,
     run_hse_from_path,
+    run_three_phase_nlm_from_path,
     wls_from_path,
 )
 
@@ -113,6 +114,7 @@ TOOL_MAP = {
     "correct_parameters_from_path": correct_parameters_from_path,
     "correct_topology_from_path": correct_topology_from_path,
     "run_hse_from_path": run_hse_from_path,
+    "run_three_phase_nlm_from_path": run_three_phase_nlm_from_path,
 }
 CORE_TOOL_NAMES = frozenset(
     {
@@ -121,6 +123,7 @@ CORE_TOOL_NAMES = frozenset(
         "correct_parameters_from_path",
         "correct_topology_from_path",
         "run_hse_from_path",
+        "run_three_phase_nlm_from_path",
     }
 )
 RUNTIME_HELPER_TOOL_NOTE_PREFIX = "Runtime helper tools available for this snapshot:"
@@ -1179,7 +1182,7 @@ def parse_gemma_generation(text: str, tokenizer: Any) -> dict[str, Any]:
 
     content = None
     if parsed and isinstance(parsed.get("content"), str):
-        content = parsed["content"]
+        content = strip_trailing_gemma_tokens(parsed["content"])
     elif body:
         content = body
 
@@ -1676,6 +1679,7 @@ def compact_tool_arguments_for_prompt(tool_name: str, arguments: dict[str, Any])
         "correct_parameters_from_path": {"case_path", "line_index"},
         "correct_topology_from_path": {"case_path", "cb_name", "desired_status"},
         "run_hse_from_path": {"case_path"},
+        "run_three_phase_nlm_from_path": {"case_path"},
     }.get(tool_name)
     if keep_keys is None:
         return dict(arguments)

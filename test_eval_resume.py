@@ -6,10 +6,12 @@ from pathlib import Path
 
 from eval_sft_agent_gemma_v4 import (
     CONTROLLER_STATE_KEY,
+    TOOL_MAP,
     apply_tool_scope_to_messages,
     execute_tool,
     load_tools,
     load_completed_results_for_resume,
+    parse_gemma_generation,
     pending_verification_error,
     validate_completed_results_for_resume,
 )
@@ -17,6 +19,22 @@ from trace_protocol import SCADA_HARMONIC_SYSTEM_PROMPT, SYSTEM_PROMPT
 
 
 class EvalResumeTests(unittest.TestCase):
+    def test_canonical_eval_runtime_registers_hif_nlm_tool(self) -> None:
+        self.assertIn("run_three_phase_nlm_from_path", TOOL_MAP)
+
+    def test_final_json_parser_strips_trailing_gemma_turn_marker(self) -> None:
+        class DummyTokenizer:
+            def parse_response(self, raw: str):
+                return {"content": raw}
+
+        parsed = parse_gemma_generation(
+            '{"verdict":{"has_error":false,"error_family":"no_error"}}<turn|>',
+            DummyTokenizer(),
+        )
+
+        self.assertEqual(parsed["type"], "verdict")
+        self.assertFalse(parsed["content"]["verdict"]["has_error"])
+
     def test_truncates_malformed_trailing_jsonl_when_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             output_path = Path(tmp) / "eval.jsonl"
