@@ -775,6 +775,47 @@ def _run_three_phase_nlm_logic(
         return {"success": False, "error": f"three-phase NLM adapter failed for {case_path}: {e}"}
 
 
+def _estimate_hif_location_magnitude_logic(
+    *,
+    case_path: str,
+    candidate_branch_row0: int,
+    candidate_phase: str | None = None,
+    z_obs: List[float] | None = None,
+    three_phase_voltages: List[Dict[str, Any]] | None = None,
+    pristine_model_dir: str | None = None,
+    load_scale: float = 1.0,
+    top_k: int = 5,
+    alpha_grid_size: int = 31,
+    r_grid_size: int = 35,
+    r_hif_pu_min: float = 5.0,
+    r_hif_pu_max: float = 1000.0,
+) -> Dict[str, Any]:
+    try:
+        import sys as _sys
+
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+        if repo_root not in _sys.path:
+            _sys.path.append(repo_root)
+        from three_phase_nlm.hif_parameter_estimator import estimate_hif_location_magnitude  # type: ignore
+
+        return estimate_hif_location_magnitude(
+            case_path=case_path,
+            candidate_branch_row0=int(candidate_branch_row0),
+            candidate_phase=candidate_phase,
+            z_obs=z_obs,
+            three_phase_voltages=three_phase_voltages,
+            pristine_model_dir=pristine_model_dir,
+            load_scale=float(load_scale),
+            top_k=int(top_k),
+            alpha_grid_size=int(alpha_grid_size),
+            r_grid_size=int(r_grid_size),
+            r_hif_pu_min=float(r_hif_pu_min),
+            r_hif_pu_max=float(r_hif_pu_max),
+        )
+    except Exception as e:
+        return {"success": False, "error": f"HIF parameter estimator failed for {case_path}: {e}"}
+
+
 @mcp.tool(name="run_three_phase_nlm_from_path")
 def run_three_phase_nlm_from_path(
     *,
@@ -805,6 +846,45 @@ def run_three_phase_nlm_from_path(
         phase=phase,
         r_hif_ohm=r_hif_ohm,
         load_scale=load_scale,
+    )
+
+
+@mcp.tool(name="estimate_hif_location_magnitude_from_path")
+def estimate_hif_location_magnitude_from_path(
+    *,
+    case_path: str,
+    candidate_branch_row0: int,
+    candidate_phase: str | None = None,
+    z_obs: List[float] | None = None,
+    three_phase_voltages: List[Dict[str, Any]] | None = None,
+    pristine_model_dir: str | None = None,
+    load_scale: float = 1.0,
+    top_k: int = 5,
+    alpha_grid_size: int = 31,
+    r_grid_size: int = 35,
+    r_hif_pu_min: float = 5.0,
+    r_hif_pu_max: float = 1000.0,
+) -> Dict[str, Any]:
+    """
+    Estimate HIF position and magnitude on a suspected IEEE-14 Line.* branch.
+
+    The trace runtime hydrates `z_obs`, optional three-phase voltages, and the
+    pristine OpenDSS model context. The model should only pass the visible
+    suspected branch selected by the line-level NLM tool.
+    """
+    return _estimate_hif_location_magnitude_logic(
+        case_path=case_path,
+        candidate_branch_row0=candidate_branch_row0,
+        candidate_phase=candidate_phase,
+        z_obs=z_obs,
+        three_phase_voltages=three_phase_voltages,
+        pristine_model_dir=pristine_model_dir,
+        load_scale=load_scale,
+        top_k=top_k,
+        alpha_grid_size=alpha_grid_size,
+        r_grid_size=r_grid_size,
+        r_hif_pu_min=r_hif_pu_min,
+        r_hif_pu_max=r_hif_pu_max,
     )
 
 @mcp.tool(name="correct_topology_from_path")

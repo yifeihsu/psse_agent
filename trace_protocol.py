@@ -80,6 +80,16 @@ DECISION_SCHEMA_TEXT = {
                 "score": "number",
             }
         ],
+        "hif_parameter_estimate": {
+            "alpha_from_from_bus": "estimated line fraction from the from bus",
+            "distance_percent_from_from_bus": "estimated distance percent from the from bus",
+            "phase": "optional estimated phase if the estimator searched or scored phases",
+            "r_hif_pu": "estimated HIF resistance in per unit",
+            "r_hif_ohm": "estimated HIF resistance in ohms",
+            "p_hif_kw": "estimated HIF active power",
+            "i_hif_amp": "estimated HIF current",
+            "localization_certainty": "well_separated|moderately_separated|ambiguous_top2",
+        },
     },
     "evidence_by_stage": {
         "optional": "multi-error only; maps stage name to compact WLS evidence observed at that stage",
@@ -125,6 +135,7 @@ def decision_schema_text_for_prompt(*, include_extended_diagnostics: bool = True
     evidence = schema.get("evidence")
     if isinstance(evidence, dict):
         evidence.pop("top_hif_groups", None)
+        evidence.pop("hif_parameter_estimate", None)
     return schema
 
 
@@ -146,7 +157,8 @@ SYSTEM_PROMPT = (
     "- `correct_parameters_from_path(case_path, line_index)`: correct line parameters after retrieving parameter context.\n"
     "- `correct_topology_from_path(case_path, cb_name, desired_status)`: correct a topology mismatch after retrieving breaker context.\n"
     "- `run_hse_from_path(case_path)`: run harmonic state estimation after retrieving harmonic measurements.\n"
-    "- `run_three_phase_nlm_from_path(case_path)`: run compact three-phase NLM HIF localization evidence.\n\n"
+    "- `run_three_phase_nlm_from_path(case_path)`: run compact three-phase NLM HIF localization evidence.\n"
+    "- `estimate_hif_location_magnitude_from_path(case_path, candidate_branch_row0, candidate_phase?)`: estimate HIF line fraction and resistance after NLM selects a suspected line.\n\n"
     "Decision policy:\n"
     "1. Use widespread residual patterns to suspect topology mismatch or three-phase imbalance.\n"
     "2. Use large normalized Lagrange multipliers concentrated on one branch to suspect parameter errors.\n"
@@ -159,9 +171,11 @@ SYSTEM_PROMPT = (
     "9. If a localized gross residual remains, correct the measurement error before running or finalizing harmonic HSE; HSE does not replace SCADA measurement cleanup.\n"
     "10. If the global residual is elevated without a dominant bad measurement and harmonic measurements are available, call `run_hse_from_path`.\n"
     "11. If a hidden high-impedance fault is suspected, call `run_three_phase_nlm_from_path` and use top_hif_groups evidence.\n"
-    "12. In multi-error traces, prefer structural correction before measurement cleanup: topology, then parameter, then measurement, then harmonic follow-up.\n"
-    "13. After a correction tool succeeds, request the verification snapshot by `stage` only, then run WLS on the returned `case_path` exactly once.\n"
-    "14. Prefer compact tool use over asking the user to restate numeric payloads.\n\n"
+    "12. If NLM returns a suspected HIF line, call `estimate_hif_location_magnitude_from_path` with the NLM top-1 branch row before finalizing.\n"
+    "13. Report HIF line fraction and magnitude only from the parameter-estimation tool; if it is ambiguous, report that ambiguity instead of an exact location.\n"
+    "14. In multi-error traces, prefer structural correction before measurement cleanup: topology, then parameter, then measurement, then harmonic follow-up.\n"
+    "15. After a correction tool succeeds, request the verification snapshot by `stage` only, then run WLS on the returned `case_path` exactly once.\n"
+    "16. Prefer compact tool use over asking the user to restate numeric payloads.\n\n"
     "Indexing convention: fields ending in `0` are 0-based; `line_index` follows the tool schema and is 1-based.\n\n"
     "Return only strict JSON with this structure:\n"
     f"{json.dumps(DECISION_SCHEMA_TEXT, ensure_ascii=False)}\n"
@@ -399,6 +413,38 @@ CANONICAL_POWER_TOOLS: list[dict[str, Any]] = [
                     "case_path": {"type": "string", "description": "Case identifier or path."},
                 },
                 "required": ["case_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "estimate_hif_location_magnitude_from_path",
+            "description": (
+                "Estimate HIF position along a suspected IEEE-14 line and estimate HIF magnitude "
+                "using model-based OpenDSS residual fitting. Do not repeat measurement arrays in "
+                "the tool arguments."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_path": {"type": "string", "description": "Case identifier or path."},
+                    "candidate_branch_row0": {
+                        "type": "integer",
+                        "description": "Zero-based IEEE-14 branch row selected by the line-level HIF locator.",
+                    },
+                    "candidate_phase": {
+                        "type": ["string", "null"],
+                        "enum": ["A", "B", "C", None],
+                        "description": "Optional phase hint. If omitted or null, all phases are searched.",
+                    },
+                    "top_k": {"type": "integer", "default": 5},
+                    "alpha_grid_size": {"type": "integer", "default": 31},
+                    "r_grid_size": {"type": "integer", "default": 35},
+                    "r_hif_pu_min": {"type": "number", "default": 5.0},
+                    "r_hif_pu_max": {"type": "number", "default": 1000.0},
+                },
+                "required": ["case_path", "candidate_branch_row0"],
             },
         },
     },
@@ -877,6 +923,68 @@ def summarize_three_phase_nlm_payload(tool_payload: Mapping[str, Any]) -> dict[s
     return round_assistant_payload(prune_none(summary))
 
 
+def summarize_hif_parameter_estimate_payload(tool_payload: Mapping[str, Any]) -> dict[str, Any]:
+    estimated = tool_payload.get("estimated") if isinstance(tool_payload.get("estimated"), Mapping) else {}
+    fit = tool_payload.get("fit") if isinstance(tool_payload.get("fit"), Mapping) else {}
+    uncertainty = tool_payload.get("uncertainty") if isinstance(tool_payload.get("uncertainty"), Mapping) else {}
+    top_candidates = tool_payload.get("top_parameter_candidates")
+    compact_candidates = []
+    if isinstance(top_candidates, list):
+        for item in top_candidates[:TOPK_EVIDENCE]:
+            if not isinstance(item, Mapping):
+                continue
+            compact_candidates.append(
+                {
+                    "rank": _maybe_int(item.get("rank")),
+                    "alpha_from_from_bus": _maybe_float(item.get("alpha_from_from_bus")),
+                    "distance_percent_from_from_bus": _maybe_float(item.get("distance_percent_from_from_bus")),
+                    "phase": item.get("phase"),
+                    "r_hif_pu": _maybe_float(item.get("r_hif_pu")),
+                    "score": _maybe_float(item.get("score")),
+                }
+            )
+    summary = {
+        "success": bool(tool_payload.get("success", True)),
+        "method": tool_payload.get("method"),
+        "candidate_branch_row0": _maybe_int(tool_payload.get("candidate_branch_row0")),
+        "dss_element": tool_payload.get("dss_element"),
+        "from_bus": _maybe_int(tool_payload.get("from_bus")),
+        "to_bus": _maybe_int(tool_payload.get("to_bus")),
+        "estimated": {
+            "alpha_from_from_bus": _maybe_float(estimated.get("alpha_from_from_bus")),
+            "distance_percent_from_from_bus": _maybe_float(estimated.get("distance_percent_from_from_bus")),
+            "phase": estimated.get("phase"),
+            "r_hif_pu": _maybe_float(estimated.get("r_hif_pu")),
+            "r_hif_ohm": _maybe_float(estimated.get("r_hif_ohm")),
+            "g_hif_siemens": _maybe_float(estimated.get("g_hif_siemens")),
+            "i_hif_amp": _maybe_float(estimated.get("i_hif_amp")),
+            "p_hif_kw": _maybe_float(estimated.get("p_hif_kw")),
+            "q_hif_kvar": _maybe_float(estimated.get("q_hif_kvar")),
+        },
+        "fit": {
+            "weighted_residual_norm": _maybe_float(fit.get("weighted_residual_norm")),
+            "residual_reduction_vs_no_refinement": _maybe_float(
+                fit.get("residual_reduction_vs_no_refinement")
+            ),
+            "relative_residual_improvement": _maybe_float(
+                fit.get("relative_residual_improvement")
+            ),
+            "localization_certainty": fit.get("localization_certainty"),
+            "ambiguity": bool(fit.get("ambiguity", False)),
+        },
+        "uncertainty": {
+            "alpha_ci90": uncertainty.get("alpha_ci90"),
+            "r_hif_pu_ci90": uncertainty.get("r_hif_pu_ci90"),
+        },
+        "top_parameter_candidates": compact_candidates,
+    }
+    if isinstance(tool_payload.get("phase_scores"), Mapping):
+        summary["phase_scores"] = tool_payload.get("phase_scores")
+    if tool_payload.get("error"):
+        summary["error"] = str(tool_payload["error"])
+    return round_assistant_payload(prune_none(summary))
+
+
 def summarize_parameter_context_payload(tool_payload: Mapping[str, Any]) -> dict[str, Any]:
     z_scans = tool_payload.get("z_scans") or []
     initial_states = tool_payload.get("initial_states") or []
@@ -963,6 +1071,8 @@ def summarize_tool_result_for_conversation(
         return summarize_hse_payload(tool_result)
     if tool_name == "run_three_phase_nlm_from_path":
         return summarize_three_phase_nlm_payload(tool_result)
+    if tool_name == "estimate_hif_location_magnitude_from_path":
+        return summarize_hif_parameter_estimate_payload(tool_result)
     if tool_name == "get_parameter_context":
         return summarize_parameter_context_payload(tool_result)
     if tool_name == "get_topology_context":
@@ -1163,6 +1273,46 @@ def hydrate_tool_arguments(
                 if key not in hydrated and source.get(key) is not None:
                     hydrated[key] = source.get(key)
                     notes.append(f"hydrated_hif_{key}")
+
+    if tool_name == "estimate_hif_location_magnitude_from_path":
+        source = hidden.get("hif_context")
+        source_from_hidden = isinstance(source, dict)
+        if not source_from_hidden:
+            source = latest_user_payload_with_keys(messages, ("z_obs",))
+        if not isinstance(source, dict):
+            source = {}
+        if source.get("case_path") and (source_from_hidden or not hydrated.get("case_path")):
+            hydrated["case_path"] = source["case_path"]
+            notes.append("hydrated_hif_estimator_case_path")
+        if "z_obs" not in hydrated:
+            z_source = source if isinstance(source.get("z_obs"), list) else latest_user_payload_with_keys(messages, ("z_obs",))
+            if isinstance(z_source, dict) and isinstance(z_source.get("z_obs"), list):
+                hydrated["z_obs"] = z_source["z_obs"]
+                notes.append("hydrated_hif_estimator_z_obs")
+        if "three_phase_voltages" not in hydrated:
+            v_source = source if isinstance(source.get("three_phase_voltages"), list) else latest_user_payload_with_keys(
+                messages,
+                ("three_phase_voltages",),
+            )
+            if isinstance(v_source, dict) and isinstance(v_source.get("three_phase_voltages"), list):
+                hydrated["three_phase_voltages"] = v_source["three_phase_voltages"]
+                notes.append("hydrated_hif_estimator_three_phase_voltages")
+        if "candidate_branch_row0" not in hydrated:
+            nlm_source = latest_tool_payload_with_keys(
+                messages,
+                ("top_hif_groups",),
+                tool_name="run_three_phase_nlm_from_path",
+            )
+            groups = nlm_source.get("top_hif_groups") if isinstance(nlm_source, dict) else None
+            if isinstance(groups, list) and groups and isinstance(groups[0], Mapping):
+                branch = _maybe_int(groups[0].get("branch_row0"))
+                if branch is not None:
+                    hydrated["candidate_branch_row0"] = branch
+                    notes.append("hydrated_hif_estimator_candidate_branch_from_nlm")
+        for key in ("pristine_model_dir", "load_scale"):
+            if key not in hydrated and source.get(key) is not None:
+                hydrated[key] = source.get(key)
+                notes.append(f"hydrated_hif_estimator_{key}")
 
     if tool_name == "correct_topology_from_path":
         source = hidden.get("topology_context")

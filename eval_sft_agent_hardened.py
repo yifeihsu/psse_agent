@@ -141,7 +141,9 @@ from mcp_server.matpower_server import (  # noqa: E402
     correct_measurements_from_path,
     correct_parameters_from_path,
     correct_topology_from_path,
+    estimate_hif_location_magnitude_from_path,
     run_hse_from_path,
+    run_three_phase_nlm_from_path,
     wls_from_path,
 )
 
@@ -150,7 +152,9 @@ TOOL_MAP = {
     "correct_measurements_from_path": correct_measurements_from_path,
     "correct_parameters_from_path": correct_parameters_from_path,
     "correct_topology_from_path": correct_topology_from_path,
+    "estimate_hif_location_magnitude_from_path": estimate_hif_location_magnitude_from_path,
     "run_hse_from_path": run_hse_from_path,
+    "run_three_phase_nlm_from_path": run_three_phase_nlm_from_path,
 }
 
 
@@ -235,6 +239,41 @@ DEFAULT_POWER_TOOLS: list[dict[str, Any]] = [
                     "slack_bus": {"type": "integer", "description": "Optional slack bus index."},
                 },
                 "required": ["case_path", "harmonic_measurements"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_three_phase_nlm_from_path",
+            "description": "Run compact three-phase NLM high-impedance-fault localization evidence.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_path": {"type": "string", "description": "Case identifier or path."},
+                },
+                "required": ["case_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "estimate_hif_location_magnitude_from_path",
+            "description": "Estimate HIF line fraction and resistance after NLM selects a suspected line.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_path": {"type": "string", "description": "Case identifier or path."},
+                    "candidate_branch_row0": {"type": "integer", "description": "Zero-based IEEE-14 branch row."},
+                    "candidate_phase": {"type": ["string", "null"], "enum": ["A", "B", "C", None]},
+                    "top_k": {"type": "integer", "default": 5},
+                    "alpha_grid_size": {"type": "integer", "default": 31},
+                    "r_grid_size": {"type": "integer", "default": 35},
+                    "r_hif_pu_min": {"type": "number", "default": 5.0},
+                    "r_hif_pu_max": {"type": "number", "default": 1000.0},
+                },
+                "required": ["case_path", "candidate_branch_row0"],
             },
         },
     },
@@ -364,6 +403,12 @@ def repair_tool_arguments(tool_name: str, arguments: Any, user_snapshot: dict[st
         elif len(z_val) != len(user_z):
             repaired["z"] = user_z
             notes.append(f"replaced_{tool_name}_z_len_{len(z_val)}_with_user_len_{len(user_z)}")
+
+    if tool_name == "estimate_hif_location_magnitude_from_path" and isinstance(user_z, list):
+        z_val = repaired.get("z_obs")
+        if not isinstance(z_val, list):
+            repaired["z_obs"] = user_z
+            notes.append("filled_hif_estimator_z_obs_from_user")
 
     return repaired, notes
 

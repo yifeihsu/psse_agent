@@ -54,6 +54,7 @@ from mcp_server.matpower_server import (
     correct_measurements_from_path,
     correct_parameters_from_path,
     correct_topology_from_path,
+    estimate_hif_location_magnitude_from_path,
     run_hse_from_path,
     run_three_phase_nlm_from_path,
     wls_from_path,
@@ -113,6 +114,7 @@ TOOL_MAP = {
     "correct_measurements_from_path": correct_measurements_from_path,
     "correct_parameters_from_path": correct_parameters_from_path,
     "correct_topology_from_path": correct_topology_from_path,
+    "estimate_hif_location_magnitude_from_path": estimate_hif_location_magnitude_from_path,
     "run_hse_from_path": run_hse_from_path,
     "run_three_phase_nlm_from_path": run_three_phase_nlm_from_path,
 }
@@ -122,6 +124,7 @@ CORE_TOOL_NAMES = frozenset(
         "correct_measurements_from_path",
         "correct_parameters_from_path",
         "correct_topology_from_path",
+        "estimate_hif_location_magnitude_from_path",
         "run_hse_from_path",
         "run_three_phase_nlm_from_path",
     }
@@ -229,9 +232,11 @@ def apply_tool_scope_to_messages(messages: list[dict[str, Any]], tool_scope: str
                 if (
                     stripped.startswith(SYSTEM_PROMPT_PREFIX.strip())
                     or "run_three_phase_nlm_from_path" in stripped
+                    or "estimate_hif_location_magnitude_from_path" in stripped
                     or "three_phase_imbalance" in stripped
                     or "high_impedance_fault" in stripped
                     or "top_hif_groups" in stripped
+                    or "hif_parameter_estimate" in stripped
                 ):
                     message["content"] = SCADA_HARMONIC_SYSTEM_PROMPT
                     replaced = True
@@ -1680,6 +1685,16 @@ def compact_tool_arguments_for_prompt(tool_name: str, arguments: dict[str, Any])
         "correct_topology_from_path": {"case_path", "cb_name", "desired_status"},
         "run_hse_from_path": {"case_path"},
         "run_three_phase_nlm_from_path": {"case_path"},
+        "estimate_hif_location_magnitude_from_path": {
+            "case_path",
+            "candidate_branch_row0",
+            "candidate_phase",
+            "top_k",
+            "alpha_grid_size",
+            "r_grid_size",
+            "r_hif_pu_min",
+            "r_hif_pu_max",
+        },
     }.get(tool_name)
     if keep_keys is None:
         return dict(arguments)

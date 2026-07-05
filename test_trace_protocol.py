@@ -96,6 +96,7 @@ class TraceProtocolTests(unittest.TestCase):
         self.assertIn("applied_tools", DECISION_SCHEMA_TEXT["action"])
         self.assertIn("high_impedance_fault", DECISION_SCHEMA_TEXT["verdict"]["error_family"])
         self.assertIn("top_hif_groups", DECISION_SCHEMA_TEXT["evidence"])
+        self.assertIn("hif_parameter_estimate", DECISION_SCHEMA_TEXT["evidence"])
         self.assertIn("first_applied_tool", DECISION_SCHEMA_TEXT["action"])
         self.assertIn("last_applied_tool", DECISION_SCHEMA_TEXT["action"])
         self.assertIn("verification_summaries", DECISION_SCHEMA_TEXT["action"])
@@ -116,9 +117,11 @@ class TraceProtocolTests(unittest.TestCase):
 
         self.assertIn("run_hse_from_path", tool_names)
         self.assertNotIn("run_three_phase_nlm_from_path", tool_names)
+        self.assertNotIn("estimate_hif_location_magnitude_from_path", tool_names)
         self.assertNotIn("high_impedance_fault", SCADA_HARMONIC_SYSTEM_PROMPT)
         self.assertNotIn("three_phase_imbalance", SCADA_HARMONIC_SYSTEM_PROMPT)
         self.assertNotIn("top_hif_groups", SCADA_HARMONIC_SYSTEM_PROMPT)
+        self.assertNotIn("hif_parameter_estimate", SCADA_HARMONIC_SYSTEM_PROMPT)
 
     def test_verification_snapshot_schema_is_stage_only(self) -> None:
         schemas = canonical_tool_schemas()
@@ -735,11 +738,15 @@ class TraceProtocolTests(unittest.TestCase):
         schemas = canonical_tool_schemas()
         names = [tool["function"]["name"] for tool in schemas]
         self.assertIn("run_three_phase_nlm_from_path", names)
+        self.assertIn("estimate_hif_location_magnitude_from_path", names)
 
         messages = [make_initial_user_message()]
         hidden_context = {
             "hif_context": {
                 "case_path": "case14",
+                "z_obs": [1.0, 2.0, 3.0],
+                "three_phase_voltages": [{"bus": "b1", "vln_pu": [1.0, 1.0, 1.0], "ang_deg": [0.0, -120.0, 120.0]}],
+                "load_scale": 1.1,
                 "label": {"branch_row0": 2, "dss_element": "Line.2-3"},
                 "nlm_diagnostic": {
                     "success": True,
@@ -777,6 +784,55 @@ class TraceProtocolTests(unittest.TestCase):
         )
         self.assertTrue(compact["success"])
         self.assertEqual(compact["top_hif_groups"][0]["branch_row0"], 2)
+
+        messages_with_nlm = messages + [
+            {
+                "role": "tool",
+                "name": "run_three_phase_nlm_from_path",
+                "content": json.dumps(compact),
+            }
+        ]
+        est_args, est_notes = hydrate_tool_arguments(
+            "estimate_hif_location_magnitude_from_path",
+            {"case_path": "case14"},
+            messages_with_nlm,
+            hidden_context=hidden_context,
+        )
+        self.assertEqual(est_args["candidate_branch_row0"], 2)
+        self.assertEqual(est_args["z_obs"], [1.0, 2.0, 3.0])
+        self.assertEqual(est_args["load_scale"], 1.1)
+        self.assertIn("hydrated_hif_estimator_candidate_branch_from_nlm", est_notes)
+
+        estimate_payload = {
+            "success": True,
+            "method": "model_based_hif_parameter_search",
+            "candidate_branch_row0": 2,
+            "dss_element": "Line.2-3",
+            "from_bus": 2,
+            "to_bus": 3,
+            "estimated": {
+                "alpha_from_from_bus": 0.47,
+                "distance_percent_from_from_bus": 47.0,
+                "phase": "B",
+                "r_hif_pu": 83.0,
+                "r_hif_ohm": 0.83,
+                "g_hif_siemens": 1.2048,
+                "i_hif_amp": 695.0,
+                "p_hif_kw": 401.0,
+                "q_hif_kvar": 0.0,
+            },
+            "fit": {"weighted_residual_norm": 1.8, "localization_certainty": "well_separated"},
+            "uncertainty": {"alpha_ci90": [0.43, 0.51], "r_hif_pu_ci90": [71.0, 101.0]},
+            "top_parameter_candidates": [{"rank": 1, "alpha_from_from_bus": 0.47, "r_hif_pu": 83.0, "score": 1.8}],
+        }
+        compact_est = summarize_tool_result_for_conversation(
+            "estimate_hif_location_magnitude_from_path",
+            estimate_payload,
+            {},
+            {},
+        )
+        self.assertEqual(compact_est["estimated"]["alpha_from_from_bus"], 0.47)
+        self.assertEqual(compact_est["fit"]["localization_certainty"], "well_separated")
 
     def test_hif_final_target_uses_visible_nlm_not_hidden_label(self) -> None:
         meta = {
@@ -819,6 +875,28 @@ class TraceProtocolTests(unittest.TestCase):
                 }
             ],
         }
+        hif_estimate_payload = {
+            "success": True,
+            "method": "model_based_hif_parameter_search",
+            "candidate_branch_row0": 4,
+            "dss_element": "Line.2-5",
+            "from_bus": 2,
+            "to_bus": 5,
+            "estimated": {
+                "alpha_from_from_bus": 0.472,
+                "distance_percent_from_from_bus": 47.2,
+                "phase": "C",
+                "r_hif_pu": 83.6,
+                "r_hif_ohm": 0.836,
+                "g_hif_siemens": 1.196,
+                "i_hif_amp": 692.1,
+                "p_hif_kw": 398.7,
+                "q_hif_kvar": 0.0,
+            },
+            "fit": {"weighted_residual_norm": 1.83, "localization_certainty": "well_separated"},
+            "uncertainty": {"alpha_ci90": [0.43, 0.51], "r_hif_pu_ci90": [71.0, 101.0]},
+            "top_parameter_candidates": [{"rank": 1, "alpha_from_from_bus": 0.472, "r_hif_pu": 83.6, "score": 1.83}],
+        }
         primary_wls = {
             "success": True,
             "r": [0.0] * 122,
@@ -827,14 +905,29 @@ class TraceProtocolTests(unittest.TestCase):
             "global_residual_threshold": 118.0,
         }
 
-        final = build_final_target(rec, meta, idx_map, primary_wls, nlm_payload=nlm_payload)
+        final = build_final_target(
+            rec,
+            meta,
+            idx_map,
+            primary_wls,
+            nlm_payload=nlm_payload,
+            hif_estimate_payload=hif_estimate_payload,
+        )
         details = final["suspect_location"]["details"]
 
         self.assertEqual(details["branch_row0"], 4)
         self.assertEqual(details["dss_element"], "Line.2-5")
         self.assertEqual(details["top_hif_groups"][0]["branch_row0"], 4)
         self.assertEqual(details["localization_certainty"], "single_top_candidate")
-        self.assertNotIn("phase", details)
+        self.assertEqual(details["alpha_from_from_bus"], 0.472)
+        self.assertEqual(details["r_hif_pu"], 83.6)
+        self.assertEqual(details["phase"], "C")
+        self.assertEqual(final["action"]["applied_tool"], "estimate_hif_location_magnitude_from_path")
+        self.assertEqual(
+            final["action"]["applied_tools"],
+            ["run_three_phase_nlm_from_path", "estimate_hif_location_magnitude_from_path"],
+        )
+        self.assertEqual(final["evidence"]["hif_parameter_estimate"]["alpha_from_from_bus"], 0.472)
 
     def test_hif_final_target_marks_near_tied_top2_as_ambiguous(self) -> None:
         meta = {

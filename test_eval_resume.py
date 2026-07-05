@@ -21,6 +21,7 @@ from trace_protocol import SCADA_HARMONIC_SYSTEM_PROMPT, SYSTEM_PROMPT
 class EvalResumeTests(unittest.TestCase):
     def test_canonical_eval_runtime_registers_hif_nlm_tool(self) -> None:
         self.assertIn("run_three_phase_nlm_from_path", TOOL_MAP)
+        self.assertIn("estimate_hif_location_magnitude_from_path", TOOL_MAP)
 
     def test_final_json_parser_strips_trailing_gemma_turn_marker(self) -> None:
         class DummyTokenizer:
@@ -202,10 +203,12 @@ class EvalResumeTests(unittest.TestCase):
 
         self.assertIn("run_hse_from_path", tool_names)
         self.assertNotIn("run_three_phase_nlm_from_path", tool_names)
+        self.assertNotIn("estimate_hif_location_magnitude_from_path", tool_names)
         self.assertEqual(scoped_messages[0]["content"], SCADA_HARMONIC_SYSTEM_PROMPT)
         self.assertNotIn("high_impedance_fault", scoped_messages[0]["content"])
         self.assertNotIn("three_phase_imbalance", scoped_messages[0]["content"])
         self.assertNotIn("top_hif_groups", scoped_messages[0]["content"])
+        self.assertNotIn("hif_parameter_estimate", scoped_messages[0]["content"])
 
     def test_sequence_only_parameter_topology_final_skips_post_parameter_verification(self) -> None:
         hidden_context = {

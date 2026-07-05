@@ -21,7 +21,9 @@ from mcp_server.matpower_server import (
     correct_measurements_from_path,
     correct_parameters_from_path,
     correct_topology_from_path,
+    estimate_hif_location_magnitude_from_path,
     run_hse_from_path,
+    run_three_phase_nlm_from_path,
     wls_from_path,
 )
 
@@ -170,7 +172,9 @@ TOOL_MAP = {
     "correct_measurements_from_path": correct_measurements_from_path,
     "correct_parameters_from_path": correct_parameters_from_path,
     "correct_topology_from_path": correct_topology_from_path,
+    "estimate_hif_location_magnitude_from_path": estimate_hif_location_magnitude_from_path,
     "run_hse_from_path": run_hse_from_path,
+    "run_three_phase_nlm_from_path": run_three_phase_nlm_from_path,
 }
 
 

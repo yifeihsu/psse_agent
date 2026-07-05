@@ -41,10 +41,16 @@ def validate_row(row: Mapping[str, Any], *, allow_metadata_fallback: bool = Fals
 
     issues: list[str] = []
     action = final.get("action") if isinstance(final.get("action"), Mapping) else {}
-    if action.get("applied_tool") != "run_three_phase_nlm_from_path":
+    applied_tools = action.get("applied_tools") if isinstance(action.get("applied_tools"), list) else []
+    if action.get("applied_tool") != "estimate_hif_location_magnitude_from_path":
+        issues.append("missing_hif_parameter_estimator_action")
+    if "run_three_phase_nlm_from_path" not in applied_tools:
         issues.append("missing_nlm_tool_action")
+    if "estimate_hif_location_magnitude_from_path" not in applied_tools:
+        issues.append("missing_hif_parameter_estimator_tool_action")
 
     nlm = _tool_payload(messages, "run_three_phase_nlm_from_path")
+    hif_est = _tool_payload(messages, "estimate_hif_location_magnitude_from_path")
     top_groups = nlm.get("top_hif_groups") if isinstance(nlm.get("top_hif_groups"), list) else []
     if not top_groups:
         issues.append("missing_nlm_top_hif_groups")
@@ -53,9 +59,23 @@ def validate_row(row: Mapping[str, Any], *, allow_metadata_fallback: bool = Fals
 
     if nlm.get("method") == "metadata_fallback" and not allow_metadata_fallback:
         issues.append("metadata_fallback_nlm")
+    if not hif_est:
+        issues.append("missing_hif_parameter_estimator_payload")
+    elif hif_est.get("success") is False:
+        issues.append("failed_hif_parameter_estimator")
+    hif_estimated = hif_est.get("estimated") if isinstance(hif_est.get("estimated"), Mapping) else {}
+    if hif_est and not isinstance(hif_estimated.get("alpha_from_from_bus"), (int, float)):
+        issues.append("missing_hif_alpha_estimate")
+    if hif_est and not isinstance(hif_estimated.get("r_hif_pu"), (int, float)):
+        issues.append("missing_hif_resistance_estimate")
 
     evidence = final.get("evidence") if isinstance(final.get("evidence"), Mapping) else {}
     final_groups = evidence.get("top_hif_groups") if isinstance(evidence.get("top_hif_groups"), list) else []
+    final_estimate = (
+        evidence.get("hif_parameter_estimate")
+        if isinstance(evidence.get("hif_parameter_estimate"), Mapping)
+        else {}
+    )
     details = (
         final.get("suspect_location", {}).get("details", {})
         if isinstance(final.get("suspect_location"), Mapping)
@@ -66,9 +86,22 @@ def validate_row(row: Mapping[str, Any], *, allow_metadata_fallback: bool = Fals
             issues.append("final_location_not_nlm_top1")
     if top_groups and final_groups and final_groups[0].get("branch_row0") != top_groups[0].get("branch_row0"):
         issues.append("final_evidence_not_nlm_top1")
+    if hif_estimated and isinstance(details, Mapping):
+        if details.get("alpha_from_from_bus") != hif_estimated.get("alpha_from_from_bus"):
+            issues.append("final_alpha_not_estimator")
+        if details.get("r_hif_pu") != hif_estimated.get("r_hif_pu"):
+            issues.append("final_resistance_not_estimator")
+    if hif_estimated and isinstance(final_estimate, Mapping):
+        if final_estimate.get("alpha_from_from_bus") != hif_estimated.get("alpha_from_from_bus"):
+            issues.append("final_evidence_alpha_not_estimator")
 
     if isinstance(details, Mapping) and "phase" in details:
-        has_phase_evidence = bool(nlm.get("suspected_phase") or nlm.get("phase_scores"))
+        has_phase_evidence = bool(
+            nlm.get("suspected_phase")
+            or nlm.get("phase_scores")
+            or hif_estimated.get("phase")
+            or hif_est.get("phase_scores")
+        )
         if not has_phase_evidence:
             issues.append("unsupported_final_phase")
 

@@ -54,6 +54,7 @@ from trace_protocol import (
     round_tool_arguments,
     round_user_payload,
     scada_harmonic_tool_schemas,
+    summarize_hif_parameter_estimate_payload,
     summarize_hse_payload,
     summarize_three_phase_nlm_payload,
     summarize_tool_result_for_conversation,
@@ -88,7 +89,7 @@ TOOL_BY_FAMILY = {
     "parameter_error": "correct_parameters_from_path",
     "topology_error": "correct_topology_from_path",
     "harmonic_anomaly": "run_hse_from_path",
-    "high_impedance_fault": "run_three_phase_nlm_from_path",
+    "high_impedance_fault": "estimate_hif_location_magnitude_from_path",
 }
 HARDENING_MAX_EXAMPLES = 150
 HARDENING_TEMPLATES = (
@@ -144,6 +145,8 @@ class BuilderConfig:
     allow_hif_metadata_fallback: bool
     hardening_examples: int
     timeout_s: int = 60
+    hif_estimator_alpha_grid_size: int = 15
+    hif_estimator_r_grid_size: int = 17
 
 
 # ----------------------------- low-level helpers -----------------------------
@@ -595,6 +598,23 @@ def call_tool_json(endpoint: str, name: str, arguments: Mapping[str, Any], timeo
                 load_scale=arguments.get("load_scale", 1.0),
             )
             return _make_serializable(result)
+
+        elif name == "estimate_hif_location_magnitude_from_path":
+            result = mp_tools.estimate_hif_location_magnitude_from_path.fn(
+                case_path=arguments["case_path"],
+                candidate_branch_row0=arguments["candidate_branch_row0"],
+                candidate_phase=arguments.get("candidate_phase"),
+                z_obs=arguments.get("z_obs", arguments.get("z")),
+                three_phase_voltages=arguments.get("three_phase_voltages"),
+                pristine_model_dir=arguments.get("pristine_model_dir"),
+                load_scale=arguments.get("load_scale", 1.0),
+                top_k=arguments.get("top_k", 5),
+                alpha_grid_size=arguments.get("alpha_grid_size", 31),
+                r_grid_size=arguments.get("r_grid_size", 35),
+                r_hif_pu_min=arguments.get("r_hif_pu_min", 5.0),
+                r_hif_pu_max=arguments.get("r_hif_pu_max", 1000.0),
+            )
+            return _make_serializable(result)
             
         else:
             return {"success": False, "error": f"Unknown tool name locally: {name}"}
@@ -791,6 +811,68 @@ def make_mock_three_phase_nlm_payload(rec: Mapping[str, Any]) -> Dict[str, Any]:
         return {"success": False, "error": str(exc), "top_hif_groups": []}
 
 
+def make_mock_hif_parameter_estimate_payload(
+    rec: Mapping[str, Any],
+    candidate_branch_row0: int,
+) -> Dict[str, Any]:
+    lab = rec.get("label", {})
+    if not isinstance(lab, Mapping):
+        lab = {}
+    alpha = _maybe_float(lab.get("split_ratio"))
+    if alpha is None:
+        alpha = 0.5
+    r_hif_pu = _maybe_float(lab.get("r_hif_pu"))
+    if r_hif_pu is None:
+        r_hif_pu = 100.0
+    r_hif_ohm = _maybe_float(lab.get("r_hif_ohm"))
+    if r_hif_ohm is None:
+        r_hif_ohm = float(r_hif_pu) * 0.01
+    kv_ln = _maybe_float(lab.get("kv_ln")) or (1.0 / np.sqrt(3.0))
+    fault_v = float(kv_ln) * 1000.0
+    p_kw = (fault_v**2) / float(r_hif_ohm) / 1000.0 if float(r_hif_ohm) > 0 else None
+    i_amp = fault_v / float(r_hif_ohm) if float(r_hif_ohm) > 0 else None
+    return {
+        "success": True,
+        "method": "mock_model_based_hif_parameter_search",
+        "candidate_branch_row0": int(candidate_branch_row0),
+        "input_branch_row0": int(candidate_branch_row0),
+        "dss_element": lab.get("dss_element"),
+        "from_bus": _maybe_int(lab.get("from_bus")),
+        "to_bus": _maybe_int(lab.get("to_bus")),
+        "estimated": {
+            "alpha_from_from_bus": float(alpha),
+            "distance_percent_from_from_bus": 100.0 * float(alpha),
+            "phase": lab.get("phase"),
+            "r_hif_pu": float(r_hif_pu),
+            "r_hif_ohm": float(r_hif_ohm),
+            "g_hif_siemens": 1.0 / float(r_hif_ohm) if float(r_hif_ohm) > 0 else None,
+            "i_hif_amp": i_amp,
+            "p_hif_kw": p_kw,
+            "q_hif_kvar": 0.0,
+        },
+        "fit": {
+            "weighted_residual_norm": 0.0,
+            "residual_reduction_vs_no_refinement": 1.0,
+            "localization_certainty": "well_separated",
+            "ambiguity": False,
+        },
+        "uncertainty": {
+            "alpha_ci90": [max(0.01, float(alpha) - 0.025), min(0.99, float(alpha) + 0.025)],
+            "r_hif_pu_ci90": [float(r_hif_pu) * 0.9, float(r_hif_pu) * 1.1],
+        },
+        "top_parameter_candidates": [
+            {
+                "rank": 1,
+                "alpha_from_from_bus": float(alpha),
+                "distance_percent_from_from_bus": 100.0 * float(alpha),
+                "phase": lab.get("phase"),
+                "r_hif_pu": float(r_hif_pu),
+                "score": 0.0,
+            }
+        ],
+    }
+
+
 # ----------------------------- conversation builders -----------------------------
 
 
@@ -897,7 +979,8 @@ def make_user_payload(rec: Mapping[str, Any], meta: Mapping[str, Any], case_path
     if normalize_scenario(str(rec.get("scenario", ""))) == "high_impedance_fault":
         payload["note"] = (
             "This snapshot is a 1φ-equivalent operator vector from a copied IEEE-14 OpenDSS scenario. "
-            "If a hidden high-impedance fault is suspected, use the three-phase NLM localization tool."
+            "If a hidden high-impedance fault is suspected, use the three-phase NLM localization tool, "
+            "then estimate the HIF position and magnitude on the NLM-selected line."
         )
     return round_user_payload(payload)
 
@@ -976,6 +1059,8 @@ def make_hif_context_payload(rec: Mapping[str, Any], case_path: str) -> Dict[str
     return round_user_payload(
         {
             "case_path": case_path,
+            "z_obs": rec.get("z_obs", []),
+            "three_phase_voltages": rec.get("three_phase_voltages", []),
             "nlm_diagnostic": nlm_diagnostic,
             "label": label,
             "pristine_model_dir": str(REPO_ROOT / "IEEE_14_OpenDSS"),
@@ -1627,6 +1712,7 @@ def build_final_target(
     verification_pre_payloads: Optional[Mapping[str, Mapping[str, Any]]] = None,
     hse_payload: Optional[Mapping[str, Any]] = None,
     nlm_payload: Optional[Mapping[str, Any]] = None,
+    hif_estimate_payload: Optional[Mapping[str, Any]] = None,
     correction_tool_name: Optional[str] = None,
     applied_tools: Optional[List[str]] = None,
     correction_steps: Optional[List[Mapping[str, Any]]] = None,
@@ -1648,6 +1734,17 @@ def build_final_target(
     }
     if isinstance(nlm_payload, Mapping):
         evidence["top_hif_groups"] = summarize_three_phase_nlm_payload(nlm_payload).get("top_hif_groups", [])
+    if isinstance(hif_estimate_payload, Mapping):
+        compact_hif_estimate = summarize_hif_parameter_estimate_payload(hif_estimate_payload)
+        estimated = compact_hif_estimate.get("estimated") if isinstance(compact_hif_estimate.get("estimated"), Mapping) else {}
+        fit = compact_hif_estimate.get("fit") if isinstance(compact_hif_estimate.get("fit"), Mapping) else {}
+        if estimated:
+            evidence["hif_parameter_estimate"] = {
+                **dict(estimated),
+                "localization_certainty": fit.get("localization_certainty"),
+                "ambiguity": fit.get("ambiguity"),
+                "weighted_residual_norm": fit.get("weighted_residual_norm"),
+            }
 
     families = multi_error_families(rec)
     if scenario == "multi_error" and families:
@@ -1986,6 +2083,11 @@ def build_final_target(
     elif scenario == "high_impedance_fault":
         raw_nlm_payload = nlm_payload or rec.get("nlm_diagnostic", {})
         compact_nlm = summarize_three_phase_nlm_payload(raw_nlm_payload)
+        compact_hif_estimate = (
+            summarize_hif_parameter_estimate_payload(hif_estimate_payload)
+            if isinstance(hif_estimate_payload, Mapping)
+            else {}
+        )
         top_groups = compact_nlm.get("top_hif_groups", [])
         if not evidence.get("top_hif_groups"):
             evidence["top_hif_groups"] = top_groups
@@ -2010,23 +2112,70 @@ def build_final_target(
             "top_hif_groups": top_groups,
             **certainty,
         }
+        estimated = (
+            compact_hif_estimate.get("estimated")
+            if isinstance(compact_hif_estimate.get("estimated"), Mapping)
+            else {}
+        )
+        fit = compact_hif_estimate.get("fit") if isinstance(compact_hif_estimate.get("fit"), Mapping) else {}
+        uncertainty = (
+            compact_hif_estimate.get("uncertainty")
+            if isinstance(compact_hif_estimate.get("uncertainty"), Mapping)
+            else {}
+        )
+        if estimated:
+            details.update(
+                {
+                    "alpha_from_from_bus": estimated.get("alpha_from_from_bus"),
+                    "distance_percent_from_from_bus": estimated.get("distance_percent_from_from_bus"),
+                    "r_hif_pu": estimated.get("r_hif_pu"),
+                    "r_hif_ohm": estimated.get("r_hif_ohm"),
+                    "g_hif_siemens": estimated.get("g_hif_siemens"),
+                    "i_hif_amp": estimated.get("i_hif_amp"),
+                    "p_hif_kw": estimated.get("p_hif_kw"),
+                    "q_hif_kvar": estimated.get("q_hif_kvar"),
+                    "parameter_fit": fit,
+                    "parameter_uncertainty": uncertainty,
+                    "top_parameter_candidates": compact_hif_estimate.get("top_parameter_candidates"),
+                }
+            )
+            if estimated.get("phase") is not None:
+                details["phase"] = estimated.get("phase")
         suspected_phase = compact_nlm.get("suspected_phase")
-        if suspected_phase is not None:
+        if suspected_phase is not None and "phase" not in details:
             details["phase"] = suspected_phase
         if compact_nlm.get("phase_scores") is not None:
             details["phase_scores"] = compact_nlm.get("phase_scores")
+        if compact_hif_estimate.get("phase_scores") is not None:
+            details["phase_scores"] = compact_hif_estimate.get("phase_scores")
         suspect_location = {
             "domain": "fault",
             "details": {k: v for k, v in details.items() if v not in (None, [], {})},
         }
+        applied_tool = (
+            "estimate_hif_location_magnitude_from_path"
+            if isinstance(hif_estimate_payload, Mapping) and hif_estimate_payload.get("success", True)
+            else "run_three_phase_nlm_from_path"
+        )
         action = {
-            "applied_tool": "run_three_phase_nlm_from_path",
-            "arguments_hint": {"high_impedance_fault": {"case_path": "case14"}},
+            "applied_tool": applied_tool,
+            "arguments_hint": {
+                "high_impedance_fault": {
+                    "case_path": "case14",
+                    "candidate_branch_row0": branch_row0,
+                }
+            },
             "request_more_data": False,
             "requested_data": None,
             "verification_summary": None,
         }
-        summary = "Three-phase NLM line-group evidence is most consistent with a hidden high-impedance fault."
+        if estimated:
+            summary = (
+                "Three-phase NLM localized the suspected HIF line, and model-based parameter fitting "
+                "estimated the fault position and HIF resistance."
+            )
+        else:
+            summary = "Three-phase NLM line-group evidence is most consistent with a hidden high-impedance fault."
         if certainty.get("localization_certainty") == "ambiguous_top2":
             summary = (
                 "Three-phase NLM line-group evidence indicates a hidden high-impedance fault, "
@@ -2049,7 +2198,13 @@ def build_final_target(
     verdict["error_families"] = family_list
 
     tool_list = list(applied_tools or [])
-    if not tool_list and action.get("applied_tool"):
+    if (
+        not tool_list
+        and family == "high_impedance_fault"
+        and action.get("applied_tool") == "estimate_hif_location_magnitude_from_path"
+    ):
+        tool_list = ["run_three_phase_nlm_from_path", "estimate_hif_location_magnitude_from_path"]
+    elif not tool_list and action.get("applied_tool"):
         tool_list = [str(action["applied_tool"])]
     action["first_applied_tool"] = tool_list[0] if tool_list else None
     action["last_applied_tool"] = tool_list[-1] if tool_list else None
@@ -2186,11 +2341,17 @@ def rejection_reason(final_target: Mapping[str, Any]) -> Optional[str]:
         if not details or details.get("hse_best_candidate_bus_1based") is None:
             return "harmonic_anomaly_missing_hse_result"
     elif family == "high_impedance_fault":
-        if action.get("applied_tool") != "run_three_phase_nlm_from_path":
+        applied = action.get("applied_tools") if isinstance(action.get("applied_tools"), list) else []
+        if "run_three_phase_nlm_from_path" not in applied:
             return "high_impedance_fault_missing_nlm_tool"
+        if "estimate_hif_location_magnitude_from_path" not in applied:
+            return "high_impedance_fault_missing_parameter_estimator_tool"
         hif_groups = evidence.get("top_hif_groups", [])
         if not isinstance(hif_groups, list) or not hif_groups:
             return "high_impedance_fault_missing_nlm_evidence"
+        hif_estimate = evidence.get("hif_parameter_estimate")
+        if not isinstance(hif_estimate, Mapping) or _maybe_float(hif_estimate.get("alpha_from_from_bus")) is None:
+            return "high_impedance_fault_missing_parameter_estimate"
     elif family == "three_phase_imbalance":
         if bool(action.get("request_more_data")):
             return "three_phase_imbalance_missing_followup"
@@ -3137,6 +3298,7 @@ def build_sft(config: BuilderConfig) -> None:
             verification_pre_payloads: dict[str, Mapping[str, Any]] = {}
             hse_payload: Optional[Dict[str, Any]] = None
             nlm_payload: Optional[Dict[str, Any]] = None
+            hif_estimate_payload: Optional[Dict[str, Any]] = None
             applied_tools: list[str] = []
             correction_steps: list[Mapping[str, Any]] = []
             tool_steps: list[Mapping[str, Any]] = []
@@ -3631,6 +3793,74 @@ def build_sft(config: BuilderConfig) -> None:
                         }
                     )
                     continue
+                compact_nlm = summarize_three_phase_nlm_payload(nlm_payload if isinstance(nlm_payload, Mapping) else {})
+                top_groups = compact_nlm.get("top_hif_groups") if isinstance(compact_nlm, Mapping) else []
+                top_group = top_groups[0] if isinstance(top_groups, list) and top_groups else {}
+                candidate_branch = _maybe_int(top_group.get("branch_row0")) if isinstance(top_group, Mapping) else None
+                applied_tools.append("run_three_phase_nlm_from_path")
+                if candidate_branch is None:
+                    rejected_rows.append(
+                        {
+                            "id": sid,
+                            "scenario": scenario,
+                            "reason": "high_impedance_fault_missing_nlm_top1",
+                        }
+                    )
+                    continue
+                hif_estimate_args = {
+                    "case_path": base_case_visible,
+                    "candidate_branch_row0": candidate_branch,
+                    "top_k": 5,
+                    "alpha_grid_size": config.hif_estimator_alpha_grid_size,
+                    "r_grid_size": config.hif_estimator_r_grid_size,
+                }
+                hif_estimate_call = make_tool_call(
+                    "estimate_hif_location_magnitude_from_path",
+                    f"call_hif_est_{sha_short(sid)}",
+                    hif_estimate_args,
+                )
+                messages.append({"role": "assistant", "tool_calls": [hif_estimate_call]})
+                try:
+                    hif_estimate_payload = (
+                        make_mock_hif_parameter_estimate_payload(rec, candidate_branch)
+                        if config.mock
+                        else call_backend_tool(
+                            config.endpoint,
+                            "estimate_hif_location_magnitude_from_path",
+                            hif_estimate_args,
+                            messages,
+                            hidden_context,
+                            timeout=config.timeout_s,
+                        )
+                    )
+                except Exception as exc:
+                    hif_estimate_payload = {"success": False, "error": str(exc)}
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": hif_estimate_call["id"],
+                        "name": "estimate_hif_location_magnitude_from_path",
+                        "content": as_tool_return_text(
+                            summarize_tool_result_for_conversation(
+                                "estimate_hif_location_magnitude_from_path",
+                                hif_estimate_payload,
+                                meta,
+                                idx_map,
+                            )
+                        ),
+                    }
+                )
+                if not bool(hif_estimate_payload.get("success", True)):
+                    rejected_rows.append(
+                        {
+                            "id": sid,
+                            "scenario": scenario,
+                            "reason": "high_impedance_fault_parameter_estimator_failed",
+                            "error": hif_estimate_payload.get("error"),
+                        }
+                    )
+                    continue
+                applied_tools.append("estimate_hif_location_magnitude_from_path")
 
             elif scenario == "three_phase_imbalance":
                 three_phase = rec.get("three_phase_voltages")
@@ -3662,6 +3892,7 @@ def build_sft(config: BuilderConfig) -> None:
                 verification_pre_payloads=verification_pre_payloads,
                 hse_payload=hse_payload,
                 nlm_payload=nlm_payload,
+                hif_estimate_payload=hif_estimate_payload,
                 correction_tool_name=correction_tool_name,
                 applied_tools=applied_tools,
                 correction_steps=correction_steps,
@@ -3811,6 +4042,18 @@ def parse_args() -> BuilderConfig:
         help="Allow oracle-backed HIF metadata fallback traces for smoke tests only.",
     )
     p.add_argument(
+        "--hif-estimator-alpha-grid-size",
+        type=int,
+        default=15,
+        help="Alpha grid size for HIF parameter-estimator tool calls in generated traces.",
+    )
+    p.add_argument(
+        "--hif-estimator-r-grid-size",
+        type=int,
+        default=17,
+        help="HIF resistance grid size for parameter-estimator tool calls in generated traces.",
+    )
+    p.add_argument(
         "--hardening-examples",
         type=int,
         default=0,
@@ -3843,6 +4086,8 @@ def parse_args() -> BuilderConfig:
         allow_hif_metadata_fallback=bool(args.allow_hif_metadata_fallback),
         hardening_examples=max(0, int(args.hardening_examples)),
         timeout_s=int(args.timeout),
+        hif_estimator_alpha_grid_size=int(args.hif_estimator_alpha_grid_size),
+        hif_estimator_r_grid_size=int(args.hif_estimator_r_grid_size),
     )
 
 
