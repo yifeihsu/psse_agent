@@ -973,8 +973,12 @@ def summarize_hif_parameter_estimate_payload(tool_payload: Mapping[str, Any]) ->
             "ambiguity": bool(fit.get("ambiguity", False)),
         },
         "uncertainty": {
-            "alpha_ci90": uncertainty.get("alpha_ci90"),
-            "r_hif_pu_ci90": uncertainty.get("r_hif_pu_ci90"),
+            "near_best_alpha_interval": uncertainty.get("near_best_alpha_interval", uncertainty.get("alpha_ci90")),
+            "near_best_r_hif_pu_interval": uncertainty.get(
+                "near_best_r_hif_pu_interval",
+                uncertainty.get("r_hif_pu_ci90"),
+            ),
+            "interval_method": uncertainty.get("interval_method"),
         },
         "top_parameter_candidates": compact_candidates,
     }

@@ -145,8 +145,8 @@ class BuilderConfig:
     allow_hif_metadata_fallback: bool
     hardening_examples: int
     timeout_s: int = 60
-    hif_estimator_alpha_grid_size: int = 15
-    hif_estimator_r_grid_size: int = 17
+    hif_estimator_alpha_grid_size: int = 31
+    hif_estimator_r_grid_size: int = 35
 
 
 # ----------------------------- low-level helpers -----------------------------
@@ -857,8 +857,9 @@ def make_mock_hif_parameter_estimate_payload(
             "ambiguity": False,
         },
         "uncertainty": {
-            "alpha_ci90": [max(0.01, float(alpha) - 0.025), min(0.99, float(alpha) + 0.025)],
-            "r_hif_pu_ci90": [float(r_hif_pu) * 0.9, float(r_hif_pu) * 1.1],
+            "near_best_alpha_interval": [max(0.01, float(alpha) - 0.025), min(0.99, float(alpha) + 0.025)],
+            "near_best_r_hif_pu_interval": [float(r_hif_pu) * 0.9, float(r_hif_pu) * 1.1],
+            "interval_method": "near_best_score_profile",
         },
         "top_parameter_candidates": [
             {
@@ -4044,13 +4045,13 @@ def parse_args() -> BuilderConfig:
     p.add_argument(
         "--hif-estimator-alpha-grid-size",
         type=int,
-        default=15,
+        default=31,
         help="Alpha grid size for HIF parameter-estimator tool calls in generated traces.",
     )
     p.add_argument(
         "--hif-estimator-r-grid-size",
         type=int,
-        default=17,
+        default=35,
         help="HIF resistance grid size for parameter-estimator tool calls in generated traces.",
     )
     p.add_argument(

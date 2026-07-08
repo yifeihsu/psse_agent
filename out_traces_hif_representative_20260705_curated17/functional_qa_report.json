@@ -3,11 +3,6 @@
     "branch_counts": {
       "0": 1,
       "1": 1,
-      "2": 1,
-      "3": 1,
-      "4": 1,
-      "5": 1,
-      "6": 1,
       "10": 1,
       "11": 1,
       "12": 1,
@@ -17,7 +12,15 @@
       "16": 1,
       "17": 1,
       "18": 1,
-      "19": 1
+      "19": 1,
+      "2": 1,
+      "3": 1,
+      "4": 1,
+      "5": 1,
+      "6": 1
+    },
+    "hif_estimator_grid_counts": {
+      "31x35": 17
     },
     "measurement_dir": "out_measurements_hif_representative_20260705_curated17",
     "messages_only_file": "out_traces_hif_representative_20260705_curated17/sft_traces.hif_representative_curated17.messages_only_hf.jsonl",
@@ -35,13 +38,16 @@
     "trace_rows": 17
   },
   "estimator_quality_against_synthetic_labels": {
-    "alpha_within_10_percent": 0.5882352941176471,
-    "alpha_within_5_percent": 0.35294117647058826,
-    "median_alpha_absolute_error": 0.08243114110483629,
-    "median_p_hif_relative_error": 0.1429924917314432,
-    "median_r_hif_relative_error": 0.08188509159800142,
-    "p90_alpha_absolute_error": 0.16250441158269097,
-    "top_k_parameter_contains_truth": 0.9411764705882353
+    "alpha_within_10_percent": 0.6470588235294118,
+    "alpha_within_5_percent": 0.5882352941176471,
+    "ambiguous_case_rate": 1.0,
+    "false_precision_rate": 0.0,
+    "line_top1_accuracy": 1.0,
+    "median_alpha_absolute_error": 0.03192699999999998,
+    "median_p_hif_relative_error": 0.1271040448517219,
+    "median_r_hif_relative_error": 0.019868397553806698,
+    "p90_alpha_absolute_error": 0.1440434,
+    "top_k_parameter_contains_truth": 0.5882352941176471
   },
   "functional_checks": {
     "applied_tool_counts": {
@@ -50,15 +56,54 @@
     "custom_issue_count": 0,
     "custom_issues": [],
     "estimator_certainty_counts": {
-      "moderately_separated": 14,
-      "well_separated": 3
+      "ambiguous_top2": 17
     },
     "hif_trace_validator_issues": {},
     "rejected_rows": 0
   },
   "notes": [
-    "Functionally correct for tool-call protocol and final-answer provenance.",
-    "Generated with a bounded 5x5 estimator grid for speed; line-fraction accuracy is representative-smoke quality, not production acceptance quality.",
-    "Resistance estimates are materially better than line-fraction estimates in this run."
-  ]
+    "Generated with a 31x35 production-start HIF parameter grid.",
+    "False precision is gated using alpha error > 0.10 on non-ambiguous estimates.",
+    "Near-best intervals are search-profile intervals, not calibrated confidence intervals.",
+    "This representative set still fails production alpha/top-k gates; use ambiguity-aware reporting or a stronger estimator before exact alpha claims."
+  ],
+  "production_gates": {
+    "false_precision_rate": {
+      "op": "<=",
+      "passed": true,
+      "threshold": 0.05,
+      "value": 0.0
+    },
+    "line_top1_accuracy": {
+      "op": "==",
+      "passed": true,
+      "threshold": 1.0,
+      "value": 1.0
+    },
+    "median_alpha_absolute_error": {
+      "op": "<=",
+      "passed": true,
+      "threshold": 0.05,
+      "value": 0.03192699999999998
+    },
+    "median_r_hif_relative_error": {
+      "op": "<=",
+      "passed": true,
+      "threshold": 0.2,
+      "value": 0.019868397553806698
+    },
+    "p90_alpha_absolute_error": {
+      "op": "<=",
+      "passed": false,
+      "threshold": 0.1,
+      "value": 0.1440434
+    },
+    "top_k_parameter_contains_truth": {
+      "op": ">=",
+      "passed": false,
+      "threshold": 0.95,
+      "value": 0.5882352941176471
+    }
+  },
+  "production_gates_passed": false
 }

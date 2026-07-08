@@ -37,6 +37,21 @@
           "type": "number",
           "minimum": 0.0,
           "maximum": 1.0
+        },
+        "error_families": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "measurement_error",
+              "parameter_error",
+              "topology_error",
+              "three_phase_imbalance",
+              "harmonic_anomaly",
+              "high_impedance_fault",
+              "no_error"
+            ]
+          }
         }
       },
       "additionalProperties": false
@@ -214,6 +229,90 @@
             },
             "additionalProperties": false
           }
+        },
+        "hif_parameter_estimate": {
+          "type": "object",
+          "properties": {
+            "alpha_from_from_bus": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "distance_percent_from_from_bus": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "phase": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "r_hif_pu": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "r_hif_ohm": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "g_hif_siemens": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "i_hif_amp": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "p_hif_kw": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "q_hif_kvar": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "localization_certainty": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "well_separated",
+                "moderately_separated",
+                "ambiguous_top2",
+                null
+              ]
+            },
+            "ambiguity": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "weighted_residual_norm": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": true
         }
       },
       "additionalProperties": false
@@ -242,6 +341,37 @@
         }
       },
       "additionalProperties": false
+    },
+    "suspect_locations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "domain",
+          "details"
+        ],
+        "properties": {
+          "domain": {
+            "type": "string",
+            "enum": [
+              "measurement",
+              "parameter",
+              "topology",
+              "harmonic",
+              "fault",
+              "imbalance",
+              "none"
+            ]
+          },
+          "details": {
+            "type": "object"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "evidence_by_stage": {
+      "type": "object"
     },
     "action": {
       "type": "object",
@@ -313,6 +443,12 @@
             "null"
           ]
         },
+        "last_verified_summary": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "tool_steps": {
           "type": "array",
           "items": {
@@ -333,7 +469,9 @@
             "elevated",
             "partial",
             "unknown",
-            "not_applicable"
+            "not_applicable",
+            "curriculum_only",
+            "sequence_only"
           ]
         },
         "remaining_candidate_families": {

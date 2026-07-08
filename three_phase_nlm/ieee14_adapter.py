@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from IEEE_14_OpenDSS.export_measurement_series import BRANCH_ORDER
+from IEEE_14_OpenDSS.constants import BRANCH_ORDER
 
 
 ELIGIBLE_HIF_BRANCHES = [

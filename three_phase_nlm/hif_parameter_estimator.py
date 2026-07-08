@@ -6,11 +6,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from IEEE_14_OpenDSS.export_measurement_series import (
-    BUS_ORDER,
-    extract_measurement_series,
-    extract_three_phase_voltage_measurements,
-)
+from IEEE_14_OpenDSS.constants import BUS_ORDER
 
 from .dss_hif_injector import (
     _line_matcher,
@@ -26,6 +22,15 @@ from .ieee14_adapter import branch_info_for_row0
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_PRISTINE_MODEL_DIR = _REPO_ROOT / "IEEE_14_OpenDSS"
 _PHASES = ("A", "B", "C")
+
+
+def _measurement_exporters():
+    from IEEE_14_OpenDSS.export_measurement_series import (  # type: ignore
+        extract_measurement_series,
+        extract_three_phase_voltage_measurements,
+    )
+
+    return extract_measurement_series, extract_three_phase_voltage_measurements
 
 
 def _maybe_float(value: Any) -> float | None:
@@ -194,6 +199,7 @@ def _fault_voltage_volts(fault_bus: str, phase: str, fallback_kv_ln: float) -> f
 
 
 def _simulate_base(model_dir: Path, *, load_scale: float) -> dict[str, Any]:
+    extract_measurement_series, extract_three_phase_voltage_measurements = _measurement_exporters()
     _compile_base_model(model_dir)
     base_loads = _enabled_load_snapshot()
     _scale_named_loads(base_loads, load_scale)
@@ -215,6 +221,7 @@ def _simulate_candidate(
     r_hif_pu: float,
     load_scale: float,
 ) -> dict[str, Any]:
+    extract_measurement_series, extract_three_phase_voltage_measurements = _measurement_exporters()
     r_hif_ohm = hif_ohms_from_pu(r_hif_pu, base_mva=100.0, kv_ll=1.0)
     fault_bus = "FaultEst"
     _compile_base_model(model_dir)
@@ -344,6 +351,48 @@ def _local_refinement_points(best: Mapping[str, Any], *, alpha_step: float, r_ra
     alphas = np.linspace(max(0.01, alpha0 - alpha_radius), min(0.99, alpha0 + alpha_radius), 9)
     rs = np.geomspace(r_low, r_high, 9)
     return [(float(alpha), float(r), phase) for alpha in alphas for r in rs]
+
+
+def classify_parameter_certainty(
+    *,
+    relative_gap: float,
+    near_best: Sequence[Mapping[str, Any]],
+    top_candidates: Sequence[Mapping[str, Any]],
+) -> tuple[str, bool]:
+    alpha_near = [
+        float(c["alpha"])
+        for c in near_best
+        if c.get("alpha") is not None and math.isfinite(float(c["alpha"]))
+    ]
+    alpha_top = [
+        float(c["alpha"])
+        for c in top_candidates
+        if c.get("alpha") is not None and math.isfinite(float(c["alpha"]))
+    ]
+
+    near_width = max(alpha_near) - min(alpha_near) if len(alpha_near) >= 2 else 0.0
+    top_width = max(alpha_top) - min(alpha_top) if len(alpha_top) >= 2 else 0.0
+    top_scores = [
+        float(c["score"])
+        for c in top_candidates
+        if c.get("score") is not None and math.isfinite(float(c["score"]))
+    ]
+    top2_delta = (
+        abs(float(top_scores[1]) - float(top_scores[0]))
+        if len(top_scores) >= 2
+        else math.inf
+    )
+
+    if (
+        relative_gap <= 1e-4
+        or (top2_delta <= 1e-4 and top_width > 0.02)
+        or near_width > 0.10
+        or top_width > 0.20
+    ):
+        return "ambiguous_top2", True
+    if relative_gap <= 1e-2 or near_width > 0.05:
+        return "moderately_separated", False
+    return "well_separated", False
 
 
 def estimate_hif_location_magnitude(
@@ -493,17 +542,25 @@ def estimate_hif_location_magnitude(
     else:
         top2_gap = math.inf
         relative_gap = math.inf
-    if relative_gap > 1e-2:
-        certainty = "well_separated"
-    elif relative_gap > 1e-4:
-        certainty = "moderately_separated"
-    else:
-        certainty = "ambiguous_top2"
 
     near_threshold = best_score + max(abs(best_score) * float(uncertainty_tolerance), 1e-6)
     near_best = [cand for cand in all_candidates if float(cand["score"]) <= near_threshold]
     if not near_best:
         near_best = [best]
+    certainty, ambiguity = classify_parameter_certainty(
+        relative_gap=float(relative_gap),
+        near_best=near_best,
+        top_candidates=top_candidates,
+    )
+
+    near_best_alpha_interval = [
+        min(float(cand["alpha"]) for cand in near_best),
+        max(float(cand["alpha"]) for cand in near_best),
+    ]
+    near_best_r_interval = [
+        min(float(cand["r_hif_pu"]) for cand in near_best),
+        max(float(cand["r_hif_pu"]) for cand in near_best),
+    ]
 
     r_ohm = float(best["r_hif_ohm"])
     fault_v = float(best.get("fault_v_volts") or (1.0 / math.sqrt(3.0) * 1000.0))
@@ -539,19 +596,14 @@ def estimate_hif_location_magnitude(
             "residual_reduction_vs_no_refinement": residual_reduction,
             "relative_residual_improvement": residual_reduction,
             "localization_certainty": certainty,
-            "ambiguity": certainty == "ambiguous_top2",
+            "ambiguity": bool(ambiguity),
             "top2_delta_score": top2_gap if math.isfinite(top2_gap) else None,
             "top2_relative_gap": relative_gap if math.isfinite(relative_gap) else None,
         },
         "uncertainty": {
-            "alpha_ci90": [
-                min(float(cand["alpha"]) for cand in near_best),
-                max(float(cand["alpha"]) for cand in near_best),
-            ],
-            "r_hif_pu_ci90": [
-                min(float(cand["r_hif_pu"]) for cand in near_best),
-                max(float(cand["r_hif_pu"]) for cand in near_best),
-            ],
+            "near_best_alpha_interval": near_best_alpha_interval,
+            "near_best_r_hif_pu_interval": near_best_r_interval,
+            "interval_method": "near_best_score_profile",
             "score_tolerance": float(uncertainty_tolerance),
             "near_best_count": len(near_best),
         },

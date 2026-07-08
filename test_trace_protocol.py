@@ -47,6 +47,7 @@ from trace_protocol import (
     scada_harmonic_tool_schemas,
     summarize_tool_result_for_conversation,
 )
+from three_phase_nlm.hif_parameter_estimator import classify_parameter_certainty
 
 
 def make_initial_user_message() -> dict:
@@ -111,6 +112,95 @@ class TraceProtocolTests(unittest.TestCase):
         self.assertIn("curriculum_only", DECISION_SCHEMA_TEXT["action"]["diagnosis_status"])
         self.assertIn("sequence_only", DECISION_SCHEMA_TEXT["action"]["diagnosis_status"])
         self.assertIn("remaining_candidate_families", DECISION_SCHEMA_TEXT["action"])
+
+    def test_decision_json_schema_accepts_current_hif_fields(self) -> None:
+        try:
+            import jsonschema
+        except Exception as exc:  # pragma: no cover - depends on local test environment
+            self.skipTest(f"jsonschema unavailable: {exc}")
+
+        schema = json.loads(Path("schema/sft_trace_decision_schema.json").read_text(encoding="utf-8"))
+        payload = {
+            "verdict": {
+                "has_error": True,
+                "error_family": "high_impedance_fault",
+                "error_families": ["high_impedance_fault"],
+                "confidence": 0.95,
+            },
+            "evidence": {
+                "global_metrics": {
+                    "global_residual_sum": 10.0,
+                    "global_residual_threshold": 5.0,
+                    "global_residual_ratio": 2.0,
+                },
+                "top_residuals": [],
+                "top_lagrange": [],
+                "top_hif_groups": [
+                    {
+                        "rank": 1,
+                        "branch_row0": 2,
+                        "line_index1": 3,
+                        "dss_element": "Line.2-3",
+                        "from_bus": 2,
+                        "to_bus": 3,
+                        "score": 31.25,
+                    }
+                ],
+                "hif_parameter_estimate": {
+                    "alpha_from_from_bus": 0.47,
+                    "distance_percent_from_from_bus": 47.0,
+                    "phase": "A",
+                    "r_hif_pu": 83.0,
+                    "r_hif_ohm": 0.83,
+                    "g_hif_siemens": 1.2,
+                    "i_hif_amp": 695.0,
+                    "p_hif_kw": 401.0,
+                    "q_hif_kvar": 0.0,
+                    "localization_certainty": "moderately_separated",
+                    "ambiguity": False,
+                    "weighted_residual_norm": 1.8,
+                },
+            },
+            "suspect_location": {
+                "domain": "fault",
+                "details": {
+                    "fault_type": "high_impedance_fault",
+                    "branch_row0": 2,
+                    "parameter_uncertainty": {
+                        "near_best_alpha_interval": [0.43, 0.51],
+                        "near_best_r_hif_pu_interval": [71.0, 101.0],
+                    },
+                },
+            },
+            "suspect_locations": [
+                {
+                    "domain": "fault",
+                    "details": {"fault_type": "high_impedance_fault", "branch_row0": 2},
+                }
+            ],
+            "action": {
+                "applied_tool": "estimate_hif_location_magnitude_from_path",
+                "arguments_hint": {"high_impedance_fault": {"case_path": "case14", "candidate_branch_row0": 2}},
+                "request_more_data": False,
+                "requested_data": None,
+                "verification_summary": None,
+                "first_applied_tool": "run_three_phase_nlm_from_path",
+                "last_applied_tool": "estimate_hif_location_magnitude_from_path",
+                "applied_tools": [
+                    "run_three_phase_nlm_from_path",
+                    "estimate_hif_location_magnitude_from_path",
+                ],
+                "last_verified_summary": None,
+                "tool_steps": [],
+                "correction_steps": [],
+                "diagnosis_status": "sequence_only",
+                "remaining_candidate_families": [],
+                "measurement_correction_policy": None,
+            },
+            "summary": "The HIF position is an estimate with uncertainty, not an exact location.",
+        }
+
+        jsonschema.Draft202012Validator(schema).validate(payload)
 
     def test_scada_harmonic_prompt_scope_excludes_hif_and_imbalance_tools(self) -> None:
         tool_names = {tool["function"]["name"] for tool in scada_harmonic_tool_schemas()}
@@ -833,6 +923,36 @@ class TraceProtocolTests(unittest.TestCase):
         )
         self.assertEqual(compact_est["estimated"]["alpha_from_from_bus"], 0.47)
         self.assertEqual(compact_est["fit"]["localization_certainty"], "well_separated")
+        self.assertEqual(compact_est["uncertainty"]["near_best_alpha_interval"], [0.43, 0.51])
+        self.assertNotIn("alpha_ci90", compact_est["uncertainty"])
+
+    def test_hif_parameter_certainty_uses_alpha_spread(self) -> None:
+        certainty, ambiguity = classify_parameter_certainty(
+            relative_gap=0.2,
+            near_best=[{"alpha": 0.2}, {"alpha": 0.23}],
+            top_candidates=[{"alpha": 0.2}, {"alpha": 0.55}],
+        )
+        self.assertEqual(certainty, "ambiguous_top2")
+        self.assertTrue(ambiguity)
+
+        certainty, ambiguity = classify_parameter_certainty(
+            relative_gap=0.2,
+            near_best=[{"alpha": 0.2}, {"alpha": 0.27}],
+            top_candidates=[{"alpha": 0.2}, {"alpha": 0.27}],
+        )
+        self.assertEqual(certainty, "moderately_separated")
+        self.assertFalse(ambiguity)
+
+        certainty, ambiguity = classify_parameter_certainty(
+            relative_gap=0.2,
+            near_best=[{"alpha": 0.50}],
+            top_candidates=[
+                {"alpha": 0.50, "score": 0.00220},
+                {"alpha": 0.47, "score": 0.00225},
+            ],
+        )
+        self.assertEqual(certainty, "ambiguous_top2")
+        self.assertTrue(ambiguity)
 
     def test_hif_final_target_uses_visible_nlm_not_hidden_label(self) -> None:
         meta = {

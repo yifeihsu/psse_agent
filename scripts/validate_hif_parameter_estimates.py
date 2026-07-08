@@ -17,6 +17,16 @@ if str(REPO_ROOT) not in sys.path:
 from three_phase_nlm.hif_parameter_estimator import estimate_hif_location_magnitude
 
 
+PRODUCTION_GATES = {
+    "line_top1_accuracy": ("==", 1.0),
+    "median_alpha_absolute_error": ("<=", 0.05),
+    "p90_alpha_absolute_error": ("<=", 0.10),
+    "median_r_hif_relative_error": ("<=", 0.20),
+    "false_precision_rate": ("<=", 0.05),
+    "top_k_parameter_contains_truth": (">=", 0.95),
+}
+
+
 def iter_jsonl(path: Path):
     with path.open("r", encoding="utf-8") as handle:
         for line_no, line in enumerate(handle, start=1):
@@ -60,6 +70,32 @@ def truth_power_kw(label: Mapping[str, Any]) -> float | None:
     return (float(kv_ln) * 1000.0) ** 2 / r_ohm / 1000.0
 
 
+def gate_passes(value: Any, op: str, threshold: float) -> bool:
+    parsed = maybe_float(value)
+    if parsed is None:
+        return False
+    if op == "==":
+        return abs(parsed - float(threshold)) <= 1e-12
+    if op == "<=":
+        return parsed <= float(threshold)
+    if op == ">=":
+        return parsed >= float(threshold)
+    raise ValueError(f"Unsupported gate operator: {op}")
+
+
+def production_gate_report(summary: Mapping[str, Any]) -> dict[str, Any]:
+    gates: dict[str, dict[str, Any]] = {}
+    for metric, (op, threshold) in PRODUCTION_GATES.items():
+        value = summary.get(metric)
+        gates[metric] = {
+            "value": value,
+            "op": op,
+            "threshold": threshold,
+            "passed": gate_passes(value, op, threshold),
+        }
+    return gates
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Validate model-based HIF parameter estimates on synthetic samples.")
     parser.add_argument("--samples", type=Path, default=Path("out_measurements_single_error_hif_bridge_500/samples.jsonl"))
@@ -72,6 +108,11 @@ def main() -> None:
     parser.add_argument("--alpha-hit-tol", type=float, default=0.05)
     parser.add_argument("--r-rel-hit-tol", type=float, default=0.20)
     parser.add_argument("--pristine-model-dir", default=str(REPO_ROOT / "IEEE_14_OpenDSS"))
+    parser.add_argument(
+        "--enforce-production-gates",
+        action="store_true",
+        help="Exit nonzero unless the synthetic HIF parameter-estimation batch passes production gates.",
+    )
     args = parser.parse_args()
 
     rows = 0
@@ -186,7 +227,12 @@ def main() -> None:
         "false_precision_rate": false_precision / evaluated if evaluated else None,
         "examples": examples[:10],
     }
+    gates = production_gate_report(summary)
+    summary["production_gates"] = gates
+    summary["production_gates_passed"] = all(item["passed"] for item in gates.values())
     print(json.dumps(summary, indent=2, sort_keys=True))
+    if args.enforce_production_gates and not summary["production_gates_passed"]:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
