@@ -1177,7 +1177,7 @@ def main() -> None:
             "May be repeated. Defaults to the six pairwise measurement/parameter/topology/harmonic combos."
         ),
     )
-    parser.add_argument("--out", default="out_measurements_multi_error")
+    parser.add_argument("--out", default="artifacts/measurements/out_measurements_multi_error")
     parser.add_argument("--seed", type=int, default=1442)
     parser.add_argument("--scans", type=int, default=8)
     parser.add_argument("--attempt-mult", type=int, default=20)

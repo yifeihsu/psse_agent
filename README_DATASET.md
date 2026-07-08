@@ -365,7 +365,7 @@ A: Check `data/processed/statistics.json` - all classes should have ~equal count
 A: Yes, modify `CONFIG` in `preprocess_dataset.py`.
 
 **Q: How do I add more data?**
-A: Combine multiple `.jsonl` files before preprocessing, or use the `out_sft_measurements/` directory.
+A: Combine multiple `.jsonl` files before preprocessing, or use the `artifacts/measurements/out_sft_measurements/` directory.
 
 **Q: What if I get memory errors?**
 A: Process in batches or reduce the number of samples used for statistics.

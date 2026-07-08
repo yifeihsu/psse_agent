@@ -98,7 +98,7 @@ def production_gate_report(summary: Mapping[str, Any]) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Validate model-based HIF parameter estimates on synthetic samples.")
-    parser.add_argument("--samples", type=Path, default=Path("out_measurements_single_error_hif_bridge_500/samples.jsonl"))
+    parser.add_argument("--samples", type=Path, default=Path("artifacts/measurements/out_measurements_single_error_hif_bridge_500/samples.jsonl"))
     parser.add_argument("--limit", type=int, default=20, help="Maximum HIF rows to evaluate; use 0 for all rows.")
     parser.add_argument("--alpha-grid-size", type=int, default=15)
     parser.add_argument("--r-grid-size", type=int, default=17)

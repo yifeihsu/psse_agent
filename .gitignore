@@ -170,3 +170,16 @@ outputs/
 unsloth_compiled_cache/
 _unsloth_sentencepiece_temp/
 *.log
+
+# Generated repo artifacts should live under artifacts/ instead of root.
+/logs/
+/out_measurements*/
+/out_traces*/
+/out_sft_measurements/
+/eval_*_results.tgz
+/*physical_pt*.tgz
+/IEEE_14_OpenDSS/out_traces*/
+/artifacts/measurements/*
+/artifacts/traces/*
+/artifacts/eval_archives/*
+/artifacts/logs/*

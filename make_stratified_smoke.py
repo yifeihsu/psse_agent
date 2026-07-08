@@ -13,7 +13,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Build a stratified smoke-test JSONL from SFT traces")
     p.add_argument(
         "--input",
-        default="out_traces_balanced/sft_traces.test.jsonl",
+        default="artifacts/traces/out_traces_balanced/sft_traces.test.jsonl",
         help="Source JSONL with conversation traces",
     )
     p.add_argument(

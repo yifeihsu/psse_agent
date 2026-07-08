@@ -21,7 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--adapter", required=True, help="Path to saved LoRA adapter directory")
     parser.add_argument(
         "--train-file",
-        default="out_traces_balanced/sft_traces.train.jsonl",
+        default="artifacts/traces/out_traces_balanced/sft_traces.train.jsonl",
         help="Training JSONL used by SFT",
     )
     parser.add_argument(

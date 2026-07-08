@@ -4,7 +4,7 @@ PS-LLM-Agent is a power-system diagnostic agent project built around MATPOWER-ba
 
 `preprocess.py` -> `submit_sft_gemma4.sh` / `gpt_oss_power_sft_revised_v3.py` -> `submit_eval_v3.sh` / `eval_sft_agent_gemma_v4.py`
 
-The current training and evaluation flow targets Gemma 4 tool-calling traces stored as JSONL conversations in `out_traces_balanced/`.
+The current training and evaluation flow targets Gemma 4 tool-calling traces stored as JSONL conversations in `artifacts/traces/out_traces_balanced/`.
 
 ## Active Workflow
 
@@ -19,7 +19,11 @@ The current training and evaluation flow targets Gemma 4 tool-calling traces sto
 - `Harmonics/`: Harmonics-specific generation and verification utilities.
 - `mcp_server/`: MATPOWER-backed tool implementations used by evaluation and external MCP-style agent runs.
 - `data/`: Source JSONL datasets such as `data/sft_with_tools.jsonl`.
-- `out_traces_balanced/`: Preprocessed train/valid/test traces used for SFT.
+- `artifacts/measurements/`: Generated raw measurement datasets.
+- `artifacts/traces/`: Generated SFT/tool-use trace datasets and inspection subsets.
+- `artifacts/traces/out_traces_balanced/`: Preprocessed train/valid/test traces used for SFT.
+- `artifacts/eval_archives/`: Evaluation result archives and packaged review outputs.
+- `artifacts/logs/`: Slurm and local run logs.
 - `outputs/`: Fine-tuning checkpoints, LoRA adapters, and evaluation outputs.
 - `docs/`: Notes, slides, and supporting documentation.
 
@@ -75,9 +79,9 @@ The script creates `/scratch/yx3882/.conda/envs/unsloth_sft` and installs the tr
 
 The active preprocessing path starts from `data/sft_with_tools.jsonl` and writes balanced splits to:
 
-- `out_traces_balanced/sft_traces.train.jsonl`
-- `out_traces_balanced/sft_traces.valid.jsonl`
-- `out_traces_balanced/sft_traces.test.jsonl`
+- `artifacts/traces/out_traces_balanced/sft_traces.train.jsonl`
+- `artifacts/traces/out_traces_balanced/sft_traces.valid.jsonl`
+- `artifacts/traces/out_traces_balanced/sft_traces.test.jsonl`
 
 Basic usage:
 
@@ -92,7 +96,7 @@ Useful notes:
 
 - `--exact-balanced` selects exactly 500 samples per error family and splits them 400/50/50 into train/valid/test.
 - `--dedupe-by user_snapshot` is a reasonable default when you want to avoid near-duplicate operating points across splits.
-- The preprocessing report is written to `out_traces_balanced/preprocess_report.json` by default.
+- The preprocessing report is written to `artifacts/traces/out_traces_balanced/preprocess_report.json` by default.
 
 ## Training
 
@@ -127,8 +131,8 @@ Direct Python launch is also possible if your local environment already matches 
 
 ```bash
 python gpt_oss_power_sft_revised_v3.py \
-  --train-file out_traces_balanced/sft_traces.train.jsonl \
-  --valid-file out_traces_balanced/sft_traces.valid.jsonl \
+  --train-file artifacts/traces/out_traces_balanced/sft_traces.train.jsonl \
+  --valid-file artifacts/traces/out_traces_balanced/sft_traces.valid.jsonl \
   --model-name unsloth/gemma-4-31B-it \
   --model-revision d722512f8f1e4ef6629c1b24d16d65295c8c945e \
   --output-dir outputs/gemma4_power_agent \
@@ -169,7 +173,7 @@ Build a small balanced subset from the test split with `make_stratified_smoke.py
 
 ```bash
 python make_stratified_smoke.py \
-  --input out_traces_balanced/sft_traces.test.jsonl \
+  --input artifacts/traces/out_traces_balanced/sft_traces.test.jsonl \
   --output outputs/stratified_smoke.jsonl \
   --per-family 4 \
   --seed 13 \

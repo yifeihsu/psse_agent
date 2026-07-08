@@ -1,13 +1,13 @@
 import json, re, requests, numpy as np
 
 endpoint = "http://127.0.0.1:3929/tools"
-meta = json.load(open("out_sft_measurements/meta.json"))
+meta = json.load(open("artifacts/measurements/out_sft_measurements/meta.json"))
 case = meta["case"]
 
 # Prefer a measurement_error sample in lines 500..600, else fall back to first measurement_error, else first sample
 z = None
 rec = None
-with open("out_sft_measurements/samples.jsonl", "r", encoding="utf-8") as f:
+with open("artifacts/measurements/out_sft_measurements/samples.jsonl", "r", encoding="utf-8") as f:
     lines = f.readlines()
     # Try window 500..600
     for i in range(min(600, len(lines))):

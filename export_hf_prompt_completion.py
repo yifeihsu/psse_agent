@@ -15,10 +15,10 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Export nested chat traces into flat prompt/completion JSONL files for HF training UIs."
     )
-    p.add_argument("--train-file", default="out_traces_balanced/sft_traces.train.jsonl")
-    p.add_argument("--valid-file", default="out_traces_balanced/sft_traces.valid.jsonl")
-    p.add_argument("--test-file", default="out_traces_balanced/sft_traces.test.jsonl")
-    p.add_argument("--output-dir", default="out_traces_flat_hf")
+    p.add_argument("--train-file", default="artifacts/traces/out_traces_balanced/sft_traces.train.jsonl")
+    p.add_argument("--valid-file", default="artifacts/traces/out_traces_balanced/sft_traces.valid.jsonl")
+    p.add_argument("--test-file", default="artifacts/traces/out_traces_balanced/sft_traces.test.jsonl")
+    p.add_argument("--output-dir", default="artifacts/traces/out_traces_flat_hf")
     p.add_argument("--model-name", default="unsloth/Gemma-4-26B-A4B-it")
     p.add_argument(
         "--no-include-tool-schemas",

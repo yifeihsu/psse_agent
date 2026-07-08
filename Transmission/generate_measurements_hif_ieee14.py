@@ -354,7 +354,7 @@ def generate_dataset(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out", default="out_measurements_hif", help="Output directory")
+    parser.add_argument("--out", default="artifacts/measurements/out_measurements_hif", help="Output directory")
     parser.add_argument("--n-hif", type=int, default=200)
     parser.add_argument("--n-no-error", type=int, default=50)
     parser.add_argument("--seed", type=int, default=17)

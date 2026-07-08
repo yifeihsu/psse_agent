@@ -165,7 +165,7 @@ def process_sample(rec: Dict[str, Any], idx: int, case_path: str = "case14") -> 
 def main() -> None:
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input-dir", default="out_sft_measurements", help="Directory containing samples.jsonl and meta.json")
+    parser.add_argument("--input-dir", default="artifacts/measurements/out_sft_measurements", help="Directory containing samples.jsonl and meta.json")
     args = parser.parse_args()
 
     input_dir = args.input_dir

@@ -148,8 +148,8 @@
 \begin{frame}[fragile]{Build the SFT File}
 \begin{verbatim}
 python Transmission/build_sft_traces.py \
-  --samples out_sft_measurements/samples.jsonl \
-  --meta out_sft_measurements/meta.json \
+  --samples artifacts/measurements/out_sft_measurements/samples.jsonl \
+  --meta artifacts/measurements/out_sft_measurements/meta.json \
   --endpoint http://127.0.0.1:3929/tools \
   --out sft_with_tools.jsonl
 \end{verbatim}

@@ -1151,7 +1151,7 @@ class TraceProtocolTests(unittest.TestCase):
             "case_aliases": {
                 "case14::measurement_verify::abc11111": "case14",
                 "case14::parameter_verify::abc22222": "case14",
-                "case14::topology_verify::abc33333": "out_measurements_balanced/models_topology/case_topology_corrected.m",
+                "case14::topology_verify::abc33333": "artifacts/measurements/out_measurements_balanced/models_topology/case_topology_corrected.m",
             },
             "snapshot_context": {
                 "case_path": "case14::parameter_verify::abc22222",
@@ -1171,7 +1171,7 @@ class TraceProtocolTests(unittest.TestCase):
         self.assertEqual(resolve_case_path_alias(hydrated_args["case_path"], hidden_context), "case14")
         self.assertEqual(
             resolve_case_path_alias("case14::topology_verify::abc33333", hidden_context),
-            "out_measurements_balanced/models_topology/case_topology_corrected.m",
+            "artifacts/measurements/out_measurements_balanced/models_topology/case_topology_corrected.m",
         )
 
     def test_build_verification_summary_reports_execution_improvement_and_resolution(self) -> None:

@@ -19,13 +19,13 @@ Main fixes versus the original evaluator:
 Usage examples:
   python eval_sft_agent_hardened.py \
     --adapter outputs/gemma4_power_agent/lora \
-    --test-file out_traces_balanced/sft_traces.test.jsonl \
+    --test-file artifacts/traces/out_traces_balanced/sft_traces.test.jsonl \
     --max-seq-length 4096 \
     --output outputs/gemma4_power_agent/eval_4k_hardened.jsonl
 
   python eval_sft_agent_hardened.py \
     --adapter outputs/gemma4_power_agent/lora \
-    --test-file out_traces_balanced/sft_traces.test.jsonl \
+    --test-file artifacts/traces/out_traces_balanced/sft_traces.test.jsonl \
     --max-seq-length 16384 \
     --output outputs/gemma4_power_agent/eval_16k_hardened.jsonl
 """
@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--test-file",
-        default="out_traces_balanced/sft_traces.test.jsonl",
+        default="artifacts/traces/out_traces_balanced/sft_traces.test.jsonl",
         help="JSONL file with test conversations",
     )
     p.add_argument(

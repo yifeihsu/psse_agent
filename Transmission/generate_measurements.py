@@ -806,7 +806,7 @@ def generate_dataset(
     load_scale_max=1.25,
     r_err_range=[(0.1, 0.5), (2.0, 5.0)],
     x_err_range=[(0.1, 0.5), (2.0, 5.0)],
-    out_dir="out_sft_measurements",
+    out_dir="artifacts/measurements/out_sft_measurements",
     num_scans_for_correction: int = 8,
     max_attempt_multiplier: int = DEFAULTS["max_attempt_multiplier"],
 ):
@@ -938,7 +938,7 @@ if __name__ == "__main__":
     p.add_argument("--topo", type=int, default=200, help="number of topology-error samples (IEEE-14 only)")
     p.add_argument("--harm", type=int, default=100, help="number of harmonic-anomaly samples (IEEE-14 only)")
     p.add_argument("--seed", type=int, default=DEFAULTS["seed"])
-    p.add_argument("--out", type=str, default="out_sft_measurements")
+    p.add_argument("--out", type=str, default="artifacts/measurements/out_sft_measurements")
     p.add_argument("--ls-min", type=float, default=DEFAULTS["load_scale_min"])
     p.add_argument("--ls-max", type=float, default=DEFAULTS["load_scale_max"])
     p.add_argument("--scans", type=int, default=8, help="number of multi-scan snapshots for parameter correction")

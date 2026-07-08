@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=gemma4_eval
-#SBATCH --output=/scratch/yx3882/psse_agent/logs/eval_%j.log
-#SBATCH --error=/scratch/yx3882/psse_agent/logs/eval_%j.err
+#SBATCH --output=/scratch/yx3882/psse_agent/artifacts/logs/eval_%j.log
+#SBATCH --error=/scratch/yx3882/psse_agent/artifacts/logs/eval_%j.err
 #SBATCH --chdir=/scratch/yx3882/psse_agent
 #SBATCH --account=torch_pr_627_general
 #SBATCH --requeue
@@ -32,12 +32,12 @@ ENV_PREFIX=/scratch/yx3882/.conda/envs/unsloth_sft
 PYTHON=$ENV_PREFIX/bin/python
 
 REPO_ROOT=/scratch/yx3882/psse_agent
-LOG_DIR=$REPO_ROOT/logs
+LOG_DIR=$REPO_ROOT/artifacts/logs
 CACHE_ROOT=/scratch/yx3882/.cache
 
 GPU_PROFILE=${GPU_PROFILE:-auto}
 ADAPTER_PATH=${ADAPTER_PATH:-outputs/gemma4_power_agent/lora}
-TEST_FILE=${TEST_FILE:-out_traces_balanced/sft_traces.test.jsonl}
+TEST_FILE=${TEST_FILE:-artifacts/traces/out_traces_balanced/sft_traces.test.jsonl}
 EVAL_SCRIPT=${EVAL_SCRIPT:-eval_sft_agent_gemma_v4.py}
 MODEL_REVISION=${MODEL_REVISION:-d722512f8f1e4ef6629c1b24d16d65295c8c945e}
 TOOL_SCOPE=${TOOL_SCOPE:-scada_harmonic}

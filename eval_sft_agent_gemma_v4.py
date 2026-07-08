@@ -339,7 +339,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--test-file",
-        default="out_traces_balanced/sft_traces.test.jsonl",
+        default="artifacts/traces/out_traces_balanced/sft_traces.test.jsonl",
         help="JSONL file with test conversations",
     )
     p.add_argument(

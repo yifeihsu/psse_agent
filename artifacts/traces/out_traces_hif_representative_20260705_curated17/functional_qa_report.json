@@ -22,8 +22,8 @@
     "hif_estimator_grid_counts": {
       "31x35": 17
     },
-    "measurement_dir": "out_measurements_hif_representative_20260705_curated17",
-    "messages_only_file": "out_traces_hif_representative_20260705_curated17/sft_traces.hif_representative_curated17.messages_only_hf.jsonl",
+    "measurement_dir": "artifacts/measurements/out_measurements_hif_representative_20260705_curated17",
+    "messages_only_file": "artifacts/traces/out_traces_hif_representative_20260705_curated17/sft_traces.hif_representative_curated17.messages_only_hf.jsonl",
     "nlm_methods": {
       "legacy_three_phase_nlm": 17
     },
@@ -34,7 +34,7 @@
       "C": 5
     },
     "rows": 17,
-    "trace_file": "out_traces_hif_representative_20260705_curated17/sft_traces.hif_representative_curated17.jsonl",
+    "trace_file": "artifacts/traces/out_traces_hif_representative_20260705_curated17/sft_traces.hif_representative_curated17.jsonl",
     "trace_rows": 17
   },
   "estimator_quality_against_synthetic_labels": {

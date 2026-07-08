@@ -285,8 +285,8 @@ def make_sft_config_kwargs(**kwargs: Any) -> dict[str, Any]:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Gemma 4 SFT for power-system tool traces")
-    parser.add_argument("--train-file", type=str, default="out_traces_balanced/sft_traces.train.jsonl")
-    parser.add_argument("--valid-file", "--val-file", dest="valid_file", type=str, default="out_traces_balanced/sft_traces.valid.jsonl")
+    parser.add_argument("--train-file", type=str, default="artifacts/traces/out_traces_balanced/sft_traces.train.jsonl")
+    parser.add_argument("--valid-file", "--val-file", dest="valid_file", type=str, default="artifacts/traces/out_traces_balanced/sft_traces.valid.jsonl")
     parser.add_argument(
         "--max-train-rows",
         type=int,

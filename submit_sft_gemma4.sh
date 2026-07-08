@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=gemma4_sft
-#SBATCH --output=/scratch/yx3882/psse_agent/logs/sft_%j.log
-#SBATCH --error=/scratch/yx3882/psse_agent/logs/sft_%j.err
+#SBATCH --output=/scratch/yx3882/psse_agent/artifacts/logs/sft_%j.log
+#SBATCH --error=/scratch/yx3882/psse_agent/artifacts/logs/sft_%j.err
 #SBATCH --chdir=/scratch/yx3882/psse_agent
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -30,10 +30,10 @@ set -euo pipefail
 ENV_PREFIX=/scratch/yx3882/.conda/envs/unsloth_sft
 PYTHON=$ENV_PREFIX/bin/python
 
-LOG_DIR=/scratch/yx3882/psse_agent/logs
+LOG_DIR=/scratch/yx3882/psse_agent/artifacts/logs
 OUTPUT_DIR=${OUTPUT_DIR:-/scratch/yx3882/psse_agent/outputs/gemma4_power_agent}
-TRAIN_FILE=${TRAIN_FILE:-out_traces_balanced/sft_traces.train.jsonl}
-VALID_FILE=${VALID_FILE:-out_traces_balanced/sft_traces.valid.jsonl}
+TRAIN_FILE=${TRAIN_FILE:-artifacts/traces/out_traces_balanced/sft_traces.train.jsonl}
+VALID_FILE=${VALID_FILE:-artifacts/traces/out_traces_balanced/sft_traces.valid.jsonl}
 MODEL_NAME=${MODEL_NAME:-unsloth/gemma-4-31B-it}
 MODEL_REVISION=${MODEL_REVISION:-}
 INIT_ADAPTER=${INIT_ADAPTER:-}

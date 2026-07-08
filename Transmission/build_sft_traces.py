@@ -63,12 +63,12 @@ from trace_protocol import (
 
 
 KNOWN_CASE_DIRS = [
-    REPO_ROOT / "out_measurements_balanced" / "cases_parameter_error",
-    REPO_ROOT / "out_measurements_balanced" / "models_topology",
-    REPO_ROOT / "out_measurements_balanced_topup" / "cases_parameter_error",
-    REPO_ROOT / "out_measurements_balanced_topup" / "models_topology",
-    REPO_ROOT / "out_sft_measurements" / "cases_parameter_error",
-    REPO_ROOT / "out_sft_measurements" / "models_topology",
+    REPO_ROOT / "artifacts/measurements/out_measurements_balanced" / "cases_parameter_error",
+    REPO_ROOT / "artifacts/measurements/out_measurements_balanced" / "models_topology",
+    REPO_ROOT / "artifacts/measurements/out_measurements_balanced_topup" / "cases_parameter_error",
+    REPO_ROOT / "artifacts/measurements/out_measurements_balanced_topup" / "models_topology",
+    REPO_ROOT / "artifacts/measurements/out_sft_measurements" / "cases_parameter_error",
+    REPO_ROOT / "artifacts/measurements/out_sft_measurements" / "models_topology",
 ]
 REPORT_FAMILY_ORDER = [
     "measurement_error",
@@ -4013,8 +4013,8 @@ def build_sft(config: BuilderConfig) -> None:
 
 def parse_args() -> BuilderConfig:
     p = argparse.ArgumentParser()
-    p.add_argument("--samples", default="out_measurements_balanced/samples.jsonl")
-    p.add_argument("--meta", default="out_measurements_balanced/meta.json")
+    p.add_argument("--samples", default="artifacts/measurements/out_measurements_balanced/samples.jsonl")
+    p.add_argument("--meta", default="artifacts/measurements/out_measurements_balanced/meta.json")
     p.add_argument("--imbalance-samples", default="")
     p.add_argument("--imbalance-meta", default="")
     p.add_argument("--hif-samples", default="")

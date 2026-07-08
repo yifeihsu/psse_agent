@@ -87,7 +87,7 @@ def _load_base_branch(case_name: str) -> np.ndarray:
 
 def main():
     parser = argparse.ArgumentParser(description="Quick check for parameter error correction")
-    parser.add_argument("--input-dir", default="out_sft_measurements", help="Directory with samples.jsonl")
+    parser.add_argument("--input-dir", default="artifacts/measurements/out_sft_measurements", help="Directory with samples.jsonl")
     parser.add_argument("--limit", type=int, default=10, help="Analyze only first N samples")
     args = parser.parse_args()
     

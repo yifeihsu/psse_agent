@@ -10,7 +10,7 @@ from typing import Any
 
 
 DEFAULT_INPUT = "data/sft_with_tools.jsonl"
-DEFAULT_REPORT = "out_traces_balanced/preprocess_report.json"
+DEFAULT_REPORT = "artifacts/traces/out_traces_balanced/preprocess_report.json"
 DEFAULT_TOKENIZER = "unsloth/Gemma-4-26B-A4B-it"
 DEFAULT_MAX_SEQ_LENGTH = 4096
 RANDOM_SEED = 42
@@ -1021,9 +1021,9 @@ def main() -> None:
         default="",
         help="Optional JSON file with tool schemas used for token audit",
     )
-    parser.add_argument("--out-train", default="out_traces_balanced/sft_traces.train.jsonl")
-    parser.add_argument("--out-val", default="out_traces_balanced/sft_traces.valid.jsonl")
-    parser.add_argument("--out-test", default="out_traces_balanced/sft_traces.test.jsonl")
+    parser.add_argument("--out-train", default="artifacts/traces/out_traces_balanced/sft_traces.train.jsonl")
+    parser.add_argument("--out-val", default="artifacts/traces/out_traces_balanced/sft_traces.valid.jsonl")
+    parser.add_argument("--out-test", default="artifacts/traces/out_traces_balanced/sft_traces.test.jsonl")
     parser.add_argument("--report", default=DEFAULT_REPORT, help="Write preprocessing report JSON here")
     args = parser.parse_args()
 
