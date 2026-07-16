@@ -1,0 +1,439 @@
+from __future__ import annotations
+
+import copy
+import random
+from collections import Counter
+from collections.abc import Callable, Iterable
+from typing import Any, Mapping
+
+from psse_env.actions import invalid_action, safe_normalize_action
+from psse_env.dagger.dataset_builder import validate_policy_payload
+from psse_env.dagger.replay_buffer import BalancedReplayBuffer
+from psse_env.state_store import OracleState, PolicyObservation, policy_safe_copy
+
+
+def classify_state_example(
+    observation: Mapping[str, Any],
+    transition_label: Mapping[str, Any] | None = None,
+    *,
+    preferred_action: Mapping[str, Any] | str | None = None,
+    candidate_assessment: Mapping[str, Any] | None = None,
+    target_candidate_disposition: str | None = None,
+) -> str:
+    """Assign a target-aware replay class from the recovery taxonomy."""
+    label = dict(transition_label or {})
+    preferred = safe_normalize_action(preferred_action) if preferred_action is not None else None
+    preferred_tool = preferred["tool"] if preferred is not None else None
+    assessment = dict(candidate_assessment or {})
+    target_disposition = (
+        target_candidate_disposition
+        or assessment.get("disposition")
+        or observation.get("candidate_disposition")
+    )
+    if target_disposition is None and preferred is None:
+        target_disposition = label.get("candidate_disposition")
+    disposition = (
+        str(getattr(target_disposition, "value", target_disposition))
+        if target_disposition
+        else None
+    )
+
+    # The supervision target defines the operational class.  These rules are
+    # intentionally ahead of transition outcomes so a malformed learner
+    # action cannot relabel a terminal or recovery teacher target as success.
+    if preferred_tool == "finalize_diagnosis":
+        return "terminal_decision"
+    if preferred_tool == "rollback_state":
+        return "rejected_candidate_recovery"
+    if preferred_tool == "commit_state":
+        if disposition == "ACCEPT_FINAL":
+            return "accepted_final_commit"
+        if disposition == "ACCEPT_PARTIAL":
+            return "accepted_partial_commit"
+        return "invalid_precondition_recovery"
+
+    if label.get("process_valid") is False:
+        return "invalid_precondition_recovery"
+    last_output = observation.get("last_tool_output")
+    if observation.get("last_tool_status") == "failure" or (
+        isinstance(last_output, Mapping)
+        and (
+            last_output.get("execution_status") == "failure"
+            or last_output.get("error_code") is not None
+        )
+    ):
+        return "invalid_precondition_recovery"
+    if disposition == "REJECT":
+        return "rejected_candidate_recovery"
+    accepted = observation.get("accepted_corrections") or []
+    if disposition == "ACCEPT_PARTIAL" or (
+        accepted and not observation.get("no_material_anomaly_remaining")
+    ):
+        return "accepted_partial_continuation"
+    if observation.get("no_material_anomaly_remaining") or disposition == "ACCEPT_FINAL":
+        return "terminal_decision"
+    signatures = observation.get("tried_action_signatures") or []
+    if len(signatures) != len(set(signatures)):
+        return "loop_repetition"
+    return "clean_successful"
+
+
+def audit_target_aware_state_classes(
+    examples: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Recompute replay classes and report target-semantic violations."""
+    rows = list(examples)
+    counts: Counter[str] = Counter()
+    mismatches: list[dict[str, Any]] = []
+    violations: list[dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        observation = row.get("policy_observation") or row.get("state_summary") or {}
+        labels = row.get("labels") if isinstance(row.get("labels"), Mapping) else {}
+        disposition = (
+            labels.get("target_candidate_disposition")
+            if "target_candidate_disposition" in labels
+            else labels.get("candidate_disposition")
+        )
+        expected = classify_state_example(
+            observation if isinstance(observation, Mapping) else {},
+            row.get("transition_label")
+            if isinstance(row.get("transition_label"), Mapping)
+            else {},
+            preferred_action=row.get("preferred_action"),
+            candidate_assessment=(
+                labels.get("candidate_assessment")
+                if isinstance(labels.get("candidate_assessment"), Mapping)
+                else None
+            ),
+            target_candidate_disposition=str(disposition) if disposition else None,
+        )
+        actual = str(row.get("state_class") or labels.get("state_class") or "")
+        counts[actual] += 1
+        if actual != expected:
+            mismatches.append(
+                {
+                    "index": index,
+                    "example_id": row.get("example_id"),
+                    "actual": actual,
+                    "expected": expected,
+                }
+            )
+        action = safe_normalize_action(row.get("preferred_action")) if row.get(
+            "preferred_action"
+        ) is not None else None
+        tool = action["tool"] if action else None
+        required = {
+            "finalize_diagnosis": "terminal_decision",
+            "rollback_state": "rejected_candidate_recovery",
+        }.get(tool)
+        if required is not None and actual != required:
+            violations.append(
+                {
+                    "index": index,
+                    "example_id": row.get("example_id"),
+                    "preferred_tool": tool,
+                    "actual": actual,
+                    "required": required,
+                }
+            )
+    return {
+        "total_rows": len(rows),
+        "class_counts": dict(sorted(counts.items())),
+        "mismatches": mismatches,
+        "semantic_violations": violations,
+        "passed": not mismatches and not violations,
+    }
+
+
+class DaggerRolloutCollector:
+    """Collect expert labels at every state visited by the mixture policy."""
+
+    def __init__(self, *, env: Any, policy: Any, expert_oracle: Any, rng: random.Random | None = None) -> None:
+        self.env = env
+        self.policy = policy
+        self.expert_oracle = expert_oracle
+        self.rng = rng or random.Random()
+
+    def collect_iteration(
+        self,
+        *,
+        scenarios: Iterable[Mapping[str, Any]],
+        iteration: int,
+        beta: float,
+        max_steps: int,
+    ) -> list[dict[str, Any]]:
+        examples: list[dict[str, Any]] = []
+        scenario_list = list(scenarios)
+        for scenario_index, scenario in enumerate(scenario_list):
+            self.env.reset(scenario)
+            history: list[dict[str, Any]] = []
+            scenario_id = str(scenario.get("scenario_id", scenario.get("id", f"scenario_{scenario_index}")))
+            root_scenario_id = str(scenario.get("root_scenario_id", scenario_id))
+
+            for step in range(max_steps):
+                policy_observation = self._policy_observation(history)
+                observation_dict = policy_observation.as_dict()
+                validate_policy_payload(observation_dict)
+                oracle_state = self._oracle_state(history, policy_observation)
+                expert_actions = [
+                    safe_normalize_action(action)
+                    for action in self.expert_oracle.next_actions(oracle_state, history)
+                ]
+                expert_actions = [
+                    action for action in expert_actions if action["tool"] != "__invalid_action__"
+                ]
+                preferred_action = expert_actions[0] if expert_actions else None
+                target_candidate_disposition = None
+                target_candidate_assessment: dict[str, Any] = {}
+                if isinstance(oracle_state, OracleState):
+                    target_candidate_disposition = oracle_state.candidate_disposition
+                    target_candidate_assessment = copy.deepcopy(
+                        dict(oracle_state.candidate_assessment or {})
+                    )
+                if preferred_action is not None and hasattr(
+                    self.env, "assert_training_decision_evidence"
+                ):
+                    self.env.assert_training_decision_evidence(preferred_action)
+                model_action = self._policy_action(observation_dict)
+
+                if expert_actions and self.rng.random() < float(beta):
+                    executed_action = copy.deepcopy(self.rng.choice(expert_actions))
+                    executed_by = "expert"
+                else:
+                    executed_action = copy.deepcopy(model_action)
+                    executed_by = "model"
+
+                pre_state = self.env.current_state()
+                next_state, tool_output = self.env.step(executed_action)
+                provisional_transition = {
+                    "state_id": observation_dict.get("active_state_id"),
+                    "action": policy_safe_copy(executed_action),
+                    "tool_output": policy_safe_copy(tool_output),
+                }
+                provisional_history = history + [provisional_transition]
+                next_policy_observation = self._policy_observation(provisional_history)
+                next_oracle_state = self._oracle_state(provisional_history, next_policy_observation)
+                transition_label = self.expert_oracle.label_transition(
+                    state=oracle_state,
+                    action=executed_action,
+                    tool_output=tool_output,
+                    next_state=next_oracle_state,
+                    history=provisional_history,
+                    store=getattr(self.env, "store", None),
+                    hidden_truth=oracle_state.truth_dict() if isinstance(oracle_state, OracleState) else None,
+                )
+                transition_record = {
+                    **provisional_transition,
+                    "transition_label": policy_safe_copy(transition_label),
+                }
+                next_history = history + [transition_record]
+                final_next_policy_observation = self._policy_observation(next_history)
+                next_oracle_state = self._oracle_state(next_history, final_next_policy_observation)
+                next_valid_actions = []
+                if not self.env.is_terminal(next_state):
+                    next_valid_actions = [
+                        safe_normalize_action(action)
+                        for action in self.expert_oracle.next_actions(next_oracle_state, next_history)
+                    ]
+                    next_valid_actions = [
+                        action for action in next_valid_actions if action["tool"] != "__invalid_action__"
+                    ]
+                if not transition_label.get("valid_next_actions"):
+                    transition_label["valid_next_actions"] = next_valid_actions
+
+                state_class = classify_state_example(
+                    observation_dict,
+                    transition_label,
+                    preferred_action=preferred_action,
+                    candidate_assessment=target_candidate_assessment,
+                    target_candidate_disposition=target_candidate_disposition,
+                )
+                dataset_mode = (
+                    "production"
+                    if bool(getattr(self.env, "production_dataset_mode", False))
+                    else "synthetic_pilot"
+                )
+                example = {
+                    "example_id": f"dagger_iter{iteration}_{scenario_id}_step{step}",
+                    "scenario_id": scenario_id,
+                    "root_scenario_id": root_scenario_id,
+                    "episode_id": observation_dict.get("episode_id"),
+                    "iteration": iteration,
+                    "step": step,
+                    "dataset_mode": dataset_mode,
+                    "policy_observation": observation_dict,
+                    "parent_state_summary": observation_dict,
+                    "state_summary": observation_dict,
+                    "history_window": policy_safe_copy(observation_dict.get("history_window", [])),
+                    "valid_next_actions": expert_actions,
+                    "preferred_action": preferred_action,
+                    "model_action": policy_safe_copy(model_action),
+                    "executed_action": policy_safe_copy(executed_action),
+                    "executed_by": executed_by,
+                    "tool_output": policy_safe_copy(tool_output),
+                    "next_state_summary": final_next_policy_observation.as_dict(),
+                    "candidate_state_summary": (
+                        final_next_policy_observation.as_dict()
+                        if final_next_policy_observation.candidate_state_id
+                        else {}
+                    ),
+                    "transition_label": policy_safe_copy(transition_label),
+                    "next_valid_actions": policy_safe_copy(next_valid_actions),
+                    "state_class": state_class,
+                    "labels": {
+                        "candidate_disposition": transition_label.get("candidate_disposition"),
+                        "target_candidate_disposition": target_candidate_disposition,
+                        "candidate_assessment": policy_safe_copy(
+                            target_candidate_assessment
+                        ),
+                        "progress_class": transition_label.get("progress_class"),
+                        "process_valid": transition_label.get("process_valid"),
+                        "state_class": state_class,
+                        "dataset_mode": dataset_mode,
+                    },
+                }
+                validate_policy_payload(
+                    {
+                        "policy_observation": example["policy_observation"],
+                        "history_window": example["history_window"],
+                    }
+                )
+                examples.append(example)
+                history = next_history
+                if self.env.is_terminal(next_state):
+                    break
+        return examples
+
+    def _policy_observation(self, history: list[Mapping[str, Any]]) -> PolicyObservation:
+        if hasattr(self.env, "get_policy_observation"):
+            observation = self.env.get_policy_observation(history)
+            if isinstance(observation, PolicyObservation):
+                return observation
+            if isinstance(observation, Mapping):
+                return PolicyObservation(**dict(observation))
+        state = self.env.current_state()
+        return PolicyObservation(
+            active_state_id=str(state["active_state_id"]),
+            history_window=policy_safe_copy(history),
+            remaining_budget=int(state.get("remaining_budget") or 0),
+        )
+
+    def _oracle_state(
+        self,
+        history: list[Mapping[str, Any]],
+        policy_observation: PolicyObservation,
+    ) -> OracleState | Mapping[str, Any]:
+        if hasattr(self.env, "get_oracle_state"):
+            return self.env.get_oracle_state(history)
+        return policy_observation.as_dict()
+
+    def _policy_action(self, observation: Mapping[str, Any]) -> dict[str, Any]:
+        try:
+            if hasattr(self.policy, "act"):
+                raw = self.policy.act(copy.deepcopy(dict(observation)))
+            elif callable(self.policy):
+                raw = self.policy(copy.deepcopy(dict(observation)))
+            else:
+                raise TypeError("policy must be callable or expose .act(obs)")
+        except Exception as exc:  # collection must retain arbitrary learner failures
+            return invalid_action("policy_exception", f"{type(exc).__name__}: {exc}")
+        return safe_normalize_action(raw)
+
+
+def _validation_score(result: Any) -> float:
+    if isinstance(result, (int, float)):
+        return float(result)
+    if isinstance(result, Mapping):
+        for key in ("score", "recovery_score", "validation_score"):
+            if result.get(key) is not None:
+                return float(result[key])
+    if hasattr(result, "score"):
+        return float(result.score)
+    raise TypeError("evaluate_fn must return a number, a mapping with score, or an object with .score")
+
+
+def _snapshot_policy(policy: Any, snapshot_policy_fn: Callable[[Any], Any] | None) -> Any:
+    if snapshot_policy_fn is not None:
+        return snapshot_policy_fn(policy)
+    try:
+        return copy.deepcopy(policy)
+    except Exception as exc:
+        raise TypeError(
+            "Policy is not deepcopy-able; provide snapshot_policy_fn so best-checkpoint selection is reliable."
+        ) from exc
+
+
+def run_dagger(
+    *,
+    policy: Any,
+    expert_oracle: Any,
+    env: Any,
+    scenarios_by_iteration: Callable[[int], Iterable[Mapping[str, Any]]] | Iterable[Mapping[str, Any]],
+    initial_dataset: list[dict[str, Any]] | None = None,
+    num_iterations: int = 8,
+    beta_schedule: list[float] | None = None,
+    max_steps: int = 12,
+    train_policy_fn: Callable[[Any, list[dict[str, Any]]], Any] | None = None,
+    evaluate_fn: Callable[[Any, Any, Any], Any] | None = None,
+    snapshot_policy_fn: Callable[[Any], Any] | None = None,
+    training_dataset_fn: Callable[[list[dict[str, Any]], int], list[dict[str, Any]]] | None = None,
+    balanced_replay: bool = True,
+    replay_sample_size: int | None = None,
+    rng: random.Random | None = None,
+) -> tuple[Any, list[dict[str, Any]]]:
+    dataset = list(initial_dataset or [])
+    betas = beta_schedule or [1.0, 0.5, 0.25, 0.1, 0.05, 0.0, 0.0, 0.0]
+    current_policy = policy
+    best_policy: Any | None = None
+    best_score = float("-inf")
+    shared_rng = rng or random.Random()
+
+    if evaluate_fn is not None:
+        best_score = _validation_score(evaluate_fn(current_policy, env, expert_oracle))
+        best_policy = _snapshot_policy(current_policy, snapshot_policy_fn)
+
+    materialized_scenarios: list[Mapping[str, Any]] | None = None
+    if not callable(scenarios_by_iteration):
+        materialized_scenarios = list(scenarios_by_iteration)
+        if not materialized_scenarios:
+            raise ValueError("scenarios_by_iteration is empty.")
+
+    for iteration in range(num_iterations):
+        beta = betas[min(iteration, len(betas) - 1)]
+        if callable(scenarios_by_iteration):
+            scenarios = list(scenarios_by_iteration(iteration))
+            if not scenarios:
+                raise ValueError(f"Scenario provider returned no scenarios for iteration {iteration}.")
+        else:
+            scenarios = list(materialized_scenarios or [])
+        collector = DaggerRolloutCollector(
+            env=env,
+            policy=current_policy,
+            expert_oracle=expert_oracle,
+            rng=shared_rng,
+        )
+        dataset.extend(
+            collector.collect_iteration(
+                scenarios=scenarios,
+                iteration=iteration,
+                beta=beta,
+                max_steps=max_steps,
+            )
+        )
+        if training_dataset_fn is not None:
+            training_dataset = training_dataset_fn(dataset, iteration)
+        elif balanced_replay and train_policy_fn is not None:
+            sample_size = replay_sample_size if replay_sample_size is not None else len(dataset)
+            training_dataset = BalancedReplayBuffer(dataset).sample(sample_size, rng=shared_rng)
+        else:
+            training_dataset = dataset
+        if train_policy_fn is not None:
+            current_policy = train_policy_fn(current_policy, list(training_dataset))
+        if evaluate_fn is not None:
+            score = _validation_score(evaluate_fn(current_policy, env, expert_oracle))
+            if score > best_score:
+                best_score = score
+                best_policy = _snapshot_policy(current_policy, snapshot_policy_fn)
+
+    selected_policy = best_policy if evaluate_fn is not None and best_policy is not None else current_policy
+    return selected_policy, dataset

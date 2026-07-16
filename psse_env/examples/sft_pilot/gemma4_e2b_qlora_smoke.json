@@ -1,0 +1,53 @@
+{
+  "model": "unsloth/gemma-4-E2B-it",
+  "revision": "f0c5915f17ad6c66dbeb577fb06ff8925bf8d7ae",
+  "processor_and_model_revision_match": true,
+  "quantization": "nf4_double_quant_bfloat16_compute",
+  "max_length": 4096,
+  "pilot_train_rows": 78,
+  "pilot_validation_rows": 6,
+  "pilot_test_rows": 6,
+  "pilot_sha256": {
+    "train": "9b0026d33e06762371192a804d95fd152d3bcc07820885cbd52b6b3c6329061c",
+    "validation": "ce0070d6dbaae0b4a2f358f9ca38a4c528bfaad5c760391e35c6c22e5eca3bfd",
+    "test": "29ace51178355195d59fe5d94ef0b12c2d4d3efb784ca902eb21edef84c4c8dd"
+  },
+  "optimizer_example": {
+    "example_id": "dagger_iter0_pilot_root_000_step0",
+    "jsonl_row_sha256": "bc685c7786c0c1332614f374da6f3aa04c65440c495fe4977205bb6c3e4f522a",
+    "unchanged_after_observable_context_export_fix": true
+  },
+  "final_pilot_e2b_processor_gate": {
+    "passed": true,
+    "rows": 90,
+    "tool_round_trips": 90,
+    "maximum_tokens": 2436,
+    "prompt_truncated_rows": 0,
+    "target_truncated_rows": 0,
+    "zero_supervision_rows": 0
+  },
+  "one_batch": {
+    "passed": true,
+    "steps": 1,
+    "initial_loss": 14.111275672912598,
+    "final_loss": 14.111275672912598,
+    "gradients_finite": true,
+    "parameter_changed": true,
+    "loss_decreased": false,
+    "generation_round_trip": null,
+    "generated_tool_name": null
+  },
+  "tiny_overfit": {
+    "passed": true,
+    "steps": 20,
+    "learning_rate": 0.001,
+    "initial_loss": 14.111275672912598,
+    "final_loss": 0.0005142065929248929,
+    "gradients_finite": true,
+    "parameter_changed": true,
+    "loss_decreased": true,
+    "generation_round_trip": true,
+    "generated_tool_name": "run_wls"
+  },
+  "scope_note": "The optimizer and generation gates used the byte-identical first training row recorded above. After bounded observable context evidence was added to later correction rows, the exact E2B processor gate was rerun over all 90 final rows and passed. This proves the exact Gemma 4 E2B QLoRA optimizer and generated-tool path locally; the 31B production checkpoint still requires its own forward/backward and tiny-overfit gates on suitable HPC hardware."
+}
