@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from psse_env.sft.cli import main as cli_main
+from psse_env.sft.collator import AssistantOnlyCollator
 from psse_env.sft.gates import (
     GateError,
     ParsedToolCall,
@@ -19,7 +20,14 @@ from psse_env.sft.gates import (
     validate_grouped_pilot,
 )
 from psse_env.sft.smoke import run_generation_tool_call_smoke, run_training_smoke
-from psse_env.sft.training import LoraSettings, TrainerSettings, resolve_language_lora_targets, trl_config_kwargs
+from psse_env.sft.training import (
+    LoraSettings,
+    TrainerSettings,
+    ensure_required_side_inputs,
+    infer_required_side_input_names,
+    resolve_language_lora_targets,
+    trl_config_kwargs,
+)
 
 
 TOOLS = [
@@ -115,6 +123,21 @@ class FakeThinkingProcessor(FakeProcessor):
         return rendered
 
 
+class FakeGemma4Processor(FakeProcessor):
+    model_input_names = ["input_ids", "attention_mask", "mm_token_type_ids"]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.tokenize_kwargs = []
+
+    def __call__(self, text=None, **kwargs):
+        encoded = super().__call__(text=text, **kwargs)
+        self.tokenize_kwargs.append(dict(kwargs))
+        if kwargs.get("return_mm_token_type_ids"):
+            encoded["mm_token_type_ids"] = [index % 3 for index in range(len(encoded["input_ids"]))]
+        return encoded
+
+
 class TestSchemaTemplateAndMasks(unittest.TestCase):
     def test_row_tools_dict_arguments_mask_and_round_trip(self) -> None:
         processor = FakeProcessor()
@@ -126,6 +149,23 @@ class TestSchemaTemplateAndMasks(unittest.TestCase):
         self.assertEqual(example.expected_tool_call, ParsedToolCall("run_wls", {"state_id": "active"}))
         self.assertFalse(example.prompt_truncated)
         self.assertFalse(example.target_truncated)
+
+    def test_processor_mm_token_type_ids_are_requested_preserved_and_sliced(self) -> None:
+        source = row()
+        source["messages"][1]["content"] = "x" * 500
+        processor = FakeGemma4Processor()
+        full = prepare_example(source, processor, max_length=10000)
+        limit = full.supervised_tokens + 25
+        truncated = prepare_example(source, processor, max_length=limit)
+
+        self.assertTrue(
+            all(kwargs.get("return_mm_token_type_ids") is True for kwargs in processor.tokenize_kwargs)
+        )
+        self.assertTrue(truncated.prompt_truncated)
+        self.assertEqual(
+            truncated.side_inputs["mm_token_type_ids"],
+            full.side_inputs["mm_token_type_ids"][-truncated.used_length :],
+        )
 
     def test_string_arguments_are_a_hard_failure(self) -> None:
         bad = row()
@@ -342,6 +382,75 @@ class TestTrainingSmoke(unittest.TestCase):
         self.assertTrue(overfit.loss_decreased)
         self.assertLess(overfit.final_loss, overfit.initial_loss)
 
+    def test_gemma4_missing_side_inputs_are_filled_and_forwarded(self) -> None:
+        import torch
+
+        class StrictGemma4Model(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.embedding = torch.nn.Embedding(256, 12)
+                self.projection = torch.nn.Linear(12, 256)
+                self.seen_mm_token_type_ids = None
+
+            def forward(
+                self,
+                input_ids,
+                attention_mask=None,
+                labels=None,
+                mm_token_type_ids=None,
+            ):
+                if mm_token_type_ids is None:
+                    raise ValueError("`mm_token_type_ids` is required as a model input when training")
+                self.seen_mm_token_type_ids = mm_token_type_ids.detach().clone()
+                logits = self.projection(self.embedding(input_ids))
+                loss = torch.nn.functional.cross_entropy(
+                    logits.reshape(-1, logits.shape[-1]), labels.reshape(-1), ignore_index=-100
+                )
+                return SimpleNamespace(loss=loss, logits=logits)
+
+        torch.manual_seed(0)
+        processor = FakeProcessor()
+        model = StrictGemma4Model()
+        original = prepare_example(row(), processor, max_length=10000)
+        required = infer_required_side_input_names(model, processor, "unsloth/gemma-4-31B-it")
+        prepared = ensure_required_side_inputs([original], required)
+
+        self.assertNotIn("mm_token_type_ids", original.side_inputs)
+        self.assertEqual(prepared[0].side_inputs["mm_token_type_ids"], [0] * len(original.input_ids))
+        batch = AssistantOnlyCollator(processor)(prepared)
+        self.assertEqual(batch["mm_token_type_ids"].shape, batch["input_ids"].shape)
+
+        one_batch = run_training_smoke(model, processor, prepared, steps=1, learning_rate=0.01)
+        self.assertTrue(one_batch.passed)
+        self.assertIsNotNone(model.seen_mm_token_type_ids)
+        self.assertTrue(
+            bool(torch.equal(model.seen_mm_token_type_ids, torch.zeros_like(model.seen_mm_token_type_ids)))
+        )
+
+    def test_collator_pads_mm_token_type_ids_with_zero(self) -> None:
+        import torch
+
+        collator = AssistantOnlyCollator(SimpleNamespace(pad_token_id=99))
+        batch = collator(
+            [
+                {
+                    "input_ids": [11, 12, 13],
+                    "attention_mask": [1, 1, 1],
+                    "labels": [-100, 12, 13],
+                    "mm_token_type_ids": [1, 2, 3],
+                },
+                {
+                    "input_ids": [21],
+                    "attention_mask": [1],
+                    "labels": [21],
+                    "mm_token_type_ids": [7],
+                },
+            ]
+        )
+        self.assertEqual(batch["input_ids"].tolist(), [[11, 12, 13], [21, 99, 99]])
+        self.assertEqual(batch["mm_token_type_ids"].tolist(), [[1, 2, 3], [7, 0, 0]])
+        self.assertEqual(batch["mm_token_type_ids"].dtype, torch.long)
+
     def test_pure_lora_and_trl_settings(self) -> None:
         lora = LoraSettings()
         self.assertEqual(lora.kwargs()["task_type"], "CAUSAL_LM")
@@ -356,20 +465,28 @@ class TestTrainingSmoke(unittest.TestCase):
         import torch
 
         processor = FakeProcessor()
-        example = prepare_example(row(), processor, max_length=10000)
 
         class GeneratingModel(torch.nn.Module):
             def __init__(self):
                 super().__init__()
                 self.anchor = torch.nn.Parameter(torch.zeros(()))
+                self.seen_mm_token_type_ids = None
 
-            def generate(self, input_ids, **_kwargs):
+            def generate(self, input_ids, mm_token_type_ids=None, **_kwargs):
+                if mm_token_type_ids is None:
+                    raise AssertionError("generation is missing mm_token_type_ids")
+                self.seen_mm_token_type_ids = mm_token_type_ids.detach().clone()
                 target = '<|tool_call|>call:run_wls{"state_id":"active"}'
                 suffix = torch.tensor([[ord(char) for char in target]], device=input_ids.device)
                 return torch.cat([input_ids, suffix], dim=1)
 
-        parsed = run_generation_tool_call_smoke(GeneratingModel(), processor, example)
+        model = GeneratingModel()
+        original = prepare_example(row(), processor, max_length=10000)
+        required = infer_required_side_input_names(model, processor, "unsloth/gemma-4-31B-it")
+        example = ensure_required_side_inputs([original], required)[0]
+        parsed = run_generation_tool_call_smoke(model, processor, example)
         self.assertEqual(parsed, ParsedToolCall("run_wls", {"state_id": "active"}))
+        self.assertIsNotNone(model.seen_mm_token_type_ids)
 
     def test_lora_targets_are_language_tower_only(self) -> None:
         class Model:

@@ -17,6 +17,21 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 
+TOKEN_TYPE_INPUT_NAMES = ("token_type_ids", "mm_token_type_ids")
+
+
+def processor_token_type_input_names(processor: Any) -> tuple[str, ...]:
+    """Return token-type side inputs advertised by a processor or tokenizer."""
+    discovered: set[str] = set()
+    for candidate in (processor, getattr(processor, "tokenizer", None)):
+        if candidate is None:
+            continue
+        names = getattr(candidate, "model_input_names", None)
+        if isinstance(names, (list, tuple)):
+            discovered.update(str(name) for name in names)
+    return tuple(name for name in TOKEN_TYPE_INPUT_NAMES if name in discovered)
+
+
 class GateError(RuntimeError):
     """A required SFT safety gate could not be proven."""
 
@@ -341,14 +356,27 @@ def _flatten_encoding(value: Any, *, field_name: str) -> list[int]:
 
 
 def _tokenize_rendered(processor: Any, text: str) -> dict[str, list[int]]:
-    kwargs = {
+    base_kwargs = {
         "add_special_tokens": False,
         "return_attention_mask": True,
     }
+    kwargs = dict(base_kwargs)
+    for name in processor_token_type_input_names(processor):
+        kwargs[f"return_{name}"] = True
+
+    def encode(call_kwargs: Mapping[str, Any]) -> Any:
+        try:
+            return processor(text=text, **call_kwargs)
+        except TypeError:
+            return processor(text, **call_kwargs)
+
     try:
-        encoded = processor(text=text, **kwargs)
+        encoded = encode(kwargs)
     except TypeError:
-        encoded = processor(text, **kwargs)
+        # Some tokenizer-style fallbacks advertise an input without accepting
+        # the corresponding ``return_*`` processor option. Required Gemma 4
+        # inputs are synthesized after model discovery in the training path.
+        encoded = encode(base_kwargs)
     if not hasattr(encoded, "items"):
         raise GateError(f"Processor returned non-mapping tokenization output {type(encoded).__name__}.")
     result: dict[str, list[int]] = {}

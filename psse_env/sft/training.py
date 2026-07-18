@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import inspect
-from dataclasses import replace
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .collator import AssistantOnlyCollator
-from .gates import GateError, PreparedExample, audit_dataset, load_exact_processor, load_jsonl, validate_grouped_pilot
+from .gates import (
+    TOKEN_TYPE_INPUT_NAMES,
+    GateError,
+    PreparedExample,
+    audit_dataset,
+    load_exact_processor,
+    load_jsonl,
+    processor_token_type_input_names,
+    validate_grouped_pilot,
+)
 from .smoke import run_generation_tool_call_smoke, run_training_smoke
 
 
@@ -107,6 +115,41 @@ def _supported_kwargs(callable_object: Any, kwargs: Mapping[str, Any]) -> dict[s
     if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
         return dict(kwargs)
     return {key: value for key, value in kwargs.items() if key in parameters}
+
+
+def infer_required_side_input_names(model: Any, processor: Any, model_name: str) -> tuple[str, ...]:
+    """Discover token-aligned side inputs required by the training model."""
+    discovered = set(processor_token_type_input_names(processor))
+    try:
+        discovered.update(inspect.signature(model.forward).parameters)
+    except (TypeError, ValueError):
+        pass
+
+    lowered = model_name.lower()
+    if "gemma-4" in lowered or "gemma4" in lowered:
+        discovered.add("mm_token_type_ids")
+    return tuple(name for name in TOKEN_TYPE_INPUT_NAMES if name in discovered)
+
+
+def ensure_required_side_inputs(
+    examples: Sequence[PreparedExample],
+    required_names: Sequence[str],
+) -> list[PreparedExample]:
+    """Preserve processor values and fill missing text-only side inputs with zeros."""
+    required = tuple(dict.fromkeys(required_names))
+    unsupported = sorted(set(required) - set(TOKEN_TYPE_INPUT_NAMES))
+    if unsupported:
+        raise GateError(f"Unsupported token-aligned side inputs requested: {unsupported}.")
+
+    enriched: list[PreparedExample] = []
+    for example in examples:
+        side_inputs = {key: list(values) for key, values in example.side_inputs.items()}
+        for name in required:
+            values = side_inputs.setdefault(name, [0] * len(example.input_ids))
+            if len(values) != len(example.input_ids):
+                raise GateError(f"Prepared example has unaligned {name}.")
+        enriched.append(replace(example, side_inputs=side_inputs))
+    return enriched
 
 
 def trl_config_kwargs(settings: TrainerSettings, *, has_validation: bool) -> dict[str, Any]:
@@ -268,7 +311,10 @@ def run_lora_smoke(
         pilot_minimum_rows=pilot_minimum_rows,
         pilot_maximum_rows=pilot_maximum_rows,
     )
-    model = _attach_lora(_load_model(settings), settings, lora)
+    model = _load_model(settings)
+    required_side_inputs = infer_required_side_input_names(model, processor, settings.model_name)
+    train_examples = ensure_required_side_inputs(train_examples, required_side_inputs)
+    model = _attach_lora(model, settings, lora)
     steps = 1 if mode == "one-batch" else tiny_overfit_steps
     result = run_training_smoke(
         model,
@@ -322,6 +368,9 @@ def run_lora_training(
         pilot_maximum_rows=pilot_maximum_rows,
     )
     model = _load_model(settings)
+    required_side_inputs = infer_required_side_input_names(model, processor, settings.model_name)
+    train_examples = ensure_required_side_inputs(train_examples, required_side_inputs)
+    validation_examples = ensure_required_side_inputs(validation_examples, required_side_inputs)
     try:
         from trl import SFTTrainer
     except Exception as exc:  # pragma: no cover
