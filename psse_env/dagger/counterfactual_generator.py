@@ -127,11 +127,17 @@ class CounterfactualGenerator:
                 state_class = "accepted_partial_continuation"
             else:
                 state_class = "invalid_precondition_recovery"
+            dataset_mode = (
+                "production"
+                if bool(getattr(self.env, "production_dataset_mode", False))
+                else "synthetic_pilot"
+            )
             rows.append(
                 {
                     "example_id": f"counterfactual_{root_scenario_id}_{index}",
                     "scenario_id": root_scenario_id,
                     "root_scenario_id": root_scenario_id,
+                    "dataset_mode": dataset_mode,
                     "branch_family": injected.family,
                     "policy_observation": reached_observation.as_dict(),
                     "parent_state_summary": reached_observation.as_dict(),
@@ -156,6 +162,7 @@ class CounterfactualGenerator:
                         "candidate_disposition": disposition,
                         "process_valid": bool(recovery_validity.get("process_valid")),
                         "state_class": state_class,
+                        "dataset_mode": dataset_mode,
                     },
                     "state_class": state_class,
                 }

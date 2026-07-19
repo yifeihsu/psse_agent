@@ -181,10 +181,19 @@ def _check_schema_node(schema: Any, *, path: str) -> None:
     if not isinstance(schema, dict):
         raise GateError(f"{path} must be a JSON Schema object.")
     declared_type = schema.get("type")
-    if declared_type is not None and declared_type not in {
-        "object", "array", "string", "integer", "number", "boolean", "null"
-    }:
-        raise GateError(f"{path}.type is unsupported or invalid: {declared_type!r}.")
+    valid_types = {"object", "array", "string", "integer", "number", "boolean", "null"}
+    if declared_type is not None:
+        # JSON Schema allows a single type name or a union list of them
+        # (e.g. ["string", "null"] for nullable arguments).
+        if isinstance(declared_type, list):
+            if (
+                not declared_type
+                or len(set(declared_type)) != len(declared_type)
+                or any(member not in valid_types for member in declared_type)
+            ):
+                raise GateError(f"{path}.type is unsupported or invalid: {declared_type!r}.")
+        elif declared_type not in valid_types:
+            raise GateError(f"{path}.type is unsupported or invalid: {declared_type!r}.")
     enum = schema.get("enum")
     if enum is not None and (not isinstance(enum, list) or not enum):
         raise GateError(f"{path}.enum must be a non-empty list.")
@@ -231,6 +240,12 @@ def _validate_json_instance(value: Any, schema: Mapping[str, Any], *, path: str)
     declared_type = schema.get("type")
     if isinstance(declared_type, str) and not _is_json_type(value, declared_type):
         raise GateError(f"{path} must have JSON type {declared_type}, got {type(value).__name__}.")
+    if isinstance(declared_type, list) and not any(
+        _is_json_type(value, member) for member in declared_type
+    ):
+        raise GateError(
+            f"{path} must have one of JSON types {declared_type!r}, got {type(value).__name__}."
+        )
     if "enum" in schema and value not in schema["enum"]:
         raise GateError(f"{path} must be one of {schema['enum']!r}, got {value!r}.")
     if isinstance(value, dict):
