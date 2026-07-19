@@ -616,7 +616,20 @@ class TransactionalPSSEEnv:
                 )
 
         if output["execution_status"] == "failure":
-            if before_hash != self.store.episode_hash():
+            # A failed action must be a no-op on the store, with one narrow
+            # exception: a candidate whose verification solve itself fails is
+            # recorded as verified-REJECT (the verdict is store metadata; the
+            # active and candidate states are untouched), otherwise the open
+            # candidate would have no legal rollback path.
+            verified_reject_recorded = bool(
+                normalized["tool"] in {RUN_WLS, VERIFY_CANDIDATE}
+                and output.get("state_mutated")
+                and before_candidate_id is not None
+                and self.current_candidate_id == before_candidate_id
+                and self.store.get_state(str(before_candidate_id)).get("candidate_disposition")
+                == "REJECT"
+            )
+            if before_hash != self.store.episode_hash() and not verified_reject_recorded:
                 raise RuntimeError("Failed action mutated the transactional state store.")
             if before_active_id != self.store.active_state_id or before_candidate_id != self.current_candidate_id:
                 raise RuntimeError("Failed action changed active or candidate state.")
@@ -1141,13 +1154,77 @@ class TransactionalPSSEEnv:
                 "remaining_anomaly_score": state_payload.get("metadata", {}).get("remaining_anomaly_score"),
             }
         else:
-            metrics = dict(self.wls_runner(copy.deepcopy(state_payload)))
+            runner_payload = copy.deepcopy(state_payload)
+            # Deployment WLS runners merge previously recorded sensor-sourced
+            # signatures with their own solve-derived ones, so they receive the
+            # same deployment-safe observation the other providers already get.
+            runner_payload["policy_observation"] = self.get_policy_observation().as_dict()
+            metrics = dict(self.wls_runner(runner_payload))
         runner_status = metrics.pop("execution_status", "success")
         if runner_status != "success":
+            error_code = str(metrics.pop("error_code", "wls_failure"))
+            error_detail = metrics.pop("error_detail", None)
+            # A candidate whose verification solve itself fails (for example a
+            # topology hypothesis that islands part of the network and makes
+            # the estimator singular) can never produce acceptance evidence.
+            # The solver failure is observable rejection evidence, so the
+            # candidate is marked verified-REJECT; leaving it unverified would
+            # deadlock the episode with no legal rollback.
+            if (
+                self.current_candidate_id is not None
+                and state_id == str(self.current_candidate_id)
+                and not state_payload.get("verified")
+            ):
+                rejection_metrics = {
+                    "state_id": state_id,
+                    "state_hash": state_payload["state_hash"],
+                    "evidence_source": str(
+                        metrics.get("evidence_source")
+                        or (
+                            f"configured_provider:{_provider_label(self.wls_runner)}"
+                            if self.wls_runner is not None
+                            else "controller_default"
+                        )
+                    ),
+                    "verification_error_code": error_code,
+                    "converged": False,
+                    "power_flow_converged": False,
+                    "physical_constraints_ok": False,
+                }
+                assessment = {
+                    "disposition": "REJECT",
+                    "progress_class": "verification_solver_failure",
+                    "collateral_damage": True,
+                    "rationale_codes": ["verification_solver_failure", error_code],
+                }
+                self.store.mark_verified(
+                    state_id, rejection_metrics, "REJECT", assessment
+                )
+                return self._standard_output(
+                    execution_status="failure",
+                    error_code=error_code,
+                    error_detail=error_detail,
+                    state_mutated=True,
+                    candidate_state_id=self.current_candidate_id,
+                    tool_metrics={
+                        **metrics,
+                        **rejection_metrics,
+                        "candidate_disposition": "REJECT",
+                        "candidate_assessment": assessment,
+                    },
+                    valid_next_actions=[
+                        {
+                            "tool": ROLLBACK_STATE,
+                            "arguments": {
+                                "candidate_state_id": str(self.current_candidate_id)
+                            },
+                        }
+                    ],
+                )
             return self._standard_output(
                 execution_status="failure",
-                error_code=str(metrics.pop("error_code", "wls_failure")),
-                error_detail=metrics.pop("error_detail", None),
+                error_code=error_code,
+                error_detail=error_detail,
                 state_mutated=False,
                 tool_metrics=metrics,
                 valid_next_actions=self.process_oracle.repair_actions(

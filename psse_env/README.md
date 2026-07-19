@@ -86,6 +86,45 @@ finalize audit accepts it when each contributing record carries an
 observable evidence source. Diagnosed-but-uncorrected episodes therefore
 terminate cleanly instead of stalling on a persistent chi-square anomaly.
 
+Deployment `run_wls` also refreshes the model-visible
+`unresolved_signatures` from the solve itself: sensor-sourced signatures are
+preserved, and when the chi-square test fires it mints residual-outlier and
+branch-multiplier signatures from the top residual/λ evidence. Classical λ-vs-r
+dominance discrimination tags the dominant family: `max|r| > 1.2·max|λ|` marks
+`wls_residual_outlier_dominant`, `max|λ| > 1.2·max|r|` marks
+`wls_branch_multiplier_dominant`, and inside the symmetric dead band neither
+carries the token, so routing falls back to static source priority
+(parameter → topology → measurement). Family experts boost their context
+confidence on a dominant signature (`dominance_confidence`), and the
+measurement expert stands down while branch evidence is dominant — until both
+branch families have had a hypothesis rejected by verification — because a measurement
+correction can zero the residuals of a wrong model and mask a branch fault.
+Two more physical guards close that masking channel: while an unexplained
+harmonic/HIF sensor signature stands, `run_wls` mints no `wls_*` signatures at
+all (the fundamental-frequency solve is unreliable under waveform anomalies),
+and `get_topology_context` filters supported status flips that would island
+the network (an EMS would never offer that switching action). A candidate
+whose verification solve itself fails is recorded as verified-REJECT — the
+solver failure is observable rejection evidence — so the episode retains a
+legal rollback path instead of deadlocking on an unverifiable candidate.
+
+`providers/scenario_generator.py` builds the round-0 offline aggregate from
+real physics: `Round0ScenarioGenerator` adapts the merged measurement corpus
+(single and multi gross outliers, corrupted-parameter cases with multi-scan
+data, harmonic and HIF rows with their runtime side channels), synthesizes
+topology scenarios via pypower power flows on status-flipped IEEE-14 cases,
+and composes measurement overlays on top of other families. Every scenario
+passes a physical validation gate (anomalous as observed, clean once the
+truth is restored — harmonic/HIF rows are anomalous by nature and gate on
+solvability), and scenario IDs are opaque hashes: the family lives only in
+the generator manifest, never in policy-visible metadata.
+`examples/generate_round0_aggregate.py` drives expert-only collection
+(β=1.0) over a family plan, injects bounded per-family counterfactual
+recovery branches, audits every episode against hidden truth (masking
+commits are quarantined), splits by root scenario, and exports canonical
+chat SFT with the native-row, teacher-realizability, and target-aware
+audits.
+
 `CandidateQualityOracle(mode="synthetic")` requires hidden truth.
 `mode="deployment"` ignores it and relies on observable WLS/physics evidence.
 The `verifier` package provides deterministic rules plus a structured numerical

@@ -5,6 +5,7 @@ from typing import Any, Mapping, Sequence
 from psse_env.actions import CORRECT_TOPOLOGY, GET_TOPOLOGY_CONTEXT
 from psse_env.oracle.expert_types import (
     ExpertActionProposal,
+    dominance_confidence,
     matching_evidence_codes,
     normalized_hint_actions,
     policy_state_view,
@@ -76,7 +77,7 @@ class TopologyExpert:
                 ExpertActionProposal(
                     action={"tool": GET_TOPOLOGY_CONTEXT, "arguments": {"state_id": active_id}},
                     source_expert=self.source_expert,
-                    confidence=0.87,
+                    confidence=dominance_confidence(0.87, topology_codes),
                     evidence_codes=evidence,
                     admissible=True,
                     estimated_immediate_risk=0.01,

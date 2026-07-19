@@ -2,9 +2,17 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-from psse_env.actions import CORRECT_MEASUREMENTS, GET_MEASUREMENT_CONTEXT, RUN_WLS
+from psse_env.actions import (
+    CORRECT_MEASUREMENTS,
+    CORRECT_PARAMETERS,
+    CORRECT_TOPOLOGY,
+    GET_MEASUREMENT_CONTEXT,
+    RUN_WLS,
+)
 from psse_env.oracle.expert_types import (
     ExpertActionProposal,
+    dominance_confidence,
+    history_action_tool,
     matching_evidence_codes,
     normalized_hint_actions,
     policy_state_view,
@@ -72,7 +80,31 @@ class MeasurementExpert:
             "meter",
             "residual_outlier",
         )
-        measurement_signal = bool(measurement_codes)
+        # A measurement correction can always drive the residuals of a wrong
+        # model to zero, so it is the one route that masks branch faults
+        # instead of being rejected by verification.  While branch-multiplier
+        # evidence dominates the solve and no measurement signature is itself
+        # dominant, the measurement route stands down and lets the branch
+        # families resolve first; the next solve re-evaluates dominance.
+        branch_dominant = bool(
+            matching_evidence_codes(unresolved, "wls_branch_multiplier_dominant")
+        )
+        measurement_dominant = bool(
+            matching_evidence_codes(measurement_codes, "dominant")
+        )
+        # Escape hatch: only after BOTH branch families have had a hypothesis
+        # rejected by verification does branch-multiplier dominance stop
+        # justifying suppression — otherwise an episode can stall with every
+        # family standing down.  A single wrong-line rejection must not open
+        # the measurement route: branch dominance (lambda clearly above the
+        # residuals) empirically only occurs on true branch faults, where a
+        # measurement correction would mask the fault and still be accepted.
+        branch_rejected = self._rejected_branch_hypothesis(
+            state, CORRECT_PARAMETERS
+        ) and self._rejected_branch_hypothesis(state, CORRECT_TOPOLOGY)
+        measurement_signal = bool(measurement_codes) and not (
+            branch_dominant and not measurement_dominant and not branch_rejected
+        )
         # A global safety requirement for measurement context is not itself
         # evidence of a measurement fault.  Context routing must be supported
         # by an observable signature (or private teacher supervision that the
@@ -84,7 +116,7 @@ class MeasurementExpert:
                 ExpertActionProposal(
                     action={"tool": GET_MEASUREMENT_CONTEXT, "arguments": {"state_id": active_id}},
                     source_expert=self.source_expert,
-                    confidence=0.87,
+                    confidence=dominance_confidence(0.87, measurement_codes),
                     evidence_codes=evidence,
                     admissible=True,
                     estimated_immediate_risk=0.01,
@@ -106,3 +138,19 @@ class MeasurementExpert:
                 )
             )
         return proposals
+
+    @staticmethod
+    def _rejected_branch_hypothesis(state: Any, tool: str) -> bool:
+        family = {CORRECT_PARAMETERS: "parameter", CORRECT_TOPOLOGY: "topology"}[tool]
+        for item in state_value(state, "rejected_hypotheses", []) or []:
+            if history_action_tool(item) == tool:
+                return True
+            if isinstance(item, Mapping):
+                item_family = (
+                    item.get("family") or item.get("action_family") or item.get("error_family")
+                )
+                if str(item_family).lower() == family:
+                    return True
+                if f"{tool}:" in str(item.get("action_signature") or ""):
+                    return True
+        return False

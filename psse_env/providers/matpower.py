@@ -29,10 +29,12 @@ import copy
 import hashlib
 import json
 import os
+import re
 import tempfile
 from typing import Any, Mapping, Sequence
 
 from psse_env.actions import (
+    ANOMALY_FAMILY_MARKERS,
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,
@@ -44,6 +46,7 @@ from psse_env.actions import (
     GET_TOPOLOGY_CONTEXT,
     RUN_HSE_FROM_PATH,
     RUN_THREE_PHASE_NLM_FROM_PATH,
+    unexplained_signatures,
 )
 
 from mcp_server.matpower_server import (  # noqa: E402  (repo-root package)
@@ -112,6 +115,19 @@ def matpower_case_differ(parent_case_path: str, candidate_case_path: str) -> dic
     }
 
 
+def _dedupe(values: Sequence[str]) -> list[str]:
+    return list(dict.fromkeys(values))
+
+
+def _matches_any_marker(text: str, markers: Sequence[str]) -> bool:
+    """Word-boundary marker matching, consistent with expert routing."""
+    lowered = text.lower()
+    return any(
+        re.search(rf"(?<![a-z0-9]){re.escape(marker.lower())}(?![a-z0-9])", lowered)
+        for marker in markers
+    )
+
+
 def _render_matpower_case(ppc: Mapping[str, Any], function_name: str) -> str:
     """Render the parsed matrices back to loadable MATPOWER text."""
     lines = [
@@ -146,6 +162,9 @@ class MatpowerDeploymentProviders:
         derived_case_dir: str | None = None,
         max_correction_iterations: int = 2,
         error_tolerance: float = 1e-3,
+        hif_alpha_grid_size: int = 31,
+        hif_r_grid_size: int = 35,
+        hif_max_scans: int = 10,
     ) -> None:
         self.top_k = int(top_k)
         self.residual_threshold = float(residual_threshold)
@@ -157,6 +176,12 @@ class MatpowerDeploymentProviders:
         )
         self.max_correction_iterations = int(max_correction_iterations)
         self.error_tolerance = float(error_tolerance)
+        # HIF grid-search resolution.  The 31x35 default matches the
+        # production estimator; round-0 collection may configure a coarser
+        # grid so the real OpenDSS search stays tractable per episode.
+        self.hif_alpha_grid_size = int(hif_alpha_grid_size)
+        self.hif_r_grid_size = int(hif_r_grid_size)
+        self.hif_max_scans = int(hif_max_scans)
 
     # ------------------------------------------------------------------ wiring
 
@@ -358,6 +383,68 @@ class MatpowerDeploymentProviders:
             solved["index_map"],
         )
         max_abs_residual = max((abs(value) for value in residuals), default=0.0)
+        # Observable anomaly signatures drive expert routing.  Signatures this
+        # runner derives from its own solve carry the ``wls_`` prefix and are
+        # refreshed on every solve; signatures recorded from other sources
+        # (power-quality or waveform sensors) are preserved verbatim because
+        # the fundamental-frequency solve has no authority to withdraw them.
+        observation = state.get("policy_observation")
+        observation = observation if isinstance(observation, Mapping) else {}
+        preserved = [
+            str(signature)
+            for signature in observation.get("unresolved_signatures") or []
+            if not str(signature).startswith("wls_")
+        ]
+        signatures = list(preserved)
+        # While an unexplained waveform-level anomaly (harmonic distortion or
+        # a suspected HIF) stands, the fundamental-frequency solve's bad-data
+        # attributions are physically unreliable: the chi-square elevation is
+        # (at least partly) the waveform event itself, and "correcting" SCADA
+        # measurements against it would mask the true anomaly.  The solve
+        # still reports its metrics but mints no signatures until the
+        # specialized diagnostics have explained the sensor-sourced ones.
+        waveform_markers = ANOMALY_FAMILY_MARKERS["harmonic"] + ANOMALY_FAMILY_MARKERS["hif"]
+        unexplained_sensor = [
+            signature
+            for signature in unexplained_signatures(
+                preserved, observation.get("explained_anomalies") or []
+            )
+            if _matches_any_marker(str(signature), waveform_markers)
+        ]
+        if statistic >= threshold and not unexplained_sensor:
+            lambda_values = [float(value) for value in payload.get("lambdaN") or []]
+            max_abs_lambda = max((abs(value) for value in lambda_values), default=0.0)
+            # Classical Lagrangian discrimination: a gross measurement error
+            # drives the largest normalized residual well above the largest
+            # normalized branch multiplier; a branch (parameter/topology)
+            # error inverts that.  Dominance requires clear separation in the
+            # claimed direction — inside the symmetric dead band neither tag
+            # carries the ``dominant`` token, so no family is suppressed and
+            # routing falls back to static source priority.
+            measurement_dominant = max_abs_residual > 1.2 * max_abs_lambda
+            branch_dominant = max_abs_lambda > 1.2 * max_abs_residual
+            residual_tag = (
+                "wls_residual_outlier_dominant" if measurement_dominant else "wls_residual_outlier"
+            )
+            branch_tag = (
+                "wls_branch_multiplier_dominant line_status_or_parameter"
+                if branch_dominant
+                else "wls_branch_multiplier line_status_or_parameter"
+            )
+            for item in build_residual_evidence(
+                residuals, solved["index_map"], k=self.top_k, min_abs=self.residual_threshold
+            ):
+                signatures.append(
+                    f"{residual_tag} index={item['index0']} channel={item['channel']}"
+                )
+            for item in build_lambda_evidence(
+                lambda_values,
+                payload.get("branch_info") or [],
+                k=self.top_k,
+                min_abs=self.lambda_threshold,
+            ):
+                if item.get("line_row0") is not None:
+                    signatures.append(f"{branch_tag} line={int(item['line_row0']) + 1}")
         metrics: dict[str, Any] = {
             **self._binding(state),
             "evidence_source": "deployment_wls:lagrangian_port",
@@ -371,6 +458,7 @@ class MatpowerDeploymentProviders:
             "anomaly_threshold": 1.0,
             "remaining_anomaly_score": statistic / threshold if threshold else None,
             "no_material_anomaly_remaining": bool(statistic < threshold),
+            "unresolved_signatures": _dedupe(signatures),
             "wls_summary": summary,
         }
         source_action = state.get("source_action")
@@ -482,19 +570,24 @@ class MatpowerDeploymentProviders:
         branch = solved["ppc"]["branch"]
         supported: list[dict[str, Any]] = []
         seen_rows: set[int] = set()
+        islanding_filtered: list[int] = []
         for item in findings:
             row0 = item.get("line_row0")
             if row0 is None or row0 in seen_rows or not 0 <= int(row0) < solved["nl"]:
                 continue
             seen_rows.add(int(row0))
             current_status = int(float(branch[int(row0)][10])) if branch.shape[1] > 10 else 1
+            proposed_status = 0 if current_status else 1
+            if self._flip_creates_island(branch, int(row0), proposed_status):
+                islanding_filtered.append(int(row0) + 1)
+                continue
             supported.append(
                 {
                     "tool": CORRECT_TOPOLOGY,
                     "arguments": {
                         "state_id": state_id,
                         "line_index": int(row0) + 1,
-                        "status": 0 if current_status else 1,
+                        "status": proposed_status,
                     },
                 }
             )
@@ -505,7 +598,41 @@ class MatpowerDeploymentProviders:
             "finding_count": len(findings),
             "topology_findings": findings,
             "supported_corrections": supported,
+            "islanding_filtered_lines": islanding_filtered,
         }
+
+    @staticmethod
+    def _flip_creates_island(branch: Any, row0: int, proposed_status: int) -> bool:
+        """Opening a line that is the only path to a bus islands the network.
+
+        A real EMS would never offer that switching action, so the context
+        provider filters it from supported corrections (closing a line can
+        only improve connectivity and is never filtered).
+        """
+        if proposed_status != 0:
+            return False
+        import numpy as np
+        from scipy.sparse import coo_matrix
+        from scipy.sparse.csgraph import connected_components
+
+        array = np.asarray(branch, dtype=float)
+        statuses = (
+            array[:, 10].astype(int).copy()
+            if array.shape[1] > 10
+            else np.ones(array.shape[0], dtype=int)
+        )
+        statuses[row0] = 0
+        active = statuses != 0
+        bus_ids = np.unique(array[:, :2].astype(int))
+        index_of = {int(bus): i for i, bus in enumerate(bus_ids)}
+        from_idx = [index_of[int(b)] for b in array[active, 0]]
+        to_idx = [index_of[int(b)] for b in array[active, 1]]
+        n_bus = len(bus_ids)
+        adjacency = coo_matrix(
+            (np.ones(len(from_idx)), (from_idx, to_idx)), shape=(n_bus, n_bus)
+        )
+        components, _ = connected_components(adjacency, directed=False)
+        return int(components) > 1
 
     # ---------------------------------------------------------------- executors
 
@@ -798,8 +925,8 @@ class MatpowerDeploymentProviders:
             pristine_model_dir=runtime.get("pristine_model_dir"),
             load_scale=float(runtime.get("load_scale", 1.0)),
             top_k=int(arguments.get("top_k", self.top_k)),
-            alpha_grid_size=int(arguments.get("alpha_grid_size", 31)),
-            r_grid_size=int(arguments.get("r_grid_size", 35)),
+            alpha_grid_size=int(arguments.get("alpha_grid_size", self.hif_alpha_grid_size)),
+            r_grid_size=int(arguments.get("r_grid_size", self.hif_r_grid_size)),
             r_hif_pu_min=float(arguments.get("r_hif_pu_min", 5.0)),
             r_hif_pu_max=float(arguments.get("r_hif_pu_max", 1000.0)),
         )
@@ -850,11 +977,11 @@ class MatpowerDeploymentProviders:
             candidate_phase=arguments.get("candidate_phase"),
             pristine_model_dir=window.get("pristine_model_dir"),
             resistance_mode=str(arguments.get("resistance_mode", "shared")),
-            max_scans=int(arguments.get("max_scans", 10)),
+            max_scans=int(arguments.get("max_scans", self.hif_max_scans)),
             scan_selection=str(arguments.get("scan_selection", "information_greedy")),
             top_k=int(arguments.get("top_k", self.top_k)),
-            alpha_grid_size=int(arguments.get("alpha_grid_size", 31)),
-            r_grid_size=int(arguments.get("r_grid_size", 35)),
+            alpha_grid_size=int(arguments.get("alpha_grid_size", self.hif_alpha_grid_size)),
+            r_grid_size=int(arguments.get("r_grid_size", self.hif_r_grid_size)),
             r_hif_pu_min=float(arguments.get("r_hif_pu_min", 5.0)),
             r_hif_pu_max=float(arguments.get("r_hif_pu_max", 1000.0)),
             robust_loss=str(arguments.get("robust_loss", "soft_l1")),

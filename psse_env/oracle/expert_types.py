@@ -113,3 +113,21 @@ def matching_evidence_codes(signatures: Any, *needles: str) -> list[str]:
 def policy_state_view(state: Any) -> Any:
     nested = state_value(state, "policy_observation")
     return nested if nested is not None else state
+
+
+def dominance_confidence(base: float, matched_codes: Sequence[str], boost: float = 0.05) -> float:
+    """Raise a family route's confidence when its WLS evidence is dominant.
+
+    The deployment WLS runner tags the signature family whose normalized
+    evidence dominates the solve (largest residual vs largest branch
+    multiplier) with a ``dominant`` token.  A family expert whose matched
+    signatures carry that token outranks the tied baseline confidence of the
+    other families; untagged signatures (pilot adapters, sensors) keep the
+    base confidence so existing routes are unchanged.
+    """
+    if any(
+        re.search(r"(?<![a-z0-9])dominant(?![a-z0-9])", str(code).lower())
+        for code in matched_codes or []
+    ):
+        return float(base) + float(boost)
+    return float(base)

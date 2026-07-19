@@ -5,6 +5,7 @@ from typing import Any, Mapping, Sequence
 from psse_env.actions import CORRECT_MEASUREMENTS, CORRECT_PARAMETERS, GET_PARAMETER_CONTEXT
 from psse_env.oracle.expert_types import (
     ExpertActionProposal,
+    dominance_confidence,
     history_action_tool,
     matching_evidence_codes,
     normalized_hint_actions,
@@ -86,7 +87,11 @@ class ParameterExpert:
         if diagnosis_needed and not has_context and active_id:
             # Once measurement work has failed or only partially succeeded,
             # parameter diagnosis must outrank even another measurement hint.
-            confidence = 0.999 if priority_evidence else 0.87
+            confidence = (
+                0.999
+                if priority_evidence
+                else dominance_confidence(0.87, parameter_codes)
+            )
             evidence = ["parameter_context_missing", *priority_evidence]
             if parameter_signal:
                 evidence.extend(["parameter_anomaly_evidence", *parameter_codes])
