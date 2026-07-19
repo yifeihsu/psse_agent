@@ -53,6 +53,21 @@ stores the reverse bindings only in metadata, and retains one bounded history
 window. `LocalAliasPolicyAdapter` applies the same view at inference and binds
 generated aliases back to episode-local controller IDs.
 
+`dagger/protocol_bridge.py` maps the controller macro surface onto the
+canonical power-tool protocol from `trace_protocol.CANONICAL_POWER_TOOLS`
+(`wls_from_path`/`case_path`), so DAgger rows can share one model-visible tool
+surface with the production SFT corpus, including the harmonic, HSE,
+three-phase NLM, and HIF estimator schemas. `examples_to_chat_sft(...,
+protocol="canonical")` exports canonical targets (correction values are
+dropped; the model is supervised on target selection only) and
+`LocalAliasPolicyAdapter(..., protocol="canonical")` converts generated
+canonical calls back before alias binding. The default remains
+`protocol="controller"`, so the validated 90-row pilot is unchanged.
+Reverse-mapped `correct_*_from_path` calls carry targets without values and
+therefore require deployment correction providers that hydrate values before
+they can execute; canonical-only diagnostics pass through and no-op until
+their executors are integrated.
+
 `production_dataset_mode=True` fails closed unless WLS, all three context
 providers, and all three correction executors declare production provenance or
 are explicitly approved deterministic pilot adapters. Production labels for

@@ -16,6 +16,14 @@ DEFAULT_DAGGER_SYSTEM_PROMPT = (
     "tool interface. Do not return final-answer prose. State references are local "
     "controller aliases such as active and candidate."
 )
+CANONICAL_DAGGER_SYSTEM_PROMPT = (
+    "You are a power-system state-estimation diagnostic agent. Given the current "
+    "state summary and recent tool history, choose exactly one next valid tool "
+    "call through the provided tool interface. Do not return final-answer prose. "
+    "Case references such as active and candidate are local case_path aliases; "
+    "use them exactly as provided."
+)
+SUPPORTED_EXPORT_PROTOCOLS = ("controller", "canonical")
 
 # State identifiers are transaction-controller capabilities, not semantic model
 # features.  Only these argument keys are rebound after model generation.
@@ -978,14 +986,39 @@ def examples_to_chat_sft(
     examples: Iterable[Mapping[str, Any]],
     *,
     available_tools: Iterable[str] | Iterable[Mapping[str, Any]] | None = None,
-    system_prompt: str = DEFAULT_DAGGER_SYSTEM_PROMPT,
+    system_prompt: str | None = None,
     assistant_format: str = "tool_calls",
     max_history_events: int = 8,
     max_history_chars: int = 4096,
     require_derived_provenance: bool = True,
+    protocol: str = "controller",
 ) -> list[dict[str, Any]]:
-    """Convert DAgger examples to native, controller-bindable chat SFT rows."""
-    tools = resolve_tool_schemas(available_tools)
+    """Convert DAgger examples to native, controller-bindable chat SFT rows.
+
+    ``protocol="controller"`` exports the internal macro-action surface.
+    ``protocol="canonical"`` exports the deployment power-tool surface
+    (``wls_from_path``/``case_path``) shared with the production SFT corpus,
+    converting each expert target through the protocol bridge while keeping
+    the reverse alias bindings in row metadata.
+    """
+    if protocol not in SUPPORTED_EXPORT_PROTOCOLS:
+        raise ValueError(
+            f"protocol must be one of {SUPPORTED_EXPORT_PROTOCOLS}, got {protocol!r}."
+        )
+    bridge = None
+    if protocol == "canonical":
+        from psse_env.dagger import protocol_bridge as bridge
+    if system_prompt is None:
+        system_prompt = (
+            CANONICAL_DAGGER_SYSTEM_PROMPT
+            if protocol == "canonical"
+            else DEFAULT_DAGGER_SYSTEM_PROMPT
+        )
+    if protocol == "canonical" and available_tools is None:
+        tools = bridge.unified_tool_schemas()
+        validate_tool_schemas(tools)
+    else:
+        tools = resolve_tool_schemas(available_tools)
     schema_names = {tool["function"]["name"] for tool in tools}
     rows: list[dict[str, Any]] = []
     for example in examples:
@@ -1013,10 +1046,6 @@ def examples_to_chat_sft(
         normalized_target = safe_normalize_action(target)
         if normalized_target["tool"] == INVALID_ACTION:
             raise ValueError(f"Invalid expert target for {example.get('example_id')}: {normalized_target}")
-        if normalized_target["tool"] not in schema_names:
-            raise ValueError(
-                f"Target tool {normalized_target['tool']} has no schema in this SFT row."
-            )
 
         alias_to_state_id = alias_metadata["state_aliases"]
         episode_aliases = alias_metadata["episode_aliases"]
@@ -1033,6 +1062,20 @@ def examples_to_chat_sft(
                 raise ValueError(
                     f"Expert target references unbound controller state for {key}: {target_reference}"
                 )
+        if protocol == "canonical":
+            exported_target = bridge.internal_to_canonical_action(aliased_target)
+            for key in bridge.CANONICAL_STATE_REFERENCE_KEYS:
+                target_reference = exported_target["arguments"].get(key)
+                if target_reference is not None and str(target_reference) not in alias_to_state_id:
+                    raise ValueError(
+                        f"Expert target references unbound case alias for {key}: {target_reference}"
+                    )
+        else:
+            exported_target = aliased_target
+        if exported_target["tool"] not in schema_names:
+            raise ValueError(
+                f"Target tool {exported_target['tool']} has no schema in this SFT row."
+            )
         user_payload = {"state": aliased_observation}
         identifier_leaks = find_model_identifier_leaks(user_payload)
         if identifier_leaks:
@@ -1058,11 +1101,11 @@ def examples_to_chat_sft(
                         "id": "call_0",
                         "type": "function",
                         "function": {
-                            "name": aliased_target["tool"],
+                            "name": exported_target["tool"],
                             # Native Transformers/TRL representation: keep this
                             # as an object.  Stringification belongs to a runtime
                             # transport adapter, never the training dataset.
-                            "arguments": _strict_json_clone(aliased_target["arguments"]),
+                            "arguments": _strict_json_clone(exported_target["arguments"]),
                         },
                     }
                 ],
@@ -1070,7 +1113,7 @@ def examples_to_chat_sft(
         elif assistant_format == "json_content":
             assistant_message = {
                 "role": "assistant",
-                "content": json.dumps(aliased_target, sort_keys=True),
+                "content": json.dumps(exported_target, sort_keys=True),
             }
         else:
             raise ValueError("assistant_format must be 'tool_calls' or 'json_content'.")
@@ -1098,6 +1141,7 @@ def examples_to_chat_sft(
                 "iteration": example.get("iteration"),
                 "step": example.get("step"),
                 "dataset_mode": dataset_mode,
+                "protocol": protocol,
                 "labels": labels,
                 "state_class": example.get("state_class"),
                 "controller": _controller_metadata(
