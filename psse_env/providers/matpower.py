@@ -719,12 +719,24 @@ class MatpowerDeploymentProviders:
         payload = _run_hse_logic(case_path, measurements, [int(order) for order in orders], slack_bus)
         if not payload.get("success"):
             return self._failure("hse_failure", payload.get("error"))
-        return {
+        summary = summarize_hse_payload(payload)
+        best_bus = payload.get("best_candidate_bus_1based")
+        metrics = {
             **self._binding(state),
             "evidence_source": "deployment_diagnostic:harmonic_state_estimation",
-            "best_candidate_bus_1based": payload.get("best_candidate_bus_1based"),
-            "hse_summary": summarize_hse_payload(payload),
+            "best_candidate_bus_1based": best_bus,
+            "hse_summary": summary,
         }
+        if best_bus is not None:
+            metrics["anomaly_explanation"] = {
+                "family": "harmonic",
+                "kind": "harmonic_source_localized",
+                "detail": {
+                    "bus_1based": int(best_bus),
+                    "thd_percent": summary.get("best_candidate_thd_percent"),
+                },
+            }
+        return metrics
 
     def run_three_phase_nlm(
         self, state: Mapping[str, Any], action: Mapping[str, Any]
@@ -793,10 +805,19 @@ class MatpowerDeploymentProviders:
         )
         if not payload.get("success"):
             return self._failure("hif_estimation_failure", payload.get("error"))
+        summary = summarize_hif_parameter_estimate_payload(payload)
         return {
             **self._binding(state),
             "evidence_source": "deployment_diagnostic:hif_parameter_estimator",
-            "hif_summary": summarize_hif_parameter_estimate_payload(payload),
+            "hif_summary": summary,
+            "anomaly_explanation": {
+                "family": "hif",
+                "kind": "hif_parameters_estimated",
+                "detail": {
+                    "candidate_branch_row0": int(arguments["candidate_branch_row0"]),
+                    "estimated": summary.get("estimated"),
+                },
+            },
         }
 
     def estimate_hif_multiscan(
@@ -841,10 +862,19 @@ class MatpowerDeploymentProviders:
         )
         if not payload.get("success"):
             return self._failure("hif_multiscan_failure", payload.get("error"))
+        summary = summarize_hif_parameter_estimate_payload(payload)
         return {
             **self._binding(state),
             "evidence_source": "deployment_diagnostic:hif_multiscan_estimator",
-            "hif_summary": summarize_hif_parameter_estimate_payload(payload),
+            "hif_summary": summary,
+            "anomaly_explanation": {
+                "family": "hif",
+                "kind": "hif_parameters_estimated",
+                "detail": {
+                    "candidate_branch_row0": int(arguments["candidate_branch_row0"]),
+                    "estimated": summary.get("estimated"),
+                },
+            },
         }
 
 

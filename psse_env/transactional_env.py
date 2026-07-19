@@ -6,8 +6,10 @@ from collections.abc import Callable, Iterable
 from typing import Any, Mapping
 
 from .actions import (
+    ANOMALY_FAMILY_MARKERS,
     ASK_FOR_MORE_EVIDENCE,
     DIAGNOSTIC_TOOLS,
+    unexplained_signatures,
     COMMIT_STATE,
     CONTEXT_TOOLS,
     CORRECTION_TOOLS,
@@ -20,6 +22,7 @@ from .actions import (
     safe_normalize_action,
 )
 from .oracle.candidate_quality import CandidateAssessment, CandidateDisposition, CandidateQualityOracle
+from .oracle.expert_types import matching_evidence_codes
 from .oracle.process_validity import ProcessValidityOracle
 from .state_store import (
     CandidateLifecycle,
@@ -498,6 +501,7 @@ class TransactionalPSSEEnv:
             last_tool_output=policy_safe_copy(summary.get("last_tool_output") or {}),
             last_verification=policy_safe_copy(summary.get("last_verification") or {}),
             accepted_corrections=policy_safe_copy(summary.get("accepted_corrections") or []),
+            explained_anomalies=policy_safe_copy(summary.get("explained_anomalies") or []),
             rejected_hypotheses=policy_safe_copy(summary.get("rejected_hypotheses") or []),
             unresolved_signatures=list(summary.get("unresolved_signatures") or []),
             tried_action_signatures=list(summary.get("tried_action_signatures") or []),
@@ -774,6 +778,8 @@ class TransactionalPSSEEnv:
                     ),
                     valid_next_actions=[],
                 )
+            if tool in DIAGNOSTIC_TOOLS:
+                self._record_anomaly_explanation(tool, target_id, metrics)
             return self._standard_output(execution_status="success", state_mutated=False, tool_metrics=metrics)
         return self.record_noop_failure(
             action=action,
@@ -907,6 +913,22 @@ class TransactionalPSSEEnv:
             provenance = state.get("semantic_field_provenance") or {}
             source = provenance.get(terminal_field) if terminal_field else None
             if terminal_field is None or not _observable_provenance_source(source):
+                signatures = state.get("unresolved_signatures") or []
+                records = [
+                    record
+                    for record in (state.get("explained_anomalies") or [])
+                    if isinstance(record, Mapping) and record.get("explained_signatures")
+                ]
+                anomalies_explained = (
+                    bool(signatures)
+                    and not unexplained_signatures(signatures, records)
+                    and all(
+                        _observable_provenance_source(record.get("evidence_source"))
+                        for record in records
+                    )
+                )
+                if anomalies_explained:
+                    return
                 raise ValueError(
                     "Production training row for finalize_diagnosis lacks observable "
                     "terminal evidence."
@@ -1331,6 +1353,38 @@ class TransactionalPSSEEnv:
                 "tool_output": policy_safe_copy(output),
             }
         )
+
+    def _record_anomaly_explanation(
+        self, tool: str, target_id: str, metrics: Mapping[str, Any]
+    ) -> None:
+        """Record a diagnostic finding that accounts for anomaly signatures.
+
+        Providers declare the explanation (family plus finding detail); the
+        environment binds it to the unresolved signatures whose observable
+        markers match that family.  Fully explained signatures satisfy the
+        terminal condition without a physical correction.
+        """
+        explanation = metrics.get("anomaly_explanation")
+        if not isinstance(explanation, Mapping):
+            return
+        family = str(explanation.get("family") or "")
+        markers = ANOMALY_FAMILY_MARKERS.get(family)
+        if not markers:
+            return
+        unresolved = list(self.current_state().get("unresolved_signatures") or [])
+        explained = matching_evidence_codes(unresolved, *markers)
+        record = policy_safe_copy(
+            {
+                "tool": tool,
+                "state_id": target_id,
+                "family": family,
+                "kind": explanation.get("kind"),
+                "detail": explanation.get("detail") or {},
+                "evidence_source": metrics.get("evidence_source"),
+                "explained_signatures": explained,
+            }
+        )
+        self.context_flags.setdefault("explained_anomalies", []).append(record)
 
     def _invalidate_context_flags(self) -> None:
         for family in ("measurement", "parameter", "topology"):

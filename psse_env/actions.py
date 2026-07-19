@@ -70,6 +70,38 @@ MACRO_ACTIONS = {
     *DIAGNOSTIC_TOOLS,
 }
 
+# Observable anomaly-signature vocabulary shared by expert routing and the
+# explained-anomaly termination semantics.  A diagnostic explanation for a
+# family accounts for the unresolved signatures matching that family's
+# markers; families not listed here can only be resolved by corrections.
+ANOMALY_FAMILY_MARKERS: dict[str, tuple[str, ...]] = {
+    "harmonic": ("harmonic", "harmonics", "thd", "distortion", "waveform"),
+    "hif": (
+        "hif",
+        "high_impedance",
+        "high_impedance_fault",
+        "arc",
+        "arcing",
+        "downed_conductor",
+        "unbalance",
+        "imbalance",
+    ),
+}
+
+
+def unexplained_signatures(
+    unresolved: Any,
+    explained_records: Any,
+) -> list[str]:
+    """Unresolved signatures not covered by any recorded diagnostic explanation."""
+    explained: set[str] = set()
+    for record in explained_records or []:
+        if not isinstance(record, Mapping):
+            continue
+        for signature in record.get("explained_signatures") or []:
+            explained.add(str(signature))
+    return [str(item) for item in (unresolved or []) if str(item) not in explained]
+
 
 def invalid_action(error_code: str, error_detail: str | None = None) -> dict[str, Any]:
     """Return the canonical learner-action representation for malformed output."""

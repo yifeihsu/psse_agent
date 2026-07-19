@@ -22,6 +22,7 @@ from psse_env.actions import (
     RUN_WLS,
     VERIFY_CANDIDATE,
     safe_normalize_action,
+    unexplained_signatures,
 )
 
 
@@ -222,7 +223,15 @@ class ProcessValidityOracle:
         if state.get("no_material_anomaly_remaining") or state.get("oracle_terminal_eligible"):
             return True
         remaining = state.get("remaining_anomaly_score")
-        return remaining is not None and float(remaining) < self.anomaly_threshold
+        if remaining is not None and float(remaining) < self.anomaly_threshold:
+            return True
+        # A residual anomaly is diagnosed, not unresolved, once every
+        # observable signature is accounted for by a recorded diagnostic
+        # explanation (localized harmonic source, estimated HIF).
+        signatures = state.get("unresolved_signatures") or []
+        return bool(signatures) and not unexplained_signatures(
+            signatures, state.get("explained_anomalies")
+        )
 
     def repair_actions(
         self,

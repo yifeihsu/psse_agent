@@ -158,6 +158,65 @@ class OrchestratorRoutingTests(unittest.TestCase):
         self.assertEqual(actions[0]["tool"], "run_three_phase_nlm_from_path")
 
 
+class ResolutionSemanticsTests(unittest.TestCase):
+    @staticmethod
+    def _explained_record(*signatures: str, family: str = "harmonic") -> dict:
+        return {
+            "tool": "run_hse_from_path",
+            "family": family,
+            "kind": "harmonic_source_localized",
+            "evidence_source": "deployment_diagnostic:harmonic_state_estimation",
+            "explained_signatures": list(signatures),
+        }
+
+    def test_unexplained_signatures_helper(self) -> None:
+        from psse_env.actions import unexplained_signatures
+
+        signatures = ["harmonic_distortion_detected", "large_residual meter_31"]
+        records = [self._explained_record("harmonic_distortion_detected")]
+        self.assertEqual(
+            unexplained_signatures(signatures, records), ["large_residual meter_31"]
+        )
+        self.assertEqual(unexplained_signatures(signatures, []), signatures)
+        self.assertEqual(unexplained_signatures([], records), [])
+
+    def test_finalize_becomes_legal_once_all_signatures_are_explained(self) -> None:
+        from psse_env.oracle import ProcessValidityOracle
+
+        gate = ProcessValidityOracle()
+        state = _policy_state(
+            unresolved_signatures=["harmonic_distortion_detected"],
+            explained_anomalies=[self._explained_record("harmonic_distortion_detected")],
+        )
+        check = gate.check(state, {"tool": "finalize_diagnosis", "arguments": {}})
+        self.assertTrue(check["process_valid"])
+
+    def test_finalize_stays_blocked_while_a_signature_is_unexplained(self) -> None:
+        from psse_env.oracle import ProcessValidityOracle
+
+        gate = ProcessValidityOracle()
+        state = _policy_state(
+            unresolved_signatures=[
+                "harmonic_distortion_detected",
+                "large_residual meter_31",
+            ],
+            explained_anomalies=[self._explained_record("harmonic_distortion_detected")],
+        )
+        check = gate.check(state, {"tool": "finalize_diagnosis", "arguments": {}})
+        self.assertFalse(check["process_valid"])
+        self.assertEqual(check["error_code"], "terminal_condition_not_met")
+
+    def test_termination_expert_proposes_finalize_from_explanations(self) -> None:
+        oracle = ExpertPolicyOracle()
+        state = _policy_state(
+            unresolved_signatures=["harmonic_distortion_detected"],
+            available_evidence=["harmonic_measurements"],
+            explained_anomalies=[self._explained_record("harmonic_distortion_detected")],
+        )
+        actions = oracle.next_actions(state, [])
+        self.assertEqual(actions[0]["tool"], "finalize_diagnosis")
+
+
 class EndToEndHarmonicRoutingTests(unittest.TestCase):
     def test_expert_drives_harmonic_investigation_in_real_environment(self) -> None:
         from psse_env.providers import MatpowerDeploymentProviders
@@ -194,7 +253,9 @@ class EndToEndHarmonicRoutingTests(unittest.TestCase):
         self.assertIn("harmonic_measurements", observation.available_evidence)
 
         executed: list[str] = []
-        for _ in range(3):
+        for _ in range(5):
+            if env.is_terminal():
+                break
             actions = oracle.next_actions(env.get_oracle_state(), env.history)
             self.assertTrue(actions, f"expert returned no action after {executed}")
             _, output = env.step(actions[0])
@@ -202,10 +263,18 @@ class EndToEndHarmonicRoutingTests(unittest.TestCase):
                 output["execution_status"], "success", f"{actions[0]} -> {output}"
             )
             executed.append(actions[0]["tool"])
-        self.assertIn("get_harmonic_context", executed)
-        self.assertIn("run_hse_from_path", executed)
-        self.assertLess(
-            executed.index("get_harmonic_context"), executed.index("run_hse_from_path")
+        self.assertEqual(
+            executed,
+            ["get_harmonic_context", "run_hse_from_path", "finalize_diagnosis"],
+        )
+        self.assertTrue(env.is_terminal())
+        # The recorded explanation is model-visible and covers the signature.
+        final_observation = env.get_policy_observation()
+        self.assertTrue(final_observation.explained_anomalies)
+        record = final_observation.explained_anomalies[0]
+        self.assertEqual(record["family"], "harmonic")
+        self.assertEqual(
+            record["explained_signatures"], ["harmonic_distortion_detected"]
         )
 
 

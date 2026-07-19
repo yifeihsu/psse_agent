@@ -72,6 +72,20 @@ proposals; they never create a route observable telemetry cannot justify.
 Diagnostic summaries (`wls_summary`, `hse_summary`, `nlm_summary`,
 `hif_summary`, ...) are model-visible history metrics in SFT export.
 
+Diagnostic findings resolve anomalies without a physical correction through
+explained-anomaly records. A provider declares an `anomaly_explanation`
+(family plus finding detail — HSE emits one when it localizes a source, the
+HIF estimators when they estimate parameters); the environment binds it to
+the unresolved signatures matching that family's markers
+(`ANOMALY_FAMILY_MARKERS` in `actions.py`, shared with expert routing) and
+records it in the model-visible `explained_anomalies` field. Once every
+unresolved signature is covered by an explanation, the terminal condition is
+met: the process gate legalizes `finalize_diagnosis`, the termination expert
+proposes it (`anomalies_explained_by_diagnostics`), and the production
+finalize audit accepts it when each contributing record carries an
+observable evidence source. Diagnosed-but-uncorrected episodes therefore
+terminate cleanly instead of stalling on a persistent chi-square anomaly.
+
 `CandidateQualityOracle(mode="synthetic")` requires hidden truth.
 `mode="deployment"` ignores it and relies on observable WLS/physics evidence.
 The `verifier` package provides deterministic rules plus a structured numerical

@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import Any, Mapping, Sequence
 
 from psse_env.actions import (
+    ANOMALY_FAMILY_MARKERS,
     DIAGNOSTIC_TOOLS,
     ESTIMATE_HIF_FROM_PATH,
     ESTIMATE_HIF_MULTISCAN_FROM_PATH,
@@ -38,17 +39,11 @@ from psse_env.oracle.expert_types import (
 )
 
 
-HARMONIC_MARKERS = ("harmonic", "harmonics", "thd", "distortion", "waveform")
-HIF_MARKERS = (
-    "hif",
-    "high_impedance",
-    "high_impedance_fault",
-    "arc",
-    "arcing",
-    "downed_conductor",
-    "unbalance",
-    "imbalance",
-)
+# One shared vocabulary with the environment's explained-anomaly recording,
+# so a signature that routes to a diagnostic is the same signature that the
+# diagnostic's explanation later accounts for.
+HARMONIC_MARKERS = ANOMALY_FAMILY_MARKERS["harmonic"]
+HIF_MARKERS = ANOMALY_FAMILY_MARKERS["hif"]
 
 
 class DiagnosticsExpert:

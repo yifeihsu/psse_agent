@@ -8,6 +8,7 @@ from psse_env.actions import (
     FINALIZE_DIAGNOSIS,
     ROLLBACK_STATE,
     RUN_WLS,
+    unexplained_signatures,
 )
 from psse_env.oracle.expert_types import ExpertActionProposal, state_value
 
@@ -108,9 +109,18 @@ class TerminationExpert:
             below_threshold = score is not None and float(score) < self.anomaly_threshold
         except (TypeError, ValueError):
             below_threshold = False
-        if not (no_anomaly or below_threshold):
+        signatures = state_value(state, "unresolved_signatures", []) or []
+        anomalies_explained = bool(signatures) and not unexplained_signatures(
+            signatures, state_value(state, "explained_anomalies", [])
+        )
+        if not (no_anomaly or below_threshold or anomalies_explained):
             return []
-        evidence = "no_material_anomaly_remaining" if no_anomaly else "anomaly_score_below_threshold"
+        if no_anomaly:
+            evidence = "no_material_anomaly_remaining"
+        elif below_threshold:
+            evidence = "anomaly_score_below_threshold"
+        else:
+            evidence = "anomalies_explained_by_diagnostics"
         return [
             ExpertActionProposal(
                 action={"tool": FINALIZE_DIAGNOSIS, "arguments": {}},

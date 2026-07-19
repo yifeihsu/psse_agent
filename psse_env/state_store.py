@@ -103,6 +103,10 @@ class PolicyObservation:
     last_tool_output: dict[str, Any] = field(default_factory=dict)
     last_verification: dict[str, Any] = field(default_factory=dict)
     accepted_corrections: list[dict[str, Any]] = field(default_factory=list)
+    # Diagnostic findings that account for observable anomaly signatures
+    # without a physical correction (localized harmonic source, estimated
+    # HIF).  Fully explained signatures satisfy the terminal condition.
+    explained_anomalies: list[dict[str, Any]] = field(default_factory=list)
     rejected_hypotheses: list[dict[str, Any]] = field(default_factory=list)
     unresolved_signatures: list[str] = field(default_factory=list)
     tried_action_signatures: list[str] = field(default_factory=list)
@@ -711,6 +715,7 @@ class PowerSystemStateStore:
             "last_tool_output": policy_safe_copy(flags.get("last_tool_output") or {}),
             "last_verification": policy_safe_copy(verification or {}),
             "accepted_corrections": policy_safe_copy(list(flags.get("accepted_corrections", []))),
+            "explained_anomalies": policy_safe_copy(list(flags.get("explained_anomalies", []))),
             "rejected_hypotheses": policy_safe_copy(list(flags.get("rejected_hypotheses", []))),
             "tried_action_signatures": list(flags.get("tried_action_signatures", [])),
             "unresolved_signatures": list(flags.get("unresolved_signatures", [])),

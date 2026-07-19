@@ -958,7 +958,12 @@ def prepare_model_policy_observation(
         observation["last_tool_output"] = _compact_last_tool_output(
             observation["last_tool_output"]
         )
-    for field in ("last_verification", "accepted_corrections", "rejected_hypotheses"):
+    for field in (
+        "last_verification",
+        "accepted_corrections",
+        "explained_anomalies",
+        "rejected_hypotheses",
+    ):
         if field in observation:
             observation[field] = _bounded_value(
                 observation[field], max_depth=4, max_items=8, max_text_chars=160
