@@ -124,6 +124,11 @@ class PolicyObservation:
     parameter_context_state_id: str | None = None
     topology_context_state_id: str | None = None
     requires_measurement_context: bool = False
+    # Observable telemetry channels attached to the active state (harmonic
+    # scans, HIF scan windows, repeated parameter scans, ...).  Knowing which
+    # data streams exist is deployment-visible operator knowledge, not hidden
+    # truth; it is the routing signal for specialized diagnostics.
+    available_evidence: list[str] = field(default_factory=list)
     # Per-field origin for semantic summaries that could otherwise become
     # privileged shortcuts.  Production environments use stable values such
     # as controller_default, wls_runner:<adapter>,

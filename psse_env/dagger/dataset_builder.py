@@ -131,6 +131,14 @@ HISTORY_METRIC_KEYS = (
     "parameter_findings",
     "topology_findings",
     "supported_corrections",
+    "wls_summary",
+    "harmonic_orders",
+    "measured_buses",
+    "harmonic_summary",
+    "best_candidate_bus_1based",
+    "hse_summary",
+    "nlm_summary",
+    "hif_summary",
 )
 CONTEXT_DETAIL_KEYS = frozenset(
     {
@@ -138,6 +146,11 @@ CONTEXT_DETAIL_KEYS = frozenset(
         "parameter_findings",
         "topology_findings",
         "supported_corrections",
+        "wls_summary",
+        "harmonic_summary",
+        "hse_summary",
+        "nlm_summary",
+        "hif_summary",
     }
 )
 

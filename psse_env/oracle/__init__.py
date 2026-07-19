@@ -1,4 +1,5 @@
 from .candidate_quality import CandidateAssessment, CandidateDisposition, CandidateQualityOracle
+from .diagnostics_expert import DiagnosticsExpert
 from .expert_types import ExpertActionProposal
 from .expert_policy import ExpertPolicyOracle
 from .measurement_expert import MeasurementExpert
@@ -12,6 +13,7 @@ __all__ = [
     "CandidateAssessment",
     "CandidateDisposition",
     "CandidateQualityOracle",
+    "DiagnosticsExpert",
     "ExpertActionProposal",
     "ExpertPolicyOracle",
     "MeasurementExpert",

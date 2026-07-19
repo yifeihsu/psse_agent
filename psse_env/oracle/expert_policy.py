@@ -6,6 +6,7 @@ from typing import Any, Mapping, Sequence
 
 from psse_env.actions import CORRECTION_TOOLS, RUN_WLS, action_signature, safe_normalize_action
 from psse_env.oracle.candidate_quality import CandidateQualityOracle
+from psse_env.oracle.diagnostics_expert import DiagnosticsExpert
 from psse_env.oracle.expert_types import ExpertActionProposal
 from psse_env.oracle.measurement_expert import MeasurementExpert
 from psse_env.oracle.parameter_expert import ParameterExpert
@@ -41,6 +42,7 @@ class ExpertPolicyOracle:
         measurement_expert: MeasurementExpert | None = None,
         parameter_expert: ParameterExpert | None = None,
         topology_expert: TopologyExpert | None = None,
+        diagnostics_expert: DiagnosticsExpert | None = None,
         recovery_expert: RecoveryExpert | None = None,
         termination_expert: TerminationExpert | None = None,
     ) -> None:
@@ -51,6 +53,7 @@ class ExpertPolicyOracle:
         self.measurement_expert = measurement_expert or MeasurementExpert()
         self.parameter_expert = parameter_expert or ParameterExpert()
         self.topology_expert = topology_expert or TopologyExpert()
+        self.diagnostics_expert = diagnostics_expert or DiagnosticsExpert()
         self.recovery_expert = recovery_expert or RecoveryExpert(self.process_oracle)
         self.termination_expert = termination_expert or TerminationExpert(
             anomaly_threshold=self.process_oracle.anomaly_threshold
@@ -136,6 +139,13 @@ class ExpertPolicyOracle:
                 oracle_hints=context.oracle_hints,
                 oracle_fault_present="topology" in context.oracle_fault_families,
             )
+            + self.diagnostics_expert.propose(
+                policy,
+                context.history,
+                oracle_hints=context.oracle_hints,
+                harmonic_fault_present="harmonic" in context.oracle_fault_families,
+                hif_fault_present="hif" in context.oracle_fault_families,
+            )
         )
         return self._rank_and_filter(
             proposals,
@@ -219,6 +229,11 @@ class ExpertPolicyOracle:
                 fault_families.add("parameter")
             if state.true_topology_errors:
                 fault_families.add("topology")
+            hidden = state.hidden_truth if isinstance(state.hidden_truth, Mapping) else {}
+            if hidden.get("true_harmonic_errors"):
+                fault_families.add("harmonic")
+            if hidden.get("true_hif_errors"):
+                fault_families.add("hif")
         elif isinstance(state, PolicyObservation):
             policy = state.as_dict()
         elif isinstance(state, Mapping):
@@ -250,6 +265,12 @@ class ExpertPolicyOracle:
                     fault_families.add("parameter")
                 if state.get("true_topology_errors"):
                     fault_families.add("topology")
+                hidden = state.get("hidden_truth")
+                hidden = hidden if isinstance(hidden, Mapping) else {}
+                if state.get("true_harmonic_errors") or hidden.get("true_harmonic_errors"):
+                    fault_families.add("harmonic")
+                if state.get("true_hif_errors") or hidden.get("true_hif_errors"):
+                    fault_families.add("hif")
         else:
             raise TypeError(f"state must be OracleState, PolicyObservation, or mapping, got {type(state).__name__}")
 
@@ -347,6 +368,7 @@ class ExpertPolicyOracle:
             "parameter_expert": 3,
             "topology_expert": 4,
             "measurement_expert": 5,
+            "diagnostics_expert": 6,
         }
         assessed.sort(
             key=lambda item: (

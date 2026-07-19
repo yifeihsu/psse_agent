@@ -59,6 +59,19 @@ collectable no-op when its data is absent. The protocol bridge maps
 `state_id` to `case_path` (or `scan_window_path` for the multi-scan
 estimator) so exported targets and generated calls stay canonical.
 
+`PolicyObservation.available_evidence` lists which telemetry channels exist
+on the active state (deployment-observable operator knowledge; channel
+contents stay out of the observation). `DiagnosticsExpert` routes on it plus
+unresolved-signature markers: harmonic signals escalate
+`get_harmonic_context` -> `run_hse_from_path`; HIF signals escalate
+`run_three_phase_nlm_from_path` -> the multi-scan estimator when a persistent
+scan window exists, else the single-scan estimator, carrying the NLM top
+branch as `candidate_branch_row0`. Privileged fault families
+(`hidden_truth.true_harmonic_errors`/`true_hif_errors`) and hints only rank
+proposals; they never create a route observable telemetry cannot justify.
+Diagnostic summaries (`wls_summary`, `hse_summary`, `nlm_summary`,
+`hif_summary`, ...) are model-visible history metrics in SFT export.
+
 `CandidateQualityOracle(mode="synthetic")` requires hidden truth.
 `mode="deployment"` ignores it and relies on observable WLS/physics evidence.
 The `verifier` package provides deterministic rules plus a structured numerical

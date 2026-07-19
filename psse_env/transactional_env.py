@@ -444,6 +444,30 @@ class TransactionalPSSEEnv:
             context_flags=self.context_flags,
         )
 
+    _EVIDENCE_CHANNEL_KEYS = (
+        "harmonic_measurements",
+        "parameter_scans",
+        "hif_scan_window",
+        "nlm_diagnostic",
+        "hif_runtime",
+    )
+
+    def _observable_evidence_channels(self) -> list[str]:
+        """Telemetry channels present on the active state's metadata.
+
+        Which data streams exist (harmonic scans, HIF scan windows, repeated
+        parameter scans) is deployment-observable operator knowledge; the
+        channel *contents* stay out of the policy observation.
+        """
+        try:
+            payload = self.store.get_state(str(self.store.active_state_id))
+        except Exception:
+            return []
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, Mapping):
+            return []
+        return [key for key in self._EVIDENCE_CHANNEL_KEYS if metadata.get(key)]
+
     def get_policy_observation(
         self,
         history: list[Mapping[str, Any]] | None = None,
@@ -495,6 +519,7 @@ class TransactionalPSSEEnv:
             parameter_context_state_id=summary.get("parameter_context_state_id"),
             topology_context_state_id=summary.get("topology_context_state_id"),
             requires_measurement_context=bool(summary.get("requires_measurement_context")),
+            available_evidence=self._observable_evidence_channels(),
             semantic_field_provenance=policy_safe_copy(
                 dict(summary.get("semantic_field_provenance") or {})
             ),
