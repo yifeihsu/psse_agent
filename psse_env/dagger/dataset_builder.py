@@ -297,6 +297,63 @@ TOOL_JSON_SCHEMAS: list[dict[str, Any]] = [
             required=("state_id",),
         ),
     ),
+    _tool_schema(
+        "get_harmonic_context",
+        "Retrieve observable harmonic measurement context for the current state.",
+        _object_schema({"state_id": _STATE_ID}, required=("state_id",)),
+    ),
+    _tool_schema(
+        "run_hse_from_path",
+        "Run harmonic state estimation on the referenced state's harmonic measurements.",
+        _object_schema({"state_id": _STATE_ID}, required=("state_id",)),
+    ),
+    _tool_schema(
+        "run_three_phase_nlm_from_path",
+        "Run three-phase NLM high-impedance-fault localization on the referenced state.",
+        _object_schema({"state_id": _STATE_ID}, required=("state_id",)),
+    ),
+    _tool_schema(
+        "estimate_hif_location_magnitude_from_path",
+        "Estimate HIF position and magnitude on a suspected branch of the referenced state.",
+        _object_schema(
+            {
+                "state_id": _STATE_ID,
+                "candidate_branch_row0": {"type": "integer"},
+                "candidate_phase": {"type": ["string", "null"], "enum": ["A", "B", "C", None]},
+                "top_k": {"type": "integer"},
+                "alpha_grid_size": {"type": "integer"},
+                "r_grid_size": {"type": "integer"},
+                "r_hif_pu_min": {"type": "number"},
+                "r_hif_pu_max": {"type": "number"},
+            },
+            required=("state_id", "candidate_branch_row0"),
+        ),
+    ),
+    _tool_schema(
+        "estimate_hif_location_magnitude_multiscan_from_path",
+        "Estimate shared HIF parameters from the referenced state's persistent scan window.",
+        _object_schema(
+            {
+                "state_id": _STATE_ID,
+                "candidate_branch_row0": {"type": "integer"},
+                "candidate_phase": {"type": ["string", "null"], "enum": ["A", "B", "C", None]},
+                "resistance_mode": {"type": "string", "enum": ["shared", "scan_specific_smooth"]},
+                "max_scans": {"type": "integer"},
+                "scan_selection": {
+                    "type": "string",
+                    "enum": ["all", "diversity_greedy", "information_greedy"],
+                },
+                "top_k": {"type": "integer"},
+                "alpha_grid_size": {"type": "integer"},
+                "r_grid_size": {"type": "integer"},
+                "r_hif_pu_min": {"type": "number"},
+                "r_hif_pu_max": {"type": "number"},
+                "robust_loss": {"type": "string", "enum": ["linear", "soft_l1", "huber"]},
+                "smoothness_lambda": {"type": "number"},
+            },
+            required=("state_id", "candidate_branch_row0"),
+        ),
+    ),
 ]
 
 

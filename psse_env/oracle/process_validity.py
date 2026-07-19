@@ -10,6 +10,7 @@ from psse_env.actions import (
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,
     CORRECTION_TOOLS,
+    DIAGNOSTIC_TOOLS,
     FINALIZE_DIAGNOSIS,
     GET_MEASUREMENT_CONTEXT,
     GET_PARAMETER_CONTEXT,
@@ -132,7 +133,10 @@ class ProcessValidityOracle:
                 error_code, error_detail = "candidate_lifecycle_violation", "finalize_with_open_candidate"
             elif not self._terminal_condition_met(state):
                 error_code, error_detail = "terminal_condition_not_met", "unresolved_or_unverified_anomaly"
-        elif tool in {ASK_FOR_MORE_EVIDENCE, RUN_ALTERNATIVE_TEST}:
+        elif tool in {ASK_FOR_MORE_EVIDENCE, RUN_ALTERNATIVE_TEST} or tool in DIAGNOSTIC_TOOLS:
+            # Specialized diagnostics are read-only evidence actions: legal on
+            # the active state during investigation, and on an open candidate
+            # only when its verification came back inconclusive.
             expected = candidate_id if has_open_candidate else active_id
             requested = args.get("state_id") or expected
             if has_open_candidate and state.get("candidate_disposition") != "INCONCLUSIVE":

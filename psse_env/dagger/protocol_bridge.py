@@ -34,13 +34,18 @@ from psse_env.actions import (
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,
+    ESTIMATE_HIF_FROM_PATH,
+    ESTIMATE_HIF_MULTISCAN_FROM_PATH,
     FINALIZE_DIAGNOSIS,
+    GET_HARMONIC_CONTEXT,
     GET_MEASUREMENT_CONTEXT,
     GET_PARAMETER_CONTEXT,
     GET_TOPOLOGY_CONTEXT,
     INVALID_ACTION,
     ROLLBACK_STATE,
     RUN_ALTERNATIVE_TEST,
+    RUN_HSE_FROM_PATH,
+    RUN_THREE_PHASE_NLM_FROM_PATH,
     RUN_WLS,
     VERIFY_CANDIDATE,
     safe_normalize_action,
@@ -72,6 +77,13 @@ INTERNAL_TO_CANONICAL_TOOL: dict[str, str] = {
     FINALIZE_DIAGNOSIS: FINALIZE_DIAGNOSIS,
     ASK_FOR_MORE_EVIDENCE: ASK_FOR_MORE_EVIDENCE,
     RUN_ALTERNATIVE_TEST: RUN_ALTERNATIVE_TEST,
+    # Specialized diagnostics keep their canonical names on both surfaces;
+    # only the state-reference argument key differs.
+    GET_HARMONIC_CONTEXT: GET_HARMONIC_CONTEXT,
+    RUN_HSE_FROM_PATH: RUN_HSE_FROM_PATH,
+    RUN_THREE_PHASE_NLM_FROM_PATH: RUN_THREE_PHASE_NLM_FROM_PATH,
+    ESTIMATE_HIF_FROM_PATH: ESTIMATE_HIF_FROM_PATH,
+    ESTIMATE_HIF_MULTISCAN_FROM_PATH: ESTIMATE_HIF_MULTISCAN_FROM_PATH,
 }
 CANONICAL_TO_INTERNAL_TOOL: dict[str, str] = {
     canonical: internal for internal, canonical in INTERNAL_TO_CANONICAL_TOOL.items()
@@ -79,6 +91,8 @@ CANONICAL_TO_INTERNAL_TOOL: dict[str, str] = {
 
 # Tools that reference the open candidate rather than the active state.
 _CANDIDATE_REFERENCE_TOOLS = frozenset({COMMIT_STATE, ROLLBACK_STATE})
+# Tools whose canonical state reference is the persistent scan window.
+_SCAN_WINDOW_REFERENCE_TOOLS = frozenset({ESTIMATE_HIF_MULTISCAN_FROM_PATH})
 # Model-visible state-reference argument keys on the canonical surface.
 CANONICAL_STATE_REFERENCE_KEYS = frozenset({"case_path", "scan_window_path"})
 
@@ -277,6 +291,8 @@ def internal_to_canonical_action(action: Mapping[str, Any] | str) -> dict[str, A
     canonical = INTERNAL_TO_CANONICAL_TOOL[tool]
     if tool in _CANDIDATE_REFERENCE_TOOLS:
         _move_key(arguments, "candidate_state_id", "case_path")
+    elif tool in _SCAN_WINDOW_REFERENCE_TOOLS:
+        _move_key(arguments, "state_id", "scan_window_path")
     else:
         _move_key(arguments, "state_id", "case_path")
 
@@ -329,6 +345,12 @@ def canonical_to_internal_action(action: Mapping[str, Any] | str) -> dict[str, A
         _move_key(arguments, "case_path", "state_id")
         # A stage-only verification references the open candidate by alias.
         arguments.setdefault("state_id", "candidate")
+    elif internal in _SCAN_WINDOW_REFERENCE_TOOLS:
+        # The persistent scan window is bound to the controller state whose
+        # metadata carries it; a stray case_path is dropped in favor of the
+        # scan-window reference.
+        _move_key(arguments, "scan_window_path", "state_id")
+        arguments.pop("case_path", None)
     else:
         _move_key(arguments, "case_path", "state_id")
 

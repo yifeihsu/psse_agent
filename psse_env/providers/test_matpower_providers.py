@@ -177,6 +177,97 @@ class CorrectionExecutorTests(unittest.TestCase):
         self.assertEqual(repeat["error_code"], "topology_correction_no_change")
 
 
+class DiagnosticProviderTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.providers = MatpowerDeploymentProviders()
+        self.data = _fixture()
+
+    def _env(self, metadata: dict | None = None) -> TransactionalPSSEEnv:
+        env = TransactionalPSSEEnv(**self.providers.env_kwargs(), production_dataset_mode=True)
+        env.reset(
+            {
+                "scenario_id": "diagnostics",
+                "case": self.data["case_path"],
+                "measurements": list(self.data["z_obs"]),
+                "metadata": metadata or {},
+            }
+        )
+        return env
+
+    @staticmethod
+    def _harmonic_metadata() -> dict:
+        return {
+            "harmonic_measurements": [
+                {"h": 5, "bus": bus, "Vm": 0.02 + 0.001 * bus, "Va_deg": 10.0 * bus, "sigma": 1e-4}
+                for bus in range(1, 15)
+            ]
+        }
+
+    def test_harmonic_context_and_hse_run_through_the_environment(self) -> None:
+        env = self._env(self._harmonic_metadata())
+        active = env.current_state()["active_state_id"]
+        _, context_output = env.step(
+            {"tool": "get_harmonic_context", "arguments": {"state_id": active}}
+        )
+        self.assertEqual(context_output["execution_status"], "success")
+        metrics = context_output["tool_metrics"]
+        self.assertEqual(metrics["harmonic_orders"], [5])
+        self.assertEqual(metrics["finding_count"], 14)
+
+        _, hse_output = env.step({"tool": "run_hse_from_path", "arguments": {"state_id": active}})
+        self.assertEqual(hse_output["execution_status"], "success")
+        hse_metrics = hse_output["tool_metrics"]
+        self.assertIsNotNone(hse_metrics["best_candidate_bus_1based"])
+        self.assertTrue(hse_metrics["hse_summary"]["ranking_top5"])
+
+    def test_diagnostics_without_runtime_data_fail_closed_as_noop(self) -> None:
+        env = self._env()
+        active = env.current_state()["active_state_id"]
+        before_hash = env.store.episode_hash()
+        for tool, expected_code in (
+            ("get_harmonic_context", "harmonic_context_missing"),
+            ("run_hse_from_path", "hse_runtime_missing"),
+            ("run_three_phase_nlm_from_path", "nlm_runtime_missing"),
+        ):
+            _, output = env.step({"tool": tool, "arguments": {"state_id": active}})
+            self.assertEqual(output["execution_status"], "failure", tool)
+            self.assertEqual(output["error_code"], expected_code, tool)
+        _, output = env.step(
+            {
+                "tool": "estimate_hif_location_magnitude_multiscan_from_path",
+                "arguments": {"state_id": active, "candidate_branch_row0": 7},
+            }
+        )
+        self.assertEqual(output["execution_status"], "failure")
+        self.assertEqual(output["error_code"], "hif_scan_window_missing")
+        self.assertEqual(env.store.episode_hash(), before_hash)
+
+    def test_hif_estimator_requires_branch_target(self) -> None:
+        env = self._env()
+        active = env.current_state()["active_state_id"]
+        _, output = env.step(
+            {
+                "tool": "estimate_hif_location_magnitude_from_path",
+                "arguments": {"state_id": active},
+            }
+        )
+        self.assertEqual(output["execution_status"], "failure")
+        self.assertEqual(output["error_code"], "hif_target_missing")
+
+    def test_diagnostics_are_blocked_while_candidate_is_unverified(self) -> None:
+        env = self._env(self._harmonic_metadata())
+        active = env.current_state()["active_state_id"]
+        env.step({"tool": "run_wls", "arguments": {"state_id": active}})
+        _, ctx = env.step({"tool": "get_measurement_context", "arguments": {"state_id": active}})
+        _, correction = env.step(ctx["tool_metrics"]["supported_corrections"][0])
+        self.assertEqual(correction["execution_status"], "success")
+        _, output = env.step(
+            {"tool": "get_harmonic_context", "arguments": {"state_id": active}}
+        )
+        self.assertEqual(output["execution_status"], "failure")
+        self.assertEqual(output["error_code"], "candidate_lifecycle_violation")
+
+
 class EndToEndEnvironmentTests(unittest.TestCase):
     def test_production_env_runs_wls_context_correct_verify_cycle(self) -> None:
         providers = MatpowerDeploymentProviders()

@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 from .actions import (
     ASK_FOR_MORE_EVIDENCE,
+    DIAGNOSTIC_TOOLS,
     COMMIT_STATE,
     CONTEXT_TOOLS,
     CORRECTION_TOOLS,
@@ -692,7 +693,7 @@ class TransactionalPSSEEnv:
             return self._standard_output(
                 execution_status="success", state_mutated=False, tool_metrics={"finalized": True}
             )
-        if tool in {ASK_FOR_MORE_EVIDENCE, RUN_ALTERNATIVE_TEST}:
+        if tool in {ASK_FOR_MORE_EVIDENCE, RUN_ALTERNATIVE_TEST} or tool in DIAGNOSTIC_TOOLS:
             provider = self.evidence_providers.get(tool)
             target_id = str(args.get("state_id") or self.current_candidate_id or self.store.active_state_id)
             provider_state = self.store.get_state(target_id)
@@ -704,10 +705,18 @@ class TransactionalPSSEEnv:
                     error_detail=tool,
                     valid_next_actions=[],
                 )
-            metrics = dict(provider(copy.deepcopy(provider_state))) if provider else {
-                "evidence_requested": tool,
-                "evidence_source": "synthetic_placeholder",
-            }
+            if provider is None:
+                metrics = {
+                    "evidence_requested": tool,
+                    "evidence_source": "synthetic_placeholder",
+                }
+            elif tool in DIAGNOSTIC_TOOLS:
+                # Specialized diagnostics receive the full action so bounded
+                # arguments (candidate branch, phase, grid options) reach the
+                # underlying estimator.
+                metrics = dict(provider(copy.deepcopy(provider_state), copy.deepcopy(action)))
+            else:
+                metrics = dict(provider(copy.deepcopy(provider_state)))
             status = str(metrics.pop("execution_status", "success"))
             if status != "success":
                 return self._standard_output(

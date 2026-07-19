@@ -188,13 +188,35 @@ class ActionMappingTests(unittest.TestCase):
         self.assertEqual(stage_only["tool"], "verify_candidate")
         self.assertEqual(stage_only["arguments"]["state_id"], "candidate")
 
-    def test_canonical_only_diagnostics_pass_through_unchanged(self) -> None:
-        call = {
+    def test_specialized_diagnostics_map_state_references(self) -> None:
+        internal = {
             "tool": "estimate_hif_location_magnitude_from_path",
-            "arguments": {"case_path": "active", "candidate_branch_row0": 12},
+            "arguments": {"state_id": "active", "candidate_branch_row0": 12},
         }
-        self.assertEqual(canonical_to_internal_action(call), call)
-        self.assertEqual(internal_to_canonical_action(call), call)
+        canonical = internal_to_canonical_action(internal)
+        self.assertEqual(
+            canonical["arguments"], {"case_path": "active", "candidate_branch_row0": 12}
+        )
+        self.assertEqual(canonical_to_internal_action(canonical), internal)
+        for tool in ("get_harmonic_context", "run_hse_from_path", "run_three_phase_nlm_from_path"):
+            round_trip = canonical_to_internal_action(
+                internal_to_canonical_action({"tool": tool, "arguments": {"state_id": "active"}})
+            )
+            self.assertEqual(round_trip["arguments"], {"state_id": "active"})
+
+    def test_multiscan_hif_binds_scan_window_to_state(self) -> None:
+        internal = {
+            "tool": "estimate_hif_location_magnitude_multiscan_from_path",
+            "arguments": {"state_id": "active", "candidate_branch_row0": 7},
+        }
+        canonical = internal_to_canonical_action(internal)
+        self.assertEqual(
+            canonical["arguments"],
+            {"scan_window_path": "active", "candidate_branch_row0": 7},
+        )
+        # A stray canonical case_path is dropped in favor of the window binding.
+        canonical["arguments"]["case_path"] = "case14"
+        self.assertEqual(canonical_to_internal_action(canonical), internal)
 
     def test_unknown_tool_fails_closed_on_export(self) -> None:
         with self.assertRaisesRegex(ValueError, "No canonical mapping"):
@@ -228,6 +250,24 @@ class CanonicalExportTests(unittest.TestCase):
         call = row["messages"][2]["tool_calls"][0]["function"]
         self.assertEqual(call["name"], "correct_measurements_from_path")
         self.assertEqual(call["arguments"], {"case_path": "active", "suspect_group": [5]})
+
+    def test_export_supports_specialized_diagnostic_targets(self) -> None:
+        example = _example()
+        example["preferred_action"] = {
+            "tool": "estimate_hif_location_magnitude_from_path",
+            "arguments": {
+                "state_id": example["policy_observation"]["active_state_id"],
+                "candidate_branch_row0": 12,
+                "candidate_phase": "B",
+            },
+        }
+        row = examples_to_chat_sft([example], protocol="canonical")[0]
+        call = row["messages"][2]["tool_calls"][0]["function"]
+        self.assertEqual(call["name"], "estimate_hif_location_magnitude_from_path")
+        self.assertEqual(
+            call["arguments"],
+            {"case_path": "active", "candidate_branch_row0": 12, "candidate_phase": "B"},
+        )
 
     def test_controller_protocol_remains_the_default(self) -> None:
         row = examples_to_chat_sft([_example()])[0]

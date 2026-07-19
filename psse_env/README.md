@@ -44,6 +44,21 @@ executor-hydrated (target-only) corrections and a deployment
 Candidate verification derives observable `target_fixed`/
 `remaining_fault_count` evidence from the candidate solve alone.
 
+The five specialized diagnostics — `get_harmonic_context`,
+`run_hse_from_path`, `run_three_phase_nlm_from_path`, and both HIF
+estimators — are first-class macro actions sharing their canonical deployment
+names. The process gate treats them as read-only evidence actions (legal on
+the active state, or on an INCONCLUSIVE candidate), and the environment
+dispatches them through `evidence_providers` with the full action so bounded
+estimator arguments (candidate branch, phase, grid options) reach the tool.
+The deployment bundle wraps the real HSE, three-phase NLM, and HIF estimation
+stacks; runtime side data comes from state metadata
+(`harmonic_measurements`/`harmonic_orders`, `nlm_diagnostic` or OpenDSS model
+dirs, `hif_runtime`, `hif_scan_window`) and each tool fails closed as a
+collectable no-op when its data is absent. The protocol bridge maps
+`state_id` to `case_path` (or `scan_window_path` for the multi-scan
+estimator) so exported targets and generated calls stay canonical.
+
 `CandidateQualityOracle(mode="synthetic")` requires hidden truth.
 `mode="deployment"` ignores it and relies on observable WLS/physics evidence.
 The `verifier` package provides deterministic rules plus a structured numerical

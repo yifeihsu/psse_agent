@@ -17,6 +17,11 @@ ROLLBACK_STATE = "rollback_state"
 FINALIZE_DIAGNOSIS = "finalize_diagnosis"
 ASK_FOR_MORE_EVIDENCE = "ask_for_more_evidence"
 RUN_ALTERNATIVE_TEST = "run_alternative_test"
+GET_HARMONIC_CONTEXT = "get_harmonic_context"
+RUN_HSE_FROM_PATH = "run_hse_from_path"
+RUN_THREE_PHASE_NLM_FROM_PATH = "run_three_phase_nlm_from_path"
+ESTIMATE_HIF_FROM_PATH = "estimate_hif_location_magnitude_from_path"
+ESTIMATE_HIF_MULTISCAN_FROM_PATH = "estimate_hif_location_magnitude_multiscan_from_path"
 INVALID_ACTION = "__invalid_action__"
 
 CORRECTION_TOOLS = {
@@ -37,6 +42,17 @@ STATE_MANAGEMENT_TOOLS = {
     FINALIZE_DIAGNOSIS,
 }
 
+# Read-only specialized diagnostics executed through configured evidence
+# providers.  They share the canonical deployment tool names so DAgger data
+# and the production corpus keep one model-visible surface.
+DIAGNOSTIC_TOOLS = {
+    GET_HARMONIC_CONTEXT,
+    RUN_HSE_FROM_PATH,
+    RUN_THREE_PHASE_NLM_FROM_PATH,
+    ESTIMATE_HIF_FROM_PATH,
+    ESTIMATE_HIF_MULTISCAN_FROM_PATH,
+}
+
 MACRO_ACTIONS = {
     RUN_WLS,
     VERIFY_CANDIDATE,
@@ -51,6 +67,7 @@ MACRO_ACTIONS = {
     FINALIZE_DIAGNOSIS,
     ASK_FOR_MORE_EVIDENCE,
     RUN_ALTERNATIVE_TEST,
+    *DIAGNOSTIC_TOOLS,
 }
 
 

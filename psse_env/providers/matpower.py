@@ -36,23 +36,37 @@ from psse_env.actions import (
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,
+    ESTIMATE_HIF_FROM_PATH,
+    ESTIMATE_HIF_MULTISCAN_FROM_PATH,
+    GET_HARMONIC_CONTEXT,
     GET_MEASUREMENT_CONTEXT,
     GET_PARAMETER_CONTEXT,
     GET_TOPOLOGY_CONTEXT,
+    RUN_HSE_FROM_PATH,
+    RUN_THREE_PHASE_NLM_FROM_PATH,
 )
 
 from mcp_server.matpower_server import (  # noqa: E402  (repo-root package)
+    _estimate_hif_location_magnitude_logic,
+    _estimate_hif_location_magnitude_multiscan_logic,
+    _infer_harmonic_orders,
     _load_python_case,
     _meas_correction_json,
     _param_correction_json,
+    _run_hse_logic,
+    _run_three_phase_nlm_logic,
     _wls_json,
 )
 from trace_protocol import (  # noqa: E402  (repo-root module)
     build_lambda_evidence,
     build_residual_evidence,
     chi2_threshold,
+    summarize_harmonic_context_payload,
+    summarize_hif_parameter_estimate_payload,
+    summarize_hse_payload,
     summarize_measurement_correction_payload,
     summarize_parameter_correction_payload,
+    summarize_three_phase_nlm_payload,
     summarize_wls_payload,
 )
 
@@ -165,6 +179,13 @@ class MatpowerDeploymentProviders:
                 CORRECT_MEASUREMENTS: self.correct_measurements,
                 CORRECT_PARAMETERS: self.correct_parameters,
                 CORRECT_TOPOLOGY: self.correct_topology,
+            },
+            "evidence_providers": {
+                GET_HARMONIC_CONTEXT: self.get_harmonic_context,
+                RUN_HSE_FROM_PATH: self.run_hse,
+                RUN_THREE_PHASE_NLM_FROM_PATH: self.run_three_phase_nlm,
+                ESTIMATE_HIF_FROM_PATH: self.estimate_hif,
+                ESTIMATE_HIF_MULTISCAN_FROM_PATH: self.estimate_hif_multiscan,
             },
         }
 
@@ -639,4 +660,192 @@ class MatpowerDeploymentProviders:
         }
 
 
-__all__ = ["MatpowerDeploymentProviders", "measurement_index_map"]
+    # ------------------------------------------------- specialized diagnostics
+
+    @staticmethod
+    def _metadata(state: Mapping[str, Any]) -> Mapping[str, Any]:
+        metadata = state.get("metadata")
+        return metadata if isinstance(metadata, Mapping) else {}
+
+    def _harmonic_measurements(self, state: Mapping[str, Any]) -> list[dict[str, Any]]:
+        measurements = self._metadata(state).get("harmonic_measurements")
+        if not isinstance(measurements, Sequence) or not measurements:
+            raise ValueError(
+                "state metadata carries no harmonic_measurements; generate the "
+                "scenario with harmonic scan data to enable harmonic diagnostics"
+            )
+        return [dict(item) for item in measurements]
+
+    def get_harmonic_context(
+        self, state: Mapping[str, Any], action: Mapping[str, Any] | None = None
+    ) -> dict[str, Any]:
+        try:
+            measurements = self._harmonic_measurements(state)
+            case_path = self._case_path(state)
+            orders = self._metadata(state).get("harmonic_orders") or _infer_harmonic_orders(
+                measurements
+            )
+        except Exception as exc:
+            return self._failure("harmonic_context_missing", f"{type(exc).__name__}: {exc}")
+        buses = sorted({int(item.get("bus")) for item in measurements if item.get("bus") is not None})
+        summary = summarize_harmonic_context_payload(
+            {
+                "case_path": case_path,
+                "harmonic_measurements": measurements,
+                "harmonic_orders": [int(order) for order in orders],
+            }
+        )
+        summary.pop("case_path", None)
+        return {
+            **self._binding(state),
+            "evidence_source": "deployment_context:harmonic_measurements",
+            "context_tool": GET_HARMONIC_CONTEXT,
+            "finding_count": len(measurements),
+            "harmonic_orders": [int(order) for order in orders],
+            "measured_buses": buses,
+            "harmonic_summary": summary,
+        }
+
+    def run_hse(self, state: Mapping[str, Any], action: Mapping[str, Any]) -> dict[str, Any]:
+        try:
+            measurements = self._harmonic_measurements(state)
+            case_path = self._case_path(state)
+            orders = self._metadata(state).get("harmonic_orders") or _infer_harmonic_orders(
+                measurements
+            )
+        except Exception as exc:
+            return self._failure("hse_runtime_missing", f"{type(exc).__name__}: {exc}")
+        slack_bus = int(self._metadata(state).get("slack_bus", 0))
+        payload = _run_hse_logic(case_path, measurements, [int(order) for order in orders], slack_bus)
+        if not payload.get("success"):
+            return self._failure("hse_failure", payload.get("error"))
+        return {
+            **self._binding(state),
+            "evidence_source": "deployment_diagnostic:harmonic_state_estimation",
+            "best_candidate_bus_1based": payload.get("best_candidate_bus_1based"),
+            "hse_summary": summarize_hse_payload(payload),
+        }
+
+    def run_three_phase_nlm(
+        self, state: Mapping[str, Any], action: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        metadata = self._metadata(state)
+        diagnostic = metadata.get("nlm_diagnostic")
+        pristine_dir = metadata.get("pristine_model_dir")
+        faulted_dir = metadata.get("faulted_model_dir")
+        if not isinstance(diagnostic, Mapping) and not (pristine_dir and faulted_dir):
+            return self._failure(
+                "nlm_runtime_missing",
+                "state metadata carries neither nlm_diagnostic nor OpenDSS model dirs",
+            )
+        try:
+            case_path = self._case_path(state)
+        except Exception as exc:
+            return self._failure("nlm_input_error", f"{type(exc).__name__}: {exc}")
+        arguments = dict(action.get("arguments") or {})
+        payload = _run_three_phase_nlm_logic(
+            case_path=case_path,
+            nlm_diagnostic=dict(diagnostic) if isinstance(diagnostic, Mapping) else None,
+            target_branch_row0=arguments.get("target_branch_row0"),
+            target_dss_element=arguments.get("target_dss_element"),
+            pristine_model_dir=pristine_dir,
+            faulted_model_dir=faulted_dir,
+            phase=arguments.get("phase"),
+            r_hif_ohm=arguments.get("r_hif_ohm"),
+            load_scale=float(metadata.get("load_scale", 1.0)),
+        )
+        if not payload.get("success"):
+            return self._failure("nlm_failure", payload.get("error"))
+        return {
+            **self._binding(state),
+            "evidence_source": "deployment_diagnostic:three_phase_nlm",
+            "nlm_summary": summarize_three_phase_nlm_payload(payload),
+        }
+
+    def estimate_hif(self, state: Mapping[str, Any], action: Mapping[str, Any]) -> dict[str, Any]:
+        arguments = dict(action.get("arguments") or {})
+        if arguments.get("candidate_branch_row0") is None:
+            return self._failure(
+                "hif_target_missing",
+                "estimate_hif_location_magnitude requires candidate_branch_row0",
+            )
+        metadata = self._metadata(state)
+        runtime = metadata.get("hif_runtime")
+        runtime = dict(runtime) if isinstance(runtime, Mapping) else {}
+        try:
+            case_path = self._case_path(state)
+            z_obs = runtime.get("z_obs") or self._measurements(state)
+        except Exception as exc:
+            return self._failure("hif_input_error", f"{type(exc).__name__}: {exc}")
+        payload = _estimate_hif_location_magnitude_logic(
+            case_path=case_path,
+            candidate_branch_row0=int(arguments["candidate_branch_row0"]),
+            candidate_phase=arguments.get("candidate_phase"),
+            z_obs=[float(value) for value in z_obs],
+            three_phase_voltages=runtime.get("three_phase_voltages"),
+            pristine_model_dir=runtime.get("pristine_model_dir"),
+            load_scale=float(runtime.get("load_scale", 1.0)),
+            top_k=int(arguments.get("top_k", self.top_k)),
+            alpha_grid_size=int(arguments.get("alpha_grid_size", 31)),
+            r_grid_size=int(arguments.get("r_grid_size", 35)),
+            r_hif_pu_min=float(arguments.get("r_hif_pu_min", 5.0)),
+            r_hif_pu_max=float(arguments.get("r_hif_pu_max", 1000.0)),
+        )
+        if not payload.get("success"):
+            return self._failure("hif_estimation_failure", payload.get("error"))
+        return {
+            **self._binding(state),
+            "evidence_source": "deployment_diagnostic:hif_parameter_estimator",
+            "hif_summary": summarize_hif_parameter_estimate_payload(payload),
+        }
+
+    def estimate_hif_multiscan(
+        self, state: Mapping[str, Any], action: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        arguments = dict(action.get("arguments") or {})
+        if arguments.get("candidate_branch_row0") is None:
+            return self._failure(
+                "hif_target_missing",
+                "multiscan HIF estimation requires candidate_branch_row0",
+            )
+        window = self._metadata(state).get("hif_scan_window")
+        window = dict(window) if isinstance(window, Mapping) else {}
+        scans = window.get("scans")
+        if not isinstance(scans, Sequence) or not scans:
+            return self._failure(
+                "hif_scan_window_missing",
+                "state metadata carries no hif_scan_window.scans for multiscan estimation",
+            )
+        try:
+            case_path = self._case_path(state)
+        except Exception as exc:
+            return self._failure("hif_input_error", f"{type(exc).__name__}: {exc}")
+        payload = _estimate_hif_location_magnitude_multiscan_logic(
+            scan_window_path=str(window.get("scan_window_path") or state.get("state_id") or "scan_window"),
+            candidate_branch_row0=int(arguments["candidate_branch_row0"]),
+            scans=[dict(scan) for scan in scans],
+            sigma_z=window.get("sigma_z"),
+            case_path=case_path,
+            candidate_phase=arguments.get("candidate_phase"),
+            pristine_model_dir=window.get("pristine_model_dir"),
+            resistance_mode=str(arguments.get("resistance_mode", "shared")),
+            max_scans=int(arguments.get("max_scans", 10)),
+            scan_selection=str(arguments.get("scan_selection", "information_greedy")),
+            top_k=int(arguments.get("top_k", self.top_k)),
+            alpha_grid_size=int(arguments.get("alpha_grid_size", 31)),
+            r_grid_size=int(arguments.get("r_grid_size", 35)),
+            r_hif_pu_min=float(arguments.get("r_hif_pu_min", 5.0)),
+            r_hif_pu_max=float(arguments.get("r_hif_pu_max", 1000.0)),
+            robust_loss=str(arguments.get("robust_loss", "soft_l1")),
+            smoothness_lambda=float(arguments.get("smoothness_lambda", 0.10)),
+        )
+        if not payload.get("success"):
+            return self._failure("hif_multiscan_failure", payload.get("error"))
+        return {
+            **self._binding(state),
+            "evidence_source": "deployment_diagnostic:hif_multiscan_estimator",
+            "hif_summary": summarize_hif_parameter_estimate_payload(payload),
+        }
+
+
+__all__ = ["MatpowerDeploymentProviders", "matpower_case_differ", "measurement_index_map"]
