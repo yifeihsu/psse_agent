@@ -27,8 +27,19 @@ from psse_env.actions import (
 class ProcessValidityOracle:
     """Single authoritative legality and state-reference gate."""
 
-    def __init__(self, *, anomaly_threshold: float = 1.0) -> None:
+    def __init__(
+        self,
+        *,
+        anomaly_threshold: float = 1.0,
+        executor_hydrated_corrections: bool = False,
+    ) -> None:
         self.anomaly_threshold = float(anomaly_threshold)
+        # Deployment correction executors compute replacement values from the
+        # identified target (suspect indices, branch row), matching the
+        # canonical correct_*_from_path protocol.  Enabling this accepts
+        # target-only correction payloads; the payload stays bounded because
+        # the model supplies no physical values at all.
+        self.executor_hydrated_corrections = bool(executor_hydrated_corrections)
 
     def check(
         self,
@@ -147,8 +158,7 @@ class ProcessValidityOracle:
             return False
         return True if store is None else bool(store.exists(str(state_id)))
 
-    @staticmethod
-    def _has_correction_payload(tool: str, args: Mapping[str, Any]) -> bool:
+    def _has_correction_payload(self, tool: str, args: Mapping[str, Any]) -> bool:
         # ``safe_normalize_action`` has already flattened the optional legacy
         # ``modification`` wrapper.  Keeping this check tool-specific prevents
         # an unrestricted whole-vector replacement from masquerading as the
@@ -157,12 +167,22 @@ class ProcessValidityOracle:
         payload.pop("state_id", None)
         payload.pop("candidate_state_id", None)
         if tool == CORRECT_MEASUREMENTS:
+            if "measurements" in payload:
+                return False
             updates = payload.get("measurement_updates")
-            return (
-                "measurements" not in payload
-                and bool(updates)
-                and isinstance(updates, Mapping)
-            )
+            if bool(updates) and isinstance(updates, Mapping):
+                return True
+            if self.executor_hydrated_corrections:
+                group = payload.get("suspect_group")
+                return (
+                    isinstance(group, (list, tuple))
+                    and bool(group)
+                    and all(
+                        isinstance(index, int) and not isinstance(index, bool)
+                        for index in group
+                    )
+                )
+            return False
         if tool == CORRECT_PARAMETERS:
             has_target = any(
                 payload.get(key) is not None
@@ -172,6 +192,8 @@ class ProcessValidityOracle:
                 payload.get(key) is not None
                 for key in ("value", "corrected_value", "new_value", "multiplier")
             )
+            if self.executor_hydrated_corrections and has_target:
+                return True
             return (has_target and has_value) or any(
                 key in payload for key in ("case", "case_updates")
             )

@@ -62,12 +62,19 @@ class CandidateQualityOracle:
         min_target_progress: float = 0.05,
         max_new_violations: int = 0,
         mode: str = "auto",
+        case_differ: Any = None,
     ) -> None:
         self.min_target_progress = float(min_target_progress)
         self.max_new_violations = int(max_new_violations)
         if mode not in {"auto", "synthetic", "deployment"}:
             raise ValueError("mode must be 'auto', 'synthetic', or 'deployment'.")
         self.mode = mode
+        # Path-valued cases cannot be structurally compared in memory.  A
+        # deployment integration may inject a differ returning
+        # {"comparable": bool, "changed_branch_rows": {row0: [column, ...]}}
+        # for two case paths; without one, path-case corrections are treated
+        # as unverifiable collateral damage (fail closed).
+        self.case_differ = case_differ
 
     def label_candidate(
         self,
@@ -468,6 +475,49 @@ class CandidateQualityOracle:
         except (TypeError, ValueError):
             return 0.0 if value == expected else 1.0
 
+    _PATH_CASE_FAMILY_COLUMNS = {
+        # MATPOWER branch-matrix columns a family's correction may touch.
+        "parameter": {2, 3, 4},  # BR_R, BR_X, BR_B
+        "topology": {10},  # BR_STATUS
+    }
+
+    def _path_case_collateral(
+        self,
+        action: Mapping[str, Any],
+        family: str,
+        parent_case: Any,
+        candidate_case: Any,
+    ) -> bool:
+        """Structurally audit a path-valued case correction via the differ."""
+        if not isinstance(parent_case, str) or not isinstance(candidate_case, str):
+            return True
+        if parent_case == candidate_case or self.case_differ is None:
+            return True
+        try:
+            diff = self.case_differ(parent_case, candidate_case)
+        except Exception:
+            return True
+        if not isinstance(diff, Mapping) or not diff.get("comparable"):
+            return True
+        if diff.get("bus_changed") or diff.get("gen_changed") or diff.get("base_mva_changed"):
+            return True
+        changed_rows = diff.get("changed_branch_rows")
+        if not isinstance(changed_rows, Mapping) or len(changed_rows) != 1:
+            return True
+        args = action.get("arguments") if isinstance(action.get("arguments"), Mapping) else {}
+        target_row0: int | None = None
+        if args.get("branch_row0") is not None:
+            target_row0 = int(args["branch_row0"])
+        elif args.get("line_index1") is not None:
+            target_row0 = int(args["line_index1"]) - 1
+        elif args.get("line_index") is not None:
+            target_row0 = int(args["line_index"]) - 1
+        ((changed_row, changed_columns),) = changed_rows.items()
+        if target_row0 is None or int(changed_row) != target_row0:
+            return True
+        allowed = self._PATH_CASE_FAMILY_COLUMNS.get(family, set())
+        return not {int(column) for column in changed_columns}.issubset(allowed)
+
     def _structural_collateral(
         self,
         action: Mapping[str, Any],
@@ -502,19 +552,32 @@ class CandidateQualityOracle:
             }
             args = action.get("arguments") if isinstance(action.get("arguments"), Mapping) else {}
             updates = args.get("measurement_updates")
-            if not isinstance(updates, Mapping):
-                return True
-            try:
-                declared_indices = {int(index) for index in updates}
-            except (TypeError, ValueError):
-                return True
-            if not changed_indices or changed_indices != declared_indices:
-                return True
-            return not allow_multi_measurement and len(changed_indices) != 1
+            suspect_group = args.get("suspect_group")
+            if isinstance(updates, Mapping):
+                try:
+                    declared_indices = {int(index) for index in updates}
+                except (TypeError, ValueError):
+                    return True
+                if not changed_indices or changed_indices != declared_indices:
+                    return True
+                return not allow_multi_measurement and len(changed_indices) != 1
+            if isinstance(suspect_group, (list, tuple)) and suspect_group:
+                # Executor-hydrated grouped correction: the action declares the
+                # suspect set and the executor computes the values, so touching
+                # any measurement outside the declared group is collateral
+                # damage while correcting a subset of it is not.
+                try:
+                    declared_indices = {int(index) for index in suspect_group}
+                except (TypeError, ValueError):
+                    return True
+                return not changed_indices or not changed_indices.issubset(declared_indices)
+            return True
         if family not in {"parameter", "topology"}:
             return False
         if parent_measurements != candidate_measurements:
             return True
+        if isinstance(parent_case, str) or isinstance(candidate_case, str):
+            return self._path_case_collateral(action, family, parent_case, candidate_case)
         if not isinstance(parent_case, Mapping) or not isinstance(candidate_case, Mapping):
             return True
         parent_nonbranch = {key: value for key, value in parent_case.items() if key != "branch"}

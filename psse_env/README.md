@@ -31,6 +31,19 @@ replacement is outside the bounded action contract. Context and evidence
 providers receive a copied physical state payload (`case`, `measurements`, and
 provenance) plus a nested deployment-safe `policy_observation`.
 
+`psse_env/providers/matpower.py` supplies deployment WLS/context/correction
+adapters (`provider_kind="deployment"`) backed by the same pure Python
+estimation stack as the production MCP server: Lagrangian WLS with residual
+and branch-multiplier evidence, chi-square global tests, grouped
+`suspect_group` measurement correction, multi-scan parameter correction (scans
+come from `metadata.parameter_scans`), and branch-status topology correction
+via content-addressed derived case files. `MatpowerDeploymentProviders().
+env_kwargs()` wires the bundle plus a `ProcessValidityOracle` accepting
+executor-hydrated (target-only) corrections and a deployment
+`CandidateQualityOracle` with a MATPOWER case differ for path-valued cases.
+Candidate verification derives observable `target_fixed`/
+`remaining_fault_count` evidence from the candidate solve alone.
+
 `CandidateQualityOracle(mode="synthetic")` requires hidden truth.
 `mode="deployment"` ignores it and relies on observable WLS/physics evidence.
 The `verifier` package provides deterministic rules plus a structured numerical
