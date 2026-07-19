@@ -16,7 +16,10 @@
 # Staged launcher for the round-0 recovery-balanced DAgger aggregate
 # (data/round0_aggregate_20260719, canonical protocol, 2273 chat rows).
 # Submit STAGE=gate, one-batch, tiny-overfit, and round0 in that order on a
-# high-memory GPU (--constraint=h200). STAGE=round0 trains the checkpoint
+# high-memory GPU (--constraint="h200|h100|rtx6000"; on a 48GB rtx6000 the
+# 6144-token batches leave little headroom — if the one-batch stage OOMs
+# there, resubmit that job with an h200/h100-only constraint rather than
+# shrinking MAX_LENGTH). STAGE=round0 trains the checkpoint
 # whose held-out recovery evaluation gates any further stage; full
 # production SFT remains refused here.
 #
