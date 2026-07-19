@@ -697,7 +697,7 @@ class CandidateQualityTests(unittest.TestCase):
         )
         self.assertNotEqual(result.disposition, CandidateDisposition.ACCEPT_FINAL)
 
-    def test_unknown_remaining_faults_cannot_accept_final_from_observable_resolution(self):
+    def test_deployment_resolution_without_physical_evidence_is_inconclusive(self):
         result = CandidateQualityOracle(mode="deployment").label_candidate(
             parent_state=self.parent,
             source_action=self.action,
@@ -710,9 +710,9 @@ class CandidateQualityTests(unittest.TestCase):
             },
         )
         self.assertEqual(result.disposition, CandidateDisposition.INCONCLUSIVE)
-        self.assertIsNone(result.remaining_fault_count)
+        self.assertIsNone(result.remaining_true_fault_count)
 
-    def test_deployment_known_remaining_count_supports_final_and_partial(self):
+    def test_deployment_global_test_supports_final_partial_and_inconclusive(self):
         parent = {"state_id": "e:s0", "case": {}, "measurements": [9.0]}
         candidate = {
             "state_id": "e:s1",
@@ -721,18 +721,23 @@ class CandidateQualityTests(unittest.TestCase):
             "measurements": [1.0],
         }
         oracle = CandidateQualityOracle(mode="deployment")
-        base = {"target_progress": 1.0, "global_progress": 0.5, "globally_resolved": True}
+        base = {
+            "target_progress": 1.0,
+            "global_progress": 0.5,
+            "physical_constraints_ok": True,
+            "new_constraint_violations": 0,
+        }
         final = oracle.label_candidate(
             parent_state=parent,
             source_action=self.action,
             candidate_state=candidate,
-            verification_output={**base, "remaining_fault_count": 0},
+            verification_output={**base, "globally_resolved": True, "remaining_suspect_count": 0},
         )
         partial = oracle.label_candidate(
             parent_state=parent,
             source_action=self.action,
             candidate_state=candidate,
-            verification_output={**base, "globally_resolved": False, "remaining_fault_count": 2},
+            verification_output={**base, "globally_resolved": False, "remaining_suspect_count": 2},
         )
         unknown = oracle.label_candidate(
             parent_state=parent,
@@ -851,8 +856,8 @@ class CandidateQualityTests(unittest.TestCase):
                 calls.append(kwargs)
                 return CandidateAssessment(
                     disposition=CandidateDisposition.ACCEPT_PARTIAL,
-                    progress_class="target_progress_remaining_faults",
-                    remaining_fault_count=1,
+                    progress_class="target_progress_remaining_true_faults",
+                    remaining_true_fault_count=1,
                 )
 
         env = TransactionalPSSEEnv(candidate_quality_oracle=RecordingOracle())
@@ -1065,7 +1070,10 @@ class CandidateQualityTests(unittest.TestCase):
         state, _ = env.step(correct_measurement(state["active_state_id"], index=0, value=1.0))
         state, _ = env.step({"tool": "run_wls", "arguments": {"state_id": state["candidate_state_id"]}})
         self.assertEqual(state["candidate_disposition"], "ACCEPT_PARTIAL")
-        self.assertEqual(env.get_oracle_state().candidate_assessment["remaining_fault_count"], 1)
+        self.assertEqual(
+            env.get_oracle_state().candidate_assessment["remaining_true_fault_count"],
+            1,
+        )
 
     def test_measurement_update_list_form_matches_mapping_semantics(self):
         scenario = {
@@ -1285,9 +1293,12 @@ class ExpertPolicyTests(unittest.TestCase):
         }
         self.assertEqual(self.oracle.next_actions(state)[0]["tool"], "get_parameter_context")
 
-    def test_accepted_partial_measurement_fix_continues_parameter_diagnosis(self):
+    def test_accepted_partial_measurement_fix_continues_observable_parameter_diagnosis(self):
         state = {
             "active_state_id": "e:s1",
+            "unresolved_signatures": [
+                "wls_branch_multiplier_dominant line_status_or_parameter line=7"
+            ],
             "accepted_corrections": [
                 {
                     "source_action": {"tool": "correct_measurements", "arguments": {}},
@@ -1462,6 +1473,7 @@ class DaggerCollectorTests(unittest.TestCase):
             max_steps=1,
             train_policy_fn=train,
             evaluate_fn=lambda policy, env, oracle: next(scores),
+            replay_require_late_iteration_model_quota=False,
             rng=random.Random(0),
         )
         self.assertEqual(best.version, 2)
@@ -1482,6 +1494,7 @@ class DaggerCollectorTests(unittest.TestCase):
             max_steps=1,
             train_policy_fn=train,
             evaluate_fn=lambda policy, env, oracle: next(scores),
+            replay_require_late_iteration_model_quota=False,
             rng=random.Random(0),
         )
         self.assertEqual(best.version, 0)
@@ -1511,7 +1524,9 @@ class DatasetConversionTests(unittest.TestCase):
         }
 
     def test_chat_sft_contains_no_privileged_fields(self):
-        rows = examples_to_chat_sft([self.example()], available_tools=["run_wls"])
+        rows = examples_to_chat_sft(
+            [self.example()], available_tools=["run_wls"], protocol="controller"
+        )
         user = json.loads(rows[0]["messages"][1]["content"])
         self.assertFalse(any(f'"{key}"' in json.dumps(user) for key in FORBIDDEN_POLICY_KEYS))
         tool_call = rows[0]["messages"][2]["tool_calls"][0]
@@ -1521,7 +1536,7 @@ class DatasetConversionTests(unittest.TestCase):
         example = self.example()
         example["policy_observation"]["clean_case"] = {"hidden": True}
         with self.assertRaises(ValueError):
-            examples_to_chat_sft([example])
+            examples_to_chat_sft([example], protocol="controller")
 
     def test_jsonl_round_trip(self):
         with tempfile.TemporaryDirectory() as tmpdir:

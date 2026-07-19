@@ -1,4 +1,7 @@
 {
+  "historical": true,
+  "release_eligible": false,
+  "superseded_reason": "pilot report predates current registry and clean-source provenance gate",
   "grouped_pilot": {
     "action_distribution": {
       "test": {

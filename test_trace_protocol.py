@@ -36,6 +36,7 @@ from Transmission.generate_measurements import (
     load_case,
     make_index_map,
 )
+from scripts.validate_hif_traces import validate_row as validate_hif_trace_row
 from trace_protocol import (
     DECISION_SCHEMA_TEXT,
     SCADA_HARMONIC_SYSTEM_PROMPT,
@@ -208,6 +209,7 @@ class TraceProtocolTests(unittest.TestCase):
         self.assertIn("run_hse_from_path", tool_names)
         self.assertNotIn("run_three_phase_nlm_from_path", tool_names)
         self.assertNotIn("estimate_hif_location_magnitude_from_path", tool_names)
+        self.assertNotIn("estimate_hif_location_magnitude_multiscan_from_path", tool_names)
         self.assertNotIn("high_impedance_fault", SCADA_HARMONIC_SYSTEM_PROMPT)
         self.assertNotIn("three_phase_imbalance", SCADA_HARMONIC_SYSTEM_PROMPT)
         self.assertNotIn("top_hif_groups", SCADA_HARMONIC_SYSTEM_PROMPT)
@@ -829,6 +831,17 @@ class TraceProtocolTests(unittest.TestCase):
         names = [tool["function"]["name"] for tool in schemas]
         self.assertIn("run_three_phase_nlm_from_path", names)
         self.assertIn("estimate_hif_location_magnitude_from_path", names)
+        self.assertIn("estimate_hif_location_magnitude_multiscan_from_path", names)
+        multiscan_schema = next(
+            tool
+            for tool in schemas
+            if tool["function"]["name"]
+            == "estimate_hif_location_magnitude_multiscan_from_path"
+        )
+        self.assertEqual(
+            multiscan_schema["function"]["parameters"]["properties"]["max_scans"]["default"],
+            10,
+        )
 
         messages = [make_initial_user_message()]
         hidden_context = {
@@ -895,6 +908,7 @@ class TraceProtocolTests(unittest.TestCase):
 
         estimate_payload = {
             "success": True,
+            "synthetic_oracle": True,
             "method": "model_based_hif_parameter_search",
             "candidate_branch_row0": 2,
             "dss_element": "Line.2-3",
@@ -921,6 +935,7 @@ class TraceProtocolTests(unittest.TestCase):
             {},
             {},
         )
+        self.assertTrue(compact_est["synthetic_oracle"])
         self.assertEqual(compact_est["estimated"]["alpha_from_from_bus"], 0.47)
         self.assertEqual(compact_est["fit"]["localization_certainty"], "well_separated")
         self.assertEqual(compact_est["uncertainty"]["near_best_alpha_interval"], [0.43, 0.51])
@@ -1048,6 +1063,173 @@ class TraceProtocolTests(unittest.TestCase):
             ["run_three_phase_nlm_from_path", "estimate_hif_location_magnitude_from_path"],
         )
         self.assertEqual(final["evidence"]["hif_parameter_estimate"]["alpha_from_from_bus"], 0.472)
+
+    def test_multiscan_noise_averaging_reports_alpha_interval_not_point(self) -> None:
+        meta = {
+            "nb": 14,
+            "nl": 20,
+            "branch_info": [{"from_bus": i + 1, "to_bus": i + 2} for i in range(20)],
+        }
+        idx_map = {
+            "Vm": slice(0, 14),
+            "Pinj": slice(14, 28),
+            "Qinj": slice(28, 42),
+            "Pf": slice(42, 62),
+            "Qf": slice(62, 82),
+            "Pt": slice(82, 102),
+            "Qt": slice(102, 122),
+        }
+        rec = {"id": "hif-window-1", "scenario": "high_impedance_fault", "label": {}}
+        nlm_payload = {
+            "success": True,
+            "method": "legacy_three_phase_nlm",
+            "top_hif_groups": [
+                {
+                    "rank": 1,
+                    "branch_row0": 13,
+                    "line_index1": 14,
+                    "dss_element": "Line.7-8",
+                    "from_bus": 7,
+                    "to_bus": 8,
+                    "score": 632.75,
+                }
+            ],
+        }
+        estimate_payload = {
+            "success": True,
+            "method": "multiscan_augmented_hif_parameter_estimation",
+            "candidate_branch_row0": 13,
+            "dss_element": "Line.7-8",
+            "from_bus": 7,
+            "to_bus": 8,
+            "scan_count": 20,
+            "selected_scan_count": 10,
+            "parameter_identifiable": True,
+            "estimated": {
+                "alpha_from_from_bus": 0.47,
+                "distance_percent_from_from_bus": 47.0,
+                "phase": "A",
+                "r_hif_pu": 83.0,
+                "r_hif_ohm": 0.83,
+                "i_hif_amp": 695.0,
+                "p_hif_kw": 401.0,
+            },
+            "fit": {
+                "multiscan_weighted_residual_norm": 1.8,
+                "localization_certainty": "well_separated",
+                "ambiguity": False,
+            },
+            "observability": {
+                "effective_rank": 2,
+                "status": "noise_averaging_only",
+                "parameter_identifiable": True,
+            },
+            "uncertainty": {
+                "near_best_alpha_interval": [0.20, 0.71],
+                "near_best_r_hif_pu_interval": [75.0, 92.0],
+            },
+        }
+        primary_wls = {
+            "success": True,
+            "r": [0.0] * 122,
+            "lambdaN": [],
+            "global_residual_sum": 10.0,
+            "global_residual_threshold": 118.0,
+        }
+
+        final = build_final_target(
+            rec,
+            meta,
+            idx_map,
+            primary_wls,
+            nlm_payload=nlm_payload,
+            hif_estimate_payload=estimate_payload,
+        )
+        details = final["suspect_location"]["details"]
+        evidence = final["evidence"]["hif_parameter_estimate"]
+
+        self.assertNotIn("alpha_from_from_bus", details)
+        self.assertNotIn("distance_percent_from_from_bus", details)
+        self.assertEqual(details["near_best_alpha_interval"], [0.20, 0.71])
+        self.assertEqual(details["r_hif_pu"], 83.0)
+        self.assertEqual(details["phase"], "A")
+        self.assertNotIn("alpha_from_from_bus", evidence)
+        self.assertEqual(evidence["near_best_alpha_interval"], [0.20, 0.71])
+
+        row = {
+            "messages": [
+                {
+                    "role": "tool",
+                    "name": "run_three_phase_nlm_from_path",
+                    "content": json.dumps(nlm_payload),
+                },
+                {
+                    "role": "tool",
+                    "name": "estimate_hif_location_magnitude_multiscan_from_path",
+                    "content": json.dumps(estimate_payload),
+                },
+                {"role": "assistant", "content": json.dumps(final)},
+            ]
+        }
+        self.assertEqual(validate_hif_trace_row(row), [])
+
+    def test_hif_trace_validator_rejects_mock_oracle_estimate(self) -> None:
+        row = {
+            "messages": [
+                {
+                    "role": "tool",
+                    "name": "run_three_phase_nlm_from_path",
+                    "content": json.dumps(
+                        {
+                            "success": True,
+                            "top_hif_groups": [{"branch_row0": 0}],
+                        }
+                    ),
+                },
+                {
+                    "role": "tool",
+                    "name": "estimate_hif_location_magnitude_from_path",
+                    "content": json.dumps(
+                        {
+                            "success": True,
+                            "synthetic_oracle": True,
+                            "estimated": {
+                                "alpha_from_from_bus": 0.5,
+                                "r_hif_pu": 100.0,
+                            },
+                        }
+                    ),
+                },
+                {
+                    "role": "assistant",
+                    "content": json.dumps(
+                        {
+                            "verdict": {"error_family": "high_impedance_fault"},
+                            "evidence": {
+                                "top_hif_groups": [{"branch_row0": 0}],
+                                "hif_parameter_estimate": {"alpha_from_from_bus": 0.5},
+                            },
+                            "suspect_location": {
+                                "details": {"branch_row0": 0, "alpha_from_from_bus": 0.5, "r_hif_pu": 100.0}
+                            },
+                            "action": {
+                                "applied_tool": "estimate_hif_location_magnitude_from_path",
+                                "applied_tools": [
+                                    "run_three_phase_nlm_from_path",
+                                    "estimate_hif_location_magnitude_from_path",
+                                ],
+                            },
+                        }
+                    ),
+                },
+            ]
+        }
+
+        self.assertIn("synthetic_oracle_hif_estimator", validate_hif_trace_row(row))
+        self.assertNotIn(
+            "synthetic_oracle_hif_estimator",
+            validate_hif_trace_row(row, allow_mock_estimator=True),
+        )
 
     def test_hif_final_target_marks_near_tied_top2_as_ambiguous(self) -> None:
         meta = {

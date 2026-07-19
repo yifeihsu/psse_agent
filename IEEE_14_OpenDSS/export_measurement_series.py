@@ -1,9 +1,54 @@
 import os
 
+import numpy as np
 import opendssdirect as dss
 from opendssdirect import Capacitors, Generators, Loads, Vsources
 
 from IEEE_14_OpenDSS.constants import BRANCH_ORDER, BUS_ORDER
+
+
+def _phase_terminal_complex_powers(
+    powers,
+    node_order,
+    *,
+    n_conductors,
+    n_terminals,
+    phase_nodes=(1, 2, 3),
+):
+    """Split an OpenDSS power array by terminal and sum phase conductors."""
+    n_conductors = int(n_conductors)
+    n_terminals = int(n_terminals)
+    if n_conductors < 1 or n_terminals < 1:
+        raise ValueError("n_conductors and n_terminals must be positive")
+
+    raw = np.asarray(powers, dtype=float).reshape(-1)
+    if raw.size % 2:
+        raise ValueError(f"Unexpected odd power-array size: {raw.size}")
+    complex_powers = raw[0::2] + 1j * raw[1::2]
+    expected = n_conductors * n_terminals
+    if complex_powers.size != expected:
+        raise ValueError(
+            f"Unexpected power-array size: got {complex_powers.size}, expected {expected}"
+        )
+
+    nodes = [int(node) for node in node_order]
+    if len(nodes) != expected:
+        raise ValueError(f"Unexpected NodeOrder size: got {len(nodes)}, expected {expected}")
+
+    selected_nodes = {int(node) for node in phase_nodes}
+    terminal_powers = []
+    for terminal in range(n_terminals):
+        start = terminal * n_conductors
+        stop = start + n_conductors
+        terminal_values = complex_powers[start:stop]
+        terminal_nodes = nodes[start:stop]
+        phase_values = [
+            value
+            for value, node in zip(terminal_values, terminal_nodes)
+            if node in selected_nodes
+        ]
+        terminal_powers.append(sum(phase_values, 0j))
+    return terminal_powers
 
 
 def element_pq_3ph_per_terminal():
@@ -11,24 +56,26 @@ def element_pq_3ph_per_terminal():
     Return list of (P_MW, Q_Mvar) per terminal for the active CktElement,
     summing over all phases.
     """
-    nph = dss.CktElement.NumPhases()
-    nterm = dss.CktElement.NumTerminals()
-    vals = dss.CktElement.Powers()  # kW, kvar per phase per terminal
-    out = []
-    for t in range(nterm):
-        s = 2 * nph * t
-        e = s + 2 * nph
-        seg = vals[s:e]
-        p_kw = sum(seg[0::2])
-        q_kvar = sum(seg[1::2])
-        out.append((p_kw / 1000.0, q_kvar / 1000.0))  # MW, Mvar
-    return out
+    terminal_powers = _phase_terminal_complex_powers(
+        dss.CktElement.Powers(),
+        dss.CktElement.NodeOrder(),
+        n_conductors=dss.CktElement.NumConductors(),
+        n_terminals=dss.CktElement.NumTerminals(),
+    )
+    return [
+        (float(value.real) / 1000.0, float(value.imag) / 1000.0)
+        for value in terminal_powers
+    ]
 
 
 def _compile_and_solve(repo_dir: str, *, load_mult: float = 1.0) -> None:
-    dss.Basic.DataPath(repo_dir)
-    dss.Text.Command("Clear")
-    dss.Text.Command("Redirect Run_IEEE14Bus.dss")
+    caller_cwd = os.getcwd()
+    try:
+        dss.Basic.DataPath(repo_dir)
+        dss.Text.Command("Clear")
+        dss.Text.Command("Redirect Run_IEEE14Bus.dss")
+    finally:
+        os.chdir(caller_cwd)
     if load_mult != 1.0:
         dss.Text.Command(f"Set LoadMult={float(load_mult)}")
     dss.Text.Command("Solve")
@@ -90,6 +137,10 @@ def _branch_terminal_pq(elem, terminal):
     return (0.0, 0.0)
 
 
+def _active_element_enabled():
+    return not hasattr(dss.CktElement, "Enabled") or bool(dss.CktElement.Enabled())
+
+
 def extract_measurement_series(*, buses=None, branch_names=None, branch_element_overrides=None):
     """
     Extract the 1ϕ-equivalent (phase-A) operator measurement vector from the *currently solved* circuit.
@@ -119,6 +170,8 @@ def extract_measurement_series(*, buses=None, branch_names=None, branch_element_
     # Loads
     for name in Loads.AllNames() or []:
         Loads.Name(name)
+        if not _active_element_enabled():
+            continue
         buses_el = dss.CktElement.BusNames()
         bus = buses_el[0].split(".")[0].lower()
         pqs = element_pq_3ph_per_terminal()
@@ -130,6 +183,8 @@ def extract_measurement_series(*, buses=None, branch_names=None, branch_element_
     # Generators
     for name in Generators.AllNames() or []:
         Generators.Name(name)
+        if not _active_element_enabled():
+            continue
         buses_el = dss.CktElement.BusNames()
         bus = buses_el[0].split(".")[0].lower()
         pqs = element_pq_3ph_per_terminal()
@@ -141,6 +196,8 @@ def extract_measurement_series(*, buses=None, branch_names=None, branch_element_
     # Slack source(s)
     for name in Vsources.AllNames() or []:
         Vsources.Name(name)
+        if not _active_element_enabled():
+            continue
         buses_el = dss.CktElement.BusNames()
         bus = buses_el[0].split(".")[0].lower()
         pqs = element_pq_3ph_per_terminal()
@@ -152,6 +209,8 @@ def extract_measurement_series(*, buses=None, branch_names=None, branch_element_
     # Capacitors (reactive injections)
     for name in Capacitors.AllNames() or []:
         Capacitors.Name(name)
+        if not _active_element_enabled():
+            continue
         buses_el = dss.CktElement.BusNames()
         bus = buses_el[0].split(".")[0].lower()
         pqs = element_pq_3ph_per_terminal()

@@ -69,7 +69,32 @@ class TopologyExpert:
             "connectivity",
             "islanding",
         )
-        topology_signal = bool(topology_codes)
+        measurement_dominant = bool(
+            matching_evidence_codes(unresolved, "wls_residual_outlier_dominant")
+        )
+        branch_dominant = bool(
+            matching_evidence_codes(
+                unresolved, "wls_branch_multiplier_dominant"
+            )
+        )
+        explicit_topology_codes = [
+            code
+            for code in topology_codes
+            if not str(code).startswith("wls_branch_multiplier")
+        ]
+        # The WLS solve emits a few bounded cross-family findings even for a
+        # clear gross-measurement case.  A non-dominant branch multiplier is
+        # useful ambiguity evidence only when measurement evidence is not
+        # currently dominant; otherwise topology flips would turn measurement
+        # recovery into a long sequence of safely rejected but pointless
+        # candidates.  Explicit topology/connectivity sensor signatures are
+        # unaffected because they do not coexist with this WLS-only dominance
+        # relation.
+        topology_signal = bool(topology_codes) and not (
+            measurement_dominant
+            and not branch_dominant
+            and not explicit_topology_codes
+        )
         if topology_signal and not has_context and active_id:
             evidence = ["topology_context_missing"]
             evidence.extend(["topology_anomaly_evidence", *topology_codes])

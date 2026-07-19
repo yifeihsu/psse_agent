@@ -306,9 +306,12 @@ def _meas_correction_json(
             return [] if value is None else value
 
         idxs = _flatten(_value_or_empty("last_corrected_global_indices"))
-        orig_vals = _flatten(_value_or_empty("last_original_values"))
+        # Prefer the cumulative fields: "original" should be the raw measured
+        # value before any correction and "estimated_error" the total error
+        # removed, not just the final iteration's increment.
+        orig_vals = _flatten(_value_or_empty("first_original_values")) or _flatten(_value_or_empty("last_original_values"))
         corr_vals = _flatten(_value_or_empty("last_corrected_values"))
-        err_vals = _flatten(_value_or_empty("last_estimated_errors"))
+        err_vals = _flatten(_value_or_empty("total_estimated_errors")) or _flatten(_value_or_empty("last_estimated_errors"))
         
         corrected = []
         n = min(len(idxs), len(corr_vals))
@@ -466,12 +469,14 @@ def correct_measurements_from_path(
     R_variances_full: List[float] | None = None,
 ) -> Dict[str, Any]:
     """
-    Grouped measurement-error correction using Transmission/LagrangianM_correct.m.
+    Grouped measurement-error correction using the pure-Python Lagrangian
+    correction port (tools/lagrangian_correct_port.py).
 
     Behavior
-    - Mirrors WLS+NLM tool semantics: loads the case via loadcase, checks vector length,
-      and invokes the MATLAB routine. Accepts optional suspect group indices
-      (0-based or 1-based) and basic correction parameters.
+    - Mirrors WLS+NLM tool semantics: loads the case via the Python case loader,
+      checks vector length, and invokes the Python routine. Accepts an optional
+      suspect group of strictly 0-based global measurement indices and basic
+      correction parameters.
 
     Inputs
     - case_path: MATPOWER case name/path (e.g., 'case14').
@@ -487,6 +492,9 @@ def correct_measurements_from_path(
     - lambdaN: normalized multipliers
     - Omega or Omega_shape: KKT/Gain information (omitted if too large)
     - z_corrected_info: diagnostic struct with correction details
+    - corrected_measurements: per-index records where 'original' is the raw
+      measured value before any correction and 'estimated_error' is the total
+      error removed across all correction iterations
     """
     try:
         return _meas_correction_json(
@@ -544,10 +552,13 @@ def correct_parameters_from_path(
     Correct a single line's parameters [R, X] using multiple measurement snapshots (multi-scan ASE).
 
     Behavior
-    - Follows existing tool conventions: loads the case via loadcase and calls
-      Transmission/correct_parameter_group_multi_scan.m.
-    - Assumes the case already contains the erroneous parameters; this tool estimates corrected [R, X]
-      for branch row `line_index` using multiple measurement snapshots.
+    - Follows existing tool conventions: loads the case via the Python case loader
+      and calls the pure-Python multi-scan estimator
+      (tools/correct_parameter_group_multi_scan_port.py).
+    - The case supplies the starting [R, X] for branch row `line_index` (normally the
+      operator's DB values suspected of being wrong); this tool estimates corrected
+      [R, X] from the measurement snapshots. Do not pass a case that already contains
+      the corrected values, or the estimator will simply converge where it started.
 
     Inputs
     - case_path: MATPOWER case name/path (e.g., 'case14').
@@ -733,10 +744,10 @@ def run_hse_from_path(
 
     Returns:
     - success: bool
-    - full_ranking: List of {bus_1based, score} sorted by likelihood (lower score = better).
-    - best_candidate: bus_1based of likely source.
+    - best_candidate_bus_1based: bus_1based of likely source.
+    - ranking_top10: List of {bus_1based, score} sorted by likelihood (lower score = better).
     - estimated_injections: {h: [real, imag]} at best bus.
-    - est_thd: {bus_1based: thd_percent} estimated across network.
+    - estimated_thd_percent: {bus_1based: thd_percent} estimated across network.
     """
     orders = harmonic_orders if harmonic_orders else _infer_harmonic_orders(harmonic_measurements)
     return _run_hse_logic(case_path, harmonic_measurements, orders, slack_bus)
@@ -816,6 +827,59 @@ def _estimate_hif_location_magnitude_logic(
         return {"success": False, "error": f"HIF parameter estimator failed for {case_path}: {e}"}
 
 
+def _estimate_hif_location_magnitude_multiscan_logic(
+    *,
+    scan_window_path: str,
+    candidate_branch_row0: int,
+    scans: List[Dict[str, Any]] | None = None,
+    sigma_z: List[float] | None = None,
+    case_path: str = "case14",
+    candidate_phase: str | None = None,
+    pristine_model_dir: str | None = None,
+    resistance_mode: str = "shared",
+    max_scans: int = 10,
+    scan_selection: str = "information_greedy",
+    top_k: int = 5,
+    alpha_grid_size: int = 31,
+    r_grid_size: int = 35,
+    r_hif_pu_min: float = 5.0,
+    r_hif_pu_max: float = 1000.0,
+    robust_loss: str = "soft_l1",
+    smoothness_lambda: float = 0.10,
+) -> Dict[str, Any]:
+    try:
+        import sys as _sys
+
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+        if repo_root not in _sys.path:
+            _sys.path.append(repo_root)
+        from three_phase_nlm.hif_multiscan_estimator import (  # type: ignore
+            estimate_hif_location_magnitude_multiscan,
+        )
+
+        return estimate_hif_location_magnitude_multiscan(
+            scan_window_path=scan_window_path,
+            scans=scans,
+            sigma_z=sigma_z,
+            case_path=case_path,
+            candidate_branch_row0=int(candidate_branch_row0),
+            candidate_phase=candidate_phase,
+            pristine_model_dir=pristine_model_dir,
+            resistance_mode=resistance_mode,
+            max_scans=int(max_scans),
+            scan_selection=scan_selection,
+            top_k=int(top_k),
+            alpha_grid_size=int(alpha_grid_size),
+            r_grid_size=int(r_grid_size),
+            r_hif_pu_min=float(r_hif_pu_min),
+            r_hif_pu_max=float(r_hif_pu_max),
+            robust_loss=robust_loss,
+            smoothness_lambda=float(smoothness_lambda),
+        )
+    except Exception as e:
+        return {"success": False, "error": f"Multi-scan HIF parameter estimator failed: {e}"}
+
+
 @mcp.tool(name="run_three_phase_nlm_from_path")
 def run_three_phase_nlm_from_path(
     *,
@@ -887,6 +951,50 @@ def estimate_hif_location_magnitude_from_path(
         r_hif_pu_max=r_hif_pu_max,
     )
 
+
+@mcp.tool(name="estimate_hif_location_magnitude_multiscan_from_path")
+def estimate_hif_location_magnitude_multiscan_from_path(
+    *,
+    scan_window_path: str,
+    candidate_branch_row0: int,
+    scans: List[Dict[str, Any]] | None = None,
+    sigma_z: List[float] | None = None,
+    case_path: str = "case14",
+    candidate_phase: str | None = None,
+    pristine_model_dir: str | None = None,
+    resistance_mode: str = "shared",
+    max_scans: int = 10,
+    scan_selection: str = "information_greedy",
+    top_k: int = 5,
+    alpha_grid_size: int = 31,
+    r_grid_size: int = 35,
+    r_hif_pu_min: float = 5.0,
+    r_hif_pu_max: float = 1000.0,
+    robust_loss: str = "soft_l1",
+    smoothness_lambda: float = 0.10,
+) -> Dict[str, Any]:
+    """Estimate shared HIF parameters from a persistent multi-scan event window."""
+    return _estimate_hif_location_magnitude_multiscan_logic(
+        scan_window_path=scan_window_path,
+        scans=scans,
+        sigma_z=sigma_z,
+        case_path=case_path,
+        candidate_branch_row0=candidate_branch_row0,
+        candidate_phase=candidate_phase,
+        pristine_model_dir=pristine_model_dir,
+        resistance_mode=resistance_mode,
+        max_scans=max_scans,
+        scan_selection=scan_selection,
+        top_k=top_k,
+        alpha_grid_size=alpha_grid_size,
+        r_grid_size=r_grid_size,
+        r_hif_pu_min=r_hif_pu_min,
+        r_hif_pu_max=r_hif_pu_max,
+        robust_loss=robust_loss,
+        smoothness_lambda=smoothness_lambda,
+    )
+
+
 @mcp.tool(name="correct_topology_from_path")
 def correct_topology_from_path(
     *,
@@ -926,10 +1034,15 @@ def correct_topology_from_path(
     else:
         ds_bool = bool(ds)
 
-    # Build NB net with the requested CB status
+    # Build NB net with the requested CB status. build_nb_ieee14_pocket123
+    # raises ValueError (listing the known CB names) if cb_name is unknown,
+    # so a typo'd or hallucinated breaker name fails closed here instead of
+    # silently returning default-topology measurements.
     try:
         status_map = {cb_name: ds_bool}
         net, sec_bus, cb_idx, line_idx, trafo_idx = nb.build_nb_ieee14_pocket123(status_map=status_map)
+    except ValueError as e:
+        return {"success": False, "error": f"invalid cb_name: {e}"}
     except Exception as e:
         return {"success": False, "error": f"build_nb failed: {e}"}
 
@@ -951,9 +1064,17 @@ def correct_topology_from_path(
 
     # Map PB measurements to operator z order
     try:
-        # case_path may be 'case14' or '14'
-        case_name_only = case_path.replace("case", "") if isinstance(case_path, str) else case_path
-        ppc_base = load_case_fn(str(case_name_only))
+        # load_case accepts only '14' or '118'; accept 'case14', '14',
+        # 'case14.m', or a path whose basename matches that pattern.
+        import re as _re
+        base_name = os.path.basename(str(case_path))
+        m = _re.fullmatch(r"(?:case)?(\d+)(?:\.m)?", base_name)
+        if not m:
+            return {
+                "success": False,
+                "error": f"cannot infer base case number from case_path={case_path!r}; expected e.g. 'case14'",
+            }
+        ppc_base = load_case_fn(m.group(1))
         z_corr = nb_to_operator_fn(net, line_idx, trafo_idx, ppc_base)
     except Exception as e:
         return {"success": False, "error": f"mapping failed: {e}"}

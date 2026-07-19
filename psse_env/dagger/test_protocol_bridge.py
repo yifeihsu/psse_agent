@@ -269,8 +269,15 @@ class CanonicalExportTests(unittest.TestCase):
             {"case_path": "active", "candidate_branch_row0": 12, "candidate_phase": "B"},
         )
 
-    def test_controller_protocol_remains_the_default(self) -> None:
+    def test_canonical_protocol_is_the_default(self) -> None:
         row = examples_to_chat_sft([_example()])[0]
+        self.assertEqual(row["metadata"]["protocol"], "canonical")
+        call = row["messages"][2]["tool_calls"][0]["function"]
+        self.assertEqual(call["name"], "wls_from_path")
+        self.assertEqual(call["arguments"], {"case_path": "active"})
+
+    def test_controller_protocol_remains_explicitly_available(self) -> None:
+        row = examples_to_chat_sft([_example()], protocol="controller")[0]
         self.assertEqual(row["metadata"]["protocol"], "controller")
         call = row["messages"][2]["tool_calls"][0]["function"]
         self.assertEqual(call["name"], "run_wls")

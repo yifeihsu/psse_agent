@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -17,6 +18,7 @@ from .dss_hif_injector import (
     hif_ohms_from_pu,
 )
 from .ieee14_adapter import branch_info_for_row0
+from .hif_operating_point import apply_hif_operating_point, capture_operating_point_baseline
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -73,9 +75,13 @@ def _line_tokens(model_dir: Path, dss_element: str) -> tuple[list[str], dict[str
 def _compile_base_model(model_dir: Path) -> None:
     import opendssdirect as dss  # type: ignore
 
-    dss.Basic.DataPath(str(model_dir.resolve()))
-    dss.Text.Command("Clear")
-    dss.Text.Command("Redirect Run_IEEE14Bus.dss")
+    caller_cwd = Path.cwd()
+    try:
+        dss.Basic.DataPath(str(model_dir.resolve()))
+        dss.Text.Command("Clear")
+        dss.Text.Command("Redirect Run_IEEE14Bus.dss")
+    finally:
+        os.chdir(caller_cwd)
 
     # The checked-in IEEE-14 OpenDSS load file may carry the imbalance-study Bus 3
     # split loads. HIF synthetic rows use a balanced base case, so mirror the
@@ -86,34 +92,6 @@ def _compile_base_model(model_dir: Path) -> None:
         "New Load.__HIF_BAL_B3 Bus1=B3 kV=1 kW=94200 kvar=19000 "
         "vmaxpu=1.06 vminpu=0.94"
     )
-
-
-def _enabled_load_snapshot() -> dict[str, dict[str, Any]]:
-    import opendssdirect as dss  # type: ignore
-
-    base: dict[str, dict[str, Any]] = {}
-    for name in dss.Loads.AllNames() or []:
-        dss.Loads.Name(name)
-        lower = str(name).lower()
-        if lower.startswith("hif_") or lower.startswith("hifest") or lower.startswith("hif_est"):
-            continue
-        if hasattr(dss.CktElement, "Enabled") and not bool(dss.CktElement.Enabled()):
-            continue
-        base[lower] = {
-            "name": str(name),
-            "kW": float(dss.Loads.kW()),
-            "kvar": float(dss.Loads.kvar()),
-        }
-    return base
-
-
-def _scale_named_loads(loads: Mapping[str, Mapping[str, Any]], load_scale: float) -> None:
-    import opendssdirect as dss  # type: ignore
-
-    for item in loads.values():
-        dss.Loads.Name(str(item["name"]))
-        dss.Loads.kW(float(item["kW"]) * float(load_scale))
-        dss.Loads.kvar(float(item["kvar"]) * float(load_scale))
 
 
 def _solve_or_raise() -> None:
@@ -198,11 +176,18 @@ def _fault_voltage_volts(fault_bus: str, phase: str, fallback_kv_ln: float) -> f
     return float(fallback_kv_ln) * 1000.0
 
 
-def _simulate_base(model_dir: Path, *, load_scale: float) -> dict[str, Any]:
+def _simulate_base(
+    model_dir: Path,
+    *,
+    load_scale: float = 1.0,
+    op_point: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     extract_measurement_series, extract_three_phase_voltage_measurements = _measurement_exporters()
     _compile_base_model(model_dir)
-    base_loads = _enabled_load_snapshot()
-    _scale_named_loads(base_loads, load_scale)
+    baseline = capture_operating_point_baseline()
+    effective_op_point = dict(op_point or {})
+    effective_op_point.setdefault("load_scale", float(load_scale))
+    apply_hif_operating_point(baseline, effective_op_point)
     _solve_or_raise()
     z_sim, _buses, _branches = extract_measurement_series()
     return {
@@ -219,7 +204,8 @@ def _simulate_candidate(
     alpha: float,
     phase: str,
     r_hif_pu: float,
-    load_scale: float,
+    load_scale: float = 1.0,
+    op_point: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     extract_measurement_series, extract_three_phase_voltage_measurements = _measurement_exporters()
     r_hif_ohm = hif_ohms_from_pu(r_hif_pu, base_mva=100.0, kv_ll=1.0)
@@ -233,8 +219,10 @@ def _simulate_candidate(
         r_hif_ohm=r_hif_ohm,
         fault_bus=fault_bus,
     )
-    base_loads = _enabled_load_snapshot()
-    _scale_named_loads(base_loads, load_scale)
+    baseline = capture_operating_point_baseline()
+    effective_op_point = dict(op_point or {})
+    effective_op_point.setdefault("load_scale", float(load_scale))
+    apply_hif_operating_point(baseline, effective_op_point)
     _solve_or_raise()
     z_sim, _buses, _branches = extract_measurement_series(branch_element_overrides=overrides)
     v3 = extract_three_phase_voltage_measurements()
@@ -248,12 +236,51 @@ def _simulate_candidate(
     }
 
 
-def _measurement_residual(z_obs: Sequence[float], z_sim: Sequence[float]) -> list[float]:
+def simulate_hif_candidate(
+    *,
+    candidate_branch_row0: int,
+    alpha: float,
+    phase: str,
+    r_hif_pu: float,
+    op_point: Mapping[str, Any] | None = None,
+    case_path: str = "case14",
+    pristine_model_dir: str | None = None,
+) -> dict[str, Any]:
+    """Replay one HIF candidate through the estimator's canonical simulator."""
+    info = branch_info_for_row0(int(candidate_branch_row0))
+    dss_element = str(info["dss_element"])
+    if not dss_element.lower().startswith("line."):
+        raise ValueError("HIF candidate simulation currently supports Line.* branches only")
+    model_dir = _resolve_model_dir(pristine_model_dir, case_path)
+    original_tokens, _ = _line_tokens(model_dir, dss_element)
+    return _simulate_candidate(
+        model_dir=model_dir,
+        original_tokens=original_tokens,
+        dss_element=dss_element,
+        alpha=float(alpha),
+        phase=str(phase),
+        r_hif_pu=float(r_hif_pu),
+        op_point=op_point,
+    )
+
+
+def _measurement_residual(
+    z_obs: Sequence[float],
+    z_sim: Sequence[float],
+    *,
+    sigma_z: Sequence[float] | None = None,
+) -> list[float]:
     obs = np.asarray(z_obs, dtype=float)
     sim = np.asarray(z_sim, dtype=float)
     if obs.shape != sim.shape:
         raise ValueError(f"Measurement vector shape mismatch: observed {obs.shape}, simulated {sim.shape}")
-    if obs.size == 122:
+    if sigma_z is not None:
+        sigma = np.asarray(sigma_z, dtype=float)
+        if sigma.shape != obs.shape:
+            raise ValueError(f"sigma_z shape mismatch: expected {obs.shape}, got {sigma.shape}")
+        if not np.all(np.isfinite(sigma)) or np.any(sigma <= 0.0):
+            raise ValueError("sigma_z must contain finite positive values")
+    elif obs.size == 122:
         sigma = np.empty_like(obs, dtype=float)
         sigma[0:14] = 1e-3
         sigma[14:42] = 1e-2
@@ -311,12 +338,15 @@ def _residual_vector(
     simulated_z: Sequence[float],
     observed_three_phase_voltages: Any = None,
     simulated_three_phase_voltages: Any = None,
+    sigma_z: Sequence[float] | None = None,
+    three_phase_sigma: float = 5e-3,
 ) -> np.ndarray:
-    parts = _measurement_residual(observed_z, simulated_z)
+    parts = _measurement_residual(observed_z, simulated_z, sigma_z=sigma_z)
     parts.extend(
         _three_phase_voltage_residual(
             observed_three_phase_voltages,
             simulated_three_phase_voltages,
+            sigma=float(three_phase_sigma),
         )
     )
     return np.asarray(parts, dtype=float)

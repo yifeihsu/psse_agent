@@ -554,7 +554,9 @@ class TopLBranchEvaluator:
         sources = _source_values(
             self._privileged_branch_evidence(branch, next_state), tool_output, next_state, state
         )
-        remaining = _count(_first(sources, "remaining_fault_count", "remaining_faults"))
+        remaining = _count(
+            _first(sources, "remaining_true_fault_count", "remaining_true_faults")
+        )
         if remaining is None:
             unresolved_count = _count(_first(sources, "unresolved_signatures"))
             # A nonempty unresolved set is a valid lower bound.  An empty set
@@ -644,7 +646,7 @@ class TopLBranchEvaluator:
                 "remaining_true_fault_count", oracle_payload.get("remaining_true_faults")
             )
             if remaining is not None:
-                evidence["remaining_fault_count"] = (
+                evidence["remaining_true_fault_count"] = (
                     len(remaining) if isinstance(remaining, (list, tuple, set)) else remaining
                 )
         candidate_id = next_state.get("candidate_state_id")
@@ -900,13 +902,39 @@ class AggreVaTeLite:
                 if item.q_cost <= best_cost + tolerance + 1e-12
             ]
         else:
+            best_cost = None
+            tolerance = 0.0
             near_optimal = []
+        near_optimal_keys = {action_key(action) for action in near_optimal}
+        action_costs = []
+        for item in ranked:
+            record = item.as_record(include_branch_result=include_branch_results)
+            record["near_optimal"] = action_key(item.action) in near_optimal_keys
+            record["cost_margin_from_best"] = (
+                float(item.q_cost - best_cost) if best_cost is not None else None
+            )
+            action_costs.append(record)
         return {
             "state": copy.deepcopy(dict(state)),
-            "action_costs": [
-                item.as_record(include_branch_result=include_branch_results) for item in ranked
-            ],
+            "action_costs": action_costs,
             "near_optimal_actions": near_optimal,
+            "best_q_cost": float(best_cost) if best_cost is not None else None,
+            "near_optimal_cost_tolerance": float(tolerance),
+            # Be explicit about what this implementation currently estimates:
+            # one candidate action (plus automatic verification for a
+            # correction) followed by an injected or heuristic recovery term.
+            # It is not a terminal expert rollout unless the injected recovery
+            # hook itself performs that rollout.
+            "cost_evaluation": {
+                "candidate_set": "bounded_oracle_top_l",
+                "full_expert_rollout": False,
+                "automatic_correction_verification": True,
+                "recovery_term": (
+                    "injected_callback"
+                    if getattr(self.branch_evaluator, "recovery_cost_fn", None) is not None
+                    else "one_step_heuristic"
+                ),
+            },
         }
 
     collect_ranking_example = rank_actions
@@ -930,7 +958,13 @@ def evaluate_top_l_actions(
 
 
 def to_pairwise_examples(ranking_example: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Convert one ranking record to chosen/rejected pairs for later training."""
+    """Convert one ranking record to unambiguous chosen/rejected pairs.
+
+    Actions within the recorded near-optimal tolerance are multi-positive: they
+    are never emitted as a rejected action against the deterministic rank-one
+    choice.  Ambiguous all-near-optimal states therefore produce no pair rather
+    than a contradictory preference target.
+    """
 
     costs = ranking_example.get("action_costs")
     if not isinstance(costs, Sequence) or len(costs) < 2:
@@ -952,8 +986,34 @@ def to_pairwise_examples(ranking_example: Mapping[str, Any]) -> list[dict[str, A
     if len(valid) < 2:
         return []
     chosen = valid[0]
+    near_optimal_source = ranking_example.get("near_optimal_actions") or []
+    if isinstance(near_optimal_source, (Mapping, str)):
+        near_optimal_source = [near_optimal_source]
+    near_optimal_keys = {
+        action_key(action)
+        for action in near_optimal_source
+        if isinstance(action, (Mapping, str))
+    }
+    near_optimal_keys.update(
+        action_key(item["action"])
+        for item in valid
+        if item.get("near_optimal") is True
+    )
+    if not near_optimal_keys:
+        tolerance = _finite(
+            ranking_example.get("near_optimal_cost_tolerance"), default=0.0
+        )
+        tolerance = max(tolerance, 0.0)
+        near_optimal_keys.update(
+            action_key(item["action"])
+            for item in valid
+            if item["q_cost"] <= chosen["q_cost"] + tolerance + 1e-12
+        )
+    near_optimal_keys.add(action_key(chosen["action"]))
     pairs: list[dict[str, Any]] = []
     for rejected in valid[1:]:
+        if action_key(rejected["action"]) in near_optimal_keys:
+            continue
         pairs.append(
             {
                 "state": copy.deepcopy(ranking_example.get("state", {})),
@@ -962,6 +1022,9 @@ def to_pairwise_examples(ranking_example: Mapping[str, Any]) -> list[dict[str, A
                 "chosen_q_cost": chosen["q_cost"],
                 "rejected_q_cost": rejected["q_cost"],
                 "cost_margin": rejected["q_cost"] - chosen["q_cost"],
+                "near_optimal_cost_tolerance": ranking_example.get(
+                    "near_optimal_cost_tolerance", 0.0
+                ),
             }
         )
     return pairs

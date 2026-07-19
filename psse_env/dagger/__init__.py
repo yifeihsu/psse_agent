@@ -29,6 +29,7 @@ from .rollout_collector import (
 )
 from .splits import grouped_scenario_split
 from .sft_audit import (
+    audit_approximate_teacher_realizability,
     audit_chat_sft_rows,
     audit_teacher_realizability,
     policy_observation_hash,
@@ -50,6 +51,7 @@ __all__ = [
     "TopLBranchEvaluator",
     "TOOL_JSON_SCHEMAS",
     "audit_chat_sft_rows",
+    "audit_approximate_teacher_realizability",
     "audit_target_aware_state_classes",
     "audit_teacher_realizability",
     "bind_controller_action",

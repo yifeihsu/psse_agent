@@ -1,4 +1,7 @@
 {
+  "historical": true,
+  "release_eligible": false,
+  "superseded_reason": "pilot report predates current registry and clean-source provenance gate",
   "model": "unsloth/gemma-4-E2B-it",
   "revision": "f0c5915f17ad6c66dbeb577fb06ff8925bf8d7ae",
   "processor_and_model_revision_match": true,

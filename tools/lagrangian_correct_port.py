@@ -301,6 +301,11 @@ def lagrangian_m_correct(
         "last_original_values": np.array([], dtype=float),
         "last_estimated_errors": np.array([], dtype=float),
         "last_corrected_values": np.array([], dtype=float),
+        # Cumulative across correction iterations: the raw measured values
+        # before any correction and the total error removed from them. The
+        # last_* fields only reflect the final iteration.
+        "first_original_values": np.array([], dtype=float),
+        "total_estimated_errors": np.array([], dtype=float),
     }
 
     valid_meas_mask = np.isfinite(z_in_full) & (z_in_full < 998.0) & (z_in_full > -998.0)
@@ -479,6 +484,13 @@ def lagrangian_m_correct(
                         corrected_group_values = original_group_values - estimated_errors
                         z_active[group_local_indices_in_active] = corrected_group_values
 
+                        if not z_corrected_info["applied_any_correction"]:
+                            z_corrected_info["first_original_values"] = original_group_values.copy()
+                            z_corrected_info["total_estimated_errors"] = estimated_errors.copy()
+                        else:
+                            z_corrected_info["total_estimated_errors"] = (
+                                z_corrected_info["total_estimated_errors"] + estimated_errors
+                            )
                         z_corrected_info["applied_any_correction"] = True
                         z_corrected_info["iterations_performed"] += 1
                         z_corrected_info["last_applied_error_norm"] = norm_of_estimated_errors

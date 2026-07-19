@@ -128,12 +128,13 @@ class ReviewedDeterministicPilotAdapters:
             "max_normalized_residual": max(family_scores.values(), default=0.0),
             "family_residual_scores": family_scores,
             "unresolved_signatures": unresolved,
-            "remaining_fault_count": len(unresolved),
+            "remaining_suspect_count": len(unresolved),
             "target_progress": 1.0 if is_candidate and resolved else 0.0,
             "global_progress": 1.0 if is_candidate and resolved else 0.0,
             "globally_resolved": resolved,
             "post_action_resolved": resolved,
             "physical_constraints_ok": True,
+            "new_constraint_violations": 0,
             "converged": True,
             "solver": "reviewed_deterministic_pilot_wls_v1",
         }
@@ -363,7 +364,7 @@ def generate(output_dir: Path, *, root_scenarios: int = DEFAULT_ROOT_SCENARIOS) 
         raise RuntimeError("Deterministic grouped split produced an empty train or validation split.")
 
     exported = {
-        split_name: examples_to_chat_sft(rows)
+        split_name: examples_to_chat_sft(rows, protocol="controller")
         for split_name, rows in raw_splits.items()
     }
     train_validation_rows = len(exported["train"]) + len(exported["validation"])

@@ -78,12 +78,32 @@ class ParameterExpert:
             "admittance",
             "multiplier",
         )
-        parameter_signal = bool(parameter_codes)
-        diagnosis_needed = bool(
-            parameter_signal
-            or rejected_measurement
-            or partial_measurement
+        measurement_dominant = bool(
+            matching_evidence_codes(unresolved, "wls_residual_outlier_dominant")
         )
+        branch_dominant = bool(
+            matching_evidence_codes(
+                unresolved, "wls_branch_multiplier_dominant"
+            )
+        )
+        explicit_parameter_codes = [
+            code
+            for code in parameter_codes
+            if not str(code).startswith("wls_branch_multiplier")
+        ]
+        # A rejected or partial measurement correction is useful priority
+        # evidence only when the *current* active state still carries
+        # observable branch-family evidence.  It must not manufacture a
+        # parameter hypothesis after a commit cleared those signatures, and a
+        # clearly measurement-dominant solve must not be reinterpreted as a
+        # branch fault merely because one bounded measurement candidate was
+        # rejected.
+        parameter_signal = bool(parameter_codes) and not (
+            measurement_dominant
+            and not branch_dominant
+            and not explicit_parameter_codes
+        )
+        diagnosis_needed = parameter_signal
         if diagnosis_needed and not has_context and active_id:
             # Once measurement work has failed or only partially succeeded,
             # parameter diagnosis must outrank even another measurement hint.

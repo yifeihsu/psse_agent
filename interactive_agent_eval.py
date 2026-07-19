@@ -22,6 +22,7 @@ from mcp_server.matpower_server import (
     correct_parameters_from_path,
     correct_topology_from_path,
     estimate_hif_location_magnitude_from_path,
+    estimate_hif_location_magnitude_multiscan_from_path,
     run_hse_from_path,
     run_three_phase_nlm_from_path,
     wls_from_path,
@@ -173,6 +174,7 @@ TOOL_MAP = {
     "correct_parameters_from_path": correct_parameters_from_path,
     "correct_topology_from_path": correct_topology_from_path,
     "estimate_hif_location_magnitude_from_path": estimate_hif_location_magnitude_from_path,
+    "estimate_hif_location_magnitude_multiscan_from_path": estimate_hif_location_magnitude_multiscan_from_path,
     "run_hse_from_path": run_hse_from_path,
     "run_three_phase_nlm_from_path": run_three_phase_nlm_from_path,
 }
@@ -506,6 +508,7 @@ def main() -> None:
     runtime_context = trace_payload.get("runtime_context") if isinstance(trace_payload, dict) else None
     hidden_context: dict[str, Any] = {
         "case_aliases": dict(((runtime_context or {}).get("case_aliases") or {})),
+        "tool_context": dict(((runtime_context or {}).get("tool_context") or {})),
     }
 
     for step in range(1, args.max_steps + 1):

@@ -44,13 +44,20 @@ class CounterfactualGenerator:
                 root_observation.as_dict(), expert_actions, physical_state=physical_state
             )
         )
-        return self.generate_from_current(injected, root_scenario_id=str(scenario.get("root_scenario_id", scenario.get("scenario_id", "scenario"))))
+        return self.generate_from_current(
+            injected,
+            root_scenario_id=str(
+                scenario.get("root_scenario_id", scenario.get("scenario_id", "scenario"))
+            ),
+            physical_root_fingerprint=scenario.get("physical_root_fingerprint"),
+        )
 
     def generate_from_current(
         self,
         injected_actions: Iterable[InjectedAction],
         *,
         root_scenario_id: str,
+        physical_root_fingerprint: str | None = None,
     ) -> list[dict[str, Any]]:
         root_hash = self.env.store.episode_hash()
         rows: list[dict[str, Any]] = []
@@ -110,7 +117,22 @@ class CounterfactualGenerator:
             continuation_actions: list[dict[str, Any]] = []
             recovered_observation = reached_observation
             recovery_validity: Mapping[str, Any] = {"process_valid": False}
+            target_evidence_sufficient: bool | None = None
+            target_evidence_error: str | None = None
             if recovery_actions:
+                if bool(getattr(branch, "production_dataset_mode", False)):
+                    assertion = getattr(branch, "assert_training_decision_evidence", None)
+                    if not callable(assertion):
+                        target_evidence_sufficient = False
+                        target_evidence_error = "training_decision_evidence_assertion_unavailable"
+                    else:
+                        try:
+                            assertion(recovery_actions[0])
+                        except ValueError as exc:
+                            target_evidence_sufficient = False
+                            target_evidence_error = str(exc)
+                        else:
+                            target_evidence_sufficient = True
                 recovery_branch = branch.clone()
                 recovery_validity = self._process_validity(recovery_branch, recovery_actions[0])
                 _, recovery_output = recovery_branch.step(copy.deepcopy(recovery_actions[0]))
@@ -127,23 +149,30 @@ class CounterfactualGenerator:
                 state_class = "accepted_partial_continuation"
             else:
                 state_class = "invalid_precondition_recovery"
-            dataset_mode = (
-                "production"
-                if bool(getattr(self.env, "production_dataset_mode", False))
-                else "synthetic_pilot"
-            )
+            # The wrong branch may be constructed from hidden truth.  Its
+            # recovery trace is useful auxiliary supervision, but it must not
+            # silently enter the production single-label SFT corpus even when
+            # the backing environment uses deployment providers.
+            dataset_mode = "synthetic_counterfactual"
             rows.append(
                 {
                     "example_id": f"counterfactual_{root_scenario_id}_{index}",
                     "scenario_id": root_scenario_id,
                     "root_scenario_id": root_scenario_id,
+                    "physical_root_fingerprint": physical_root_fingerprint,
                     "dataset_mode": dataset_mode,
+                    "dataset_source": "synthetic_counterfactual",
+                    "production_label_eligible": False,
+                    "target_evidence_sufficient": target_evidence_sufficient,
+                    "target_evidence_error": target_evidence_error,
                     "branch_family": injected.family,
                     "policy_observation": reached_observation.as_dict(),
                     "parent_state_summary": reached_observation.as_dict(),
                     "state_summary": reached_observation.as_dict(),
                     "history_window": copy.deepcopy(reached_observation.history_window),
                     "executed_action": copy.deepcopy(recovery_actions[0]) if recovery_actions else None,
+                    "executed_by": "expert_recovery" if recovery_actions else None,
+                    "state_visited_by": "counterfactual_injection",
                     "tool_output": policy_safe_copy(recovery_output or {}),
                     "next_state_summary": recovered_observation.as_dict(),
                     "candidate_state_summary": (
@@ -163,6 +192,9 @@ class CounterfactualGenerator:
                         "process_valid": bool(recovery_validity.get("process_valid")),
                         "state_class": state_class,
                         "dataset_mode": dataset_mode,
+                        "dataset_source": "synthetic_counterfactual",
+                        "production_label_eligible": False,
+                        "target_evidence_sufficient": target_evidence_sufficient,
                     },
                     "state_class": state_class,
                 }
@@ -187,8 +219,9 @@ class CounterfactualGenerator:
         active_id = oracle_state.get("active_state_id")
         actions: list[dict[str, Any]] = []
         measurement_errors = list(getattr(oracle_state, "true_measurement_errors", []) or [])
-        if measurement_errors and isinstance(measurement_errors[0], Mapping):
-            fault = measurement_errors[0]
+        for fault in measurement_errors:
+            if not isinstance(fault, Mapping):
+                continue
             index = fault.get("index", fault.get("index0", fault.get("measurement_index")))
             value = fault.get("clean", fault.get("clean_value", fault.get("true_value")))
             if value is None and index is not None:
@@ -206,8 +239,9 @@ class CounterfactualGenerator:
                     }
                 )
         parameter_errors = list(getattr(oracle_state, "true_parameter_errors", []) or [])
-        if parameter_errors and isinstance(parameter_errors[0], Mapping):
-            fault = parameter_errors[0]
+        for fault in parameter_errors:
+            if not isinstance(fault, Mapping):
+                continue
             target_key = next(
                 (
                     key
@@ -238,8 +272,9 @@ class CounterfactualGenerator:
             if len(arguments) > 1:
                 actions.append({"tool": CORRECT_PARAMETERS, "arguments": arguments})
         topology_errors = list(getattr(oracle_state, "true_topology_errors", []) or [])
-        if topology_errors and isinstance(topology_errors[0], Mapping):
-            fault = topology_errors[0]
+        for fault in topology_errors:
+            if not isinstance(fault, Mapping):
+                continue
             target_key = next(
                 (
                     key

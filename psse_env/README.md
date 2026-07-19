@@ -41,8 +41,12 @@ via content-addressed derived case files. `MatpowerDeploymentProviders().
 env_kwargs()` wires the bundle plus a `ProcessValidityOracle` accepting
 executor-hydrated (target-only) corrections and a deployment
 `CandidateQualityOracle` with a MATPOWER case differ for path-valued cases.
-Candidate verification derives observable `target_fixed`/
-`remaining_fault_count` evidence from the candidate solve alone.
+Candidate verification derives observable `target_fixed` and
+`remaining_suspect_count` evidence from the candidate solve alone. The latter
+counts thresholded residual/multiplier suspects, not physical faults; final
+versus partial deployment acceptance uses target improvement plus the global
+anomaly test. Synthetic truth remains separate as
+`remaining_true_fault_count`.
 
 The five specialized diagnostics — `get_harmonic_context`,
 `run_hse_from_path`, `run_three_phase_nlm_from_path`, and both HIF
@@ -53,8 +57,8 @@ dispatches them through `evidence_providers` with the full action so bounded
 estimator arguments (candidate branch, phase, grid options) reach the tool.
 The deployment bundle wraps the real HSE, three-phase NLM, and HIF estimation
 stacks; runtime side data comes from state metadata
-(`harmonic_measurements`/`harmonic_orders`, `nlm_diagnostic` or OpenDSS model
-dirs, `hif_runtime`, `hif_scan_window`) and each tool fails closed as a
+(`harmonic_measurements`/`harmonic_orders`, `three_phase_voltages`,
+`nlm_diagnostic` or OpenDSS model dirs, `hif_runtime`, `hif_scan_window`) and each tool fails closed as a
 collectable no-op when its data is absent. The protocol bridge maps
 `state_id` to `case_path` (or `scan_window_path` for the multi-scan
 estimator) so exported targets and generated calls stay canonical.
@@ -63,19 +67,26 @@ estimator) so exported targets and generated calls stay canonical.
 on the active state (deployment-observable operator knowledge; channel
 contents stay out of the observation). `DiagnosticsExpert` routes on it plus
 unresolved-signature markers: harmonic signals escalate
-`get_harmonic_context` -> `run_hse_from_path`; HIF signals escalate
+`get_harmonic_context` -> `run_hse_from_path`; pure three-phase-unbalance
+signals stop at a VUF/null-gated non-HIF classification; HIF-specific signals escalate
 `run_three_phase_nlm_from_path` -> the multi-scan estimator when a persistent
 scan window exists, else the single-scan estimator, carrying the NLM top
-branch as `candidate_branch_row0`. Privileged fault families
-(`hidden_truth.true_harmonic_errors`/`true_hif_errors`) and hints only rank
-proposals; they never create a route observable telemetry cannot justify.
+branch as `candidate_branch_row0`. Privileged fault families and hints are
+ignored by this expert, so changing hidden truth while holding the policy
+observation fixed cannot change the production target.
 Diagnostic summaries (`wls_summary`, `hse_summary`, `nlm_summary`,
-`hif_summary`, ...) are model-visible history metrics in SFT export.
+`hif_summary`, `diagnostic_acceptance`, ...) are model-visible history metrics
+in SFT export. The production target audit independently requires matching
+observable signature provenance and telemetry, and binds HIF-estimator branch
+targets to the latest successful NLM output.
 
 Diagnostic findings resolve anomalies without a physical correction through
 explained-anomaly records. A provider declares an `anomaly_explanation`
-(family plus finding detail — HSE emits one when it localizes a source, the
-HIF estimators when they estimate parameters); the environment binds it to
+only after an explicit null/goodness gate accepts the finding: HSE requires
+THD above its configured threshold, the unbalance path requires VUF above its
+configured threshold, and HIF estimation requires material improvement over
+the no-HIF model with acceptable residual fit. A best candidate or successful
+optimizer alone is not terminal evidence. The environment binds an accepted finding to
 the unresolved signatures matching that family's markers
 (`ANOMALY_FAMILY_MARKERS` in `actions.py`, shared with expert routing) and
 records it in the model-visible `explained_anomalies` field. Once every
@@ -100,13 +111,22 @@ measurement expert stands down while branch evidence is dominant — until both
 branch families have had a hypothesis rejected by verification — because a measurement
 correction can zero the residuals of a wrong model and mask a branch fault.
 Two more physical guards close that masking channel: while an unexplained
-harmonic/HIF sensor signature stands, `run_wls` mints no `wls_*` signatures at
+harmonic/unbalance/HIF sensor signature stands, `run_wls` mints no `wls_*` signatures at
 all (the fundamental-frequency solve is unreliable under waveform anomalies),
 and `get_topology_context` filters supported status flips that would island
 the network (an EMS would never offer that switching action). A candidate
 whose verification solve itself fails is recorded as verified-REJECT — the
 solver failure is observable rejection evidence — so the episode retains a
 legal rollback path instead of deadlocking on an unverifiable candidate.
+After a candidate passes the global WLS chi-square test, the deployment
+provider emits a separate `steady_state_physical_evidence` record scoped to
+the observed snapshot: connectivity of the in-service MATPOWER topology,
+measured bus `Vm` against `VMIN`/`VMAX`, and measured terminal MVA against
+positive `RATE_A` limits on active branches. This is not a power-flow
+convergence claim. Complete violations set `physical_constraints_ok=false`;
+missing or malformed inputs leave it null/inconclusive, so acceptance remains
+fail-closed. Topology fixtures clamp PYPOWER generator voltage setpoints to
+their declared bus bounds before synthesis.
 
 `providers/scenario_generator.py` builds the round-0 offline aggregate from
 real physics: `Round0ScenarioGenerator` adapts the merged measurement corpus
@@ -124,6 +144,14 @@ recovery branches, audits every episode against hidden truth (masking
 commits are quarantined), splits by root scenario, and exports canonical
 chat SFT with the native-row, teacher-realizability, and target-aware
 audits.
+
+The preflight report treats a terminal decision and a resolved diagnosis as
+different outcomes. `terminal_scenario_matrix` records `resolved` and
+`operator_escalation` counts and IDs separately. `release_terminal_coverage`
+accepts either a resolved episode or an audited, state-bound operator handoff;
+`release_resolution_coverage` is true only when every episode resolves.
+Nonterminal, quarantined, or terminal episodes with an unknown outcome fail
+the release gate.
 
 `CandidateQualityOracle(mode="synthetic")` requires hidden truth.
 `mode="deployment"` ignores it and relies on observable WLS/physics evidence.
@@ -155,8 +183,9 @@ three-phase NLM, and HIF estimator schemas. `examples_to_chat_sft(...,
 protocol="canonical")` exports canonical targets (correction values are
 dropped; the model is supervised on target selection only) and
 `LocalAliasPolicyAdapter(..., protocol="canonical")` converts generated
-canonical calls back before alias binding. The default remains
-`protocol="controller"`, so the validated 90-row pilot is unchanged.
+canonical calls back before alias binding. Canonical is the default for both
+deployment export and inference. Historical controller-protocol fixtures must
+request `protocol="controller"` explicitly.
 Reverse-mapped `correct_*_from_path` calls carry targets without values and
 therefore require deployment correction providers that hydrate values before
 they can execute; canonical-only diagnostics pass through and no-op until

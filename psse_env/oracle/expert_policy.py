@@ -4,7 +4,21 @@ import json
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
-from psse_env.actions import CORRECTION_TOOLS, RUN_WLS, action_signature, safe_normalize_action
+from psse_env.actions import (
+    ASK_FOR_MORE_EVIDENCE,
+    CORRECT_MEASUREMENTS,
+    CORRECT_PARAMETERS,
+    CORRECT_TOPOLOGY,
+    CORRECTION_TOOLS,
+    GET_MEASUREMENT_CONTEXT,
+    GET_PARAMETER_CONTEXT,
+    GET_TOPOLOGY_CONTEXT,
+    RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+    RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+    RUN_WLS,
+    action_signature,
+    safe_normalize_action,
+)
 from psse_env.oracle.candidate_quality import CandidateQualityOracle
 from psse_env.oracle.diagnostics_expert import DiagnosticsExpert
 from psse_env.oracle.expert_types import ExpertActionProposal
@@ -76,22 +90,49 @@ class ExpertPolicyOracle:
         context = self._context(state, history)
         policy = context.policy_state
         seen_signatures = self._seen_action_signatures(policy, context.history)
+        blocked_correction_tools = self._structurally_blocked_correction_tools(
+            policy, context.history
+        )
 
         recovery = self.recovery_expert.repair_actions(policy, context.history)
         if recovery:
-            return self._rank_and_filter(recovery, policy, seen_signatures=seen_signatures, mandatory=True)
+            return self._rank_and_filter(
+                recovery,
+                policy,
+                seen_signatures=seen_signatures,
+                blocked_correction_tools=blocked_correction_tools,
+                mandatory=True,
+            )
 
         verification = self.termination_expert.verification_actions(policy)
         if verification:
-            return self._rank_and_filter(verification, policy, seen_signatures=seen_signatures, mandatory=True)
+            return self._rank_and_filter(
+                verification,
+                policy,
+                seen_signatures=seen_signatures,
+                blocked_correction_tools=blocked_correction_tools,
+                mandatory=True,
+            )
 
         disposition = self.termination_expert.candidate_disposition_actions(policy)
         if disposition:
-            return self._rank_and_filter(disposition, policy, seen_signatures=seen_signatures, mandatory=True)
+            return self._rank_and_filter(
+                disposition,
+                policy,
+                seen_signatures=seen_signatures,
+                blocked_correction_tools=blocked_correction_tools,
+                mandatory=True,
+            )
 
         terminal = self.termination_expert.propose(policy, context.history)
         if terminal:
-            return self._rank_and_filter(terminal, policy, seen_signatures=seen_signatures, mandatory=True)
+            return self._rank_and_filter(
+                terminal,
+                policy,
+                seen_signatures=seen_signatures,
+                blocked_correction_tools=blocked_correction_tools,
+                mandatory=True,
+            )
 
         # Hidden fault-family flags and action hints may rank later diagnosis,
         # but they must never choose a different label for an otherwise
@@ -117,7 +158,18 @@ class ExpertPolicyOracle:
                 baseline,
                 policy,
                 seen_signatures=seen_signatures,
+                blocked_correction_tools=blocked_correction_tools,
                 mandatory=True,
+            )
+
+        budget_handoff = self._recovery_budget_proposals(policy, context.history)
+        if budget_handoff:
+            return self._rank_and_filter(
+                budget_handoff,
+                policy,
+                seen_signatures=seen_signatures,
+                blocked_correction_tools=blocked_correction_tools,
+                mandatory=False,
             )
 
         proposals = (
@@ -147,10 +199,21 @@ class ExpertPolicyOracle:
                 hif_fault_present="hif" in context.oracle_fault_families,
             )
         )
-        return self._rank_and_filter(
+        ranked = self._rank_and_filter(
             proposals,
             policy,
             seen_signatures=seen_signatures,
+            blocked_correction_tools=blocked_correction_tools,
+            mandatory=False,
+        )
+        if ranked:
+            return ranked
+        escalation = self._recovery_exhaustion_proposals(policy, context.history)
+        return self._rank_and_filter(
+            escalation,
+            policy,
+            seen_signatures=seen_signatures,
+            blocked_correction_tools=blocked_correction_tools,
             mandatory=False,
         )
 
@@ -229,11 +292,6 @@ class ExpertPolicyOracle:
                 fault_families.add("parameter")
             if state.true_topology_errors:
                 fault_families.add("topology")
-            hidden = state.hidden_truth if isinstance(state.hidden_truth, Mapping) else {}
-            if hidden.get("true_harmonic_errors"):
-                fault_families.add("harmonic")
-            if hidden.get("true_hif_errors"):
-                fault_families.add("hif")
         elif isinstance(state, PolicyObservation):
             policy = state.as_dict()
         elif isinstance(state, Mapping):
@@ -265,12 +323,6 @@ class ExpertPolicyOracle:
                     fault_families.add("parameter")
                 if state.get("true_topology_errors"):
                     fault_families.add("topology")
-                hidden = state.get("hidden_truth")
-                hidden = hidden if isinstance(hidden, Mapping) else {}
-                if state.get("true_harmonic_errors") or hidden.get("true_harmonic_errors"):
-                    fault_families.add("harmonic")
-                if state.get("true_hif_errors") or hidden.get("true_hif_errors"):
-                    fault_families.add("hif")
         else:
             raise TypeError(f"state must be OracleState, PolicyObservation, or mapping, got {type(state).__name__}")
 
@@ -281,19 +333,26 @@ class ExpertPolicyOracle:
             policy = dict(policy)
             if policy.get("has_unverified_candidate") or policy.get("has_verified_candidate"):
                 policy["has_open_candidate"] = True
-            observable_corrections = self._observable_supported_corrections(policy)
-            if observable_corrections:
-                # Once an observable context provider supplies exact bounded
-                # corrections, it is the sole source of correction targets.
-                # Private scenario hints remain available for synthetic flows
-                # that have no observable provider contract.
-                hints = observable_corrections
-
         if history is None:
             raw_history = self._get(policy, "history_window", []) or []
             history_items = [dict(item) for item in raw_history if isinstance(item, Mapping)]
         else:
             history_items = [dict(item) for item in history if isinstance(item, Mapping)]
+        if isinstance(policy, Mapping):
+            observable_corrections = self._observable_supported_corrections(
+                policy, history_items
+            )
+            if observable_corrections:
+                # Context evidence remains usable after a rejected candidate
+                # is rolled back to the exact same active state.  The latest
+                # tool output is then the rollback rather than the context
+                # payload, so discarding history here used to strand every
+                # untried provider-supported alternative.  Only context
+                # outputs bound to a still-fresh active state are recovered.
+                # They remain the sole source of correction targets; private
+                # scenario hints are used only when no observable provider
+                # contract exists.
+                hints = observable_corrections
         return _ExpertContext(
             policy_state=policy,
             history=history_items,
@@ -301,27 +360,82 @@ class ExpertPolicyOracle:
             oracle_fault_families=frozenset(fault_families),
         )
 
-    @staticmethod
+    @classmethod
     def _observable_supported_corrections(
+        cls,
         policy: Mapping[str, Any],
+        history: Sequence[Mapping[str, Any]] = (),
     ) -> list[dict[str, Any]]:
-        output = policy.get("last_tool_output")
-        if not isinstance(output, Mapping):
+        active_id = policy.get("active_state_id")
+        if active_id is None:
             return []
-        metrics = output.get("tool_metrics")
-        if not isinstance(metrics, Mapping):
-            metrics = output.get("observable_metrics")
-        if not isinstance(metrics, Mapping):
-            return []
-        raw_actions = metrics.get("supported_corrections")
-        if not isinstance(raw_actions, (list, tuple)):
-            return []
+        context_contracts = {
+            GET_MEASUREMENT_CONTEXT: ("measurement", CORRECT_MEASUREMENTS),
+            GET_PARAMETER_CONTEXT: ("parameter", CORRECT_PARAMETERS),
+            GET_TOPOLOGY_CONTEXT: ("topology", CORRECT_TOPOLOGY),
+        }
+
+        # The explicit history is authoritative.  The synthetic last-output
+        # event supports direct callers whose compact policy observation does
+        # not carry a history window.
+        events = list(history)
+        last_tool = policy.get("last_tool")
+        last_output = policy.get("last_tool_output")
+        if last_tool in context_contracts and isinstance(last_output, Mapping):
+            events.append(
+                {
+                    "action": {
+                        "tool": last_tool,
+                        "arguments": {"state_id": active_id},
+                    },
+                    "tool_output": last_output,
+                }
+            )
+
         actions: list[dict[str, Any]] = []
-        for raw_action in raw_actions:
-            if not isinstance(raw_action, Mapping):
+        emitted: set[str] = set()
+        latest_context_seen: set[str] = set()
+        for event in reversed(events):
+            event_action = event.get("action") or event.get("executed_action")
+            normalized_event = safe_normalize_action(event_action or {})
+            context_tool = normalized_event["tool"]
+            contract = context_contracts.get(context_tool)
+            if contract is None or context_tool in latest_context_seen:
                 continue
-            normalized = safe_normalize_action(raw_action)
-            if normalized["tool"] in CORRECTION_TOOLS:
+            family, correction_tool = contract
+            if not (
+                policy.get(f"has_fresh_{family}_context", False)
+                and str(policy.get(f"{family}_context_state_id")) == str(active_id)
+            ):
+                continue
+            requested = normalized_event["arguments"].get("state_id")
+            if requested is not None and str(requested) != str(active_id):
+                continue
+            latest_context_seen.add(context_tool)
+            output = event.get("tool_output")
+            if not isinstance(output, Mapping) or output.get("execution_status") == "failure":
+                continue
+            metrics = output.get("tool_metrics")
+            if not isinstance(metrics, Mapping):
+                metrics = output.get("observable_metrics")
+            if not isinstance(metrics, Mapping):
+                continue
+            raw_actions = metrics.get("supported_corrections")
+            if not isinstance(raw_actions, (list, tuple)):
+                continue
+            for raw_action in raw_actions:
+                if not isinstance(raw_action, Mapping):
+                    continue
+                normalized = safe_normalize_action(raw_action)
+                if normalized["tool"] != correction_tool:
+                    continue
+                target_state = normalized["arguments"].get("state_id")
+                if target_state is not None and str(target_state) != str(active_id):
+                    continue
+                signature = cls._signature(normalized)
+                if signature is None or signature in emitted:
+                    continue
+                emitted.add(signature)
                 actions.append(normalized)
         return actions
 
@@ -331,10 +445,14 @@ class ExpertPolicyOracle:
         policy: PolicyObservation | Mapping[str, Any],
         *,
         seen_signatures: set[str],
+        blocked_correction_tools: set[str],
         mandatory: bool,
     ) -> list[ExpertActionProposal]:
         assessed: list[tuple[int, ExpertActionProposal, str]] = []
         for index, proposal in enumerate(proposals):
+            normalized = safe_normalize_action(proposal.action)
+            if normalized["tool"] in blocked_correction_tools:
+                continue
             signature = self._signature(proposal.action)
             equivalent_signatures = self._equivalent_signatures(proposal.action)
             if signature is None or equivalent_signatures & seen_signatures:
@@ -351,6 +469,9 @@ class ExpertPolicyOracle:
         # signature.
         if not assessed and mandatory and proposals:
             for index, proposal in enumerate(proposals):
+                normalized = safe_normalize_action(proposal.action)
+                if normalized["tool"] in blocked_correction_tools:
+                    continue
                 signature = self._signature(proposal.action)
                 if signature is None:
                     continue
@@ -412,18 +533,192 @@ class ExpertPolicyOracle:
             return False
         return True
 
+    def _recovery_exhaustion_proposals(
+        self,
+        policy: PolicyObservation | Mapping[str, Any],
+        history: Sequence[Mapping[str, Any]],
+    ) -> list[ExpertActionProposal]:
+        """Request an operator handoff after observable autonomous options end.
+
+        This is not a resolution label.  It is reachable only after a
+        successful WLS solve on the current state plus at least one observable
+        investigation step, and only when every ordinary expert proposal has
+        already been filtered out.  The environment re-audits the full history
+        and provider response before treating the request as terminal.
+        """
+        if self._get(policy, "has_open_candidate", False):
+            return []
+        active_id = self._get(policy, "active_state_id")
+        if active_id is None or self._get(policy, "no_material_anomaly_remaining", False):
+            return []
+        score = self._get(policy, "remaining_anomaly_score")
+        try:
+            score_unresolved = (
+                score is not None
+                and float(score) >= float(self.process_oracle.anomaly_threshold)
+            )
+        except (TypeError, ValueError):
+            score_unresolved = False
+        if not (
+            score_unresolved
+            or bool(self._get(policy, "unresolved_signatures", []) or [])
+        ):
+            return []
+
+        successful_current_wls = False
+        investigation_seen = False
+        investigation_tools = {
+            GET_MEASUREMENT_CONTEXT,
+            GET_PARAMETER_CONTEXT,
+            GET_TOPOLOGY_CONTEXT,
+            *CORRECTION_TOOLS,
+        }
+        for event in history:
+            if not isinstance(event, Mapping):
+                continue
+            event_action = safe_normalize_action(
+                event.get("action") or event.get("executed_action") or {}
+            )
+            requested = event_action["arguments"].get("state_id")
+            output = event.get("tool_output")
+            success = (
+                isinstance(output, Mapping)
+                and output.get("execution_status") == "success"
+            )
+            if (
+                event_action["tool"] == RUN_WLS
+                and success
+                and requested is not None
+                and str(requested) == str(active_id)
+            ):
+                successful_current_wls = True
+            if (
+                event_action["tool"] in investigation_tools
+                and success
+                and (requested is None or str(requested) == str(active_id))
+            ):
+                investigation_seen = True
+        if not (successful_current_wls and investigation_seen):
+            return []
+        return [
+            ExpertActionProposal(
+                action={
+                    "tool": ASK_FOR_MORE_EVIDENCE,
+                    "arguments": {
+                        "state_id": active_id,
+                        "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                    },
+                },
+                source_expert="recovery_expert",
+                confidence=1.0,
+                evidence_codes=[
+                    "observable_recovery_options_exhausted",
+                    "unresolved_anomaly_requires_operator_handoff",
+                ],
+                admissible=True,
+                estimated_immediate_risk=0.0,
+            )
+        ]
+
+    def _recovery_budget_proposals(
+        self,
+        policy: PolicyObservation | Mapping[str, Any],
+        history: Sequence[Mapping[str, Any]],
+    ) -> list[ExpertActionProposal]:
+        """Hand off before opening a lifecycle the remaining budget cannot close."""
+        if self._get(policy, "has_open_candidate", False):
+            return []
+        active_id = self._get(policy, "active_state_id")
+        if active_id is None or self._get(
+            policy, "no_material_anomaly_remaining", False
+        ):
+            return []
+        try:
+            remaining_budget = int(self._get(policy, "remaining_budget", 0) or 0)
+        except (TypeError, ValueError):
+            return []
+        # A new hypothesis needs correction -> verification -> disposition,
+        # followed by either finalization or an explicit handoff.
+        if not 0 < remaining_budget < 4:
+            return []
+        if not (
+            self._get(policy, "unresolved_signatures", [])
+            or self._get(policy, "remaining_anomaly_score") is not None
+        ):
+            return []
+
+        successful_current_wls = False
+        investigation_seen = False
+        investigation_tools = {
+            GET_MEASUREMENT_CONTEXT,
+            GET_PARAMETER_CONTEXT,
+            GET_TOPOLOGY_CONTEXT,
+            *CORRECTION_TOOLS,
+        }
+        for event in history:
+            if not isinstance(event, Mapping):
+                continue
+            event_action = safe_normalize_action(
+                event.get("action") or event.get("executed_action") or {}
+            )
+            requested = event_action["arguments"].get("state_id")
+            output = event.get("tool_output")
+            success = (
+                isinstance(output, Mapping)
+                and output.get("execution_status") == "success"
+            )
+            if (
+                event_action["tool"] == RUN_WLS
+                and success
+                and requested is not None
+                and str(requested) == str(active_id)
+            ):
+                successful_current_wls = True
+            if (
+                event_action["tool"] in investigation_tools
+                and success
+                and (requested is None or str(requested) == str(active_id))
+            ):
+                investigation_seen = True
+        if not (successful_current_wls and investigation_seen):
+            return []
+        return [
+            ExpertActionProposal(
+                action={
+                    "tool": ASK_FOR_MORE_EVIDENCE,
+                    "arguments": {
+                        "state_id": active_id,
+                        "request": RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+                    },
+                },
+                source_expert="recovery_expert",
+                confidence=1.0,
+                evidence_codes=[
+                    "autonomous_recovery_budget_exhausted",
+                    "operator_handoff_required",
+                ],
+                admissible=True,
+                estimated_immediate_risk=0.0,
+            )
+        ]
+
     def _seen_action_signatures(
         self,
         policy: PolicyObservation | Mapping[str, Any],
         history: Sequence[Mapping[str, Any]],
     ) -> set[str]:
+        active_id = self._get(policy, "active_state_id")
         signatures = {
             str(signature)
             for signature in (self._get(policy, "tried_action_signatures", []) or [])
             if signature
         }
         for signature in list(signatures):
-            semantic = self._semantic_signature_from_text(signature)
+            semantic = (
+                self._semantic_signature_from_text(signature)
+                if self._signature_applies_to_state(signature, active_id)
+                else None
+            )
             if semantic:
                 signatures.add(semantic)
         for field in ("rejected_hypotheses", "accepted_corrections"):
@@ -433,17 +728,100 @@ class ExpertPolicyOracle:
                 if remembered.get("action_signature"):
                     text_signature = str(remembered["action_signature"])
                     signatures.add(text_signature)
-                    semantic = self._semantic_signature_from_text(text_signature)
+                    semantic = (
+                        self._semantic_signature_from_text(text_signature)
+                        if self._signature_applies_to_state(text_signature, active_id)
+                        else None
+                    )
                     if semantic:
                         signatures.add(semantic)
                 source_action = remembered.get("source_action")
                 if source_action:
-                    signatures.update(self._equivalent_signatures(source_action))
+                    normalized = safe_normalize_action(source_action)
+                    exact = self._signature(normalized)
+                    if exact is not None:
+                        signatures.add(exact)
+                    requested = normalized["arguments"].get("state_id")
+                    if (
+                        normalized["tool"] not in CORRECTION_TOOLS
+                        or requested is None
+                        or str(requested) == str(active_id)
+                    ):
+                        semantic = self._semantic_signature_from_text(exact or "")
+                        if semantic:
+                            signatures.add(semantic)
         for item in history:
             action = item.get("action") or item.get("executed_action")
             if action:
-                signatures.update(self._equivalent_signatures(action))
+                normalized = safe_normalize_action(action)
+                exact = self._signature(normalized)
+                if exact is not None:
+                    signatures.add(exact)
+                requested = normalized["arguments"].get("state_id")
+                if (
+                    normalized["tool"] not in CORRECTION_TOOLS
+                    or requested is None
+                    or str(requested) == str(active_id)
+                ):
+                    semantic = self._semantic_signature_from_text(exact or "")
+                    if semantic:
+                        signatures.add(semantic)
         return signatures
+
+    @classmethod
+    def _structurally_blocked_correction_tools(
+        cls,
+        policy: PolicyObservation | Mapping[str, Any],
+        history: Sequence[Mapping[str, Any]],
+    ) -> set[str]:
+        """Return correction families unavailable on the current active state.
+
+        Some executor failures describe the state contract, not a bad target.
+        In particular, ``parameter_scans_missing`` means *every* proposed line
+        will fail until the active state changes.  Treating it like a
+        target-specific rejection caused the expert to exhaust the same invalid
+        operation over every ranked line.  This gate consumes only observable
+        action/output history and is scoped to the state on which it occurred.
+        """
+
+        active_id = cls._get(policy, "active_state_id")
+        if active_id is None:
+            return set()
+        family_wide_failures = {
+            CORRECT_PARAMETERS: {"parameter_scans_missing"},
+            CORRECT_TOPOLOGY: {"topology_correction_unsupported"},
+        }
+        events = list(history)
+        last_tool = cls._get(policy, "last_tool")
+        last_output = cls._get(policy, "last_tool_output", {})
+        if last_tool in family_wide_failures and isinstance(last_output, Mapping):
+            events.append(
+                {
+                    "action": {
+                        "tool": last_tool,
+                        "arguments": {"state_id": active_id},
+                    },
+                    "tool_output": last_output,
+                }
+            )
+        blocked: set[str] = set()
+        for event in events:
+            action = safe_normalize_action(
+                event.get("action") or event.get("executed_action") or {}
+            )
+            tool = action["tool"]
+            if tool not in family_wide_failures:
+                continue
+            requested = action["arguments"].get("state_id")
+            if requested is not None and str(requested) != str(active_id):
+                continue
+            output = event.get("tool_output")
+            if not isinstance(output, Mapping):
+                continue
+            error_code = str(output.get("error_code") or "")
+            if error_code in family_wide_failures[tool]:
+                blocked.add(tool)
+        return blocked
 
     @staticmethod
     def _signature(action: Any) -> str | None:
@@ -477,6 +855,21 @@ class ExpertPolicyOracle:
             return f"{tool}:{json.dumps(semantic_arguments, sort_keys=True, separators=(',', ':'))}"
         except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
             return None
+
+    @staticmethod
+    def _signature_applies_to_state(signature: str, active_id: Any) -> bool:
+        """Whether a state-free correction identity may be reused here."""
+        try:
+            tool, raw_arguments = signature.split(":", 1)
+            if tool not in CORRECTION_TOOLS:
+                return True
+            arguments = json.loads(raw_arguments)
+            if not isinstance(arguments, Mapping):
+                return False
+            requested = arguments.get("state_id")
+            return requested is None or str(requested) == str(active_id)
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+            return False
 
     @staticmethod
     def _get(state: Any, key: str, default: Any = None) -> Any:

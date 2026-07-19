@@ -29,7 +29,7 @@ class LocalAliasPolicyAdapter:
         *,
         max_history_events: int = 8,
         max_history_chars: int = 4096,
-        protocol: str = "controller",
+        protocol: str = "canonical",
     ) -> None:
         if protocol not in SUPPORTED_EXPORT_PROTOCOLS:
             raise ValueError(

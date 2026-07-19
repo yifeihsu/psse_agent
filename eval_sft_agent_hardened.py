@@ -42,7 +42,7 @@ import time
 import uuid
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 # ---------------------------------------------------------------------------
 # 0. Argument parsing
@@ -142,10 +142,12 @@ from mcp_server.matpower_server import (  # noqa: E402
     correct_parameters_from_path,
     correct_topology_from_path,
     estimate_hif_location_magnitude_from_path,
+    estimate_hif_location_magnitude_multiscan_from_path,
     run_hse_from_path,
     run_three_phase_nlm_from_path,
     wls_from_path,
 )
+from trace_protocol import hydrate_tool_arguments  # noqa: E402
 
 TOOL_MAP = {
     "wls_from_path": wls_from_path,
@@ -153,6 +155,7 @@ TOOL_MAP = {
     "correct_parameters_from_path": correct_parameters_from_path,
     "correct_topology_from_path": correct_topology_from_path,
     "estimate_hif_location_magnitude_from_path": estimate_hif_location_magnitude_from_path,
+    "estimate_hif_location_magnitude_multiscan_from_path": estimate_hif_location_magnitude_multiscan_from_path,
     "run_hse_from_path": run_hse_from_path,
     "run_three_phase_nlm_from_path": run_three_phase_nlm_from_path,
 }
@@ -274,6 +277,32 @@ DEFAULT_POWER_TOOLS: list[dict[str, Any]] = [
                     "r_hif_pu_max": {"type": "number", "default": 1000.0},
                 },
                 "required": ["case_path", "candidate_branch_row0"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "estimate_hif_location_magnitude_multiscan_from_path",
+            "description": "Estimate shared HIF parameters and observability from a persistent scan window.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "scan_window_path": {"type": "string", "description": "Bound HIF scan-window path."},
+                    "candidate_branch_row0": {"type": "integer", "description": "Zero-based IEEE-14 branch row."},
+                    "candidate_phase": {"type": ["string", "null"], "enum": ["A", "B", "C", None]},
+                    "resistance_mode": {"type": "string", "enum": ["shared", "scan_specific_smooth"], "default": "shared"},
+                    "max_scans": {"type": "integer", "default": 10},
+                    "scan_selection": {"type": "string", "enum": ["all", "diversity_greedy", "information_greedy"], "default": "information_greedy"},
+                    "top_k": {"type": "integer", "default": 5},
+                    "alpha_grid_size": {"type": "integer", "default": 31},
+                    "r_grid_size": {"type": "integer", "default": 35},
+                    "r_hif_pu_min": {"type": "number", "default": 5.0},
+                    "r_hif_pu_max": {"type": "number", "default": 1000.0},
+                    "robust_loss": {"type": "string", "enum": ["linear", "soft_l1", "huber"], "default": "soft_l1"},
+                    "smoothness_lambda": {"type": "number", "default": 0.10},
+                },
+                "required": ["scan_window_path", "candidate_branch_row0"],
             },
         },
     },
@@ -1226,6 +1255,7 @@ def run_one_sample(
     continue_on_tool_error: bool,
     repair_wls_from_user: bool,
     verbose: bool,
+    runtime_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     import torch
 
@@ -1306,19 +1336,34 @@ def run_one_sample(
         if parsed["type"] == "tool_call":
             tool_name = parsed["name"]
             tool_args = parsed["arguments"]
+            if isinstance(tool_args, dict):
+                tool_args, hydration_notes = hydrate_tool_arguments(
+                    tool_name,
+                    tool_args,
+                    conversation,
+                    hidden_context=runtime_context,
+                )
+                if hydration_notes:
+                    parse_notes.extend(hydration_notes)
+                    turn_record.setdefault("parse_notes", [])
+                    turn_record["parse_notes"].extend(hydration_notes)
             if repair_wls_from_user:
                 tool_args, repair_notes = repair_tool_arguments(tool_name, tool_args, user_snapshot)
                 if repair_notes:
                     parse_notes.extend(repair_notes)
                     turn_record.setdefault("parse_notes", [])
                     turn_record["parse_notes"].extend(repair_notes)
-            turn_record["tool_name"] = tool_name
-            turn_record["tool_arguments"] = tool_args
             if not isinstance(tool_args, dict):
                 error_msg = f"Parsed tool arguments are not a dict for {tool_name}: {type(tool_args).__name__}"
                 turn_record["error"] = error_msg
                 turn_trace.append(turn_record)
                 break
+            conversation_tool_args = dict(tool_args)
+            if tool_name == "estimate_hif_location_magnitude_multiscan_from_path":
+                for private_key in ("scans", "sigma_z", "pristine_model_dir"):
+                    conversation_tool_args.pop(private_key, None)
+            turn_record["tool_name"] = tool_name
+            turn_record["tool_arguments"] = conversation_tool_args
 
             tool_calls_made.append(tool_name)
             call_id = f"call_{tool_name}_{uuid.uuid4().hex[:8]}"
@@ -1331,7 +1376,7 @@ def run_one_sample(
                         "id": call_id,
                         "function": {
                             "name": tool_name,
-                            "arguments": tool_args,
+                            "arguments": conversation_tool_args,
                         },
                     }
                 ],
@@ -1546,6 +1591,7 @@ def main() -> None:
                     continue_on_tool_error=args.continue_on_tool_error,
                     repair_wls_from_user=args.repair_wls_from_user,
                     verbose=args.verbose,
+                    runtime_context=sample.get("runtime_context"),
                 )
             except Exception as exc:  # pragma: no cover - top-level eval guard
                 import traceback

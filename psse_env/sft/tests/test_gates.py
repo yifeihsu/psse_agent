@@ -4,10 +4,12 @@ import copy
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from psse_env.dagger.dataset_builder import TOOL_JSON_SCHEMAS
 from psse_env.sft.cli import main as cli_main
 from psse_env.sft.collator import AssistantOnlyCollator
 from psse_env.sft.gates import (
@@ -20,6 +22,12 @@ from psse_env.sft.gates import (
     validate_grouped_pilot,
 )
 from psse_env.sft.smoke import run_generation_tool_call_smoke, run_training_smoke
+from psse_env.sft.provenance import (
+    file_sha256,
+    stable_json_sha256,
+    validate_generation_provenance,
+)
+import psse_env.sft.training as training_module
 from psse_env.sft.training import (
     LoraSettings,
     TrainerSettings,
@@ -51,6 +59,8 @@ def row(group: str = "g0", state: str = "active") -> dict:
         "dataset_mode": "production",
         "example_id": f"{group}-{state}",
         "root_scenario_id": group,
+        "physical_root_fingerprint": f"physical_v1_{group}",
+        "production_label_eligible": True,
         "tools": copy.deepcopy(TOOLS),
         "messages": [
             {"role": "system", "content": "Use tools."},
@@ -66,7 +76,11 @@ def row(group: str = "g0", state: str = "active") -> dict:
                 ],
             },
         ],
-        "metadata": {"dataset_mode": "production", "state_class": "diagnostic"},
+        "metadata": {
+            "dataset_mode": "production",
+            "state_class": "diagnostic",
+            "protocol": "controller",
+        },
     }
 
 
@@ -139,6 +153,21 @@ class FakeGemma4Processor(FakeProcessor):
 
 
 class TestSchemaTemplateAndMasks(unittest.TestCase):
+    def test_release_gate_rejects_stale_partial_tool_registry(self) -> None:
+        stale = row()
+        stale["metadata"]["protocol"] = "controller"
+        stale["tools"] = copy.deepcopy(TOOL_JSON_SCHEMAS[:-1])
+        report = audit_dataset(
+            [stale],
+            FakeProcessor(),
+            max_length=100000,
+            require_current_registry=True,
+        )
+        self.assertFalse(report.passed)
+        self.assertTrue(
+            any("does not match current controller registry" in item for item in report.failures)
+        )
+
     def test_row_tools_dict_arguments_mask_and_round_trip(self) -> None:
         processor = FakeProcessor()
         example = prepare_example(row(), processor, max_length=10000)
@@ -290,6 +319,199 @@ class TestGroupedPilot(unittest.TestCase):
         self.assertTrue(
             any("not tagged as a production dataset row" in item for item in report.failures)
         )
+
+    def test_explicitly_ineligible_auxiliary_row_fails_closed(self) -> None:
+        auxiliary = row("aux0")
+        auxiliary["production_label_eligible"] = False
+        report = validate_grouped_pilot(
+            {"train": [auxiliary], "validation": [row("valid0")]},
+            minimum_rows=2,
+            maximum_rows=2,
+        )
+        self.assertFalse(report.passed)
+        self.assertTrue(
+            any("not explicitly production-label eligible" in item for item in report.failures)
+        )
+
+
+class TestGenerationProvenance(unittest.TestCase):
+    def _fixture(self, root: Path) -> tuple[dict, dict[str, Path], dict]:
+        repo_root = Path(__file__).resolve().parents[3]
+        current_source = {
+            "source_commit": "a" * 40,
+            "source_worktree_dirty": False,
+            "tracked_diff_hash": "0" * 64,
+            "untracked_source_files": [],
+            "release_eligible_source": True,
+        }
+        descriptor = {
+            "generation_provenance_version": 1,
+            "source_state": current_source,
+            "protocol": "canonical",
+            "schema_registry_hash": stable_json_sha256(TOOLS),
+            "generator_hashes": {
+                "psse_env/sft/provenance.py": file_sha256(
+                    repo_root / "psse_env/sft/provenance.py"
+                )
+            },
+            "generation_config": {"seed": 7},
+        }
+        provenance_id = stable_json_sha256(descriptor)
+        source_row = row()
+        source_row["generation_provenance_id"] = provenance_id
+        datasets = {
+            "train": root / "aggregate.train.jsonl",
+            "validation": root / "aggregate.validation.jsonl",
+        }
+        for path in datasets.values():
+            path.write_text(json.dumps(source_row) + "\n", encoding="utf-8")
+        manifest = {
+            **descriptor,
+            "generation_descriptor": descriptor,
+            "generation_provenance_id": provenance_id,
+            "dataset_hashes": {
+                path.name: file_sha256(path) for path in datasets.values()
+            },
+            "release_eligible": True,
+            "release_failures": [],
+        }
+        (root / "aggregate.generation_provenance.json").write_text(
+            json.dumps(manifest), encoding="utf-8"
+        )
+        return source_row, datasets, current_source
+
+    def test_clean_matching_manifest_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_row, datasets, source_state = self._fixture(Path(temp_dir))
+            with mock.patch(
+                "psse_env.sft.provenance.git_source_state",
+                return_value=source_state,
+            ):
+                result = validate_generation_provenance(
+                    repo_root=Path(__file__).resolve().parents[3],
+                    datasets=datasets,
+                    rows=[source_row, source_row],
+                )
+        self.assertTrue(result["passed"], result["failures"])
+
+    def test_missing_manifest_and_row_or_dataset_mismatch_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_row, datasets, source_state = self._fixture(root)
+            manifest_path = root / "aggregate.generation_provenance.json"
+            manifest_path.unlink()
+            with mock.patch(
+                "psse_env.sft.provenance.git_source_state",
+                return_value=source_state,
+            ):
+                missing = validate_generation_provenance(
+                    repo_root=Path(__file__).resolve().parents[3],
+                    datasets=datasets,
+                    rows=[source_row, source_row],
+                )
+            self.assertFalse(missing["passed"])
+            self.assertTrue(any("missing" in item for item in missing["failures"]))
+
+            source_row, datasets, source_state = self._fixture(root)
+            bad_row = {**source_row, "generation_provenance_id": "wrong"}
+            with mock.patch(
+                "psse_env.sft.provenance.git_source_state",
+                return_value=source_state,
+            ):
+                wrong_id = validate_generation_provenance(
+                    repo_root=Path(__file__).resolve().parents[3],
+                    datasets=datasets,
+                    rows=[bad_row, source_row],
+                )
+            self.assertFalse(wrong_id["passed"])
+            self.assertTrue(any("identifier" in item for item in wrong_id["failures"]))
+
+            datasets["train"].write_text("{}\n", encoding="utf-8")
+            with mock.patch(
+                "psse_env.sft.provenance.git_source_state",
+                return_value=source_state,
+            ):
+                wrong_hash = validate_generation_provenance(
+                    repo_root=Path(__file__).resolve().parents[3],
+                    datasets=datasets,
+                    rows=[source_row, source_row],
+                )
+            self.assertFalse(wrong_hash["passed"])
+            self.assertTrue(any("hash mismatch" in item for item in wrong_hash["failures"]))
+
+    def test_generation_commit_mismatch_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_row, datasets, source_state = self._fixture(Path(temp_dir))
+            current = {**source_state, "source_commit": "b" * 40}
+            with mock.patch(
+                "psse_env.sft.provenance.git_source_state", return_value=current
+            ):
+                result = validate_generation_provenance(
+                    repo_root=Path(__file__).resolve().parents[3],
+                    datasets=datasets,
+                    rows=[source_row, source_row],
+                )
+        self.assertFalse(result["passed"])
+        self.assertTrue(any("commit" in item for item in result["failures"]))
+
+    def test_training_prepare_requires_explicit_nonrelease_override(self) -> None:
+        source_rows = [row("g0", "a"), row("g1", "b")]
+        grouped = SimpleNamespace(passed=True, failures=[])
+        gate = SimpleNamespace(failures=[], prepared=[])
+        base = TrainerSettings(revision="a" * 40)
+        patches = (
+            mock.patch(
+                "psse_env.sft.training.load_jsonl", side_effect=[source_rows, source_rows]
+            ),
+            mock.patch(
+                "psse_env.sft.training.validate_grouped_pilot", return_value=grouped
+            ),
+            mock.patch(
+                "psse_env.sft.training.validate_generation_provenance",
+                return_value={"passed": False, "failures": ["nonrelease"]},
+            ),
+            mock.patch(
+                "psse_env.sft.training.load_exact_processor",
+                return_value=(FakeProcessor(), "fake"),
+            ),
+            mock.patch("psse_env.sft.training.audit_dataset", return_value=gate),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            with self.assertRaisesRegex(GateError, "Generation provenance"):
+                training_module._prepare_pilot(
+                    train_file="train.jsonl",
+                    validation_file="validation.jsonl",
+                    settings=base,
+                    pilot_minimum_rows=2,
+                    pilot_maximum_rows=4,
+                )
+
+        override = replace(base, allow_nonrelease_artifacts=True)
+        patches = (
+            mock.patch(
+                "psse_env.sft.training.load_jsonl", side_effect=[source_rows, source_rows]
+            ),
+            mock.patch(
+                "psse_env.sft.training.validate_grouped_pilot", return_value=grouped
+            ),
+            mock.patch(
+                "psse_env.sft.training.validate_generation_provenance",
+                return_value={"passed": False, "failures": ["nonrelease"]},
+            ),
+            mock.patch(
+                "psse_env.sft.training.load_exact_processor",
+                return_value=(FakeProcessor(), "fake"),
+            ),
+            mock.patch("psse_env.sft.training.audit_dataset", return_value=gate),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            training_module._prepare_pilot(
+                train_file="train.jsonl",
+                validation_file="validation.jsonl",
+                settings=override,
+                pilot_minimum_rows=2,
+                pilot_maximum_rows=4,
+            )
 
 
 class TestExactLoader(unittest.TestCase):
@@ -460,6 +682,9 @@ class TestTrainingSmoke(unittest.TestCase):
         kwargs = trl_config_kwargs(settings, has_validation=True)
         self.assertFalse(kwargs["completion_only_loss"])
         self.assertEqual(kwargs["dataset_kwargs"], {"skip_prepare_dataset": True})
+        self.assertEqual(kwargs["eval_strategy"], "epoch")
+        self.assertEqual(kwargs["save_strategy"], "epoch")
+        self.assertIsNone(kwargs["eval_steps"])
 
     def test_generated_tool_call_round_trip(self) -> None:
         import torch

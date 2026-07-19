@@ -8,7 +8,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import psse_env.dagger.dataset_builder as dataset_builder
+
 from .gates import GateError, audit_dataset, load_exact_processor, load_jsonl, validate_grouped_pilot
+from .provenance import build_gate_provenance, validate_generation_provenance
 from .training import LoraSettings, TrainerSettings, run_lora_smoke, run_lora_training
 
 
@@ -32,6 +35,19 @@ def _common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--allow-prompt-truncation", action="store_true")
     parser.add_argument("--pilot-min-rows", type=int, default=32)
     parser.add_argument("--pilot-max-rows", type=int, default=128)
+    parser.add_argument(
+        "--report-output",
+        type=Path,
+        help="Optional durable JSON gate report (recommended for HPC release evidence).",
+    )
+    parser.add_argument(
+        "--allow-dirty-source",
+        action="store_true",
+        help=(
+            "Development-only: allow dirty source or non-release generation "
+            "provenance; report remains non-release-eligible."
+        ),
+    )
 
 
 def parser() -> argparse.ArgumentParser:
@@ -47,6 +63,13 @@ def parser() -> argparse.ArgumentParser:
     train.add_argument("--learning-rate", type=float, default=1e-4)
     train.add_argument("--epochs", type=float, default=1.0)
     train.add_argument("--max-steps", type=int, default=-1)
+    train.add_argument(
+        "--eval-strategy", choices=("epoch", "steps"), default="epoch"
+    )
+    train.add_argument(
+        "--save-strategy", choices=("epoch", "steps"), default="epoch"
+    )
+    train.add_argument("--eval-steps", type=int, default=25)
     train.add_argument("--smoke-steps", type=int, default=1)
     train.add_argument("--load-in-4bit", action="store_true")
     train.add_argument("--fp16", action="store_true")
@@ -79,8 +102,11 @@ def _gate_payload(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
     splits = {"train": train_rows, "validation": validation_rows}
     if test_rows:
         splits["test"] = test_rows
+    all_rows = train_rows + validation_rows + test_rows
     grouped = validate_grouped_pilot(
         splits,
+        group_key="physical_root_fingerprint",
+        required_protocol="canonical",
         minimum_rows=args.pilot_min_rows,
         maximum_rows=args.pilot_max_rows,
     )
@@ -95,12 +121,14 @@ def _gate_payload(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
         processor,
         max_length=args.max_length,
         allow_prompt_truncation=args.allow_prompt_truncation,
+        require_current_registry=True,
     )
     validation_gate = audit_dataset(
         validation_rows,
         processor,
         max_length=args.max_length,
         allow_prompt_truncation=args.allow_prompt_truncation,
+        require_current_registry=True,
     )
     test_gate = (
         audit_dataset(
@@ -108,21 +136,49 @@ def _gate_payload(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
             processor,
             max_length=args.max_length,
             allow_prompt_truncation=args.allow_prompt_truncation,
+            require_current_registry=True,
         )
         if test_rows
         else None
     )
-    passed = (
+    data_passed = (
         grouped.passed
         and train_gate.passed
         and validation_gate.passed
         and (test_gate is None or test_gate.passed)
     )
+    datasets = {
+        **{"train": args.train, "validation": args.validation},
+        **({"test": args.test} if args.test is not None else {}),
+    }
+    provenance = build_gate_provenance(
+        repo_root=Path(__file__).resolve().parents[2],
+        processor_revision=args.revision,
+        datasets=datasets,
+        rows=all_rows,
+        exporter_files=[dataset_builder.__file__, __file__],
+    )
+    generation = validate_generation_provenance(
+        repo_root=Path(__file__).resolve().parents[2],
+        datasets=datasets,
+        rows=all_rows,
+    )
+    source_passed = bool(provenance.get("release_eligible_source"))
+    provenance_passed = source_passed and generation["passed"]
+    passed = data_passed and (provenance_passed or args.allow_dirty_source)
     payload = {
         "passed": passed,
+        "release_eligible": data_passed and provenance_passed,
+        "source_gate_passed": source_passed,
+        "provenance_gate_passed": provenance_passed,
+        "provenance_gate_override": bool(
+            args.allow_dirty_source and not provenance_passed
+        ),
         "processor_loader": loader,
         "model": args.model,
         "revision": args.revision,
+        "provenance": provenance,
+        "generation_provenance": generation,
         "grouped_pilot": grouped.to_dict(),
         "train": train_gate.to_dict(),
         "validation": validation_gate.to_dict(),
@@ -137,7 +193,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "gate":
             payload, passed = _gate_payload(args)
-            print(json.dumps(payload, indent=2, sort_keys=True))
+            rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+            if args.report_output is not None:
+                args.report_output.parent.mkdir(parents=True, exist_ok=True)
+                args.report_output.write_text(rendered, encoding="utf-8")
+            print(rendered, end="")
             return 0 if passed else 2
         settings = TrainerSettings(
             model_name=args.model,
@@ -149,12 +209,16 @@ def main(argv: list[str] | None = None) -> int:
             learning_rate=args.learning_rate,
             epochs=getattr(args, "epochs", 1.0),
             max_steps=getattr(args, "max_steps", -1),
+            eval_strategy=getattr(args, "eval_strategy", "epoch"),
+            save_strategy=getattr(args, "save_strategy", "epoch"),
+            eval_steps=getattr(args, "eval_steps", 25),
             bf16=not args.no_bf16 and not args.fp16,
             fp16=args.fp16,
             load_in_4bit=args.load_in_4bit,
             local_files_only=not args.allow_download,
             trust_remote_code=args.trust_remote_code,
             allow_prompt_truncation=args.allow_prompt_truncation,
+            allow_nonrelease_artifacts=args.allow_dirty_source,
         )
         lora = LoraSettings(rank=args.lora_rank, alpha=args.lora_alpha, dropout=args.lora_dropout)
         if args.command == "smoke":

@@ -1,14 +1,20 @@
 # DAgger Gemma 4 SFT pilot validation
 
+> Historical pilot evidence only. The committed JSON reports in
+> `psse_env/examples/sft_pilot/` predate the expanded diagnostic registry and
+> do not carry source/schema/exporter provenance. They must not be accepted as
+> current release evidence. Regenerate the exact probe and live dataset gate
+> from the commit being evaluated.
+
 ## Decision
 
-**GO** for the corrected 90-row production-tagged pilot, exact Gemma 4
-processor/token/mask checks, and local E2B QLoRA plumbing.
-
-**NO-GO** for the full 31B SFT run until the exact 31B checkpoint passes a real
-forward/backward step and tiny-overfit gate on suitable HPC hardware, followed
-by a short root-group-held-out recovery evaluation. The bundled pilot contains
-only standard successful paths and is not recovery-balanced.
+**CURRENT NO-GO.** The 90-row results below are a historical record only and
+are release-ineligible against the current code and expanded tool registry.
+They do not authorize a pilot or full 31B SFT run. Regenerate a provenance-bound
+canonical aggregate and rerun the exact processor/template/mask gate from a
+clean commit before any optimizer stage. The resulting checkpoint must then
+pass a real forward/backward step, tiny-overfit gate, and short
+physical-root-held-out recovery evaluation on suitable HPC hardware.
 
 ## Review-blocker closure
 

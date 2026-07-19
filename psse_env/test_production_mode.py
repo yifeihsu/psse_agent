@@ -50,8 +50,10 @@ def _wls_adapter(state):
         "anomaly_threshold": 0.5,
         "target_progress": 1.0 if state.get("parent_state_id") and remaining == 0 else 0.0,
         "global_progress": 1.0 if state.get("parent_state_id") and remaining == 0 else 0.0,
-        "remaining_fault_count": remaining,
+        "remaining_suspect_count": remaining,
         "globally_resolved": remaining == 0,
+        "physical_constraints_ok": True,
+        "new_constraint_violations": 0,
         "unresolved_signatures": [] if remaining == 0 else ["measurement_residual_outlier"],
         "converged": True,
     }
@@ -124,6 +126,88 @@ def _measurement_scenario():
 
 
 class ProductionConfigurationTests(unittest.TestCase):
+    @staticmethod
+    def _parent_metric_env():
+        env = _production_env()
+        env.reset(
+            {
+                "scenario_id": "parent-metric",
+                "case": {"branch": [{}]},
+                "measurements": [1.0],
+            }
+        )
+        state_id = env.current_state()["active_state_id"]
+        action = {
+            "tool": CORRECT_PARAMETERS,
+            "arguments": {"state_id": state_id, "line_index": 1},
+        }
+        metrics = {
+            "state_id": state_id,
+            "state_hash": env.store.state_hash(state_id),
+            "evidence_source": "deployment_context:test",
+            "supported_corrections": [action],
+            "parameter_findings": [{"line_row0": 0, "value": 5.0}],
+        }
+        env.history = [
+            {
+                "action": {
+                    "tool": GET_PARAMETER_CONTEXT,
+                    "arguments": {"state_id": state_id},
+                },
+                "tool_output": {
+                    "execution_status": "success",
+                    "tool_metrics": metrics,
+                },
+            }
+        ]
+        return env, state_id, action, metrics
+
+    def test_parent_target_metric_rejects_malformed_supported_action(self):
+        env, state_id, action, metrics = self._parent_metric_env()
+        metrics["supported_corrections"].append(
+            {
+                "tool": CORRECT_PARAMETERS,
+                "arguments": {
+                    "state_id": state_id,
+                    "line_index": 2,
+                    "value": object(),
+                },
+            }
+        )
+
+        self.assertIsNone(env._parent_target_metric_value(state_id, action))
+
+    def test_parent_target_metric_rejects_malformed_or_nonfinite_finding(self):
+        for finding in (
+            {"line_row0": "bad", "value": 5.0},
+            {"line_row0": 0, "value": object()},
+            {"line_row0": 0, "value": float("nan")},
+        ):
+            with self.subTest(finding=finding):
+                env, state_id, action, metrics = self._parent_metric_env()
+                metrics["parameter_findings"] = [finding]
+                self.assertIsNone(
+                    env._parent_target_metric_value(state_id, action)
+                )
+
+    def test_wls_convergence_is_not_physical_safety_evidence(self):
+        metrics = {
+            "converged": True,
+            "state_estimation_converged": True,
+            "new_constraint_violations": 0,
+            "globally_resolved": True,
+        }
+        gaps = TransactionalPSSEEnv._target_decision_evidence_missing(
+            metrics, "ACCEPT_FINAL"
+        )
+        self.assertIn("physical_constraint_evidence_missing", gaps)
+
+        metrics["power_flow_converged"] = True
+        gaps = TransactionalPSSEEnv._target_decision_evidence_missing(
+            metrics, "ACCEPT_FINAL"
+        )
+        self.assertNotIn("physical_constraint_evidence_missing", gaps)
+
     def test_missing_provider_error_lists_actionable_names(self):
         with self.assertRaisesRegex(ValueError, "run_wls") as raised:
             TransactionalPSSEEnv(production_dataset_mode=True)

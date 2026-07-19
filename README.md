@@ -26,6 +26,9 @@ The current training and evaluation flow targets Gemma 4 tool-calling traces sto
 - `artifacts/logs/`: Slurm and local run logs.
 - `outputs/`: Fine-tuning checkpoints, LoRA adapters, and evaluation outputs.
 - `docs/`: Notes, slides, and supporting documentation.
+- `docs/hif_multiscan_estimation.md`: Multi-scan HIF window generation, estimator semantics, observability diagnostics, and validation gates.
+- `docs/hif_multiscan_benchmark_20260713.md`: Initial paired snapshot-count benchmark.
+- `docs/hif_multiscan_revision_20260714.md`: Transformer correction, strict 17-event QA, controlled A-E benchmark, and production go/no-go decision.
 
 ## Active Root Scripts
 

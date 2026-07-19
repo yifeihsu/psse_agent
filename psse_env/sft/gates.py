@@ -8,6 +8,7 @@ pinned processor/tokenizer that training will use.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import math
 import re
@@ -299,6 +300,62 @@ def validate_tool_schemas(tools: Any, *, row_label: str) -> list[dict[str, Any]]
             raise GateError(f"{row_label}: schema {name!r} is not strict JSON: {exc}") from exc
         validated.append(copy.deepcopy(raw_schema))
     return validated
+
+
+def validate_current_tool_registry(
+    rows: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    """Require every release row to carry the exact current protocol registry."""
+    from psse_env.dagger.dataset_builder import TOOL_JSON_SCHEMAS
+    from psse_env.dagger.protocol_bridge import unified_tool_schemas
+
+    expected = {
+        "controller": TOOL_JSON_SCHEMAS,
+        "canonical": unified_tool_schemas(),
+    }
+    expected_json = {
+        protocol: json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        for protocol, value in expected.items()
+    }
+    failures: list[str] = []
+    seen_mismatches: set[tuple[str, str]] = set()
+    for index, row in enumerate(rows):
+        row_label = str(row.get("example_id") or f"row[{index}]")
+        metadata = row.get("metadata")
+        protocol = metadata.get("protocol") if isinstance(metadata, Mapping) else None
+        if protocol not in expected:
+            failures.append(
+                f"{row_label}: release row must declare metadata.protocol as canonical or controller."
+            )
+            continue
+        tools = row.get("tools")
+        try:
+            actual_json = json.dumps(
+                tools, sort_keys=True, separators=(",", ":"), allow_nan=False
+            )
+        except (TypeError, ValueError):
+            continue  # The ordinary schema validator reports the malformed row.
+        if actual_json == expected_json[protocol]:
+            continue
+        actual_names = {
+            item.get("function", {}).get("name")
+            for item in tools or []
+            if isinstance(item, Mapping) and isinstance(item.get("function"), Mapping)
+        }
+        expected_names = {
+            item["function"]["name"] for item in expected[protocol]
+        }
+        signature = (protocol, hashlib.sha256(actual_json.encode("utf-8")).hexdigest())
+        if signature in seen_mismatches:
+            continue
+        seen_mismatches.add(signature)
+        failures.append(
+            f"{row_label}: tool registry does not match current {protocol} registry; "
+            f"missing={sorted(expected_names - actual_names)}, "
+            f"extra={sorted(actual_names - expected_names)}, "
+            f"expected_count={len(expected_names)}, actual_count={len(actual_names)}."
+        )
+    return failures
 
 
 def _validate_messages(messages: Any, *, tools: Sequence[Mapping[str, Any]], row_label: str) -> list[dict[str, Any]]:
@@ -735,6 +792,7 @@ def audit_dataset(
     *,
     max_length: int,
     allow_prompt_truncation: bool = False,
+    require_current_registry: bool = False,
 ) -> DatasetGateReport:
     failures: list[str] = []
     warnings: list[str] = []
@@ -752,6 +810,8 @@ def audit_dataset(
 
     if not materialized:
         failures.append("Dataset has no rows.")
+    if require_current_registry:
+        failures.extend(validate_current_tool_registry(materialized))
     for index, row in enumerate(materialized):
         row_label = str(row.get("example_id") or f"row[{index}]")
         actions[_target_action(row)] += 1
@@ -827,6 +887,8 @@ def validate_grouped_pilot(
     maximum_rows: int = 128,
     require_validation: bool = True,
     require_production_dataset_mode: bool = True,
+    require_production_label_eligible: bool = True,
+    required_protocol: str | None = None,
 ) -> GroupedPilotReport:
     failures: list[str] = []
     total = sum(len(rows) for rows in splits.values())
@@ -846,10 +908,23 @@ def validate_grouped_pilot(
         actions: Counter[str] = Counter()
         classes: Counter[str] = Counter()
         for index, row in enumerate(rows):
+            if (
+                require_production_label_eligible
+                and row.get("production_label_eligible") is not True
+            ):
+                failures.append(
+                    f"{split_name}[{index}] is not explicitly production-label eligible."
+                )
+            metadata = row.get("metadata")
+            protocol = metadata.get("protocol") if isinstance(metadata, Mapping) else None
+            if required_protocol is not None and protocol != required_protocol:
+                failures.append(
+                    f"{split_name}[{index}] must use {required_protocol!r} protocol, got {protocol!r}."
+                )
             if require_production_dataset_mode and (
                 row.get("dataset_mode") != "production"
-                or not isinstance(row.get("metadata"), Mapping)
-                or row["metadata"].get("dataset_mode") != "production"
+                or not isinstance(metadata, Mapping)
+                or metadata.get("dataset_mode") != "production"
             ):
                 failures.append(
                     f"{split_name}[{index}] is not tagged as a production dataset row."

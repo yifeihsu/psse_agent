@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import math
+import re
 import types
 from collections.abc import Callable, Iterable
 from typing import Any, Mapping
@@ -9,17 +11,32 @@ from .actions import (
     ANOMALY_FAMILY_MARKERS,
     ASK_FOR_MORE_EVIDENCE,
     DIAGNOSTIC_TOOLS,
-    unexplained_signatures,
     COMMIT_STATE,
     CONTEXT_TOOLS,
+    CORRECT_MEASUREMENTS,
+    CORRECT_PARAMETERS,
+    CORRECT_TOPOLOGY,
     CORRECTION_TOOLS,
+    ESTIMATE_HIF_FROM_PATH,
+    ESTIMATE_HIF_MULTISCAN_FROM_PATH,
     FINALIZE_DIAGNOSIS,
+    GET_HARMONIC_CONTEXT,
+    GET_MEASUREMENT_CONTEXT,
+    GET_PARAMETER_CONTEXT,
+    GET_TOPOLOGY_CONTEXT,
+    HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
+    INVALID_ACTION,
+    RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+    RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     ROLLBACK_STATE,
     RUN_ALTERNATIVE_TEST,
+    RUN_HSE_FROM_PATH,
+    RUN_THREE_PHASE_NLM_FROM_PATH,
     RUN_WLS,
     VERIFY_CANDIDATE,
     action_signature,
     safe_normalize_action,
+    unexplained_signatures,
 )
 from .oracle.candidate_quality import CandidateAssessment, CandidateDisposition, CandidateQualityOracle
 from .oracle.expert_types import matching_evidence_codes
@@ -110,12 +127,25 @@ _PRODUCTION_DECISION_EVIDENCE_KEYS = frozenset(
         "normalized_residuals",
         "target_fixed",
         "target_progress",
+        "target_metric_kind",
+        "target_metric_value",
+        "target_metric_threshold",
+        "parent_target_metric_value",
         "global_progress",
+        "sequential_cross_family_measurement",
+        "measurement_evidence_dominant",
+        "measurement_target_branch_colocated",
+        "independent_measurement_target",
         "remaining_anomaly_score",
+        "remaining_suspect_count",
+        # Transitional external-provider compatibility. This legacy field is
+        # interpreted only as observable suspect evidence in deployment mode.
         "remaining_fault_count",
         "globally_resolved",
         "post_action_resolved",
         "physical_constraints_ok",
+        "power_flow_converged",
+        "topology_feasible",
         "new_constraint_violations",
         "healthy_component_modified",
         "collateral_damage",
@@ -180,6 +210,110 @@ def _observable_provenance_source(source: Any) -> bool:
     )
 
 
+def _semantic_correction_signature(action: Mapping[str, Any] | str) -> str | None:
+    """Canonical bounded correction identity independent of active state ID."""
+    normalized = safe_normalize_action(action)
+    tool = normalized["tool"]
+    if tool not in CORRECTION_TOOLS:
+        return None
+    arguments = dict(normalized["arguments"])
+    arguments.pop("state_id", None)
+    arguments.pop("candidate_state_id", None)
+    if any(key in arguments for key in ("case", "case_updates", "measurements")):
+        return None
+
+    if tool == CORRECT_MEASUREMENTS:
+        group = arguments.get("suspect_group")
+        updates = arguments.get("measurement_updates")
+        group_indices: set[int] | None = None
+        update_indices: set[int] | None = None
+        if group is not None:
+            if not isinstance(group, (list, tuple)) or not group:
+                return None
+            group_indices = set()
+            for index in group:
+                if (
+                    not isinstance(index, int)
+                    or isinstance(index, bool)
+                    or index < 0
+                ):
+                    return None
+                group_indices.add(index)
+            if len(group_indices) != len(group):
+                return None
+        if updates is not None:
+            if not isinstance(updates, Mapping) or not updates:
+                return None
+            update_indices = set()
+            for index in updates:
+                if (
+                    not isinstance(index, int)
+                    or isinstance(index, bool)
+                    or index < 0
+                ):
+                    return None
+                update_indices.add(index)
+        if group_indices is None and update_indices is None:
+            return None
+        if (
+            group_indices is not None
+            and update_indices is not None
+            and group_indices != update_indices
+        ):
+            return None
+        if group_indices is not None:
+            arguments["suspect_group"] = sorted(group_indices)
+    else:
+        branch_keys = [
+            key
+            for key in ("branch_row0", "line_index1", "line_index", "branch_id", "cb_name")
+            if arguments.get(key) is not None
+        ]
+        if len(branch_keys) != 1:
+            return None
+        branch_key = branch_keys[0]
+        branch_value = arguments[branch_key]
+        if branch_key in {"branch_row0", "line_index1", "line_index"}:
+            if not isinstance(branch_value, int) or isinstance(branch_value, bool):
+                return None
+            row0 = branch_value if branch_key == "branch_row0" else branch_value - 1
+            if row0 < 0:
+                return None
+            canonical_target = ("branch_row0", row0)
+        else:
+            if not isinstance(branch_value, str) or not branch_value.strip():
+                return None
+            canonical_target = (branch_key, branch_value.strip())
+        for key in ("branch_row0", "line_index1", "line_index", "branch_id", "cb_name"):
+            arguments.pop(key, None)
+        arguments[canonical_target[0]] = canonical_target[1]
+
+        if tool == CORRECT_TOPOLOGY:
+            statuses = [
+                arguments[key]
+                for key in ("status", "expected_status")
+                if arguments.get(key) is not None
+            ]
+            if not statuses:
+                return None
+            canonical_statuses: set[int] = set()
+            for status in statuses:
+                if isinstance(status, bool):
+                    canonical_statuses.add(int(status))
+                elif isinstance(status, int) and status in {0, 1}:
+                    canonical_statuses.add(status)
+                else:
+                    return None
+            if len(canonical_statuses) != 1:
+                return None
+            arguments.pop("expected_status", None)
+            arguments["status"] = canonical_statuses.pop()
+    try:
+        return action_signature({"tool": tool, "arguments": arguments})
+    except (TypeError, ValueError):
+        return None
+
+
 class TransactionalPSSEEnv:
     """Recovery-aware transactional controller around PSSE macro-actions."""
 
@@ -198,7 +332,7 @@ class TransactionalPSSEEnv:
         | None = None,
         production_dataset_mode: bool = False,
         approved_deterministic_providers: Iterable[str] | None = None,
-        max_steps: int = 12,
+        max_steps: int = 24,
         history_window: int = 4,
     ) -> None:
         self.store = store or PowerSystemStateStore()
@@ -218,6 +352,7 @@ class TransactionalPSSEEnv:
         self.context_flags: dict[str, Any] = {}
         self.history: list[dict[str, Any]] = []
         self.terminal = False
+        self.terminal_outcome: str | None = None
         self._episode_counter = 0
         self._oracle_payload: dict[str, Any] = {}
         if self.production_dataset_mode:
@@ -438,6 +573,7 @@ class TransactionalPSSEEnv:
         }
         self.history = []
         self.terminal = False
+        self.terminal_outcome = None
         return self.current_state()
 
     def current_state(self) -> dict[str, Any]:
@@ -453,6 +589,7 @@ class TransactionalPSSEEnv:
         "hif_scan_window",
         "nlm_diagnostic",
         "hif_runtime",
+        "three_phase_voltages",
     )
 
     def _observable_evidence_channels(self) -> list[str]:
@@ -732,14 +869,21 @@ class TransactionalPSSEEnv:
             )
         if tool == FINALIZE_DIAGNOSIS:
             self.terminal = True
+            self.terminal_outcome = "resolved"
             return self._standard_output(
-                execution_status="success", state_mutated=False, tool_metrics={"finalized": True}
+                execution_status="success",
+                state_mutated=False,
+                tool_metrics={
+                    "finalized": True,
+                    "terminal_outcome": self.terminal_outcome,
+                },
             )
         if tool in {ASK_FOR_MORE_EVIDENCE, RUN_ALTERNATIVE_TEST} or tool in DIAGNOSTIC_TOOLS:
             provider = self.evidence_providers.get(tool)
             target_id = str(args.get("state_id") or self.current_candidate_id or self.store.active_state_id)
             provider_state = self.store.get_state(target_id)
             provider_state["policy_observation"] = self.get_policy_observation().as_dict()
+            provider_state["evidence_request"] = args.get("request")
             if provider is None and self.production_dataset_mode:
                 return self.record_noop_failure(
                     action=action,
@@ -793,6 +937,29 @@ class TransactionalPSSEEnv:
                 )
             if tool in DIAGNOSTIC_TOOLS:
                 self._record_anomaly_explanation(tool, target_id, metrics)
+            if (
+                tool == ASK_FOR_MORE_EVIDENCE
+                and args.get("request")
+                in {
+                    HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
+                    RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+                    RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                }
+            ):
+                escalation_audit = self._operator_escalation_audit(
+                    action, provider_metrics=metrics
+                )
+                if not escalation_audit["sufficient"]:
+                    return self.record_noop_failure(
+                        action=action,
+                        error_code="operator_escalation_precondition_not_met",
+                        error_detail=",".join(escalation_audit["missing"]),
+                        valid_next_actions=[],
+                    )
+                self.terminal = True
+                self.terminal_outcome = "operator_escalation"
+                metrics["operator_escalation_audit"] = escalation_audit["ledger"]
+                metrics["terminal_outcome"] = self.terminal_outcome
             return self._standard_output(execution_status="success", state_mutated=False, tool_metrics=metrics)
         return self.record_noop_failure(
             action=action,
@@ -840,10 +1007,19 @@ class TransactionalPSSEEnv:
             missing.append("placeholder_evidence_prohibited")
         elif not _observable_provenance_source(source):
             missing.append("non_observable_evidence_source")
+        source_tool = safe_normalize_action(candidate.get("source_action") or {})[
+            "tool"
+        ]
+        partial_global_progress_floor = (
+            self.candidate_quality_oracle.min_branch_partial_global_progress
+            if source_tool in {CORRECT_PARAMETERS, CORRECT_TOPOLOGY}
+            else self.candidate_quality_oracle.min_partial_global_progress
+        )
         missing.extend(
             self._target_decision_evidence_missing(
                 verification,
                 str(candidate.get("candidate_disposition") or ""),
+                min_partial_global_progress=partial_global_progress_floor,
             )
         )
         return {
@@ -880,6 +1056,17 @@ class TransactionalPSSEEnv:
             observable_recovery_route = family == "parameter" and bool(
                 state.get("rejected_hypotheses") or state.get("accepted_corrections")
             )
+            if family == "measurement" and not state.get(
+                "no_material_anomaly_remaining"
+            ):
+                observable_recovery_route = any(
+                    safe_normalize_action(
+                        item.get("source_action") or item.get("action") or {}
+                    )["tool"]
+                    == CORRECT_MEASUREMENTS
+                    for item in state.get("accepted_corrections") or []
+                    if isinstance(item, Mapping)
+                )
             if not any(marker in signature_text for marker in markers) and not observable_recovery_route:
                 raise ValueError(
                     f"Production training row for {tool} lacks observable {family} evidence."
@@ -906,6 +1093,25 @@ class TransactionalPSSEEnv:
                     f"Production training row for {tool} is not supported by the latest "
                     f"observable {context_family} context."
                 )
+            return
+        if (
+            tool == ASK_FOR_MORE_EVIDENCE
+            and normalized["arguments"].get("request")
+            in {
+                HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
+                RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+                RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+            }
+        ):
+            audit = self._operator_escalation_audit(normalized)
+            if not audit["sufficient"]:
+                raise ValueError(
+                    "Production operator-escalation label lacks exhausted, "
+                    "same-state observable HIF evidence: " + ", ".join(audit["missing"])
+                )
+            return
+        if tool in DIAGNOSTIC_TOOLS:
+            self._assert_specialized_diagnostic_evidence(normalized, state)
             return
         if tool == FINALIZE_DIAGNOSIS:
             score = state.get("remaining_anomaly_score")
@@ -958,6 +1164,879 @@ class TransactionalPSSEEnv:
                 f"Production training row for {normalized['tool']} lacks observable evidence: "
                 + ", ".join(report["missing"])
             )
+
+    def _assert_specialized_diagnostic_evidence(
+        self,
+        action: Mapping[str, Any],
+        state: Mapping[str, Any],
+    ) -> None:
+        """Fail closed when a production diagnostic target is not observable."""
+        tool = str(action.get("tool") or "")
+        unresolved = state.get("unresolved_signatures") or []
+        harmonic_codes = matching_evidence_codes(
+            unresolved, *ANOMALY_FAMILY_MARKERS["harmonic"]
+        )
+        unbalance_codes = matching_evidence_codes(
+            unresolved, *ANOMALY_FAMILY_MARKERS["three_phase_unbalance"]
+        )
+        hif_codes = matching_evidence_codes(
+            unresolved, *ANOMALY_FAMILY_MARKERS["hif"]
+        )
+        provenance = state.get("semantic_field_provenance")
+        provenance = provenance if isinstance(provenance, Mapping) else {}
+        signature_source = provenance.get("unresolved_signatures")
+        if not _observable_provenance_source(signature_source):
+            raise ValueError(
+                f"Production training row for {tool} lacks observable signature provenance."
+            )
+
+        available = set(self._observable_evidence_channels())
+        if tool in {GET_HARMONIC_CONTEXT, RUN_HSE_FROM_PATH}:
+            if not harmonic_codes:
+                raise ValueError(
+                    f"Production training row for {tool} lacks an observable harmonic signature."
+                )
+            if "harmonic_measurements" not in available:
+                raise ValueError(
+                    f"Production training row for {tool} lacks harmonic_measurements telemetry."
+                )
+            if tool == RUN_HSE_FROM_PATH and self._latest_successful_tool_metrics(
+                GET_HARMONIC_CONTEXT
+            ) is None:
+                raise ValueError(
+                    "Production training row for run_hse_from_path lacks successful "
+                    "observable harmonic context."
+                )
+            return
+
+        if tool == RUN_THREE_PHASE_NLM_FROM_PATH:
+            if not hif_codes and not unbalance_codes:
+                raise ValueError(
+                    "Production training row for run_three_phase_nlm_from_path lacks "
+                    "an observable HIF or three-phase-unbalance signature."
+                )
+            required_channels = (
+                {"nlm_diagnostic"}
+                if hif_codes
+                else {"nlm_diagnostic", "three_phase_voltages"}
+            )
+            if not (available & required_channels):
+                raise ValueError(
+                    "Production training row for run_three_phase_nlm_from_path lacks "
+                    "required observable three-phase telemetry."
+                )
+            return
+
+        if tool in {ESTIMATE_HIF_FROM_PATH, ESTIMATE_HIF_MULTISCAN_FROM_PATH}:
+            if not hif_codes:
+                raise ValueError(
+                    f"Production training row for {tool} lacks an observable HIF signature."
+                )
+            if "nlm_diagnostic" not in available:
+                raise ValueError(
+                    f"Production training row for {tool} lacks nlm_diagnostic telemetry."
+                )
+            if (
+                tool == ESTIMATE_HIF_MULTISCAN_FROM_PATH
+                and "hif_scan_window" not in available
+            ):
+                raise ValueError(
+                    "Production training row for the multi-scan HIF estimator lacks "
+                    "hif_scan_window telemetry."
+                )
+            nlm_metrics = self._latest_successful_tool_metrics(
+                RUN_THREE_PHASE_NLM_FROM_PATH
+            )
+            summary = (
+                nlm_metrics.get("nlm_summary")
+                if isinstance(nlm_metrics, Mapping)
+                else None
+            )
+            groups = summary.get("top_hif_groups") if isinstance(summary, Mapping) else None
+            supported_rows = {
+                int(group["branch_row0"])
+                for group in (groups or [])
+                if isinstance(group, Mapping) and group.get("branch_row0") is not None
+            }
+            target = action.get("arguments")
+            target = target.get("candidate_branch_row0") if isinstance(target, Mapping) else None
+            try:
+                target_row = int(target)
+            except (TypeError, ValueError):
+                target_row = None
+            if target_row is None or target_row not in supported_rows:
+                raise ValueError(
+                    f"Production training row for {tool} targets a branch not supported "
+                    "by the latest observable NLM output."
+                )
+            return
+
+        raise ValueError(f"Unsupported production diagnostic action: {tool}")
+
+    def _operator_escalation_audit(
+        self,
+        action: Mapping[str, Any],
+        *,
+        provider_metrics: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Audit the explicit HIF evidence-exhaustion handoff contract.
+
+        Terminal escalation is intentionally separate from anomaly resolution.
+        The configured provider may report its evidence inventory, but this
+        method independently checks the environment's full same-state history,
+        including the fail-closed acceptance decision from every applicable HIF
+        estimator.
+        """
+        normalized = safe_normalize_action(action)
+        arguments = normalized["arguments"]
+        summary = self.current_state()
+        active_id = str(summary.get("active_state_id") or "")
+        target_id = str(arguments.get("state_id") or active_id)
+        missing: list[str] = []
+        if normalized["tool"] != ASK_FOR_MORE_EVIDENCE:
+            missing.append("escalation_tool_invalid")
+        request = arguments.get("request")
+        supported_requests = {
+            HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
+            RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+            RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+        }
+        if request not in supported_requests:
+            missing.append("escalation_request_invalid")
+        if summary.get("has_open_candidate"):
+            missing.append("open_candidate_present")
+        if not callable(self.evidence_providers.get(ASK_FOR_MORE_EVIDENCE)):
+            missing.append("operator_escalation_provider_missing")
+        if not active_id or target_id != active_id:
+            missing.append("escalation_state_not_active")
+        try:
+            active_payload = self.store.get_state(active_id)
+            active_hash = str(active_payload.get("state_hash") or "")
+        except Exception:
+            active_hash = ""
+            missing.append("active_state_missing")
+
+        provenance = summary.get("semantic_field_provenance")
+        provenance = provenance if isinstance(provenance, Mapping) else {}
+        if not _observable_provenance_source(provenance.get("unresolved_signatures")):
+            missing.append("anomaly_signature_provenance_not_observable")
+        unresolved = unexplained_signatures(
+            summary.get("unresolved_signatures") or [],
+            summary.get("explained_anomalies") or [],
+        )
+        hif_signatures = matching_evidence_codes(
+            unresolved, *ANOMALY_FAMILY_MARKERS["hif"]
+        )
+        if request == HIF_DIAGNOSTICS_EXHAUSTED_REQUEST and not hif_signatures:
+            missing.append("unexplained_hif_signature_missing")
+
+        score = summary.get("remaining_anomaly_score")
+        try:
+            score_unresolved = (
+                score is not None
+                and float(score) >= float(self.process_oracle.anomaly_threshold)
+            )
+        except (TypeError, ValueError):
+            score_unresolved = False
+        if request in {
+            RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+            RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+        } and not (
+            unresolved or score_unresolved
+        ):
+            missing.append("unresolved_observable_anomaly_missing")
+
+        available = set(self._observable_evidence_channels())
+        required_estimators = [ESTIMATE_HIF_FROM_PATH]
+        if "hif_scan_window" in available:
+            required_estimators.insert(0, ESTIMATE_HIF_MULTISCAN_FROM_PATH)
+
+        def latest_success(tool: str) -> tuple[Mapping[str, Any], Mapping[str, Any]] | None:
+            for event in reversed(self.history):
+                if not isinstance(event, Mapping):
+                    continue
+                event_action = safe_normalize_action(event.get("action") or {})
+                if event_action["tool"] != tool:
+                    continue
+                requested = event_action["arguments"].get("state_id")
+                if requested is not None and str(requested) != active_id:
+                    continue
+                output = event.get("tool_output")
+                if not isinstance(output, Mapping) or output.get("execution_status") != "success":
+                    continue
+                metrics = output.get("tool_metrics")
+                if not isinstance(metrics, Mapping):
+                    continue
+                return event_action, metrics
+            return None
+
+        def bound_observable_metrics(tool: str) -> tuple[Mapping[str, Any], Mapping[str, Any]] | None:
+            event = latest_success(tool)
+            if event is None:
+                missing.append(f"{tool}_successful_evidence_missing")
+                return None
+            event_action, metrics = event
+            if str(metrics.get("state_id")) != active_id:
+                missing.append(f"{tool}_state_id_unbound")
+            if str(metrics.get("state_hash")) != active_hash:
+                missing.append(f"{tool}_state_hash_unbound")
+            if not _observable_provenance_source(metrics.get("evidence_source")):
+                missing.append(f"{tool}_source_not_observable")
+            return event_action, metrics
+
+        rejected_estimators: list[str] = []
+        investigation_tools: list[str] = []
+        supported_recovery_targets: list[str] = []
+        exhausted_recovery_targets: set[str] = set()
+        safety_blocked_recovery_targets: set[str] = set()
+        outstanding_recovery_targets: list[str] = []
+        missing_required_contexts: list[str] = []
+        if request == HIF_DIAGNOSTICS_EXHAUSTED_REQUEST:
+            nlm_event = bound_observable_metrics(RUN_THREE_PHASE_NLM_FROM_PATH)
+            supported_rows: set[int] = set()
+            if nlm_event is not None:
+                summary_payload = nlm_event[1].get("nlm_summary")
+                groups = (
+                    summary_payload.get("top_hif_groups")
+                    if isinstance(summary_payload, Mapping)
+                    else None
+                )
+                for group in groups or []:
+                    if isinstance(group, Mapping) and group.get("branch_row0") is not None:
+                        try:
+                            supported_rows.add(int(group["branch_row0"]))
+                        except (TypeError, ValueError):
+                            continue
+                if not supported_rows:
+                    missing.append("nlm_hif_branch_missing")
+
+            for tool in required_estimators:
+                estimator_event = bound_observable_metrics(tool)
+                if estimator_event is None:
+                    continue
+                estimator_action, estimator_metrics = estimator_event
+                acceptance = estimator_metrics.get("diagnostic_acceptance")
+                if not (
+                    isinstance(acceptance, Mapping)
+                    and acceptance.get("accepted") is False
+                ):
+                    missing.append(f"{tool}_not_explicitly_rejected")
+                else:
+                    rejected_estimators.append(tool)
+                target_row = estimator_action["arguments"].get("candidate_branch_row0")
+                try:
+                    target_row = int(target_row)
+                except (TypeError, ValueError):
+                    target_row = None
+                if target_row is None or target_row not in supported_rows:
+                    missing.append(f"{tool}_target_not_nlm_supported")
+        elif request in {
+            RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+            RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+        }:
+            bound_observable_metrics(RUN_WLS)
+            measurement_signal = bool(
+                matching_evidence_codes(
+                    unresolved,
+                    "measurement",
+                    "bad_data",
+                    "large_residual",
+                    "meter",
+                    "residual_outlier",
+                )
+            )
+            parameter_signal = bool(
+                matching_evidence_codes(
+                    unresolved,
+                    "parameter",
+                    "impedance",
+                    "reactance",
+                    "resistance",
+                    "admittance",
+                    "multiplier",
+                )
+            )
+            topology_signal = bool(
+                matching_evidence_codes(
+                    unresolved,
+                    "topology",
+                    "breaker",
+                    "switch",
+                    "line_status",
+                    "connectivity",
+                    "islanding",
+                )
+            )
+            measurement_dominant = bool(
+                matching_evidence_codes(
+                    unresolved, "wls_residual_outlier_dominant"
+                )
+            )
+            branch_dominant = bool(
+                matching_evidence_codes(
+                    unresolved, "wls_branch_multiplier_dominant"
+                )
+            )
+            required_contexts: set[str] = set()
+            if measurement_signal and not (
+                branch_dominant and not measurement_dominant
+            ):
+                required_contexts.add(GET_MEASUREMENT_CONTEXT)
+            if parameter_signal and not (
+                measurement_dominant and not branch_dominant
+            ):
+                required_contexts.add(GET_PARAMETER_CONTEXT)
+            if topology_signal and not (
+                measurement_dominant and not branch_dominant
+            ):
+                required_contexts.add(GET_TOPOLOGY_CONTEXT)
+
+            context_contracts = {
+                GET_MEASUREMENT_CONTEXT: CORRECT_MEASUREMENTS,
+                GET_PARAMETER_CONTEXT: CORRECT_PARAMETERS,
+                GET_TOPOLOGY_CONTEXT: CORRECT_TOPOLOGY,
+            }
+            for context_tool, correction_tool in context_contracts.items():
+                bound_event: tuple[Mapping[str, Any], Mapping[str, Any]] | None = None
+                for event in reversed(self.history):
+                    if not isinstance(event, Mapping):
+                        continue
+                    event_action = safe_normalize_action(event.get("action") or {})
+                    if event_action["tool"] != context_tool:
+                        continue
+                    requested = event_action["arguments"].get("state_id")
+                    if requested is not None and str(requested) != active_id:
+                        continue
+                    output = event.get("tool_output")
+                    if not isinstance(output, Mapping) or output.get("execution_status") != "success":
+                        continue
+                    metrics = output.get("tool_metrics")
+                    if not isinstance(metrics, Mapping):
+                        continue
+                    if str(metrics.get("state_id")) != active_id:
+                        continue
+                    if str(metrics.get("state_hash")) != active_hash:
+                        continue
+                    if not _observable_provenance_source(metrics.get("evidence_source")):
+                        continue
+                    bound_event = event_action, metrics
+                    break
+                if bound_event is None:
+                    if context_tool in required_contexts:
+                        missing_required_contexts.append(context_tool)
+                    continue
+                investigation_tools.append(context_tool)
+                raw_supported = bound_event[1].get("supported_corrections")
+                if not isinstance(raw_supported, (list, tuple)):
+                    missing.append(f"{context_tool}_supported_corrections_missing")
+                    continue
+                for raw_action in raw_supported:
+                    if not isinstance(raw_action, Mapping):
+                        missing.append(f"{context_tool}_supported_correction_malformed")
+                        continue
+                    normalized_supported = safe_normalize_action(raw_action)
+                    if normalized_supported["tool"] != correction_tool:
+                        missing.append(f"{context_tool}_supported_correction_tool_mismatch")
+                        continue
+                    supported_state = normalized_supported["arguments"].get("state_id")
+                    if supported_state is None or str(supported_state) != active_id:
+                        missing.append(f"{context_tool}_supported_correction_state_unbound")
+                        continue
+                    signature = _semantic_correction_signature(normalized_supported)
+                    if signature is None:
+                        missing.append(f"{context_tool}_supported_correction_malformed")
+                        continue
+                    supported_recovery_targets.append(signature)
+
+            for record in summary.get("rejected_hypotheses") or []:
+                if not isinstance(record, Mapping):
+                    continue
+                if str(record.get("candidate_parent_id") or "") != active_id:
+                    continue
+                rejected_action = safe_normalize_action(
+                    record.get("source_action") or {}
+                )
+                if (
+                    str(rejected_action["arguments"].get("state_id") or "")
+                    != active_id
+                ):
+                    continue
+                signature = _semantic_correction_signature(rejected_action)
+                if signature is not None:
+                    exhausted_recovery_targets.add(signature)
+
+            family_wide_failures = {
+                CORRECT_PARAMETERS: {"parameter_scans_missing"},
+                CORRECT_TOPOLOGY: {"topology_correction_unsupported"},
+            }
+            process_failure_codes = {
+                "schema_error",
+                "unknown_tool",
+                "candidate_lifecycle_violation",
+                "unknown_state_id",
+                "state_reference_mismatch",
+                "missing_precondition",
+            }
+            exhausted_families: set[str] = set()
+            for event in self.history:
+                if not isinstance(event, Mapping):
+                    continue
+                event_action = safe_normalize_action(event.get("action") or {})
+                if event_action["tool"] not in CORRECTION_TOOLS:
+                    continue
+                requested = event_action["arguments"].get("state_id")
+                if requested is None or str(requested) != active_id:
+                    continue
+                output = event.get("tool_output")
+                if not isinstance(output, Mapping) or output.get("execution_status") != "failure":
+                    continue
+                error_code = str(output.get("error_code") or "")
+                if error_code in process_failure_codes:
+                    continue
+                signature = _semantic_correction_signature(event_action)
+                if signature is not None:
+                    exhausted_recovery_targets.add(signature)
+                if error_code in family_wide_failures.get(event_action["tool"], set()):
+                    exhausted_families.add(event_action["tool"])
+
+            supported_recovery_targets = list(
+                dict.fromkeys(supported_recovery_targets)
+            )
+            accepted_measurement_partial = any(
+                safe_normalize_action(
+                    item.get("source_action") or item.get("action") or {}
+                )["tool"]
+                == CORRECT_MEASUREMENTS
+                for item in summary.get("accepted_corrections") or []
+                if isinstance(item, Mapping)
+            )
+            if (
+                accepted_measurement_partial
+                and parameter_signal
+                and not measurement_dominant
+            ):
+                # A residual correction can mask the still-observable branch
+                # anomaly after a partial measurement commit.  These provider
+                # targets remain visible in the ledger but are deliberately
+                # unavailable to autonomous recovery until branch evidence is
+                # resolved; an operator handoff is the safe terminal action.
+                safety_blocked_recovery_targets.update(
+                    signature
+                    for signature in supported_recovery_targets
+                    if signature.startswith(f"{CORRECT_MEASUREMENTS}:")
+                )
+            outstanding_recovery_targets = [
+                signature
+                for signature in supported_recovery_targets
+                if signature not in exhausted_recovery_targets
+                and signature not in safety_blocked_recovery_targets
+                and signature.split(":", 1)[0] not in exhausted_families
+            ]
+            if not investigation_tools:
+                missing.append("same_state_investigation_evidence_missing")
+            if request == RECOVERY_OPTIONS_EXHAUSTED_REQUEST:
+                if missing_required_contexts:
+                    missing.append("required_recovery_contexts_missing")
+                if outstanding_recovery_targets:
+                    missing.append("same_state_supported_corrections_unexhausted")
+            else:
+                try:
+                    remaining_budget = int(summary.get("remaining_budget") or 0)
+                except (TypeError, ValueError):
+                    remaining_budget = 0
+                if not 0 < remaining_budget < 4:
+                    missing.append("autonomous_recovery_budget_not_exhausted")
+
+        if provider_metrics is not None:
+            if str(provider_metrics.get("state_id")) != active_id:
+                missing.append("escalation_provider_state_id_unbound")
+            if str(provider_metrics.get("state_hash")) != active_hash:
+                missing.append("escalation_provider_state_hash_unbound")
+            if not _observable_provenance_source(provider_metrics.get("evidence_source")):
+                missing.append("escalation_provider_source_not_observable")
+            if request == RECOVERY_BUDGET_EXHAUSTED_REQUEST:
+                if provider_metrics.get("autonomous_budget_available") is not False:
+                    missing.append("autonomous_budget_not_explicitly_exhausted")
+                if provider_metrics.get("additional_evidence_available") is not True:
+                    missing.append("remaining_options_not_acknowledged")
+            elif provider_metrics.get("additional_evidence_available") is not False:
+                missing.append("additional_evidence_not_explicitly_exhausted")
+            if provider_metrics.get("operator_review_required") is not True:
+                missing.append("operator_review_not_required")
+            if provider_metrics.get("request") != request:
+                missing.append("escalation_provider_request_mismatch")
+
+        additional_evidence_available = (
+            True
+            if request == RECOVERY_BUDGET_EXHAUSTED_REQUEST
+            else bool(missing_required_contexts or outstanding_recovery_targets)
+        )
+        ledger = {
+            "request": request,
+            "active_state_id": active_id,
+            "active_state_hash": active_hash,
+            "family": (
+                "hif"
+                if request == HIF_DIAGNOSTICS_EXHAUSTED_REQUEST
+                else "recovery_budget"
+                if request == RECOVERY_BUDGET_EXHAUSTED_REQUEST
+                else "mixed_or_unresolved"
+            ),
+            "unexplained_signature_count": len(unresolved),
+            "required_estimators": (
+                required_estimators
+                if request == HIF_DIAGNOSTICS_EXHAUSTED_REQUEST
+                else []
+            ),
+            "rejected_estimators": rejected_estimators,
+            "investigation_tools": investigation_tools,
+            "supported_recovery_target_count": len(supported_recovery_targets),
+            "exhausted_recovery_target_count": len(
+                set(supported_recovery_targets) & exhausted_recovery_targets
+            ),
+            "outstanding_recovery_targets": outstanding_recovery_targets,
+            "safety_blocked_recovery_targets": sorted(
+                safety_blocked_recovery_targets
+            ),
+            "missing_required_contexts": missing_required_contexts,
+            "additional_evidence_available": additional_evidence_available,
+            "autonomous_budget_available": (
+                False if request == RECOVERY_BUDGET_EXHAUSTED_REQUEST else None
+            ),
+            "operator_review_required": True,
+        }
+        return {
+            "sufficient": not missing,
+            "missing": list(dict.fromkeys(missing)),
+            "ledger": ledger,
+        }
+
+    def _latest_successful_tool_metrics(self, tool: str) -> Mapping[str, Any] | None:
+        for event in reversed(self.history):
+            if not isinstance(event, Mapping):
+                continue
+            if safe_normalize_action(event.get("action") or {})["tool"] != tool:
+                continue
+            output = event.get("tool_output")
+            if not isinstance(output, Mapping) or output.get("execution_status") != "success":
+                return None
+            metrics = output.get("tool_metrics")
+            return metrics if isinstance(metrics, Mapping) else None
+        return None
+
+    def _latest_successful_wls_score(self, state_id: str) -> float | None:
+        """Return the latest observable anomaly score bound to ``state_id``."""
+        if not state_id:
+            return None
+        for event in reversed(self.history):
+            if not isinstance(event, Mapping):
+                continue
+            event_action = safe_normalize_action(event.get("action") or {})
+            if event_action["tool"] not in {RUN_WLS, VERIFY_CANDIDATE}:
+                continue
+            if str(event_action["arguments"].get("state_id") or "") != state_id:
+                continue
+            output = event.get("tool_output")
+            if not isinstance(output, Mapping) or output.get("execution_status") != "success":
+                return None
+            metrics = output.get("tool_metrics")
+            if not isinstance(metrics, Mapping):
+                return None
+            value = metrics.get("remaining_anomaly_score")
+            try:
+                return None if value is None else float(value)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def _parent_target_metric_value(
+        self, state_id: str, source_action: Mapping[str, Any]
+    ) -> float | None:
+        """Return context evidence for the exact correction target.
+
+        Continuous target progress must compare the candidate against the
+        same target that a fresh, state-bound provider context offered.  A
+        global WLS improvement cannot substitute for this local baseline.
+        """
+        if not state_id:
+            return None
+        normalized = safe_normalize_action(source_action)
+        tool = normalized["tool"]
+        context_tool = {
+            CORRECT_MEASUREMENTS: GET_MEASUREMENT_CONTEXT,
+            CORRECT_PARAMETERS: GET_PARAMETER_CONTEXT,
+            CORRECT_TOPOLOGY: GET_TOPOLOGY_CONTEXT,
+        }.get(tool)
+        if context_tool is None:
+            return None
+        try:
+            expected_hash = self.store.state_hash(state_id)
+            expected_signature = action_signature(normalized)
+        except (StateStoreError, TypeError, ValueError):
+            return None
+
+        for event in reversed(self.history):
+            if not isinstance(event, Mapping):
+                continue
+            event_action = safe_normalize_action(event.get("action") or {})
+            if event_action["tool"] != context_tool:
+                continue
+            requested = event_action["arguments"].get("state_id")
+            if requested is not None and str(requested) != state_id:
+                continue
+            output = event.get("tool_output")
+            if not isinstance(output, Mapping) or output.get("execution_status") != "success":
+                return None
+            metrics = output.get("tool_metrics")
+            if not isinstance(metrics, Mapping):
+                return None
+            if str(metrics.get("state_id")) != state_id:
+                return None
+            if str(metrics.get("state_hash")) != str(expected_hash):
+                return None
+            if not _observable_provenance_source(metrics.get("evidence_source")):
+                return None
+            supported = metrics.get("supported_corrections")
+            if not isinstance(supported, (list, tuple)):
+                return None
+            supported_signatures: set[str] = set()
+            for item in supported:
+                if not isinstance(item, Mapping):
+                    return None
+                normalized_item = safe_normalize_action(item)
+                if normalized_item["tool"] == INVALID_ACTION:
+                    return None
+                try:
+                    supported_signatures.add(action_signature(normalized_item))
+                except (TypeError, ValueError):
+                    return None
+            if expected_signature not in supported_signatures:
+                return None
+
+            arguments = normalized["arguments"]
+            if tool == CORRECT_MEASUREMENTS:
+                group = arguments.get("suspect_group")
+                updates = arguments.get("measurement_updates")
+                if isinstance(group, (list, tuple)):
+                    raw_target_indices = group
+                elif isinstance(updates, Mapping):
+                    raw_target_indices = updates.keys()
+                else:
+                    return None
+                target_indices: set[int] = set()
+                for index in raw_target_indices:
+                    if (
+                        not isinstance(index, int)
+                        or isinstance(index, bool)
+                        or index < 0
+                    ):
+                        return None
+                    target_indices.add(index)
+                if not target_indices:
+                    return None
+                findings = metrics.get("measurement_findings")
+                if not isinstance(findings, (list, tuple)):
+                    return None
+                values: list[float] = []
+                for item in findings:
+                    if not isinstance(item, Mapping):
+                        return None
+                    index0 = item.get("index0")
+                    if (
+                        not isinstance(index0, int)
+                        or isinstance(index0, bool)
+                        or index0 < 0
+                        or item.get("value") is None
+                    ):
+                        return None
+                    try:
+                        value = abs(float(item["value"]))
+                    except (TypeError, ValueError, OverflowError):
+                        return None
+                    if not math.isfinite(value):
+                        return None
+                    if index0 in target_indices:
+                        values.append(value)
+            else:
+                raw_targets = [
+                    (key, arguments[key])
+                    for key in ("branch_row0", "line_index1", "line_index")
+                    if arguments.get(key) is not None
+                ]
+                if len(raw_targets) != 1:
+                    return None
+                target_key, raw_target = raw_targets[0]
+                if not isinstance(raw_target, int) or isinstance(raw_target, bool):
+                    return None
+                target_row0 = raw_target if target_key == "branch_row0" else raw_target - 1
+                if target_row0 < 0:
+                    return None
+                findings_key = (
+                    "parameter_findings"
+                    if tool == CORRECT_PARAMETERS
+                    else "topology_findings"
+                )
+                findings = metrics.get(findings_key)
+                if not isinstance(findings, (list, tuple)):
+                    return None
+                values = []
+                for item in findings:
+                    if not isinstance(item, Mapping):
+                        return None
+                    row0 = item.get("line_row0")
+                    if (
+                        not isinstance(row0, int)
+                        or isinstance(row0, bool)
+                        or row0 < 0
+                        or item.get("value") is None
+                    ):
+                        return None
+                    try:
+                        value = abs(float(item["value"]))
+                    except (TypeError, ValueError, OverflowError):
+                        return None
+                    if not math.isfinite(value):
+                        return None
+                    if row0 == target_row0:
+                        values.append(value)
+            return max(values) if values else None
+        return None
+
+    def _accepted_branch_rows(self) -> set[int]:
+        rows: set[int] = set()
+        for item in self.context_flags.get("accepted_corrections") or []:
+            if not isinstance(item, Mapping):
+                continue
+            action = safe_normalize_action(
+                item.get("source_action") or item.get("action") or {}
+            )
+            if action["tool"] not in {CORRECT_PARAMETERS, CORRECT_TOPOLOGY}:
+                continue
+            arguments = action["arguments"]
+            try:
+                if arguments.get("branch_row0") is not None:
+                    row0 = int(arguments["branch_row0"])
+                elif arguments.get("line_index1") is not None:
+                    row0 = int(arguments["line_index1"]) - 1
+                elif arguments.get("line_index") is not None:
+                    row0 = int(arguments["line_index"]) - 1
+                else:
+                    continue
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if row0 >= 0:
+                rows.add(row0)
+        return rows
+
+    def _measurement_target_branch_colocated(
+        self, state_id: str, source_action: Mapping[str, Any]
+    ) -> bool | None:
+        """Bind a measurement target to direct-flow evidence on repaired rows.
+
+        ``None`` means the provider context was absent or malformed, so a
+        nondominant sequential measurement candidate cannot be accepted.
+        """
+        accepted_rows = self._accepted_branch_rows()
+        if not accepted_rows:
+            return False
+        signature_rows: set[int] = set()
+        for signature in self.context_flags.get("unresolved_signatures") or []:
+            if "wls_branch_multiplier" not in str(signature):
+                continue
+            match = re.search(r"(?:^|\s)line=(\d+)(?:\s|$)", str(signature))
+            if match:
+                signature_rows.add(int(match.group(1)) - 1)
+        candidate_rows = accepted_rows & signature_rows
+        if not candidate_rows:
+            return False
+
+        normalized = safe_normalize_action(source_action)
+        if normalized["tool"] != CORRECT_MEASUREMENTS:
+            return None
+        arguments = normalized["arguments"]
+        group = arguments.get("suspect_group")
+        updates = arguments.get("measurement_updates")
+        raw_targets = (
+            group
+            if isinstance(group, (list, tuple))
+            else updates.keys()
+            if isinstance(updates, Mapping)
+            else ()
+        )
+        target_indices: set[int] = set()
+        for raw_index in raw_targets:
+            if (
+                not isinstance(raw_index, int)
+                or isinstance(raw_index, bool)
+                or raw_index < 0
+            ):
+                return None
+            target_indices.add(raw_index)
+        if not target_indices:
+            return None
+
+        try:
+            expected_hash = self.store.state_hash(state_id)
+            expected_signature = action_signature(normalized)
+        except (StateStoreError, TypeError, ValueError):
+            return None
+        for event in reversed(self.history):
+            if not isinstance(event, Mapping):
+                continue
+            event_action = safe_normalize_action(event.get("action") or {})
+            if event_action["tool"] != GET_MEASUREMENT_CONTEXT:
+                continue
+            requested = event_action["arguments"].get("state_id")
+            if requested is not None and str(requested) != state_id:
+                continue
+            output = event.get("tool_output")
+            if not isinstance(output, Mapping) or output.get("execution_status") != "success":
+                return None
+            metrics = output.get("tool_metrics")
+            if not isinstance(metrics, Mapping):
+                return None
+            if str(metrics.get("state_id")) != state_id:
+                return None
+            if str(metrics.get("state_hash")) != str(expected_hash):
+                return None
+            if not _observable_provenance_source(metrics.get("evidence_source")):
+                return None
+            supported = metrics.get("supported_corrections")
+            if not isinstance(supported, (list, tuple)):
+                return None
+            signatures: set[str] = set()
+            for raw_action in supported:
+                if not isinstance(raw_action, Mapping):
+                    return None
+                try:
+                    signatures.add(action_signature(raw_action))
+                except (TypeError, ValueError):
+                    return None
+            if expected_signature not in signatures:
+                return None
+            findings = metrics.get("measurement_findings")
+            if not isinstance(findings, (list, tuple)):
+                return None
+            for item in findings:
+                if not isinstance(item, Mapping):
+                    return None
+                if str(item.get("channel") or "") not in {"Pf", "Qf", "Pt", "Qt"}:
+                    continue
+                index0 = item.get("index0")
+                offset = item.get("channel_offset")
+                if (
+                    not isinstance(index0, int)
+                    or isinstance(index0, bool)
+                    or index0 < 0
+                    or not isinstance(offset, int)
+                    or isinstance(offset, bool)
+                    or offset < 0
+                ):
+                    return None
+                if index0 in target_indices and offset in candidate_rows:
+                    return True
+            return False
+        return None
 
     def _supported_correction_signatures(self, context_family: str) -> set[str]:
         context_tool = f"get_{context_family}_context"
@@ -1281,6 +2360,62 @@ class TransactionalPSSEEnv:
             parent_id = state_payload.get("parent_state_id")
             parent_payload = self.store.get_state(str(parent_id)) if parent_id else {}
             source_action = state_payload.get("source_action") or action
+            parent_score = self._latest_successful_wls_score(str(parent_id or ""))
+            candidate_score = metrics.get("remaining_anomaly_score")
+            try:
+                if parent_score is not None and candidate_score is not None:
+                    denominator = max(abs(float(parent_score)), 1e-12)
+                    metrics.setdefault(
+                        "global_progress",
+                        (float(parent_score) - float(candidate_score)) / denominator,
+                    )
+                    metrics.setdefault("parent_anomaly_score", float(parent_score))
+            except (TypeError, ValueError, OverflowError):
+                pass
+            parent_target_metric = self._parent_target_metric_value(
+                str(parent_id or ""), source_action
+            )
+            candidate_target_metric = metrics.get("target_metric_value")
+            target_metric_threshold = metrics.get("target_metric_threshold")
+            try:
+                if parent_target_metric is not None and candidate_target_metric is not None:
+                    parent_target_metric = float(parent_target_metric)
+                    candidate_target_metric = float(candidate_target_metric)
+                    target_metric_threshold = float(target_metric_threshold or 0.0)
+                    denominator = max(
+                        abs(parent_target_metric),
+                        abs(target_metric_threshold),
+                        1e-12,
+                    )
+                    metrics["parent_target_metric_value"] = parent_target_metric
+                    metrics["target_progress"] = (
+                        parent_target_metric - candidate_target_metric
+                    ) / denominator
+            except (TypeError, ValueError, OverflowError):
+                pass
+            source_tool = safe_normalize_action(source_action)["tool"]
+            if source_tool == CORRECT_MEASUREMENTS:
+                if self._accepted_branch_rows():
+                    parent_signatures = [
+                        str(item)
+                        for item in self.context_flags.get("unresolved_signatures") or []
+                    ]
+                    metrics["sequential_cross_family_measurement"] = True
+                    metrics["measurement_evidence_dominant"] = bool(
+                        matching_evidence_codes(
+                            parent_signatures, "wls_residual_outlier_dominant"
+                        )
+                    )
+                    target_colocated = self._measurement_target_branch_colocated(
+                        str(parent_id or ""), source_action
+                    )
+                    if target_colocated is not None:
+                        metrics["measurement_target_branch_colocated"] = bool(
+                            target_colocated
+                        )
+                        metrics["independent_measurement_target"] = not bool(
+                            target_colocated
+                        )
             truth = self.get_oracle_state().truth_dict() if self._oracle_payload.get("truth_complete") else None
             assessment = self.candidate_quality_oracle.label_candidate(
                 parent_state=parent_payload,
@@ -1290,8 +2425,15 @@ class TransactionalPSSEEnv:
                 hidden_truth=truth,
             )
             if self.production_dataset_mode:
+                partial_global_progress_floor = (
+                    self.candidate_quality_oracle.min_branch_partial_global_progress
+                    if source_tool in {CORRECT_PARAMETERS, CORRECT_TOPOLOGY}
+                    else self.candidate_quality_oracle.min_partial_global_progress
+                )
                 decision_missing = self._target_decision_evidence_missing(
-                    metrics, assessment.disposition.value
+                    metrics,
+                    assessment.disposition.value,
+                    min_partial_global_progress=partial_global_progress_floor,
                 )
                 if decision_missing:
                     return self._standard_output(
@@ -1542,7 +2684,10 @@ class TransactionalPSSEEnv:
 
     @staticmethod
     def _target_decision_evidence_missing(
-        metrics: Mapping[str, Any], disposition: str
+        metrics: Mapping[str, Any],
+        disposition: str,
+        *,
+        min_partial_global_progress: float = 0.20,
     ) -> list[str]:
         """Require observable metrics that distinguish the proposed disposition."""
         disposition = str(disposition or "")
@@ -1554,7 +2699,6 @@ class TransactionalPSSEEnv:
             except (TypeError, ValueError):
                 return None
 
-        remaining = number("remaining_fault_count")
         target_progress = number("target_progress")
         global_progress = number("global_progress")
         score = number("remaining_anomaly_score")
@@ -1564,18 +2708,54 @@ class TransactionalPSSEEnv:
         resolved = any(
             metrics.get(key) is True
             for key in ("globally_resolved", "post_action_resolved", "no_material_anomaly_remaining")
-        ) or (remaining == 0) or (
+        ) or (
             score is not None and threshold is not None and score < threshold
         )
+        anomaly_remains = any(
+            metrics.get(key) is False
+            for key in (
+                "globally_resolved",
+                "post_action_resolved",
+                "no_material_anomaly_remaining",
+            )
+        ) or (
+            score is not None and threshold is not None and score >= threshold
+        )
+        physical_ok = metrics.get("physical_constraints_ok") is True or (
+            any(
+                metrics.get(key) is True
+                # Generic ``converged`` is commonly emitted by WLS/state-
+                # estimation providers.  It proves optimizer completion, not
+                # AC power-flow feasibility or constraint safety.
+                for key in ("power_flow_converged", "topology_feasible")
+            )
+            and number("new_constraint_violations") == 0
+        )
+
+        if (
+            disposition
+            in {
+                CandidateDisposition.ACCEPT_FINAL.value,
+                CandidateDisposition.ACCEPT_PARTIAL.value,
+            }
+            and metrics.get("sequential_cross_family_measurement") is True
+            and metrics.get("measurement_evidence_dominant") is not True
+            and metrics.get("measurement_target_branch_colocated") is not False
+        ):
+            return ["independent_measurement_target_evidence_missing"]
 
         if disposition == CandidateDisposition.ACCEPT_FINAL.value:
+            if not physical_ok:
+                return ["physical_constraint_evidence_missing"]
             if not resolved:
                 return ["final_resolution_evidence_missing"]
         elif disposition == CandidateDisposition.ACCEPT_PARTIAL.value:
             progress = metrics.get("target_fixed") is True or (
                 target_progress is not None and target_progress > 0
             )
-            if remaining is None or remaining <= 0 or not progress:
+            if not physical_ok:
+                return ["physical_constraint_evidence_missing"]
+            if not anomaly_remains or not progress:
                 return ["partial_progress_evidence_missing"]
         elif disposition == CandidateDisposition.REJECT.value:
             violations = number("new_constraint_violations")
@@ -1585,8 +2765,18 @@ class TransactionalPSSEEnv:
                 or metrics.get("collateral_damage") is True
                 or metrics.get("physical_constraints_ok") is False
                 or metrics.get("converged") is False
+                or (
+                    metrics.get("sequential_cross_family_measurement") is True
+                    and metrics.get("measurement_evidence_dominant") is not True
+                    and metrics.get("measurement_target_branch_colocated") is True
+                )
                 or (target_progress is not None and target_progress <= 0)
                 or (global_progress is not None and global_progress < 0)
+                or (
+                    metrics.get("target_fixed") is True
+                    and global_progress is not None
+                    and global_progress < float(min_partial_global_progress)
+                )
                 or (violations is not None and violations > 0)
             )
             if not rejected:

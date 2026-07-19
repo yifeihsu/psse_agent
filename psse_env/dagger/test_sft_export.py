@@ -7,16 +7,23 @@ from psse_env.actions import MACRO_ACTIONS
 from psse_env.dagger.dataset_builder import (
     TOOL_JSON_SCHEMAS,
     bind_controller_action,
-    examples_to_chat_sft,
+    examples_to_chat_sft as _examples_to_chat_sft,
     validate_tool_schemas,
 )
 from psse_env.dagger.sft_audit import (
+    audit_approximate_teacher_realizability,
     audit_chat_sft_rows,
     audit_teacher_realizability,
     canonical_semantic_action,
     policy_observation_hash,
 )
 from psse_env.dagger.policy_adapter import LocalAliasPolicyAdapter
+
+
+def examples_to_chat_sft(*args, **kwargs):
+    """Controller-surface helper for this legacy-format unit-test module."""
+    kwargs.setdefault("protocol", "controller")
+    return _examples_to_chat_sft(*args, **kwargs)
 
 
 def _observation(episode: str = "case14_measurement_seed42_episode0") -> dict:
@@ -87,6 +94,17 @@ class NativeToolExportTests(unittest.TestCase):
         self.assertEqual(row["dataset_mode"], "production")
         self.assertEqual(row["metadata"]["dataset_mode"], "production")
         self.assertNotIn("production", row["messages"][1]["content"])
+
+    def test_explicitly_ineligible_auxiliary_row_fails_closed(self) -> None:
+        example = _example()
+        example["dataset_source"] = "synthetic_counterfactual"
+        example["production_label_eligible"] = False
+        with self.assertRaisesRegex(ValueError, "ineligible for production SFT"):
+            examples_to_chat_sft([example])
+        rows = examples_to_chat_sft(
+            [example], allow_ineligible_auxiliary=True
+        )
+        self.assertEqual(len(rows), 1)
 
     def test_measurement_update_keys_round_trip_as_strict_json_strings(self) -> None:
         example = _example()
@@ -186,7 +204,7 @@ class ControllerAliasTests(unittest.TestCase):
         raw["semantic_field_provenance"] = {
             "remaining_anomaly_score": "controller_default"
         }
-        rebound = LocalAliasPolicyAdapter(ModelPolicy()).act(raw)
+        rebound = LocalAliasPolicyAdapter(ModelPolicy(), protocol="controller").act(raw)
         self.assertEqual(seen[0]["active_state_id"], "active")
         self.assertNotIn("semantic_field_provenance", seen[0])
         self.assertEqual(rebound["arguments"]["state_id"], raw["active_state_id"])
@@ -378,6 +396,94 @@ class TeacherRealizabilityAuditTests(unittest.TestCase):
             {action["tool"] for action in report["conflicts"][0]["semantic_actions"]},
             {"get_measurement_context", "get_parameter_context"},
         )
+
+    def test_nearby_continuous_teacher_conflict_is_reported_approximately(self) -> None:
+        measurement = _example(
+            episode="measurement_template_episode0",
+            tool="get_measurement_context",
+        )
+        parameter = _example(
+            episode="parameter_template_episode9",
+            tool="get_parameter_context",
+        )
+        for example, score in ((measurement, 1.01), (parameter, 1.02)):
+            example["policy_observation"]["last_tool"] = "run_wls"
+            example["policy_observation"]["last_tool_output"] = {
+                "execution_status": "success",
+                "tool_metrics": {
+                    "max_normalized_residual": score,
+                    "chi_square_statistic": 101.0 + score,
+                    "chi_square_threshold": 100.0,
+                    "wls_summary": {
+                        "top_residuals": [
+                            {"channel": "Pinj", "index0": 7, "value": score}
+                        ]
+                    },
+                },
+            }
+        self.assertTrue(audit_teacher_realizability([measurement, parameter])["passed"])
+        report = audit_approximate_teacher_realizability(
+            [measurement, parameter],
+            quantization_bin=0.25,
+            conflict_tolerance=0.0,
+            nearest_neighbor_tolerance=0.0,
+        )
+        self.assertFalse(report["passed"])
+        self.assertEqual(report["conflict_buckets"], 1)
+        self.assertEqual(report["approximate_conflict_rate"], 1.0)
+        self.assertEqual(report["nearest_neighbor_action_disagreement_rate"], 1.0)
+
+    def test_nlm_localized_branch_separates_hif_targets_in_approximate_audit(self) -> None:
+        examples = []
+        for branch in (2, 12):
+            example = _example(
+                episode=f"hif_branch_{branch}_episode0",
+                tool="estimate_hif_location_magnitude_from_path",
+            )
+            state_id = example["policy_observation"]["active_state_id"]
+            example["preferred_action"]["arguments"] = {
+                "state_id": state_id,
+                "candidate_branch_row0": branch,
+            }
+            example["history_window"] = [
+                {
+                    "state_id": state_id,
+                    "action": {
+                        "tool": "run_three_phase_nlm_from_path",
+                        "arguments": {"state_id": state_id},
+                    },
+                    "tool_output": {
+                        "execution_status": "success",
+                        "tool_metrics": {
+                            "nlm_summary": {
+                                "top_hif_groups": [
+                                    {"rank": 1, "branch_row0": branch, "score": 0.9}
+                                ]
+                            }
+                        },
+                    },
+                }
+            ]
+            examples.append(example)
+
+        report = audit_approximate_teacher_realizability(
+            examples,
+            conflict_tolerance=0.0,
+            nearest_neighbor_tolerance=0.0,
+        )
+
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["conflict_buckets"], 0)
+        self.assertEqual(report["nearest_neighbor_compared_examples"], 0)
+
+    def test_cost_margin_coverage_and_low_margin_rate_are_explicit(self) -> None:
+        first = _example(episode="margin_a_episode0")
+        second = _example(episode="margin_b_episode0")
+        first["cost_margin"] = 0.01
+        second["action_costs"] = [{"q_cost": 1.0}, {"q_cost": 1.2}]
+        report = audit_approximate_teacher_realizability([first, second])
+        self.assertEqual(report["cost_margin_coverage"], 1.0)
+        self.assertEqual(report["low_cost_margin_rate"], 0.5)
 
     def test_verbose_history_and_provenance_do_not_hide_same_visible_conflict(self) -> None:
         measurement = _example(

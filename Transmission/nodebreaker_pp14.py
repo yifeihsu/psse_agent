@@ -267,6 +267,17 @@ def build_nb_ieee14_pocket123(status_map: Optional[Dict[str,bool]] = None,
         for cb in ss.cbs:
             add_cb(cb.name, cb.a, cb.b, cb.closed)
 
+    # Fail closed on unknown CB names: status_map.get(name, closed) silently
+    # ignores them, which would return default-topology results for a typo'd
+    # or hallucinated breaker name.
+    if status_map:
+        unknown_cbs = sorted(set(status_map) - set(cb_idx))
+        if unknown_cbs:
+            raise ValueError(
+                f"Unknown CB name(s) in status_map: {unknown_cbs}. "
+                f"Known CBs: {sorted(cb_idx)}"
+            )
+
     # --- Lines / transformers: connect bay buses for pocket ends, otherwise planning buses ---
     line_idx: Dict[str,int] = {}
     trafo_idx: Dict[str,int] = {}

@@ -17,6 +17,15 @@ ROLLBACK_STATE = "rollback_state"
 FINALIZE_DIAGNOSIS = "finalize_diagnosis"
 ASK_FOR_MORE_EVIDENCE = "ask_for_more_evidence"
 RUN_ALTERNATIVE_TEST = "run_alternative_test"
+HIF_DIAGNOSTICS_EXHAUSTED_REQUEST = (
+    "operator_escalation:hif_diagnostics_exhausted"
+)
+RECOVERY_OPTIONS_EXHAUSTED_REQUEST = (
+    "operator_escalation:recovery_options_exhausted"
+)
+RECOVERY_BUDGET_EXHAUSTED_REQUEST = (
+    "operator_escalation:recovery_budget_exhausted"
+)
 GET_HARMONIC_CONTEXT = "get_harmonic_context"
 RUN_HSE_FROM_PATH = "run_hse_from_path"
 RUN_THREE_PHASE_NLM_FROM_PATH = "run_three_phase_nlm_from_path"
@@ -76,6 +85,14 @@ MACRO_ACTIONS = {
 # markers; families not listed here can only be resolved by corrections.
 ANOMALY_FAMILY_MARKERS: dict[str, tuple[str, ...]] = {
     "harmonic": ("harmonic", "harmonics", "thd", "distortion", "waveform"),
+    "three_phase_unbalance": (
+        "three_phase_unbalance",
+        "voltage_unbalance",
+        "unbalance",
+        "imbalance",
+        "negative_sequence",
+        "vuf",
+    ),
     "hif": (
         "hif",
         "high_impedance",
@@ -83,8 +100,7 @@ ANOMALY_FAMILY_MARKERS: dict[str, tuple[str, ...]] = {
         "arc",
         "arcing",
         "downed_conductor",
-        "unbalance",
-        "imbalance",
+        "zero_sequence_hif",
     ),
 }
 

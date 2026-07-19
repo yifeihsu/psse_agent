@@ -22,7 +22,8 @@ class CandidateAssessment:
     target_progress: float | None = None
     global_progress: float | None = None
     collateral_damage: bool = False
-    remaining_fault_count: int | None = None
+    remaining_true_fault_count: int | None = None
+    remaining_suspect_count: int | None = None
     belief_update: dict[str, str] = field(default_factory=dict)
     unresolved_signatures: list[str] = field(default_factory=list)
     rationale_codes: list[str] = field(default_factory=list)
@@ -31,6 +32,15 @@ class CandidateAssessment:
         payload = asdict(self)
         payload["disposition"] = self.disposition.value
         return payload
+
+    @property
+    def remaining_fault_count(self) -> int | None:
+        """Deprecated compatibility view; never serialized as observable evidence."""
+        return (
+            self.remaining_true_fault_count
+            if self.remaining_true_fault_count is not None
+            else self.remaining_suspect_count
+        )
 
 
 def _first_present(*values: Any) -> Any:
@@ -60,11 +70,25 @@ class CandidateQualityOracle:
         self,
         *,
         min_target_progress: float = 0.05,
+        min_partial_global_progress: float = 0.20,
+        min_branch_partial_global_progress: float = 0.30,
+        min_branch_target_progress: float = 0.80,
+        min_branch_global_progress: float = 0.50,
+        max_branch_target_threshold_ratio: float = 1.25,
         max_new_violations: int = 0,
         mode: str = "auto",
         case_differ: Any = None,
     ) -> None:
         self.min_target_progress = float(min_target_progress)
+        self.min_partial_global_progress = float(min_partial_global_progress)
+        self.min_branch_partial_global_progress = float(
+            min_branch_partial_global_progress
+        )
+        self.min_branch_target_progress = float(min_branch_target_progress)
+        self.min_branch_global_progress = float(min_branch_global_progress)
+        self.max_branch_target_threshold_ratio = float(
+            max_branch_target_threshold_ratio
+        )
         self.max_new_violations = int(max_new_violations)
         if mode not in {"auto", "synthetic", "deployment"}:
             raise ValueError("mode must be 'auto', 'synthetic', or 'deployment'.")
@@ -93,17 +117,49 @@ class CandidateQualityOracle:
         if self.mode == "synthetic" and hidden_truth is None:
             raise ValueError("synthetic candidate assessment requires hidden_truth.")
         truth = {} if self.mode == "deployment" else dict(hidden_truth or {})
+        synthetic_truth = self.mode != "deployment" and bool(truth)
         candidate_meta = candidate.get("metadata") if isinstance(candidate.get("metadata"), Mapping) else {}
 
         target_progress = _optional_float(verification.get("target_progress"))
         global_progress = _optional_float(verification.get("global_progress"))
+        target_metric_value = _optional_float(verification.get("target_metric_value"))
+        target_metric_threshold = _optional_float(
+            verification.get("target_metric_threshold")
+        )
         target_fixed = self._target_fixed(
             action, verification, truth, candidate_meta, parent, candidate
         )
-        remaining_faults = self._remaining_faults(
+        action_family = self._action_family(action)
+        partial_global_progress_floor = (
+            self.min_branch_partial_global_progress
+            if action_family in {"parameter", "topology"}
+            else self.min_partial_global_progress
+        )
+        branch_target_materially_improved = bool(
+            not synthetic_truth
+            and target_fixed is False
+            and action_family in {"parameter", "topology"}
+            and target_progress is not None
+            and target_progress >= self.min_branch_target_progress
+            and target_metric_value is not None
+            and target_metric_threshold is not None
+            and target_metric_threshold > 0.0
+            and target_metric_value
+            <= self.max_branch_target_threshold_ratio * target_metric_threshold
+            and global_progress is not None
+            and global_progress >= self.min_branch_global_progress
+        )
+        remaining_true_faults = self._remaining_true_faults(
             action, target_fixed, verification, truth, candidate_meta, parent, candidate
         )
-        global_resolved = self._global_resolved(verification, remaining_faults)
+        remaining_suspects = self._remaining_suspects(verification)
+        global_resolved = self._global_resolved(verification)
+        if global_resolved is None and synthetic_truth:
+            global_resolved = (
+                remaining_true_faults == 0
+                if remaining_true_faults is not None
+                else None
+            )
         collateral_damage = self._collateral_damage(
             action, verification, truth, candidate_meta, parent, candidate
         )
@@ -115,26 +171,84 @@ class CandidateQualityOracle:
             disposition = CandidateDisposition.REJECT
             progress_class = "healthy_component_corruption"
             rationale.append("collateral_damage_detected")
-        elif not physical_ok:
+        elif physical_ok is False:
             disposition = CandidateDisposition.REJECT
             progress_class = "physical_regression"
             rationale.append("physical_constraints_failed")
-        elif target_fixed is True and remaining_faults == 0 and global_resolved:
-            disposition = CandidateDisposition.ACCEPT_FINAL
-            progress_class = "resolved"
-            rationale.extend(["target_fixed", "no_remaining_faults", "globally_resolved"])
-        elif target_fixed is True and remaining_faults is not None and remaining_faults > 0:
-            disposition = CandidateDisposition.ACCEPT_PARTIAL
-            progress_class = "target_progress_remaining_faults"
-            rationale.extend(["target_fixed", "remaining_faults_present"])
-        elif target_fixed is True and remaining_faults is None:
+        elif physical_ok is None and not synthetic_truth:
             disposition = CandidateDisposition.INCONCLUSIVE
-            progress_class = "target_fixed_remaining_unknown"
-            rationale.extend(["target_fixed", "remaining_fault_count_unknown"])
+            progress_class = "physical_status_unknown"
+            rationale.append("physical_constraint_evidence_missing")
+        elif (
+            not synthetic_truth
+            and action_family == "measurement"
+            and verification.get("sequential_cross_family_measurement") is True
+            and verification.get("measurement_evidence_dominant") is not True
+            and verification.get("measurement_target_branch_colocated") is None
+        ):
+            disposition = CandidateDisposition.INCONCLUSIVE
+            progress_class = "measurement_target_locality_unknown"
+            rationale.append("measurement_target_locality_missing")
+        elif (
+            not synthetic_truth
+            and action_family == "measurement"
+            and verification.get("sequential_cross_family_measurement") is True
+            and verification.get("measurement_evidence_dominant") is not True
+            and verification.get("measurement_target_branch_colocated") is True
+        ):
+            disposition = CandidateDisposition.REJECT
+            progress_class = "ambiguous_cross_family_measurement_cleanup"
+            rationale.append("independent_measurement_evidence_missing")
+        elif (
+            target_fixed is True
+            and global_resolved is False
+            and global_progress is not None
+            and global_progress < partial_global_progress_floor
+        ):
+            disposition = CandidateDisposition.REJECT
+            progress_class = "insufficient_global_progress"
+            rationale.append("partial_global_progress_below_threshold")
+        elif target_fixed is True and synthetic_truth:
+            if remaining_true_faults == 0 and global_resolved is True:
+                disposition = CandidateDisposition.ACCEPT_FINAL
+                progress_class = "resolved"
+                rationale.extend(
+                    ["target_fixed", "no_remaining_true_faults", "globally_resolved"]
+                )
+            elif remaining_true_faults is not None and remaining_true_faults > 0:
+                disposition = CandidateDisposition.ACCEPT_PARTIAL
+                progress_class = "target_progress_remaining_true_faults"
+                rationale.extend(["target_fixed", "remaining_true_faults_present"])
+            else:
+                disposition = CandidateDisposition.INCONCLUSIVE
+                progress_class = "target_fixed_remaining_truth_unknown"
+                rationale.extend(["target_fixed", "remaining_true_fault_count_unknown"])
+        elif target_fixed is True and global_resolved is True:
+            disposition = CandidateDisposition.ACCEPT_FINAL
+            progress_class = "observable_resolved"
+            rationale.extend(["target_fixed", "global_test_resolved"])
+        elif target_fixed is True and global_resolved is False:
+            disposition = CandidateDisposition.ACCEPT_PARTIAL
+            progress_class = "observable_progress_global_anomaly_remains"
+            rationale.extend(["target_fixed", "global_anomaly_remains"])
         elif target_fixed is True:
             disposition = CandidateDisposition.INCONCLUSIVE
             progress_class = "target_fixed_global_status_unknown"
             rationale.extend(["target_fixed", "global_resolution_not_established"])
+        elif branch_target_materially_improved and global_resolved is False:
+            # The exact context-supported branch target improved materially
+            # and is now only marginally above its local cutoff.  Retain the
+            # repair as partial progress, but never call it final while the
+            # explicit target test remains false.
+            disposition = CandidateDisposition.ACCEPT_PARTIAL
+            progress_class = "observable_branch_target_progress"
+            rationale.extend(
+                [
+                    "target_local_progress",
+                    "target_marginally_above_threshold",
+                    "global_anomaly_remains",
+                ]
+            )
         elif target_fixed is False:
             disposition = CandidateDisposition.REJECT
             progress_class = "no_target_progress"
@@ -147,33 +261,25 @@ class CandidateQualityOracle:
                 rationale.append("observable_regression")
             elif (
                 observable["target_improved"]
-                and observable["global_resolved"]
-                and remaining_faults == 0
+                and observable["global_resolved"] is True
             ):
                 disposition = CandidateDisposition.ACCEPT_FINAL
                 progress_class = "observable_resolved"
                 rationale.extend(
-                    ["observable_target_progress", "globally_resolved", "no_remaining_faults"]
+                    ["observable_target_progress", "global_test_resolved"]
                 )
             elif (
                 observable["target_improved"]
-                and remaining_faults is not None
-                and remaining_faults > 0
+                and observable["global_resolved"] is False
                 and (global_progress is None or global_progress >= 0.0)
             ):
                 disposition = CandidateDisposition.ACCEPT_PARTIAL
-                progress_class = "observable_progress_remaining_faults"
-                rationale.extend(["observable_target_progress", "remaining_faults_present"])
-            elif observable["target_improved"] and observable["global_resolved"]:
-                disposition = CandidateDisposition.INCONCLUSIVE
-                progress_class = "observable_resolution_remaining_unknown"
-                rationale.extend(
-                    ["observable_target_progress", "globally_resolved", "remaining_fault_count_unknown"]
-                )
+                progress_class = "observable_progress_global_anomaly_remains"
+                rationale.extend(["observable_target_progress", "global_anomaly_remains"])
             elif observable["target_improved"]:
                 disposition = CandidateDisposition.INCONCLUSIVE
-                progress_class = "observable_progress_truth_unknown"
-                rationale.append("remaining_fault_count_unknown")
+                progress_class = "observable_progress_global_status_unknown"
+                rationale.append("global_resolution_not_established")
             elif observable["mixed_or_weak"]:
                 disposition = CandidateDisposition.INCONCLUSIVE
                 progress_class = "mixed_or_weak"
@@ -196,7 +302,8 @@ class CandidateQualityOracle:
             target_progress=target_progress,
             global_progress=global_progress,
             collateral_damage=collateral_damage,
-            remaining_fault_count=remaining_faults,
+            remaining_true_fault_count=remaining_true_faults,
+            remaining_suspect_count=remaining_suspects,
             belief_update=belief_update,
             unresolved_signatures=unresolved,
             rationale_codes=rationale,
@@ -253,7 +360,7 @@ class CandidateQualityOracle:
             return True
         return None if any(match is None for match in matches) else False
 
-    def _remaining_faults(
+    def _remaining_true_faults(
         self,
         action: Mapping[str, Any],
         target_fixed: bool | None,
@@ -263,8 +370,8 @@ class CandidateQualityOracle:
         parent_state: Mapping[str, Any],
         candidate_state: Mapping[str, Any],
     ) -> int | None:
-        # Complete synthetic truth is authoritative.  Observable verifier
-        # counts may disagree, but cannot erase injected faults.
+        # Synthetic truth is authoritative. Observable verifier suspect counts
+        # may disagree, but cannot erase injected physical faults.
         if truth.get("truth_complete"):
             pre_action = _first_present(
                 truth.get("remaining_true_fault_count"),
@@ -286,16 +393,29 @@ class CandidateQualityOracle:
             ))
             return max(total - matched, 0) if target_fixed else total
 
-        # Deployment verifier counts are post-action observable evidence.
-        post_action = _first_present(
-            verification.get("remaining_fault_count"),
-            verification.get("remaining_faults"),
+        explicit = _first_present(
+            truth.get("remaining_true_fault_count"),
+            truth.get("remaining_true_faults"),
+            # Backward compatibility for older synthetic fixtures only. In
+            # deployment mode hidden truth was already discarded above.
             truth.get("remaining_fault_count"),
         )
-        if post_action is not None:
-            return len(post_action) if isinstance(post_action, (list, tuple, set)) else int(post_action)
+        if explicit is not None:
+            return len(explicit) if isinstance(explicit, (list, tuple, set)) else int(explicit)
 
         return None
+
+    @staticmethod
+    def _remaining_suspects(verification: Mapping[str, Any]) -> int | None:
+        value = verification.get("remaining_suspect_count")
+        if value is None and verification.get("evidence_source") is not None:
+            # Transitional compatibility for an external deployment provider
+            # that has not yet adopted the renamed observable field. This
+            # value is still treated only as suspect evidence.
+            value = verification.get("remaining_fault_count")
+        if value is None:
+            return None
+        return len(value) if isinstance(value, (list, tuple, set)) else int(value)
 
     def _collateral_damage(
         self,
@@ -619,14 +739,33 @@ class CandidateQualityOracle:
             allowed_field = self._topology_field(args, before)
         return changed_fields != {allowed_field}
 
-    def _physical_ok(self, verification: Mapping[str, Any]) -> bool:
-        if verification.get("power_flow_converged") is False or verification.get("topology_feasible") is False:
+    def _physical_ok(self, verification: Mapping[str, Any]) -> bool | None:
+        explicit = verification.get("physical_constraints_ok")
+        convergence_values = [
+            verification.get(key)
+            # Generic/WLS ``converged`` only proves optimizer completion; it
+            # must never stand in for physical feasibility.
+            for key in ("power_flow_converged", "topology_feasible")
+            if verification.get(key) is not None
+        ]
+        if explicit is False or any(value is False for value in convergence_values):
             return False
-        violations = verification.get("physical_bound_violations", verification.get("new_violations", 0))
-        count = len(violations) if isinstance(violations, list) else int(violations or 0)
-        return count <= self.max_new_violations
+        violations = _first_present(
+            verification.get("physical_bound_violations"),
+            verification.get("new_constraint_violations"),
+            verification.get("new_violations"),
+        )
+        if violations is not None:
+            count = len(violations) if isinstance(violations, list) else int(violations or 0)
+            if count > self.max_new_violations:
+                return False
+        if explicit is True:
+            return True
+        if any(value is True for value in convergence_values) and violations is not None:
+            return True
+        return None
 
-    def _global_resolved(self, verification: Mapping[str, Any], remaining_faults: int | None) -> bool:
+    def _global_resolved(self, verification: Mapping[str, Any]) -> bool | None:
         explicit = _first_present(
             verification.get("globally_resolved"),
             verification.get("post_action_resolved"),
@@ -637,14 +776,14 @@ class CandidateQualityOracle:
         threshold = verification.get("anomaly_threshold", verification.get("chi_square_threshold"))
         if score is not None and threshold is not None:
             return float(score) < float(threshold)
-        return remaining_faults == 0
+        return None
 
     def _observable_progress(self, verification: Mapping[str, Any]) -> dict[str, bool]:
         target_progress = float(verification.get("target_progress", 0.0) or 0.0)
         global_progress = float(verification.get("global_progress", 0.0) or 0.0)
         violations = verification.get("new_large_residuals", verification.get("new_violations", 0))
         violation_count = len(violations) if isinstance(violations, list) else int(violations or 0)
-        global_resolved = self._global_resolved(verification, None)
+        global_resolved = self._global_resolved(verification)
         target_improved = target_progress >= self.min_target_progress
         return {
             "target_improved": target_improved,

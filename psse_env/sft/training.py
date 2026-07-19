@@ -18,6 +18,7 @@ from .gates import (
     processor_token_type_input_names,
     validate_grouped_pilot,
 )
+from .provenance import validate_generation_provenance
 from .smoke import run_generation_tool_call_smoke, run_training_smoke
 
 
@@ -56,6 +57,8 @@ class TrainerSettings:
     logging_steps: int = 1
     save_steps: int = 25
     eval_steps: int = 25
+    eval_strategy: str = "epoch"
+    save_strategy: str = "epoch"
     seed: int = 3407
     bf16: bool = True
     fp16: bool = False
@@ -63,6 +66,7 @@ class TrainerSettings:
     local_files_only: bool = True
     trust_remote_code: bool = False
     allow_prompt_truncation: bool = False
+    allow_nonrelease_artifacts: bool = False
 
     def validate(self) -> None:
         if "gemma-4" not in self.model_name.lower():
@@ -74,6 +78,12 @@ class TrainerSettings:
             raise GateError("max_length and batch_size must be positive.")
         if self.bf16 and self.fp16:
             raise GateError("bf16 and fp16 cannot both be enabled.")
+        if self.eval_strategy not in {"epoch", "steps"}:
+            raise GateError("eval_strategy must be 'epoch' or 'steps'.")
+        if self.save_strategy not in {"epoch", "steps"}:
+            raise GateError("save_strategy must be 'epoch' or 'steps'.")
+        if self.eval_strategy == "steps" and self.eval_steps <= 0:
+            raise GateError("eval_steps must be positive for step-based validation.")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -163,9 +173,13 @@ def trl_config_kwargs(settings: TrainerSettings, *, has_validation: bool) -> dic
         "max_steps": settings.max_steps,
         "logging_steps": settings.logging_steps,
         "save_steps": settings.save_steps,
-        "eval_steps": settings.eval_steps if has_validation else None,
-        "eval_strategy": "steps" if has_validation else "no",
-        "save_strategy": "steps",
+        "eval_steps": (
+            settings.eval_steps
+            if has_validation and settings.eval_strategy == "steps"
+            else None
+        ),
+        "eval_strategy": settings.eval_strategy if has_validation else "no",
+        "save_strategy": settings.save_strategy,
         "seed": settings.seed,
         "bf16": settings.bf16,
         "fp16": settings.fp16,
@@ -241,11 +255,23 @@ def _prepare_pilot(
     validation_rows = load_jsonl(validation_file)
     grouped = validate_grouped_pilot(
         {"train": train_rows, "validation": validation_rows},
+        group_key="physical_root_fingerprint",
+        required_protocol="canonical",
         minimum_rows=pilot_minimum_rows,
         maximum_rows=pilot_maximum_rows,
     )
     if not grouped.passed:
         raise GateError("Grouped pilot gate failed: " + " | ".join(grouped.failures))
+    generation = validate_generation_provenance(
+        repo_root=Path(__file__).resolve().parents[2],
+        datasets={"train": train_file, "validation": validation_file},
+        rows=train_rows + validation_rows,
+    )
+    if not generation["passed"] and not settings.allow_nonrelease_artifacts:
+        raise GateError(
+            "Generation provenance gate failed: "
+            + " | ".join(generation["failures"])
+        )
     processor, _ = load_exact_processor(
         settings.model_name,
         settings.revision,
@@ -257,12 +283,14 @@ def _prepare_pilot(
         processor,
         max_length=settings.max_length,
         allow_prompt_truncation=settings.allow_prompt_truncation,
+        require_current_registry=True,
     )
     validation_gate = audit_dataset(
         validation_rows,
         processor,
         max_length=settings.max_length,
         allow_prompt_truncation=settings.allow_prompt_truncation,
+        require_current_registry=True,
     )
     failures = train_gate.failures + validation_gate.failures
     if failures:

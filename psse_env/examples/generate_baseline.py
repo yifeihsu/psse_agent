@@ -56,7 +56,10 @@ def generate(output_dir: Path) -> list[dict[str, Any]]:
     output_dir.mkdir(parents=True, exist_ok=True)
     write_jsonl(output_dir / "sample_rollout.jsonl", rows)
     write_jsonl(output_dir / "dagger_example.jsonl", rows[:1])
-    write_jsonl(output_dir / "chat_sft_example.jsonl", examples_to_chat_sft(rows[:1]))
+    write_jsonl(
+        output_dir / "chat_sft_example.jsonl",
+        examples_to_chat_sft(rows[:1], protocol="controller"),
+    )
     return rows
 
 

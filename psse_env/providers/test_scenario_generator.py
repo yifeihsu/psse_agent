@@ -8,6 +8,7 @@ from psse_env.providers import MatpowerDeploymentProviders
 from psse_env.providers.scenario_generator import (
     BASE_FAMILIES,
     COMPOSED_FAMILIES,
+    DEFAULT_HIF_FALLBACK_SAMPLE_PATHS,
     Round0ScenarioGenerator,
     ScenarioRejected,
 )
@@ -131,6 +132,19 @@ class ScenarioConstructionTests(unittest.TestCase):
             scenario["unresolved_signatures"], ["hif_suspected_zero_sequence"]
         )
         self.assertTrue(scenario["hidden_truth"]["true_hif_errors"])
+
+    def test_tracked_hif_fallback_promotes_legacy_rows_to_scan_windows(self) -> None:
+        generator = Round0ScenarioGenerator(
+            hif_sample_paths=DEFAULT_HIF_FALLBACK_SAMPLE_PATHS,
+            seed=20260719,
+        )
+        scenario = generator.build({"hif": 1})[0]
+        window = scenario["metadata"]["hif_scan_window"]
+        self.assertEqual(len(window["scans"]), 1)
+        self.assertEqual(
+            window["window_metadata"]["source_kind"],
+            "tracked_single_scan_fallback",
+        )
 
     def test_composition_overlays_extra_measurement_faults(self) -> None:
         scenario = self.by_family["measurement+parameter"]
@@ -346,11 +360,26 @@ class MeasurementRouteDisciplineTests(unittest.TestCase):
 
 
 class EndToEndRound0EpisodeTests(unittest.TestCase):
-    def _run_episode(self, scenario, max_steps: int = 18):
+    @staticmethod
+    def _without_privileged_targets(scenario):
+        scenario = dict(scenario)
+        for key in list(scenario):
+            if key.startswith("true_") or key.startswith("clean_") or key in {
+                "hidden_truth",
+                "oracle_action_hints",
+            }:
+                scenario.pop(key, None)
+        return scenario
+
+    def _run_episode(
+        self, scenario, max_steps: int = 18, provider_kwargs: dict | None = None
+    ):
         from psse_env.oracle import ExpertPolicyOracle
         from psse_env.transactional_env import TransactionalPSSEEnv
 
-        providers = MatpowerDeploymentProviders(chi2_alpha=0.01)
+        providers = MatpowerDeploymentProviders(
+            chi2_alpha=0.01, **dict(provider_kwargs or {})
+        )
         env = TransactionalPSSEEnv(
             **providers.env_kwargs(),
             production_dataset_mode=True,
@@ -369,6 +398,21 @@ class EndToEndRound0EpisodeTests(unittest.TestCase):
             _, output = env.step(actions[0])
             executed.append((actions[0], output))
         return env, executed
+
+    def _assert_scoped_candidate_physical_evidence(self, executed) -> None:
+        candidate_checks = [
+            output["tool_metrics"]
+            for action, output in executed
+            if action["tool"] == "run_wls"
+            and "steady_state_physical_evidence" in output.get("tool_metrics", {})
+        ]
+        self.assertEqual(len(candidate_checks), 1)
+        metrics = candidate_checks[0]
+        self.assertIs(metrics["physical_constraints_ok"], True)
+        self.assertNotIn("power_flow_converged", metrics)
+        evidence = metrics["steady_state_physical_evidence"]
+        self.assertEqual(evidence["scope"], "observed_snapshot_topology_vm_rate_a")
+        self.assertTrue(evidence["complete"])
 
     def test_measurement_scenario_resolves_with_true_index_in_group(self) -> None:
         # Seed 29 is a well-conditioned single-outlier scenario.  Marginal
@@ -391,6 +435,37 @@ class EndToEndRound0EpisodeTests(unittest.TestCase):
         self.assertTrue(groups)
         self.assertTrue(any(true_index in group for group in groups))
 
+    def test_measurement_cycle_is_autonomous_without_truth_or_hints(self) -> None:
+        generator = Round0ScenarioGenerator(seed=29)
+        source = generator.build({"measurement": 1})[0]
+        true_index = int(source["true_measurement_errors"][0]["index"])
+        scenario = self._without_privileged_targets(source)
+        env, executed = self._run_episode(scenario)
+
+        self.assertTrue(env.is_terminal())
+        oracle_state = env.get_oracle_state()
+        self.assertFalse(oracle_state.true_measurement_errors)
+        self.assertFalse(oracle_state.oracle_action_hints)
+        tools = [action["tool"] for action, _ in executed]
+        self.assertEqual(
+            tools,
+            [
+                "run_wls",
+                "get_measurement_context",
+                "correct_measurements",
+                "run_wls",
+                "commit_state",
+                "finalize_diagnosis",
+            ],
+        )
+        group = next(
+            action["arguments"]["suspect_group"]
+            for action, _ in executed
+            if action["tool"] == "correct_measurements"
+        )
+        self.assertIn(true_index, group)
+        self._assert_scoped_candidate_physical_evidence(executed)
+
     def test_topology_scenario_resolves_by_status_flip_on_true_line(self) -> None:
         generator = Round0ScenarioGenerator(seed=31)
         scenario = generator.build({"topology": 1})[0]
@@ -406,8 +481,134 @@ class EndToEndRound0EpisodeTests(unittest.TestCase):
         self.assertTrue(flips)
         self.assertEqual(int(flips[-1]["line_index"]), true_line)
 
+    def test_branch_family_ambiguity_resolves_without_privileged_truth(self) -> None:
+        generator = Round0ScenarioGenerator(seed=31)
+        source = generator.build({"topology": 1})[0]
+        true_line = int(source["true_topology_errors"][0]["line_index1"])
+        env, executed = self._run_episode(
+            self._without_privileged_targets(source), max_steps=24
+        )
+
+        self.assertTrue(env.is_terminal())
+        oracle_state = env.get_oracle_state()
+        self.assertFalse(oracle_state.true_parameter_errors)
+        self.assertFalse(oracle_state.true_topology_errors)
+        self.assertFalse(oracle_state.oracle_action_hints)
+        tools = [action["tool"] for action, _ in executed]
+        self.assertIn("get_parameter_context", tools)
+        self.assertIn("get_topology_context", tools)
+        # Missing parameter scans reject that hypothesis without a hidden
+        # family choice; the observable topology context then supplies the
+        # bounded status flip that verifies and commits.
+        self.assertTrue(
+            any(
+                action["tool"] == "correct_parameters"
+                and output.get("error_code") == "parameter_scans_missing"
+                for action, output in executed
+            )
+        )
+        topology_action = next(
+            action for action, output in executed
+            if action["tool"] == "correct_topology"
+            and output["execution_status"] == "success"
+        )
+        self.assertEqual(int(topology_action["arguments"]["line_index"]), true_line)
+        self._assert_scoped_candidate_physical_evidence(executed)
+
+    def test_mixed_measurement_topology_commits_partial_then_final_without_truth(self) -> None:
+        generator = Round0ScenarioGenerator(seed=20260719)
+        source = generator.build({"measurement+topology": 1})[0]
+        env, executed = self._run_episode(
+            self._without_privileged_targets(source), max_steps=24
+        )
+
+        self.assertTrue(env.is_terminal())
+        oracle_state = env.get_oracle_state()
+        self.assertFalse(oracle_state.true_measurement_errors)
+        self.assertFalse(oracle_state.true_topology_errors)
+        successful_corrections = [
+            (action, output)
+            for action, output in executed
+            if action["tool"] in {"correct_measurements", "correct_topology"}
+            and output["execution_status"] == "success"
+        ]
+        self.assertEqual(
+            {action["tool"] for action, _ in successful_corrections},
+            {"correct_measurements", "correct_topology"},
+        )
+
+        candidate_ids = [
+            str(output["candidate_state_id"])
+            for _, output in successful_corrections
+        ]
+        candidates = [env.store.get_state(candidate_id) for candidate_id in candidate_ids]
+        dispositions = [candidate["candidate_disposition"] for candidate in candidates]
+        self.assertIn("ACCEPT_PARTIAL", dispositions)
+        self.assertEqual(dispositions[-1], "ACCEPT_FINAL")
+
+        partial = next(
+            candidate
+            for candidate in candidates
+            if candidate["candidate_disposition"] == "ACCEPT_PARTIAL"
+        )
+        verification = partial["verification_output"]
+        self.assertFalse(verification["globally_resolved"])
+        self.assertIs(verification["physical_constraints_ok"], True)
+        self.assertTrue(verification["physical_evidence_complete"])
+        self.assertNotIn("power_flow_converged", verification)
+        self.assertEqual(
+            verification["steady_state_physical_evidence"]["method"],
+            "matpower_case_limits_with_observed_wls_telemetry",
+        )
+
+    def test_rejected_mixed_hif_ladder_ends_in_explicit_operator_escalation(self) -> None:
+        generator = Round0ScenarioGenerator(seed=20260719, hif_max_scans=3)
+        source = generator.build({"measurement+hif": 1})[0]
+        env, executed = self._run_episode(
+            self._without_privileged_targets(source),
+            max_steps=24,
+            provider_kwargs={
+                "hif_alpha_grid_size": 5,
+                "hif_r_grid_size": 7,
+                "hif_max_scans": 3,
+            },
+        )
+
+        self.assertTrue(env.is_terminal())
+        self.assertEqual(env.terminal_outcome, "operator_escalation")
+        tools = [action["tool"] for action, _ in executed]
+        self.assertNotIn("finalize_diagnosis", tools)
+        self.assertEqual(tools[-1], "ask_for_more_evidence")
+        final_action, final_output = executed[-1]
+        self.assertEqual(
+            final_action["arguments"]["request"],
+            "operator_escalation:hif_diagnostics_exhausted",
+        )
+        self.assertEqual(
+            final_output["tool_metrics"]["terminal_outcome"],
+            "operator_escalation",
+        )
+        self.assertFalse(env.current_state()["no_material_anomaly_remaining"])
+        self.assertTrue(env.current_state()["unresolved_signatures"])
+
 
 class EpisodeTruthAuditTests(unittest.TestCase):
+    def test_incomplete_collection_blocks_release_provenance(self) -> None:
+        from psse_env.examples.generate_round0_aggregate import (
+            _collection_release_failures,
+        )
+
+        failures = _collection_release_failures(
+            plan={"measurement": 2, "topology": 1},
+            scenarios=[{"scenario_family": "measurement"}],
+            nonterminal_episodes=["r0_nonterminal"],
+            quarantined_episodes=[{"scenario_id": "r0_bad"}],
+        )
+        self.assertTrue(any("did not reach a terminal decision" in item for item in failures))
+        self.assertTrue(any("truth-side correction audit" in item for item in failures))
+        self.assertTrue(any('"measurement": 1' in item for item in failures))
+        self.assertTrue(any('"topology": 1' in item for item in failures))
+
     def test_masking_measurement_commit_is_quarantined(self) -> None:
         from psse_env.examples.generate_round0_aggregate import (
             audit_episode_against_truth,

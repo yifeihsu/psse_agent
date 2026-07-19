@@ -52,6 +52,48 @@ def validate_row(
     if not _finite_vector(row.get("z_obs"), 122):
         issues.append("bad_z_obs")
 
+    scans = row.get("scans")
+    if scans is not None:
+        if not isinstance(scans, list) or not scans:
+            issues.append("bad_hif_scan_window")
+        else:
+            if row.get("scan_count") != len(scans):
+                issues.append("scan_count_mismatch")
+            topology_ids = set()
+            op_points = []
+            for position, scan in enumerate(scans):
+                if not isinstance(scan, Mapping):
+                    issues.append("bad_hif_scan")
+                    continue
+                if scan.get("scan_index") != position:
+                    issues.append("nonsequential_scan_index")
+                if not _finite_vector(scan.get("z_obs"), 122):
+                    issues.append("bad_scan_z_obs")
+                if not isinstance(scan.get("three_phase_voltages"), list):
+                    issues.append("missing_scan_three_phase_voltages")
+                if not isinstance(scan.get("op_point"), Mapping):
+                    issues.append("missing_scan_op_point")
+                else:
+                    op_points.append(json.dumps(scan.get("op_point"), sort_keys=True))
+                if scan.get("topology_id") is not None:
+                    topology_ids.add(str(scan.get("topology_id")))
+                if "label" in scan or "shared_label" in scan:
+                    issues.append("label_leakage_inside_scan")
+            if len(topology_ids) > 1:
+                issues.append("scan_topology_changed")
+            if scans and row.get("z_obs") != scans[0].get("z_obs"):
+                issues.append("reference_scan_z_mismatch")
+            window_metadata = row.get("window_metadata")
+            mode = window_metadata.get("operating_point_mode") if isinstance(window_metadata, Mapping) else None
+            if mode == "identical_noise" and len(set(op_points)) > 1:
+                issues.append("identical_noise_op_points_differ")
+            if mode == "diverse" and len(scans) > 1 and len(set(op_points)) < 2:
+                issues.append("diverse_op_points_not_diverse")
+            sigma_z = row.get("sigma_z")
+            if sigma_z is not None:
+                if not _finite_vector(sigma_z, 122) or any(float(value) <= 0.0 for value in sigma_z):
+                    issues.append("bad_scan_sigma_z")
+
     label = row.get("label") if isinstance(row.get("label"), Mapping) else {}
     target = label.get("branch_row0")
     if target is None:

@@ -115,6 +115,7 @@ HISTORY_METRIC_KEYS = (
     "residual_norm",
     "max_normalized_residual",
     "remaining_anomaly_score",
+    "remaining_suspect_count",
     "anomaly_threshold",
     "chi_square_threshold",
     "power_flow_converged",
@@ -139,6 +140,7 @@ HISTORY_METRIC_KEYS = (
     "hse_summary",
     "nlm_summary",
     "hif_summary",
+    "diagnostic_acceptance",
 )
 CONTEXT_DETAIL_KEYS = frozenset(
     {
@@ -151,6 +153,7 @@ CONTEXT_DETAIL_KEYS = frozenset(
         "hse_summary",
         "nlm_summary",
         "hif_summary",
+        "diagnostic_acceptance",
     }
 )
 
@@ -1066,7 +1069,8 @@ def examples_to_chat_sft(
     max_history_events: int = 8,
     max_history_chars: int = 4096,
     require_derived_provenance: bool = True,
-    protocol: str = "controller",
+    protocol: str = "canonical",
+    allow_ineligible_auxiliary: bool = False,
 ) -> list[dict[str, Any]]:
     """Convert DAgger examples to native, controller-bindable chat SFT rows.
 
@@ -1097,6 +1101,14 @@ def examples_to_chat_sft(
     schema_names = {tool["function"]["name"] for tool in tools}
     rows: list[dict[str, Any]] = []
     for example in examples:
+        if (
+            example.get("production_label_eligible") is False
+            and not allow_ineligible_auxiliary
+        ):
+            raise ValueError(
+                "Example is explicitly ineligible for production SFT; export it only "
+                "to a separate auxiliary artifact with allow_ineligible_auxiliary=True."
+            )
         target = example.get("preferred_action")
         if target is None:
             valid = example.get("valid_next_actions") or []
@@ -1205,7 +1217,13 @@ def examples_to_chat_sft(
             "example_id": example.get("example_id") or f"sft_{source_index:06d}",
             "scenario_id": example.get("scenario_id"),
             "root_scenario_id": example.get("root_scenario_id", example.get("scenario_id")),
+            "physical_root_fingerprint": example.get("physical_root_fingerprint"),
             "dataset_mode": dataset_mode,
+            "dataset_source": example.get("dataset_source"),
+            "production_label_eligible": example.get(
+                "production_label_eligible", True
+            ),
+            "generation_provenance_id": example.get("generation_provenance_id"),
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": json.dumps(user_payload, sort_keys=True)},
@@ -1216,6 +1234,13 @@ def examples_to_chat_sft(
                 "iteration": example.get("iteration"),
                 "step": example.get("step"),
                 "dataset_mode": dataset_mode,
+                "dataset_source": example.get("dataset_source"),
+                "production_label_eligible": example.get(
+                    "production_label_eligible", True
+                ),
+                "generation_provenance_id": example.get(
+                    "generation_provenance_id"
+                ),
                 "protocol": protocol,
                 "labels": labels,
                 "state_class": example.get("state_class"),

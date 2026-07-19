@@ -25,27 +25,50 @@ import json
 import random
 from collections import Counter
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
+import psse_env.dagger.counterfactual_generator as counterfactual_generator_module
+import psse_env.dagger.dataset_builder as dataset_builder_module
+import psse_env.dagger.protocol_bridge as protocol_bridge_module
+import psse_env.dagger.rollout_collector as rollout_collector_module
+import psse_env.dagger.sft_audit as sft_audit_module
+import psse_env.dagger.splits as splits_module
+import psse_env.oracle as oracle_module
+import psse_env.providers.matpower as matpower_provider_module
+import psse_env.providers.scenario_generator as scenario_generator_module
+import psse_env.transactional_env as transactional_env_module
 from psse_env.actions import (
-    COMMIT_STATE,
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,
     RUN_WLS,
 )
 from psse_env.dagger.counterfactual_generator import CounterfactualGenerator
-from psse_env.dagger.dataset_builder import examples_to_chat_sft, write_jsonl
+from psse_env.dagger.dataset_builder import (
+    TOOL_JSON_SCHEMAS,
+    examples_to_chat_sft,
+    write_jsonl,
+)
 from psse_env.dagger.error_injectors import plausible_wrong_actions
 from psse_env.dagger.rollout_collector import (
     DaggerRolloutCollector,
     audit_target_aware_state_classes,
 )
-from psse_env.dagger.sft_audit import audit_chat_sft_rows, audit_teacher_realizability
-from psse_env.dagger.splits import grouped_scenario_split
+from psse_env.dagger.sft_audit import (
+    audit_approximate_teacher_realizability,
+    audit_chat_sft_rows,
+    audit_teacher_realizability,
+)
+from psse_env.dagger.splits import (
+    audit_physical_split_disjointness,
+    grouped_scenario_split,
+    physical_root_fingerprint,
+)
+from psse_env.dagger.protocol_bridge import unified_tool_schemas
 from psse_env.oracle import ExpertPolicyOracle
 from psse_env.providers import MatpowerDeploymentProviders
 from psse_env.providers.scenario_generator import Round0ScenarioGenerator
+from psse_env.sft.provenance import file_sha256, git_source_state, stable_json_sha256
 from psse_env.transactional_env import TransactionalPSSEEnv
 
 DEFAULT_SEED = 20260719
@@ -73,41 +96,6 @@ class ObservableBaselinePolicy:
             "tool": RUN_WLS,
             "arguments": {"state_id": observation["active_state_id"]},
         }
-
-
-class CommitDisciplinedExpertOracle:
-    """Keep uniform state diversification away from belief-corrupting actions.
-
-    The collector samples uniformly over every expert proposal at beta=1.0.
-    Non-preferred corrections and commits can pass verification against a
-    wrong model (masking) and corrupt the rest of the episode; deliberate
-    wrong actions belong to the bounded counterfactual injector instead.  The
-    rank-1 proposal (the supervision label) is always kept; lower-ranked
-    corrections/commits are dropped from the sampling pool.
-    """
-
-    _MUTATING_TOOLS = {
-        CORRECT_MEASUREMENTS,
-        CORRECT_PARAMETERS,
-        CORRECT_TOPOLOGY,
-        COMMIT_STATE,
-    }
-
-    def __init__(self, inner: ExpertPolicyOracle) -> None:
-        self._inner = inner
-
-    def next_actions(self, state: Any, history: Any) -> list[dict[str, Any]]:
-        actions = list(self._inner.next_actions(state, history))
-        if len(actions) <= 1:
-            return actions
-        return [actions[0]] + [
-            action
-            for action in actions[1:]
-            if str(action.get("tool")) not in self._MUTATING_TOOLS
-        ]
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._inner, name)
 
 
 def build_environment(args: argparse.Namespace) -> tuple[TransactionalPSSEEnv, ExpertPolicyOracle]:
@@ -155,6 +143,7 @@ def audit_episode_against_truth(
     final_state: Mapping[str, Any],
     *,
     terminal: bool,
+    terminal_outcome: str | None = None,
 ) -> dict[str, Any]:
     """Truth-side episode audit for round-0 quarantining.
 
@@ -197,6 +186,7 @@ def audit_episode_against_truth(
         "scenario_id": str(scenario.get("scenario_id")),
         "scenario_family": str(scenario.get("scenario_family", "unknown")),
         "terminal": bool(terminal),
+        "terminal_outcome": str(terminal_outcome) if terminal_outcome else None,
         "problems": problems,
         "quarantined": bool(problems),
     }
@@ -247,7 +237,7 @@ def collect_round0(
         collector = DaggerRolloutCollector(
             env=env,
             policy=ObservableBaselinePolicy(),
-            expert_oracle=CommitDisciplinedExpertOracle(oracle),
+            expert_oracle=oracle,
             rng=collector_rng,
         )
         rows = collector.collect_iteration(
@@ -257,7 +247,10 @@ def collect_round0(
             max_steps=args.max_steps,
         )
         audit = audit_episode_against_truth(
-            scenario, env.current_state(), terminal=env.is_terminal()
+            scenario,
+            env.current_state(),
+            terminal=env.is_terminal(),
+            terminal_outcome=env.terminal_outcome,
         )
         episode_audits.append(audit)
         if audit["quarantined"]:
@@ -278,6 +271,9 @@ def collect_round0(
                 generator.generate_from_current(
                     injected,
                     root_scenario_id=str(scenario["scenario_id"]),
+                    physical_root_fingerprint=scenario.get(
+                        "physical_root_fingerprint"
+                    ),
                 )
             )
 
@@ -309,6 +305,109 @@ def _family_by_root(scenarios: Iterable[Mapping[str, Any]]) -> dict[str, str]:
     }
 
 
+def _collection_release_failures(
+    *,
+    plan: Mapping[str, int],
+    scenarios: Iterable[Mapping[str, Any]],
+    nonterminal_episodes: Sequence[str],
+    quarantined_episodes: Sequence[Mapping[str, Any]],
+    unknown_terminal_outcome_episodes: Sequence[str] = (),
+) -> list[str]:
+    """Fail release provenance when the requested expert suite is incomplete."""
+    failures: list[str] = []
+    if nonterminal_episodes:
+        failures.append(
+            f"{len(nonterminal_episodes)} expert episode(s) did not reach a terminal decision"
+        )
+    if quarantined_episodes:
+        failures.append(
+            f"{len(quarantined_episodes)} episode(s) failed the truth-side correction audit"
+        )
+    if unknown_terminal_outcome_episodes:
+        failures.append(
+            f"{len(unknown_terminal_outcome_episodes)} terminal episode(s) lacked "
+            "an explicit resolved/operator_escalation outcome"
+        )
+    built_by_family = Counter(
+        str(scenario.get("scenario_family") or "unknown") for scenario in scenarios
+    )
+    plan_shortfalls = {
+        family: int(required) - int(built_by_family.get(family, 0))
+        for family, required in plan.items()
+        if int(built_by_family.get(family, 0)) < int(required)
+    }
+    if plan_shortfalls:
+        failures.append(
+            "scenario generator did not fulfill the requested plan: "
+            + json.dumps(plan_shortfalls, sort_keys=True)
+        )
+    return failures
+
+
+def _terminal_scenario_matrix(
+    episode_audits: Iterable[Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Summarize whether every collected expert root terminates, by family."""
+    grouped: dict[str, dict[str, Any]] = {}
+    for audit in episode_audits:
+        family = str(audit.get("scenario_family") or "unknown")
+        entry = grouped.setdefault(
+            family,
+            {
+                "episodes": 0,
+                "terminal_episodes": 0,
+                "nonterminal_episode_ids": [],
+                "quarantined_episode_ids": [],
+                "resolved_episode_ids": [],
+                "operator_escalation_episode_ids": [],
+                "unknown_terminal_outcome_episode_ids": [],
+                "terminal_outcome_counts": Counter(),
+            },
+        )
+        entry["episodes"] += 1
+        scenario_id = str(audit.get("scenario_id") or "unknown")
+        if audit.get("terminal") is True:
+            entry["terminal_episodes"] += 1
+            outcome = str(audit.get("terminal_outcome") or "unknown")
+            entry["terminal_outcome_counts"][outcome] += 1
+            if outcome == "resolved":
+                entry["resolved_episode_ids"].append(scenario_id)
+            elif outcome == "operator_escalation":
+                entry["operator_escalation_episode_ids"].append(scenario_id)
+            else:
+                entry["unknown_terminal_outcome_episode_ids"].append(scenario_id)
+        else:
+            entry["nonterminal_episode_ids"].append(scenario_id)
+        if audit.get("quarantined") is True:
+            entry["quarantined_episode_ids"].append(scenario_id)
+    for entry in grouped.values():
+        entry["terminal_rate"] = (
+            entry["terminal_episodes"] / entry["episodes"]
+            if entry["episodes"]
+            else 0.0
+        )
+        entry["resolution_rate"] = (
+            len(entry["resolved_episode_ids"]) / entry["episodes"]
+            if entry["episodes"]
+            else 0.0
+        )
+        entry["terminal_outcome_counts"] = dict(
+            sorted(entry["terminal_outcome_counts"].items())
+        )
+        entry["release_terminal_coverage"] = bool(
+            entry["episodes"]
+            and entry["terminal_episodes"] == entry["episodes"]
+            and not entry["quarantined_episode_ids"]
+            and not entry["unknown_terminal_outcome_episode_ids"]
+        )
+        entry["release_resolution_coverage"] = bool(
+            entry["episodes"]
+            and len(entry["resolved_episode_ids"]) == entry["episodes"]
+            and not entry["quarantined_episode_ids"]
+        )
+    return {family: grouped[family] for family in sorted(grouped)}
+
+
 def _family_class_matrix(
     rows: Iterable[Mapping[str, Any]], family_by_root: Mapping[str, str]
 ) -> dict[str, dict[str, int]]:
@@ -322,26 +421,136 @@ def _family_class_matrix(
     return {family: dict(sorted(counts.items())) for family, counts in sorted(matrix.items())}
 
 
+def _generation_descriptor(
+    args: argparse.Namespace,
+    plan: Mapping[str, int],
+) -> dict[str, Any]:
+    """Bind a generated aggregate to its source, schemas, and collection plan."""
+    repo_root = Path(__file__).resolve().parents[2]
+    source_files = (
+        Path(__file__),
+        Path(dataset_builder_module.__file__),
+        Path(protocol_bridge_module.__file__),
+        Path(rollout_collector_module.__file__),
+        Path(counterfactual_generator_module.__file__),
+        Path(sft_audit_module.__file__),
+        Path(splits_module.__file__),
+        Path(scenario_generator_module.__file__),
+        Path(matpower_provider_module.__file__),
+        Path(transactional_env_module.__file__),
+        Path(oracle_module.__file__),
+    )
+    schemas = (
+        unified_tool_schemas()
+        if args.protocol == "canonical"
+        else TOOL_JSON_SCHEMAS
+    )
+    return {
+        "generation_provenance_version": 1,
+        "source_state": git_source_state(repo_root),
+        "protocol": args.protocol,
+        "schema_registry_hash": stable_json_sha256(schemas),
+        "generator_hashes": {
+            str(path.resolve().relative_to(repo_root)): file_sha256(path)
+            for path in source_files
+        },
+        "generation_config": {
+            "seed": args.seed,
+            "plan": dict(sorted(plan.items())),
+            "max_steps": args.max_steps,
+            "counterfactuals_per_scenario": args.counterfactuals_per_scenario,
+            "chi2_alpha": args.chi2_alpha,
+            "hif_alpha_grid": args.hif_alpha_grid,
+            "hif_r_grid": args.hif_r_grid,
+            "hif_max_scans": args.hif_max_scans,
+        },
+    }
+
+
 def generate(args: argparse.Namespace) -> dict[str, Any]:
     plan = {family: count * args.scale for family, count in DEFAULT_PLAN.items()}
     if args.plan:
         plan = json.loads(Path(args.plan).read_text()) if Path(args.plan).is_file() else json.loads(args.plan)
+    generation_descriptor = _generation_descriptor(args, plan)
+    generation_provenance_id = stable_json_sha256(generation_descriptor)
     generator = Round0ScenarioGenerator(seed=args.seed, hif_max_scans=args.hif_max_scans)
     scenarios = generator.build(plan)
     if not scenarios:
         raise RuntimeError("Scenario generator produced no scenarios for the plan.")
+
+    physical_by_root = {}
+    for scenario in scenarios:
+        fingerprint = physical_root_fingerprint(scenario)
+        scenario["physical_root_fingerprint"] = fingerprint
+        physical_by_root[str(scenario["root_scenario_id"])] = fingerprint
+
+    # Assign the physical-root split before any DAgger or counterfactual
+    # descendants are generated. Every later row inherits this immutable
+    # assignment; it is never independently hashed by scenario/branch ID.
+    root_split_rows = [
+        {
+            "root_scenario_id": str(scenario["root_scenario_id"]),
+            "physical_root_fingerprint": scenario["physical_root_fingerprint"],
+        }
+        for scenario in scenarios
+    ]
+    root_splits = grouped_scenario_split(
+        root_split_rows,
+        train_fraction=0.75,
+        validation_fraction=0.15,
+        seed=args.seed,
+    )
+    split_by_root = {
+        str(row["root_scenario_id"]): split_name
+        for split_name, rows in root_splits.items()
+        for row in rows
+    }
+    for scenario in scenarios:
+        scenario["dataset_split"] = split_by_root[str(scenario["root_scenario_id"])]
 
     collected = collect_round0(args, scenarios)
     all_rows = collected["episode_rows"] + collected["recovery_rows"]
     if not all_rows:
         raise RuntimeError("Round-0 collection produced no rows.")
 
-    splits = grouped_scenario_split(
-        all_rows,
-        train_fraction=0.75,
-        validation_fraction=0.15,
-        seed=args.seed,
-    )
+    for row in all_rows:
+        root_id = str(row.get("root_scenario_id", row.get("scenario_id")))
+        try:
+            expected_fingerprint = physical_by_root[root_id]
+        except KeyError as exc:
+            raise RuntimeError(
+                f"Collected row references unknown physical root {root_id!r}."
+            ) from exc
+        if row.get("physical_root_fingerprint") != expected_fingerprint:
+            raise RuntimeError(
+                f"Collected row {row.get('example_id')!r} did not inherit its "
+                "physical-root fingerprint."
+            )
+        row["dataset_split"] = split_by_root[root_id]
+        row["generation_provenance_id"] = generation_provenance_id
+        if row.get("production_label_eligible") is not False:
+            row["production_label_eligible"] = True
+            row.setdefault("dataset_source", "dagger_rollout")
+
+    eligible_rows = [
+        row for row in all_rows if row.get("production_label_eligible") is True
+    ]
+    auxiliary_rows = [
+        row for row in all_rows if row.get("production_label_eligible") is False
+    ]
+    if not eligible_rows:
+        raise RuntimeError("Round-0 collection produced no production-label-eligible rows.")
+    splits = {
+        split_name: [
+            row for row in eligible_rows if row.get("dataset_split") == split_name
+        ]
+        for split_name in ("train", "validation", "test")
+    }
+    physical_split_audit = audit_physical_split_disjointness(splits)
+    if not physical_split_audit["passed"]:
+        raise RuntimeError(
+            f"Physical-root split audit failed: {physical_split_audit}"
+        )
     exported = {
         name: examples_to_chat_sft(rows, protocol=args.protocol)
         for name, rows in splits.items()
@@ -350,6 +559,14 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
     all_exported = [row for rows in exported.values() for row in rows]
     chat_audit = audit_chat_sft_rows(all_exported)
     realizability = audit_teacher_realizability(all_exported, conflict_tolerance=0.0)
+    approximate_realizability = audit_approximate_teacher_realizability(
+        all_exported,
+        quantization_bin=0.25,
+        conflict_tolerance=0.05,
+        nearest_neighbor_tolerance=0.10,
+        perturbation_radius=0.25,
+        require_cost_margins=False,
+    )
     class_audit = audit_target_aware_state_classes(collected["episode_rows"])
     if not chat_audit["passed"]:
         raise RuntimeError(f"Chat-row audit failed: {chat_audit['errors'][:3]}")
@@ -357,17 +574,38 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError(
             f"Teacher realizability audit failed: conflict_rate={realizability['conflict_rate']}"
         )
+    if not approximate_realizability["passed"]:
+        raise RuntimeError(
+            "Approximate teacher realizability audit failed: "
+            f"conflict_rate={approximate_realizability['approximate_conflict_rate']}, "
+            "nearest_neighbor_disagreement_rate="
+            f"{approximate_realizability['nearest_neighbor_action_disagreement_rate']}"
+        )
     if not class_audit["passed"]:
         raise RuntimeError(f"Target-aware class audit failed: {class_audit['mismatches'][:3]}")
 
     family_by_root = _family_by_root(scenarios)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    write_jsonl(output_dir / "aggregate.raw.jsonl", all_rows)
+    dataset_paths = [output_dir / "aggregate.raw.jsonl"]
+    write_jsonl(dataset_paths[0], eligible_rows)
+    if auxiliary_rows:
+        auxiliary_path = output_dir / "aggregate.auxiliary_counterfactual.raw.jsonl"
+        write_jsonl(auxiliary_path, auxiliary_rows)
+        dataset_paths.append(auxiliary_path)
     for name, rows in exported.items():
-        write_jsonl(output_dir / f"aggregate.{name}.jsonl", rows)
+        split_path = output_dir / f"aggregate.{name}.jsonl"
+        write_jsonl(split_path, rows)
+        dataset_paths.append(split_path)
     manifest = {
-        "scenario_manifest": generator.manifest,
+        "scenario_manifest": [
+            {
+                **entry,
+                "physical_root_fingerprint": physical_by_root[str(entry["scenario_id"])],
+                "dataset_split": split_by_root[str(entry["scenario_id"])],
+            }
+            for entry in generator.manifest
+        ],
         "family_by_root": family_by_root,
         "episode_audits": collected["episode_audits"],
     }
@@ -375,6 +613,28 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
 
+    nonterminal_episodes = [
+        audit["scenario_id"]
+        for audit in collected["episode_audits"]
+        if not audit["terminal"]
+    ]
+    quarantined_episodes = [
+        audit for audit in collected["episode_audits"] if audit["quarantined"]
+    ]
+    operator_escalation_episodes = [
+        audit["scenario_id"]
+        for audit in collected["episode_audits"]
+        if audit.get("terminal_outcome") == "operator_escalation"
+    ]
+    unknown_terminal_outcome_episodes = [
+        audit["scenario_id"]
+        for audit in collected["episode_audits"]
+        if audit.get("terminal") is True
+        and audit.get("terminal_outcome") not in {"resolved", "operator_escalation"}
+    ]
+    terminal_scenario_matrix = _terminal_scenario_matrix(
+        collected["episode_audits"]
+    )
     report = {
         "seed": args.seed,
         "protocol": args.protocol,
@@ -382,27 +642,87 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         "scenario_report": generator.report(),
         "episode_rows": len(collected["episode_rows"]),
         "recovery_rows": len(collected["recovery_rows"]),
+        "production_label_eligible_rows": len(eligible_rows),
+        "auxiliary_ineligible_rows": len(auxiliary_rows),
         "quarantined_rows": collected["quarantined_rows"],
-        "quarantined_episodes": [
-            audit for audit in collected["episode_audits"] if audit["quarantined"]
-        ],
-        "nonterminal_episodes": [
-            audit["scenario_id"]
-            for audit in collected["episode_audits"]
-            if not audit["terminal"]
-        ],
+        "quarantined_episodes": quarantined_episodes,
+        "nonterminal_episodes": nonterminal_episodes,
+        "operator_escalation_episodes": operator_escalation_episodes,
+        "unknown_terminal_outcome_episodes": unknown_terminal_outcome_episodes,
+        "terminal_scenario_matrix": terminal_scenario_matrix,
         "split_rows": {name: len(rows) for name, rows in exported.items()},
-        "state_class_distribution": _distribution(all_rows, "state_class"),
-        "family_state_class_matrix": _family_class_matrix(all_rows, family_by_root),
+        "state_class_distribution": _distribution(eligible_rows, "state_class"),
+        "auxiliary_state_class_distribution": _distribution(
+            auxiliary_rows, "state_class"
+        ),
+        "family_state_class_matrix": _family_class_matrix(
+            eligible_rows, family_by_root
+        ),
         "native_chat_audit": chat_audit,
         "teacher_realizability": realizability,
+        "approximate_teacher_realizability": approximate_realizability,
+        "physical_split_audit": physical_split_audit,
         "target_aware_class_audit": class_audit,
+        "generation_provenance": {
+            "generation_provenance_id": generation_provenance_id,
+            "source_commit": generation_descriptor["source_state"].get(
+                "source_commit"
+            ),
+            "source_worktree_dirty": generation_descriptor["source_state"].get(
+                "source_worktree_dirty"
+            ),
+            "schema_registry_hash": generation_descriptor[
+                "schema_registry_hash"
+            ],
+        },
     }
     preferred: Counter[str] = Counter()
     for row in collected["episode_rows"]:
         action = row.get("preferred_action")
         preferred[str(action.get("tool") if isinstance(action, Mapping) else None)] += 1
     report["preferred_action_distribution"] = dict(sorted(preferred.items()))
+    release_failures: list[str] = []
+    if generation_descriptor["source_state"].get("release_eligible_source") is not True:
+        release_failures.append("source worktree was not clean at generation time")
+    if args.protocol != "canonical":
+        release_failures.append("model-visible protocol was not canonical")
+    release_failures.extend(
+        _collection_release_failures(
+            plan=plan,
+            scenarios=scenarios,
+            nonterminal_episodes=nonterminal_episodes,
+            quarantined_episodes=quarantined_episodes,
+            unknown_terminal_outcome_episodes=unknown_terminal_outcome_episodes,
+        )
+    )
+    if set(exported) != {"train", "validation", "test"}:
+        release_failures.append("one or more required train/validation/test splits were empty")
+    observed_schema_hashes = {
+        stable_json_sha256(row.get("tools")) for row in all_exported
+    }
+    if observed_schema_hashes != {generation_descriptor["schema_registry_hash"]}:
+        release_failures.append("exported rows did not match the generated schema registry")
+    generation_provenance = {
+        **generation_descriptor,
+        "generation_descriptor": generation_descriptor,
+        "generation_provenance_id": generation_provenance_id,
+        "dataset_hashes": {
+            path.name: file_sha256(path) for path in sorted(dataset_paths)
+        },
+        "release_eligible": not release_failures,
+        "release_failures": release_failures,
+    }
+    (output_dir / "aggregate.generation_provenance.json").write_text(
+        json.dumps(generation_provenance, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    report["generation_provenance"].update(
+        {
+            "release_eligible": not release_failures,
+            "release_failures": release_failures,
+            "path": str(output_dir / "aggregate.generation_provenance.json"),
+        }
+    )
     (output_dir / "aggregate.preflight.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -422,7 +742,7 @@ def main() -> None:
     parser.add_argument("--scale", type=int, default=1, help="Multiply the default plan.")
     parser.add_argument("--plan", type=str, default=None, help="JSON plan or path to one.")
     parser.add_argument("--protocol", choices=("controller", "canonical"), default="canonical")
-    parser.add_argument("--max-steps", type=int, default=18)
+    parser.add_argument("--max-steps", type=int, default=24)
     parser.add_argument("--counterfactuals-per-scenario", type=int, default=3)
     parser.add_argument("--chi2-alpha", type=float, default=0.01)
     parser.add_argument("--hif-alpha-grid", type=int, default=5)

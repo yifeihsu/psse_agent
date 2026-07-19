@@ -9,8 +9,7 @@ Usage:
   python -m mcp_server.run_http_server --port 3929 --host 127.0.0.1 --path /mcp
 
 Notes:
-- On first request, the server will start a MATLAB engine process.
-- Ensure MATLAB has MATPOWER on the path (or set MATPOWER_PATH env var).
+- All tools run pure-Python implementations (no MATLAB engine required).
 - This process should be kept running while clients send requests.
 """
 

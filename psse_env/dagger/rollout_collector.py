@@ -6,7 +6,14 @@ from collections import Counter
 from collections.abc import Callable, Iterable
 from typing import Any, Mapping
 
-from psse_env.actions import invalid_action, safe_normalize_action
+from psse_env.actions import (
+    ASK_FOR_MORE_EVIDENCE,
+    HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
+    RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+    RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+    invalid_action,
+    safe_normalize_action,
+)
 from psse_env.dagger.dataset_builder import validate_policy_payload
 from psse_env.dagger.replay_buffer import BalancedReplayBuffer
 from psse_env.state_store import OracleState, PolicyObservation, policy_safe_copy
@@ -42,6 +49,17 @@ def classify_state_example(
     # intentionally ahead of transition outcomes so a malformed learner
     # action cannot relabel a terminal or recovery teacher target as success.
     if preferred_tool == "finalize_diagnosis":
+        return "terminal_decision"
+    if (
+        preferred_tool == ASK_FOR_MORE_EVIDENCE
+        and preferred is not None
+        and preferred["arguments"].get("request")
+        in {
+            HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
+            RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+            RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+        }
+    ):
         return "terminal_decision"
     if preferred_tool == "rollback_state":
         return "rejected_candidate_recovery"
@@ -126,6 +144,17 @@ def audit_target_aware_state_classes(
             "finalize_diagnosis": "terminal_decision",
             "rollback_state": "rejected_candidate_recovery",
         }.get(tool)
+        if (
+            tool == ASK_FOR_MORE_EVIDENCE
+            and action is not None
+            and action["arguments"].get("request")
+            in {
+                HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
+                RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+                RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+            }
+        ):
+            required = "terminal_decision"
         if required is not None and actual != required:
             violations.append(
                 {
@@ -169,6 +198,8 @@ class DaggerRolloutCollector:
             history: list[dict[str, Any]] = []
             scenario_id = str(scenario.get("scenario_id", scenario.get("id", f"scenario_{scenario_index}")))
             root_scenario_id = str(scenario.get("root_scenario_id", scenario_id))
+            physical_root_fingerprint = scenario.get("physical_root_fingerprint")
+            state_visited_by = "initial"
 
             for step in range(max_steps):
                 policy_observation = self._policy_observation(history)
@@ -196,8 +227,15 @@ class DaggerRolloutCollector:
                     self.env.assert_training_decision_evidence(preferred_action)
                 model_action = self._policy_action(observation_dict)
 
-                if expert_actions and self.rng.random() < float(beta):
-                    executed_action = copy.deepcopy(self.rng.choice(expert_actions))
+                if preferred_action is not None and self.rng.random() < float(beta):
+                    # Ordinary DAgger labels the visited state with the
+                    # rank-one expert action.  Executing a different proposal
+                    # here would roll out a different expert policy than the
+                    # one represented by ``preferred_action`` in the SFT row.
+                    # Deliberate exploration belongs in the counterfactual or
+                    # ranking pipelines, where the executed target is recorded
+                    # explicitly.
+                    executed_action = copy.deepcopy(preferred_action)
                     executed_by = "expert"
                 else:
                     executed_action = copy.deepcopy(model_action)
@@ -248,6 +286,12 @@ class DaggerRolloutCollector:
                     candidate_assessment=target_candidate_assessment,
                     target_candidate_disposition=target_candidate_disposition,
                 )
+                output_metrics = tool_output.get("tool_metrics")
+                terminal_outcome = (
+                    output_metrics.get("terminal_outcome")
+                    if isinstance(output_metrics, Mapping)
+                    else None
+                )
                 dataset_mode = (
                     "production"
                     if bool(getattr(self.env, "production_dataset_mode", False))
@@ -257,6 +301,7 @@ class DaggerRolloutCollector:
                     "example_id": f"dagger_iter{iteration}_{scenario_id}_step{step}",
                     "scenario_id": scenario_id,
                     "root_scenario_id": root_scenario_id,
+                    "physical_root_fingerprint": physical_root_fingerprint,
                     "episode_id": observation_dict.get("episode_id"),
                     "iteration": iteration,
                     "step": step,
@@ -270,6 +315,7 @@ class DaggerRolloutCollector:
                     "model_action": policy_safe_copy(model_action),
                     "executed_action": policy_safe_copy(executed_action),
                     "executed_by": executed_by,
+                    "state_visited_by": state_visited_by,
                     "tool_output": policy_safe_copy(tool_output),
                     "next_state_summary": final_next_policy_observation.as_dict(),
                     "candidate_state_summary": (
@@ -280,6 +326,7 @@ class DaggerRolloutCollector:
                     "transition_label": policy_safe_copy(transition_label),
                     "next_valid_actions": policy_safe_copy(next_valid_actions),
                     "state_class": state_class,
+                    "terminal_outcome": terminal_outcome,
                     "labels": {
                         "candidate_disposition": transition_label.get("candidate_disposition"),
                         "target_candidate_disposition": target_candidate_disposition,
@@ -290,6 +337,7 @@ class DaggerRolloutCollector:
                         "process_valid": transition_label.get("process_valid"),
                         "state_class": state_class,
                         "dataset_mode": dataset_mode,
+                        "terminal_outcome": terminal_outcome,
                     },
                 }
                 validate_policy_payload(
@@ -300,6 +348,7 @@ class DaggerRolloutCollector:
                 )
                 examples.append(example)
                 history = next_history
+                state_visited_by = executed_by
                 if self.env.is_terminal(next_state):
                     break
         return examples
@@ -352,9 +401,57 @@ def _validation_score(result: Any) -> float:
     raise TypeError("evaluate_fn must return a number, a mapping with score, or an object with .score")
 
 
+def _requires_explicit_snapshot(
+    policy: Any, *, _seen: set[int] | None = None, _depth: int = 0
+) -> bool:
+    if policy is None or _depth > 3:
+        return False
+    seen = _seen if _seen is not None else set()
+    identity = id(policy)
+    if identity in seen:
+        return False
+    seen.add(identity)
+    policy_type = type(policy)
+    type_path = f"{policy_type.__module__}.{policy_type.__qualname__}".lower()
+    mro_paths = " ".join(
+        f"{item.__module__}.{item.__qualname__}".lower()
+        for item in getattr(policy_type, "__mro__", ())
+    )
+    framework_policy = any(
+        marker in f"{type_path} {mro_paths}"
+        for marker in ("transformers.", "peft.", "accelerate.")
+    )
+    sharded_or_quantized = bool(getattr(policy, "hf_device_map", None)) or any(
+        bool(getattr(policy, name, False))
+        for name in ("is_loaded_in_4bit", "is_loaded_in_8bit")
+    )
+    peft_policy = getattr(policy, "peft_config", None) is not None
+    pretrained_policy = all(
+        hasattr(policy, name) for name in ("save_pretrained", "config", "state_dict")
+    )
+    if framework_policy or sharded_or_quantized or peft_policy or pretrained_policy:
+        return True
+    for attribute in ("policy", "model", "module"):
+        try:
+            nested = getattr(policy, attribute, None)
+        except Exception:
+            continue
+        if nested is not None and nested is not policy and _requires_explicit_snapshot(
+            nested, _seen=seen, _depth=_depth + 1
+        ):
+            return True
+    return False
+
+
 def _snapshot_policy(policy: Any, snapshot_policy_fn: Callable[[Any], Any] | None) -> Any:
     if snapshot_policy_fn is not None:
         return snapshot_policy_fn(policy)
+    if _requires_explicit_snapshot(policy):
+        raise TypeError(
+            "evaluate_fn checkpoint selection requires snapshot_policy_fn for "
+            "Transformers, PEFT, quantized, or sharded policies; generic deepcopy "
+            "is not a reliable 31B checkpoint snapshot."
+        )
     try:
         return copy.deepcopy(policy)
     except Exception as exc:
@@ -372,13 +469,20 @@ def run_dagger(
     initial_dataset: list[dict[str, Any]] | None = None,
     num_iterations: int = 8,
     beta_schedule: list[float] | None = None,
-    max_steps: int = 12,
+    max_steps: int = 24,
     train_policy_fn: Callable[[Any, list[dict[str, Any]]], Any] | None = None,
     evaluate_fn: Callable[[Any, Any, Any], Any] | None = None,
     snapshot_policy_fn: Callable[[Any], Any] | None = None,
     training_dataset_fn: Callable[[list[dict[str, Any]], int], list[dict[str, Any]]] | None = None,
     balanced_replay: bool = True,
     replay_sample_size: int | None = None,
+    replay_unknown_class_policy: str = "error",
+    replay_unknown_class_weight: float = 0.05,
+    replay_max_duplicate_count: int = 2,
+    replay_max_rows_per_root: int | None = None,
+    replay_late_iteration_model_fraction: float = 0.25,
+    replay_require_late_iteration_model_quota: bool = True,
+    replay_report_fn: Callable[[Mapping[str, Any], int], None] | None = None,
     rng: random.Random | None = None,
 ) -> tuple[Any, list[dict[str, Any]]]:
     dataset = list(initial_dataset or [])
@@ -424,7 +528,20 @@ def run_dagger(
             training_dataset = training_dataset_fn(dataset, iteration)
         elif balanced_replay and train_policy_fn is not None:
             sample_size = replay_sample_size if replay_sample_size is not None else len(dataset)
-            training_dataset = BalancedReplayBuffer(dataset).sample(sample_size, rng=shared_rng)
+            replay_buffer = BalancedReplayBuffer(
+                dataset,
+                unknown_class_policy=replay_unknown_class_policy,
+                unknown_class_weight=replay_unknown_class_weight,
+                max_duplicate_count=replay_max_duplicate_count,
+                max_rows_per_root=replay_max_rows_per_root,
+                late_iteration_model_fraction=replay_late_iteration_model_fraction,
+                require_late_iteration_model_quota=(
+                    replay_require_late_iteration_model_quota
+                ),
+            )
+            training_dataset = replay_buffer.sample(sample_size, rng=shared_rng)
+            if replay_report_fn is not None:
+                replay_report_fn(replay_buffer.sample_report() or {}, iteration)
         else:
             training_dataset = dataset
         if train_policy_fn is not None:

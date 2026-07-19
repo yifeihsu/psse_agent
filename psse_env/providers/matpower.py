@@ -25,9 +25,11 @@ collectable no-op learner state.
 
 from __future__ import annotations
 
+import cmath
 import copy
 import hashlib
 import json
+import math
 import os
 import re
 import tempfile
@@ -35,6 +37,7 @@ from typing import Any, Mapping, Sequence
 
 from psse_env.actions import (
     ANOMALY_FAMILY_MARKERS,
+    ASK_FOR_MORE_EVIDENCE,
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,
@@ -44,6 +47,9 @@ from psse_env.actions import (
     GET_MEASUREMENT_CONTEXT,
     GET_PARAMETER_CONTEXT,
     GET_TOPOLOGY_CONTEXT,
+    HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
+    RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+    RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     RUN_HSE_FROM_PATH,
     RUN_THREE_PHASE_NLM_FROM_PATH,
     unexplained_signatures,
@@ -128,6 +134,55 @@ def _matches_any_marker(text: str, markers: Sequence[str]) -> bool:
     )
 
 
+def _three_phase_vuf_evidence(
+    three_phase_voltages: Any,
+    *,
+    top_k: int,
+) -> list[dict[str, Any]]:
+    """Compute observable negative/positive-sequence voltage ratios."""
+    if not isinstance(three_phase_voltages, Sequence) or isinstance(
+        three_phase_voltages, (str, bytes)
+    ):
+        return []
+    rotation = cmath.exp(2j * math.pi / 3.0)
+    rows: list[dict[str, Any]] = []
+    for item in three_phase_voltages:
+        if not isinstance(item, Mapping):
+            continue
+        magnitudes = item.get("vln_pu")
+        angles = item.get("ang_deg")
+        if (
+            not isinstance(magnitudes, Sequence)
+            or isinstance(magnitudes, (str, bytes))
+            or not isinstance(angles, Sequence)
+            or isinstance(angles, (str, bytes))
+            or len(magnitudes) < 3
+            or len(angles) < 3
+        ):
+            continue
+        try:
+            phases = [
+                cmath.rect(float(magnitudes[index]), math.radians(float(angles[index])))
+                for index in range(3)
+            ]
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not all(math.isfinite(value.real) and math.isfinite(value.imag) for value in phases):
+            continue
+        va, vb, vc = phases
+        positive = (va + rotation * vb + (rotation**2) * vc) / 3.0
+        negative = (va + (rotation**2) * vb + rotation * vc) / 3.0
+        if abs(positive) <= 1e-12:
+            continue
+        bus = item.get("bus")
+        if isinstance(bus, str):
+            match = re.search(r"\d+", bus)
+            bus = int(match.group()) if match else bus
+        rows.append({"bus": bus, "vuf": float(abs(negative) / abs(positive))})
+    rows.sort(key=lambda row: float(row["vuf"]), reverse=True)
+    return rows[: max(int(top_k), 0)]
+
+
 def _render_matpower_case(ppc: Mapping[str, Any], function_name: str) -> str:
     """Render the parsed matrices back to loadable MATPOWER text."""
     lines = [
@@ -165,6 +220,12 @@ class MatpowerDeploymentProviders:
         hif_alpha_grid_size: int = 31,
         hif_r_grid_size: int = 35,
         hif_max_scans: int = 10,
+        harmonic_thd_threshold_percent: float = 1.0,
+        unbalance_vuf_threshold: float = 0.02,
+        hif_min_residual_reduction: float = 0.20,
+        hif_max_weighted_residual_norm: float = 3.0,
+        vm_bound_tolerance_pu: float = 0.005,
+        branch_rate_tolerance_mva: float = 1e-6,
     ) -> None:
         self.top_k = int(top_k)
         self.residual_threshold = float(residual_threshold)
@@ -182,6 +243,14 @@ class MatpowerDeploymentProviders:
         self.hif_alpha_grid_size = int(hif_alpha_grid_size)
         self.hif_r_grid_size = int(hif_r_grid_size)
         self.hif_max_scans = int(hif_max_scans)
+        self.harmonic_thd_threshold_percent = float(harmonic_thd_threshold_percent)
+        self.unbalance_vuf_threshold = float(unbalance_vuf_threshold)
+        self.hif_min_residual_reduction = float(hif_min_residual_reduction)
+        self.hif_max_weighted_residual_norm = float(hif_max_weighted_residual_norm)
+        self.vm_bound_tolerance_pu = float(vm_bound_tolerance_pu)
+        self.branch_rate_tolerance_mva = float(branch_rate_tolerance_mva)
+        if self.vm_bound_tolerance_pu < 0.0 or self.branch_rate_tolerance_mva < 0.0:
+            raise ValueError("Physical-bound tolerances must be non-negative.")
 
     # ------------------------------------------------------------------ wiring
 
@@ -206,12 +275,130 @@ class MatpowerDeploymentProviders:
                 CORRECT_TOPOLOGY: self.correct_topology,
             },
             "evidence_providers": {
+                ASK_FOR_MORE_EVIDENCE: self.request_additional_evidence,
                 GET_HARMONIC_CONTEXT: self.get_harmonic_context,
                 RUN_HSE_FROM_PATH: self.run_hse,
                 RUN_THREE_PHASE_NLM_FROM_PATH: self.run_three_phase_nlm,
                 ESTIMATE_HIF_FROM_PATH: self.estimate_hif,
                 ESTIMATE_HIF_MULTISCAN_FROM_PATH: self.estimate_hif_multiscan,
             },
+        }
+
+    def request_additional_evidence(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        """Report exhaustion of the configured HIF diagnostic inventory.
+
+        This provider does not declare the HIF absent or resolved.  It only
+        reports that the controller has already invoked every configured HIF
+        diagnostic for the current observable channel inventory.  The
+        transactional environment separately checks the full bound history and
+        the rejected acceptance tests before this report can end an episode.
+        """
+        observation = state.get("policy_observation")
+        observation = observation if isinstance(observation, Mapping) else {}
+        request = state.get("evidence_request")
+        attempted = {
+            str(signature).split(":", 1)[0]
+            for signature in observation.get("tried_action_signatures") or []
+        }
+        if request in {
+            RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+            RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+        }:
+            investigation_tools = {
+                GET_MEASUREMENT_CONTEXT,
+                GET_PARAMETER_CONTEXT,
+                GET_TOPOLOGY_CONTEXT,
+                CORRECT_MEASUREMENTS,
+                CORRECT_PARAMETERS,
+                CORRECT_TOPOLOGY,
+            }
+            score = observation.get("remaining_anomaly_score")
+            try:
+                score_unresolved = score is not None and float(score) >= 1.0
+            except (TypeError, ValueError):
+                score_unresolved = False
+            if not (
+                (observation.get("unresolved_signatures") or score_unresolved)
+                and "run_wls" in attempted
+                and bool(attempted & investigation_tools)
+            ):
+                return self._failure(
+                    "recovery_evidence_inventory_incomplete",
+                    "observable WLS plus investigation history is required",
+                )
+            available = {
+                str(item) for item in observation.get("available_evidence") or []
+            }
+            if request == RECOVERY_BUDGET_EXHAUSTED_REQUEST:
+                try:
+                    remaining_budget = int(observation.get("remaining_budget") or 0)
+                except (TypeError, ValueError):
+                    remaining_budget = 0
+                if not 0 < remaining_budget < 4:
+                    return self._failure(
+                        "recovery_budget_not_exhausted",
+                        f"remaining_budget={remaining_budget}",
+                    )
+                return {
+                    **self._binding(state),
+                    "evidence_source": "deployment_diagnostic:recovery_budget_inventory",
+                    "request": RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+                    "family": "recovery_budget",
+                    "additional_evidence_available": True,
+                    "autonomous_budget_available": False,
+                    "operator_review_required": True,
+                    "remaining_budget": remaining_budget,
+                    "attempted_tools": sorted(attempted),
+                    "available_evidence_channels": sorted(available),
+                }
+            return {
+                **self._binding(state),
+                "evidence_source": "deployment_diagnostic:recovery_evidence_inventory",
+                "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                "family": "mixed_or_unresolved",
+                "additional_evidence_available": False,
+                "operator_review_required": True,
+                "attempted_tools": sorted(attempted),
+                "available_evidence_channels": sorted(available),
+            }
+        if request != HIF_DIAGNOSTICS_EXHAUSTED_REQUEST:
+            return self._failure(
+                "operator_escalation_request_unsupported", request or "missing_request"
+            )
+        unresolved = unexplained_signatures(
+            observation.get("unresolved_signatures") or [],
+            observation.get("explained_anomalies") or [],
+        )
+        if not self._has_family_signature(
+            {"policy_observation": {"unresolved_signatures": unresolved}}, "hif"
+        ):
+            return self._failure(
+                "operator_escalation_not_supported",
+                "no unexplained observable HIF signature remains",
+            )
+
+        available = {str(item) for item in observation.get("available_evidence") or []}
+        required = {RUN_THREE_PHASE_NLM_FROM_PATH, ESTIMATE_HIF_FROM_PATH}
+        if "hif_scan_window" in available:
+            required.add(ESTIMATE_HIF_MULTISCAN_FROM_PATH)
+        missing = sorted(required - attempted)
+        if missing:
+            return self._failure(
+                "hif_diagnostic_ladder_incomplete",
+                ",".join(missing),
+                required_diagnostics=sorted(required),
+                attempted_diagnostics=sorted(required & attempted),
+            )
+        return {
+            **self._binding(state),
+            "evidence_source": "deployment_diagnostic:hif_evidence_inventory",
+            "request": HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
+            "family": "hif",
+            "additional_evidence_available": False,
+            "operator_review_required": True,
+            "required_diagnostics": sorted(required),
+            "attempted_diagnostics": sorted(required & attempted),
+            "available_evidence_channels": sorted(available),
         }
 
     # ----------------------------------------------------------------- helpers
@@ -305,9 +492,9 @@ class MatpowerDeploymentProviders:
         Derived solely from the candidate solve: a measurement target is fixed
         when every corrected index sits below the residual threshold; a branch
         target is fixed when its Lagrange multipliers sit below the multiplier
-        threshold.  ``remaining_fault_count`` counts the non-target suspects
-        still above threshold, which the deployment candidate oracle uses to
-        separate partial from final acceptance.
+        threshold. ``remaining_suspect_count`` counts non-target residual and
+        branch-multiplier threshold violations. It is observable diagnostic
+        evidence, not an estimate of physical-error cardinality.
         """
         tool = str(source_action.get("tool") or "")
         arguments = source_action.get("arguments")
@@ -339,11 +526,22 @@ class MatpowerDeploymentProviders:
             ]
             return max(values, default=0.0)
 
-        target_fixed = all(
-            abs(float(residuals[index])) < self.residual_threshold
-            for index in target_measurements
-            if 0 <= index < len(residuals)
-        ) and all(row_lambda(row0) < self.lambda_threshold for row0 in target_rows)
+        if target_measurements:
+            target_values = [
+                abs(float(residuals[index]))
+                for index in target_measurements
+                if 0 <= index < len(residuals)
+            ]
+            target_metric_kind = "max_abs_normalized_residual"
+            target_metric_threshold = self.residual_threshold
+        else:
+            target_values = [row_lambda(row0) for row0 in target_rows]
+            target_metric_kind = "max_abs_branch_multiplier"
+            target_metric_threshold = self.lambda_threshold
+        if not target_values:
+            return None
+        target_metric_value = max(target_values)
+        target_fixed = target_metric_value < target_metric_threshold
         remaining = sum(
             1
             for index, value in enumerate(residuals)
@@ -356,7 +554,255 @@ class MatpowerDeploymentProviders:
         return {
             "target_fixed": bool(target_fixed),
             "target_progress": 1.0 if target_fixed else 0.0,
-            "remaining_fault_count": int(remaining),
+            "target_metric_kind": target_metric_kind,
+            "target_metric_value": float(target_metric_value),
+            "target_metric_threshold": float(target_metric_threshold),
+            "remaining_suspect_count": int(remaining),
+        }
+
+    def _steady_state_physical_evidence(
+        self, solved: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Check observable snapshot constraints without claiming a power-flow solve.
+
+        The check uses only the current MATPOWER case and the same measured
+        ``Vm/Pf/Qf/Pt/Qt`` channels supplied to WLS.  It deliberately has a
+        narrow scope: active-network connectivity, bus-voltage limits, and
+        active-branch ``RATE_A`` limits.  A zero/non-positive ``RATE_A`` has the
+        standard MATPOWER meaning of no applicable limit and is reported as
+        unrated rather than silently treated as a passing rated branch.
+        """
+        import numpy as np
+
+        scope = "observed_snapshot_topology_vm_rate_a"
+        violations: list[dict[str, Any]] = []
+        input_errors: list[str] = []
+        topology: dict[str, Any] = {"checked": False}
+        voltage: dict[str, Any] = {
+            "checked": False,
+            "tolerance_pu": self.vm_bound_tolerance_pu,
+        }
+        thermal: dict[str, Any] = {
+            "checked": False,
+            "tolerance_mva": self.branch_rate_tolerance_mva,
+            "telemetry_units": "per_unit_on_case_base_mva",
+        }
+
+        try:
+            ppc = solved["ppc"]
+            bus = np.asarray(ppc["bus"], dtype=float)
+            branch = np.asarray(ppc["branch"], dtype=float)
+            z = np.asarray(solved["z"], dtype=float)
+            nb = int(solved["nb"])
+            nl = int(solved["nl"])
+            index_map = solved["index_map"]
+            base_mva = float(ppc["baseMVA"])
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            input_errors.append(f"physical_evidence_input_invalid:{type(exc).__name__}")
+            bus = np.empty((0, 0), dtype=float)
+            branch = np.empty((0, 0), dtype=float)
+            z = np.asarray([], dtype=float)
+            nb = nl = 0
+            index_map = {}
+            base_mva = math.nan
+
+        if bus.ndim != 2 or bus.shape[0] != nb or bus.shape[1] < 13:
+            input_errors.append("matpower_bus_schema_invalid")
+        if branch.ndim != 2 or branch.shape[0] != nl or branch.shape[1] < 11:
+            input_errors.append("matpower_branch_schema_invalid")
+        if not math.isfinite(base_mva) or base_mva <= 0.0:
+            input_errors.append("matpower_base_mva_invalid")
+        expected_measurements = 3 * nb + 4 * nl
+        if z.ndim != 1 or len(z) != expected_measurements or not np.isfinite(z).all():
+            input_errors.append("measurement_telemetry_invalid")
+        if not isinstance(index_map, Mapping) or not all(
+            key in index_map for key in ("Vm", "Pf", "Qf", "Pt", "Qt")
+        ):
+            input_errors.append("measurement_index_map_invalid")
+
+        schema_ok = not input_errors
+        in_service_rows: list[int] = []
+        bus_ids: list[int] = []
+        if schema_ok:
+            raw_ids = bus[:, 0]
+            if not np.isfinite(raw_ids).all() or not np.allclose(raw_ids, np.rint(raw_ids)):
+                input_errors.append("matpower_bus_ids_invalid")
+            else:
+                # MATPOWER BUS_TYPE=4 is an explicitly isolated bus and is not
+                # part of the energized-network connectivity/limit scope.
+                in_service_rows = [
+                    row for row in range(nb) if int(round(float(bus[row, 1]))) != 4
+                ]
+                bus_ids = [int(round(float(bus[row, 0]))) for row in in_service_rows]
+                if not bus_ids or len(set(bus_ids)) != len(bus_ids):
+                    input_errors.append("matpower_in_service_bus_set_invalid")
+
+        active_rows: list[int] = []
+        components: list[list[int]] = []
+        if not input_errors:
+            bus_set = set(bus_ids)
+            adjacency = {bus_id: set() for bus_id in bus_ids}
+            for row in range(nl):
+                status = float(branch[row, 10])
+                if not math.isfinite(status):
+                    input_errors.append(f"branch_status_invalid:row0={row}")
+                    continue
+                if status == 0.0:
+                    continue
+                active_rows.append(row)
+                raw_from = float(branch[row, 0])
+                raw_to = float(branch[row, 1])
+                if not (
+                    math.isfinite(raw_from)
+                    and math.isfinite(raw_to)
+                    and raw_from.is_integer()
+                    and raw_to.is_integer()
+                ):
+                    input_errors.append(f"active_branch_endpoint_invalid:row0={row}")
+                    continue
+                from_bus = int(raw_from)
+                to_bus = int(raw_to)
+                if from_bus not in bus_set or to_bus not in bus_set:
+                    input_errors.append(f"active_branch_endpoint_invalid:row0={row}")
+                    continue
+                adjacency[from_bus].add(to_bus)
+                adjacency[to_bus].add(from_bus)
+
+            unseen = set(bus_ids)
+            while unseen:
+                root = min(unseen)
+                stack = [root]
+                component: set[int] = set()
+                while stack:
+                    current = stack.pop()
+                    if current in component:
+                        continue
+                    component.add(current)
+                    stack.extend(adjacency[current] - component)
+                unseen -= component
+                components.append(sorted(component))
+            connected = len(components) == 1
+            topology = {
+                "checked": True,
+                "bus_scope": "matpower_bus_type_not_4",
+                "in_service_bus_count": len(bus_ids),
+                "active_branch_count": len(active_rows),
+                "connected": connected,
+                "component_count": len(components),
+                "components": components,
+            }
+            if not connected:
+                violations.append(
+                    {
+                        "type": "topology_disconnected",
+                        "component_count": len(components),
+                        "components": components,
+                    }
+                )
+
+        if not input_errors:
+            vm = z[index_map["Vm"]]
+            vm_violations: list[dict[str, Any]] = []
+            for row in in_service_rows:
+                observed = float(vm[row])
+                vmax = float(bus[row, 11])
+                vmin = float(bus[row, 12])
+                bus_id = int(round(float(bus[row, 0])))
+                if (
+                    not all(math.isfinite(value) for value in (observed, vmin, vmax))
+                    or vmin <= 0.0
+                    or vmax < vmin
+                ):
+                    input_errors.append(f"bus_voltage_limit_invalid:bus={bus_id}")
+                    continue
+                if (
+                    observed < vmin - self.vm_bound_tolerance_pu
+                    or observed > vmax + self.vm_bound_tolerance_pu
+                ):
+                    item = {
+                        "type": "bus_voltage_out_of_bounds",
+                        "bus": bus_id,
+                        "observed_vm_pu": observed,
+                        "vmin_pu": vmin,
+                        "vmax_pu": vmax,
+                    }
+                    vm_violations.append(item)
+                    violations.append(item)
+            voltage = {
+                "checked": True,
+                "checked_bus_count": len(in_service_rows),
+                "within_bounds": not vm_violations,
+                "tolerance_pu": self.vm_bound_tolerance_pu,
+                "violation_count": len(vm_violations),
+            }
+
+        if not input_errors:
+            pf = z[index_map["Pf"]]
+            qf = z[index_map["Qf"]]
+            pt = z[index_map["Pt"]]
+            qt = z[index_map["Qt"]]
+            rated = 0
+            unrated = 0
+            thermal_violations: list[dict[str, Any]] = []
+            for row in active_rows:
+                rate_a = float(branch[row, 5])
+                if not math.isfinite(rate_a):
+                    input_errors.append(f"branch_rate_a_invalid:row0={row}")
+                    continue
+                if rate_a <= 0.0:
+                    unrated += 1
+                    continue
+                rated += 1
+                from_mva = math.hypot(float(pf[row]), float(qf[row])) * base_mva
+                to_mva = math.hypot(float(pt[row]), float(qt[row])) * base_mva
+                observed_mva = max(from_mva, to_mva)
+                if observed_mva > rate_a + self.branch_rate_tolerance_mva:
+                    item = {
+                        "type": "active_branch_rate_a_exceeded",
+                        "branch_row0": row,
+                        "from_bus": int(round(float(branch[row, 0]))),
+                        "to_bus": int(round(float(branch[row, 1]))),
+                        "from_mva": from_mva,
+                        "to_mva": to_mva,
+                        "rate_a_mva": rate_a,
+                    }
+                    thermal_violations.append(item)
+                    violations.append(item)
+            thermal = {
+                "checked": True,
+                "active_branch_count": len(active_rows),
+                "rated_branch_count": rated,
+                "unrated_branch_count": unrated,
+                "within_defined_rate_a_bounds": not thermal_violations,
+                "tolerance_mva": self.branch_rate_tolerance_mva,
+                "telemetry_units": "per_unit_on_case_base_mva",
+                "base_mva": base_mva,
+                "violation_count": len(thermal_violations),
+            }
+
+        complete = not input_errors and all(
+            bool(check.get("checked")) for check in (topology, voltage, thermal)
+        )
+        # Missing/malformed observable inputs are inconclusive, not affirmative
+        # evidence of a physical violation.  Downstream acceptance still fails
+        # closed because only literal ``True`` is sufficient physical evidence.
+        physical_ok: bool | None = None if not complete else not violations
+        evidence = {
+            "scope": scope,
+            "method": "matpower_case_limits_with_observed_wls_telemetry",
+            "complete": complete,
+            "topology_connectivity": topology,
+            "bus_voltage_bounds": voltage,
+            "active_branch_rate_a_bounds": thermal,
+            "violation_count": len(violations),
+            "input_errors": input_errors,
+        }
+        return {
+            "physical_constraints_ok": physical_ok,
+            "physical_evidence_scope": scope,
+            "physical_evidence_complete": complete,
+            "physical_bound_violations": violations,
+            "steady_state_physical_evidence": evidence,
         }
 
     def run_wls(self, state: Mapping[str, Any]) -> dict[str, Any]:
@@ -403,7 +849,11 @@ class MatpowerDeploymentProviders:
         # measurements against it would mask the true anomaly.  The solve
         # still reports its metrics but mints no signatures until the
         # specialized diagnostics have explained the sensor-sourced ones.
-        waveform_markers = ANOMALY_FAMILY_MARKERS["harmonic"] + ANOMALY_FAMILY_MARKERS["hif"]
+        waveform_markers = (
+            ANOMALY_FAMILY_MARKERS["harmonic"]
+            + ANOMALY_FAMILY_MARKERS["three_phase_unbalance"]
+            + ANOMALY_FAMILY_MARKERS["hif"]
+        )
         unexplained_sensor = [
             signature
             for signature in unexplained_signatures(
@@ -448,8 +898,12 @@ class MatpowerDeploymentProviders:
         metrics: dict[str, Any] = {
             **self._binding(state),
             "evidence_source": "deployment_wls:lagrangian_port",
+            # This is convergence of the state-estimation solve only.  It is
+            # not evidence that voltage, thermal, or topology constraints were
+            # checked; those remain unknown unless a separate verifier emits
+            # narrowly scoped physical evidence.
+            "state_estimation_converged": True,
             "converged": True,
-            "power_flow_converged": True,
             "wls_objective": statistic,
             "chi_square_statistic": statistic,
             "chi_square_threshold": threshold,
@@ -458,11 +912,13 @@ class MatpowerDeploymentProviders:
             "anomaly_threshold": 1.0,
             "remaining_anomaly_score": statistic / threshold if threshold else None,
             "no_material_anomaly_remaining": bool(statistic < threshold),
+            "globally_resolved": bool(statistic < threshold),
             "unresolved_signatures": _dedupe(signatures),
             "wls_summary": summary,
         }
         source_action = state.get("source_action")
-        if str(state.get("status") or "") == "candidate" and isinstance(source_action, Mapping):
+        is_candidate = str(state.get("status") or "") == "candidate"
+        if is_candidate and isinstance(source_action, Mapping):
             target_evidence = self._target_evidence(
                 source_action,
                 residuals,
@@ -472,10 +928,19 @@ class MatpowerDeploymentProviders:
             if target_evidence is not None:
                 resolved = bool(statistic < threshold)
                 metrics.update(target_evidence)
-                metrics["physical_constraints_ok"] = True
-                metrics["new_constraint_violations"] = 0
                 metrics["post_action_resolved"] = resolved
                 metrics["globally_resolved"] = resolved and target_evidence["target_fixed"]
+        # Physical feasibility is a separate, narrowly scoped observable
+        # check.  Run it for every successfully estimated candidate, including
+        # a candidate that intentionally leaves another anomaly for the next
+        # recovery step.  The result is derived from case topology plus the
+        # measured Vm/terminal-flow channels; WLS convergence is only what
+        # makes those channels available and is never used as the safety
+        # predicate.  The explicit scope prevents a passing snapshot check
+        # from being mistaken for global anomaly resolution or an AC
+        # power-flow convergence claim.
+        if is_candidate:
+            metrics.update(self._steady_state_physical_evidence(solved))
         return metrics
 
     # ----------------------------------------------------------------- contexts
@@ -803,6 +1268,63 @@ class MatpowerDeploymentProviders:
             )
         return [dict(item) for item in measurements]
 
+    @staticmethod
+    def _observable_signatures(state: Mapping[str, Any]) -> list[str]:
+        observation = state.get("policy_observation")
+        observation = observation if isinstance(observation, Mapping) else {}
+        return [str(item) for item in observation.get("unresolved_signatures") or []]
+
+    @classmethod
+    def _has_family_signature(cls, state: Mapping[str, Any], family: str) -> bool:
+        return any(
+            _matches_any_marker(signature, ANOMALY_FAMILY_MARKERS[family])
+            for signature in cls._observable_signatures(state)
+        )
+
+    def _hif_diagnostic_acceptance(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Apply a fail-closed HIF-vs-null goodness-of-fit gate."""
+        fit = payload.get("fit")
+        fit = fit if isinstance(fit, Mapping) else {}
+        observability = payload.get("observability")
+        observability = observability if isinstance(observability, Mapping) else {}
+        improvement = fit.get("residual_reduction_vs_no_hif")
+        if improvement is None:
+            # The single-scan estimator uses this older name for improvement
+            # over the no-HIF base-model simulation.
+            improvement = fit.get("residual_reduction_vs_no_refinement")
+        residual = fit.get("multiscan_weighted_residual_norm")
+        if residual is None:
+            residual = fit.get("weighted_residual_norm")
+        try:
+            improvement_value = float(improvement)
+            residual_value = float(residual)
+        except (TypeError, ValueError):
+            improvement_value = math.nan
+            residual_value = math.nan
+        model_mismatch = bool(
+            fit.get("model_mismatch_suspected")
+            or observability.get("model_mismatch_suspected")
+        )
+        accepted = bool(
+            math.isfinite(improvement_value)
+            and math.isfinite(residual_value)
+            and improvement_value >= self.hif_min_residual_reduction
+            and residual_value <= self.hif_max_weighted_residual_norm
+            and not model_mismatch
+            and not payload.get("synthetic_oracle", False)
+        )
+        return {
+            "accepted": accepted,
+            "null_hypothesis": "no_hif_base_model",
+            "residual_reduction_vs_null": (
+                improvement_value if math.isfinite(improvement_value) else None
+            ),
+            "weighted_residual_norm": residual_value if math.isfinite(residual_value) else None,
+            "minimum_residual_reduction": self.hif_min_residual_reduction,
+            "maximum_weighted_residual_norm": self.hif_max_weighted_residual_norm,
+            "model_mismatch_suspected": model_mismatch,
+        }
+
     def get_harmonic_context(
         self, state: Mapping[str, Any], action: Mapping[str, Any] | None = None
     ) -> dict[str, Any]:
@@ -848,19 +1370,35 @@ class MatpowerDeploymentProviders:
             return self._failure("hse_failure", payload.get("error"))
         summary = summarize_hse_payload(payload)
         best_bus = payload.get("best_candidate_bus_1based")
+        best_thd = summary.get("best_candidate_thd_percent")
+        try:
+            thd_value = float(best_thd)
+        except (TypeError, ValueError):
+            thd_value = math.nan
+        accepted = bool(
+            best_bus is not None
+            and math.isfinite(thd_value)
+            and thd_value >= self.harmonic_thd_threshold_percent
+        )
         metrics = {
             **self._binding(state),
             "evidence_source": "deployment_diagnostic:harmonic_state_estimation",
             "best_candidate_bus_1based": best_bus,
             "hse_summary": summary,
+            "diagnostic_acceptance": {
+                "accepted": accepted,
+                "null_hypothesis": "thd_below_operational_threshold",
+                "thd_percent": thd_value if math.isfinite(thd_value) else None,
+                "minimum_thd_percent": self.harmonic_thd_threshold_percent,
+            },
         }
-        if best_bus is not None:
+        if accepted:
             metrics["anomaly_explanation"] = {
                 "family": "harmonic",
                 "kind": "harmonic_source_localized",
                 "detail": {
                     "bus_1based": int(best_bus),
-                    "thd_percent": summary.get("best_candidate_thd_percent"),
+                    "thd_percent": thd_value,
                 },
             }
         return metrics
@@ -872,10 +1410,62 @@ class MatpowerDeploymentProviders:
         diagnostic = metadata.get("nlm_diagnostic")
         pristine_dir = metadata.get("pristine_model_dir")
         faulted_dir = metadata.get("faulted_model_dir")
+        unbalance_signal = self._has_family_signature(state, "three_phase_unbalance")
+        hif_signal = self._has_family_signature(state, "hif")
+
+        # Pure unbalance is a distinct terminal explanation, not an implicit
+        # HIF localization.  Sequence-voltage evidence provides an explicit
+        # balanced-system null test and never emits a candidate HIF branch.
+        three_phase_voltages = metadata.get("three_phase_voltages")
+        if unbalance_signal and not hif_signal and three_phase_voltages:
+            vuf_evidence = _three_phase_vuf_evidence(
+                three_phase_voltages, top_k=self.top_k
+            )
+            if not vuf_evidence:
+                return self._failure(
+                    "unbalance_voltage_evidence_invalid",
+                    "three_phase_voltages contains no usable three-phase phasors",
+                )
+            max_vuf = float(vuf_evidence[0]["vuf"])
+            accepted = max_vuf >= self.unbalance_vuf_threshold
+            acceptance = {
+                "accepted": accepted,
+                "null_hypothesis": "balanced_three_phase_voltage",
+                "max_vuf": max_vuf,
+                "minimum_vuf": self.unbalance_vuf_threshold,
+            }
+            metrics: dict[str, Any] = {
+                **self._binding(state),
+                "evidence_source": "deployment_diagnostic:sequence_voltage_unbalance",
+                "nlm_summary": {
+                    "success": True,
+                    "converged": True,
+                    "method": "sequence_voltage_unbalance_test",
+                    "diagnostic_classification": (
+                        "three_phase_unbalance" if accepted else "unresolved"
+                    ),
+                    "top_hif_groups": [],
+                    "top_vuf_buses": vuf_evidence,
+                },
+                "diagnostic_acceptance": acceptance,
+            }
+            if accepted:
+                metrics["anomaly_explanation"] = {
+                    "family": "three_phase_unbalance",
+                    "kind": "voltage_unbalance_confirmed",
+                    "detail": {
+                        "max_vuf": max_vuf,
+                        "minimum_vuf": self.unbalance_vuf_threshold,
+                        "top_vuf_buses": vuf_evidence,
+                    },
+                }
+            return metrics
+
         if not isinstance(diagnostic, Mapping) and not (pristine_dir and faulted_dir):
             return self._failure(
                 "nlm_runtime_missing",
-                "state metadata carries neither nlm_diagnostic nor OpenDSS model dirs",
+                "state metadata carries neither usable three-phase voltages, "
+                "nlm_diagnostic, nor OpenDSS model dirs",
             )
         try:
             case_path = self._case_path(state)
@@ -895,11 +1485,29 @@ class MatpowerDeploymentProviders:
         )
         if not payload.get("success"):
             return self._failure("nlm_failure", payload.get("error"))
-        return {
+        metrics = {
             **self._binding(state),
             "evidence_source": "deployment_diagnostic:three_phase_nlm",
             "nlm_summary": summarize_three_phase_nlm_payload(payload),
         }
+        if unbalance_signal and not hif_signal:
+            classification = str(payload.get("diagnostic_classification") or "")
+            accepted = bool(
+                payload.get("classification_accepted")
+                and classification == "three_phase_unbalance"
+            )
+            metrics["diagnostic_acceptance"] = {
+                "accepted": accepted,
+                "null_hypothesis": "hif_or_other_unexplained_three_phase_event",
+                "diagnostic_classification": classification or None,
+            }
+            if accepted:
+                metrics["anomaly_explanation"] = {
+                    "family": "three_phase_unbalance",
+                    "kind": "nlm_non_hif_unbalance_classified",
+                    "detail": {"diagnostic_classification": classification},
+                }
+        return metrics
 
     def estimate_hif(self, state: Mapping[str, Any], action: Mapping[str, Any]) -> dict[str, Any]:
         arguments = dict(action.get("arguments") or {})
@@ -933,19 +1541,26 @@ class MatpowerDeploymentProviders:
         if not payload.get("success"):
             return self._failure("hif_estimation_failure", payload.get("error"))
         summary = summarize_hif_parameter_estimate_payload(payload)
-        return {
+        acceptance = self._hif_diagnostic_acceptance(payload)
+        metrics: dict[str, Any] = {
             **self._binding(state),
             "evidence_source": "deployment_diagnostic:hif_parameter_estimator",
             "hif_summary": summary,
-            "anomaly_explanation": {
+            "diagnostic_acceptance": acceptance,
+        }
+        if acceptance["accepted"]:
+            metrics["anomaly_explanation"] = {
                 "family": "hif",
-                "kind": "hif_parameters_estimated",
+                "kind": "hif_model_accepted_over_null",
                 "detail": {
                     "candidate_branch_row0": int(arguments["candidate_branch_row0"]),
                     "estimated": summary.get("estimated"),
+                    "residual_reduction_vs_null": acceptance[
+                        "residual_reduction_vs_null"
+                    ],
                 },
-            },
-        }
+            }
+        return metrics
 
     def estimate_hif_multiscan(
         self, state: Mapping[str, Any], action: Mapping[str, Any]
@@ -990,19 +1605,26 @@ class MatpowerDeploymentProviders:
         if not payload.get("success"):
             return self._failure("hif_multiscan_failure", payload.get("error"))
         summary = summarize_hif_parameter_estimate_payload(payload)
-        return {
+        acceptance = self._hif_diagnostic_acceptance(payload)
+        metrics: dict[str, Any] = {
             **self._binding(state),
             "evidence_source": "deployment_diagnostic:hif_multiscan_estimator",
             "hif_summary": summary,
-            "anomaly_explanation": {
+            "diagnostic_acceptance": acceptance,
+        }
+        if acceptance["accepted"]:
+            metrics["anomaly_explanation"] = {
                 "family": "hif",
-                "kind": "hif_parameters_estimated",
+                "kind": "hif_model_accepted_over_null",
                 "detail": {
                     "candidate_branch_row0": int(arguments["candidate_branch_row0"]),
                     "estimated": summary.get("estimated"),
+                    "residual_reduction_vs_null": acceptance[
+                        "residual_reduction_vs_null"
+                    ],
                 },
-            },
-        }
+            }
+        return metrics
 
 
 __all__ = ["MatpowerDeploymentProviders", "matpower_case_differ", "measurement_index_map"]

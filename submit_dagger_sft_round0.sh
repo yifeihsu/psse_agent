@@ -13,8 +13,11 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=yx3882@nyu.edu
 
-# Staged launcher for the round-0 recovery-balanced DAgger aggregate
-# (data/round0_aggregate_20260719, canonical protocol, 2273 chat rows).
+# Staged launcher for a newly generated, provenance-bound, canonical round-0
+# recovery-balanced DAgger aggregate.  The historical
+# data/round0_aggregate_20260719 directory is intentionally not the default:
+# it predates physical-root fingerprints, explicit eligibility, and current
+# registry/source provenance and must fail the release gate.
 # Submit STAGE=gate, one-batch, tiny-overfit, and round0 in that order on a
 # high-memory GPU (--constraint="h200|h100|rtx6000"; on a 48GB rtx6000 the
 # 6144-token batches leave little headroom — if the one-batch stage OOMs
@@ -23,9 +26,8 @@
 # whose held-out recovery evaluation gates any further stage; full
 # production SFT remains refused here.
 #
-# The aggregate rows carry the complete canonical tool schema block, so
-# prepared prompts run to ~5.3k tokens: MAX_LENGTH is 6144 (validated by the
-# local gate run; 4096 would truncate ~35% of prompts).
+# MAX_LENGTH=6144 is a conservative starting envelope.  The exact pinned
+# processor gate for the newly generated release aggregate remains decisive.
 
 set -euo pipefail
 
@@ -37,7 +39,7 @@ ALLOW_DOWNLOAD=${ALLOW_DOWNLOAD:-0}
 
 MODEL_NAME=${MODEL_NAME:-unsloth/gemma-4-31B-it}
 MODEL_REVISION=${MODEL_REVISION:-8a796db4df380b178065ed910849477ff0e99c87}
-AGGREGATE_DIR=${AGGREGATE_DIR:-data/round0_aggregate_20260719}
+AGGREGATE_DIR=${AGGREGATE_DIR:-data/round0_aggregate_release}
 TRAIN_FILE=${TRAIN_FILE:-$AGGREGATE_DIR/aggregate.train.jsonl}
 VALIDATION_FILE=${VALIDATION_FILE:-$AGGREGATE_DIR/aggregate.validation.jsonl}
 TEST_FILE=${TEST_FILE:-$AGGREGATE_DIR/aggregate.test.jsonl}
@@ -95,6 +97,10 @@ for path in "$TRAIN_FILE" "$VALIDATION_FILE" "$TEST_FILE"; do
         exit 2
     fi
 done
+if [[ ! -f "$AGGREGATE_DIR/aggregate.generation_provenance.json" ]]; then
+    echo "ERROR: release generation provenance is missing from $AGGREGATE_DIR; regenerate round 0 from the clean commit before submitting SFT." >&2
+    exit 2
+fi
 if [[ -f "$AGGREGATE_DIR/SHA256SUMS" ]]; then
     (cd "$AGGREGATE_DIR" && sha256sum --check --quiet SHA256SUMS) || {
         echo "ERROR: aggregate split checksums do not match SHA256SUMS; re-ship the aggregate." >&2
@@ -133,7 +139,7 @@ fi
 
 case "$STAGE" in
     gate)
-        COMMAND=("$PYTHON" -m psse_env.sft gate "${COMMON_ARGS[@]}" --test "$TEST_FILE")
+        COMMAND=("$PYTHON" -m psse_env.sft gate "${COMMON_ARGS[@]}" --test "$TEST_FILE" --report-output "$OUTPUT_DIR/gate_report.json")
         ;;
     one-batch)
         COMMAND=("$PYTHON" -m psse_env.sft smoke "${COMMON_ARGS[@]}" --mode one-batch --load-in-4bit)

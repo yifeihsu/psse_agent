@@ -17,6 +17,7 @@ from .gates import (
     parse_tool_call,
     prepare_example,
     validate_grouped_pilot,
+    validate_current_tool_registry,
 )
 from .training import LoraSettings, TrainerSettings
 
@@ -34,4 +35,5 @@ __all__ = [
     "parse_tool_call",
     "prepare_example",
     "validate_grouped_pilot",
+    "validate_current_tool_registry",
 ]

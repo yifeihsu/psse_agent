@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import re
 from collections import defaultdict
 from typing import Any, Iterable, Mapping
 
@@ -345,6 +347,369 @@ def audit_teacher_realizability(
     }
 
 
+_APPROX_NUMERIC_MARKERS = (
+    "residual",
+    "lagrange",
+    "lambda",
+    "chi_square",
+    "objective",
+    "anomaly_score",
+    "progress",
+    "threshold",
+    "ratio",
+    "suspect_count",
+)
+_APPROX_STRUCTURAL_KEYS = frozenset(
+    {
+        "candidate_lifecycle",
+        "candidate_status",
+        "has_open_candidate",
+        "has_unverified_candidate",
+        "has_verified_candidate",
+        "has_fresh_measurement_context",
+        "has_fresh_parameter_context",
+        "has_fresh_topology_context",
+        "last_tool",
+        "last_tool_status",
+        "execution_status",
+        "process_valid",
+        "state_mutated",
+        "tool",
+    }
+)
+
+
+def _normalized_signature_text(value: Any) -> str:
+    text = str(value).strip().lower()
+    # Provider signatures may append indices or magnitudes. Keep the semantic
+    # family while allowing nearby continuous states to share an audit bucket.
+    return re.sub(r"[-+]?\d+(?:\.\d+)?", "#", text)
+
+
+def _scaled_numeric(value: float) -> float:
+    if not math.isfinite(value):
+        raise ValueError("Approximate audit encountered a non-finite feature.")
+    if abs(value) <= 20.0:
+        return value
+    return math.copysign(20.0 + math.log1p(abs(value) - 20.0), value)
+
+
+def _approximate_features(
+    observation: Mapping[str, Any],
+) -> tuple[dict[str, float], dict[str, Any]]:
+    numeric: dict[str, float] = {}
+    structural: dict[str, Any] = {}
+
+    def visit(value: Any, path: str, key: str = "") -> None:
+        if isinstance(value, Mapping):
+            # Explicit threshold ratios make WLS magnitudes comparable across
+            # operating points and covariance/noise settings.
+            ratio_pairs = (
+                ("chi_square_statistic", "chi_square_threshold"),
+                ("remaining_anomaly_score", "anomaly_threshold"),
+                ("global_residual_sum", "global_residual_threshold"),
+            )
+            for numerator_key, denominator_key in ratio_pairs:
+                numerator = value.get(numerator_key)
+                denominator = value.get(denominator_key)
+                if (
+                    isinstance(numerator, (int, float))
+                    and not isinstance(numerator, bool)
+                    and isinstance(denominator, (int, float))
+                    and not isinstance(denominator, bool)
+                    and float(denominator) != 0.0
+                ):
+                    numeric[f"{path}.{numerator_key}_to_{denominator_key}"] = _scaled_numeric(
+                        float(numerator) / float(denominator)
+                    )
+            for child_key, child in value.items():
+                child_key_text = str(child_key)
+                child_path = f"{path}.{child_key_text}"
+                if child_key_text in _APPROX_STRUCTURAL_KEYS and isinstance(
+                    child, (str, bool)
+                ):
+                    structural[child_path] = child
+                if child_key_text == "unresolved_signatures" and isinstance(child, list):
+                    structural[child_path] = sorted(
+                        _normalized_signature_text(item) for item in child
+                    )
+                if child_key_text in {"top_residuals", "top_lagrange"} and isinstance(
+                    child, list
+                ):
+                    ranks: list[tuple[Any, ...]] = []
+                    for item in child:
+                        if not isinstance(item, Mapping):
+                            continue
+                        if child_key_text == "top_residuals":
+                            ranks.append((item.get("channel"), item.get("index0")))
+                        else:
+                            ranks.append(
+                                (
+                                    item.get("line_row0"),
+                                    item.get("from_bus"),
+                                    item.get("to_bus"),
+                                    item.get("terminal"),
+                                )
+                            )
+                    structural[f"{child_path}.rank_pattern"] = ranks
+                if child_key_text == "top_hif_groups" and isinstance(child, list):
+                    # NLM branch localization is the observable categorical
+                    # target for the downstream HIF estimator.  Treating all
+                    # localized branches as the same approximate state creates
+                    # a false teacher conflict even though the model prompt
+                    # explicitly contains the ranked branch row.
+                    structural[f"{child_path}.rank_pattern"] = [
+                        (
+                            item.get("branch_row0"),
+                            item.get("dss_element"),
+                            item.get("phase"),
+                        )
+                        for item in child
+                        if isinstance(item, Mapping)
+                    ]
+                visit(child, child_path, child_key_text)
+        elif isinstance(value, (list, tuple)):
+            for index, child in enumerate(value):
+                visit(child, f"{path}[{index}]", key)
+        elif (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and any(marker in key.lower() for marker in _APPROX_NUMERIC_MARKERS)
+        ):
+            numeric[path] = _scaled_numeric(float(value))
+
+    visit(observation, "state")
+    return numeric, structural
+
+
+def _quantized_feature_key(
+    numeric: Mapping[str, float],
+    structural: Mapping[str, Any],
+    *,
+    quantization_bin: float,
+) -> str:
+    quantized = {
+        key: int(round(value / quantization_bin)) for key, value in numeric.items()
+    }
+    return _stable_json({"numeric": quantized, "structural": structural})
+
+
+def _feature_distance(left: Mapping[str, float], right: Mapping[str, float]) -> float:
+    keys = set(left) | set(right)
+    if not keys:
+        return 0.0
+    squared = 0.0
+    for key in keys:
+        if key not in left or key not in right:
+            squared += 4.0
+        else:
+            squared += (float(left[key]) - float(right[key])) ** 2
+    return math.sqrt(squared / len(keys))
+
+
+def _example_cost_margin(example: Mapping[str, Any]) -> float | None:
+    sources = [example]
+    for key in ("metadata", "labels"):
+        nested = example.get(key)
+        if isinstance(nested, Mapping):
+            sources.append(nested)
+    for source in sources:
+        value = source.get("cost_margin")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+        costs = source.get("action_costs")
+        if isinstance(costs, list):
+            values = sorted(
+                float(item["q_cost"])
+                for item in costs
+                if isinstance(item, Mapping)
+                and isinstance(item.get("q_cost"), (int, float))
+            )
+            if len(values) >= 2:
+                return values[1] - values[0]
+    return None
+
+
+def audit_approximate_teacher_realizability(
+    examples: Iterable[Mapping[str, Any]],
+    *,
+    quantization_bin: float = 0.25,
+    conflict_tolerance: float = 0.05,
+    nearest_neighbor_tolerance: float = 0.10,
+    perturbation_radius: float = 0.25,
+    low_cost_margin_threshold: float = 0.05,
+    require_cost_margins: bool = False,
+    max_conflict_details: int = 100,
+) -> dict[str, Any]:
+    """Audit label stability for nearby continuous WLS observations.
+
+    This complements, rather than replaces, the exact-hash audit. It combines
+    provider-normalized residuals/threshold ratios, rank patterns, quantized
+    buckets, nearest-neighbor disagreement, conditional action entropy, local
+    perturbation stability, and available expert cost margins.
+    """
+    if quantization_bin <= 0 or perturbation_radius < 0:
+        raise ValueError("quantization_bin must be positive and perturbation_radius nonnegative.")
+    for value, name in (
+        (conflict_tolerance, "conflict_tolerance"),
+        (nearest_neighbor_tolerance, "nearest_neighbor_tolerance"),
+    ):
+        if not 0.0 <= float(value) <= 1.0:
+            raise ValueError(f"{name} must be between 0 and 1.")
+
+    records: list[dict[str, Any]] = []
+    invalid: list[dict[str, Any]] = []
+    margins: list[float] = []
+    for index, example in enumerate(examples):
+        example_id = str(example.get("example_id", f"row_{index}"))
+        observation = _example_observation(example)
+        target = _example_target(example)
+        if observation is None or target is None:
+            invalid.append({"example_id": example_id, "reason": "missing observation or target"})
+            continue
+        already_model_visible = not any(
+            isinstance(example.get(key), Mapping)
+            for key in ("policy_observation", "state_summary")
+        )
+        raw_history = None if already_model_visible else example.get("history_window")
+        history = (
+            list(raw_history)
+            if raw_history is not None
+            and not isinstance(raw_history, (str, bytes, Mapping))
+            else None
+        )
+        try:
+            canonical = canonical_policy_observation(
+                observation,
+                history=history,
+                already_model_visible=already_model_visible,
+            )
+            action = canonical_semantic_action(
+                target,
+                observation,
+                history=history,
+                already_model_visible=already_model_visible,
+            )
+            numeric, structural = _approximate_features(canonical)
+        except ValueError as exc:
+            invalid.append({"example_id": example_id, "reason": str(exc)})
+            continue
+        margin = _example_cost_margin(example)
+        if margin is not None and math.isfinite(margin):
+            margins.append(margin)
+        records.append(
+            {
+                "example_id": example_id,
+                "action_key": _stable_json(action),
+                "numeric": numeric,
+                "structural": structural,
+                "bucket": _quantized_feature_key(
+                    numeric, structural, quantization_bin=quantization_bin
+                ),
+            }
+        )
+
+    buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    structures: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for record in records:
+        buckets[record["bucket"]].append(record)
+        structures[_stable_json(record["structural"])].append(record)
+
+    conflicting_rows = 0
+    entropy_weighted = 0.0
+    conflicts: list[dict[str, Any]] = []
+    for bucket_key, bucket in buckets.items():
+        action_counts: dict[str, int] = defaultdict(int)
+        for record in bucket:
+            action_counts[record["action_key"]] += 1
+        bucket_entropy = -sum(
+            (count / len(bucket)) * math.log2(count / len(bucket))
+            for count in action_counts.values()
+        )
+        entropy_weighted += len(bucket) * bucket_entropy
+        if len(action_counts) > 1:
+            conflicting_rows += len(bucket)
+            conflicts.append(
+                {
+                    "feature_hash": hashlib.sha256(bucket_key.encode("utf-8")).hexdigest(),
+                    "example_ids": [record["example_id"] for record in bucket],
+                    "semantic_actions": [json.loads(key) for key in sorted(action_counts)],
+                    "conditional_action_entropy_bits": bucket_entropy,
+                }
+            )
+
+    nearest_total = 0
+    nearest_disagreements = 0
+    local_total = 0
+    local_disagreements = 0
+    nearest_distances: list[float] = []
+    for structural_group in structures.values():
+        if len(structural_group) < 2:
+            continue
+        for index, record in enumerate(structural_group):
+            candidates = [
+                (
+                    _feature_distance(record["numeric"], other["numeric"]),
+                    other,
+                )
+                for other_index, other in enumerate(structural_group)
+                if other_index != index
+            ]
+            distance, neighbor = min(
+                candidates, key=lambda item: (item[0], item[1]["example_id"])
+            )
+            nearest_total += 1
+            nearest_distances.append(distance)
+            disagrees = record["action_key"] != neighbor["action_key"]
+            nearest_disagreements += int(disagrees)
+            if distance <= perturbation_radius:
+                local_total += 1
+                local_disagreements += int(disagrees)
+
+    labeled = len(records)
+    conflict_rate = conflicting_rows / labeled if labeled else 0.0
+    nearest_rate = nearest_disagreements / nearest_total if nearest_total else 0.0
+    local_rate = local_disagreements / local_total if local_total else 0.0
+    low_margin = sum(margin <= low_cost_margin_threshold for margin in margins)
+    margin_coverage = len(margins) / labeled if labeled else 0.0
+    passed = (
+        not invalid
+        and conflict_rate <= conflict_tolerance
+        and nearest_rate <= nearest_neighbor_tolerance
+        and (not require_cost_margins or len(margins) == labeled)
+    )
+    return {
+        "total_examples": len(records) + len(invalid),
+        "labeled_examples": labeled,
+        "quantization_bin": quantization_bin,
+        "quantized_bucket_count": len(buckets),
+        "conflict_buckets": len(conflicts),
+        "conflicting_examples": conflicting_rows,
+        "approximate_conflict_rate": conflict_rate,
+        "conflict_tolerance": conflict_tolerance,
+        "conditional_action_entropy_bits": entropy_weighted / labeled if labeled else 0.0,
+        "nearest_neighbor_compared_examples": nearest_total,
+        "nearest_neighbor_action_disagreement_rate": nearest_rate,
+        "nearest_neighbor_tolerance": nearest_neighbor_tolerance,
+        "mean_nearest_neighbor_distance": (
+            sum(nearest_distances) / len(nearest_distances) if nearest_distances else None
+        ),
+        "perturbation_radius": perturbation_radius,
+        "local_perturbation_compared_examples": local_total,
+        "local_perturbation_action_disagreement_rate": local_rate,
+        "cost_margin_examples": len(margins),
+        "cost_margin_coverage": margin_coverage,
+        "low_cost_margin_threshold": low_cost_margin_threshold,
+        "low_cost_margin_rate": low_margin / len(margins) if margins else None,
+        "cost_margins_required": require_cost_margins,
+        "normalization": "provider-normalized residuals, threshold ratios, and rank patterns",
+        "passed": passed,
+        "conflicts": conflicts[:max_conflict_details],
+        "conflict_details_truncated": max(0, len(conflicts) - max_conflict_details),
+        "invalid_examples": invalid,
+    }
+
+
 def count_model_history_locations(value: Any) -> int:
     """Count history containers recursively in a model-visible payload."""
     count = 0
@@ -436,6 +801,7 @@ def audit_chat_sft_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 __all__ = [
+    "audit_approximate_teacher_realizability",
     "audit_chat_sft_rows",
     "audit_teacher_realizability",
     "canonical_policy_observation",

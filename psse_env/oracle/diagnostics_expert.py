@@ -1,16 +1,17 @@
 """Routing expert for the specialized diagnostic tools.
 
-Routes harmonic and high-impedance-fault investigation from observable
-signals only: which telemetry channels exist on the active state
+Routes harmonic, three-phase-unbalance, and high-impedance-fault
+investigation from observable signals only: which telemetry channels exist on the active state
 (``available_evidence``), which anomaly signatures are unresolved, and what
 earlier diagnostics in this episode already produced.  Privileged fault
-flags and oracle hints may raise a proposal's rank, matching the contract of
-the other family experts, but they never create a route that observable
-evidence cannot justify.
+flags and oracle hints are deliberately ignored here: holding the policy
+observation fixed must hold the production target action fixed too.
 
 The intended escalation ladders are:
 
 - harmonic: ``get_harmonic_context`` -> ``run_hse_from_path``;
+- three-phase unbalance: ``run_three_phase_nlm_from_path`` -> an observable
+  non-HIF unbalance classification (recorded by the provider);
 - HIF: ``run_three_phase_nlm_from_path`` (line-level localization) ->
   ``estimate_hif_location_magnitude_multiscan_from_path`` when a persistent
   scan window exists, else ``estimate_hif_location_magnitude_from_path``.
@@ -22,18 +23,20 @@ from typing import Any, Mapping, Sequence
 
 from psse_env.actions import (
     ANOMALY_FAMILY_MARKERS,
+    ASK_FOR_MORE_EVIDENCE,
     DIAGNOSTIC_TOOLS,
     ESTIMATE_HIF_FROM_PATH,
     ESTIMATE_HIF_MULTISCAN_FROM_PATH,
     GET_HARMONIC_CONTEXT,
+    HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
     RUN_HSE_FROM_PATH,
     RUN_THREE_PHASE_NLM_FROM_PATH,
     safe_normalize_action,
+    unexplained_signatures,
 )
 from psse_env.oracle.expert_types import (
     ExpertActionProposal,
     matching_evidence_codes,
-    normalized_hint_actions,
     policy_state_view,
     state_value,
 )
@@ -43,6 +46,7 @@ from psse_env.oracle.expert_types import (
 # so a signature that routes to a diagnostic is the same signature that the
 # diagnostic's explanation later accounts for.
 HARMONIC_MARKERS = ANOMALY_FAMILY_MARKERS["harmonic"]
+UNBALANCE_MARKERS = ANOMALY_FAMILY_MARKERS["three_phase_unbalance"]
 HIF_MARKERS = ANOMALY_FAMILY_MARKERS["hif"]
 
 
@@ -60,36 +64,27 @@ class DiagnosticsExpert:
         harmonic_fault_present: bool = False,
         hif_fault_present: bool = False,
     ) -> list[ExpertActionProposal]:
-        if oracle_hints is None:
-            oracle_hints = state_value(state, "oracle_action_hints", []) or []
+        # Keep these parameters for API compatibility with the orchestrator,
+        # but never let privileged data affect a production diagnostic label.
+        del oracle_hints, harmonic_fault_present, hif_fault_present
         state = policy_state_view(state)
         active_id = state_value(state, "active_state_id")
         if not active_id:
             return []
         available = {str(item) for item in state_value(state, "available_evidence", []) or []}
-        unresolved = state_value(state, "unresolved_signatures", [])
+        unresolved = unexplained_signatures(
+            state_value(state, "unresolved_signatures", []),
+            state_value(state, "explained_anomalies", []),
+        )
         harmonic_codes = matching_evidence_codes(unresolved, *HARMONIC_MARKERS)
+        unbalance_codes = matching_evidence_codes(unresolved, *UNBALANCE_MARKERS)
         hif_codes = matching_evidence_codes(unresolved, *HIF_MARKERS)
-        completed = self._completed_diagnostics(history or [])
+        completed = self._completed_diagnostics(
+            history or [], active_state_id=str(active_id)
+        )
         proposals: list[ExpertActionProposal] = []
 
-        for action in normalized_hint_actions(
-            list(oracle_hints or ()),
-            allowed_tools=set(DIAGNOSTIC_TOOLS),
-            active_state_id=active_id,
-        ):
-            proposals.append(
-                ExpertActionProposal(
-                    action=action,
-                    source_expert=self.source_expert,
-                    confidence=0.97,
-                    evidence_codes=["oracle_action_hint", "diagnostic_family"],
-                    admissible=True,
-                    estimated_immediate_risk=0.02,
-                )
-            )
-
-        harmonic_signal = bool(harmonic_codes) or harmonic_fault_present
+        harmonic_signal = bool(harmonic_codes)
         if harmonic_signal and "harmonic_measurements" in available:
             if GET_HARMONIC_CONTEXT not in completed:
                 proposals.append(
@@ -99,7 +94,7 @@ class DiagnosticsExpert:
                         confidence=0.86,
                         evidence=[
                             "harmonic_telemetry_available",
-                            *(harmonic_codes or ["privileged_harmonic_ranking"]),
+                            *harmonic_codes,
                         ],
                     )
                 )
@@ -113,23 +108,36 @@ class DiagnosticsExpert:
                     )
                 )
 
-        hif_signal = bool(hif_codes) or hif_fault_present
+        hif_signal = bool(hif_codes)
+        unbalance_signal = bool(unbalance_codes)
+        nlm_channel_available = bool(
+            "nlm_diagnostic" in available
+            or (unbalance_signal and "three_phase_voltages" in available)
+        )
         hif_branch = self._nlm_top_branch(completed.get(RUN_THREE_PHASE_NLM_FROM_PATH))
-        if hif_signal and "nlm_diagnostic" in available and (
+        if (hif_signal or unbalance_signal) and nlm_channel_available and (
             RUN_THREE_PHASE_NLM_FROM_PATH not in completed
         ):
+            evidence_codes = hif_codes if hif_signal else unbalance_codes
             proposals.append(
                 self._proposal(
                     RUN_THREE_PHASE_NLM_FROM_PATH,
                     {"state_id": active_id},
                     confidence=0.85,
                     evidence=[
-                        "nlm_telemetry_available",
-                        *(hif_codes or ["privileged_hif_ranking"]),
+                        (
+                            "nlm_telemetry_available"
+                            if "nlm_diagnostic" in available
+                            else "three_phase_voltage_telemetry_available"
+                        ),
+                        *evidence_codes,
                     ],
                 )
             )
-        if hif_branch is not None:
+        # A ranked NLM branch is not itself proof of HIF.  Escalation requires
+        # an independently observable HIF-specific signature; an unbalance or
+        # imbalance signature alone stops at the non-HIF classification rung.
+        if hif_signal and hif_branch is not None:
             follow_up_arguments = {
                 "state_id": active_id,
                 "candidate_branch_row0": int(hif_branch),
@@ -158,6 +166,32 @@ class DiagnosticsExpert:
                         evidence=["nlm_branch_localized", "single_scan_estimation"],
                     )
                 )
+            required_estimators = [ESTIMATE_HIF_FROM_PATH]
+            if "hif_scan_window" in available:
+                required_estimators.insert(0, ESTIMATE_HIF_MULTISCAN_FROM_PATH)
+            if all(
+                self._diagnostic_rejected(completed.get(tool))
+                for tool in required_estimators
+            ):
+                # A rejected model fit is not a clean bill of health.  End the
+                # autonomous ladder with an explicit operator handoff request;
+                # the environment independently re-audits the full, same-state
+                # history before it may treat this request as terminal.
+                proposals.append(
+                    self._proposal(
+                        ASK_FOR_MORE_EVIDENCE,
+                        {
+                            "state_id": active_id,
+                            "request": HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
+                        },
+                        confidence=0.95,
+                        evidence=[
+                            "hif_signature_unexplained",
+                            "configured_hif_diagnostics_rejected",
+                            "operator_handoff_required",
+                        ],
+                    )
+                )
         return proposals
 
     def _proposal(
@@ -180,6 +214,8 @@ class DiagnosticsExpert:
     @staticmethod
     def _completed_diagnostics(
         history: Sequence[Mapping[str, Any]],
+        *,
+        active_state_id: str | None = None,
     ) -> dict[str, Mapping[str, Any]]:
         """Map successfully executed diagnostic tools to their latest metrics.
 
@@ -193,10 +229,19 @@ class DiagnosticsExpert:
                 continue
             action = item.get("action") or item.get("executed_action") or item
             try:
-                tool = safe_normalize_action(action)["tool"]
+                normalized = safe_normalize_action(action)
+                tool = normalized["tool"]
             except Exception:
                 continue
             if tool not in DIAGNOSTIC_TOOLS:
+                continue
+            requested_state = normalized["arguments"].get("state_id")
+            if (
+                active_state_id is not None
+                and requested_state is not None
+                and str(requested_state) != str(active_state_id)
+                and str(requested_state) not in {"active", "s0"}
+            ):
                 continue
             output = item.get("tool_output")
             outcome = item.get("outcome")
@@ -230,5 +275,17 @@ class DiagnosticsExpert:
                     continue
         return None
 
+    @staticmethod
+    def _diagnostic_rejected(metrics: Mapping[str, Any] | None) -> bool:
+        if not isinstance(metrics, Mapping):
+            return False
+        acceptance = metrics.get("diagnostic_acceptance")
+        return isinstance(acceptance, Mapping) and acceptance.get("accepted") is False
 
-__all__ = ["DiagnosticsExpert", "HARMONIC_MARKERS", "HIF_MARKERS"]
+
+__all__ = [
+    "DiagnosticsExpert",
+    "HARMONIC_MARKERS",
+    "UNBALANCE_MARKERS",
+    "HIF_MARKERS",
+]

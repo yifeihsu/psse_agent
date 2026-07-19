@@ -70,15 +70,37 @@ class DiagnosticsExpertRoutingTests(unittest.TestCase):
         )
         self.assertEqual([p.action["tool"] for p in done], [])
 
-    def test_privileged_family_flag_ranks_but_needs_telemetry(self) -> None:
-        state = _policy_state(available_evidence=["harmonic_measurements"])
-        proposals = self.expert.propose(state, [], harmonic_fault_present=True)
-        self.assertEqual(proposals[0].action["tool"], "get_harmonic_context")
-        self.assertIn("privileged_harmonic_ranking", proposals[0].evidence_codes)
-        without_channel = self.expert.propose(
-            _policy_state(), [], harmonic_fault_present=True
+    def test_privileged_flags_and_hints_cannot_create_a_route(self) -> None:
+        state = _policy_state(
+            available_evidence=["harmonic_measurements", "nlm_diagnostic"]
         )
-        self.assertEqual(without_channel, [])
+        proposals = self.expert.propose(
+            state,
+            [],
+            oracle_hints=[
+                {
+                    "tool": "run_three_phase_nlm_from_path",
+                    "arguments": {"state_id": "episode:s0"},
+                }
+            ],
+            harmonic_fault_present=True,
+            hif_fault_present=True,
+        )
+        self.assertEqual(proposals, [])
+
+    def test_privileged_flags_do_not_change_an_observable_route(self) -> None:
+        state = _policy_state(
+            unresolved_signatures=["harmonic_distortion_detected"],
+            available_evidence=["harmonic_measurements"],
+        )
+        baseline = self.expert.propose(state, [])
+        privileged = self.expert.propose(
+            state, [], harmonic_fault_present=True, hif_fault_present=True
+        )
+        self.assertEqual(
+            [proposal.action for proposal in privileged],
+            [proposal.action for proposal in baseline],
+        )
 
     def test_hif_ladder_nlm_then_estimator(self) -> None:
         state = _policy_state(
@@ -110,6 +132,102 @@ class DiagnosticsExpertRoutingTests(unittest.TestCase):
             "estimate_hif_location_magnitude_multiscan_from_path",
         )
         self.assertEqual(with_window[0].action["arguments"]["candidate_branch_row0"], 12)
+
+    def test_rejected_hif_ladder_requests_explicit_operator_handoff(self) -> None:
+        state = _policy_state(
+            unresolved_signatures=["hif_suspected_zero_sequence"],
+            available_evidence=["nlm_diagnostic"],
+        )
+        nlm_metrics = {
+            "nlm_summary": {
+                "top_hif_groups": [{"rank": 1, "branch_row0": 12, "score": 0.91}]
+            }
+        }
+        rejected = {"diagnostic_acceptance": {"accepted": False}}
+        proposals = self.expert.propose(
+            state,
+            [
+                _successful_step("run_three_phase_nlm_from_path", nlm_metrics),
+                _successful_step(
+                    "estimate_hif_location_magnitude_from_path", rejected
+                ),
+            ],
+        )
+
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0].action["tool"], "ask_for_more_evidence")
+        self.assertEqual(
+            proposals[0].action["arguments"]["request"],
+            "operator_escalation:hif_diagnostics_exhausted",
+        )
+
+    def test_multiscan_hif_handoff_waits_for_single_scan_rejection(self) -> None:
+        state = _policy_state(
+            unresolved_signatures=["hif_suspected_zero_sequence"],
+            available_evidence=["nlm_diagnostic", "hif_scan_window"],
+        )
+        nlm_metrics = {
+            "nlm_summary": {
+                "top_hif_groups": [{"rank": 1, "branch_row0": 12, "score": 0.91}]
+            }
+        }
+        rejected = {"diagnostic_acceptance": {"accepted": False}}
+        history = [
+            _successful_step("run_three_phase_nlm_from_path", nlm_metrics),
+            _successful_step(
+                "estimate_hif_location_magnitude_multiscan_from_path", rejected
+            ),
+        ]
+        follow_up = self.expert.propose(state, history)
+        self.assertEqual(
+            follow_up[0].action["tool"],
+            "estimate_hif_location_magnitude_from_path",
+        )
+
+        history.append(
+            _successful_step("estimate_hif_location_magnitude_from_path", rejected)
+        )
+        handoff = self.expert.propose(state, history)
+        self.assertEqual(handoff[0].action["tool"], "ask_for_more_evidence")
+
+    def test_accepted_hif_estimator_never_requests_operator_handoff(self) -> None:
+        state = _policy_state(
+            unresolved_signatures=["hif_suspected_zero_sequence"],
+            available_evidence=["nlm_diagnostic"],
+        )
+        history = [
+            _successful_step(
+                "run_three_phase_nlm_from_path",
+                {
+                    "nlm_summary": {
+                        "top_hif_groups": [{"branch_row0": 12, "score": 0.91}]
+                    }
+                },
+            ),
+            _successful_step(
+                "estimate_hif_location_magnitude_from_path",
+                {"diagnostic_acceptance": {"accepted": True}},
+            ),
+        ]
+        self.assertEqual(self.expert.propose(state, history), [])
+
+    def test_unbalance_runs_nlm_but_never_escalates_to_hif_estimation(self) -> None:
+        state = _policy_state(
+            unresolved_signatures=["three_phase_unbalance vuf=0.05"],
+            available_evidence=["three_phase_voltages"],
+        )
+        first = self.expert.propose(state, [])
+        self.assertEqual(first[0].action["tool"], "run_three_phase_nlm_from_path")
+
+        nlm_metrics = {
+            "nlm_summary": {
+                "top_hif_groups": [{"rank": 1, "branch_row0": 12, "score": 0.91}]
+            }
+        }
+        done = self.expert.propose(
+            state, [_successful_step("run_three_phase_nlm_from_path", nlm_metrics)]
+        )
+        self.assertEqual(done, [])
 
     def test_summarized_history_window_shape_is_understood(self) -> None:
         state = _policy_state(
@@ -145,17 +263,44 @@ class OrchestratorRoutingTests(unittest.TestCase):
         actions = oracle.next_actions(state, [])
         self.assertEqual(actions[0]["tool"], "get_measurement_context")
 
-    def test_hif_route_via_hidden_family_and_telemetry(self) -> None:
+    def test_hidden_hif_truth_does_not_change_the_teacher_label(self) -> None:
         oracle = ExpertPolicyOracle()
-        state = {
-            "policy_observation": _policy_state(
-                available_evidence=["nlm_diagnostic", "hif_scan_window"]
-            ),
+        observation = _policy_state(
+            unresolved_signatures=["hif_suspected_zero_sequence"],
+            available_evidence=["nlm_diagnostic", "hif_scan_window"],
+        )
+        without_truth = {
+            "policy_observation": observation,
+            "hidden_truth": {},
+            "oracle_action_hints": [],
+        }
+        with_truth = {
+            "policy_observation": observation,
             "hidden_truth": {"true_hif_errors": [{"branch_row0": 12}]},
             "oracle_action_hints": [],
         }
-        actions = oracle.next_actions(state, [])
-        self.assertEqual(actions[0]["tool"], "run_three_phase_nlm_from_path")
+        baseline_actions = oracle.next_actions(without_truth, [])
+        privileged_actions = oracle.next_actions(with_truth, [])
+        self.assertEqual(privileged_actions, baseline_actions)
+        self.assertEqual(
+            baseline_actions[0]["tool"], "run_three_phase_nlm_from_path"
+        )
+
+    def test_hidden_hif_truth_cannot_create_a_teacher_label(self) -> None:
+        oracle = ExpertPolicyOracle()
+        observation = _policy_state(available_evidence=["nlm_diagnostic"])
+        baseline = oracle.next_actions(
+            {"policy_observation": observation, "hidden_truth": {}}, []
+        )
+        privileged = oracle.next_actions(
+            {
+                "policy_observation": observation,
+                "hidden_truth": {"true_hif_errors": [{"branch_row0": 12}]},
+            },
+            [],
+        )
+        self.assertEqual(privileged, baseline)
+        self.assertNotEqual(baseline[0]["tool"], "run_three_phase_nlm_from_path")
 
 
 class ResolutionSemanticsTests(unittest.TestCase):
@@ -258,6 +403,7 @@ class EndToEndHarmonicRoutingTests(unittest.TestCase):
                 break
             actions = oracle.next_actions(env.get_oracle_state(), env.history)
             self.assertTrue(actions, f"expert returned no action after {executed}")
+            env.assert_training_decision_evidence(actions[0])
             _, output = env.step(actions[0])
             self.assertEqual(
                 output["execution_status"], "success", f"{actions[0]} -> {output}"
@@ -276,6 +422,95 @@ class EndToEndHarmonicRoutingTests(unittest.TestCase):
         self.assertEqual(
             record["explained_signatures"], ["harmonic_distortion_detected"]
         )
+
+
+class ProductionDiagnosticEvidenceGateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from psse_env.providers import MatpowerDeploymentProviders
+        from psse_env.transactional_env import TransactionalPSSEEnv
+
+        self.data = json.loads(FIXTURE.read_text())
+        providers = MatpowerDeploymentProviders()
+        self.env = TransactionalPSSEEnv(
+            **providers.env_kwargs(), production_dataset_mode=True
+        )
+
+    def _scenario(self, **overrides) -> dict:
+        scenario = {
+            "scenario_id": "diagnostic_gate",
+            "case": self.data["case_path"],
+            "measurements": list(self.data["z_obs"]),
+            "metadata": {},
+        }
+        scenario.update(overrides)
+        return scenario
+
+    def test_hidden_truth_and_channel_cannot_bypass_signature_gate(self) -> None:
+        state = self.env.reset(
+            self._scenario(
+                metadata={
+                    "nlm_diagnostic": {
+                        "success": True,
+                        "method": "observable_test",
+                        "top_hif_groups": [{"branch_row0": 12}],
+                    }
+                },
+                hidden_truth={"true_hif_errors": [{"branch_row0": 12}]},
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "observable .*signature"):
+            self.env.assert_training_decision_evidence(
+                {
+                    "tool": "run_three_phase_nlm_from_path",
+                    "arguments": {"state_id": state["active_state_id"]},
+                }
+            )
+
+    def test_hif_estimator_target_must_come_from_latest_nlm_output(self) -> None:
+        state = self.env.reset(
+            self._scenario(
+                unresolved_signatures=["hif_suspected_zero_sequence"],
+                semantic_field_provenance={
+                    "unresolved_signatures": "deployment_sensor:waveform_capture"
+                },
+                metadata={
+                    "nlm_diagnostic": {
+                        "success": True,
+                        "converged": True,
+                        "method": "observable_test",
+                        "top_hif_groups": [
+                            {"rank": 1, "branch_row0": 12, "score": 0.9}
+                        ],
+                    }
+                },
+            )
+        )
+        nlm_action = {
+            "tool": "run_three_phase_nlm_from_path",
+            "arguments": {"state_id": state["active_state_id"]},
+        }
+        self.env.assert_training_decision_evidence(nlm_action)
+        _, output = self.env.step(nlm_action)
+        self.assertEqual(output["execution_status"], "success")
+
+        unsupported = {
+            "tool": "estimate_hif_location_magnitude_from_path",
+            "arguments": {
+                "state_id": state["active_state_id"],
+                "candidate_branch_row0": 11,
+            },
+        }
+        with self.assertRaisesRegex(ValueError, "not supported by the latest"):
+            self.env.assert_training_decision_evidence(unsupported)
+
+        supported = {
+            "tool": "estimate_hif_location_magnitude_from_path",
+            "arguments": {
+                "state_id": state["active_state_id"],
+                "candidate_branch_row0": 12,
+            },
+        }
+        self.env.assert_training_decision_evidence(supported)
 
 
 if __name__ == "__main__":

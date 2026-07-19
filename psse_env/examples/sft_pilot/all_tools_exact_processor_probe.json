@@ -1,4 +1,7 @@
 {
+  "historical": true,
+  "release_eligible": false,
+  "superseded_reason": "13-tool report predates current registry and clean-source provenance gate",
   "adversarial_episode_id": "e",
   "processors": {
     "unsloth/gemma-4-31B-it": {

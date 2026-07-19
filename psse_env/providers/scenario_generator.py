@@ -68,6 +68,13 @@ DEFAULT_HIF_SAMPLE_PATHS = (
     / "hif_multiscan_benchmark_fixed_identical_17x20_20260714"
     / "samples.jsonl",
 )
+DEFAULT_HIF_FALLBACK_SAMPLE_PATHS = (
+    _REPO_ROOT
+    / "artifacts"
+    / "measurements"
+    / "out_measurements_hif_representative_20260705_curated17"
+    / "samples.jsonl",
+)
 DEFAULT_BALANCED_ARTIFACT_DIR = (
     _REPO_ROOT / "artifacts" / "measurements" / "out_measurements_balanced"
 )
@@ -157,9 +164,20 @@ class Round0ScenarioGenerator:
         noise_profile_rows: int = 200,
     ) -> None:
         self.corpus_path = Path(corpus_path or DEFAULT_CORPUS_PATH)
+        uses_default_hif_paths = hif_sample_paths is None
         self.hif_sample_paths = [
-            Path(path) for path in (hif_sample_paths or DEFAULT_HIF_SAMPLE_PATHS)
+            Path(path)
+            for path in (
+                DEFAULT_HIF_SAMPLE_PATHS
+                if uses_default_hif_paths
+                else hif_sample_paths
+            )
         ]
+        self.hif_fallback_sample_paths = (
+            [Path(path) for path in DEFAULT_HIF_FALLBACK_SAMPLE_PATHS]
+            if uses_default_hif_paths
+            else []
+        )
         self.balanced_artifact_dir = Path(
             balanced_artifact_dir or DEFAULT_BALANCED_ARTIFACT_DIR
         )
@@ -180,6 +198,7 @@ class Round0ScenarioGenerator:
         self._rng = np.random.default_rng(self.seed)
         self._corpus_by_class: dict[str, list[dict[str, Any]]] | None = None
         self._hif_samples: list[dict[str, Any]] | None = None
+        self._hif_order_population_size: int | None = None
         self._noise_std: np.ndarray | None = None
         self._case14: dict[str, Any] | None = None
         self._chi2_cache: dict[tuple[str, str], float] = {}
@@ -199,13 +218,62 @@ class Round0ScenarioGenerator:
     def _hif_rows(self) -> list[dict[str, Any]]:
         if self._hif_samples is None:
             rows: list[dict[str, Any]] = []
+            used_fallback = False
             for path in self.hif_sample_paths:
                 if not path.is_file():
                     continue
                 with open(path, encoding="utf-8") as handle:
                     rows.extend(json.loads(line) for line in handle)
-            self._hif_samples = rows
+            if not rows:
+                used_fallback = True
+                for path in self.hif_fallback_sample_paths:
+                    if not path.is_file():
+                        continue
+                    with open(path, encoding="utf-8") as handle:
+                        rows.extend(json.loads(line) for line in handle)
+            self._hif_samples = [self._normalize_hif_row(row) for row in rows]
+            # Both primary corpora cover the same 17 HIF branches.  Preserve
+            # their combined ordering population when the single tracked
+            # fallback corpus is used, so later families see the same seeded
+            # random stream without duplicating physical fallback scenarios.
+            source_sets = len(self.hif_sample_paths) if used_fallback else 1
+            self._hif_order_population_size = len(self._hif_samples) * source_sets
         return self._hif_samples
+
+    @staticmethod
+    def _normalize_hif_row(row: Mapping[str, Any]) -> dict[str, Any]:
+        """Promote a legacy HIF snapshot to the current scan-window schema.
+
+        The tracked representative HIF corpus predates persistent multiscan
+        windows.  It remains a physically generated snapshot with NLM and
+        three-phase evidence, so a clean checkout can safely expose it as a
+        one-scan window when the larger benchmark artifacts are unavailable.
+        """
+        normalized = copy.deepcopy(dict(row))
+        if normalized.get("scans"):
+            return normalized
+        required = ("z_obs", "z_true", "three_phase_voltages")
+        if any(not normalized.get(key) for key in required):
+            return normalized
+        topology_id = str(normalized.get("topology_id") or "ieee14_base")
+        normalized["scans"] = [
+            {
+                "scan_index": 0,
+                "z_clean": copy.deepcopy(normalized["z_true"]),
+                "z_obs": copy.deepcopy(normalized["z_obs"]),
+                "three_phase_voltages": copy.deepcopy(
+                    normalized["three_phase_voltages"]
+                ),
+                "op_point": copy.deepcopy(normalized.get("op_point") or {}),
+                "topology_id": topology_id,
+            }
+        ]
+        normalized["scan_count"] = 1
+        normalized["topology_id"] = topology_id
+        normalized["window_metadata"] = {
+            "source_kind": "tracked_single_scan_fallback",
+        }
+        return normalized
 
     def noise_profile(self) -> np.ndarray:
         """Per-index measurement noise std estimated from no-error corpus rows."""
@@ -426,6 +494,8 @@ class Round0ScenarioGenerator:
     def _topology_scenario(self, index: int) -> dict[str, Any]:
         from pypower.api import case14 as pypower_case14
         from pypower.api import ppoption, runpf
+        from pypower.idx_bus import BUS_I, VMAX, VMIN
+        from pypower.idx_gen import GEN_BUS, VG
 
         safe_rows = self._safe_outage_rows()
         row0 = int(self._rng.choice(safe_rows))
@@ -433,6 +503,19 @@ class Round0ScenarioGenerator:
         truth = pypower_case14()
         truth["bus"][:, 2] *= load_scale
         truth["bus"][:, 3] *= load_scale
+        # PYPOWER's canonical case14 ships generator voltage setpoints of 1.07
+        # and 1.09 pu at buses whose declared VMAX is 1.06 pu.  That is usable
+        # as a power-flow demo but not as a physically admissible verification
+        # fixture.  Keep synthesized telemetry inside the case's own declared
+        # voltage limits before solving instead of teaching the verifier to
+        # tolerate an actual limit violation.
+        voltage_bounds = {
+            int(row[BUS_I]): (float(row[VMIN]), float(row[VMAX]))
+            for row in truth["bus"]
+        }
+        for gen_row in truth["gen"]:
+            vmin, vmax = voltage_bounds[int(gen_row[GEN_BUS])]
+            gen_row[VG] = min(max(float(gen_row[VG]), vmin), vmax)
         slack_rows = truth["bus"][:, 1] == 3
         slack_buses = set(truth["bus"][slack_rows, 0].astype(int))
         for gen_row in truth["gen"]:
@@ -550,6 +633,7 @@ class Round0ScenarioGenerator:
             "scan_window_path": str(row.get("id") or scenario["scenario_id"]),
             "scans": copy.deepcopy(list(scans)),
             "sigma_z": copy.deepcopy(row.get("sigma_z")),
+            "window_metadata": copy.deepcopy(row.get("window_metadata") or {}),
         }
         scenario["hidden_truth"] = {"true_hif_errors": [copy.deepcopy(label)]}
         return scenario
@@ -663,11 +747,22 @@ class Round0ScenarioGenerator:
             return built
 
         source_rows, builder = self._family_source(family)
-        order = self._rng.permutation(len(source_rows))
+        order_population = len(source_rows)
+        if family in {"hif", "measurement+hif"}:
+            order_population = max(
+                order_population,
+                int(self._hif_order_population_size or 0),
+            )
+        raw_order = self._rng.permutation(order_population)
+        order = list(
+            dict.fromkeys(
+                int(position) % len(source_rows) for position in raw_order
+            )
+        ) if source_rows else []
         for position in order:
             if len(built) >= count:
                 break
-            row = source_rows[int(position)]
+            row = source_rows[position]
             source = str(row.get("id") or position)
             attempts += 1
             try:
@@ -768,5 +863,6 @@ __all__ = [
     "build_measurement_vector",
     "DEFAULT_CORPUS_PATH",
     "DEFAULT_HIF_SAMPLE_PATHS",
+    "DEFAULT_HIF_FALLBACK_SAMPLE_PATHS",
     "DEFAULT_BALANCED_ARTIFACT_DIR",
 ]
