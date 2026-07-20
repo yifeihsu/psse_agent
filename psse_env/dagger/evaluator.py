@@ -218,22 +218,375 @@ CaseLoader = Callable[[Any], Any]
 
 _OFFLINE_EXECUTION_KEYS = frozenset(
     {
+        "action_cost",
+        "action_costs",
+        "admissible_actions",
+        "best_cost",
+        "candidate_assessment",
+        "candidate_disposition",
+        "chosen_cost",
+        "cost_margin",
+        "cost_to_go",
+        "costs",
+        "cost_label",
+        "cost_labels",
+        "data_source_tier",
+        "dataset_split",
         "evaluation_labels",
+        "executed_cost",
+        "expected_final_state",
+        "expert_cost",
+        "final_physical_state",
+        "final_state",
+        "final_states",
         "hidden_truth",
+        "ground_truth",
+        "label",
+        "labels",
+        "minimum_cost",
+        "min_cost",
         "oracle_action_hints",
+        "oracle_action",
+        "optimal_cost",
+        "oracle_cost_to_go",
+        "preferred_action",
+        "progress_class",
+        "q_cost",
+        "q_costs",
+        "release_audit",
         "suggested_actions",
+        "recommended_action",
+        "ranked_actions",
+        "target_fixed",
+        "target_action",
+        "teacher_action",
+        "expert_action",
+        "gold_action",
+        "tool_cost",
+        "tool_costs",
         "tool_cost_labels",
+        "valid_actions",
+        "valid_action",
+        "valid_next_actions",
+        "valid_next_action",
         "remaining_true_faults",
         "remaining_true_fault_count",
         "remaining_fault_count",
         "final_remaining",
         "truth_complete",
+        "truth",
+        "scenario_family",
+        "error_family",
+        "error_family_combination",
+        "error_cardinality",
+        "cardinality",
+        "network_case",
+        "case_id",
+        "physical_root",
+        "physical_root_fingerprint",
+        "root_scenario_id",
+        "split",
+        "source_tier",
+    }
+)
+_SCENARIO_SCHEMA_VERSION = 1
+_SCENARIO_PARTITION_KEYS = frozenset(
+    {"scenario_schema_version", "execution", "audit", "grouping"}
+)
+_SCENARIO_PARTITION_MARKERS = _SCENARIO_PARTITION_KEYS
+_EXECUTION_METADATA_KEYS = frozenset(
+    {
+        "semantic_field_provenance",
+        "unresolved_signatures",
+        "remaining_anomaly_score",
+        "no_material_anomaly_remaining",
+        "requires_measurement_context",
+        "measurement_covariance",
+        "slack_bus",
+        "pristine_model_dir",
+        "faulted_model_dir",
+        "load_scale",
+        "parameter_scans",
+        "harmonic_measurements",
+        "harmonic_orders",
+        "nlm_diagnostic",
+        "hif_runtime",
+        "hif_scan_window",
+        "three_phase_voltages",
+    }
+)
+_PHYSICAL_AUDIT_OVERRIDE_KEYS = frozenset(
+    {
+        "final_physical_correct",
+        "physical_correctness_known",
+        "healthy_components_preserved",
+        "healthy_preservation_known",
+        "partial_fixes_retained",
+    }
+)
+_EXECUTION_SCENARIO_KEYS = frozenset(
+    {
+        "scenario_id",
+        "id",
+        "episode_id",
+        "case",
+        "case_path",
+        "measurements",
+        "z_obs",
+        "metadata",
+        "semantic_field_provenance",
+        "unresolved_signatures",
+        "remaining_anomaly_score",
+        "no_material_anomaly_remaining",
+        "requires_measurement_context",
+        # Explicit test/development adapters may initialize their own state and
+        # scripted transitions, but these fields contain no audit reference.
+        "initial_physical_state",
+        "script",
+    }
+)
+_GROUPING_SCENARIO_KEYS = frozenset(
+    {
+        "root_scenario_id",
+        "physical_root_fingerprint",
+        "scenario_family",
+        "error_cardinality",
+        "case_id",
+        "split",
+        "source_tier",
+    }
+)
+_REQUIRED_EXECUTION_SCENARIO_KEYS = frozenset(
+    {"scenario_id", "case", "measurements"}
+)
+_REQUIRED_GROUPING_SCENARIO_KEYS = frozenset(
+    {
+        "physical_root_fingerprint",
+        "scenario_family",
+        "error_cardinality",
+        "case_id",
+        "split",
+        "source_tier",
     }
 )
 _REQUIRED_RELEASE_ENVIRONMENT = {
     "production_dataset_mode": True,
     "candidate_quality_oracle_mode": "deployment",
 }
+
+
+def _normalized_key(key: Any) -> str:
+    separated = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(key).strip())
+    return re.sub(r"[^a-zA-Z0-9]+", "_", separated).strip("_").lower()
+
+
+def _offline_execution_key(key: Any) -> bool:
+    normalized = _normalized_key(key)
+    return bool(
+        normalized in _OFFLINE_EXECUTION_KEYS
+        or normalized.startswith(
+            (
+                "true_",
+                "clean_",
+                "expected_",
+                "gold_final_",
+                "ground_truth_",
+                "oracle_action_",
+                "expert_action_",
+                "teacher_action_",
+                "target_action_",
+                "release_audit_",
+                "action_cost",
+                "q_value",
+                "reference_solution",
+            )
+        )
+        or normalized.startswith(
+            (
+                "final_",
+                "recommended_action",
+                "oracle_action",
+                "expert_action",
+                "teacher_action",
+                "target_action",
+                "gold_action",
+                "valid_action",
+                "correct_action",
+                "optimal_action",
+            )
+        )
+        or normalized.endswith(
+            (
+                "_truth",
+                "_ground_truth",
+                "_label",
+                "_labels",
+                "_cost",
+                "_costs",
+                "_cost_label",
+                "_cost_labels",
+            )
+        )
+    )
+
+
+def _has_partition_marker(scenario: Mapping[str, Any]) -> bool:
+    return bool(
+        {_normalized_key(key) for key in scenario} & _SCENARIO_PARTITION_MARKERS
+    )
+
+
+def _normalized_mapping_value(
+    source: Mapping[str, Any], canonical_key: str, *, label: str
+) -> tuple[bool, Any]:
+    matches = [
+        (str(key), value)
+        for key, value in source.items()
+        if _normalized_key(key) == canonical_key
+    ]
+    if not matches:
+        return False, None
+    value = copy.deepcopy(matches[0][1])
+    for alias, candidate in matches[1:]:
+        if candidate != value:
+            raise ValueError(
+                f"conflicting normalized field {canonical_key!r} in {label}: "
+                + ", ".join(name for name, _ in matches)
+            )
+    return True, value
+
+
+def privileged_execution_paths(value: Any, *, path: str = "$") -> list[str]:
+    """Return recursively discovered audit-only fields in an execution payload."""
+
+    if isinstance(value, Mapping):
+        found: list[str] = []
+        for key, item in value.items():
+            child = f"{path}.{key}"
+            if _offline_execution_key(key):
+                found.append(child)
+            found.extend(privileged_execution_paths(item, path=child))
+        return found
+    if isinstance(value, (list, tuple)):
+        return [
+            leaked
+            for index, item in enumerate(value)
+            for leaked in privileged_execution_paths(item, path=f"{path}[{index}]")
+        ]
+    return []
+
+
+def _partitioned_scenario_parts(
+    scenario: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    if set(scenario) != _SCENARIO_PARTITION_KEYS:
+        missing = sorted(_SCENARIO_PARTITION_KEYS - set(scenario))
+        extra = sorted(set(scenario) - _SCENARIO_PARTITION_KEYS)
+        details = []
+        if missing:
+            details.append("missing=" + ",".join(missing))
+        if extra:
+            details.append("unexpected=" + ",".join(str(item) for item in extra))
+        raise ValueError(
+            "partitioned scenario must contain exactly scenario_schema_version, "
+            "execution, audit, and grouping: " + "; ".join(details)
+        )
+    version = scenario.get("scenario_schema_version")
+    if type(version) is not int or version != _SCENARIO_SCHEMA_VERSION:
+        raise ValueError(
+            f"partitioned scenario_schema_version must be {_SCENARIO_SCHEMA_VERSION}"
+        )
+    parts: list[dict[str, Any]] = []
+    for name in ("execution", "audit", "grouping"):
+        value = scenario.get(name)
+        if not isinstance(value, Mapping):
+            raise ValueError(f"partitioned scenario {name} must be a mapping")
+        parts.append(copy.deepcopy(dict(value)))
+    execution, audit, grouping = parts
+    unexpected_execution = sorted(set(execution) - _EXECUTION_SCENARIO_KEYS)
+    if unexpected_execution:
+        raise ValueError(
+            "partitioned scenario execution contains unsupported fields: "
+            + ", ".join(str(item) for item in unexpected_execution)
+        )
+    unexpected_grouping = sorted(set(grouping) - _GROUPING_SCENARIO_KEYS)
+    if unexpected_grouping:
+        raise ValueError(
+            "partitioned scenario grouping contains unsupported fields: "
+            + ", ".join(str(item) for item in unexpected_grouping)
+        )
+    leaked = privileged_execution_paths(execution)
+    if leaked:
+        raise ValueError(
+            "partitioned scenario execution contains audit-only fields: "
+            + ", ".join(leaked)
+        )
+    metadata = execution.get("metadata")
+    if metadata is not None:
+        if not isinstance(metadata, Mapping):
+            raise ValueError("partitioned scenario execution.metadata must be a mapping")
+        unexpected_metadata = sorted(set(metadata) - _EXECUTION_METADATA_KEYS)
+        if unexpected_metadata:
+            raise ValueError(
+                "partitioned scenario execution.metadata contains unsupported fields: "
+                + ", ".join(str(item) for item in unexpected_metadata)
+            )
+    _, truth = _normalized_mapping_value(audit, "truth", label="audit")
+    if truth is not None and not isinstance(truth, Mapping):
+        raise ValueError("partitioned scenario audit.truth must be a mapping")
+    execution_keys = {_normalized_key(key) for key in execution}
+    grouping_keys = {_normalized_key(key) for key in grouping}
+    audit_keys = {
+        _normalized_key(key)
+        for key in audit
+        if _normalized_key(key) != "truth"
+    }
+    truth_keys = (
+        {_normalized_key(key) for key in truth}
+        if isinstance(truth, Mapping)
+        else set()
+    )
+    collisions = sorted(
+        (audit_keys & (execution_keys | grouping_keys))
+        | (truth_keys & (execution_keys | grouping_keys | audit_keys))
+    )
+    if collisions:
+        raise ValueError(
+            "partitioned scenario audit fields collide with execution/grouping: "
+            + ", ".join(str(item) for item in collisions)
+        )
+    missing_execution = sorted(_REQUIRED_EXECUTION_SCENARIO_KEYS - set(execution))
+    if missing_execution:
+        raise ValueError(
+            "partitioned scenario execution is missing required fields: "
+            + ", ".join(missing_execution)
+        )
+    missing_grouping = sorted(_REQUIRED_GROUPING_SCENARIO_KEYS - set(grouping))
+    if missing_grouping:
+        raise ValueError(
+            "partitioned scenario grouping is missing required fields: "
+            + ", ".join(missing_grouping)
+        )
+    if not str(execution.get("scenario_id") or "").strip():
+        raise ValueError("partitioned scenario execution.scenario_id must be non-empty")
+    measurements = execution.get("measurements")
+    if not isinstance(measurements, Sequence) or isinstance(measurements, (str, bytes)):
+        raise ValueError("partitioned scenario execution.measurements must be a sequence")
+    cardinality = grouping.get("error_cardinality")
+    if isinstance(cardinality, bool) or not isinstance(cardinality, int) or cardinality < 0:
+        raise ValueError(
+            "partitioned scenario grouping.error_cardinality must be a non-negative integer"
+        )
+    for key in (
+        "physical_root_fingerprint",
+        "scenario_family",
+        "case_id",
+        "split",
+        "source_tier",
+    ):
+        if not isinstance(grouping.get(key), str) or not grouping[key].strip():
+            raise ValueError(f"partitioned scenario grouping.{key} must be non-empty")
+    return execution, audit, grouping
 
 
 def strip_offline_truth(scenario: Mapping[str, Any]) -> dict[str, Any]:
@@ -246,21 +599,22 @@ def strip_offline_truth(scenario: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(scenario, Mapping):
         raise TypeError("scenario must be a mapping")
 
-    def strip(value: Any) -> Any:
+    if _has_partition_marker(scenario):
+        execution, _, _ = _partitioned_scenario_parts(scenario)
+        return execution
+
+    def strip(value: Any, *, depth: int = 0) -> Any:
         if isinstance(value, Mapping):
             return {
-                copy.deepcopy(key): strip(item)
+                copy.deepcopy(key): strip(item, depth=depth + 1)
                 for key, item in value.items()
-                if not (
-                    str(key).startswith("true_")
-                    or str(key).startswith("clean_")
-                    or str(key) in _OFFLINE_EXECUTION_KEYS
-                )
+                if not _offline_execution_key(key)
+                and not (depth == 0 and _normalized_key(key) == "family")
             }
         if isinstance(value, list):
-            return [strip(item) for item in value]
+            return [strip(item, depth=depth + 1) for item in value]
         if isinstance(value, tuple):
-            return tuple(strip(item) for item in value)
+            return tuple(strip(item, depth=depth + 1) for item in value)
         return copy.deepcopy(value)
 
     return strip(scenario)
@@ -395,9 +749,11 @@ class ClosedLoopRolloutEvaluator:
 
     ``env_factory`` and ``policy_factory`` are called once per episode.  They
     may accept a keyword-only ``seed`` and/or ``rng`` argument, but never
-    receive the scenario or its truth.  ``physical_audit_fn`` and
-    ``tool_cost_resolver`` run only after the policy action has been selected;
-    their single context mapping may therefore contain offline truth.
+    receive the scenario or its truth.  Development-only
+    ``physical_audit_fn`` and ``tool_cost_resolver`` callbacks may inspect
+    copied offline truth, but never receive the live environment.  Release
+    evaluation forbids both callbacks so trajectory and audit evidence come
+    only from the pinned evaluator implementation.
 
     A physical audit callback can override the conservative built-in audit by
     returning any of these keys: ``final_physical_correct``,
@@ -430,6 +786,20 @@ class ClosedLoopRolloutEvaluator:
             raise ValueError("max_steps must be positive.")
         if case_loader is not None and not callable(case_loader):
             raise TypeError("case_loader must be callable when supplied.")
+        if physical_audit_fn is not None and not callable(physical_audit_fn):
+            raise TypeError("physical_audit_fn must be callable when supplied.")
+        if tool_cost_resolver is not None and not callable(tool_cost_resolver):
+            raise TypeError("tool_cost_resolver must be callable when supplied.")
+        if (
+            require_release_environment
+            or require_policy_identity
+            or isinstance(expected_policy_identity, Mapping)
+        ) and (
+            physical_audit_fn is not None or tool_cost_resolver is not None
+        ):
+            raise ValueError(
+                "release evaluation forbids custom physical-audit and tool-cost callbacks"
+            )
         self.env_factory = env_factory
         self.policy_factory = policy_factory
         self.max_steps = int(max_steps)
@@ -466,8 +836,24 @@ class ClosedLoopRolloutEvaluator:
         | Iterable[Mapping[str, Any]],
     ) -> EvaluationResult:
         suites = _normalize_suites(scenario_suites)
-        suite_manifest = _validate_and_fingerprint_suites(
+        try:
+            validate_release_scenario_suites(suites)
+        except ValueError as exc:
+            release_scenario_schema_validation = {
+                "passed": False,
+                "scenario_schema_version": _SCENARIO_SCHEMA_VERSION,
+                "failures": [str(exc)],
+            }
+            if self.require_release_environment:
+                raise
+        else:
+            release_scenario_schema_validation = {
+                "passed": True,
+                "scenario_schema_version": _SCENARIO_SCHEMA_VERSION,
+            }
+        suite_manifest = fingerprint_evaluation_suites(
             suites,
+            seed=self.seed,
             required_suites=self.required_suites,
             minimum_suites=self.minimum_suites,
             minimum_episodes_per_suite=self.minimum_episodes_per_suite,
@@ -528,13 +914,21 @@ class ClosedLoopRolloutEvaluator:
                 "seed": self.seed,
                 "max_steps": self.max_steps,
                 "suite_names": sorted(suites),
-                "episode_order": [episode.episode_key for episode in episodes],
                 "required_suites": list(self.required_suites),
                 "minimum_suites": self.minimum_suites,
                 "minimum_episodes_per_suite": self.minimum_episodes_per_suite,
                 "minimum_roots_per_suite": self.minimum_roots_per_suite,
+                "release_scenario_schema_validation": (
+                    release_scenario_schema_validation
+                ),
                 "release_environment_validation": release_environment_validation,
                 "policy_identity_validation": policy_identity_validation,
+                "custom_callback_validation": {
+                    "passed": self.physical_audit_fn is None
+                    and self.tool_cost_resolver is None,
+                    "physical_audit_callback": self.physical_audit_fn is not None,
+                    "tool_cost_callback": self.tool_cost_resolver is not None,
+                },
                 **suite_manifest,
             },
             "overall": overall,
@@ -718,8 +1112,8 @@ class ClosedLoopRolloutEvaluator:
 
             label = _resolve_cost_label(
                 self.tool_cost_resolver,
-                # The action is already fixed.  Offline labels belong in this
-                # scorer context, never in env.reset or the policy payload.
+                # Offline labels belong only in a copied scorer context, never
+                # in env.reset, the policy payload, or a live environment handle.
                 scenario=audit_scenario,
                 suite=suite,
                 step=step,
@@ -727,7 +1121,6 @@ class ClosedLoopRolloutEvaluator:
                 action=action,
                 tool_output=output,
                 oracle_state=pre_oracle,
-                env=env,
             )
             regret = _tool_regret(label, action)
             if regret is not None:
@@ -787,7 +1180,6 @@ class ClosedLoopRolloutEvaluator:
                     "terminal": terminal,
                     "terminal_outcome": outcome,
                     "active_physical_state": copy.deepcopy(active_physical_state),
-                    "environment": env,
                     "default_audit": copy.deepcopy(default_audit),
                 }
             )
@@ -798,6 +1190,12 @@ class ClosedLoopRolloutEvaluator:
                 }
             if not isinstance(supplied, Mapping):
                 raise TypeError("physical_audit_fn must return a mapping or bool.")
+            unexpected = sorted(set(supplied) - _PHYSICAL_AUDIT_OVERRIDE_KEYS)
+            if unexpected:
+                raise ValueError(
+                    "physical_audit_fn returned unsupported override fields: "
+                    + ", ".join(str(item) for item in unexpected)
+                )
             audit.update(copy.deepcopy(dict(supplied)))
 
         physical_known = bool(audit.get("physical_correctness_known", False))
@@ -969,8 +1367,14 @@ _RELEASE_ENVIRONMENT_FAILURE = (
     "production_dataset_mode=true and candidate_quality_oracle.mode='deployment' "
     "are required"
 )
+_RELEASE_SCENARIO_SCHEMA_FAILURE = (
+    "input suite is not canonical release scenario schema version 1"
+)
 _RELEASE_POLICY_IDENTITY_FAILURE = (
     "instantiated policy identity did not match the release provenance identity"
+)
+_RELEASE_CALLBACK_FAILURE = (
+    "custom physical-audit or tool-cost callbacks are forbidden in release evaluation"
 )
 _IMMUTABLE_REVISION = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})\Z")
 
@@ -1050,6 +1454,9 @@ def _evaluation_provenance_failures(provenance: Mapping[str, Any] | None) -> lis
         return ["evaluation identity provenance is missing"]
 
     failures: list[str] = []
+    provenance_schema_version = provenance.get("provenance_schema_version")
+    if type(provenance_schema_version) is not int or provenance_schema_version != 1:
+        failures.append("provenance_schema_version is not exactly integer 1")
     source_state = provenance.get("source_state")
     if not isinstance(source_state, Mapping) or source_state.get(
         "release_eligible_source"
@@ -1229,6 +1636,20 @@ def write_evaluation_artifact(
         or release_environment.get("passed") is not True
     ):
         release_failures.append(_RELEASE_ENVIRONMENT_FAILURE)
+    release_scenario_schema = (
+        configuration.get("release_scenario_schema_validation")
+        if isinstance(configuration, Mapping)
+        else None
+    )
+    if (
+        not isinstance(release_scenario_schema, Mapping)
+        or set(release_scenario_schema) != {"passed", "scenario_schema_version"}
+        or release_scenario_schema.get("passed") is not True
+        or type(release_scenario_schema.get("scenario_schema_version")) is not int
+        or release_scenario_schema.get("scenario_schema_version")
+        != _SCENARIO_SCHEMA_VERSION
+    ):
+        release_failures.append(_RELEASE_SCENARIO_SCHEMA_FAILURE)
     policy_identity_validation = (
         configuration.get("policy_identity_validation")
         if isinstance(configuration, Mapping)
@@ -1239,6 +1660,17 @@ def write_evaluation_artifact(
         or policy_identity_validation.get("passed") is not True
     ):
         release_failures.append(_RELEASE_POLICY_IDENTITY_FAILURE)
+    callback_validation = (
+        configuration.get("custom_callback_validation")
+        if isinstance(configuration, Mapping)
+        else None
+    )
+    if callback_validation != {
+        "passed": True,
+        "physical_audit_callback": False,
+        "tool_cost_callback": False,
+    }:
+        release_failures.append(_RELEASE_CALLBACK_FAILURE)
     if recorded_provenance is not None:
         recorded_provenance["release_eligible"] = not release_failures
         recorded_provenance["release_failures"] = release_failures
@@ -1665,7 +2097,7 @@ def _validate_and_fingerprint_suites(
     required_suites: Sequence[str],
     minimum_suites: int,
     minimum_episodes_per_suite: int,
-    minimum_roots_per_suite: int,
+    minimum_roots_per_suite: int | Mapping[str, int],
 ) -> dict[str, Any]:
     errors: list[str] = []
     if len(suites) < minimum_suites:
@@ -1678,6 +2110,20 @@ def _validate_and_fingerprint_suites(
 
     manifest: dict[str, dict[str, Any]] = {}
     all_roots: set[str] = set()
+    if isinstance(minimum_roots_per_suite, Mapping):
+        root_minimums = {
+            str(name): _positive_integer(value, field=f"{name}.minimum_roots")
+            for name, value in minimum_roots_per_suite.items()
+        }
+        if set(root_minimums) != set(required_suites):
+            raise ValueError(
+                "minimum roots mapping must contain exactly the required suites"
+            )
+    else:
+        shared_minimum = _positive_integer(
+            minimum_roots_per_suite, field="minimum_roots_per_suite"
+        )
+        root_minimums = {name: shared_minimum for name in suites}
     for suite_name in sorted(suites):
         rows = list(suites[suite_name])
         ordered = sorted(
@@ -1697,10 +2143,11 @@ def _validate_and_fingerprint_suites(
                 f"{suite_name}: episodes={len(rows)} < "
                 f"minimum_episodes_per_suite={minimum_episodes_per_suite}"
             )
-        if len(roots) < minimum_roots_per_suite:
+        required_root_count = root_minimums.get(suite_name, 1)
+        if len(roots) < required_root_count:
             errors.append(
                 f"{suite_name}: distinct_roots={len(roots)} < "
-                f"minimum_roots_per_suite={minimum_roots_per_suite}"
+                f"minimum_roots_per_suite={required_root_count}"
             )
         manifest[suite_name] = {
             "episodes": len(rows),
@@ -1731,8 +2178,120 @@ def _validate_and_fingerprint_suites(
     }
 
 
+def fingerprint_evaluation_suites(
+    scenario_suites: Mapping[str, Iterable[Mapping[str, Any]]]
+    | Iterable[Mapping[str, Any]],
+    *,
+    seed: int = 0,
+    required_suites: Iterable[str] | None = None,
+    minimum_suites: int = 1,
+    minimum_episodes_per_suite: int = 1,
+    minimum_roots_per_suite: int | Mapping[str, int] = 1,
+) -> dict[str, Any]:
+    """Return the canonical semantic identity used by evaluator and gate."""
+
+    suites = _normalize_suites(scenario_suites)
+    normalized_required = _normalize_required_suites(required_suites)
+    fingerprint = _validate_and_fingerprint_suites(
+        suites,
+        required_suites=normalized_required,
+        minimum_suites=_positive_integer(minimum_suites, field="minimum_suites"),
+        minimum_episodes_per_suite=_positive_integer(
+            minimum_episodes_per_suite, field="minimum_episodes_per_suite"
+        ),
+        minimum_roots_per_suite=minimum_roots_per_suite,
+    )
+    episode_manifest: list[dict[str, Any]] = []
+    for suite_name in sorted(suites):
+        ordered = sorted(
+            enumerate(suites[suite_name]),
+            key=lambda item: (
+                _scenario_id(item[1], item[0]),
+                _stable_hash(strip_offline_truth(item[1])),
+            ),
+        )
+        occurrence_by_id: Counter[str] = Counter()
+        for original_index, scenario in ordered:
+            scenario_id = _scenario_id(scenario, original_index)
+            occurrence = occurrence_by_id[scenario_id]
+            occurrence_by_id[scenario_id] += 1
+            groups = _scenario_groups(scenario)
+            episode_manifest.append(
+                {
+                    "episode_key": f"{suite_name}:{scenario_id}:{occurrence}",
+                    "scenario_id": scenario_id,
+                    "scenario_index": occurrence,
+                    "suite": suite_name,
+                    "family": groups["family"],
+                    "cardinality": groups["cardinality"],
+                    "case": groups["case"],
+                    "split": groups["split"],
+                    "source_tier": groups["source_tier"],
+                    "physical_root": groups["physical_root"],
+                    "seed": _episode_seed(
+                        int(seed), suite_name, scenario_id, occurrence
+                    ),
+                }
+            )
+    return {
+        **fingerprint,
+        "suite_names": sorted(suites),
+        "episode_order": [row["episode_key"] for row in episode_manifest],
+        "episode_manifest": episode_manifest,
+        "episode_manifest_sha256": _stable_hash(episode_manifest),
+    }
+
+
+def load_evaluation_suites(path: str | os.PathLike[str]) -> dict[str, list[dict[str, Any]]]:
+    """Load and normalize a JSON evaluation-suite file."""
+
+    payload = _load_scenario_suite_file(path)
+    return _normalize_suites(payload)
+
+
+def validate_release_scenario_suites(
+    scenario_suites: Mapping[str, Iterable[Mapping[str, Any]]]
+    | Iterable[Mapping[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Require the canonical versioned execution/audit/grouping release schema."""
+
+    suites = _normalize_suites(scenario_suites)
+    problems: list[str] = []
+    for suite_name in sorted(suites):
+        for index, scenario in enumerate(suites[suite_name]):
+            if not _has_partition_marker(scenario):
+                problems.append(
+                    f"{suite_name}[{index}] is not a versioned partitioned scenario"
+                )
+                continue
+            try:
+                execution, _, _ = _partitioned_scenario_parts(scenario)
+                development_fields = sorted(
+                    set(execution) & {"initial_physical_state", "script"}
+                )
+                if development_fields:
+                    raise ValueError(
+                        "release execution contains development-only fields: "
+                        + ", ".join(development_fields)
+                    )
+            except (TypeError, ValueError) as exc:
+                problems.append(f"{suite_name}[{index}]: {exc}")
+    if problems:
+        raise ValueError("release scenario schema validation failed: " + "; ".join(problems))
+    return suites
+
+
 def _scenario_id(scenario: Mapping[str, Any], index: int) -> str:
-    explicit = scenario.get("scenario_id", scenario.get("id"))
+    execution = scenario.get("execution")
+    execution = execution if isinstance(execution, Mapping) else {}
+    grouping = scenario.get("grouping")
+    grouping = grouping if isinstance(grouping, Mapping) else {}
+    explicit = scenario.get(
+        "scenario_id",
+        grouping.get(
+            "scenario_id", execution.get("scenario_id", execution.get("id"))
+        ),
+    )
     if explicit is not None:
         return str(explicit)
     # A content-derived fallback keeps evaluation invariant to input ordering
@@ -2001,19 +2560,7 @@ def _oracle_truth(oracle_state: Any) -> dict[str, Any]:
     if isinstance(oracle_state, OracleState):
         return oracle_state.truth_dict()
     if isinstance(oracle_state, Mapping):
-        hidden = oracle_state.get("hidden_truth")
-        truth = copy.deepcopy(dict(hidden)) if isinstance(hidden, Mapping) else {}
-        for key, value in oracle_state.items():
-            if str(key).startswith("true_") or key in {
-                "truth_complete",
-                "remaining_true_faults",
-                "remaining_true_fault_count",
-                "remaining_fault_count",
-                "clean_case",
-                "clean_measurements",
-            }:
-                truth[key] = copy.deepcopy(value)
-        return truth
+        return _scenario_truth(oracle_state)
     return {}
 
 
@@ -2066,23 +2613,133 @@ def _complete_remaining_truth(oracle_state: Any) -> dict[str, Any] | None:
 
 
 def _scenario_truth(scenario: Mapping[str, Any]) -> dict[str, Any]:
-    hidden = scenario.get("hidden_truth")
-    truth = copy.deepcopy(dict(hidden)) if isinstance(hidden, Mapping) else {}
-    metadata = scenario.get("metadata")
-    metadata = metadata if isinstance(metadata, Mapping) else {}
-    for source in (metadata, scenario):
-        for key, value in source.items():
-            if str(key).startswith("true_") or key in {
-                "truth_complete",
-                "clean_case",
-                "clean_measurements",
-                "remaining_true_faults",
-                "remaining_true_fault_count",
-            }:
-                truth[str(key)] = copy.deepcopy(value)
+    if _has_partition_marker(scenario):
+        _, audit_partition, _ = _partitioned_scenario_parts(scenario)
+    else:
+        audit_partition = copy.deepcopy(dict(scenario))
+    has_nested_truth, nested_truth_value = _normalized_mapping_value(
+        audit_partition, "truth", label="scenario/audit"
+    )
+    if has_nested_truth and not isinstance(nested_truth_value, Mapping):
+        raise ValueError("offline truth container must be a mapping")
+    nested_truth = (
+        dict(nested_truth_value) if isinstance(nested_truth_value, Mapping) else {}
+    )
+    _, metadata = _normalized_mapping_value(
+        audit_partition, "metadata", label="scenario/audit"
+    )
+    metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+    truth: dict[str, Any] = {}
+
+    def merge(source: Any, *, label: str, all_fields: bool = False) -> None:
+        if not isinstance(source, Mapping):
+            return
+        for raw_key, value in source.items():
+            key = _normalized_key(raw_key)
+            if key == "remaining_fault_count":
+                key = "remaining_true_fault_count"
+            if key in {"truth", "hidden_truth", "ground_truth"}:
+                continue
+            if not all_fields and not (
+                key.startswith("true_")
+                or key
+                in {
+                    "truth_complete",
+                    "clean_case",
+                    "clean_measurements",
+                    "clean_state",
+                    "remaining_true_faults",
+                    "remaining_true_fault_count",
+                    "remaining_fault_count",
+                }
+            ):
+                continue
+            copied = copy.deepcopy(value)
+            if key in truth and truth[key] != copied:
+                raise ValueError(
+                    f"conflicting offline truth field {key!r} from {label}"
+                )
+            truth[key] = copied
+
+    def merge_container(
+        value: Any, *, label: str, seen: set[int] | None = None
+    ) -> None:
+        if value is None:
+            return
+        if not isinstance(value, Mapping):
+            raise ValueError(f"offline {label} container must be a mapping")
+        seen = set() if seen is None else seen
+        if id(value) in seen:
+            raise ValueError(f"offline {label} container is cyclic")
+        seen.add(id(value))
+        for container_key in ("truth", "hidden_truth", "ground_truth"):
+            found, nested = _normalized_mapping_value(
+                value, container_key, label=label
+            )
+            if found:
+                merge_container(
+                    nested,
+                    label=f"{label}.{container_key}",
+                    seen=seen,
+                )
+        merge(value, label=label, all_fields=True)
+        seen.remove(id(value))
+
+    for parent, parent_label in (
+        (audit_partition, "scenario/audit"),
+        (metadata, "metadata"),
+    ):
+        for container_key in ("truth", "hidden_truth", "ground_truth"):
+            found, value = _normalized_mapping_value(
+                parent, container_key, label=parent_label
+            )
+            if found:
+                merge_container(value, label=f"{parent_label}.{container_key}")
+    merge(metadata, label="metadata")
+    merge(nested_truth, label="truth")
+    merge(audit_partition, label="scenario/audit")
+
+    clean_state = truth.get("clean_state")
+    if clean_state is not None and not isinstance(clean_state, Mapping):
+        raise ValueError("offline truth field 'clean_state' must be a mapping")
+    if isinstance(clean_state, Mapping):
+        for nested_key, canonical_key in (
+            ("case", "clean_case"),
+            ("measurements", "clean_measurements"),
+        ):
+            if nested_key not in clean_state:
+                continue
+            nested_value = copy.deepcopy(clean_state[nested_key])
+            if canonical_key in truth and truth[canonical_key] != nested_value:
+                raise ValueError(
+                    f"conflicting offline truth field {canonical_key!r} from clean_state"
+                )
+            truth[canonical_key] = nested_value
+
+    if "truth_complete" in truth and not isinstance(truth["truth_complete"], bool):
+        raise ValueError("offline truth field 'truth_complete' must be a boolean")
+    if "remaining_true_fault_count" in truth:
+        remaining_count = truth["remaining_true_fault_count"]
+        if (
+            isinstance(remaining_count, bool)
+            or not isinstance(remaining_count, int)
+            or remaining_count < 0
+        ):
+            raise ValueError(
+                "offline truth field 'remaining_true_fault_count' must be a non-negative integer"
+            )
+        remaining_rows = truth.get("remaining_true_faults")
+        if remaining_rows is not None and (
+            not isinstance(remaining_rows, Sequence)
+            or isinstance(remaining_rows, (str, bytes))
+            or len(remaining_rows) != remaining_count
+        ):
+            raise ValueError(
+                "offline remaining_true_faults must match remaining_true_fault_count"
+            )
     if "truth_complete" not in truth:
         truth["truth_complete"] = bool(
-            hidden
+            truth
             or any(str(key).startswith("true_") for key in truth)
             or "clean_case" in truth
             or "clean_measurements" in truth
@@ -2109,22 +2766,13 @@ _STRICT_PHYSICAL_EVIDENCE_GAPS = frozenset(
 def _scenario_truth_available(
     scenario: Mapping[str, Any], truth: Mapping[str, Any]
 ) -> bool:
-    containers: list[Mapping[str, Any]] = [scenario]
-    for key in ("hidden_truth", "metadata", "clean_state"):
-        nested = scenario.get(key)
-        if isinstance(nested, Mapping):
-            containers.append(nested)
+    del scenario
     return bool(
         truth.get("truth_complete") is True
         and (
-            any(
-                str(key).startswith("true_")
-                for container in containers
-                for key in container
-            )
+            any(str(key).startswith("true_") for key in truth)
             or any(
-                key in container
-                for container in containers
+                key in truth
                 for key in ("clean_case", "clean_measurements", "clean_state")
             )
         )
@@ -2158,21 +2806,21 @@ def _case_evidence_comparable(
 def _strict_audit_scenario(scenario: Mapping[str, Any]) -> dict[str, Any]:
     """Promote offline correction truth aliases into the strict audit contract."""
 
-    normalized = copy.deepcopy(dict(scenario))
-    hidden = scenario.get("hidden_truth")
-    if not isinstance(hidden, Mapping):
-        return normalized
-    for key in (
-        "true_measurement_errors",
-        "true_parameter_errors",
-        "true_topology_errors",
-        "clean_case",
-        "clean_measurements",
-        "clean_state",
-        "truth_complete",
-    ):
-        if key not in normalized and key in hidden:
-            normalized[key] = copy.deepcopy(hidden[key])
+    if _has_partition_marker(scenario):
+        execution, audit, grouping = _partitioned_scenario_parts(scenario)
+        normalized = execution
+        normalized.update(grouping)
+        truth = audit.pop("truth", None)
+        normalized.update(audit)
+        if isinstance(truth, Mapping):
+            normalized.update(copy.deepcopy(dict(truth)))
+    else:
+        normalized = copy.deepcopy(dict(scenario))
+    canonical_truth = _scenario_truth(normalized)
+    for key, value in canonical_truth.items():
+        if key in normalized and normalized[key] != value:
+            raise ValueError(f"conflicting offline truth field {key!r}")
+        normalized[key] = copy.deepcopy(value)
     return normalized
 
 
@@ -2220,6 +2868,7 @@ def _default_physical_audit(
         "final_active_state_id": final_state.get("active_state_id"),
         "strict_release_audit": None,
         "audit_mode": "insufficient_evidence",
+        "evidence_complete": False,
     }
     evidence_problems: list[str] = []
     if not _scenario_truth_available(audit_scenario, original_truth):
@@ -2263,8 +2912,12 @@ def _default_physical_audit(
         _strict_check_status(checks, HEALTHY_MEASUREMENTS_CHECK),
         _strict_check_status(checks, HEALTHY_CASE_CHECK),
     ]
+    # Healthy-component preservation is a terminal safety invariant, not a
+    # resolution claim.  A truth-audited operator handoff can therefore know
+    # that the untouched system was preserved even while true faults remain.
     healthy_known = bool(
-        resolved
+        terminal
+        and terminal_outcome in {"resolved", "operator_escalation"}
         and evidence_complete
         and all(status in {"passed", "failed"} for status in healthy_statuses)
     )
@@ -2289,6 +2942,7 @@ def _default_physical_audit(
         "remaining_true_fault_count": remaining,
         "strict_release_audit": copy.deepcopy(strict),
         "audit_mode": "strict_release_audit",
+        "evidence_complete": evidence_complete,
         "problems": strict_problems,
         "quarantined": bool(strict.get("quarantined", True)),
         "strict_checks_used": [
@@ -2512,13 +3166,21 @@ def _diagnostic_truth_audit(
 
 
 def _scenario_groups(scenario: Mapping[str, Any]) -> dict[str, Any]:
-    metadata = scenario.get("metadata")
+    execution = scenario.get("execution")
+    execution = execution if isinstance(execution, Mapping) else {}
+    grouping = scenario.get("grouping")
+    grouping = grouping if isinstance(grouping, Mapping) else {}
+    metadata = execution.get("metadata", scenario.get("metadata"))
     metadata = metadata if isinstance(metadata, Mapping) else {}
 
     def first(*keys: str, default: Any = "unknown") -> Any:
         for key in keys:
+            if grouping.get(key) is not None:
+                return grouping[key]
             if scenario.get(key) is not None:
                 return scenario[key]
+            if execution.get(key) is not None:
+                return execution[key]
             if metadata.get(key) is not None:
                 return metadata[key]
         return default
@@ -2570,7 +3232,6 @@ def _resolve_cost_label(
     action: Mapping[str, Any],
     tool_output: Mapping[str, Any],
     oracle_state: Any,
-    env: Any,
 ) -> Mapping[str, Any] | None:
     context = {
         "scenario": copy.deepcopy(dict(scenario)),
@@ -2580,37 +3241,92 @@ def _resolve_cost_label(
         "action": copy.deepcopy(dict(action)),
         "tool_output": copy.deepcopy(dict(tool_output)),
         "oracle_state": copy.deepcopy(oracle_state),
-        "environment": env,
     }
     if resolver is not None:
         label = resolver(context)
         if label is not None and not isinstance(label, Mapping):
             raise TypeError("tool_cost_resolver must return a mapping or None.")
-        return copy.deepcopy(dict(label)) if isinstance(label, Mapping) else None
+        return _canonical_cost_label(label) if isinstance(label, Mapping) else None
 
-    source = scenario.get("evaluation_labels", scenario.get("tool_cost_labels"))
-    if source is None and isinstance(scenario.get("metadata"), Mapping):
-        source = scenario["metadata"].get(
-            "evaluation_labels", scenario["metadata"].get("tool_cost_labels")
+    label_scenario: Mapping[str, Any] = scenario
+    if _has_partition_marker(scenario):
+        _, audit_partition, _ = _partitioned_scenario_parts(scenario)
+        label_scenario = audit_partition
+    has_source, source = _normalized_mapping_value(
+        label_scenario, "evaluation_labels", label="audit cost labels"
+    )
+    if not has_source:
+        has_source, source = _normalized_mapping_value(
+            label_scenario, "tool_cost_labels", label="audit cost labels"
         )
+    _, label_metadata = _normalized_mapping_value(
+        label_scenario, "metadata", label="audit cost labels"
+    )
+    if not has_source and isinstance(label_metadata, Mapping):
+        has_source, source = _normalized_mapping_value(
+            label_metadata, "evaluation_labels", label="audit metadata cost labels"
+        )
+        if not has_source:
+            has_source, source = _normalized_mapping_value(
+                label_metadata,
+                "tool_cost_labels",
+                label="audit metadata cost labels",
+            )
+    direct_label_keys = {
+        "action_costs",
+        "costs",
+        "chosen_cost",
+        "action_cost",
+        "executed_cost",
+        "best_cost",
+        "minimum_cost",
+        "min_cost",
+        "optimal_cost",
+        "expert_cost",
+        "preferred_action",
+    }
+    if not has_source and any(
+        _normalized_key(key) in direct_label_keys for key in label_scenario
+    ):
+        source = label_scenario
+        has_source = True
     if isinstance(source, Sequence) and not isinstance(source, (str, bytes)):
         label = source[step] if step < len(source) else None
     elif isinstance(source, Mapping):
         label = source.get(step, source.get(str(step)))
         if label is None and any(
-            key in source
-            for key in (
-                "action_costs",
-                "costs",
-                "chosen_cost",
-                "action_cost",
-                "preferred_action",
-            )
+            _normalized_key(key) in direct_label_keys for key in source
         ):
             label = source
     else:
         label = None
-    return copy.deepcopy(dict(label)) if isinstance(label, Mapping) else None
+    return _canonical_cost_label(label) if isinstance(label, Mapping) else None
+
+
+def _canonical_cost_label(label: Mapping[str, Any]) -> dict[str, Any]:
+    canonical_keys = {
+        "action_costs",
+        "costs",
+        "chosen_cost",
+        "action_cost",
+        "executed_cost",
+        "cost",
+        "best_cost",
+        "minimum_cost",
+        "min_cost",
+        "optimal_cost",
+        "expert_cost",
+        "preferred_action",
+    }
+    normalized: dict[str, Any] = {}
+    for raw_key, value in label.items():
+        candidate = _normalized_key(raw_key)
+        key = candidate if candidate in canonical_keys else str(raw_key)
+        copied = copy.deepcopy(value)
+        if key in normalized and normalized[key] != copied:
+            raise ValueError(f"conflicting cost-label field {key!r}")
+        normalized[key] = copied
+    return normalized
 
 
 def _tool_regret(
@@ -2699,10 +3415,15 @@ __all__ = [
     "evaluate_closed_loop",
     "evaluate_closed_loop_rollouts",
     "evaluate_rollout_suites",
+    "fingerprint_evaluation_suites",
+    "load_evaluation_suites",
     "main",
     "make_evaluation_result",
     "recovery_score",
+    "privileged_execution_paths",
+    "strip_offline_truth",
     "summarize_episode_evaluations",
+    "validate_release_scenario_suites",
     "write_evaluation_artifact",
 ]
 

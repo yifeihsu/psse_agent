@@ -22,8 +22,10 @@ from psse_env.actions import (
 )
 from psse_env.dagger.evaluator import (
     ClosedLoopRolloutEvaluator,
+    build_evaluation_provenance,
     evaluate_rollout_suites,
     main as evaluator_main,
+    strip_offline_truth,
     write_evaluation_artifact,
 )
 
@@ -145,7 +147,7 @@ class _ScriptEnv:
         self.accepted = []
         self.explanations = []
         self.physical_state = copy.deepcopy(
-            dict(self.scenario.get("final_physical_state") or {})
+            dict(self.scenario.get("initial_physical_state") or {})
         )
         return self.current_state()
 
@@ -220,6 +222,19 @@ class _ScriptEnv:
         return self.terminal
 
 
+class _ReleaseScriptEnv(_ScriptEnv):
+    """Test-only factory whose executable fixture is code-pinned, not suite data."""
+
+    def reset(self, scenario: Mapping[str, Any]) -> dict[str, Any]:
+        payload = copy.deepcopy(dict(scenario))
+        fixture = _resolved_scenario()
+        payload["initial_physical_state"] = copy.deepcopy(
+            fixture["initial_physical_state"]
+        )
+        payload["script"] = copy.deepcopy(fixture["script"])
+        return super().reset(payload)
+
+
 def _resolved_scenario() -> dict[str, Any]:
     dirty_measurements = [0.0] * 8
     dirty_measurements[7] = 9.0
@@ -237,7 +252,7 @@ def _resolved_scenario() -> dict[str, Any]:
         "clean_case": copy.deepcopy(clean_case),
         "measurements": dirty_measurements,
         "clean_measurements": clean_measurements,
-        "final_physical_state": {
+        "initial_physical_state": {
             "case": copy.deepcopy(clean_case),
             "measurements": copy.deepcopy(clean_measurements),
         },
@@ -272,6 +287,53 @@ def _resolved_scenario() -> dict[str, Any]:
             {"phase": "finalize", "remaining": 0, "terminal_outcome": "resolved"},
         ],
     }
+
+
+def _partitioned_resolved_scenario() -> dict[str, Any]:
+    source = _resolved_scenario()
+    return {
+        "scenario_schema_version": 1,
+        "execution": {
+            key: copy.deepcopy(source[key])
+            for key in (
+                "scenario_id",
+                "case",
+                "measurements",
+                "initial_physical_state",
+                "script",
+            )
+        },
+        "audit": {
+            "truth": {
+                "clean_case": copy.deepcopy(source["clean_case"]),
+                "clean_measurements": copy.deepcopy(source["clean_measurements"]),
+                "true_measurement_errors": copy.deepcopy(
+                    source["true_measurement_errors"]
+                ),
+                "hidden_truth": copy.deepcopy(source["hidden_truth"]),
+                "truth_complete": True,
+            }
+        },
+        "grouping": {
+            key: copy.deepcopy(source[key])
+            for key in (
+                "root_scenario_id",
+                "physical_root_fingerprint",
+                "scenario_family",
+                "error_cardinality",
+                "case_id",
+                "split",
+                "source_tier",
+            )
+        },
+    }
+
+
+def _release_partitioned_resolved_scenario() -> dict[str, Any]:
+    scenario = _partitioned_resolved_scenario()
+    scenario["execution"].pop("initial_physical_state")
+    scenario["execution"].pop("script")
+    return scenario
 
 
 def _escalation_scenario() -> dict[str, Any]:
@@ -351,6 +413,39 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             self.assertNotIn("hidden_truth", observation)
             self.assertFalse(any(key.startswith("true_") for key in observation))
 
+    def test_safe_operator_escalation_reports_known_healthy_preservation(
+        self,
+    ) -> None:
+        scenario = _resolved_scenario()
+        scenario["scenario_id"] = "safe-escalation"
+        scenario["physical_root_fingerprint"] = "fp-safe-escalation"
+        scenario["script"] = [
+            {
+                "phase": "escalate",
+                "remaining": 2,
+                "terminal_outcome": "operator_escalation",
+            }
+        ]
+
+        result = evaluate_rollout_suites(
+            [scenario],
+            env_factory=_ScriptEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+        )
+
+        episode = result.suite_metrics["episodes"][0]
+        self.assertEqual(episode["terminal_outcome"], "operator_escalation")
+        self.assertFalse(episode["physical_correctness_known"])
+        self.assertFalse(episode["final_physical_correct"])
+        self.assertFalse(episode["final_physical_success"])
+        self.assertTrue(episode["healthy_preservation_known"])
+        self.assertTrue(episode["healthy_components_preserved"])
+        checks = episode["audit"]["strict_release_audit"]["checks"]
+        self.assertEqual(checks["healthy_measurements_preserved"]["status"], "passed")
+        self.assertEqual(
+            checks["healthy_case_components_preserved"]["status"], "passed"
+        )
+
     def test_uses_offline_per_step_cost_labels_without_a_resolver(self) -> None:
         scenario = {
             "scenario_id": "cost-labeled",
@@ -373,6 +468,104 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             env_factory=_ScriptEnv,
             policy_factory=lambda: _ScriptPolicy([]),
         )
+        overall = result.suite_metrics["overall"]
+        self.assertEqual(overall["tool_regret_samples"], 1)
+        self.assertEqual(overall["mean_tool_regret"], 2.0)
+
+    def test_partitioned_audit_cost_labels_are_scored_but_never_executed(
+        self,
+    ) -> None:
+        class RecordingEnv(_ScriptEnv):
+            reset_payloads: list[dict[str, Any]] = []
+
+            def reset(self, scenario: Mapping[str, Any]) -> dict[str, Any]:
+                self.__class__.reset_payloads.append(copy.deepcopy(dict(scenario)))
+                return super().reset(scenario)
+
+        execution = {
+            "scenario_id": "partitioned-cost-labeled",
+            "case": {"baseMVA": 100.0, "branch": []},
+            "measurements": [],
+            "initial_physical_state": {
+                "case": {"baseMVA": 100.0, "branch": []},
+                "measurements": [],
+            },
+            "script": [
+                {
+                    "phase": "finalize",
+                    "remaining": 0,
+                    "terminal_outcome": "resolved",
+                }
+            ],
+        }
+        scenario = {
+            "scenario_schema_version": 1,
+            "execution": execution,
+            "audit": {
+                "evaluation_labels": [
+                    {"action_costs": {FINALIZE_DIAGNOSIS: 3.0, RUN_WLS: 1.0}}
+                ]
+            },
+            "grouping": {
+                "physical_root_fingerprint": "root-partitioned-cost",
+                "scenario_family": "no_error",
+                "error_cardinality": 0,
+                "case_id": "case14",
+                "split": "test",
+                "source_tier": "test",
+            },
+        }
+
+        RecordingEnv.reset_payloads.clear()
+        result = evaluate_rollout_suites(
+            [scenario],
+            env_factory=RecordingEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+        )
+
+        self.assertEqual(RecordingEnv.reset_payloads, [execution])
+        overall = result.suite_metrics["overall"]
+        self.assertEqual(overall["tool_regret_samples"], 1)
+        self.assertEqual(overall["mean_tool_regret"], 2.0)
+
+    def test_partitioned_direct_normalized_cost_label_is_scored(self) -> None:
+        scenario = {
+            "scenario_schema_version": 1,
+            "execution": {
+                "scenario_id": "partitioned-direct-cost",
+                "case": {"baseMVA": 100.0, "branch": []},
+                "measurements": [],
+                "initial_physical_state": {
+                    "case": {"baseMVA": 100.0, "branch": []},
+                    "measurements": [],
+                },
+                "script": [
+                    {
+                        "phase": "finalize",
+                        "remaining": 0,
+                        "terminal_outcome": "resolved",
+                    }
+                ],
+            },
+            "audit": {
+                "actionCosts": {FINALIZE_DIAGNOSIS: 3.0, RUN_WLS: 1.0}
+            },
+            "grouping": {
+                "physical_root_fingerprint": "root-partitioned-direct-cost",
+                "scenario_family": "no_error",
+                "error_cardinality": 0,
+                "case_id": "case14",
+                "split": "test",
+                "source_tier": "test",
+            },
+        }
+
+        result = evaluate_rollout_suites(
+            [scenario],
+            env_factory=_ScriptEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+        )
+
         overall = result.suite_metrics["overall"]
         self.assertEqual(overall["tool_regret_samples"], 1)
         self.assertEqual(overall["mean_tool_regret"], 2.0)
@@ -455,12 +648,68 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             ValueError, "release environment validation failed"
         ):
             evaluate_rollout_suites(
-                [_resolved_scenario()],
+                [_release_partitioned_resolved_scenario()],
                 env_factory=DevelopmentEnv,
                 policy_factory=lambda: _ScriptPolicy([]),
                 max_steps=8,
                 require_release_environment=True,
             )
+
+        for callback_kwargs in (
+            {"tool_cost_resolver": lambda _context: None},
+            {"physical_audit_fn": lambda _context: True},
+        ):
+            with self.subTest(callback=next(iter(callback_kwargs))):
+                with self.assertRaisesRegex(ValueError, "release evaluation forbids"):
+                    evaluate_rollout_suites(
+                        [_resolved_scenario()],
+                        env_factory=_ScriptEnv,
+                        policy_factory=lambda: _ScriptPolicy([]),
+                        require_release_environment=True,
+                        **callback_kwargs,
+                    )
+
+        with self.assertRaisesRegex(ValueError, "release evaluation forbids"):
+            evaluate_rollout_suites(
+                [_resolved_scenario()],
+                env_factory=_ScriptEnv,
+                policy_factory=lambda: _ScriptPolicy([]),
+                expected_policy_identity={
+                    "explicit_policy_identity": "test-policy-v1",
+                    "model_id": None,
+                    "model_revision": None,
+                },
+                tool_cost_resolver=lambda _context: None,
+            )
+
+        with self.assertRaisesRegex(ValueError, "unsupported override fields"):
+            evaluate_rollout_suites(
+                [_resolved_scenario()],
+                env_factory=_ScriptEnv,
+                policy_factory=lambda: _ScriptPolicy([]),
+                physical_audit_fn=lambda _context: {
+                    "strict_release_audit": {"quarantined": False}
+                },
+            )
+
+        callback_result = evaluate_rollout_suites(
+            [_resolved_scenario()],
+            env_factory=_ScriptEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+            tool_cost_resolver=lambda _context: None,
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            callback_artifact = write_evaluation_artifact(
+                callback_result,
+                Path(temporary_directory) / "callback-development.json",
+            )
+        self.assertFalse(callback_artifact["release_eligible"])
+        self.assertTrue(
+            any(
+                "custom physical-audit or tool-cost callbacks" in failure
+                for failure in callback_artifact["release_failures"]
+            )
+        )
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             artifact = write_evaluation_artifact(
@@ -472,6 +721,432 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                 "executed environment contract is not release-safe" in failure
                 for failure in artifact["release_failures"]
             )
+        )
+
+    def test_strip_offline_truth_removes_extended_normalized_audit_aliases(
+        self,
+    ) -> None:
+        scenario = {
+            "scenario_id": "extended-aliases",
+            "case": "case14",
+            "measurements": [1.0, 2.0],
+            "initial_physical_state": {
+                "case": "case14",
+                "measurements": [1.0, 2.0],
+            },
+            "finalPhysicalState": {"measurements": [0.0, 0.0]},
+            "Ground-Truth": {"fault": "measurement"},
+            "truth": {"fault": "topology"},
+            "finalState": {"case": "clean-answer"},
+            "labels": {"candidate_disposition": "ACCEPT_FINAL"},
+            "preferredAction": {"tool": FINALIZE_DIAGNOSIS, "arguments": {}},
+            "teacherAction": {"tool": FINALIZE_DIAGNOSIS, "arguments": {}},
+            "expert_action": {"tool": FINALIZE_DIAGNOSIS, "arguments": {}},
+            "targetAction": {"tool": FINALIZE_DIAGNOSIS, "arguments": {}},
+            "goldAction": {"tool": FINALIZE_DIAGNOSIS, "arguments": {}},
+            "oracleAction": {"tool": FINALIZE_DIAGNOSIS, "arguments": {}},
+            "recommendedAction": {"tool": FINALIZE_DIAGNOSIS, "arguments": {}},
+            "validAction": {"tool": FINALIZE_DIAGNOSIS, "arguments": {}},
+            "validNextAction": {"tool": FINALIZE_DIAGNOSIS, "arguments": {}},
+            "teacherActions": [{"tool": FINALIZE_DIAGNOSIS, "arguments": {}}],
+            "expertActions": [{"tool": FINALIZE_DIAGNOSIS, "arguments": {}}],
+            "oracleActions": [{"tool": FINALIZE_DIAGNOSIS, "arguments": {}}],
+            "recommendedActions": [
+                {"tool": FINALIZE_DIAGNOSIS, "arguments": {}}
+            ],
+            "correctAction": {"tool": FINALIZE_DIAGNOSIS, "arguments": {}},
+            "optimalAction": {"tool": FINALIZE_DIAGNOSIS, "arguments": {}},
+            "actionCostsByTool": {FINALIZE_DIAGNOSIS: 0.0},
+            "qValues": {FINALIZE_DIAGNOSIS: 0.0},
+            "referenceSolution": {"case": "clean-answer"},
+            "family": "measurement",
+            "valid-next-actions": [
+                {"tool": FINALIZE_DIAGNOSIS, "arguments": {}}
+            ],
+            "ACTION COSTS": {FINALIZE_DIAGNOSIS: 0.0, RUN_WLS: 1.0},
+            "rankingCostLabels": {FINALIZE_DIAGNOSIS: 0.0},
+            "metadata": {
+                "observable_runtime": {"channel": "pmu"},
+                "groundTruth": {"fault": "parameter"},
+                "preferred-action": {"tool": RUN_WLS, "arguments": {}},
+                "validNextActions": [{"tool": RUN_WLS, "arguments": {}}],
+                "action-costs": {RUN_WLS: 0.0},
+                "nested": [
+                    {
+                        "finalPhysicalState": {"case": "clean-answer"},
+                        "runtime_value": 7,
+                    }
+                ],
+            },
+        }
+        original = copy.deepcopy(scenario)
+
+        execution = strip_offline_truth(scenario)
+
+        self.assertEqual(scenario, original)
+        self.assertEqual(
+            execution,
+            {
+                "scenario_id": "extended-aliases",
+                "case": "case14",
+                "measurements": [1.0, 2.0],
+                "initial_physical_state": {
+                    "case": "case14",
+                    "measurements": [1.0, 2.0],
+                },
+                "metadata": {
+                    "observable_runtime": {"channel": "pmu"},
+                    "nested": [{"runtime_value": 7}],
+                },
+            },
+        )
+
+    def test_partitioned_scenario_passes_only_explicit_execution_to_reset(
+        self,
+    ) -> None:
+        class RecordingEnv(_ScriptEnv):
+            reset_payloads: list[dict[str, Any]] = []
+
+            def reset(self, scenario: Mapping[str, Any]) -> dict[str, Any]:
+                self.__class__.reset_payloads.append(copy.deepcopy(dict(scenario)))
+                return super().reset(scenario)
+
+        source = _resolved_scenario()
+        execution = {
+            key: copy.deepcopy(source[key])
+            for key in (
+                "scenario_id",
+                "case",
+                "measurements",
+                "initial_physical_state",
+                "script",
+            )
+        }
+        audit = {
+            "truth": {
+                "clean_case": copy.deepcopy(source["clean_case"]),
+                "clean_measurements": copy.deepcopy(source["clean_measurements"]),
+                "true_measurement_errors": copy.deepcopy(
+                    source["true_measurement_errors"]
+                ),
+                "hidden_truth": copy.deepcopy(source["hidden_truth"]),
+                "truth_complete": True,
+            },
+            "final_physical_state": {"audit_sentinel": "never-reset"},
+            "labels": {
+                "preferred_action": {
+                    "tool": FINALIZE_DIAGNOSIS,
+                    "arguments": {},
+                }
+            },
+        }
+        grouping = {
+            key: copy.deepcopy(source[key])
+            for key in (
+                "root_scenario_id",
+                "physical_root_fingerprint",
+                "scenario_family",
+                "error_cardinality",
+                "case_id",
+                "split",
+                "source_tier",
+            )
+        }
+        partitioned = {
+            "scenario_schema_version": 1,
+            "execution": execution,
+            "audit": audit,
+            "grouping": grouping,
+        }
+        resolver_scenarios: list[dict[str, Any]] = []
+
+        def cost_resolver(context: Mapping[str, Any]) -> None:
+            self.assertNotIn("environment", context)
+            resolver_scenarios.append(copy.deepcopy(dict(context["scenario"])))
+            return None
+
+        RecordingEnv.reset_payloads.clear()
+        result = evaluate_rollout_suites(
+            [partitioned],
+            env_factory=RecordingEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+            tool_cost_resolver=cost_resolver,
+            max_steps=8,
+        )
+
+        self.assertEqual(RecordingEnv.reset_payloads, [execution])
+        self.assertTrue(resolver_scenarios)
+        self.assertEqual(
+            resolver_scenarios[0]["audit"]["final_physical_state"],
+            {"audit_sentinel": "never-reset"},
+        )
+        self.assertTrue(result.suite_metrics["episodes"][0]["final_physical_success"])
+        self.assertEqual(
+            set(result.suite_metrics["by_family"]), {"measurement+harmonic"}
+        )
+
+    def test_partitioned_scenario_rejects_normalized_audit_aliases_in_execution(
+        self,
+    ) -> None:
+        scenario = {
+            "scenario_schema_version": 1,
+            "execution": {
+                "scenario_id": "leaky-explicit-execution",
+                "case": "case14",
+                "measurements": [],
+                "metadata": {
+                    "finalPhysicalState": {"case": "answer"},
+                    "groundTruth": {"fault": "measurement"},
+                    "labels": {"state_class": "terminal_resolved"},
+                    "preferredAction": {
+                        "tool": FINALIZE_DIAGNOSIS,
+                        "arguments": {},
+                    },
+                    "validNextActions": [
+                        {"tool": FINALIZE_DIAGNOSIS, "arguments": {}}
+                    ],
+                    "action-costs": {FINALIZE_DIAGNOSIS: 0.0},
+                },
+            },
+            "audit": {},
+            "grouping": {},
+        }
+
+        with self.assertRaisesRegex(
+            ValueError, r"\$\.metadata\.finalPhysicalState"
+        ):
+            strip_offline_truth(scenario)
+
+    def test_partition_markers_are_versioned_complete_and_collision_safe(self) -> None:
+        for malformed in (
+            {"audit": {"truth": {"clean_case": "answer"}}, "case": "case14"},
+            {"grouping": {"scenario_family": "measurement"}, "case": "case14"},
+            {
+                "execution": {"case": "case14", "measurements": []},
+                "audit": {},
+                "grouping": {},
+            },
+            {
+                "scenario_schema_version": True,
+                "execution": {"case": "case14", "measurements": []},
+                "audit": {},
+                "grouping": {},
+            },
+            {
+                "scenario_schema_version": 1.0,
+                "execution": {"case": "case14", "measurements": []},
+                "audit": {},
+                "grouping": {},
+            },
+            {
+                "scenarioSchemaVersion": 1,
+                "Execution": {"case": "case14", "measurements": []},
+                "Audit": {},
+                "Grouping": {},
+            },
+        ):
+            with self.subTest(malformed=sorted(malformed)):
+                with self.assertRaisesRegex(ValueError, "partitioned scenario"):
+                    strip_offline_truth(malformed)
+
+        collision = {
+            "scenario_schema_version": 1,
+            "execution": {
+                "scenario_id": "collision",
+                "case": "dirty-case",
+                "measurements": [9.0],
+            },
+            "audit": {
+                "case": "forged-clean-case",
+                "truth": {"measurements": [1.0]},
+            },
+            "grouping": {"scenario_family": "measurement"},
+        }
+        with self.assertRaisesRegex(ValueError, "collide"):
+            strip_offline_truth(collision)
+
+    def test_partitioned_grouping_and_metadata_schema_fail_closed(self) -> None:
+        malformed: list[tuple[dict[str, Any], str]] = []
+        missing = _partitioned_resolved_scenario()
+        missing["grouping"].pop("source_tier")
+        malformed.append((missing, "missing required fields"))
+        empty = _partitioned_resolved_scenario()
+        empty["grouping"]["split"] = ""
+        malformed.append((empty, "grouping.split must be non-empty"))
+        fractional = _partitioned_resolved_scenario()
+        fractional["grouping"]["error_cardinality"] = 1.5
+        malformed.append((fractional, "error_cardinality must be a non-negative integer"))
+        ambiguous = _partitioned_resolved_scenario()
+        ambiguous["grouping"]["family"] = ambiguous["grouping"]["scenario_family"]
+        malformed.append((ambiguous, "grouping contains unsupported fields"))
+        unknown_metadata = _partitioned_resolved_scenario()
+        unknown_metadata["execution"]["metadata"] = {"unknown_runtime": True}
+        malformed.append((unknown_metadata, "metadata contains unsupported fields"))
+
+        for scenario, message in malformed:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    strip_offline_truth(scenario)
+
+        valid = _partitioned_resolved_scenario()
+        valid_metadata = {
+            "semantic_field_provenance": {},
+            "unresolved_signatures": [],
+            "remaining_anomaly_score": 0.0,
+            "no_material_anomaly_remaining": False,
+            "requires_measurement_context": True,
+            "measurement_covariance": [],
+            "slack_bus": 1,
+            "pristine_model_dir": "/models/pristine",
+            "faulted_model_dir": "/models/faulted",
+            "load_scale": 1.0,
+            "parameter_scans": {},
+            "harmonic_measurements": [],
+            "harmonic_orders": [],
+            "nlm_diagnostic": {},
+            "hif_runtime": {},
+            "hif_scan_window": {},
+            "three_phase_voltages": [],
+        }
+        valid["execution"]["metadata"] = valid_metadata
+        self.assertEqual(strip_offline_truth(valid)["metadata"], valid_metadata)
+
+    def test_conflicting_truth_aliases_fail_closed(self) -> None:
+        scenario = _resolved_scenario()
+        scenario["ground_truth"] = {
+            "true_measurement_errors": [{"index": 6}],
+        }
+
+        with self.assertRaisesRegex(
+            ValueError, "conflicting offline truth field 'true_measurement_errors'"
+        ):
+            evaluate_rollout_suites(
+                [scenario],
+                env_factory=_ScriptEnv,
+                policy_factory=lambda: _ScriptPolicy([]),
+                max_steps=8,
+            )
+
+    def test_normalized_ground_truth_container_drives_strict_audit(self) -> None:
+        scenario = _resolved_scenario()
+        scenario["scenario_id"] = "normalized-ground-truth"
+        scenario["physical_root_fingerprint"] = "fp-normalized-ground-truth"
+        scenario["Ground-Truth"] = {
+            "cleanCase": scenario.pop("clean_case"),
+            "cleanMeasurements": scenario.pop("clean_measurements"),
+            "trueMeasurementErrors": scenario.pop("true_measurement_errors"),
+            "trueHarmonicErrors": scenario.pop("hidden_truth")[
+                "true_harmonic_errors"
+            ],
+            "truthComplete": True,
+        }
+
+        result = evaluate_rollout_suites(
+            [scenario],
+            env_factory=_ScriptEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+            max_steps=8,
+        )
+
+        episode = result.suite_metrics["episodes"][0]
+        self.assertTrue(episode["final_physical_success"])
+        self.assertEqual(episode["audit"]["audit_mode"], "strict_release_audit")
+
+    def test_partitioned_ground_truth_locations_drive_strict_audit(self) -> None:
+        for nested in (False, True):
+            scenario = _partitioned_resolved_scenario()
+            truth = scenario["audit"].pop("truth")
+            scenario["audit"] = (
+                {"truth": {"groundTruth": truth}}
+                if nested
+                else {"groundTruth": truth}
+            )
+            with self.subTest(nested=nested):
+                result = evaluate_rollout_suites(
+                    [scenario],
+                    env_factory=_ScriptEnv,
+                    policy_factory=lambda: _ScriptPolicy([]),
+                    max_steps=8,
+                )
+                self.assertTrue(
+                    result.suite_metrics["episodes"][0]["final_physical_success"]
+                )
+
+    def test_mapping_oracle_ground_truth_is_canonicalized(self) -> None:
+        class GroundTruthOracleEnv(_ScriptEnv):
+            def get_oracle_state(
+                self, history: list[Mapping[str, Any]]
+            ) -> dict[str, Any]:
+                del history
+                return {
+                    "groundTruth": {
+                        "truthComplete": True,
+                        "remainingTrueFaults": [{"family": "measurement"}],
+                        "remainingTrueFaultCount": 1,
+                    }
+                }
+
+        scenario = _resolved_scenario()
+        scenario["script"] = [
+            {
+                "phase": "finalize",
+                "terminal_outcome": "resolved",
+            }
+        ]
+        result = evaluate_rollout_suites(
+            [scenario],
+            env_factory=GroundTruthOracleEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+        )
+        self.assertEqual(
+            result.suite_metrics["episodes"][0]["false_finalization_count"], 1
+        )
+
+    def test_semantically_conflicting_truth_evidence_fails_closed(self) -> None:
+        clean_conflict = _resolved_scenario()
+        clean_conflict["clean_state"] = {
+            "case": copy.deepcopy(clean_conflict["clean_case"]),
+            "measurements": [99.0] * len(clean_conflict["clean_measurements"]),
+        }
+        count_conflict = _resolved_scenario()
+        count_conflict["remaining_true_fault_count"] = 2
+        count_conflict["remaining_fault_count"] = 1
+
+        for scenario, message in (
+            (clean_conflict, "clean_measurements"),
+            (count_conflict, "remaining_true_fault_count"),
+        ):
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    evaluate_rollout_suites(
+                        [scenario],
+                        env_factory=_ScriptEnv,
+                        policy_factory=lambda: _ScriptPolicy([]),
+                        max_steps=8,
+                    )
+
+    def test_legacy_grouping_fields_never_reach_reset(self) -> None:
+        scenario = {
+            "scenario_id": "legacy-grouping",
+            "case": "case14",
+            "measurements": [1.0],
+            "metadata": {"observable_runtime": True},
+            "scenario_family": "measurement+parameter",
+            "error_cardinality": 2,
+            "split": "held-out",
+            "source_tier": "teacher-label",
+            "physical_root_fingerprint": "root-secret",
+            "root_scenario_id": "root-secret",
+        }
+        execution = strip_offline_truth(scenario)
+        self.assertEqual(
+            execution,
+            {
+                "scenario_id": "legacy-grouping",
+                "case": "case14",
+                "measurements": [1.0],
+                "metadata": {"observable_runtime": True},
+            },
         )
 
     def test_hidden_truth_changes_only_offline_audit_not_trajectory(self) -> None:
@@ -649,7 +1324,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         scenario = _resolved_scenario()
         scenario["scenario_id"] = "wrong-value"
         scenario["physical_root_fingerprint"] = "fp-wrong-value"
-        scenario["final_physical_state"]["measurements"][7] = 2.0
+        scenario["initial_physical_state"]["measurements"][7] = 2.0
 
         result = evaluate_rollout_suites(
             [scenario],
@@ -690,7 +1365,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
     def test_default_audit_fails_closed_without_active_physical_state(self) -> None:
         scenario = _resolved_scenario()
         scenario["scenario_id"] = "missing-physical-state"
-        scenario.pop("final_physical_state")
+        scenario.pop("initial_physical_state")
 
         result = evaluate_rollout_suites(
             [scenario],
@@ -712,7 +1387,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         scenario["scenario_id"] = "case-reference"
         scenario["case"] = "case14"
         scenario["clean_case"] = "case14"
-        physical_case = copy.deepcopy(scenario["final_physical_state"]["case"])
+        physical_case = copy.deepcopy(scenario["initial_physical_state"]["case"])
 
         without_loader = evaluate_rollout_suites(
             [scenario],
@@ -763,7 +1438,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         physically_wrong = _resolved_scenario()
         physically_wrong["scenario_id"] = "wrong-after-invalid"
         physically_wrong["physical_root_fingerprint"] = "fp-wrong-after-invalid"
-        physically_wrong["final_physical_state"]["measurements"][7] = 3.0
+        physically_wrong["initial_physical_state"]["measurements"][7] = 3.0
         failed_audit = evaluate_rollout_suites(
             [physically_wrong],
             env_factory=_ScriptEnv,
@@ -837,7 +1512,9 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             input_path = root / "suite.json"
             output_path = root / "release.json"
             input_path.write_text(
-                json.dumps({"standard_success": [_resolved_scenario()]}),
+                json.dumps(
+                    {"standard_success": [_release_partitioned_resolved_scenario()]}
+                ),
                 encoding="utf-8",
             )
             arguments = [
@@ -846,7 +1523,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                 "--output",
                 str(output_path),
                 "--env-factory",
-                "psse_env.dagger.test_evaluator:_ScriptEnv",
+                "psse_env.dagger.test_evaluator:_ReleaseScriptEnv",
                 "--policy-factory",
                 "psse_env.dagger.test_evaluator:_cli_policy_factory",
                 "--case-loader",
@@ -903,6 +1580,10 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                 },
             )
             self.assertEqual(
+                configuration["release_scenario_schema_validation"],
+                {"passed": True, "scenario_schema_version": 1},
+            )
+            self.assertEqual(
                 configuration["policy_identity_validation"],
                 {
                     "passed": True,
@@ -927,7 +1608,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             self.assertEqual(provenance["source_state"], clean_source)
             self.assertEqual(
                 provenance["factories"]["environment"]["import_spec"],
-                "psse_env.dagger.test_evaluator:_ScriptEnv",
+                "psse_env.dagger.test_evaluator:_ReleaseScriptEnv",
             )
             self.assertEqual(
                 provenance["factories"]["policy"]["import_spec"],
@@ -977,7 +1658,9 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             root = Path(temporary_directory)
             input_path = root / "suite.json"
             input_path.write_text(
-                json.dumps({"standard_success": [_resolved_scenario()]}),
+                json.dumps(
+                    {"standard_success": [_release_partitioned_resolved_scenario()]}
+                ),
                 encoding="utf-8",
             )
             base = [
@@ -986,7 +1669,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                 "--output",
                 str(root / "release.json"),
                 "--env-factory",
-                "psse_env.dagger.test_evaluator:_ScriptEnv",
+                "psse_env.dagger.test_evaluator:_ReleaseScriptEnv",
                 "--policy-factory",
                 "psse_env.dagger.test_evaluator:_cli_policy_factory",
                 "--required-suite",
@@ -1010,7 +1693,9 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             root = Path(temporary_directory)
             input_path = root / "suite.json"
             input_path.write_text(
-                json.dumps({"standard_success": [_resolved_scenario()]}),
+                json.dumps(
+                    {"standard_success": [_release_partitioned_resolved_scenario()]}
+                ),
                 encoding="utf-8",
             )
             arguments = [
@@ -1019,7 +1704,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                 "--output",
                 str(root / "release.json"),
                 "--env-factory",
-                "psse_env.dagger.test_evaluator:_ScriptEnv",
+                "psse_env.dagger.test_evaluator:_ReleaseScriptEnv",
                 "--policy-factory",
                 "psse_env.dagger.test_evaluator:_unattested_policy_factory",
                 "--model-id",
@@ -1049,7 +1734,9 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             input_path = root / "suite.json"
             output_path = root / "release.json"
             input_path.write_text(
-                json.dumps({"standard_success": [_resolved_scenario()]}),
+                json.dumps(
+                    {"standard_success": [_release_partitioned_resolved_scenario()]}
+                ),
                 encoding="utf-8",
             )
             arguments = [
@@ -1058,7 +1745,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                 "--output",
                 str(output_path),
                 "--env-factory",
-                "psse_env.dagger.test_evaluator:_ScriptEnv",
+                "psse_env.dagger.test_evaluator:_ReleaseScriptEnv",
                 "--policy-factory",
                 "psse_env.dagger.test_evaluator:_cli_policy_factory",
                 "--policy-identity",
@@ -1124,9 +1811,72 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                 artifact["release_failures"],
                 [
                     "evaluation identity provenance is missing",
+                    "input suite is not canonical release scenario schema version 1",
                     "instantiated policy identity did not match the release provenance identity",
                 ],
             )
+
+    def test_flat_suite_cannot_self_attest_as_release_eligible(self) -> None:
+        expected_identity = {
+            "explicit_policy_identity": None,
+            "model_id": "test/script-policy",
+            "model_revision": "a" * 40,
+        }
+        result = evaluate_rollout_suites(
+            [_resolved_scenario()],
+            env_factory=_ReleaseScriptEnv,
+            policy_factory=_cli_policy_factory,
+            max_steps=8,
+            expected_policy_identity=expected_identity,
+            require_policy_identity=True,
+        )
+        configuration = result.suite_metrics["configuration"]
+        self.assertTrue(configuration["release_environment_validation"]["passed"])
+        self.assertTrue(configuration["policy_identity_validation"]["passed"])
+        self.assertFalse(
+            configuration["release_scenario_schema_validation"]["passed"]
+        )
+
+        clean_source = {
+            "source_commit": "b" * 40,
+            "source_worktree_dirty": False,
+            "tracked_diff_hash": hashlib.sha256(b"").hexdigest(),
+            "untracked_source_files": [],
+            "release_eligible_source": True,
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            input_path = root / "flat-suite.json"
+            input_path.write_text(
+                json.dumps({"standard_success": [_resolved_scenario()]}),
+                encoding="utf-8",
+            )
+            with mock.patch(
+                "psse_env.dagger.evaluator.git_source_state",
+                return_value=clean_source,
+            ):
+                provenance = build_evaluation_provenance(
+                    input_suite_path=input_path,
+                    environment_factory_spec=(
+                        "psse_env.dagger.test_evaluator:_ReleaseScriptEnv"
+                    ),
+                    environment_factory=_ReleaseScriptEnv,
+                    policy_factory_spec=(
+                        "psse_env.dagger.test_evaluator:_cli_policy_factory"
+                    ),
+                    policy_factory=_cli_policy_factory,
+                    model_id="test/script-policy",
+                    model_revision="a" * 40,
+                )
+            artifact = write_evaluation_artifact(
+                result, root / "flat-artifact.json", provenance=provenance
+            )
+
+        self.assertFalse(artifact["release_eligible"])
+        self.assertEqual(
+            artifact["release_failures"],
+            ["input suite is not canonical release scenario schema version 1"],
+        )
 
     def test_is_reproducible_and_does_not_mutate_supplied_scenarios(self) -> None:
         scenarios = [_escalation_scenario(), _resolved_scenario()]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import copy
 import json
 import tempfile
@@ -10,7 +11,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from psse_env.dagger.dataset_builder import TOOL_JSON_SCHEMAS
-from psse_env.sft.cli import main as cli_main
+from psse_env.sft.cli import _baseline_evaluation_gate, main as cli_main
 from psse_env.sft.collator import AssistantOnlyCollator
 from psse_env.sft.gates import (
     GateError,
@@ -512,6 +513,204 @@ class TestGenerationProvenance(unittest.TestCase):
                 pilot_minimum_rows=2,
                 pilot_maximum_rows=4,
             )
+
+
+class TestBaselineEvaluationGate(unittest.TestCase):
+    @staticmethod
+    def _result(
+        *,
+        role: str,
+        passed: bool,
+        evidence_passed: bool,
+        performance_passed: bool,
+        evidence_failures: tuple[str, ...] = (),
+        performance_failures: tuple[str, ...] = (),
+    ) -> SimpleNamespace:
+        failures = (
+            evidence_failures + performance_failures
+            if role != "base-baseline"
+            else evidence_failures
+        )
+        payload = {
+            "passed": passed,
+            "failures": failures,
+            "validation_role": role,
+            "evidence_passed": evidence_passed,
+            "performance_passed": performance_passed,
+            "performance_enforced": role != "base-baseline",
+            "evidence_failures": evidence_failures,
+            "performance_failures": performance_failures,
+        }
+        return SimpleNamespace(
+            **payload,
+            as_dict=lambda: copy.deepcopy(payload),
+        )
+
+    @staticmethod
+    def _args(root: Path) -> argparse.Namespace:
+        paths = {
+            name: root / f"{name}.json"
+            for name in ("expert", "base", "suite", "policy")
+        }
+        for path in paths.values():
+            path.write_text("{}\n", encoding="utf-8")
+        return argparse.Namespace(
+            expert_baseline_evaluation=paths["expert"],
+            base_baseline_evaluation=paths["base"],
+            evaluation_suite=paths["suite"],
+            evaluation_policy=paths["policy"],
+            expert_policy_identity="observable-expert-v1",
+            model="unsloth/gemma-4-31B-it",
+            revision="b" * 40,
+            baseline_evaluation_report_output=root / "baseline-report.json",
+        )
+
+    @staticmethod
+    def _source_state() -> dict[str, object]:
+        return {
+            "source_commit": "a" * 40,
+            "release_eligible_source": True,
+        }
+
+    def test_weak_base_performance_is_recorded_but_does_not_block(self) -> None:
+        expert = self._result(
+            role="expert-baseline",
+            passed=True,
+            evidence_passed=True,
+            performance_passed=True,
+        )
+        base = self._result(
+            role="base-baseline",
+            passed=True,
+            evidence_passed=True,
+            performance_passed=False,
+            performance_failures=("minimum terminal rate was not met",),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            args = self._args(Path(temp_dir))
+            with (
+                mock.patch(
+                    "psse_env.sft.cli.git_source_state",
+                    return_value=self._source_state(),
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.current_registry_sha256",
+                    return_value="c" * 64,
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.validate_evaluation_artifact",
+                    side_effect=[expert, base],
+                ) as validate,
+            ):
+                payload = _baseline_evaluation_gate(args)
+            report = json.loads(
+                args.baseline_evaluation_report_output.read_text(encoding="utf-8")
+            )
+
+        self.assertTrue(payload["passed"])
+        self.assertTrue(payload["pretraining_gate_passed"])
+        self.assertFalse(payload["release_eligible"])
+        self.assertFalse(payload["all_baselines_performance_qualified"])
+        self.assertEqual(payload["failures"], [])
+        self.assertEqual(
+            payload["base_performance_findings"],
+            ["base performance: minimum terminal rate was not met"],
+        )
+        self.assertEqual(
+            report["base"]["performance_failures"],
+            ["minimum terminal rate was not met"],
+        )
+        expert_call, base_call = validate.call_args_list
+        self.assertEqual(expert_call.kwargs["role"], "expert-baseline")
+        self.assertEqual(base_call.kwargs["role"], "base-baseline")
+        self.assertEqual(
+            expert_call.kwargs["expected_suite_path"], args.evaluation_suite
+        )
+        self.assertEqual(
+            base_call.kwargs["expected_suite_path"], args.evaluation_suite
+        )
+        self.assertNotIn("expected_suite_sha256", expert_call.kwargs)
+
+    def test_base_evidence_failure_blocks_and_is_reported(self) -> None:
+        expert = self._result(
+            role="expert-baseline",
+            passed=True,
+            evidence_passed=True,
+            performance_passed=True,
+        )
+        base = self._result(
+            role="base-baseline",
+            passed=False,
+            evidence_passed=False,
+            performance_passed=False,
+            evidence_failures=("strict audit evidence is incomplete",),
+            performance_failures=("minimum terminal rate was not met",),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            args = self._args(Path(temp_dir))
+            with (
+                mock.patch(
+                    "psse_env.sft.cli.git_source_state",
+                    return_value=self._source_state(),
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.current_registry_sha256",
+                    return_value="c" * 64,
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.validate_evaluation_artifact",
+                    side_effect=[expert, base],
+                ),
+                self.assertRaisesRegex(GateError, "strict audit evidence is incomplete"),
+            ):
+                _baseline_evaluation_gate(args)
+            report = json.loads(
+                args.baseline_evaluation_report_output.read_text(encoding="utf-8")
+            )
+
+        self.assertFalse(report["passed"])
+        self.assertEqual(
+            report["failures"],
+            ["base evidence: strict audit evidence is incomplete"],
+        )
+        self.assertEqual(
+            report["base_performance_findings"],
+            ["base performance: minimum terminal rate was not met"],
+        )
+
+    def test_expert_performance_failure_still_blocks(self) -> None:
+        expert = self._result(
+            role="expert-baseline",
+            passed=False,
+            evidence_passed=True,
+            performance_passed=False,
+            performance_failures=("minimum terminal rate was not met",),
+        )
+        base = self._result(
+            role="base-baseline",
+            passed=True,
+            evidence_passed=True,
+            performance_passed=False,
+            performance_failures=("minimum terminal rate was not met",),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            args = self._args(Path(temp_dir))
+            with (
+                mock.patch(
+                    "psse_env.sft.cli.git_source_state",
+                    return_value=self._source_state(),
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.current_registry_sha256",
+                    return_value="c" * 64,
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.validate_evaluation_artifact",
+                    side_effect=[expert, base],
+                ),
+                self.assertRaisesRegex(GateError, "expert: minimum terminal rate"),
+            ):
+                _baseline_evaluation_gate(args)
 
 
 class TestExactLoader(unittest.TestCase):

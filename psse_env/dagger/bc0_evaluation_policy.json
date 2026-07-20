@@ -5,6 +5,33 @@
     "expert_policy": [],
     "model_policy": []
   },
+  "role_policy": {
+    "base-baseline": "identity_and_measurement_only",
+    "checkpoint-promotion": "bc0_promotion",
+    "expert-baseline": "teacher_release"
+  },
+  "suite_policy": {
+    "approved_suite_manifest": null,
+    "approved_suite_sha256": null,
+    "evaluator_seed": 20260719,
+    "max_steps": 24,
+    "scenario_schema_version": 1,
+    "minimum_physical_roots_per_suite": {
+      "efficiency": 20,
+      "forced_error_recovery": 20,
+      "invalid_action_recovery": 20,
+      "partial_success_retention": 20,
+      "standard_success": 20
+    },
+    "required_suites": [
+      "standard_success",
+      "forced_error_recovery",
+      "partial_success_retention",
+      "invalid_action_recovery",
+      "efficiency"
+    ],
+    "status": "unconfigured"
+  },
   "family_policy": {
     "harmonic": {
       "maximum_operator_escalation_rate": 0.0,
@@ -78,6 +105,6 @@
     "maximum_steps_per_episode": 24,
     "minimum_terminal_rate": 1.0
   },
-  "policy_id": "bc0_closed_loop_hard_gate_v1",
-  "policy_schema_version": 1
+  "policy_id": "bc0_closed_loop_hard_gate_v2",
+  "policy_schema_version": 2
 }

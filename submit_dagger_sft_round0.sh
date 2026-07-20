@@ -23,10 +23,13 @@
 # 6144-token batches leave little headroom — if the one-batch stage OOMs
 # there, resubmit that job with an h200/h100-only constraint rather than
 # shrinking MAX_LENGTH). STAGE=round0 refuses to train until the observable
-# expert and exact pinned base model both pass the content-pinned fixed-suite
-# evaluation gate. After training, STAGE=checkpoint-gate validates one exact
-# checkpoint artifact before promotion; full production SFT remains refused
-# here.
+# expert passes the full content-pinned fixed-suite gate and the exact pinned
+# base model supplies complete, reproducible identity/evaluation evidence. Base
+# performance failures remain in the baseline report but do not block BC0
+# training or mislabel the weak base as release-qualified. After training,
+# STAGE=checkpoint-gate validates one exact checkpoint artifact and its paired
+# per-root non-regression against the persisted base artifact before promotion;
+# full production SFT remains refused here.
 #
 # MAX_LENGTH=6144 is a conservative starting envelope.  The exact pinned
 # processor gate for the newly generated release aggregate remains decisive.
@@ -150,6 +153,10 @@ if [[ "$STAGE" == "checkpoint-gate" ]]; then
         echo "ERROR: checkpoint promotion requires CHECKPOINT_MODEL_ID and an immutable CHECKPOINT_MODEL_REVISION." >&2
         exit 2
     fi
+    if [[ ! -f "$BASE_GEMMA_EVALUATION" ]]; then
+        echo "ERROR: checkpoint promotion requires the persisted base reference artifact: $BASE_GEMMA_EVALUATION" >&2
+        exit 2
+    fi
 fi
 
 echo "===== BC0 Gemma 4 round-0 stage ====="
@@ -199,7 +206,7 @@ case "$STAGE" in
         COMMAND=("$PYTHON" -m psse_env.sft train "${COMMON_ARGS[@]}" --output-dir "$OUTPUT_DIR" --batch-size 1 --gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS" --learning-rate "$TRAIN_LR" --epochs "$TRAIN_EPOCHS" --smoke-steps 1 --load-in-4bit --evaluation-suite "$EVALUATION_SUITE" --evaluation-policy "$EVALUATION_POLICY" --expert-baseline-evaluation "$EXPERT_BASELINE_EVALUATION" --base-baseline-evaluation "$BASE_GEMMA_EVALUATION" --expert-policy-identity "$EXPERT_POLICY_IDENTITY" --baseline-evaluation-report-output "$BASELINE_EVALUATION_REPORT")
         ;;
     checkpoint-gate)
-        COMMAND=("$PYTHON" -m psse_env.dagger.validate_evaluation --role checkpoint-promotion --artifact "$CHECKPOINT_EVALUATION" --policy "$EVALUATION_POLICY" --expected-source-commit HEAD --expected-suite "$EVALUATION_SUITE" --expected-protocol canonical --expected-model-id "$CHECKPOINT_MODEL_ID" --expected-model-revision "$CHECKPOINT_MODEL_REVISION" --report-output "$CHECKPOINT_GATE_REPORT")
+        COMMAND=("$PYTHON" -m psse_env.dagger.validate_evaluation --role checkpoint-promotion --artifact "$CHECKPOINT_EVALUATION" --policy "$EVALUATION_POLICY" --expected-source-commit HEAD --expected-suite "$EVALUATION_SUITE" --expected-protocol canonical --expected-model-id "$CHECKPOINT_MODEL_ID" --expected-model-revision "$CHECKPOINT_MODEL_REVISION" --reference-artifact "$BASE_GEMMA_EVALUATION" --reference-model-id "$MODEL_NAME" --reference-model-revision "$MODEL_REVISION" --report-output "$CHECKPOINT_GATE_REPORT")
         ;;
 esac
 

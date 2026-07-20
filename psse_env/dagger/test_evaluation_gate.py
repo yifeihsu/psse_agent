@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import io
 import json
 import tempfile
@@ -12,26 +11,121 @@ from unittest import mock
 
 from psse_env.dagger.evaluation_gate import (
     DEFAULT_POLICY_ID,
+    DEFAULT_POLICY_PATH,
     EvaluationGateResult,
     current_registry_sha256,
     main as gate_main,
     validate_evaluation_artifact,
 )
-from psse_env.sft.cli import main as sft_main
+from psse_env.dagger.evaluator import (
+    EVALUATION_SUITES,
+    fingerprint_evaluation_suites,
+    load_evaluation_suites,
+)
 from psse_env.sft.provenance import file_sha256, stable_json_sha256
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMMIT = "a" * 40
-SUITE_SHA = "b" * 64
 MODEL_REVISION = "c" * 40
+SEED = 19
+MAX_STEPS = 8
+TEST_POLICY_ID = "test-hard-gate-v2"
+TEST_SUITES = ("standard_success", "efficiency")
+SUITE_MANIFEST_FIELDS = (
+    "suite_manifest",
+    "suite_content_hashes",
+    "suite_root_set_hashes",
+    "suite_content_sha256",
+    "root_set_sha256",
+)
 
 
-def _policy() -> dict:
-    source_hash = file_sha256(Path(__file__))
+def _suite_payload(
+    *,
+    names: tuple[str, ...] = TEST_SUITES,
+    roots_per_suite: int = 1,
+    suffix: str = "",
+) -> dict[str, list[dict]]:
     return {
-        "policy_schema_version": 1,
-        "policy_id": "test-hard-gate-v1",
+        suite: [
+            {
+                "scenario_schema_version": 1,
+                "execution": {
+                    "scenario_id": f"{suite}-case-{index}{suffix}",
+                    "case": "ieee14",
+                    "measurements": [],
+                },
+                "audit": {
+                    "truth": {
+                        "clean_case": "ieee14",
+                        "clean_measurements": [],
+                        "truth_complete": True,
+                    }
+                },
+                "grouping": {
+                    "physical_root_fingerprint": f"{suite}-root-{index}{suffix}",
+                    "scenario_family": "no_error",
+                    "error_cardinality": 0,
+                    "case_id": "ieee14",
+                    "split": "test",
+                    "source_tier": "frozen-test",
+                },
+            }
+            for index in range(roots_per_suite)
+        ]
+        for suite in names
+    }
+
+
+def _write_json(path: Path, payload: object) -> None:
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _fingerprint(
+    suite_path: Path,
+    *,
+    required_suites: tuple[str, ...] = TEST_SUITES,
+    seed: int = SEED,
+    minimum_roots: int | dict[str, int] = 1,
+) -> dict:
+    return fingerprint_evaluation_suites(
+        load_evaluation_suites(suite_path),
+        seed=seed,
+        required_suites=required_suites,
+        minimum_suites=len(required_suites),
+        minimum_episodes_per_suite=1,
+        minimum_roots_per_suite=minimum_roots,
+    )
+
+
+def _manifest_identity(contract: dict) -> dict:
+    return {
+        name: copy.deepcopy(contract[name]) for name in SUITE_MANIFEST_FIELDS
+    }
+
+
+def _source_descriptor(path: Path) -> dict:
+    return {
+        "path": str(path.resolve().relative_to(REPO_ROOT)),
+        "location": "repository",
+        "sha256": file_sha256(path),
+    }
+
+
+def _policy(suite_path: Path, contract: dict) -> dict:
+    source_hash = file_sha256(Path(__file__))
+    required_suites = list(contract["suite_names"])
+    total_roots = sum(
+        int(row["distinct_physical_roots"])
+        for row in contract["suite_manifest"].values()
+    )
+    return {
+        "policy_schema_version": 2,
+        "policy_id": TEST_POLICY_ID,
         "approved_factories": {
             "environment": [
                 {
@@ -53,6 +147,23 @@ def _policy() -> dict:
             ],
             "case_loader": [],
         },
+        "role_policy": {
+            "expert-baseline": "teacher_release",
+            "base-baseline": "identity_and_measurement_only",
+            "checkpoint-promotion": "bc0_promotion",
+        },
+        "suite_policy": {
+            "status": "pinned",
+            "approved_suite_sha256": file_sha256(suite_path),
+            "approved_suite_manifest": _manifest_identity(contract),
+            "required_suites": required_suites,
+            "evaluator_seed": SEED,
+            "max_steps": MAX_STEPS,
+            "scenario_schema_version": 1,
+            "minimum_physical_roots_per_suite": {
+                name: 1 for name in required_suites
+            },
+        },
         "hard_constraints": {
             "maximum_false_commit_count": 0,
             "maximum_false_finalization_count": 0,
@@ -61,12 +172,12 @@ def _policy() -> dict:
             "maximum_invalid_action_rate": 0.2,
             "maximum_invalid_actions_per_episode": 1,
             "maximum_loop_episode_rate": 0.05,
-            "maximum_steps_per_episode": 8,
+            "maximum_steps_per_episode": MAX_STEPS,
             "minimum_terminal_rate": 1.0,
         },
         "family_policy": {
             "no_error": {
-                "minimum_physical_roots": 1,
+                "minimum_physical_roots": total_roots,
                 "minimum_resolution_rate": 1.0,
                 "maximum_operator_escalation_rate": 0.0,
             }
@@ -74,116 +185,233 @@ def _policy() -> dict:
     }
 
 
-def _source_descriptor(path: Path) -> dict:
-    return {
-        "path": str(path.resolve().relative_to(REPO_ROOT)),
-        "location": "repository",
-        "sha256": file_sha256(path),
-    }
-
-
-def _artifact(
+def _policy_identity(
     *,
-    count: int = 1,
-    explicit_identity: str | None = "expert-v1",
-    model_id: str | None = None,
-    model_revision: str | None = None,
-    invalid_episode: int | None = None,
-    false_commit_episode: int | None = None,
-    duplicate_root: bool = False,
+    explicit_identity: str | None,
+    model_id: str | None,
+    model_revision: str | None,
 ) -> dict:
-    source_file = Path(__file__)
-    evaluator_file = REPO_ROOT / "psse_env/dagger/evaluator.py"
-    episodes = []
-    policy_identity = {
+    return {
         "explicit_policy_identity": explicit_identity,
         "model_id": model_id,
         "model_revision": model_revision,
     }
-    for index in range(count):
-        invalid = 1 if invalid_episode == index else 0
-        false_commit = 1 if false_commit_episode == index else 0
-        root = "root-0" if duplicate_root else f"root-{index}"
-        episodes.append(
+
+
+def _episode(
+    manifest_row: dict,
+    *,
+    identity: dict,
+    performance_ok: bool,
+) -> dict:
+    terminal = bool(performance_ok)
+    outcome = "resolved" if performance_ok else None
+    checks = {
+        "accepted_correction_targets": {"status": "passed"},
+        "healthy_measurements_preserved": {"status": "passed"},
+        "healthy_case_components_preserved": {"status": "passed"},
+        "accepted_target_nonregression": {"status": "passed"},
+    }
+    if performance_ok:
+        checks.update(
             {
-                "episode_key": f"standard_success:case-{index}:0",
-                "family": "no_error",
-                "physical_root": root,
-                "steps": 2,
-                "terminal": True,
-                "terminal_outcome": "resolved",
-                "final_physical_success": True,
-                "physical_correctness_known": True,
-                "final_physical_correct": True,
-                "healthy_preservation_known": True,
-                "healthy_components_preserved": True,
-                "false_commit_count": false_commit,
-                "false_rollback_count": 0,
-                "false_finalization_count": 0,
-                "invalid_action_count": invalid,
-                "loop_detected": False,
-                "evaluator_error": None,
-                "release_environment_attestation": {
-                    "passed": True,
-                    "production_dataset_mode": True,
-                    "candidate_quality_oracle_mode": "deployment",
-                    "failures": [],
-                },
-                "policy_identity_attestation": {
-                    "passed": True,
-                    "required": copy.deepcopy(policy_identity),
-                    "actual": copy.deepcopy(policy_identity),
-                    "failures": [],
-                },
-                "audit": {
-                    "audit_mode": "strict_release_audit",
-                    "quarantined": False,
-                    "strict_release_audit": {
-                        "audit_version": "strict_offline_episode_truth_v3",
-                        "terminal": True,
-                        "terminal_outcome": "resolved",
-                        "scenario_family": "no_error",
-                        "physical_root_fingerprint": root,
-                        "problems": [],
-                        "quarantined": False,
-                        "checks": {
-                            "accepted_correction_targets": {"status": "passed"},
-                            "healthy_measurements_preserved": {"status": "passed"},
-                            "healthy_case_components_preserved": {"status": "passed"},
-                            "accepted_target_nonregression": {"status": "passed"},
-                            "remaining_true_faults": {"status": "passed"},
-                            "final_measurements_match_clean": {"status": "passed"},
-                            "final_case_matches_clean": {"status": "passed"},
-                        },
-                    },
-                },
+                "remaining_true_faults": {"status": "passed"},
+                "final_measurements_match_clean": {"status": "passed"},
+                "final_case_matches_clean": {"status": "passed"},
             }
         )
-    invalid_count = sum(row["invalid_action_count"] for row in episodes)
-    false_commit_count = sum(row["false_commit_count"] for row in episodes)
-    overall = {
-        "episodes": count,
-        "terminal_episodes": count,
-        "terminal_rate": 1.0,
-        "resolved_episodes": count,
-        "resolution_rate": 1.0,
-        "operator_escalation_episodes": 0,
-        "operator_escalation_rate": 0.0,
-        "false_commit_count": false_commit_count,
+    return {
+        "episode_key": manifest_row["episode_key"],
+        "scenario_id": manifest_row["scenario_id"],
+        "seed": manifest_row["seed"],
+        "suite": manifest_row["suite"],
+        "family": manifest_row["family"],
+        "cardinality": manifest_row["cardinality"],
+        "case": manifest_row["case"],
+        "split": manifest_row["split"],
+        "source_tier": manifest_row["source_tier"],
+        "physical_root": manifest_row["physical_root"],
+        "steps": 2,
+        "terminal": terminal,
+        "terminal_outcome": outcome,
+        "final_physical_success": bool(performance_ok),
+        "physical_correctness_known": True,
+        "final_physical_correct": bool(performance_ok),
+        "healthy_preservation_known": True,
+        "healthy_components_preserved": True,
+        "false_commit_count": 0 if performance_ok else 1,
         "false_rollback_count": 0,
         "false_finalization_count": 0,
-        "healthy_component_corruption_episodes": 0,
-        "invalid_action_count": invalid_count,
-        "loop_episodes": 0,
-        "evaluator_error_episodes": 0,
-    }
-    suite_hashes = {"standard_success": "d" * 64}
-    environment_rows = [
-        {
+        "invalid_action_count": 0,
+        "loop_detected": False,
+        "evaluator_error": None,
+        "release_environment_attestation": {
+            "passed": True,
             "production_dataset_mode": True,
             "candidate_quality_oracle_mode": "deployment",
-        }
+            "failures": [],
+        },
+        "policy_identity_attestation": {
+            "passed": True,
+            "required": copy.deepcopy(identity),
+            "actual": copy.deepcopy(identity),
+            "failures": [],
+        },
+        "audit": {
+            "audit_mode": "strict_release_audit",
+            "evidence_complete": True,
+            "quarantined": False,
+            "strict_release_audit": {
+                "audit_version": "strict_offline_episode_truth_v3",
+                "terminal": terminal,
+                "terminal_outcome": outcome,
+                "scenario_family": manifest_row["family"],
+                "physical_root_fingerprint": manifest_row["physical_root"],
+                "problems": [],
+                "quarantined": False,
+                "checks": checks,
+            },
+        },
+    }
+
+
+def _overall(episodes: list[dict]) -> dict:
+    total = len(episodes)
+    terminal = sum(row["terminal"] is True for row in episodes)
+    resolved = sum(
+        row["terminal"] is True
+        and row["terminal_outcome"] == "resolved"
+        and row["final_physical_success"] is True
+        for row in episodes
+    )
+    escalated = sum(
+        row["terminal"] is True
+        and row["terminal_outcome"] == "operator_escalation"
+        for row in episodes
+    )
+    return {
+        "episodes": total,
+        "terminal_episodes": terminal,
+        "terminal_rate": terminal / total if total else 0.0,
+        "resolved_episodes": resolved,
+        "resolution_rate": resolved / total if total else 0.0,
+        "operator_escalation_episodes": escalated,
+        "operator_escalation_rate": escalated / total if total else 0.0,
+        "false_commit_count": sum(row["false_commit_count"] for row in episodes),
+        "false_rollback_count": sum(
+            row["false_rollback_count"] for row in episodes
+        ),
+        "false_finalization_count": sum(
+            row["false_finalization_count"] for row in episodes
+        ),
+        "healthy_component_corruption_episodes": sum(
+            row["healthy_preservation_known"] is True
+            and row["healthy_components_preserved"] is False
+            for row in episodes
+        ),
+        "invalid_action_count": sum(row["invalid_action_count"] for row in episodes),
+        "loop_episodes": sum(row["loop_detected"] is True for row in episodes),
+        "evaluator_error_episodes": sum(
+            row["evaluator_error"] is not None for row in episodes
+        ),
+    }
+
+
+def _rehash(artifact: dict) -> None:
+    unsigned = copy.deepcopy(artifact)
+    unsigned.pop("content_sha256", None)
+    artifact["content_sha256"] = stable_json_sha256(unsigned)
+
+
+def _rehash_provenance(artifact: dict) -> None:
+    identity_core = copy.deepcopy(artifact["provenance"])
+    for field in ("identity_sha256", "release_eligible", "release_failures"):
+        identity_core.pop(field, None)
+    artifact["provenance"]["identity_sha256"] = stable_json_sha256(identity_core)
+    _rehash(artifact)
+
+
+def _set_operator_escalation(
+    artifact: dict,
+    episode_index: int,
+    *,
+    healthy_summary_known: bool = True,
+) -> None:
+    suite_metrics = artifact["evaluation"]["suite_metrics"]
+    episode = suite_metrics["episodes"][episode_index]
+    episode["terminal_outcome"] = "operator_escalation"
+    episode["final_physical_success"] = False
+    episode["physical_correctness_known"] = False
+    episode["final_physical_correct"] = False
+    episode["healthy_preservation_known"] = healthy_summary_known
+    episode["healthy_components_preserved"] = healthy_summary_known
+    episode["audit"]["strict_release_audit"][
+        "terminal_outcome"
+    ] = "operator_escalation"
+    suite_metrics["overall"] = _overall(suite_metrics["episodes"])
+    _rehash(artifact)
+
+
+def _artifact(
+    suite_path: Path,
+    contract: dict,
+    *,
+    explicit_identity: str | None = "expert-v1",
+    model_id: str | None = None,
+    model_revision: str | None = None,
+    performance_ok: bool = True,
+) -> dict:
+    source_file = Path(__file__)
+    evaluator_file = REPO_ROOT / "psse_env/dagger/evaluator.py"
+    identity = _policy_identity(
+        explicit_identity=explicit_identity,
+        model_id=model_id,
+        model_revision=model_revision,
+    )
+    episodes = [
+        _episode(
+            manifest_row,
+            identity=identity,
+            performance_ok=performance_ok,
+        )
+        for manifest_row in contract["episode_manifest"]
     ]
+    environment_contract = {
+        "production_dataset_mode": True,
+        "candidate_quality_oracle_mode": "deployment",
+    }
+    configuration = {
+        **copy.deepcopy(contract),
+        "seed": SEED,
+        "max_steps": MAX_STEPS,
+        "required_suites": sorted(contract["suite_names"]),
+        "minimum_suites": len(contract["suite_names"]),
+        "minimum_episodes_per_suite": 1,
+        "minimum_roots_per_suite": 1,
+        "release_scenario_schema_validation": {
+            "passed": True,
+            "scenario_schema_version": 1,
+        },
+        "release_environment_validation": {
+            "passed": True,
+            "episodes_checked": len(episodes),
+            "required": copy.deepcopy(environment_contract),
+            "observed": [copy.deepcopy(environment_contract)],
+            "failures": [],
+        },
+        "policy_identity_validation": {
+            "passed": True,
+            "episodes_checked": len(episodes),
+            "required": copy.deepcopy(identity),
+            "observed": [copy.deepcopy(identity)],
+            "failures": [],
+        },
+        "custom_callback_validation": {
+            "passed": True,
+            "physical_audit_callback": False,
+            "tool_cost_callback": False,
+        },
+    }
     core = {
         "provenance_schema_version": 1,
         "source_state": {
@@ -194,10 +422,10 @@ def _artifact(
             "release_eligible_source": True,
         },
         "input_suite": {
-            "provided_path": "suite.json",
-            "resolved_path": "/frozen/suite.json",
-            "sha256": SUITE_SHA,
-            "size_bytes": 100,
+            "provided_path": str(suite_path),
+            "resolved_path": str(suite_path.resolve()),
+            "sha256": file_sha256(suite_path),
+            "size_bytes": suite_path.stat().st_size,
         },
         "factories": {
             "environment": {
@@ -210,11 +438,7 @@ def _artifact(
             },
             "case_loader": None,
         },
-        "policy_identity": {
-            "explicit_policy_identity": explicit_identity,
-            "model_id": model_id,
-            "model_revision": model_revision,
-        },
+        "policy_identity": copy.deepcopy(identity),
         "protocol_registry": {
             "protocol": "canonical",
             "registry_sha256": current_registry_sha256("canonical"),
@@ -230,287 +454,828 @@ def _artifact(
         "release_failures": [],
         "provenance": provenance,
         "evaluation": {
-            # A deliberately terrible scalar demonstrates that it is not a gate.
             "score": -1.0e12,
             "metrics": {},
             "suite_metrics": {
-                "configuration": {
-                    "suite_coverage_validation": {"passed": True},
-                    "suite_content_hashes": suite_hashes,
-                    "suite_content_sha256": stable_json_sha256(suite_hashes),
-                    "release_environment_validation": {
-                        "passed": True,
-                        "episodes_checked": count,
-                        "required": {
-                            "production_dataset_mode": True,
-                            "candidate_quality_oracle_mode": "deployment",
-                        },
-                        "observed": environment_rows,
-                        "failures": [],
-                    },
-                    "policy_identity_validation": {
-                        "passed": True,
-                        "episodes_checked": count,
-                        "required": copy.deepcopy(policy_identity),
-                        "observed": [copy.deepcopy(policy_identity)],
-                        "failures": [],
-                    },
-                },
-                "overall": overall,
+                "configuration": configuration,
+                "overall": _overall(episodes),
                 "episodes": episodes,
             },
         },
     }
-    artifact["content_sha256"] = hashlib.sha256(
-        json.dumps(
-            artifact, sort_keys=True, separators=(",", ":"), default=str
-        ).encode("utf-8")
-    ).hexdigest()
+    _rehash(artifact)
     return artifact
 
 
-def _validate(artifact: dict, **kwargs) -> EvaluationGateResult:
+def _validate(
+    artifact: dict,
+    *,
+    role: str,
+    policy: dict,
+    suite_path: Path,
+    explicit_identity: str | None = "expert-v1",
+    model_id: str | None = None,
+    model_revision: str | None = None,
+    reference_artifact: dict | None = None,
+    reference_model_id: str | None = None,
+    reference_model_revision: str | None = None,
+    required_policy_id: str = TEST_POLICY_ID,
+) -> EvaluationGateResult:
+    identity_kwargs = (
+        {"expected_policy_identity": explicit_identity}
+        if explicit_identity is not None
+        else {
+            "expected_model_id": model_id,
+            "expected_model_revision": model_revision,
+        }
+    )
     return validate_evaluation_artifact(
         artifact,
-        policy=_policy(),
+        role=role,
+        policy=policy,
         expected_source_commit=COMMIT,
-        expected_suite_sha256=SUITE_SHA,
+        expected_suite_path=suite_path,
         expected_protocol="canonical",
         expected_registry_sha256=current_registry_sha256("canonical"),
-        expected_policy_identity="expert-v1",
-        required_gate_policy_id="test-hard-gate-v1",
+        reference_artifact=reference_artifact,
+        reference_model_id=reference_model_id,
+        reference_model_revision=reference_model_revision,
+        required_gate_policy_id=required_policy_id,
         repo_root=REPO_ROOT,
         require_current_clean_source=False,
-        **kwargs,
+        **identity_kwargs,
     )
 
 
-def _rehash(artifact: dict) -> None:
-    unsigned = dict(artifact)
-    unsigned.pop("content_sha256", None)
-    artifact["content_sha256"] = hashlib.sha256(
-        json.dumps(
-            unsigned, sort_keys=True, separators=(",", ":"), default=str
-        ).encode("utf-8")
-    ).hexdigest()
+class EvaluationGateV2Tests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary_directory.name)
+        self.suite_path = self.root / "frozen-suite.json"
+        _write_json(self.suite_path, _suite_payload())
+        self.contract = _fingerprint(self.suite_path)
+        self.policy = _policy(self.suite_path, self.contract)
 
+    def tearDown(self) -> None:
+        self.temporary_directory.cleanup()
 
-class EvaluationGateTests(unittest.TestCase):
-    def test_valid_artifact_passes_without_using_scalar_score(self) -> None:
-        result = _validate(_artifact())
+    def test_exact_pinned_suite_and_expert_artifact_pass(self) -> None:
+        result = _validate(
+            _artifact(self.suite_path, self.contract),
+            role="expert-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
+        )
         self.assertTrue(result.passed, result.failures)
-        self.assertEqual(result.observed["terminal_rate"], 1.0)
+        self.assertTrue(result.evidence_passed)
+        self.assertTrue(result.performance_passed)
+        self.assertTrue(result.performance_enforced)
+        self.assertEqual(result.validation_role, "expert-baseline")
+        self.assertEqual(result.frozen_suite_sha256, file_sha256(self.suite_path))
 
-    def test_hard_safety_failure_cannot_be_offset_by_score(self) -> None:
-        artifact = _artifact(false_commit_episode=0)
-        artifact["evaluation"]["score"] = 1.0e100
-        unsigned = dict(artifact)
-        unsigned.pop("content_sha256")
-        artifact["content_sha256"] = hashlib.sha256(
-            json.dumps(
-                unsigned, sort_keys=True, separators=(",", ":"), default=str
-            ).encode("utf-8")
-        ).hexdigest()
-        result = _validate(artifact)
-        self.assertFalse(result.passed)
-        self.assertTrue(any("maximum_false_commit_count" in row for row in result.failures))
+    def test_policy_pinned_suite_rejects_substitution(self) -> None:
+        substitute_path = self.root / "easier-suite.json"
+        _write_json(substitute_path, _suite_payload(suffix="-substitute"))
+        substitute_contract = _fingerprint(substitute_path)
+        substitute_artifact = _artifact(substitute_path, substitute_contract)
 
-    def test_artifact_and_provenance_hashes_are_recomputed(self) -> None:
-        artifact = _artifact()
-        artifact["evaluation"]["score"] = 99.0
-        result = _validate(artifact)
-        self.assertFalse(result.passed)
-        self.assertTrue(any("content_sha256" in row for row in result.failures))
-
-        artifact = _artifact()
-        artifact["provenance"]["source_state"]["source_commit"] = "e" * 40
-        unsigned = dict(artifact)
-        unsigned.pop("content_sha256")
-        artifact["content_sha256"] = hashlib.sha256(
-            json.dumps(
-                unsigned, sort_keys=True, separators=(",", ":"), default=str
-            ).encode("utf-8")
-        ).hexdigest()
-        result = _validate(artifact)
-        self.assertFalse(result.passed)
-        self.assertTrue(any("identity_sha256" in row for row in result.failures))
-
-    def test_invalid_call_bound_is_explicit_and_fail_closed(self) -> None:
-        within_bound = _validate(_artifact(count=5, invalid_episode=0))
-        self.assertTrue(within_bound.passed, within_bound.failures)
-        self.assertEqual(
-            len(
-                _artifact(count=5)["evaluation"]["suite_metrics"]["configuration"][
-                    "release_environment_validation"
-                ]["observed"]
-            ),
-            1,
+        result = _validate(
+            substitute_artifact,
+            role="expert-baseline",
+            policy=self.policy,
+            suite_path=substitute_path,
         )
-        over_bound = _validate(_artifact(count=4, invalid_episode=0))
-        self.assertFalse(over_bound.passed)
+        self.assertFalse(result.passed)
         self.assertTrue(
-            any("maximum_invalid_action_rate" in row for row in over_bound.failures)
+            any("policy-pinned SHA-256" in failure for failure in result.failures),
+            result.failures,
+        )
+        self.assertTrue(
+            any("packaged policy" in failure for failure in result.failures),
+            result.failures,
         )
 
-    def test_duplicate_family_root_cannot_inflate_coverage(self) -> None:
-        result = _validate(_artifact(count=2, duplicate_root=True))
-        self.assertFalse(result.passed)
-        self.assertTrue(any("globally duplicate" in row for row in result.failures))
+    def test_release_gate_rejects_legacy_flat_suite_schema(self) -> None:
+        legacy_path = self.root / "legacy-flat-suite.json"
+        _write_json(
+            legacy_path,
+            {
+                suite: [
+                    {
+                        "scenario_id": f"legacy-{suite}",
+                        "physical_root_fingerprint": f"legacy-root-{suite}",
+                        "scenario_family": "no_error",
+                        "error_cardinality": 0,
+                        "network_case": "ieee14",
+                        "split": "test",
+                        "source_tier": "legacy",
+                    }
+                ]
+                for suite in TEST_SUITES
+            },
+        )
 
-    def test_one_root_cannot_be_relabelled_across_families(self) -> None:
-        artifact = _artifact(count=2)
-        second = artifact["evaluation"]["suite_metrics"]["episodes"][1]
-        second["physical_root"] = "root-0"
-        second["family"] = "measurement"
-        strict = second["audit"]["strict_release_audit"]
-        strict["physical_root_fingerprint"] = "root-0"
-        strict["scenario_family"] = "measurement"
-        policy = _policy()
-        policy["family_policy"]["measurement"] = {
-            "minimum_physical_roots": 1,
-            "minimum_resolution_rate": 1.0,
-            "maximum_operator_escalation_rate": 0.0,
-        }
+        with self.assertRaisesRegex(ValueError, "release scenario schema validation"):
+            _validate(
+                _artifact(self.suite_path, self.contract),
+                role="expert-baseline",
+                policy=self.policy,
+                suite_path=legacy_path,
+            )
+    def test_episode_without_suite_membership_fails_closed(self) -> None:
+        artifact = _artifact(self.suite_path, self.contract)
+        del artifact["evaluation"]["suite_metrics"]["episodes"][0]["suite"]
         _rehash(artifact)
-        result = validate_evaluation_artifact(
+
+        result = _validate(
             artifact,
-            policy=policy,
-            expected_source_commit=COMMIT,
-            expected_suite_sha256=SUITE_SHA,
-            expected_protocol="canonical",
-            expected_registry_sha256=current_registry_sha256("canonical"),
-            expected_policy_identity="expert-v1",
-            required_gate_policy_id="test-hard-gate-v1",
-            repo_root=REPO_ROOT,
-            require_current_clean_source=False,
+            role="expert-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
         )
         self.assertFalse(result.passed)
-        self.assertTrue(any("globally duplicate" in row for row in result.failures))
+        self.assertTrue(
+            any("missing required evidence" in failure for failure in result.failures),
+            result.failures,
+        )
+        self.assertTrue(
+            any("suite membership" in failure for failure in result.failures),
+            result.failures,
+        )
 
-    def test_self_declared_mock_environment_needs_pinned_factory(self) -> None:
-        policy = _policy()
-        policy["approved_factories"]["environment"] = []
-        result = validate_evaluation_artifact(
-            _artifact(),
-            policy=policy,
-            expected_source_commit=COMMIT,
-            expected_suite_sha256=SUITE_SHA,
-            expected_protocol="canonical",
-            expected_registry_sha256=current_registry_sha256("canonical"),
-            expected_policy_identity="expert-v1",
-            required_gate_policy_id="test-hard-gate-v1",
-            repo_root=REPO_ROOT,
-            require_current_clean_source=False,
+    def test_evaluator_seed_and_max_steps_are_policy_bound(self) -> None:
+        for field, value in (("seed", SEED + 1), ("max_steps", MAX_STEPS - 1)):
+            with self.subTest(field=field):
+                artifact = _artifact(self.suite_path, self.contract)
+                artifact["evaluation"]["suite_metrics"]["configuration"][field] = value
+                _rehash(artifact)
+                result = _validate(
+                    artifact,
+                    role="expert-baseline",
+                    policy=self.policy,
+                    suite_path=self.suite_path,
+                )
+                self.assertFalse(result.passed)
+                self.assertTrue(
+                    any(
+                        f"configuration {field}" in failure
+                        for failure in result.failures
+                    ),
+                    result.failures,
+                )
+
+    def test_custom_callback_isolation_evidence_is_mandatory(self) -> None:
+        for callback_evidence in (
+            None,
+            {
+                "passed": False,
+                "physical_audit_callback": False,
+                "tool_cost_callback": True,
+            },
+        ):
+            with self.subTest(callback_evidence=callback_evidence):
+                artifact = _artifact(self.suite_path, self.contract)
+                configuration = artifact["evaluation"]["suite_metrics"][
+                    "configuration"
+                ]
+                if callback_evidence is None:
+                    configuration.pop("custom_callback_validation")
+                else:
+                    configuration["custom_callback_validation"] = callback_evidence
+                _rehash(artifact)
+                result = _validate(
+                    artifact,
+                    role="expert-baseline",
+                    policy=self.policy,
+                    suite_path=self.suite_path,
+                )
+                self.assertFalse(result.evidence_passed)
+                self.assertTrue(
+                    any("custom-callback" in failure for failure in result.failures),
+                    result.failures,
+                )
+
+    def test_release_scenario_schema_evidence_is_mandatory(self) -> None:
+        for schema_evidence in (
+            None,
+            {"passed": False, "scenario_schema_version": 1},
+            {"passed": True, "scenario_schema_version": 1.0},
+        ):
+            with self.subTest(schema_evidence=schema_evidence):
+                artifact = _artifact(self.suite_path, self.contract)
+                configuration = artifact["evaluation"]["suite_metrics"][
+                    "configuration"
+                ]
+                if schema_evidence is None:
+                    configuration.pop("release_scenario_schema_validation")
+                else:
+                    configuration["release_scenario_schema_validation"] = (
+                        schema_evidence
+                    )
+                _rehash(artifact)
+                result = _validate(
+                    artifact,
+                    role="expert-baseline",
+                    policy=self.policy,
+                    suite_path=self.suite_path,
+                )
+                self.assertFalse(result.evidence_passed)
+                self.assertTrue(
+                    any("schema-v1" in failure for failure in result.failures),
+                    result.failures,
+                )
+
+    def test_schema_versions_require_exact_integers(self) -> None:
+        artifact = _artifact(self.suite_path, self.contract)
+        artifact["artifact_schema_version"] = 2.0
+        artifact["provenance"]["provenance_schema_version"] = 1.0
+        _rehash_provenance(artifact)
+        _rehash(artifact)
+        result = _validate(
+            artifact,
+            role="expert-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
+        )
+        self.assertFalse(result.evidence_passed)
+        self.assertTrue(
+            any("artifact_schema_version" in failure for failure in result.failures),
+            result.failures,
+        )
+        self.assertTrue(
+            any("provenance_schema_version" in failure for failure in result.failures),
+            result.failures,
+        )
+
+    def test_artifact_provenance_and_factory_integrity_remain_fail_closed(
+        self,
+    ) -> None:
+        artifact = _artifact(self.suite_path, self.contract)
+        artifact["evaluation"]["score"] = 1.0e100
+        result = _validate(
+            artifact,
+            role="expert-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
         )
         self.assertFalse(result.passed)
-        self.assertTrue(any("environment factory" in row for row in result.failures))
+        self.assertTrue(
+            any("content_sha256" in failure for failure in result.failures),
+            result.failures,
+        )
 
-    def test_scripted_expert_factory_cannot_be_relabelled_as_model(self) -> None:
-        artifact = _artifact(
+        artifact = _artifact(self.suite_path, self.contract)
+        artifact["provenance"]["source_state"]["source_commit"] = "e" * 40
+        _rehash(artifact)
+        result = _validate(
+            artifact,
+            role="expert-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
+        )
+        self.assertFalse(result.passed)
+        self.assertTrue(
+            any("identity_sha256" in failure for failure in result.failures),
+            result.failures,
+        )
+
+        unapproved = copy.deepcopy(self.policy)
+        unapproved["approved_factories"]["environment"] = []
+        result = _validate(
+            _artifact(self.suite_path, self.contract),
+            role="expert-baseline",
+            policy=unapproved,
+            suite_path=self.suite_path,
+        )
+        self.assertFalse(result.passed)
+        self.assertTrue(
+            any("environment factory" in failure for failure in result.failures),
+            result.failures,
+        )
+
+    def test_episode_root_and_strict_audit_cannot_be_relabelled(self) -> None:
+        artifact = _artifact(self.suite_path, self.contract)
+        episodes = artifact["evaluation"]["suite_metrics"]["episodes"]
+        episodes[1]["physical_root"] = episodes[0]["physical_root"]
+        episodes[1]["audit"]["strict_release_audit"][
+            "physical_root_fingerprint"
+        ] = episodes[0]["physical_root"]
+        _rehash(artifact)
+        result = _validate(
+            artifact,
+            role="expert-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
+        )
+        self.assertFalse(result.passed)
+        self.assertTrue(
+            any("globally duplicate" in failure for failure in result.failures),
+            result.failures,
+        )
+
+    def test_frozen_manifest_binds_family_and_all_grouping_dimensions(self) -> None:
+        artifact = _artifact(self.suite_path, self.contract)
+        episode = artifact["evaluation"]["suite_metrics"]["episodes"][0]
+        episode["family"] = "hif"
+        episode["audit"]["strict_release_audit"]["scenario_family"] = "hif"
+        _rehash(artifact)
+
+        result = _validate(
+            artifact,
+            role="expert-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
+        )
+        self.assertFalse(result.passed)
+        self.assertTrue(
+            any("frozen suite manifest" in failure for failure in result.failures),
+            result.failures,
+        )
+
+        for field in ("cardinality", "case", "split", "source_tier"):
+            with self.subTest(field=field):
+                artifact = _artifact(self.suite_path, self.contract)
+                artifact["evaluation"]["suite_metrics"]["episodes"][0][field] = (
+                    "altered"
+                )
+                _rehash(artifact)
+                result = _validate(
+                    artifact,
+                    role="expert-baseline",
+                    policy=self.policy,
+                    suite_path=self.suite_path,
+                )
+                self.assertFalse(result.passed)
+                self.assertTrue(
+                    any(
+                        "frozen suite manifest" in failure
+                        for failure in result.failures
+                    ),
+                    result.failures,
+                )
+
+    def test_episode_counters_require_exact_json_integers(self) -> None:
+        artifact = _artifact(self.suite_path, self.contract)
+        artifact["evaluation"]["suite_metrics"]["episodes"][0][
+            "invalid_action_count"
+        ] = "1"
+        _rehash(artifact)
+        result = _validate(
+            artifact,
+            role="expert-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
+        )
+        self.assertFalse(result.passed)
+        self.assertFalse(result.evidence_passed)
+        self.assertTrue(
+            any("must be a non-negative integer" in failure for failure in result.failures),
+            result.failures,
+        )
+
+    def test_evaluator_source_is_anchored_to_the_real_evaluator(self) -> None:
+        artifact = _artifact(self.suite_path, self.contract)
+        artifact["provenance"]["evaluator_source"] = _source_descriptor(Path(__file__))
+        _rehash_provenance(artifact)
+        result = _validate(
+            artifact,
+            role="expert-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
+        )
+        self.assertFalse(result.passed)
+        self.assertTrue(
+            any("evaluator source identity" in failure for failure in result.failures),
+            result.failures,
+        )
+
+        artifact = _artifact(self.suite_path, self.contract)
+        artifact["evaluation"]["suite_metrics"]["episodes"][0]["audit"][
+            "strict_release_audit"
+        ]["terminal_outcome"] = "operator_escalation"
+        _rehash(artifact)
+        result = _validate(
+            artifact,
+            role="expert-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
+        )
+        self.assertFalse(result.passed)
+        self.assertTrue(
+            any("audit evidence" in failure for failure in result.failures),
+            result.failures,
+        )
+
+    def test_provenance_for_suite_a_cannot_cover_results_from_suite_b(self) -> None:
+        substitute_path = self.root / "suite-b.json"
+        _write_json(substitute_path, _suite_payload(suffix="-suite-b"))
+        substitute_contract = _fingerprint(substitute_path)
+        artifact = _artifact(substitute_path, substitute_contract)
+        input_suite = artifact["provenance"]["input_suite"]
+        input_suite.update(
+            {
+                "provided_path": str(self.suite_path),
+                "resolved_path": str(self.suite_path.resolve()),
+                "sha256": file_sha256(self.suite_path),
+                "size_bytes": self.suite_path.stat().st_size,
+            }
+        )
+        identity_core = copy.deepcopy(artifact["provenance"])
+        for field in ("identity_sha256", "release_eligible", "release_failures"):
+            identity_core.pop(field, None)
+        artifact["provenance"]["identity_sha256"] = stable_json_sha256(
+            identity_core
+        )
+        _rehash(artifact)
+
+        result = _validate(
+            artifact,
+            role="expert-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
+        )
+        self.assertFalse(result.passed)
+        self.assertTrue(
+            any(
+                "recomputed expected suite" in failure
+                or "frozen suite manifest" in failure
+                for failure in result.failures
+            ),
+            result.failures,
+        )
+
+    def test_base_records_performance_failure_but_does_not_block_measurement(self) -> None:
+        base_artifact = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="base/gemma",
+            model_revision=MODEL_REVISION,
+            performance_ok=False,
+        )
+        result = _validate(
+            base_artifact,
+            role="base-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
             explicit_identity=None,
             model_id="base/gemma",
             model_revision=MODEL_REVISION,
         )
-        policy = _policy()
-        policy["approved_factories"]["model_policy"] = []
-        result = validate_evaluation_artifact(
-            artifact,
-            policy=policy,
-            expected_source_commit=COMMIT,
-            expected_suite_sha256=SUITE_SHA,
-            expected_protocol="canonical",
-            expected_registry_sha256=current_registry_sha256("canonical"),
-            expected_model_id="base/gemma",
-            expected_model_revision=MODEL_REVISION,
-            required_gate_policy_id="test-hard-gate-v1",
-            repo_root=REPO_ROOT,
-            require_current_clean_source=False,
+        self.assertTrue(result.passed, result.failures)
+        self.assertTrue(result.evidence_passed)
+        self.assertFalse(result.performance_passed)
+        self.assertFalse(result.performance_enforced)
+        self.assertTrue(result.performance_failures)
+
+        base_artifact["evaluation"]["suite_metrics"]["episodes"][0]["audit"][
+            "evidence_complete"
+        ] = False
+        _rehash(base_artifact)
+        incomplete = _validate(
+            base_artifact,
+            role="base-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
+            explicit_identity=None,
+            model_id="base/gemma",
+            model_revision=MODEL_REVISION,
+        )
+        self.assertFalse(incomplete.passed)
+        self.assertFalse(incomplete.evidence_passed)
+        self.assertTrue(
+            any("evidence is incomplete" in failure for failure in incomplete.failures),
+            incomplete.failures,
+        )
+
+    def test_same_performance_failure_blocks_expert_and_checkpoint(self) -> None:
+        expert = _validate(
+            _artifact(
+                self.suite_path,
+                self.contract,
+                performance_ok=False,
+            ),
+            role="expert-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
+        )
+        self.assertFalse(expert.passed)
+        self.assertTrue(expert.evidence_passed)
+        self.assertFalse(expert.performance_passed)
+        self.assertTrue(expert.performance_enforced)
+
+        checkpoint_artifact = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="checkpoint/bc0",
+            model_revision=MODEL_REVISION,
+            performance_ok=False,
+        )
+        reference_artifact = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="base/gemma",
+            model_revision=MODEL_REVISION,
+            performance_ok=True,
+        )
+        checkpoint = _validate(
+            checkpoint_artifact,
+            role="checkpoint-promotion",
+            policy=self.policy,
+            suite_path=self.suite_path,
+            explicit_identity=None,
+            model_id="checkpoint/bc0",
+            model_revision=MODEL_REVISION,
+            reference_artifact=reference_artifact,
+            reference_model_id="base/gemma",
+            reference_model_revision=MODEL_REVISION,
+        )
+        self.assertFalse(checkpoint.passed)
+        self.assertTrue(checkpoint.evidence_passed)
+        self.assertFalse(checkpoint.performance_passed)
+        self.assertTrue(checkpoint.performance_enforced)
+
+    def test_checkpoint_requires_an_evidence_valid_reference(self) -> None:
+        checkpoint_artifact = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="checkpoint/bc0",
+            model_revision=MODEL_REVISION,
+        )
+        with self.assertRaisesRegex(ValueError, "requires reference_artifact"):
+            _validate(
+                checkpoint_artifact,
+                role="checkpoint-promotion",
+                policy=self.policy,
+                suite_path=self.suite_path,
+                explicit_identity=None,
+                model_id="checkpoint/bc0",
+                model_revision=MODEL_REVISION,
+            )
+
+        invalid_reference = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="base/gemma",
+            model_revision=MODEL_REVISION,
+        )
+        invalid_reference["evaluation"]["suite_metrics"]["episodes"][0][
+            "release_environment_attestation"
+        ]["passed"] = False
+        _rehash(invalid_reference)
+        result = _validate(
+            checkpoint_artifact,
+            role="checkpoint-promotion",
+            policy=self.policy,
+            suite_path=self.suite_path,
+            explicit_identity=None,
+            model_id="checkpoint/bc0",
+            model_revision=MODEL_REVISION,
+            reference_artifact=invalid_reference,
+            reference_model_id="base/gemma",
+            reference_model_revision=MODEL_REVISION,
         )
         self.assertFalse(result.passed)
-        self.assertTrue(any("model_policy factory" in row for row in result.failures))
+        self.assertTrue(
+            any("reference" in failure.lower() for failure in result.failures),
+            result.failures,
+        )
 
-    def test_environment_terminal_and_required_evidence_fail_closed(self) -> None:
-        artifact = _artifact()
-        episode = artifact["evaluation"]["suite_metrics"]["episodes"][0]
-        episode["release_environment_attestation"]["passed"] = False
-        episode["release_environment_attestation"]["production_dataset_mode"] = False
-        _rehash(artifact)
-        result = _validate(artifact)
-        self.assertFalse(result.passed)
-        self.assertTrue(any("deployment-environment" in row for row in result.failures))
-
-        artifact = _artifact()
-        episode = artifact["evaluation"]["suite_metrics"]["episodes"][0]
-        episode["terminal"] = False
-        episode["terminal_outcome"] = None
-        episode["final_physical_success"] = False
-        overall = artifact["evaluation"]["suite_metrics"]["overall"]
-        overall["terminal_episodes"] = 0
-        overall["terminal_rate"] = 0.0
-        overall["resolved_episodes"] = 0
-        overall["resolution_rate"] = 0.0
-        _rehash(artifact)
-        result = _validate(artifact)
-        self.assertFalse(result.passed)
-        self.assertTrue(any("minimum_terminal_rate" in row for row in result.failures))
-        self.assertTrue(any("family 'no_error' resolution" in row for row in result.failures))
-
-        artifact = _artifact()
-        del artifact["evaluation"]["suite_metrics"]["episodes"][0][
-            "false_commit_count"
-        ]
-        _rehash(artifact)
-        result = _validate(artifact)
-        self.assertFalse(result.passed)
-        self.assertTrue(any("missing required evidence" in row for row in result.failures))
-
-    def test_outer_outcome_cannot_relabel_a_strict_escalation_as_resolution(self) -> None:
-        artifact = _artifact()
-        episode = artifact["evaluation"]["suite_metrics"]["episodes"][0]
-        strict = episode["audit"]["strict_release_audit"]
-        strict["terminal_outcome"] = "operator_escalation"
-        strict["checks"]["remaining_true_faults"] = {"status": "not_required"}
-        strict["checks"]["final_measurements_match_clean"] = {
-            "status": "not_required"
-        }
-        strict["checks"]["final_case_matches_clean"] = {"status": "not_required"}
-        _rehash(artifact)
-        result = _validate(artifact)
-        self.assertFalse(result.passed)
-        self.assertTrue(any("strict release audit" in row for row in result.failures))
-
-    def test_current_dirty_source_is_rejected(self) -> None:
-        dirty = {
-            "source_commit": COMMIT,
-            "release_eligible_source": False,
-            "source_worktree_dirty": True,
-        }
-        with mock.patch(
-            "psse_env.dagger.evaluation_gate.git_source_state", return_value=dirty
-        ):
-            result = validate_evaluation_artifact(
-                _artifact(),
-                policy=_policy(),
-                expected_source_commit=COMMIT,
-                expected_suite_sha256=SUITE_SHA,
-                expected_protocol="canonical",
-                expected_registry_sha256=current_registry_sha256("canonical"),
-                expected_policy_identity="expert-v1",
-                required_gate_policy_id="test-hard-gate-v1",
-                repo_root=REPO_ROOT,
+    def test_checkpoint_cannot_reference_itself_or_change_policy_factory(self) -> None:
+        checkpoint_artifact = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="checkpoint/bc0",
+            model_revision=MODEL_REVISION,
+        )
+        with self.assertRaisesRegex(ValueError, "identities must differ"):
+            _validate(
+                checkpoint_artifact,
+                role="checkpoint-promotion",
+                policy=self.policy,
+                suite_path=self.suite_path,
+                explicit_identity=None,
+                model_id="checkpoint/bc0",
+                model_revision=MODEL_REVISION,
+                reference_artifact=checkpoint_artifact,
+                reference_model_id="checkpoint/bc0",
+                reference_model_revision=MODEL_REVISION,
             )
-        self.assertFalse(result.passed)
-        self.assertTrue(any("current evaluation-gate source" in row for row in result.failures))
 
-    def test_default_policy_identity_is_bound_to_packaged_content(self) -> None:
-        weaker = _policy()
-        weaker["policy_id"] = DEFAULT_POLICY_ID
-        weaker["family_policy"]["no_error"]["minimum_resolution_rate"] = 0.0
+        reference_artifact = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="base/gemma",
+            model_revision=MODEL_REVISION,
+        )
+        reference_artifact["provenance"]["factories"]["policy"][
+            "import_spec"
+        ] = "tests:alternate_policy"
+        _rehash_provenance(reference_artifact)
+        policy = copy.deepcopy(self.policy)
+        policy["approved_factories"]["model_policy"].append(
+            {
+                "import_spec": "tests:alternate_policy",
+                "source_sha256": file_sha256(Path(__file__)),
+            }
+        )
+        result = _validate(
+            checkpoint_artifact,
+            role="checkpoint-promotion",
+            policy=policy,
+            suite_path=self.suite_path,
+            explicit_identity=None,
+            model_id="checkpoint/bc0",
+            model_revision=MODEL_REVISION,
+            reference_artifact=reference_artifact,
+            reference_model_id="base/gemma",
+            reference_model_revision=MODEL_REVISION,
+        )
+        self.assertFalse(result.passed)
+        self.assertFalse(result.evidence_passed)
+        self.assertTrue(
+            any("policy_factory" in failure for failure in result.failures),
+            result.failures,
+        )
+
+    def test_exact_paired_checkpoint_and_reference_pass(self) -> None:
+        checkpoint_artifact = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="checkpoint/bc0",
+            model_revision=MODEL_REVISION,
+        )
+        reference_artifact = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="base/gemma",
+            model_revision=MODEL_REVISION,
+        )
+        result = _validate(
+            checkpoint_artifact,
+            role="checkpoint-promotion",
+            policy=self.policy,
+            suite_path=self.suite_path,
+            explicit_identity=None,
+            model_id="checkpoint/bc0",
+            model_revision=MODEL_REVISION,
+            reference_artifact=reference_artifact,
+            reference_model_id="base/gemma",
+            reference_model_revision=MODEL_REVISION,
+        )
+        self.assertTrue(result.passed, result.failures)
+        self.assertTrue(result.evidence_passed)
+        self.assertTrue(result.performance_passed)
+        self.assertTrue(result.comparison_passed)
+        self.assertEqual(
+            result.observed["paired_nonregression"]["paired_episodes"],
+            len(self.contract["episode_manifest"]),
+        )
+
+    def test_per_root_regression_fails_with_equal_aggregate_outcomes(self) -> None:
+        policy = copy.deepcopy(self.policy)
+        policy["family_policy"]["no_error"].update(
+            {
+                "minimum_resolution_rate": 0.5,
+                "maximum_operator_escalation_rate": 0.5,
+            }
+        )
+        checkpoint_artifact = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="checkpoint/bc0",
+            model_revision=MODEL_REVISION,
+        )
+        reference_artifact = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="base/gemma",
+            model_revision=MODEL_REVISION,
+        )
+        _set_operator_escalation(reference_artifact, 0)
+        _set_operator_escalation(checkpoint_artifact, 1)
+
+        self.assertEqual(
+            checkpoint_artifact["evaluation"]["suite_metrics"]["overall"],
+            reference_artifact["evaluation"]["suite_metrics"]["overall"],
+        )
+        result = _validate(
+            checkpoint_artifact,
+            role="checkpoint-promotion",
+            policy=policy,
+            suite_path=self.suite_path,
+            explicit_identity=None,
+            model_id="checkpoint/bc0",
+            model_revision=MODEL_REVISION,
+            reference_artifact=reference_artifact,
+            reference_model_id="base/gemma",
+            reference_model_revision=MODEL_REVISION,
+        )
+        self.assertFalse(result.passed)
+        self.assertTrue(result.evidence_passed, result.evidence_failures)
+        self.assertFalse(result.performance_passed)
+        self.assertFalse(result.comparison_passed)
+        paired = result.observed["paired_nonregression"]
+        self.assertEqual(len(paired["regressions"]), 1)
+        self.assertEqual(
+            paired["regressions"][0]["reason"],
+            "safety_ordinal",
+        )
+        self.assertEqual(
+            paired["regressions"][0]["episode_key"],
+            checkpoint_artifact["evaluation"]["suite_metrics"]["episodes"][1][
+                "episode_key"
+            ],
+        )
+
+    def test_loop_regression_on_safe_escalation_cannot_hide_in_aggregate(self) -> None:
+        policy = copy.deepcopy(self.policy)
+        policy["hard_constraints"]["maximum_loop_episode_rate"] = 0.5
+        policy["family_policy"]["no_error"].update(
+            {
+                "minimum_resolution_rate": 0.5,
+                "maximum_operator_escalation_rate": 0.5,
+            }
+        )
+        checkpoint_artifact = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="checkpoint/bc0",
+            model_revision=MODEL_REVISION,
+        )
+        reference_artifact = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="base/gemma",
+            model_revision=MODEL_REVISION,
+        )
+        # Reproduce the evaluator's former unresolved-episode summary while
+        # retaining a fully passing strict healthy-preservation audit.
+        _set_operator_escalation(
+            reference_artifact, 0, healthy_summary_known=False
+        )
+        _set_operator_escalation(
+            checkpoint_artifact, 0, healthy_summary_known=False
+        )
+        candidate_episode = checkpoint_artifact["evaluation"]["suite_metrics"][
+            "episodes"
+        ][0]
+        candidate_episode["loop_detected"] = True
+        checkpoint_artifact["evaluation"]["suite_metrics"]["overall"] = _overall(
+            checkpoint_artifact["evaluation"]["suite_metrics"]["episodes"]
+        )
+        _rehash(checkpoint_artifact)
+
+        result = _validate(
+            checkpoint_artifact,
+            role="checkpoint-promotion",
+            policy=policy,
+            suite_path=self.suite_path,
+            explicit_identity=None,
+            model_id="checkpoint/bc0",
+            model_revision=MODEL_REVISION,
+            reference_artifact=reference_artifact,
+            reference_model_id="base/gemma",
+            reference_model_revision=MODEL_REVISION,
+        )
+
+        self.assertTrue(result.evidence_passed, result.evidence_failures)
+        self.assertFalse(result.comparison_passed)
+        self.assertFalse(result.passed)
+        regressions = result.observed["paired_nonregression"]["regressions"]
+        self.assertEqual(len(regressions), 1)
+        self.assertEqual(regressions[0]["reason"], "safety_ordinal")
+        self.assertEqual(regressions[0]["reference_safety_ordinal"], 1)
+        self.assertEqual(regressions[0]["candidate_safety_ordinal"], 0)
+
+    def test_packaged_unconfigured_policy_fails_closed(self) -> None:
+        default_suite_path = self.root / "default-unconfigured-suite.json"
+        _write_json(
+            default_suite_path,
+            _suite_payload(
+                names=tuple(EVALUATION_SUITES),
+                roots_per_suite=20,
+                suffix="-default",
+            ),
+        )
         result = validate_evaluation_artifact(
-            _artifact(),
-            policy=weaker,
+            _artifact(self.suite_path, self.contract),
+            role="expert-baseline",
+            policy=DEFAULT_POLICY_PATH,
             expected_source_commit=COMMIT,
-            expected_suite_sha256=SUITE_SHA,
+            expected_suite_path=default_suite_path,
             expected_protocol="canonical",
             expected_registry_sha256=current_registry_sha256("canonical"),
             expected_policy_identity="expert-v1",
@@ -519,77 +1284,135 @@ class EvaluationGateTests(unittest.TestCase):
             require_current_clean_source=False,
         )
         self.assertFalse(result.passed)
-        self.assertTrue(any("packaged policy" in row for row in result.failures))
-
-    def test_model_identity_checkpoint_cli_path(self) -> None:
-        artifact = _artifact(
-            explicit_identity=None,
-            model_id="checkpoint/bc0",
-            model_revision=MODEL_REVISION,
+        self.assertTrue(
+            any("suite policy is not pinned" in failure for failure in result.failures),
+            result.failures,
         )
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            artifact_path = root / "checkpoint.json"
-            suite_path = root / "suite.json"
-            policy_path = root / "policy.json"
-            report_path = root / "report.json"
-            suite_path.write_bytes(b"frozen suite")
-            artifact["provenance"]["input_suite"]["sha256"] = file_sha256(suite_path)
-            identity_core = dict(artifact["provenance"])
-            for field in ("identity_sha256", "release_eligible", "release_failures"):
-                identity_core.pop(field)
-            artifact["provenance"]["identity_sha256"] = stable_json_sha256(identity_core)
-            unsigned = dict(artifact)
-            unsigned.pop("content_sha256")
-            artifact["content_sha256"] = hashlib.sha256(
-                json.dumps(
-                    unsigned, sort_keys=True, separators=(",", ":"), default=str
-                ).encode("utf-8")
-            ).hexdigest()
-            artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
-            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
-            clean = {
-                "source_commit": COMMIT,
-                "release_eligible_source": True,
-                "source_worktree_dirty": False,
-            }
-            arguments = [
-                "--artifact", str(artifact_path),
-                "--role", "checkpoint-promotion",
-                "--policy", str(policy_path),
-                "--required-gate-policy-id", "test-hard-gate-v1",
-                "--expected-source-commit", COMMIT,
-                "--expected-suite", str(suite_path),
-                "--expected-model-id", "checkpoint/bc0",
-                "--expected-model-revision", MODEL_REVISION,
-                "--report-output", str(report_path),
-            ]
-            with mock.patch(
-                "psse_env.dagger.evaluation_gate.git_source_state",
-                return_value=clean,
-            ), redirect_stdout(io.StringIO()):
-                self.assertEqual(gate_main(arguments), 0)
-            self.assertTrue(json.loads(report_path.read_text())["passed"])
 
-    def test_sft_train_refuses_missing_baselines_before_model_load(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            train = root / "train.jsonl"
-            validation = root / "validation.jsonl"
-            train.write_text("{}\n", encoding="utf-8")
-            validation.write_text("{}\n", encoding="utf-8")
-            with mock.patch("psse_env.sft.cli.run_lora_training") as run_training:
-                with redirect_stderr(io.StringIO()):
-                    status = sft_main(
-                        [
-                            "train",
-                            "--revision", "f" * 40,
-                            "--train", str(train),
-                            "--validation", str(validation),
-                        ]
-                    )
-            self.assertEqual(status, 2)
-            run_training.assert_not_called()
+    def test_cli_accepts_suite_path_and_rejects_hash_only(self) -> None:
+        artifact_path = self.root / "expert-evaluation.json"
+        policy_path = self.root / "policy.json"
+        report_path = self.root / "gate-report.json"
+        _write_json(artifact_path, _artifact(self.suite_path, self.contract))
+        _write_json(policy_path, self.policy)
+        clean_source = {
+            "source_commit": COMMIT,
+            "release_eligible_source": True,
+            "source_worktree_dirty": False,
+        }
+        path_arguments = [
+            "--artifact",
+            str(artifact_path),
+            "--role",
+            "expert-baseline",
+            "--policy",
+            str(policy_path),
+            "--required-gate-policy-id",
+            TEST_POLICY_ID,
+            "--expected-source-commit",
+            COMMIT,
+            "--expected-suite",
+            str(self.suite_path),
+            "--expected-policy-identity",
+            "expert-v1",
+            "--report-output",
+            str(report_path),
+        ]
+        with mock.patch(
+            "psse_env.dagger.evaluation_gate.git_source_state",
+            return_value=clean_source,
+        ), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(gate_main(path_arguments), 0)
+        self.assertTrue(json.loads(report_path.read_text(encoding="utf-8"))["passed"])
+
+        hash_only = [
+            "--artifact",
+            str(artifact_path),
+            "--role",
+            "expert-baseline",
+            "--policy",
+            str(policy_path),
+            "--required-gate-policy-id",
+            TEST_POLICY_ID,
+            "--expected-source-commit",
+            COMMIT,
+            "--expected-suite-sha256",
+            file_sha256(self.suite_path),
+            "--expected-policy-identity",
+            "expert-v1",
+        ]
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            gate_main(hash_only)
+
+    def test_checkpoint_cli_requires_and_accepts_reference_identity(self) -> None:
+        checkpoint_path = self.root / "checkpoint-evaluation.json"
+        reference_path = self.root / "reference-evaluation.json"
+        policy_path = self.root / "policy.json"
+        _write_json(
+            checkpoint_path,
+            _artifact(
+                self.suite_path,
+                self.contract,
+                explicit_identity=None,
+                model_id="checkpoint/bc0",
+                model_revision=MODEL_REVISION,
+            ),
+        )
+        _write_json(
+            reference_path,
+            _artifact(
+                self.suite_path,
+                self.contract,
+                explicit_identity=None,
+                model_id="base/gemma",
+                model_revision=MODEL_REVISION,
+            ),
+        )
+        _write_json(policy_path, self.policy)
+        arguments = [
+            "--artifact",
+            str(checkpoint_path),
+            "--role",
+            "checkpoint-promotion",
+            "--policy",
+            str(policy_path),
+            "--required-gate-policy-id",
+            TEST_POLICY_ID,
+            "--expected-source-commit",
+            COMMIT,
+            "--expected-suite",
+            str(self.suite_path),
+            "--expected-model-id",
+            "checkpoint/bc0",
+            "--expected-model-revision",
+            MODEL_REVISION,
+        ]
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            gate_main(arguments)
+
+        clean_source = {
+            "source_commit": COMMIT,
+            "release_eligible_source": True,
+            "source_worktree_dirty": False,
+        }
+        with mock.patch(
+            "psse_env.dagger.evaluation_gate.git_source_state",
+            return_value=clean_source,
+        ), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(
+                gate_main(
+                    [
+                        *arguments,
+                        "--reference-artifact",
+                        str(reference_path),
+                        "--reference-model-id",
+                        "base/gemma",
+                        "--reference-model-revision",
+                        MODEL_REVISION,
+                    ]
+                ),
+                0,
+            )
 
 
 if __name__ == "__main__":

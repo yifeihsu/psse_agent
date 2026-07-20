@@ -267,7 +267,7 @@ def _baseline_evaluation_gate(args: argparse.Namespace) -> dict[str, Any]:
     common = {
         "policy": args.evaluation_policy,
         "expected_source_commit": source_commit,
-        "expected_suite_sha256": suite_hash,
+        "expected_suite_path": args.evaluation_suite,
         "expected_protocol": "canonical",
         "expected_registry_sha256": registry_hash,
         "required_gate_policy_id": DEFAULT_POLICY_ID,
@@ -276,24 +276,47 @@ def _baseline_evaluation_gate(args: argparse.Namespace) -> dict[str, Any]:
     }
     expert = validate_evaluation_artifact(
         args.expert_baseline_evaluation,
+        role="expert-baseline",
         expected_policy_identity=args.expert_policy_identity,
         **common,
     )
     base = validate_evaluation_artifact(
         args.base_baseline_evaluation,
+        role="base-baseline",
         expected_model_id=args.model,
         expected_model_revision=args.revision,
         **common,
     )
-    failures = [
+    blocking_failures = [
         *(f"expert: {failure}" for failure in expert.failures),
-        *(f"base: {failure}" for failure in base.failures),
+        *(f"base evidence: {failure}" for failure in base.evidence_failures),
     ]
+    if not expert.passed and not expert.failures:
+        blocking_failures.append("expert: full evaluation gate did not pass")
+    if not base.evidence_passed and not base.evidence_failures:
+        blocking_failures.append("base evidence: evaluation evidence gate did not pass")
+    base_performance_findings = [
+        f"base performance: {failure}" for failure in base.performance_failures
+    ]
+    pretraining_gate_passed = expert.passed and base.evidence_passed
+    all_baselines_performance_qualified = (
+        expert.performance_passed and base.performance_passed
+    )
     payload = {
-        "passed": expert.passed and base.passed,
-        "release_eligible": expert.passed and base.passed,
+        "passed": pretraining_gate_passed,
+        "pretraining_gate_passed": pretraining_gate_passed,
+        "expert_full_gate_passed": expert.passed,
+        "base_evidence_gate_passed": base.evidence_passed,
+        "all_baselines_performance_qualified": all_baselines_performance_qualified,
+        # Retain the old field as a strict performance-qualification signal.  A
+        # weak but reproducibly measured base may unblock training, but it is
+        # never described as release-qualified.
+        "release_eligible": (
+            pretraining_gate_passed and all_baselines_performance_qualified
+        ),
         "override": False,
-        "failures": failures,
+        "failures": blocking_failures,
+        "base_performance_findings": base_performance_findings,
         "source_commit": source_commit,
         "frozen_suite_sha256": suite_hash,
         "protocol": "canonical",
@@ -309,10 +332,10 @@ def _baseline_evaluation_gate(args: argparse.Namespace) -> dict[str, Any]:
             json.dumps(payload, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-    if failures:
+    if not pretraining_gate_passed:
         raise GateError(
             "BC0 baseline closed-loop evaluation gate failed: "
-            + "; ".join(failures)
+            + "; ".join(blocking_failures)
         )
     return payload
 

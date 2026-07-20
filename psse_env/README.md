@@ -216,11 +216,20 @@ pass. The balanced training view is audited independently as an additional
 training-input gate.
 
 Checkpoint decisions must also persist a reproducible closed-loop evaluator
-report on fixed scenario suites. Before reset, the evaluator recursively strips
-offline truth, clean references, oracle hints, and cost labels from a separate
-execution copy; the full scenario remains available only after an action is
-fixed for offline scoring and the terminal audit. Release evaluation also
-requires every actual environment to attest
+report on fixed scenario suites. Development runs may retain legacy flat
+scenarios behind normalized recursive truth stripping. Release runs require
+scenario schema v1 with exactly `scenario_schema_version`, `execution`, `audit`,
+and `grouping`: only a positive allowlist of execution and deployment-metadata
+fields reaches reset, while audit truth, labels, and the required canonical
+family/cardinality/case/split/source/root identity remain outside execution.
+Partial, case-variant, ambiguous, or malformed envelopes fail closed. Release
+scenarios also reject the scripted-transition and injected-physical-state
+fields reserved for development test adapters. Every evaluation records this
+schema-v1 check, and both the artifact writer and release gate require the exact
+passing attestation before reporting release eligibility. Offline
+cost scoring receives copied values but no live environment, and custom cost or
+physical-audit callbacks are development-only; their use makes an artifact
+release-ineligible. Release execution also requires every actual environment to attest
 `production_dataset_mode=true` and
 `candidate_quality_oracle.mode="deployment"`. Every instantiated policy must
 also expose an exact `release_policy_identity` matching the requested explicit
@@ -231,23 +240,39 @@ false commit/rollback/finalization, partial-fix retention, invalid-action
 recovery, loops, WLS and specialized-tool use, and tool regret, grouped by
 suite, family, cardinality, case, split, source tier, and physical root.
 
-`python -m psse_env.dagger.validate_evaluation` validates those artifacts
-against the content-pinned BC0 policy in
-`dagger/bc0_evaluation_policy.json`. It recomputes identity hashes, binds the
-artifact to the current clean commit and frozen suite, enforces strict audit v3
-and deployment/policy attestations, exact-matches environment, expert/model
-policy, and optional case-loader factory import specs plus source hashes, and
-applies hard safety, terminality, loop, invalid-call, and per-family
-root/outcome constraints before any scalar score can be considered. The
-packaged factory approval lists intentionally start empty: release remains
-fail-closed until reviewed production factories are checked in and their exact
-identities are pinned in the content-pinned policy. `psse_env.sft train`
-requires both the observable-expert and
-exact base-model artifacts before loading the model; the launcher exposes
-`STAGE=checkpoint-gate` for the same mandatory check before promotion. These
-reports are required release artifacts, not substitutes for corpus preflight
-or strict episode auditing. The current BC0 scope permits audited HIF handoff;
-it validates safe HIF escalation, not autonomous HIF localization or repair.
+`python -m psse_env.dagger.validate_evaluation` implements the content-pinned
+v2 contract in `dagger/bc0_evaluation_policy.json`. It recomputes identity
+hashes, binds the artifact to the current clean commit and frozen suite,
+enforces strict audit v3, exact-matches schema-v1 evaluator configuration and approved
+factory identities, and checks hard safety, terminality, loop, invalid-call,
+and per-family root/outcome constraints before any scalar score is considered.
+The packaged policy is deliberately not a release approval: its suite status is
+`unconfigured`, its approved suite identities are null, and every factory
+approval list is empty. It therefore fails closed until reviewers pin a real
+schema-v1 artifact containing the five required suites (standard success, forced-error
+recovery, partial-success retention, invalid-action recovery, and efficiency)
+and the exact reviewed environment, policy, and case-loader factories.
+
+Roles have different blocking semantics. The expert baseline must pass both
+evidence and performance. The base-model baseline records the same performance
+failures, but only incomplete identity or evaluation evidence blocks BC0
+training; a weak but reproducibly evaluated base is never labeled
+release-qualified. Checkpoint promotion again requires the full absolute gate
+and an exact paired base-reference comparison: evaluator, environment,
+model-policy factory, case-loader, configuration, and episode identities must match, and no paired
+episode may regress in safety ordinal or invalid-action count. Aggregate gains
+and scalar scores cannot hide a regressed root.
+
+These artifacts establish reproducibility and internal consistency, not a
+cryptographic attestation that the named code was the code executed. Trusted
+runner isolation, signing, and custody controls remain deployment concerns.
+Before deployment promotion, publish threshold sensitivity for the hard and
+per-family limits, including margins and the roots whose decisions change
+under predeclared nearby thresholds; sensitivity analysis supplements and
+never rewrites the pinned pass/fail policy. These reports remain required
+release evidence, not substitutes for corpus preflight or strict episode
+auditing. The current BC0 scope permits audited HIF handoff; it validates safe
+HIF escalation, not autonomous HIF localization or repair.
 
 `CandidateQualityOracle(mode="synthetic")` requires hidden truth.
 `mode="deployment"` ignores it and relies on observable WLS/physics evidence.
@@ -318,6 +343,8 @@ Run the dedicated gate with:
 uv run --with 'pytest>=8,<9' pytest -q \
   test_psse_dagger_scaffold.py \
   psse_env/verifier/test_hardening.py \
+  psse_env/dagger/test_evaluator.py \
+  psse_env/dagger/test_evaluation_gate.py \
   psse_env/dagger/test_sft_export.py \
   psse_env/test_production_mode.py \
   psse_env/sft/tests/test_gates.py
