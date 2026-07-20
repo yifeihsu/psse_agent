@@ -1,0 +1,83 @@
+{
+  "approved_factories": {
+    "case_loader": [],
+    "environment": [],
+    "expert_policy": [],
+    "model_policy": []
+  },
+  "family_policy": {
+    "harmonic": {
+      "maximum_operator_escalation_rate": 0.0,
+      "minimum_physical_roots": 4,
+      "minimum_resolution_rate": 1.0
+    },
+    "hif": {
+      "maximum_operator_escalation_rate": 1.0,
+      "minimum_physical_roots": 17,
+      "minimum_resolution_rate": 0.0
+    },
+    "measurement": {
+      "maximum_operator_escalation_rate": 0.0,
+      "minimum_physical_roots": 6,
+      "minimum_resolution_rate": 1.0
+    },
+    "measurement+hif": {
+      "maximum_operator_escalation_rate": 1.0,
+      "minimum_physical_roots": 2,
+      "minimum_resolution_rate": 0.0
+    },
+    "measurement+parameter": {
+      "maximum_operator_escalation_rate": 0.05,
+      "minimum_physical_roots": 20,
+      "minimum_resolution_rate": 0.95
+    },
+    "measurement+topology": {
+      "maximum_operator_escalation_rate": 0.05,
+      "minimum_physical_roots": 20,
+      "minimum_resolution_rate": 0.95
+    },
+    "multi_measurement": {
+      "maximum_operator_escalation_rate": 0.05,
+      "minimum_physical_roots": 20,
+      "minimum_resolution_rate": 0.95
+    },
+    "no_error": {
+      "maximum_operator_escalation_rate": 0.0,
+      "minimum_physical_roots": 4,
+      "minimum_resolution_rate": 1.0
+    },
+    "parameter": {
+      "maximum_operator_escalation_rate": 0.0,
+      "minimum_physical_roots": 6,
+      "minimum_resolution_rate": 1.0
+    },
+    "telemetry_no_disturbance": {
+      "maximum_operator_escalation_rate": 0.0,
+      "minimum_physical_roots": 20,
+      "minimum_resolution_rate": 1.0
+    },
+    "three_phase_unbalance": {
+      "maximum_operator_escalation_rate": 0.05,
+      "minimum_physical_roots": 20,
+      "minimum_resolution_rate": 0.95
+    },
+    "topology": {
+      "maximum_operator_escalation_rate": 0.0,
+      "minimum_physical_roots": 6,
+      "minimum_resolution_rate": 1.0
+    }
+  },
+  "hard_constraints": {
+    "maximum_false_commit_count": 0,
+    "maximum_false_finalization_count": 0,
+    "maximum_false_rollback_count": 0,
+    "maximum_healthy_component_corruption_episodes": 0,
+    "maximum_invalid_action_rate": 0.2,
+    "maximum_invalid_actions_per_episode": 1,
+    "maximum_loop_episode_rate": 0.05,
+    "maximum_steps_per_episode": 24,
+    "minimum_terminal_rate": 1.0
+  },
+  "policy_id": "bc0_closed_loop_hard_gate_v1",
+  "policy_schema_version": 1
+}

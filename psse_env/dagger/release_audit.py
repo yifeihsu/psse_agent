@@ -11,8 +11,9 @@ remaining-fault evidence and the final active physical store payload.  Healthy
 component preservation and the correctness of any claimed diagnostic
 explanation remain mandatory for operator handoff as well: escalation may
 leave true faults unresolved, but it may not hide collateral damage or a false
-partial diagnosis.  A check may be skipped only through a named,
-reason-bearing ``not_applicable`` declaration.
+partial diagnosis.  Only the final clean-measurement comparison may be skipped
+through a reason-bearing ``not_applicable`` declaration; core physical
+invariants are never waivable.
 """
 
 from __future__ import annotations
@@ -29,9 +30,10 @@ from psse_env.actions import (
 )
 
 
-AUDIT_VERSION = "strict_offline_episode_truth_v2"
+AUDIT_VERSION = "strict_offline_episode_truth_v3"
 
 ACCEPTED_TARGETS_CHECK = "accepted_correction_targets"
+ACCEPTED_TARGET_NONREGRESSION_CHECK = "accepted_target_nonregression"
 REMAINING_FAULTS_CHECK = "remaining_true_faults"
 HEALTHY_MEASUREMENTS_CHECK = "healthy_measurements_preserved"
 HEALTHY_CASE_CHECK = "healthy_case_components_preserved"
@@ -49,6 +51,17 @@ _RESOLVED_CHECKS = frozenset(
         FINAL_CASE_CHECK,
         DIAGNOSTIC_LOCALIZATION_CHECK,
     }
+)
+# ``not_applicable`` is deliberately narrower than the set of resolved-only
+# checks.  Explanation-only waveform families cannot restore their fundamental
+# measurement vector, so they may waive the final clean-vector comparison.
+# Target correctness, target non-regression, the remaining-fault ledger, and
+# healthy-component preservation are physical invariants and are never
+# waivable.  Final-case waivers are also prohibited until an explicit,
+# independently validated explanation-only case contract exists.
+ALLOWED_NOT_APPLICABLE_CHECKS = frozenset({FINAL_MEASUREMENTS_CHECK})
+EXPLANATION_ONLY_DIAGNOSTIC_CONTRACT = (
+    "explanation_only_diagnostic_localization_v1"
 )
 _DIAGNOSTIC_FAMILIES = frozenset(
     {"harmonic", "hif", "three_phase_unbalance"}
@@ -1006,6 +1019,371 @@ def _healthy_case_preserved(
     )
 
 
+_PARAMETER_CLEAN_FIELDS = {
+    2: "clean_r",
+    3: "clean_x",
+    4: "clean_b",
+    8: "clean_tap",
+    9: "clean_shift",
+}
+
+
+def _case_branches(
+    value: Any, case_loader: Callable[[Any], Any] | None
+) -> list[Any] | None:
+    loaded, loaded_ok = _load_case(value, case_loader)
+    if not loaded_ok or not isinstance(loaded, Mapping):
+        return None
+    return _as_sequence(loaded.get("branch"))
+
+
+def _branch_row(rows: list[Any] | None, row0: int) -> list[Any] | None:
+    if rows is None or not 0 <= row0 < len(rows):
+        return None
+    return _as_sequence(rows[row0])
+
+
+def _vector_distance(left: Sequence[float], right: Sequence[float]) -> float:
+    return math.sqrt(sum((a - b) ** 2 for a, b in zip(left, right)))
+
+
+def _distance_tolerance(
+    initial: Sequence[float],
+    clean: Sequence[float],
+    *,
+    abs_tolerance: float,
+    rel_tolerance: float,
+) -> float:
+    # Scale the absolute allowance for a multi-column target while keeping the
+    # relative term independent of the final value.  Including the final value
+    # in the scale would let a large regression manufacture its own tolerance.
+    dimensions = max(1, len(clean))
+    return math.sqrt(dimensions) * abs_tolerance + rel_tolerance * max(
+        _vector_distance(initial, [0.0] * len(initial)),
+        _vector_distance(clean, [0.0] * len(clean)),
+    )
+
+
+def _accepted_target_nonregression(
+    scenario: Mapping[str, Any],
+    *,
+    final_measurements: Any,
+    final_case: Any,
+    case_loader: Callable[[Any], Any] | None,
+    tolerances: ReleaseAuditTolerances,
+    target_problems: Sequence[str],
+    accepted_measurements: set[int],
+    accepted_parameters: set[tuple[str, Any]],
+    accepted_topology: set[tuple[str, Any]],
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Prove that every committed true target is no worse than at reset.
+
+    This invariant is intentionally outcome-independent.  In particular, an
+    operator escalation may retain an unresolved true fault, but it may not
+    retain a committed correction that increased that fault's distance from
+    clean truth.  Missing or contradictory target-state evidence fails closed.
+    """
+
+    problems: list[str] = []
+    evidence: list[dict[str, Any]] = []
+    if target_problems:
+        return ["accepted_target_nonregression_target_evidence_invalid"], evidence
+
+    initial_measurements = _as_sequence(scenario.get("measurements"))
+    final_measurement_rows = _as_sequence(final_measurements)
+    clean_state = scenario.get("clean_state")
+    clean_state = clean_state if isinstance(clean_state, Mapping) else {}
+    clean_measurements = _as_sequence(
+        clean_state.get("measurements", scenario.get("clean_measurements"))
+    )
+    measurement_truth_rows = _as_sequence(
+        scenario.get("true_measurement_errors", [])
+    )
+
+    for index in sorted(accepted_measurements):
+        malformed = False
+        if (
+            initial_measurements is None
+            or final_measurement_rows is None
+            or not 0 <= index < len(initial_measurements)
+            or not 0 <= index < len(final_measurement_rows)
+            or measurement_truth_rows is None
+        ):
+            malformed = True
+        initial_value = (
+            _finite_number(initial_measurements[index])
+            if not malformed and initial_measurements is not None
+            else None
+        )
+        final_value = (
+            _finite_number(final_measurement_rows[index])
+            if not malformed and final_measurement_rows is not None
+            else None
+        )
+        matching_faults = (
+            [
+                fault
+                for fault in measurement_truth_rows
+                if isinstance(fault, Mapping)
+                and _nonnegative_integer(fault.get("index", fault.get("index0")))
+                == index
+            ]
+            if measurement_truth_rows is not None
+            else []
+        )
+        explicit_clean: list[float] = []
+        for fault in matching_faults:
+            if "clean" in fault:
+                clean_value = _finite_number(fault.get("clean"))
+                if clean_value is None:
+                    malformed = True
+                else:
+                    explicit_clean.append(clean_value)
+        clean_vector_value = (
+            _finite_number(clean_measurements[index])
+            if clean_measurements is not None and 0 <= index < len(clean_measurements)
+            else None
+        )
+        clean_candidates = list(explicit_clean)
+        if clean_vector_value is not None:
+            clean_candidates.append(clean_vector_value)
+        if not matching_faults or not clean_candidates:
+            malformed = True
+        if clean_measurements is not None and clean_vector_value is None:
+            malformed = True
+        if clean_candidates and any(
+            not _values_close(
+                value,
+                clean_candidates[0],
+                abs_tolerance=tolerances.measurement_abs,
+                rel_tolerance=tolerances.measurement_rel,
+            )
+            for value in clean_candidates[1:]
+        ):
+            malformed = True
+        if initial_value is None or final_value is None:
+            malformed = True
+        if malformed:
+            problems.append(
+                "accepted_measurement_nonregression_evidence_missing_or_malformed"
+            )
+            evidence.append(
+                {"family": "measurement", "index0": index, "status": "malformed"}
+            )
+            continue
+        clean_value = clean_candidates[0]
+        initial_distance = abs(initial_value - clean_value)
+        final_distance = abs(final_value - clean_value)
+        allowance = _distance_tolerance(
+            [initial_value],
+            [clean_value],
+            abs_tolerance=tolerances.measurement_abs,
+            rel_tolerance=tolerances.measurement_rel,
+        )
+        passed = final_distance <= initial_distance + allowance
+        evidence.append(
+            {
+                "family": "measurement",
+                "index0": index,
+                "initial_distance": initial_distance,
+                "final_distance": final_distance,
+                "tolerance": allowance,
+                "status": "passed" if passed else "regressed",
+            }
+        )
+        if not passed:
+            problems.append("accepted_measurement_target_regressed")
+
+    needs_case = bool(accepted_parameters or accepted_topology)
+    initial_branches = (
+        _case_branches(scenario.get("case"), case_loader) if needs_case else None
+    )
+    final_branches = _case_branches(final_case, case_loader) if needs_case else None
+    clean_case = clean_state.get("case", scenario.get("clean_case"))
+    clean_branches = _case_branches(clean_case, case_loader) if needs_case else None
+
+    parameter_truth_rows = _as_sequence(scenario.get("true_parameter_errors", []))
+    for target in sorted(accepted_parameters, key=lambda item: (str(item[0]), str(item[1]))):
+        malformed = target[0] != "branch_row0" or parameter_truth_rows is None
+        row0 = int(target[1]) if target[0] == "branch_row0" else -1
+        initial_row = _branch_row(initial_branches, row0)
+        final_row = _branch_row(final_branches, row0)
+        clean_row = _branch_row(clean_branches, row0)
+        matching_faults = (
+            [
+                fault
+                for fault in parameter_truth_rows
+                if isinstance(fault, Mapping) and _branch_target(fault) == target
+            ]
+            if parameter_truth_rows is not None
+            else []
+        )
+        clean_by_column: dict[int, float] = {}
+        columns: set[int] = set()
+        for fault in matching_faults:
+            parameter = str(fault.get("parameter") or "rx").strip().lower()
+            fault_columns = _PARAMETER_BRANCH_COLUMNS.get(parameter)
+            if fault_columns is None:
+                malformed = True
+                continue
+            for column in fault_columns:
+                columns.add(column)
+                clean_field = _PARAMETER_CLEAN_FIELDS[column]
+                raw_clean = fault.get(clean_field)
+                if raw_clean is None and clean_row is not None and column < len(clean_row):
+                    raw_clean = clean_row[column]
+                numeric_clean = _finite_number(raw_clean)
+                if numeric_clean is None:
+                    malformed = True
+                    continue
+                previous = clean_by_column.get(column)
+                if previous is not None and not _values_close(
+                    previous,
+                    numeric_clean,
+                    abs_tolerance=tolerances.final_case_abs,
+                    rel_tolerance=tolerances.final_case_rel,
+                ):
+                    malformed = True
+                clean_by_column[column] = numeric_clean
+        if not matching_faults or not columns or set(clean_by_column) != columns:
+            malformed = True
+        ordered_columns = sorted(columns)
+        if (
+            initial_row is None
+            or final_row is None
+            or any(
+                column >= len(initial_row) or column >= len(final_row)
+                for column in ordered_columns
+            )
+        ):
+            malformed = True
+        initial_values = (
+            [_finite_number(initial_row[column]) for column in ordered_columns]
+            if initial_row is not None
+            and all(column < len(initial_row) for column in ordered_columns)
+            else []
+        )
+        final_values = (
+            [_finite_number(final_row[column]) for column in ordered_columns]
+            if final_row is not None
+            and all(column < len(final_row) for column in ordered_columns)
+            else []
+        )
+        clean_values = [
+            clean_by_column[column]
+            for column in ordered_columns
+            if column in clean_by_column
+        ]
+        if any(value is None for value in initial_values + final_values):
+            malformed = True
+        if malformed:
+            problems.append(
+                "accepted_parameter_nonregression_evidence_missing_or_malformed"
+            )
+            evidence.append(
+                {"family": "parameter", "target": list(target), "status": "malformed"}
+            )
+            continue
+        numeric_initial = [float(value) for value in initial_values if value is not None]
+        numeric_final = [float(value) for value in final_values if value is not None]
+        initial_distance = _vector_distance(numeric_initial, clean_values)
+        final_distance = _vector_distance(numeric_final, clean_values)
+        allowance = _distance_tolerance(
+            numeric_initial,
+            clean_values,
+            abs_tolerance=tolerances.final_case_abs,
+            rel_tolerance=tolerances.final_case_rel,
+        )
+        passed = final_distance <= initial_distance + allowance
+        evidence.append(
+            {
+                "family": "parameter",
+                "target": list(target),
+                "columns": ordered_columns,
+                "initial_distance": initial_distance,
+                "final_distance": final_distance,
+                "tolerance": allowance,
+                "status": "passed" if passed else "regressed",
+            }
+        )
+        if not passed:
+            problems.append("accepted_parameter_target_regressed")
+
+    topology_truth_rows = _as_sequence(scenario.get("true_topology_errors", []))
+    for target in sorted(accepted_topology, key=lambda item: (str(item[0]), str(item[1]))):
+        malformed = target[0] != "branch_row0" or topology_truth_rows is None
+        row0 = int(target[1]) if target[0] == "branch_row0" else -1
+        initial_row = _branch_row(initial_branches, row0)
+        final_row = _branch_row(final_branches, row0)
+        clean_row = _branch_row(clean_branches, row0)
+        matching_faults = (
+            [
+                fault
+                for fault in topology_truth_rows
+                if isinstance(fault, Mapping) and _branch_target(fault) == target
+            ]
+            if topology_truth_rows is not None
+            else []
+        )
+        clean_candidates: list[float] = []
+        for fault in matching_faults:
+            raw_clean = fault.get("expected_status")
+            if raw_clean is None and clean_row is not None and len(clean_row) > 10:
+                raw_clean = clean_row[10]
+            numeric_clean = _finite_number(raw_clean)
+            if numeric_clean is None:
+                malformed = True
+            else:
+                clean_candidates.append(numeric_clean)
+        initial_status = (
+            _finite_number(initial_row[10])
+            if initial_row is not None and len(initial_row) > 10
+            else None
+        )
+        final_status = (
+            _finite_number(final_row[10])
+            if final_row is not None and len(final_row) > 10
+            else None
+        )
+        if (
+            not matching_faults
+            or not clean_candidates
+            or initial_status is None
+            or final_status is None
+            or any(value not in {0.0, 1.0} for value in clean_candidates)
+            or initial_status not in {0.0, 1.0}
+            or final_status not in {0.0, 1.0}
+            or len(set(clean_candidates)) != 1
+        ):
+            malformed = True
+        if malformed:
+            problems.append(
+                "accepted_topology_nonregression_evidence_missing_or_malformed"
+            )
+            evidence.append(
+                {"family": "topology", "target": list(target), "status": "malformed"}
+            )
+            continue
+        clean_status = clean_candidates[0]
+        initial_distance = abs(initial_status - clean_status)
+        final_distance = abs(final_status - clean_status)
+        passed = final_distance <= initial_distance
+        evidence.append(
+            {
+                "family": "topology",
+                "target": list(target),
+                "initial_distance": initial_distance,
+                "final_distance": final_distance,
+                "tolerance": 0.0,
+                "status": "passed" if passed else "regressed",
+            }
+        )
+        if not passed:
+            problems.append("accepted_topology_target_regressed")
+
+    return list(dict.fromkeys(problems)), evidence
+
+
 def _not_applicable_declarations(
     scenario: Mapping[str, Any], supplied: Mapping[str, str] | None
 ) -> tuple[dict[str, str], list[str]]:
@@ -1018,11 +1396,14 @@ def _not_applicable_declarations(
         else scenario.get("release_audit_not_applicable")
     )
     if isinstance(release_audit, Mapping):
-        for name in _RESOLVED_CHECKS:
-            declaration = release_audit.get(name)
+        for raw_name, declaration in release_audit.items():
             if not isinstance(declaration, Mapping):
                 continue
             if str(declaration.get("status") or "").lower() != "not_applicable":
+                continue
+            name = str(raw_name)
+            if name not in ALLOWED_NOT_APPLICABLE_CHECKS:
+                problems.append("not_applicable_check_unknown_or_prohibited")
                 continue
             reason = declaration.get("reason")
             if not isinstance(reason, str) or not reason.strip():
@@ -1037,7 +1418,7 @@ def _not_applicable_declarations(
             continue
         for key, reason in raw.items():
             name = str(key)
-            if name not in _RESOLVED_CHECKS:
+            if name not in ALLOWED_NOT_APPLICABLE_CHECKS:
                 problems.append("not_applicable_check_unknown_or_prohibited")
                 continue
             if not isinstance(reason, str) or not reason.strip():
@@ -1045,6 +1426,98 @@ def _not_applicable_declarations(
                 continue
             declarations[name] = reason.strip()
     return declarations, problems
+
+
+def _validated_not_applicable_declarations(
+    scenario: Mapping[str, Any],
+    final_state: Mapping[str, Any],
+    declarations: Mapping[str, str],
+    *,
+    terminal: bool,
+    resolved: bool,
+    target_problems: Sequence[str],
+    measurement_targets: set[int],
+    parameter_targets: set[tuple[str, Any]],
+    topology_targets: set[tuple[str, Any]],
+    diagnostic_family_problems: Sequence[str],
+    localization_problems: Sequence[str],
+    remaining_diagnostic_faults: int,
+    diagnostic_claim_count: int,
+) -> tuple[dict[str, str], list[str]]:
+    """Authorize the sole waiver only for a proven explanation-only result."""
+
+    validated = dict(declarations)
+    if not resolved or FINAL_MEASUREMENTS_CHECK not in validated:
+        # The declaration has no effect on non-resolved outcomes.  In
+        # particular, a generated diagnostic scenario that safely escalates
+        # should not be quarantined merely because its resolved-path contract
+        # is present but unused.
+        return validated, []
+
+    problems: list[str] = []
+    release_audit = scenario.get("release_audit")
+    release_audit = release_audit if isinstance(release_audit, Mapping) else {}
+    if (
+        release_audit.get("explanation_only_contract")
+        != EXPLANATION_ONLY_DIAGNOSTIC_CONTRACT
+    ):
+        problems.append(
+            "final_measurements_not_applicable_contract_marker_missing_or_invalid"
+        )
+
+    expected_truth_family = {
+        "harmonic": "harmonic",
+        "hif": "hif",
+        "three_phase_unbalance": "three_phase_unbalance",
+    }.get(str(scenario.get("scenario_family") or "").strip().lower())
+    if expected_truth_family is None:
+        problems.append(
+            "final_measurements_not_applicable_requires_pure_diagnostic_family"
+        )
+
+    diagnostic_truth, diagnostic_truth_problems = _diagnostic_truth(scenario)
+    populated_diagnostic_families = {
+        family for family, rows in diagnostic_truth.items() if rows
+    }
+    if (
+        expected_truth_family is None
+        or populated_diagnostic_families != {expected_truth_family}
+        or diagnostic_truth_problems
+    ):
+        problems.append(
+            "final_measurements_not_applicable_diagnostic_truth_missing_or_malformed"
+        )
+
+    if (
+        measurement_targets
+        or parameter_targets
+        or topology_targets
+        or target_problems
+    ):
+        problems.append(
+            "final_measurements_not_applicable_prohibits_correction_truth"
+        )
+
+    corrections, corrections_well_formed = _accepted_corrections(final_state)
+    if corrections or not corrections_well_formed:
+        problems.append(
+            "final_measurements_not_applicable_prohibits_accepted_corrections"
+        )
+
+    if (
+        not terminal
+        or diagnostic_claim_count < 1
+        or diagnostic_family_problems
+        or localization_problems
+        or remaining_diagnostic_faults != 0
+    ):
+        problems.append(
+            "final_measurements_not_applicable_requires_resolved_diagnostic_localization"
+        )
+
+    if problems:
+        validated.pop(FINAL_MEASUREMENTS_CHECK, None)
+    return validated, list(dict.fromkeys(problems))
 
 
 def audit_episode_against_truth(
@@ -1114,6 +1587,22 @@ def audit_episode_against_truth(
     declarations, declaration_problems = _not_applicable_declarations(
         scenario, not_applicable
     )
+    declarations, contract_problems = _validated_not_applicable_declarations(
+        scenario,
+        final_state,
+        declarations,
+        terminal=terminal,
+        resolved=resolved,
+        target_problems=target_problems,
+        measurement_targets=measurement_targets,
+        parameter_targets=parameter_targets,
+        topology_targets=topology_targets,
+        diagnostic_family_problems=diagnostic_family_problems,
+        localization_problems=localization_problems,
+        remaining_diagnostic_faults=remaining_diagnostic_faults,
+        diagnostic_claim_count=diagnostic_claim_count,
+    )
+    declaration_problems.extend(contract_problems)
     if declaration_problems:
         record("audit_evidence_contract", declaration_problems)
 
@@ -1188,11 +1677,33 @@ def audit_episode_against_truth(
     physical = physical if isinstance(physical, Mapping) else {}
     initial_measurements = scenario.get("measurements")
     final_measurements = physical.get("measurements")
+    final_case = physical.get("case")
     clean_state = scenario.get("clean_state")
     clean_state = clean_state if isinstance(clean_state, Mapping) else {}
     clean_measurements = clean_state.get(
         "measurements", scenario.get("clean_measurements")
     )
+
+    if terminal:
+        nonregression_problems, nonregression_evidence = (
+            _accepted_target_nonregression(
+                scenario,
+                final_measurements=final_measurements,
+                final_case=final_case,
+                case_loader=case_loader,
+                tolerances=tolerance_profile,
+                target_problems=target_problems,
+                accepted_measurements=accepted_measurement_targets,
+                accepted_parameters=accepted_parameter_targets,
+                accepted_topology=accepted_topology_targets,
+            )
+        )
+        record(ACCEPTED_TARGET_NONREGRESSION_CHECK, nonregression_problems)
+        checks[ACCEPTED_TARGET_NONREGRESSION_CHECK]["target_evidence"] = (
+            nonregression_evidence
+        )
+    else:
+        record(ACCEPTED_TARGET_NONREGRESSION_CHECK, [], status="not_required")
 
     healthy_measurement_problems: list[str] = []
     before = _as_sequence(initial_measurements)
@@ -1241,7 +1752,6 @@ def audit_episode_against_truth(
             continue
         mutable_columns_by_row.setdefault(int(target[1]), set()).add(10)
     initial_case = scenario.get("case")
-    final_case = physical.get("case")
     preserved = _healthy_case_preserved(
         initial_case,
         final_case,
@@ -1317,10 +1827,13 @@ def audit_episode_against_truth(
 
 
 __all__ = [
+    "ACCEPTED_TARGET_NONREGRESSION_CHECK",
     "ACCEPTED_TARGETS_CHECK",
+    "ALLOWED_NOT_APPLICABLE_CHECKS",
     "AUDIT_VERSION",
     "DIAGNOSTIC_FAMILY_CHECK",
     "DIAGNOSTIC_LOCALIZATION_CHECK",
+    "EXPLANATION_ONLY_DIAGNOSTIC_CONTRACT",
     "FINAL_CASE_CHECK",
     "FINAL_MEASUREMENTS_CHECK",
     "HEALTHY_CASE_CHECK",

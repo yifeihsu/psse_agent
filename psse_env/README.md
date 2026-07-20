@@ -154,22 +154,31 @@ The strict audit quarantines an episode unless its claimed outcome is supported
 by the hidden physical truth. Every accepted correction must name an exact
 same-family truth target: a grouped measurement correction may not include a
 healthy index, and parameter and topology targets remain distinct even on the
-same branch. A `resolved` episode additionally requires the active physical
-store payload, zero faults in the independently derived remaining-truth
-ledger, preservation of healthy measurements and all non-target case fields,
-and final target measurements/case fields matching clean truth within their
-separately declared tolerances (topology status is exact). A caller-supplied
-remaining ledger is optional, but an incomplete or false ledger is rejected
-and a complete ledger must agree with the derived count.
+same branch. For every terminal outcome, including operator escalation, each
+accepted target must also be no farther from clean truth than it was at reset;
+missing or malformed initial/final/clean evidence fails closed. A `resolved`
+episode additionally requires the active physical store payload, zero faults
+in the independently derived remaining-truth ledger, preservation of healthy
+measurements and all non-target case fields, and final target
+measurements/case fields matching clean truth within their separately declared
+tolerances (topology status is exact). A caller-supplied remaining ledger is
+optional, but an incomplete or false ledger is rejected and a complete ledger
+must agree with the derived count.
 
 Harmonic, HIF, and three-phase-unbalance explanations must match both the true
 family and the declared localization tolerance; unbalance may declare an
-explicit top-k localization allowance. A resolved check can be skipped only
-through that check's named, reason-bearing `not_applicable` declaration.
-Explanation-only waveform scenarios therefore declare final fundamental
-measurement matching as N/A because diagnosis does not rewrite that snapshot.
-N/A does not remove a fault from the derived remaining ledger, so it cannot
-turn an unlocalized diagnostic fault into a resolution.
+explicit top-k localization allowance. The only allowed reason-bearing
+`not_applicable` declaration is the final fundamental-measurement comparison
+used by explanation-only waveform scenarios, because diagnosis does not
+rewrite that snapshot. That waiver requires the generator's explicit
+`explanation_only_diagnostic_localization_v1` contract, a pure harmonic, HIF,
+or three-phase-unbalance root, matching diagnostic truth and localization,
+and no correction truth or accepted correction. Accepted-target correctness
+and non-regression,
+remaining faults, healthy measurements, healthy case components, diagnostic
+localization, and final case evidence are never waivable. N/A does not remove
+a fault from the derived remaining ledger, so it cannot turn an unlocalized
+diagnostic fault into a resolution.
 
 Terminality is not synonymous with successful recovery. The state classes
 `terminal_resolved` and `terminal_operator_escalation` are separate, and
@@ -207,13 +216,38 @@ pass. The balanced training view is audited independently as an additional
 training-input gate.
 
 Checkpoint decisions must also persist a reproducible closed-loop evaluator
-report on fixed scenario suites. The evaluator isolates policy observations
-from truth and reports physical correctness, resolution versus escalation,
-healthy-component corruption, false commit/rollback/finalization, partial-fix
-retention, invalid-action recovery, loops, WLS and specialized-tool use, and
-tool regret, grouped by suite, family, cardinality, case, split, source tier,
-and physical root. This report is a required release artifact, not a substitute
-for corpus preflight or strict episode auditing.
+report on fixed scenario suites. Before reset, the evaluator recursively strips
+offline truth, clean references, oracle hints, and cost labels from a separate
+execution copy; the full scenario remains available only after an action is
+fixed for offline scoring and the terminal audit. Release evaluation also
+requires every actual environment to attest
+`production_dataset_mode=true` and
+`candidate_quality_oracle.mode="deployment"`. Every instantiated policy must
+also expose an exact `release_policy_identity` matching the requested explicit
+policy identity or immutable model ID/revision; the evaluator persists that
+attestation for every episode. The evaluator reports physical
+correctness, resolution versus escalation, healthy-component corruption,
+false commit/rollback/finalization, partial-fix retention, invalid-action
+recovery, loops, WLS and specialized-tool use, and tool regret, grouped by
+suite, family, cardinality, case, split, source tier, and physical root.
+
+`python -m psse_env.dagger.validate_evaluation` validates those artifacts
+against the content-pinned BC0 policy in
+`dagger/bc0_evaluation_policy.json`. It recomputes identity hashes, binds the
+artifact to the current clean commit and frozen suite, enforces strict audit v3
+and deployment/policy attestations, exact-matches environment, expert/model
+policy, and optional case-loader factory import specs plus source hashes, and
+applies hard safety, terminality, loop, invalid-call, and per-family
+root/outcome constraints before any scalar score can be considered. The
+packaged factory approval lists intentionally start empty: release remains
+fail-closed until reviewed production factories are checked in and their exact
+identities are pinned in the content-pinned policy. `psse_env.sft train`
+requires both the observable-expert and
+exact base-model artifacts before loading the model; the launcher exposes
+`STAGE=checkpoint-gate` for the same mandatory check before promotion. These
+reports are required release artifacts, not substitutes for corpus preflight
+or strict episode auditing. The current BC0 scope permits audited HIF handoff;
+it validates safe HIF escalation, not autonomous HIF localization or repair.
 
 `CandidateQualityOracle(mode="synthetic")` requires hidden truth.
 `mode="deployment"` ignores it and relies on observable WLS/physics evidence.
@@ -269,10 +303,11 @@ Current release decision: **BC0 training, exact 31B training, and full
 learner-in-the-loop DAgger are all NO-GO until every gate above passes on a
 new aggregate generated from a clean tracked source.** Historical pilot and
 round-0 artifacts are evidence inputs only; they are not release-eligible by
-inheritance. BC0 additionally requires the fixed-suite closed-loop baseline
-artifact. The exact 31B checkpoint must then pass its processor/template/mask,
-forward/backward, and tiny-overfit gates on that release aggregate plus the
-held-out closed-loop evaluation. Full DAgger may start only after a BC0
+inheritance. BC0 additionally requires passing fixed-suite closed-loop
+artifacts for both the observable expert and exact base Gemma revision. The
+exact 31B checkpoint must then pass its processor/template/mask,
+forward/backward, and tiny-overfit gates on that release aggregate plus its own
+checkpoint-promotion closed-loop artifact. Full DAgger may start only after a BC0
 checkpoint is selected through those gates and new learner-controlled roots
 can be collected without truth leakage. No expert-only `β=1.0` corpus or
 checkpoint should be labeled as DAgger.

@@ -9,9 +9,20 @@ from pathlib import Path
 from typing import Any
 
 import psse_env.dagger.dataset_builder as dataset_builder
+from psse_env.dagger.evaluation_gate import (
+    DEFAULT_POLICY_ID,
+    DEFAULT_POLICY_PATH,
+    current_registry_sha256,
+    validate_evaluation_artifact,
+)
 
 from .gates import GateError, audit_dataset, load_exact_processor, load_jsonl, validate_grouped_pilot
-from .provenance import build_gate_provenance, validate_generation_provenance
+from .provenance import (
+    build_gate_provenance,
+    file_sha256,
+    git_source_state,
+    validate_generation_provenance,
+)
 from .training import LoraSettings, TrainerSettings, run_lora_smoke, run_lora_training
 
 
@@ -77,6 +88,36 @@ def parser() -> argparse.ArgumentParser:
     train.add_argument("--lora-rank", type=int, default=16)
     train.add_argument("--lora-alpha", type=int, default=16)
     train.add_argument("--lora-dropout", type=float, default=0.0)
+    train.add_argument(
+        "--expert-baseline-evaluation",
+        type=Path,
+        help="Release evaluator artifact for the observable expert baseline.",
+    )
+    train.add_argument(
+        "--base-baseline-evaluation",
+        type=Path,
+        help="Release evaluator artifact for the exact pinned base model.",
+    )
+    train.add_argument(
+        "--evaluation-suite",
+        type=Path,
+        help="Frozen JSON suite used by both required baseline evaluations.",
+    )
+    train.add_argument(
+        "--evaluation-policy",
+        type=Path,
+        default=DEFAULT_POLICY_PATH,
+        help="Versioned hard-constraint policy used for both baselines.",
+    )
+    train.add_argument(
+        "--expert-policy-identity",
+        help="Exact immutable explicit identity recorded by the expert artifact.",
+    )
+    train.add_argument(
+        "--baseline-evaluation-report-output",
+        type=Path,
+        help="Optional durable JSON report for the two pretraining gates.",
+    )
     smoke = commands.add_parser("smoke", help="Gate and run LoRA optimizer smoke only; never starts TRL training.")
     _common(smoke)
     smoke.add_argument("--mode", choices=("one-batch", "tiny-overfit"), required=True)
@@ -188,6 +229,94 @@ def _gate_payload(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
     return payload, passed
 
 
+def _baseline_evaluation_gate(args: argparse.Namespace) -> dict[str, Any]:
+    """Validate both frozen-suite baselines before any model is loaded."""
+
+    required = {
+        "expert_baseline_evaluation": args.expert_baseline_evaluation,
+        "base_baseline_evaluation": args.base_baseline_evaluation,
+        "evaluation_suite": args.evaluation_suite,
+        "expert_policy_identity": args.expert_policy_identity,
+    }
+    missing = sorted(name for name, value in required.items() if not value)
+    if missing:
+        raise GateError(
+            "BC0 training requires frozen-suite expert and base-model evaluation "
+            "artifacts; missing: " + ", ".join(missing)
+        )
+    paths = (
+        args.expert_baseline_evaluation,
+        args.base_baseline_evaluation,
+        args.evaluation_suite,
+        args.evaluation_policy,
+    )
+    missing_paths = [str(path) for path in paths if not Path(path).is_file()]
+    if missing_paths:
+        raise GateError(
+            "BC0 baseline evaluation inputs are missing: " + ", ".join(missing_paths)
+        )
+    repo_root = Path(__file__).resolve().parents[2]
+    current_source = git_source_state(repo_root)
+    source_commit = str(current_source.get("source_commit") or "")
+    if current_source.get("release_eligible_source") is not True or not source_commit:
+        raise GateError(
+            "BC0 training requires the current source to be a clean tracked commit."
+        )
+    suite_hash = file_sha256(args.evaluation_suite)
+    registry_hash = current_registry_sha256("canonical")
+    common = {
+        "policy": args.evaluation_policy,
+        "expected_source_commit": source_commit,
+        "expected_suite_sha256": suite_hash,
+        "expected_protocol": "canonical",
+        "expected_registry_sha256": registry_hash,
+        "required_gate_policy_id": DEFAULT_POLICY_ID,
+        "repo_root": repo_root,
+        "require_current_clean_source": True,
+    }
+    expert = validate_evaluation_artifact(
+        args.expert_baseline_evaluation,
+        expected_policy_identity=args.expert_policy_identity,
+        **common,
+    )
+    base = validate_evaluation_artifact(
+        args.base_baseline_evaluation,
+        expected_model_id=args.model,
+        expected_model_revision=args.revision,
+        **common,
+    )
+    failures = [
+        *(f"expert: {failure}" for failure in expert.failures),
+        *(f"base: {failure}" for failure in base.failures),
+    ]
+    payload = {
+        "passed": expert.passed and base.passed,
+        "release_eligible": expert.passed and base.passed,
+        "override": False,
+        "failures": failures,
+        "source_commit": source_commit,
+        "frozen_suite_sha256": suite_hash,
+        "protocol": "canonical",
+        "registry_sha256": registry_hash,
+        "expert": expert.as_dict(),
+        "base": base.as_dict(),
+    }
+    if args.baseline_evaluation_report_output is not None:
+        args.baseline_evaluation_report_output.parent.mkdir(
+            parents=True, exist_ok=True
+        )
+        args.baseline_evaluation_report_output.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    if failures:
+        raise GateError(
+            "BC0 baseline closed-loop evaluation gate failed: "
+            + "; ".join(failures)
+        )
+    return payload
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
@@ -199,6 +328,9 @@ def main(argv: list[str] | None = None) -> int:
                 args.report_output.write_text(rendered, encoding="utf-8")
             print(rendered, end="")
             return 0 if passed else 2
+        baseline_evaluation_gate = (
+            _baseline_evaluation_gate(args) if args.command == "train" else None
+        )
         settings = TrainerSettings(
             model_name=args.model,
             revision=args.revision,
@@ -244,7 +376,17 @@ def main(argv: list[str] | None = None) -> int:
             smoke_steps=args.smoke_steps,
         )
         metrics = getattr(result, "metrics", {})
-        print(json.dumps({"passed": True, "training_metrics": metrics}, indent=2, default=str))
+        print(
+            json.dumps(
+                {
+                    "passed": True,
+                    "baseline_evaluation_gate": baseline_evaluation_gate,
+                    "training_metrics": metrics,
+                },
+                indent=2,
+                default=str,
+            )
+        )
         return 0
     except (GateError, ValueError) as exc:
         print(json.dumps({"passed": False, "error": str(exc)}, indent=2), file=sys.stderr)

@@ -47,6 +47,7 @@ from psse_env.actions import (
 )
 from psse_env.dagger.dataset_builder import TOOL_JSON_SCHEMAS, validate_policy_payload
 from psse_env.dagger.release_audit import (
+    ACCEPTED_TARGET_NONREGRESSION_CHECK,
     ACCEPTED_TARGETS_CHECK,
     DIAGNOSTIC_FAMILY_CHECK,
     FINAL_CASE_CHECK,
@@ -154,6 +155,8 @@ class EpisodeEvaluation:
     specialized_tool_counts: dict[str, int]
     tool_regret_total: float
     tool_regret_samples: int
+    release_environment_attestation: dict[str, Any] = field(default_factory=dict)
+    policy_identity_attestation: dict[str, Any] = field(default_factory=dict)
     audit: dict[str, Any] = field(default_factory=dict)
     trace: list[dict[str, Any]] = field(default_factory=list)
     evaluator_error: str | None = None
@@ -213,6 +216,180 @@ ToolCostResolver = Callable[[Mapping[str, Any]], Mapping[str, Any] | None]
 CaseLoader = Callable[[Any], Any]
 
 
+_OFFLINE_EXECUTION_KEYS = frozenset(
+    {
+        "evaluation_labels",
+        "hidden_truth",
+        "oracle_action_hints",
+        "suggested_actions",
+        "tool_cost_labels",
+        "remaining_true_faults",
+        "remaining_true_fault_count",
+        "remaining_fault_count",
+        "final_remaining",
+        "truth_complete",
+    }
+)
+_REQUIRED_RELEASE_ENVIRONMENT = {
+    "production_dataset_mode": True,
+    "candidate_quality_oracle_mode": "deployment",
+}
+
+
+def strip_offline_truth(scenario: Mapping[str, Any]) -> dict[str, Any]:
+    """Return an execution-only copy with privileged audit fields removed.
+
+    Stripping is recursive because ``TransactionalPSSEEnv.reset`` also reads
+    truth and action hints from nested metadata.  The input is never mutated.
+    """
+
+    if not isinstance(scenario, Mapping):
+        raise TypeError("scenario must be a mapping")
+
+    def strip(value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {
+                copy.deepcopy(key): strip(item)
+                for key, item in value.items()
+                if not (
+                    str(key).startswith("true_")
+                    or str(key).startswith("clean_")
+                    or str(key) in _OFFLINE_EXECUTION_KEYS
+                )
+            }
+        if isinstance(value, list):
+            return [strip(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(strip(item) for item in value)
+        return copy.deepcopy(value)
+
+    return strip(scenario)
+
+
+def _release_environment_attestation(env: Any) -> dict[str, Any]:
+    """Read the deployment contract from the actual per-episode environment."""
+
+    try:
+        production_mode = getattr(env, "production_dataset_mode")
+    except Exception:
+        production_mode = None
+    try:
+        candidate_oracle = getattr(env, "candidate_quality_oracle")
+        oracle_mode = getattr(candidate_oracle, "mode")
+    except Exception:
+        oracle_mode = None
+
+    failures: list[str] = []
+    if production_mode is not True:
+        failures.append("production_dataset_mode is not exactly true")
+    if oracle_mode != "deployment":
+        failures.append("candidate_quality_oracle.mode is not 'deployment'")
+    return {
+        "passed": not failures,
+        "production_dataset_mode": production_mode is True,
+        "candidate_quality_oracle_mode": (
+            str(oracle_mode) if oracle_mode is not None else None
+        ),
+        "failures": failures,
+    }
+
+
+def _summarize_release_environment_attestations(
+    attestations: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    rows = [copy.deepcopy(dict(row)) for row in attestations]
+    observed_by_hash: dict[str, dict[str, Any]] = {}
+    failures: set[str] = set()
+    for row in rows:
+        contract = {
+            "production_dataset_mode": row.get("production_dataset_mode"),
+            "candidate_quality_oracle_mode": row.get(
+                "candidate_quality_oracle_mode"
+            ),
+        }
+        observed_by_hash[_stable_hash(contract)] = contract
+        failures.update(str(item) for item in row.get("failures") or [])
+    return {
+        "passed": bool(rows) and all(row.get("passed") is True for row in rows),
+        "episodes_checked": len(rows),
+        "required": copy.deepcopy(_REQUIRED_RELEASE_ENVIRONMENT),
+        "observed": [observed_by_hash[key] for key in sorted(observed_by_hash)],
+        "failures": sorted(failures),
+    }
+
+
+def _normalize_release_policy_identity(value: Mapping[str, Any]) -> dict[str, Any]:
+    identity = {
+        "explicit_policy_identity": (
+            str(value.get("explicit_policy_identity") or "").strip() or None
+        ),
+        "model_id": str(value.get("model_id") or "").strip() or None,
+        "model_revision": str(value.get("model_revision") or "").strip() or None,
+    }
+    explicit = identity["explicit_policy_identity"]
+    model_id = identity["model_id"]
+    revision = identity["model_revision"]
+    if explicit and (model_id or revision):
+        raise ValueError("release policy identity cannot mix explicit and model identities")
+    if bool(model_id) != bool(revision):
+        raise ValueError("release model identity requires both model_id and model_revision")
+    if revision and _IMMUTABLE_REVISION.fullmatch(revision) is None:
+        raise ValueError("release model revision must be an immutable digest")
+    if not explicit and not model_id:
+        raise ValueError("release policy identity is empty")
+    return identity
+
+
+def _policy_identity_attestation(
+    policy: Any, expected: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    required = copy.deepcopy(dict(expected)) if isinstance(expected, Mapping) else None
+    failures: list[str] = []
+    try:
+        exposed = getattr(policy, "release_policy_identity")
+    except Exception:
+        exposed = None
+    actual: dict[str, Any] | None = None
+    if not isinstance(exposed, Mapping):
+        failures.append("policy does not expose release_policy_identity mapping")
+    else:
+        try:
+            actual = _normalize_release_policy_identity(exposed)
+        except ValueError as exc:
+            failures.append(str(exc))
+    if required is None:
+        failures.append("no expected release policy identity was configured")
+    elif actual != required:
+        failures.append("instantiated policy identity does not match the required identity")
+    return {
+        "passed": not failures,
+        "required": required,
+        "actual": actual,
+        "failures": failures,
+    }
+
+
+def _summarize_policy_identity_attestations(
+    attestations: Sequence[Mapping[str, Any]],
+    *,
+    required: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    rows = [copy.deepcopy(dict(row)) for row in attestations]
+    observed_by_hash: dict[str, Any] = {}
+    failures: set[str] = set()
+    for row in rows:
+        actual = row.get("actual")
+        observed_by_hash[_stable_hash(actual)] = copy.deepcopy(actual)
+        failures.update(str(item) for item in row.get("failures") or [])
+    return {
+        "passed": bool(rows) and all(row.get("passed") is True for row in rows),
+        "episodes_checked": len(rows),
+        "required": copy.deepcopy(dict(required)) if isinstance(required, Mapping) else None,
+        "observed": [observed_by_hash[key] for key in sorted(observed_by_hash)],
+        "failures": sorted(failures),
+    }
+
+
 class ClosedLoopRolloutEvaluator:
     """Execute fixed scenario suites against freshly constructed policies.
 
@@ -243,6 +420,9 @@ class ClosedLoopRolloutEvaluator:
         minimum_suites: int = 1,
         minimum_episodes_per_suite: int = 1,
         minimum_roots_per_suite: int = 1,
+        require_release_environment: bool = False,
+        expected_policy_identity: Mapping[str, Any] | None = None,
+        require_policy_identity: bool = False,
     ) -> None:
         if not callable(env_factory) or not callable(policy_factory):
             raise TypeError("env_factory and policy_factory must be callable.")
@@ -268,6 +448,17 @@ class ClosedLoopRolloutEvaluator:
         self.minimum_roots_per_suite = _positive_integer(
             minimum_roots_per_suite, field="minimum_roots_per_suite"
         )
+        self.require_release_environment = bool(require_release_environment)
+        self.expected_policy_identity = (
+            _normalize_release_policy_identity(expected_policy_identity)
+            if isinstance(expected_policy_identity, Mapping)
+            else None
+        )
+        self.require_policy_identity = bool(require_policy_identity)
+        if self.require_policy_identity and self.expected_policy_identity is None:
+            raise ValueError(
+                "require_policy_identity needs an explicit expected policy identity"
+            )
 
     def evaluate(
         self,
@@ -288,7 +479,7 @@ class ClosedLoopRolloutEvaluator:
                 enumerate(suites[suite_name]),
                 key=lambda item: (
                     _scenario_id(item[1], item[0]),
-                    _stable_hash(item[1]),
+                    _stable_hash(strip_offline_truth(item[1])),
                 ),
             )
             occurrence_by_id: Counter[str] = Counter()
@@ -312,6 +503,13 @@ class ClosedLoopRolloutEvaluator:
                 )
 
         overall = summarize_episode_evaluations(episodes)
+        release_environment_validation = _summarize_release_environment_attestations(
+            [episode.release_environment_attestation for episode in episodes]
+        )
+        policy_identity_validation = _summarize_policy_identity_attestations(
+            [episode.policy_identity_attestation for episode in episodes],
+            required=self.expected_policy_identity,
+        )
         grouped = {
             dimension: _group_episodes(episodes, attribute)
             for dimension, attribute in (
@@ -335,6 +533,8 @@ class ClosedLoopRolloutEvaluator:
                 "minimum_suites": self.minimum_suites,
                 "minimum_episodes_per_suite": self.minimum_episodes_per_suite,
                 "minimum_roots_per_suite": self.minimum_roots_per_suite,
+                "release_environment_validation": release_environment_validation,
+                "policy_identity_validation": policy_identity_validation,
                 **suite_manifest,
             },
             "overall": overall,
@@ -368,10 +568,32 @@ class ClosedLoopRolloutEvaluator:
         scenario_index: int,
         episode_seed: int,
     ) -> EpisodeEvaluation:
-        scenario_copy = copy.deepcopy(dict(scenario))
+        # Keep the immutable, privileged scenario outside execution.  The
+        # environment receives only a separately copied observable scenario;
+        # the full record is consulted after the trajectory has terminated.
+        audit_scenario = copy.deepcopy(dict(scenario))
+        execution_scenario = strip_offline_truth(audit_scenario)
         env = _call_factory(self.env_factory, episode_seed)
-        policy = _call_factory(self.policy_factory, episode_seed)
-        env.reset(copy.deepcopy(scenario_copy))
+        environment_attestation = _release_environment_attestation(env)
+        if self.require_release_environment and not environment_attestation["passed"]:
+            raise ValueError(
+                "release environment validation failed: "
+                + "; ".join(environment_attestation["failures"])
+            )
+        policy = _call_factory(
+            self.policy_factory,
+            episode_seed,
+            policy_identity=self.expected_policy_identity,
+        )
+        policy_attestation = _policy_identity_attestation(
+            policy, self.expected_policy_identity
+        )
+        if self.require_policy_identity and not policy_attestation["passed"]:
+            raise ValueError(
+                "release policy identity validation failed: "
+                + "; ".join(policy_attestation["failures"])
+            )
+        env.reset(copy.deepcopy(execution_scenario))
         initial_state = _current_state(env)
         history: list[dict[str, Any]] = []
         trace: list[dict[str, Any]] = []
@@ -384,7 +606,7 @@ class ClosedLoopRolloutEvaluator:
         false_commits = 0
         false_rollbacks = 0
         false_finalizations = 0
-        deferred_finalizations = 0
+        deferred_finalization_audits: list[dict[str, Any]] = []
         partial_candidate_ids: list[str] = []
         partial_action_signatures: list[str] = []
         collateral_commit_seen = False
@@ -429,19 +651,20 @@ class ClosedLoopRolloutEvaluator:
                 if disposition in {"ACCEPT_FINAL", "ACCEPT_PARTIAL"}:
                     false_rollbacks += 1
             elif tool == FINALIZE_DIAGNOSIS:
-                pre_diagnostic = _diagnostic_truth_audit(
-                    _scenario_truth(scenario_copy),
-                    observation.get("explained_anomalies") or [],
-                )
                 known_false = pre_remaining is not None and pre_remaining > 0
-                known_false = known_false or not pre_diagnostic[
-                    "diagnostic_truth_matched"
-                ]
                 if known_false:
                     false_finalizations += 1
                     false_finalization_this_step = True
-                elif pre_remaining is None:
-                    deferred_finalizations += 1
+                else:
+                    deferred_finalization_audits.append(
+                        {
+                            "remaining_true_fault_count": pre_remaining,
+                            "explained_anomalies": copy.deepcopy(
+                                observation.get("explained_anomalies") or []
+                            ),
+                            "counted": False,
+                        }
+                    )
 
             try:
                 next_state, tool_output = env.step(copy.deepcopy(action))
@@ -466,8 +689,8 @@ class ClosedLoopRolloutEvaluator:
             ):
                 false_finalizations += 1
                 false_finalization_this_step = True
-                if pre_remaining is None:
-                    deferred_finalizations = max(0, deferred_finalizations - 1)
+                if deferred_finalization_audits:
+                    deferred_finalization_audits[-1]["counted"] = True
             if tool == COMMIT_STATE and status == "success":
                 if disposition == "ACCEPT_PARTIAL":
                     candidate_id = _candidate_id(pre_oracle, observation)
@@ -495,7 +718,9 @@ class ClosedLoopRolloutEvaluator:
 
             label = _resolve_cost_label(
                 self.tool_cost_resolver,
-                scenario=scenario_copy,
+                # The action is already fixed.  Offline labels belong in this
+                # scorer context, never in env.reset or the policy payload.
+                scenario=audit_scenario,
                 suite=suite,
                 step=step,
                 observation=observation,
@@ -538,7 +763,7 @@ class ClosedLoopRolloutEvaluator:
         outcome = _terminal_outcome(env, trace)
         active_physical_state = _active_physical_state(env, final_state)
         default_audit = _default_physical_audit(
-            scenario=scenario_copy,
+            scenario=audit_scenario,
             initial_state=initial_state,
             final_state=final_state,
             final_oracle=final_oracle,
@@ -553,7 +778,7 @@ class ClosedLoopRolloutEvaluator:
         if self.physical_audit_fn is not None:
             supplied = self.physical_audit_fn(
                 {
-                    "scenario": copy.deepcopy(scenario_copy),
+                    "scenario": copy.deepcopy(audit_scenario),
                     "suite": suite,
                     "initial_state": copy.deepcopy(initial_state),
                     "final_state": copy.deepcopy(final_state),
@@ -583,8 +808,23 @@ class ClosedLoopRolloutEvaluator:
         healthy_preserved = healthy_known and bool(
             audit.get("healthy_components_preserved", False)
         )
-        if deferred_finalizations and physical_known and not physical_correct:
-            false_finalizations += deferred_finalizations
+        audit_truth = _scenario_truth(audit_scenario)
+        for pending in deferred_finalization_audits:
+            if pending["counted"]:
+                continue
+            diagnostic = _diagnostic_truth_audit(
+                audit_truth, pending["explained_anomalies"]
+            )
+            unknown_and_physically_wrong = (
+                pending["remaining_true_fault_count"] is None
+                and physical_known
+                and not physical_correct
+            )
+            if (
+                not diagnostic["diagnostic_truth_matched"]
+                or unknown_and_physically_wrong
+            ):
+                false_finalizations += 1
 
         accepted = _accepted_corrections(final_state)
         accepted_ids = {
@@ -614,8 +854,8 @@ class ClosedLoopRolloutEvaluator:
                     0, min(int(override), len(partial_action_signatures))
                 )
 
-        groups = _scenario_groups(scenario_copy)
-        scenario_id = _scenario_id(scenario_copy, scenario_index)
+        groups = _scenario_groups(audit_scenario)
+        scenario_id = _scenario_id(audit_scenario, scenario_index)
         episode_key = f"{suite}:{scenario_id}:{scenario_index}"
         final_success = bool(
             terminal and outcome == "resolved" and physical_correct
@@ -664,6 +904,8 @@ class ClosedLoopRolloutEvaluator:
             specialized_tool_counts=dict(sorted(specialized_counts.items())),
             tool_regret_total=regret_total,
             tool_regret_samples=regret_samples,
+            release_environment_attestation=copy.deepcopy(environment_attestation),
+            policy_identity_attestation=copy.deepcopy(policy_attestation),
             audit=copy.deepcopy(audit),
             trace=trace,
             evaluator_error=evaluator_error,
@@ -686,6 +928,9 @@ def evaluate_rollout_suites(
     minimum_suites: int = 1,
     minimum_episodes_per_suite: int = 1,
     minimum_roots_per_suite: int = 1,
+    require_release_environment: bool = False,
+    expected_policy_identity: Mapping[str, Any] | None = None,
+    require_policy_identity: bool = False,
 ) -> EvaluationResult:
     """Functional entry point for closed-loop suite evaluation."""
 
@@ -702,6 +947,9 @@ def evaluate_rollout_suites(
         minimum_suites=minimum_suites,
         minimum_episodes_per_suite=minimum_episodes_per_suite,
         minimum_roots_per_suite=minimum_roots_per_suite,
+        require_release_environment=require_release_environment,
+        expected_policy_identity=expected_policy_identity,
+        require_policy_identity=require_policy_identity,
     ).evaluate(scenario_suites)
 
 
@@ -715,6 +963,14 @@ evaluate_closed_loop = evaluate_rollout_suites
 _RELEASE_SOURCE_FAILURE = (
     "source worktree is not a clean tracked commit; use --allow-dirty-source "
     "only for non-release development evidence"
+)
+_RELEASE_ENVIRONMENT_FAILURE = (
+    "executed environment contract is not release-safe: "
+    "production_dataset_mode=true and candidate_quality_oracle.mode='deployment' "
+    "are required"
+)
+_RELEASE_POLICY_IDENTITY_FAILURE = (
+    "instantiated policy identity did not match the release provenance identity"
 )
 _IMMUTABLE_REVISION = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})\Z")
 
@@ -962,6 +1218,27 @@ def write_evaluation_artifact(
         copy.deepcopy(dict(provenance)) if isinstance(provenance, Mapping) else None
     )
     release_failures = _evaluation_provenance_failures(recorded_provenance)
+    configuration = result.suite_metrics.get("configuration")
+    release_environment = (
+        configuration.get("release_environment_validation")
+        if isinstance(configuration, Mapping)
+        else None
+    )
+    if (
+        not isinstance(release_environment, Mapping)
+        or release_environment.get("passed") is not True
+    ):
+        release_failures.append(_RELEASE_ENVIRONMENT_FAILURE)
+    policy_identity_validation = (
+        configuration.get("policy_identity_validation")
+        if isinstance(configuration, Mapping)
+        else None
+    )
+    if (
+        not isinstance(policy_identity_validation, Mapping)
+        or policy_identity_validation.get("passed") is not True
+    ):
+        release_failures.append(_RELEASE_POLICY_IDENTITY_FAILURE)
     if recorded_provenance is not None:
         recorded_provenance["release_eligible"] = not release_failures
         recorded_provenance["release_failures"] = release_failures
@@ -1079,6 +1356,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             "release evaluation requires --policy-identity or both --model-id "
             "and --model-revision"
         )
+    expected_policy_identity = _normalize_release_policy_identity(
+        {
+            "explicit_policy_identity": explicit_policy_identity or None,
+            "model_id": model_id or None,
+            "model_revision": model_revision or None,
+        }
+    )
 
     required_suites = (
         tuple(args.required_suite)
@@ -1132,6 +1416,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         minimum_suites=args.minimum_suites,
         minimum_episodes_per_suite=args.minimum_episodes_per_suite,
         minimum_roots_per_suite=args.minimum_roots_per_suite,
+        require_release_environment=True,
+        expected_policy_identity=expected_policy_identity,
+        require_policy_identity=True,
     )
     artifact = write_evaluation_artifact(
         result,
@@ -1448,8 +1735,9 @@ def _scenario_id(scenario: Mapping[str, Any], index: int) -> str:
     explicit = scenario.get("scenario_id", scenario.get("id"))
     if explicit is not None:
         return str(explicit)
-    # A content-derived fallback keeps evaluation invariant to input ordering.
-    return f"scenario_{_stable_hash(scenario)[:12]}"
+    # A content-derived fallback keeps evaluation invariant to input ordering
+    # without allowing hidden audit truth to alter the execution seed.
+    return f"scenario_{_stable_hash(strip_offline_truth(scenario))[:12]}"
 
 
 def _episode_seed(base_seed: int, suite: str, scenario_id: str, index: int) -> int:
@@ -1462,7 +1750,12 @@ def _episode_seed(base_seed: int, suite: str, scenario_id: str, index: int) -> i
     return int.from_bytes(digest[:8], "big") & 0x7FFFFFFF
 
 
-def _call_factory(factory: Callable[..., Any], seed: int) -> Any:
+def _call_factory(
+    factory: Callable[..., Any],
+    seed: int,
+    *,
+    policy_identity: Mapping[str, Any] | None = None,
+) -> Any:
     """Call a factory without ever supplying scenario data."""
 
     kwargs: dict[str, Any] = {}
@@ -1478,6 +1771,19 @@ def _call_factory(factory: Callable[..., Any], seed: int) -> Any:
         kwargs["seed"] = int(seed)
     if "rng" in parameters or accepts_kwargs:
         kwargs["rng"] = random.Random(seed)
+    # Identity-bearing policy factories receive only explicitly declared
+    # identity parameters.  The instantiated object must independently expose
+    # the same values through ``release_policy_identity``.
+    if isinstance(policy_identity, Mapping):
+        explicit = policy_identity.get("explicit_policy_identity")
+        model_id = policy_identity.get("model_id")
+        model_revision = policy_identity.get("model_revision")
+        if "policy_identity" in parameters and explicit is not None:
+            kwargs["policy_identity"] = explicit
+        if "model_id" in parameters and model_id is not None:
+            kwargs["model_id"] = model_id
+        if "model_revision" in parameters and model_revision is not None:
+            kwargs["model_revision"] = model_revision
     return factory(**kwargs)
 
 
@@ -1786,6 +2092,10 @@ def _scenario_truth(scenario: Mapping[str, Any]) -> dict[str, Any]:
 
 _STRICT_PHYSICAL_EVIDENCE_GAPS = frozenset(
     {
+        "accepted_measurement_nonregression_evidence_missing_or_malformed",
+        "accepted_parameter_nonregression_evidence_missing_or_malformed",
+        "accepted_topology_nonregression_evidence_missing_or_malformed",
+        "accepted_target_nonregression_target_evidence_invalid",
         "healthy_measurement_preservation_evidence_missing_or_malformed",
         "healthy_case_preservation_evidence_missing_or_unloadable",
         "final_clean_measurement_evidence_missing_or_malformed",
@@ -1982,10 +2292,12 @@ def _default_physical_audit(
         "problems": strict_problems,
         "quarantined": bool(strict.get("quarantined", True)),
         "strict_checks_used": [
+            ACCEPTED_TARGET_NONREGRESSION_CHECK,
             ACCEPTED_TARGETS_CHECK,
             DIAGNOSTIC_FAMILY_CHECK,
             HEALTHY_MEASUREMENTS_CHECK,
             HEALTHY_CASE_CHECK,
+            REMAINING_FAULTS_CHECK,
             FINAL_MEASUREMENTS_CHECK,
             FINAL_CASE_CHECK,
         ],

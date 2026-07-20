@@ -4,7 +4,10 @@ import copy
 import unittest
 
 from psse_env.dagger.release_audit import (
+    ACCEPTED_TARGET_NONREGRESSION_CHECK,
+    ACCEPTED_TARGETS_CHECK,
     DIAGNOSTIC_LOCALIZATION_CHECK,
+    EXPLANATION_ONLY_DIAGNOSTIC_CONTRACT,
     FINAL_CASE_CHECK,
     FINAL_MEASUREMENTS_CHECK,
     HEALTHY_CASE_CHECK,
@@ -205,6 +208,186 @@ class AcceptedCorrectionTargetTests(unittest.TestCase):
         )
         self.assertIn(
             "accepted_topology_target_outside_same_family_truth",
+            result["problems"],
+        )
+
+
+class AcceptedTargetNonregressionTests(unittest.TestCase):
+    def _measurement_action(self) -> dict[str, object]:
+        return {
+            "tool": "correct_measurements",
+            "arguments": {"suspect_group": [1]},
+        }
+
+    def _parameter_scenario(self) -> dict[str, object]:
+        scenario = _base_scenario()
+        scenario["scenario_family"] = "parameter"
+        scenario["measurements"] = [1.0, 2.0, 3.0]
+        scenario["clean_measurements"] = [1.0, 2.0, 3.0]
+        scenario["true_measurement_errors"] = []
+        clean = _case()
+        clean["branch"][1][2] = 0.01  # type: ignore[index]
+        clean["branch"][1][3] = 0.02  # type: ignore[index]
+        scenario["clean_case"] = clean
+        scenario["true_parameter_errors"] = [
+            {
+                "branch_row0": 1,
+                "line_index1": 2,
+                "parameter": "rx",
+                "clean_r": 0.01,
+                "clean_x": 0.02,
+            }
+        ]
+        return scenario
+
+    def _topology_scenario(self) -> dict[str, object]:
+        scenario = _base_scenario()
+        scenario["scenario_family"] = "topology"
+        scenario["measurements"] = [1.0, 2.0, 3.0]
+        scenario["clean_measurements"] = [1.0, 2.0, 3.0]
+        scenario["true_measurement_errors"] = []
+        clean = _case()
+        clean["branch"][1][10] = 0.0  # type: ignore[index]
+        scenario["clean_case"] = clean
+        scenario["true_topology_errors"] = [
+            {"branch_row0": 1, "line_index1": 2, "expected_status": 0}
+        ]
+        return scenario
+
+    def test_operator_escalation_rejects_worsened_measurement_target(self) -> None:
+        result = audit_episode_against_truth(
+            _base_scenario(),
+            _final_state(self._measurement_action()),
+            terminal=True,
+            terminal_outcome="operator_escalation",
+            active_physical_state=_active(measurements=[1.0, 150.0, 3.0]),
+        )
+
+        self.assertTrue(result["quarantined"])
+        self.assertIn("accepted_measurement_target_regressed", result["problems"])
+        self.assertEqual(
+            result["checks"][ACCEPTED_TARGET_NONREGRESSION_CHECK]["status"],
+            "failed",
+        )
+
+    def test_operator_escalation_allows_unresolved_but_improved_target(self) -> None:
+        result = audit_episode_against_truth(
+            _base_scenario(),
+            _final_state(self._measurement_action()),
+            terminal=True,
+            terminal_outcome="operator_escalation",
+            active_physical_state=_active(measurements=[1.0, 50.0, 3.0]),
+        )
+
+        self.assertFalse(result["quarantined"], result["problems"])
+        check = result["checks"][ACCEPTED_TARGET_NONREGRESSION_CHECK]
+        self.assertEqual(check["status"], "passed")
+        self.assertEqual(check["target_evidence"][0]["status"], "passed")
+
+    def test_missing_measurement_clean_evidence_fails_closed(self) -> None:
+        scenario = _base_scenario()
+        scenario.pop("clean_measurements")
+        scenario["true_measurement_errors"] = [{"index": 1}]
+        result = audit_episode_against_truth(
+            scenario,
+            _final_state(self._measurement_action()),
+            terminal=True,
+            terminal_outcome="operator_escalation",
+            active_physical_state=_active(),
+        )
+
+        self.assertIn(
+            "accepted_measurement_nonregression_evidence_missing_or_malformed",
+            result["problems"],
+        )
+
+    def test_operator_escalation_rejects_worsened_parameter_target(self) -> None:
+        scenario = self._parameter_scenario()
+        final_case = _case()
+        final_case["branch"][1][2] = 0.06  # type: ignore[index]
+        final_case["branch"][1][3] = 0.08  # type: ignore[index]
+        result = audit_episode_against_truth(
+            scenario,
+            _final_state(
+                {
+                    "tool": "correct_parameters",
+                    "arguments": {"line_index1": 2},
+                }
+            ),
+            terminal=True,
+            terminal_outcome="operator_escalation",
+            active_physical_state=_active(case=final_case),
+        )
+
+        self.assertIn("accepted_parameter_target_regressed", result["problems"])
+        evidence = result["checks"][ACCEPTED_TARGET_NONREGRESSION_CHECK][
+            "target_evidence"
+        ]
+        self.assertEqual(evidence[0]["family"], "parameter")
+        self.assertGreater(evidence[0]["final_distance"], evidence[0]["initial_distance"])
+
+    def test_missing_parameter_initial_case_fails_closed(self) -> None:
+        scenario = self._parameter_scenario()
+        scenario.pop("case")
+        result = audit_episode_against_truth(
+            scenario,
+            _final_state(
+                {
+                    "tool": "correct_parameters",
+                    "arguments": {"branch_row0": 1},
+                }
+            ),
+            terminal=True,
+            terminal_outcome="operator_escalation",
+            active_physical_state=_active(case=scenario["clean_case"]),
+        )
+
+        self.assertIn(
+            "accepted_parameter_nonregression_evidence_missing_or_malformed",
+            result["problems"],
+        )
+
+    def test_unresolved_topology_target_is_nonregressing(self) -> None:
+        scenario = self._topology_scenario()
+        result = audit_episode_against_truth(
+            scenario,
+            _final_state(
+                {
+                    "tool": "correct_topology",
+                    "arguments": {"branch_row0": 1, "status": 0},
+                }
+            ),
+            terminal=True,
+            terminal_outcome="operator_escalation",
+            active_physical_state=_active(case=_case()),
+        )
+
+        self.assertFalse(result["quarantined"], result["problems"])
+        evidence = result["checks"][ACCEPTED_TARGET_NONREGRESSION_CHECK][
+            "target_evidence"
+        ]
+        self.assertEqual(evidence[0]["family"], "topology")
+        self.assertEqual(evidence[0]["initial_distance"], evidence[0]["final_distance"])
+
+    def test_malformed_topology_status_fails_closed(self) -> None:
+        scenario = self._topology_scenario()
+        final_case = _case()
+        final_case["branch"][1][10] = 2.0  # type: ignore[index]
+        result = audit_episode_against_truth(
+            scenario,
+            _final_state(
+                {
+                    "tool": "correct_topology",
+                    "arguments": {"branch_row0": 1, "status": 0},
+                }
+            ),
+            terminal=True,
+            terminal_outcome="operator_escalation",
+            active_physical_state=_active(case=final_case),
+        )
+
+        self.assertIn(
+            "accepted_topology_nonregression_evidence_missing_or_malformed",
             result["problems"],
         )
 
@@ -459,11 +642,74 @@ class DiagnosticLocalizationTests(unittest.TestCase):
         scenario["true_measurement_errors"] = []
         scenario["hidden_truth"] = {truth_key: [truth]}
         scenario["release_audit"] = {
+            "explanation_only_contract": EXPLANATION_ONLY_DIAGNOSTIC_CONTRACT,
             "not_applicable": {
                 FINAL_MEASUREMENTS_CHECK: "diagnostic-only anomaly is explained, not repaired"
             }
         }
         return scenario
+
+    def test_measurement_recovery_cannot_spoof_explanation_only_waiver(self) -> None:
+        scenario = _base_scenario()
+        scenario["release_audit"] = {
+            "explanation_only_contract": EXPLANATION_ONLY_DIAGNOSTIC_CONTRACT,
+            "not_applicable": {
+                FINAL_MEASUREMENTS_CHECK: "spoofed explanation-only waiver"
+            },
+        }
+        result = _audit_resolved(
+            scenario,
+            _final_state(
+                {
+                    "tool": "correct_measurements",
+                    "arguments": {"suspect_group": [1]},
+                }
+            ),
+            active=_active(measurements=[1.0, 50.0, 3.0]),
+            remaining={"remaining_true_fault_count": 0},
+        )
+
+        self.assertTrue(result["quarantined"])
+        self.assertIn(
+            "final_measurements_not_applicable_requires_pure_diagnostic_family",
+            result["problems"],
+        )
+        self.assertIn(
+            "final_measurements_not_applicable_prohibits_correction_truth",
+            result["problems"],
+        )
+        self.assertIn(
+            "final_measurements_not_applicable_prohibits_accepted_corrections",
+            result["problems"],
+        )
+        self.assertIn("final_measurements_outside_clean_tolerance", result["problems"])
+        self.assertEqual(
+            result["checks"][FINAL_MEASUREMENTS_CHECK]["status"], "failed"
+        )
+
+    def test_explanation_only_waiver_requires_generator_contract_marker(self) -> None:
+        scenario = self._diagnostic_scenario(
+            "harmonic", "true_harmonic_errors", {"bus_1based": 5}
+        )
+        scenario["release_audit"].pop("explanation_only_contract")  # type: ignore[union-attr]
+        result = _audit_resolved(
+            scenario,
+            _final_state(
+                explanations=[
+                    {"family": "harmonic", "detail": {"bus_1based": 5}}
+                ]
+            ),
+            active=_active(measurements=[10.0, 20.0, 30.0]),
+            remaining={"remaining_true_fault_count": 0},
+        )
+
+        self.assertIn(
+            "final_measurements_not_applicable_contract_marker_missing_or_invalid",
+            result["problems"],
+        )
+        self.assertEqual(
+            result["checks"][FINAL_MEASUREMENTS_CHECK]["status"], "failed"
+        )
 
     def test_operator_escalation_does_not_claim_or_require_localization(self) -> None:
         scenario = self._diagnostic_scenario(
@@ -704,7 +950,7 @@ class DiagnosticLocalizationTests(unittest.TestCase):
         )
         self.assertIn("diagnostic_localization_evidence_missing", result["problems"])
 
-    def test_localization_not_applicable_does_not_clear_derived_fault(self) -> None:
+    def test_localization_not_applicable_is_prohibited(self) -> None:
         scenario = self._diagnostic_scenario(
             "three_phase_unbalance",
             "true_three_phase_unbalance_errors",
@@ -730,13 +976,16 @@ class DiagnosticLocalizationTests(unittest.TestCase):
             },
         )
         self.assertTrue(result["quarantined"])
+        self.assertIn(
+            "not_applicable_check_unknown_or_prohibited", result["problems"]
+        )
         self.assertIn("resolved_episode_has_remaining_true_faults", result["problems"])
         self.assertEqual(
             result["checks"][DIAGNOSTIC_LOCALIZATION_CHECK]["status"],
-            "not_applicable",
+            "failed",
         )
 
-    def test_explicit_not_applicable_field_form_is_supported(self) -> None:
+    def test_final_case_not_applicable_field_form_is_prohibited(self) -> None:
         scenario = _base_scenario()
         scenario["release_audit"] = {
             FINAL_CASE_CHECK: {
@@ -756,9 +1005,12 @@ class DiagnosticLocalizationTests(unittest.TestCase):
             active=_active(),
             remaining={"remaining_true_fault_count": 0},
         )
-        self.assertFalse(result["quarantined"], result["problems"])
+        self.assertTrue(result["quarantined"])
+        self.assertIn(
+            "not_applicable_check_unknown_or_prohibited", result["problems"]
+        )
         self.assertEqual(
-            result["checks"][FINAL_CASE_CHECK]["status"], "not_applicable"
+            result["checks"][FINAL_CASE_CHECK]["status"], "failed"
         )
 
     def test_not_applicable_requires_known_check_and_reason(self) -> None:
@@ -767,10 +1019,54 @@ class DiagnosticLocalizationTests(unittest.TestCase):
             _final_state(),
             active=_active(),
             remaining={"remaining_true_fault_count": 0},
-            not_applicable={"unknown_check": "because", FINAL_CASE_CHECK: ""},
+            not_applicable={
+                "unknown_check": "because",
+                FINAL_MEASUREMENTS_CHECK: "",
+            },
         )
         self.assertIn("not_applicable_check_unknown_or_prohibited", result["problems"])
         self.assertIn("not_applicable_reason_missing", result["problems"])
+
+    def test_core_invariant_not_applicable_attempts_fail_on_escalation(self) -> None:
+        prohibited = (
+            ACCEPTED_TARGETS_CHECK,
+            REMAINING_FAULTS_CHECK,
+            HEALTHY_MEASUREMENTS_CHECK,
+            HEALTHY_CASE_CHECK,
+        )
+        for name in prohibited:
+            with self.subTest(check=name):
+                scenario = _base_scenario()
+                supplied = None
+                if name == ACCEPTED_TARGETS_CHECK:
+                    # Cover the embedded per-check status form as well as the
+                    # generic supplied map exercised by the other invariants.
+                    scenario["release_audit"] = {
+                        name: {
+                            "status": "not_applicable",
+                            "reason": "attempted core-invariant waiver",
+                        }
+                    }
+                else:
+                    supplied = {name: "attempted core-invariant waiver"}
+                result = audit_episode_against_truth(
+                    scenario,
+                    _final_state(),
+                    terminal=True,
+                    terminal_outcome="operator_escalation",
+                    active_physical_state=_active(),
+                    not_applicable=supplied,
+                )
+
+                self.assertTrue(result["quarantined"])
+                self.assertIn(
+                    "not_applicable_check_unknown_or_prohibited",
+                    result["problems"],
+                )
+                self.assertEqual(
+                    result["checks"]["audit_evidence_contract"]["status"],
+                    "failed",
+                )
 
 
 class AuditBoundaryTests(unittest.TestCase):

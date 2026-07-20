@@ -133,6 +133,7 @@ HIF_SIGNATURE = "hif_suspected_zero_sequence"
 UNBALANCE_SIGNATURE = "three_phase_unbalance vuf_threshold_exceeded"
 
 _EXPLANATION_ONLY_RELEASE_AUDIT = {
+    "explanation_only_contract": "explanation_only_diagnostic_localization_v1",
     "not_applicable": {
         "final_measurements_match_clean": (
             "The diagnostic resolves an explanation-only waveform anomaly; "

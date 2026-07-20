@@ -29,8 +29,17 @@ from psse_env.dagger.evaluator import (
 
 
 class _ScriptPolicy:
-    def __init__(self, observations: list[dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        observations: list[dict[str, Any]],
+        *,
+        release_policy_identity: Mapping[str, Any] | None = None,
+    ) -> None:
         self.observations = observations
+        if release_policy_identity is not None:
+            self.release_policy_identity = copy.deepcopy(
+                dict(release_policy_identity)
+            )
 
     def act(self, observation: Mapping[str, Any]) -> Any:
         payload = copy.deepcopy(dict(observation))
@@ -68,7 +77,26 @@ class _ScriptPolicy:
         return actions[phase]
 
 
-def _cli_policy_factory() -> _ScriptPolicy:
+def _cli_policy_factory(
+    *,
+    policy_identity: str | None = None,
+    model_id: str | None = None,
+    model_revision: str | None = None,
+) -> _ScriptPolicy:
+    return _ScriptPolicy(
+        [],
+        release_policy_identity={
+            "explicit_policy_identity": policy_identity,
+            "model_id": model_id,
+            "model_revision": model_revision,
+        },
+    )
+
+
+def _unattested_policy_factory(
+    *, model_id: str | None = None, model_revision: str | None = None
+) -> _ScriptPolicy:
+    del model_id, model_revision
     return _ScriptPolicy([])
 
 
@@ -87,7 +115,17 @@ class _PhysicalStore:
         return copy.deepcopy(self.env.physical_state)
 
 
+class _DeploymentCandidateOracle:
+    mode = "deployment"
+
+
 class _ScriptEnv:
+    # This scripted environment is a release-contract test double: its
+    # transitions are observable-script driven and its oracle exposes no
+    # hidden scenario truth.
+    production_dataset_mode = True
+    candidate_quality_oracle = _DeploymentCandidateOracle()
+
     def __init__(self, *, seed: int | None = None) -> None:
         self.seed = seed
         self.cursor = 0
@@ -129,13 +167,10 @@ class _ScriptEnv:
 
     def get_oracle_state(self, history: list[Mapping[str, Any]]) -> dict[str, Any]:
         row = self._current_script()
-        truth = copy.deepcopy(dict(self.scenario.get("hidden_truth") or {}))
-        truth["truth_complete"] = True
-        truth["remaining_true_fault_count"] = (
-            self.scenario.get("final_remaining", 0)
-            if self.cursor >= len(self.scenario["script"])
-            else row.get("remaining", self.scenario.get("final_remaining", 0))
-        )
+        truth = {
+            "truth_complete": True,
+            "remaining_true_fault_count": row.get("remaining"),
+        }
         return {
             "candidate_disposition": row.get("disposition"),
             "candidate_assessment": row.get("assessment", {}),
@@ -381,6 +416,184 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         self.assertEqual(summary["false_rollback_count"], 1)
         self.assertEqual(summary["false_finalization_count"], 1)
         self.assertEqual(summary["final_physical_success_rate"], 0.0)
+
+    def test_release_environment_contract_fails_closed(self) -> None:
+        class DevelopmentOracle:
+            mode = "auto"
+
+        class DevelopmentEnv(_ScriptEnv):
+            production_dataset_mode = False
+            candidate_quality_oracle = DevelopmentOracle()
+
+        development = evaluate_rollout_suites(
+            [_resolved_scenario()],
+            env_factory=DevelopmentEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+            max_steps=8,
+        )
+        validation = development.suite_metrics["configuration"][
+            "release_environment_validation"
+        ]
+        self.assertFalse(validation["passed"])
+        self.assertEqual(validation["episodes_checked"], 1)
+        self.assertEqual(
+            validation["required"],
+            {
+                "production_dataset_mode": True,
+                "candidate_quality_oracle_mode": "deployment",
+            },
+        )
+        self.assertEqual(
+            validation["failures"],
+            [
+                "candidate_quality_oracle.mode is not 'deployment'",
+                "production_dataset_mode is not exactly true",
+            ],
+        )
+
+        with self.assertRaisesRegex(
+            ValueError, "release environment validation failed"
+        ):
+            evaluate_rollout_suites(
+                [_resolved_scenario()],
+                env_factory=DevelopmentEnv,
+                policy_factory=lambda: _ScriptPolicy([]),
+                max_steps=8,
+                require_release_environment=True,
+            )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            artifact = write_evaluation_artifact(
+                development, Path(temporary_directory) / "development.json"
+            )
+        self.assertFalse(artifact["release_eligible"])
+        self.assertTrue(
+            any(
+                "executed environment contract is not release-safe" in failure
+                for failure in artifact["release_failures"]
+            )
+        )
+
+    def test_hidden_truth_changes_only_offline_audit_not_trajectory(self) -> None:
+        class RecordingEnv(_ScriptEnv):
+            instances: list["RecordingEnv"] = []
+
+            def __init__(self, *, seed: int | None = None) -> None:
+                super().__init__(seed=seed)
+                self.transcript: dict[str, Any] = {}
+                self.__class__.instances.append(self)
+
+            def reset(self, scenario: Mapping[str, Any]) -> dict[str, Any]:
+                self.transcript = {
+                    "reset_scenario": copy.deepcopy(dict(scenario)),
+                    "observations": [],
+                    "transitions": [],
+                }
+                state = super().reset(scenario)
+                self.transcript["initial_state"] = copy.deepcopy(state)
+                return state
+
+            def get_policy_observation(
+                self, history: list[Mapping[str, Any]]
+            ) -> dict[str, Any]:
+                observation = super().get_policy_observation(history)
+                self.transcript["observations"].append(copy.deepcopy(observation))
+                return observation
+
+            def step(
+                self, action: Mapping[str, Any]
+            ) -> tuple[dict[str, Any], dict[str, Any]]:
+                state, output = super().step(action)
+                self.transcript["transitions"].append(
+                    {
+                        "action": copy.deepcopy(dict(action)),
+                        "tool_output": copy.deepcopy(output),
+                        "lifecycle_state": copy.deepcopy(state),
+                        "terminal": self.terminal,
+                        "terminal_outcome": self.terminal_outcome,
+                    }
+                )
+                return state, output
+
+        first_scenario = _resolved_scenario()
+        first_scenario["evaluation_labels"] = [
+            {"action_costs": {"invalid_action": 1.0}}
+        ]
+        first_scenario["metadata"] = {
+            "hidden_truth": {"true_nested_secret": "first"},
+            "clean_nested_reference": [1.0],
+            "oracle_action_hints": [{"tool": "hidden_first"}],
+            "tool_cost_labels": {"0": {"best_cost": 0.0}},
+        }
+        first_scenario["oracle_action_hints"] = [{"tool": "hidden_first"}]
+        second_scenario = copy.deepcopy(first_scenario)
+        second_scenario["true_measurement_errors"] = [{"index": 6}]
+        second_scenario["hidden_truth"] = {
+            "true_harmonic_errors": [{"bus_1based": 5}]
+        }
+        second_scenario["metadata"] = {
+            "hidden_truth": {"true_nested_secret": "second"},
+            "clean_nested_reference": [2.0],
+            "oracle_action_hints": [{"tool": "hidden_second"}],
+        }
+        second_scenario["oracle_action_hints"] = [{"tool": "hidden_second"}]
+
+        def run(scenario: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+            RecordingEnv.instances.clear()
+            result = evaluate_rollout_suites(
+                [scenario],
+                env_factory=RecordingEnv,
+                policy_factory=lambda: _ScriptPolicy([]),
+                max_steps=8,
+                seed=109,
+            )
+            self.assertEqual(len(RecordingEnv.instances), 1)
+            return (
+                copy.deepcopy(RecordingEnv.instances[0].transcript),
+                result.suite_metrics["episodes"][0],
+            )
+
+        first_transcript, first_episode = run(first_scenario)
+        second_transcript, second_episode = run(second_scenario)
+
+        # The reset payload, observations, actions, complete tool outputs,
+        # candidate lifecycle, and terminal trace are byte-for-byte equivalent.
+        self.assertEqual(first_transcript, second_transcript)
+        self.assertEqual(first_episode["trace"], second_episode["trace"])
+        self.assertEqual(first_episode["terminal"], second_episode["terminal"])
+        self.assertEqual(
+            first_episode["terminal_outcome"], second_episode["terminal_outcome"]
+        )
+
+        reset_payload = first_transcript["reset_scenario"]
+
+        def privileged_keys(value: Any) -> list[str]:
+            if isinstance(value, Mapping):
+                found = [
+                    str(key)
+                    for key in value
+                    if str(key).startswith(("true_", "clean_"))
+                    or str(key)
+                    in {
+                        "evaluation_labels",
+                        "hidden_truth",
+                        "oracle_action_hints",
+                        "tool_cost_labels",
+                    }
+                ]
+                return found + [
+                    key
+                    for item in value.values()
+                    for key in privileged_keys(item)
+                ]
+            if isinstance(value, (list, tuple)):
+                return [key for item in value for key in privileged_keys(item)]
+            return []
+
+        self.assertEqual(privileged_keys(reset_payload), [])
+        self.assertTrue(first_episode["final_physical_success"])
+        self.assertFalse(second_episode["final_physical_success"])
+        self.assertNotEqual(first_episode["audit"], second_episode["audit"])
 
     def test_rejects_privileged_custom_policy_observation(self) -> None:
         class LeakyEnv(_ScriptEnv):
@@ -671,6 +884,44 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             self.assertEqual(len(artifact["content_sha256"]), 64)
             configuration = artifact["evaluation"]["suite_metrics"]["configuration"]
             self.assertTrue(configuration["suite_coverage_validation"]["passed"])
+            self.assertEqual(
+                configuration["release_environment_validation"],
+                {
+                    "passed": True,
+                    "episodes_checked": 1,
+                    "required": {
+                        "production_dataset_mode": True,
+                        "candidate_quality_oracle_mode": "deployment",
+                    },
+                    "observed": [
+                        {
+                            "production_dataset_mode": True,
+                            "candidate_quality_oracle_mode": "deployment",
+                        }
+                    ],
+                    "failures": [],
+                },
+            )
+            self.assertEqual(
+                configuration["policy_identity_validation"],
+                {
+                    "passed": True,
+                    "episodes_checked": 1,
+                    "required": {
+                        "explicit_policy_identity": None,
+                        "model_id": "test/script-policy",
+                        "model_revision": "a" * 40,
+                    },
+                    "observed": [
+                        {
+                            "explicit_policy_identity": None,
+                            "model_id": "test/script-policy",
+                            "model_revision": "a" * 40,
+                        }
+                    ],
+                    "failures": [],
+                },
+            )
             self.assertIn("standard_success", configuration["suite_content_hashes"])
             provenance = artifact["provenance"]
             self.assertEqual(provenance["source_state"], clean_source)
@@ -754,6 +1005,44 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                     ]
                 )
 
+    def test_cli_rejects_script_policy_relabelled_as_model(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            input_path = root / "suite.json"
+            input_path.write_text(
+                json.dumps({"standard_success": [_resolved_scenario()]}),
+                encoding="utf-8",
+            )
+            arguments = [
+                "--input",
+                str(input_path),
+                "--output",
+                str(root / "release.json"),
+                "--env-factory",
+                "psse_env.dagger.test_evaluator:_ScriptEnv",
+                "--policy-factory",
+                "psse_env.dagger.test_evaluator:_unattested_policy_factory",
+                "--model-id",
+                "base/gemma",
+                "--model-revision",
+                "a" * 40,
+                "--required-suite",
+                "standard_success",
+            ]
+            clean_source = {
+                "source_commit": "b" * 40,
+                "source_worktree_dirty": False,
+                "tracked_diff_hash": hashlib.sha256(b"").hexdigest(),
+                "untracked_source_files": [],
+                "release_eligible_source": True,
+            }
+            with mock.patch(
+                "psse_env.dagger.evaluator.git_source_state",
+                return_value=clean_source,
+            ), self.assertRaisesRegex(ValueError, "policy identity validation failed"):
+                evaluator_main(arguments)
+            self.assertFalse((root / "release.json").exists())
+
     def test_cli_dirty_source_requires_override_and_stays_nonrelease(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -833,7 +1122,10 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             self.assertIsNone(artifact["provenance"])
             self.assertEqual(
                 artifact["release_failures"],
-                ["evaluation identity provenance is missing"],
+                [
+                    "evaluation identity provenance is missing",
+                    "instantiated policy identity did not match the release provenance identity",
+                ],
             )
 
     def test_is_reproducible_and_does_not_mutate_supplied_scenarios(self) -> None:

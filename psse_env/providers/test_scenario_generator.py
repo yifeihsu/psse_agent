@@ -171,6 +171,19 @@ class ScenarioConstructionTests(unittest.TestCase):
         self.assertTrue(scenario["metadata"]["harmonic_measurements"])
         self.assertTrue(scenario["hidden_truth"]["true_harmonic_errors"])
 
+    def test_diagnostic_families_emit_explanation_only_audit_contract(self) -> None:
+        for family in ("harmonic", "hif", "three_phase_unbalance"):
+            with self.subTest(family=family):
+                release_audit = self.by_family[family]["release_audit"]
+                self.assertEqual(
+                    release_audit["explanation_only_contract"],
+                    "explanation_only_diagnostic_localization_v1",
+                )
+                self.assertEqual(
+                    set(release_audit["not_applicable"]),
+                    {"final_measurements_match_clean"},
+                )
+
     def test_hif_scenario_carries_all_diagnostic_channels(self) -> None:
         scenario = self.by_family["hif"]
         metadata = scenario["metadata"]
@@ -812,8 +825,11 @@ class EpisodeTruthAuditTests(unittest.TestCase):
             "scenario_family": "measurement+topology",
             "case": "case14",
             "measurements": [0.0] * 122,
-            "true_measurement_errors": [{"index": 100}],
-            "true_topology_errors": [{"line_index1": 17}],
+            "clean_measurements": [0.0] * 122,
+            "true_measurement_errors": [{"index": 100, "clean": 0.0}],
+            "true_topology_errors": [
+                {"line_index1": 17, "expected_status": 0}
+            ],
         }
         final_state = {
             "accepted_corrections": [
