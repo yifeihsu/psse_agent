@@ -91,7 +91,7 @@ if [[ "$GPU_PROFILE" == "auto" ]]; then
     set_default_if_unset MAX_SEQ_LENGTH 6144
     set_default_if_unset LOAD_IN_4BIT 0
     set_default_if_unset LOAD_IN_16BIT 1
-    set_default_if_unset CONCURRENT_CONVERSATIONS 8
+    set_default_if_unset CONCURRENT_CONVERSATIONS 16
   elif [[ "$GPU_NAME" == *"L40S"* && "${GPU_MEM_MB:-0}" -ge 43000 ]]; then
     GPU_PROFILE_SELECTED="l40s"
     set_default_if_unset MAX_SEQ_LENGTH 4096
@@ -117,7 +117,7 @@ else
       set_default_if_unset MAX_SEQ_LENGTH 6144
       set_default_if_unset LOAD_IN_4BIT 0
       set_default_if_unset LOAD_IN_16BIT 1
-      set_default_if_unset CONCURRENT_CONVERSATIONS 8
+      set_default_if_unset CONCURRENT_CONVERSATIONS 16
       ;;
     highmem-accelerator)
       set_default_if_unset MAX_SEQ_LENGTH 6144
