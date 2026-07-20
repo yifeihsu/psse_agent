@@ -1084,6 +1084,10 @@ def examples_to_chat_sft(
         raise ValueError(
             f"protocol must be one of {SUPPORTED_EXPORT_PROTOCOLS}, got {protocol!r}."
         )
+    # Local import avoids a module-load cycle: the audit canonicalizer itself
+    # depends on this module's identifier-aliasing helpers.
+    from psse_env.dagger.sft_audit import admissible_semantic_action_count
+
     bridge = None
     if protocol == "canonical":
         from psse_env.dagger import protocol_bridge as bridge
@@ -1115,6 +1119,22 @@ def examples_to_chat_sft(
             target = valid[0] if valid else None
         if target is None:
             continue
+
+        semantic_action_count = admissible_semantic_action_count(example)
+        declared_action_count = example.get("admissible_semantic_action_count")
+        if declared_action_count is not None:
+            try:
+                declared_action_count = int(declared_action_count)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(
+                    "admissible_semantic_action_count must be an integer"
+                ) from exc
+            if declared_action_count != semantic_action_count:
+                raise ValueError(
+                    "Declared admissible semantic action count disagrees with "
+                    f"canonical actions for {example.get('example_id')}: "
+                    f"declared={declared_action_count}, computed={semantic_action_count}."
+                )
 
         raw_observation = example.get("policy_observation", example.get("state_summary", {}))
         if not isinstance(raw_observation, Mapping):
@@ -1224,6 +1244,11 @@ def examples_to_chat_sft(
                 "production_label_eligible", True
             ),
             "generation_provenance_id": example.get("generation_provenance_id"),
+            "scenario_family": example.get("scenario_family"),
+            "error_cardinality": example.get("error_cardinality"),
+            "network_case": example.get("network_case"),
+            "source_tier": example.get("source_tier"),
+            "episode_terminal_outcome": example.get("episode_terminal_outcome"),
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": json.dumps(user_payload, sort_keys=True)},
@@ -1244,6 +1269,22 @@ def examples_to_chat_sft(
                 "protocol": protocol,
                 "labels": labels,
                 "state_class": example.get("state_class"),
+                "scenario_family": example.get("scenario_family"),
+                "error_cardinality": example.get("error_cardinality"),
+                "network_case": example.get("network_case"),
+                "source_tier": example.get("source_tier"),
+                "terminal_outcome": example.get("episode_terminal_outcome"),
+                "admissible_semantic_action_count": semantic_action_count,
+                "cost_margin": example.get(
+                    "cost_margin",
+                    labels.get("cost_margin") if isinstance(labels, Mapping) else None,
+                ),
+                "action_costs": copy.deepcopy(
+                    example.get(
+                        "action_costs",
+                        labels.get("action_costs") if isinstance(labels, Mapping) else None,
+                    )
+                ),
                 "controller": _controller_metadata(
                     example,
                     alias_to_state_id,

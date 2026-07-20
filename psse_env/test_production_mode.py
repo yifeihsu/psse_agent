@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from psse_env.actions import (
+    ASK_FOR_MORE_EVIDENCE,
     COMMIT_STATE,
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
@@ -11,6 +12,7 @@ from psse_env.actions import (
     GET_MEASUREMENT_CONTEXT,
     GET_PARAMETER_CONTEXT,
     GET_TOPOLOGY_CONTEXT,
+    RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     ROLLBACK_STATE,
     RUN_WLS,
 )
@@ -207,6 +209,38 @@ class ProductionConfigurationTests(unittest.TestCase):
             metrics, "ACCEPT_FINAL"
         )
         self.assertNotIn("physical_constraint_evidence_missing", gaps)
+
+    def test_topology_structural_ambiguity_is_explicit_rejection_evidence(self):
+        metrics = {
+            "target_fixed": True,
+            "target_progress": 1.0,
+            "global_progress": 0.86,
+            "globally_resolved": False,
+            "physical_constraints_ok": True,
+            "topology_target_status_matches_requested": True,
+            "topology_target_branch_multiplier": 18.0,
+            "topology_target_branch_multiplier_threshold": 3.0,
+        }
+
+        gaps = TransactionalPSSEEnv._target_decision_evidence_missing(
+            metrics,
+            "REJECT",
+            min_partial_global_progress=0.30,
+            min_topology_structural_global_progress=0.95,
+            max_branch_target_threshold_ratio=1.25,
+        )
+
+        self.assertNotIn("rejection_evidence_missing", gaps)
+
+        metrics["global_progress"] = 0.96
+        gaps = TransactionalPSSEEnv._target_decision_evidence_missing(
+            metrics,
+            "REJECT",
+            min_partial_global_progress=0.30,
+            min_topology_structural_global_progress=0.95,
+            max_branch_target_threshold_ratio=1.25,
+        )
+        self.assertIn("rejection_evidence_missing", gaps)
 
     def test_missing_provider_error_lists_actionable_names(self):
         with self.assertRaisesRegex(ValueError, "run_wls") as raised:
@@ -665,9 +699,19 @@ class TeacherRealizabilityAndReplayTests(unittest.TestCase):
         base = {"active_state_id": "active"}
         cases = (
             (
-                {"tool": "finalize_diagnosis", "arguments": {}},
+                {"tool": FINALIZE_DIAGNOSIS, "arguments": {}},
                 "ACCEPT_FINAL",
-                "terminal_decision",
+                "terminal_resolved",
+            ),
+            (
+                {
+                    "tool": ASK_FOR_MORE_EVIDENCE,
+                    "arguments": {
+                        "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                    },
+                },
+                "INCONCLUSIVE",
+                "terminal_operator_escalation",
             ),
             (
                 {"tool": ROLLBACK_STATE, "arguments": {"candidate_state_id": "candidate"}},
@@ -707,6 +751,9 @@ class TeacherRealizabilityAndReplayTests(unittest.TestCase):
                     "state_class": actual,
                 }
             )
+        self.assertEqual(rows[0]["state_class"], "terminal_resolved")
+        self.assertEqual(rows[1]["state_class"], "terminal_operator_escalation")
+        self.assertNotEqual(rows[1]["state_class"], rows[0]["state_class"])
         invalid = classify_state_example(
             {
                 **base,

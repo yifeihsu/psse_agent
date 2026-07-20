@@ -49,7 +49,7 @@ def classify_state_example(
     # intentionally ahead of transition outcomes so a malformed learner
     # action cannot relabel a terminal or recovery teacher target as success.
     if preferred_tool == "finalize_diagnosis":
-        return "terminal_decision"
+        return "terminal_resolved"
     if (
         preferred_tool == ASK_FOR_MORE_EVIDENCE
         and preferred is not None
@@ -60,7 +60,7 @@ def classify_state_example(
             RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
         }
     ):
-        return "terminal_decision"
+        return "terminal_operator_escalation"
     if preferred_tool == "rollback_state":
         return "rejected_candidate_recovery"
     if preferred_tool == "commit_state":
@@ -89,7 +89,7 @@ def classify_state_example(
     ):
         return "accepted_partial_continuation"
     if observation.get("no_material_anomaly_remaining") or disposition == "ACCEPT_FINAL":
-        return "terminal_decision"
+        return "terminal_resolved"
     signatures = observation.get("tried_action_signatures") or []
     if len(signatures) != len(set(signatures)):
         return "loop_repetition"
@@ -141,7 +141,7 @@ def audit_target_aware_state_classes(
         ) is not None else None
         tool = action["tool"] if action else None
         required = {
-            "finalize_diagnosis": "terminal_decision",
+            "finalize_diagnosis": "terminal_resolved",
             "rollback_state": "rejected_candidate_recovery",
         }.get(tool)
         if (
@@ -154,7 +154,7 @@ def audit_target_aware_state_classes(
                 RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
             }
         ):
-            required = "terminal_decision"
+            required = "terminal_operator_escalation"
         if required is not None and actual != required:
             violations.append(
                 {
@@ -199,6 +199,15 @@ class DaggerRolloutCollector:
             scenario_id = str(scenario.get("scenario_id", scenario.get("id", f"scenario_{scenario_index}")))
             root_scenario_id = str(scenario.get("root_scenario_id", scenario_id))
             physical_root_fingerprint = scenario.get("physical_root_fingerprint")
+            scenario_family = str(scenario.get("scenario_family") or "unknown")
+            network_case = str(
+                scenario.get("network_case") or scenario.get("case_id") or scenario.get("case") or "unknown"
+            )
+            source_tier = str(scenario.get("source_tier") or "unknown")
+            try:
+                error_cardinality = int(scenario.get("error_cardinality", 0))
+            except (TypeError, ValueError, OverflowError):
+                error_cardinality = 0
             state_visited_by = "initial"
 
             for step in range(max_steps):
@@ -224,7 +233,14 @@ class DaggerRolloutCollector:
                 if preferred_action is not None and hasattr(
                     self.env, "assert_training_decision_evidence"
                 ):
-                    self.env.assert_training_decision_evidence(preferred_action)
+                    try:
+                        self.env.assert_training_decision_evidence(preferred_action)
+                    except ValueError as exc:
+                        raise ValueError(
+                            "Training-decision evidence failed for "
+                            f"scenario={scenario_id}, step={step}, "
+                            f"preferred_tool={preferred_action.get('tool')}: {exc}"
+                        ) from exc
                 model_action = self._policy_action(observation_dict)
 
                 if preferred_action is not None and self.rng.random() < float(beta):
@@ -302,6 +318,10 @@ class DaggerRolloutCollector:
                     "scenario_id": scenario_id,
                     "root_scenario_id": root_scenario_id,
                     "physical_root_fingerprint": physical_root_fingerprint,
+                    "scenario_family": scenario_family,
+                    "error_cardinality": error_cardinality,
+                    "network_case": network_case,
+                    "source_tier": source_tier,
                     "episode_id": observation_dict.get("episode_id"),
                     "iteration": iteration,
                     "step": step,
@@ -338,6 +358,10 @@ class DaggerRolloutCollector:
                         "state_class": state_class,
                         "dataset_mode": dataset_mode,
                         "terminal_outcome": terminal_outcome,
+                        "scenario_family": scenario_family,
+                        "error_cardinality": error_cardinality,
+                        "network_case": network_case,
+                        "source_tier": source_tier,
                     },
                 }
                 validate_policy_payload(

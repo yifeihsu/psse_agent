@@ -25,6 +25,661 @@ def _state(signatures: list[str]) -> dict:
 
 
 class MultiMeasurementContinuationTests(unittest.TestCase):
+    @staticmethod
+    def _rejected_singleton_history(
+        state_id: str,
+        candidate_id: str,
+        target: int,
+        *,
+        physical_ok: bool = True,
+        violation_indices: tuple[int, ...] = (),
+    ) -> list[dict]:
+        action = {
+            "tool": "correct_measurements",
+            "arguments": {"state_id": state_id, "suspect_group": [target]},
+        }
+        return [
+            {"action": action, "tool_output": {"execution_status": "success"}},
+            {
+                "action": {
+                    "tool": "run_wls",
+                    "arguments": {"state_id": candidate_id},
+                },
+                "tool_output": {
+                    "execution_status": "success",
+                    "tool_metrics": {
+                        "target_metric_value": 0.01,
+                        "target_metric_threshold": 3.0,
+                        "target_progress": 0.99,
+                        "global_progress": 0.15,
+                        "globally_resolved": False,
+                        "physical_constraints_ok": physical_ok,
+                        "physical_bound_violations": [
+                            {
+                                "type": "bus_voltage_out_of_bounds",
+                                "measurement_index0": index,
+                            }
+                            for index in violation_indices
+                        ],
+                    },
+                },
+            },
+            {
+                "action": {
+                    "tool": "rollback_state",
+                    "arguments": {"candidate_state_id": candidate_id},
+                },
+                "tool_output": {"execution_status": "success"},
+            },
+        ]
+
+    def test_two_safe_locally_fixed_rejections_get_one_joint_retry(self) -> None:
+        state_id = "episode:s0"
+        state = _state(
+            [
+                "wls_residual_outlier index=67 channel=Qf",
+                "wls_residual_outlier index=69 channel=Qf",
+            ]
+        )
+        state.update(
+            {
+                "active_state_id": state_id,
+                "has_fresh_measurement_context": True,
+                "measurement_context_state_id": state_id,
+                "remaining_budget": 4,
+                "rejected_hypotheses": [
+                    {
+                        "candidate_parent_id": state_id,
+                        "candidate_state_id": f"{state_id}:c1",
+                        "source_action": {
+                            "tool": "correct_measurements",
+                            "arguments": {
+                                "state_id": state_id,
+                                "suspect_group": [67],
+                            },
+                        },
+                    },
+                    {
+                        "candidate_parent_id": state_id,
+                        "candidate_state_id": f"{state_id}:c2",
+                        "source_action": {
+                            "tool": "correct_measurements",
+                            "arguments": {
+                                "state_id": state_id,
+                                "suspect_group": [69],
+                            },
+                        },
+                    },
+                ],
+            }
+        )
+        hints = [
+            {
+                "tool": "correct_measurements",
+                "arguments": {"state_id": state_id, "suspect_group": [target]},
+            }
+            for target in (67, 69, 74)
+        ]
+        hints.append(
+            {
+                "tool": "correct_measurements",
+                "arguments": {
+                    "state_id": state_id,
+                    "suspect_group": [67, 69],
+                },
+            }
+        )
+        history = [
+            {
+                "action": {
+                    "tool": "get_measurement_context",
+                    "arguments": {"state_id": state_id},
+                },
+                "tool_output": {
+                    "execution_status": "success",
+                    "tool_metrics": {
+                        "state_id": state_id,
+                        "supported_corrections": hints,
+                    },
+                },
+            },
+            *self._rejected_singleton_history(
+                state_id, f"{state_id}:c1", 67
+            ),
+            *self._rejected_singleton_history(
+                state_id, f"{state_id}:c2", 69
+            ),
+        ]
+
+        proposals = MeasurementExpert().propose(
+            state, history, oracle_hints=hints
+        )
+        joint = {
+            "tool": "correct_measurements",
+            "arguments": {"state_id": state_id, "suspect_group": [67, 69]},
+        }
+
+        self.assertIn(joint, [proposal.action for proposal in proposals])
+
+    def test_joint_retry_requires_physical_safety_and_budget(self) -> None:
+        state_id = "episode:s0"
+        hints = [
+            {
+                "tool": "correct_measurements",
+                "arguments": {"state_id": state_id, "suspect_group": [target]},
+            }
+            for target in (67, 69)
+        ]
+        hints.append(
+            {
+                "tool": "correct_measurements",
+                "arguments": {
+                    "state_id": state_id,
+                    "suspect_group": [67, 69],
+                },
+            }
+        )
+        rejected = [
+            {
+                "candidate_parent_id": state_id,
+                "candidate_state_id": f"{state_id}:c{offset}",
+                "source_action": hints[offset - 1],
+            }
+            for offset in (1, 2)
+        ]
+        base = _state(
+            [
+                "wls_residual_outlier index=67 channel=Qf",
+                "wls_residual_outlier index=69 channel=Qf",
+            ]
+        )
+        base.update(
+            {
+                "active_state_id": state_id,
+                "has_fresh_measurement_context": True,
+                "measurement_context_state_id": state_id,
+                "rejected_hypotheses": rejected,
+            }
+        )
+        history = [
+            *self._rejected_singleton_history(
+                state_id, f"{state_id}:c1", 67
+            ),
+            *self._rejected_singleton_history(
+                state_id, f"{state_id}:c2", 69, physical_ok=False
+            ),
+        ]
+        joint = {
+            "tool": "correct_measurements",
+            "arguments": {"state_id": state_id, "suspect_group": [67, 69]},
+        }
+
+        unsafe = dict(base, remaining_budget=4)
+        low_budget = dict(base, remaining_budget=3)
+
+        self.assertNotIn(
+            joint,
+            [
+                proposal.action
+                for proposal in MeasurementExpert().propose(
+                    unsafe, history, oracle_hints=hints
+                )
+            ],
+        )
+        self.assertNotIn(
+            joint,
+            [
+                proposal.action
+                for proposal in MeasurementExpert().propose(
+                    low_budget,
+                    [
+                        *self._rejected_singleton_history(
+                            state_id, f"{state_id}:c1", 67
+                        ),
+                        *self._rejected_singleton_history(
+                            state_id, f"{state_id}:c2", 69
+                        ),
+                    ],
+                    oracle_hints=hints,
+                )
+            ],
+        )
+
+    def test_dependency_closure_joins_only_the_exact_vm_violation_target(
+        self,
+    ) -> None:
+        state_id = "episode:s0"
+        hints = [
+            {
+                "tool": "correct_measurements",
+                "arguments": {"state_id": state_id, "suspect_group": [target]},
+            }
+            for target in (0, 10)
+        ]
+        hints.append(
+            {
+                "tool": "correct_measurements",
+                "arguments": {"state_id": state_id, "suspect_group": [0, 10]},
+            }
+        )
+        state = _state(
+            [
+                "wls_residual_outlier index=0 channel=Vm",
+                "wls_residual_outlier index=10 channel=Vm",
+            ]
+        )
+        state.update(
+            {
+                "active_state_id": state_id,
+                "has_fresh_measurement_context": True,
+                "measurement_context_state_id": state_id,
+                "remaining_budget": 4,
+                "rejected_hypotheses": [
+                    {
+                        "candidate_parent_id": state_id,
+                        "candidate_state_id": f"{state_id}:blocked",
+                        "source_action": hints[1],
+                    },
+                    {
+                        "candidate_parent_id": state_id,
+                        "candidate_state_id": f"{state_id}:closure",
+                        "source_action": hints[0],
+                    },
+                ],
+            }
+        )
+        blocked_history = self._rejected_singleton_history(
+            state_id,
+            f"{state_id}:blocked",
+            10,
+            physical_ok=False,
+            violation_indices=(0,),
+        )
+        # The blocked target made enough global progress that physical safety,
+        # not the ordinary partial-progress floor, is the reason it rejected.
+        blocked_history[1]["tool_output"]["tool_metrics"][
+            "global_progress"
+        ] = 0.30
+        history = [
+            *blocked_history,
+            *self._rejected_singleton_history(
+                state_id, f"{state_id}:closure", 0
+            ),
+        ]
+        joint = {
+            "tool": "correct_measurements",
+            "arguments": {"state_id": state_id, "suspect_group": [0, 10]},
+        }
+
+        proposals = MeasurementExpert().propose(
+            state, history, oracle_hints=hints
+        )
+
+        self.assertIn(joint, [proposal.action for proposal in proposals])
+
+    def test_dependency_closure_rejects_uncovered_or_non_vm_violations(self) -> None:
+        state_id = "episode:s0"
+        hints = [
+            {
+                "tool": "correct_measurements",
+                "arguments": {"state_id": state_id, "suspect_group": [target]},
+            }
+            for target in (0, 10)
+        ]
+        hints.append(
+            {
+                "tool": "correct_measurements",
+                "arguments": {"state_id": state_id, "suspect_group": [0, 10]},
+            }
+        )
+        state = _state(
+            [
+                "wls_residual_outlier index=0 channel=Vm",
+                "wls_residual_outlier index=10 channel=Vm",
+            ]
+        )
+        state.update(
+            {
+                "active_state_id": state_id,
+                "has_fresh_measurement_context": True,
+                "measurement_context_state_id": state_id,
+                "remaining_budget": 4,
+                "rejected_hypotheses": [
+                    {
+                        "candidate_parent_id": state_id,
+                        "candidate_state_id": f"{state_id}:blocked",
+                        "source_action": hints[1],
+                    },
+                    {
+                        "candidate_parent_id": state_id,
+                        "candidate_state_id": f"{state_id}:closure",
+                        "source_action": hints[0],
+                    },
+                ],
+            }
+        )
+        blocked = self._rejected_singleton_history(
+            state_id,
+            f"{state_id}:blocked",
+            10,
+            physical_ok=False,
+            violation_indices=(1,),
+        )
+        blocked[1]["tool_output"]["tool_metrics"]["global_progress"] = 0.30
+        history = [
+            *blocked,
+            *self._rejected_singleton_history(
+                state_id, f"{state_id}:closure", 0
+            ),
+        ]
+        joint = {
+            "tool": "correct_measurements",
+            "arguments": {"state_id": state_id, "suspect_group": [0, 10]},
+        }
+
+        proposals = MeasurementExpert().propose(
+            state, history, oracle_hints=hints
+        )
+
+        self.assertNotIn(joint, [proposal.action for proposal in proposals])
+
+    def test_production_evidence_requires_the_exact_context_supported_joint(self) -> None:
+        from psse_env.transactional_env import TransactionalPSSEEnv
+
+        state_id = "episode:s0"
+        hints = [
+            {
+                "tool": "correct_measurements",
+                "arguments": {"state_id": state_id, "suspect_group": [target]},
+            }
+            for target in (0, 10)
+        ]
+        hints.append(
+            {
+                "tool": "correct_measurements",
+                "arguments": {"state_id": state_id, "suspect_group": [0, 10]},
+            }
+        )
+        state = _state(
+            [
+                "wls_residual_outlier index=0 channel=Vm",
+                "wls_residual_outlier index=10 channel=Vm",
+            ]
+        )
+        state.update(
+            {
+                "active_state_id": state_id,
+                "has_fresh_measurement_context": True,
+                "measurement_context_state_id": state_id,
+                "remaining_budget": 4,
+                "rejected_hypotheses": [
+                    {
+                        "candidate_parent_id": state_id,
+                        "candidate_state_id": f"{state_id}:blocked",
+                        "source_action": hints[1],
+                    },
+                    {
+                        "candidate_parent_id": state_id,
+                        "candidate_state_id": f"{state_id}:closure",
+                        "source_action": hints[0],
+                    },
+                ],
+            }
+        )
+        blocked = self._rejected_singleton_history(
+            state_id,
+            f"{state_id}:blocked",
+            10,
+            physical_ok=False,
+            violation_indices=(0,),
+        )
+        blocked[1]["tool_output"]["tool_metrics"]["global_progress"] = 0.30
+        history = [
+            {
+                "action": {
+                    "tool": "get_measurement_context",
+                    "arguments": {"state_id": state_id},
+                },
+                "tool_output": {
+                    "execution_status": "success",
+                    "tool_metrics": {
+                        "state_id": state_id,
+                        "supported_corrections": hints,
+                    },
+                },
+            },
+            *blocked,
+            *self._rejected_singleton_history(
+                state_id, f"{state_id}:closure", 0
+            ),
+        ]
+        env = object.__new__(TransactionalPSSEEnv)
+        env.production_dataset_mode = True
+        env.history = history
+        env.current_state = lambda: state
+        exact = {
+            "tool": "correct_measurements",
+            "arguments": {"state_id": state_id, "suspect_group": [0, 10]},
+        }
+        unsupported_superset = {
+            "tool": "correct_measurements",
+            "arguments": {"state_id": state_id, "suspect_group": [0, 10, 99]},
+        }
+
+        env.assert_training_decision_evidence(exact)
+        with self.assertRaisesRegex(ValueError, "not supported by the latest"):
+            env.assert_training_decision_evidence(unsupported_superset)
+
+    def test_near_threshold_branch_cross_signal_still_refreshes_accepted_targets(
+        self,
+    ) -> None:
+        state = _state(
+            [
+                "wls_residual_outlier index=120 channel=Qt",
+                "wls_branch_multiplier line_status_or_parameter line=7",
+            ]
+        )
+        state.update(
+            {
+                "remaining_anomaly_score": 1.024,
+                "remaining_budget": 11,
+                "accepted_corrections": [
+                    {
+                        "source_action": {
+                            "tool": "correct_measurements",
+                            "arguments": {
+                                "state_id": "episode:s0",
+                                "suspect_group": [target],
+                            },
+                        }
+                    }
+                    for target in (24, 25, 26)
+                ],
+            }
+        )
+
+        proposals = MeasurementExpert().propose(state, [])
+
+        self.assertEqual(proposals[0].action["tool"], "get_measurement_context")
+        self.assertIn(
+            "near_threshold_accepted_target_refinement",
+            proposals[0].evidence_codes,
+        )
+
+    def test_homogeneous_residual_channel_breaks_neutral_context_tie(self) -> None:
+        state = _state(
+            [
+                "wls_residual_outlier index=67 channel=Qf",
+                "wls_residual_outlier index=68 channel=Qf",
+                "wls_residual_outlier index=69 channel=Qf",
+                "wls_branch_multiplier line_status_or_parameter line=7",
+            ]
+        )
+
+        proposal = MeasurementExpert().propose(state, [])[0]
+
+        self.assertEqual(proposal.action["tool"], "get_measurement_context")
+        self.assertGreater(proposal.confidence, 0.87)
+
+    def test_observable_joint_refinement_of_accepted_targets_is_admissible(self) -> None:
+        state = _state([])
+        state["has_fresh_measurement_context"] = True
+        state["measurement_context_state_id"] = "episode:s1"
+        state["accepted_corrections"] = [
+            {
+                "source_action": {
+                    "tool": "correct_measurements",
+                    "arguments": {
+                        "state_id": "episode:s0",
+                        "suspect_group": [index],
+                    },
+                }
+            }
+            for index in (104, 110, 113, 114)
+        ]
+        refinement = {
+            "tool": "correct_measurements",
+            "arguments": {
+                "state_id": "episode:s1",
+                "suspect_group": [104, 110, 113, 114],
+            },
+        }
+        history = [
+            {
+                "action": {
+                    "tool": "get_measurement_context",
+                    "arguments": {"state_id": "episode:s1"},
+                },
+                "tool_output": {
+                    "execution_status": "success",
+                    "tool_metrics": {
+                        "state_id": "episode:s1",
+                        "accepted_target_refinement": True,
+                        "supported_corrections": [refinement],
+                    },
+                },
+            }
+        ]
+
+        proposals = MeasurementExpert().propose(
+            state, history, oracle_hints=[refinement]
+        )
+
+        self.assertIn(refinement, [proposal.action for proposal in proposals])
+        proposal = next(item for item in proposals if item.action == refinement)
+        self.assertIn(
+            "observable_accepted_target_refinement", proposal.evidence_codes
+        )
+
+    def test_observable_post_branch_singleton_refinement_is_admissible(self) -> None:
+        state = _state([])
+        state["has_fresh_measurement_context"] = True
+        state["measurement_context_state_id"] = "episode:s1"
+        state["accepted_corrections"] = [
+            {
+                "source_action": {
+                    "tool": "correct_measurements",
+                    "arguments": {
+                        "state_id": "episode:s0",
+                        "suspect_group": [45],
+                    },
+                }
+            },
+            {
+                "source_action": {
+                    "tool": "correct_parameters",
+                    "arguments": {
+                        "state_id": "episode:s0",
+                        "line_index": 7,
+                    },
+                }
+            },
+        ]
+        refinement = {
+            "tool": "correct_measurements",
+            "arguments": {
+                "state_id": "episode:s1",
+                "suspect_group": [45],
+            },
+        }
+        history = [
+            {
+                "action": {
+                    "tool": "get_measurement_context",
+                    "arguments": {"state_id": "episode:s1"},
+                },
+                "tool_output": {
+                    "execution_status": "success",
+                    "tool_metrics": {
+                        "state_id": "episode:s1",
+                        "accepted_target_refinement": True,
+                        "accepted_target_refinement_kind": (
+                            "post_branch_model_reestimate"
+                        ),
+                        "supported_corrections": [refinement],
+                    },
+                },
+            }
+        ]
+
+        proposals = MeasurementExpert().propose(
+            state, history, oracle_hints=[refinement]
+        )
+
+        self.assertIn(refinement, [proposal.action for proposal in proposals])
+        proposal = next(item for item in proposals if item.action == refinement)
+        self.assertIn(
+            "observable_accepted_target_refinement", proposal.evidence_codes
+        )
+
+    def test_joint_refinement_cannot_add_an_unaccepted_target(self) -> None:
+        state = _state([])
+        state["has_fresh_measurement_context"] = True
+        state["measurement_context_state_id"] = "episode:s1"
+        state["accepted_corrections"] = [
+            {
+                "source_action": {
+                    "tool": "correct_measurements",
+                    "arguments": {
+                        "state_id": "episode:s0",
+                        "suspect_group": [index],
+                    },
+                }
+            }
+            for index in (104, 110)
+        ]
+        unsafe_refinement = {
+            "tool": "correct_measurements",
+            "arguments": {
+                "state_id": "episode:s1",
+                "suspect_group": [104, 110, 999],
+            },
+        }
+        history = [
+            {
+                "action": {
+                    "tool": "get_measurement_context",
+                    "arguments": {"state_id": "episode:s1"},
+                },
+                "tool_output": {
+                    "execution_status": "success",
+                    "tool_metrics": {
+                        "state_id": "episode:s1",
+                        "accepted_target_refinement": True,
+                        "supported_corrections": [unsafe_refinement],
+                    },
+                },
+            }
+        ]
+
+        proposals = MeasurementExpert().propose(
+            state, history, oracle_hints=[unsafe_refinement]
+        )
+
+        self.assertNotIn(
+            unsafe_refinement, [proposal.action for proposal in proposals]
+        )
+
     def test_partial_measurement_commit_requires_fresh_context_on_active_state(self) -> None:
         state = _state([])
         state["accepted_corrections"] = [
@@ -262,7 +917,6 @@ class MultiMeasurementContinuationTests(unittest.TestCase):
             [
                 "wls_residual_outlier index=42 channel=Pf",
                 "wls_residual_outlier index=47 channel=Pf",
-                "wls_branch_multiplier line_status_or_parameter line=1",
             ]
         )
         state["accepted_corrections"] = [
@@ -389,6 +1043,21 @@ class ObservableGlobalProgressTests(unittest.TestCase):
         }
         self.oracle = CandidateQualityOracle(mode="deployment")
 
+    @staticmethod
+    def _topology_states() -> tuple[dict, dict]:
+        parent = {
+            "state_id": "episode:s0",
+            "case": {"branch": [{"r": 1.0, "x": 2.0, "status": 1}]},
+            "measurements": [1.0],
+        }
+        candidate = {
+            "state_id": "episode:s1",
+            "parent_state_id": "episode:s0",
+            "case": {"branch": [{"r": 1.0, "x": 2.0, "status": 0}]},
+            "measurements": [1.0],
+        }
+        return parent, candidate
+
     def test_strong_target_local_branch_progress_can_be_retained_as_partial(self) -> None:
         result = self.oracle.label_candidate(
             parent_state=self.parent,
@@ -408,6 +1077,91 @@ class ObservableGlobalProgressTests(unittest.TestCase):
         self.assertIn(
             "target_local_progress", result.rationale_codes
         )
+
+    def test_structural_topology_target_rejects_uncleared_moderate_progress(self) -> None:
+        parent, candidate = self._topology_states()
+        action = {
+            "tool": "correct_topology",
+            "arguments": {"state_id": "episode:s0", "branch_row0": 0, "status": 0},
+        }
+        result = self.oracle.label_candidate(
+            parent_state=parent,
+            source_action=action,
+            candidate_state=candidate,
+            verification_output={
+                "target_fixed": True,
+                "target_progress": 1.0,
+                "target_metric_kind": "branch_status_mismatch",
+                "target_metric_value": 0.0,
+                "target_metric_threshold": 0.5,
+                "topology_target_status_matches_requested": True,
+                "topology_target_branch_multiplier": 18.0,
+                "topology_target_branch_multiplier_threshold": 3.0,
+                "global_progress": 0.86,
+                "globally_resolved": False,
+                "physical_constraints_ok": True,
+            },
+        )
+
+        self.assertEqual(result.disposition, CandidateDisposition.REJECT)
+        self.assertIn(
+            "topology_global_progress_below_structural_threshold",
+            result.rationale_codes,
+        )
+
+    def test_structural_topology_target_allows_exceptional_global_progress(self) -> None:
+        parent, candidate = self._topology_states()
+        action = {
+            "tool": "correct_topology",
+            "arguments": {"state_id": "episode:s0", "branch_row0": 0, "status": 0},
+        }
+        result = self.oracle.label_candidate(
+            parent_state=parent,
+            source_action=action,
+            candidate_state=candidate,
+            verification_output={
+                "target_fixed": True,
+                "target_progress": 1.0,
+                "target_metric_kind": "branch_status_mismatch",
+                "target_metric_value": 0.0,
+                "target_metric_threshold": 0.5,
+                "topology_target_status_matches_requested": True,
+                "topology_target_branch_multiplier": 11.6,
+                "topology_target_branch_multiplier_threshold": 3.0,
+                "global_progress": 0.996,
+                "globally_resolved": False,
+                "physical_constraints_ok": True,
+            },
+        )
+
+        self.assertEqual(result.disposition, CandidateDisposition.ACCEPT_PARTIAL)
+
+    def test_structural_topology_target_keeps_marginal_multiplier_route(self) -> None:
+        parent, candidate = self._topology_states()
+        action = {
+            "tool": "correct_topology",
+            "arguments": {"state_id": "episode:s0", "branch_row0": 0, "status": 0},
+        }
+        result = self.oracle.label_candidate(
+            parent_state=parent,
+            source_action=action,
+            candidate_state=candidate,
+            verification_output={
+                "target_fixed": True,
+                "target_progress": 1.0,
+                "target_metric_kind": "branch_status_mismatch",
+                "target_metric_value": 0.0,
+                "target_metric_threshold": 0.5,
+                "topology_target_status_matches_requested": True,
+                "topology_target_branch_multiplier": 3.5,
+                "topology_target_branch_multiplier_threshold": 3.0,
+                "global_progress": 0.60,
+                "globally_resolved": False,
+                "physical_constraints_ok": True,
+            },
+        )
+
+        self.assertEqual(result.disposition, CandidateDisposition.ACCEPT_PARTIAL)
 
     def test_global_progress_alone_cannot_override_explicit_target_failure(self) -> None:
         result = self.oracle.label_candidate(
@@ -637,7 +1391,7 @@ class MultiMeasurementEndToEndRoutingTests(unittest.TestCase):
             "operator_escalation:recovery_options_exhausted",
         )
 
-    def test_partial_commit_refreshes_measurement_context_before_handoff(self) -> None:
+    def test_partial_commit_refreshes_measurement_context_before_resolution(self) -> None:
         env, actions = self._run(20260719)
         tools = [action["tool"] for action in actions]
 
@@ -645,13 +1399,13 @@ class MultiMeasurementEndToEndRoutingTests(unittest.TestCase):
         self.assertEqual(tools[commit_index + 1], "get_measurement_context")
         self.assertEqual(
             actions[commit_index + 1]["arguments"]["state_id"],
-            env.get_policy_observation(env.history).active_state_id,
+            actions[commit_index]["arguments"]["candidate_state_id"],
         )
         self.assertNotIn("get_parameter_context", tools)
         self.assertNotIn("get_topology_context", tools)
         self.assertTrue(env.is_terminal())
-        self.assertEqual(env.terminal_outcome, "operator_escalation")
-        self.assertEqual(tools[-1], "ask_for_more_evidence")
+        self.assertEqual(env.terminal_outcome, "resolved")
+        self.assertEqual(tools[-1], "finalize_diagnosis")
 
 
 if __name__ == "__main__":

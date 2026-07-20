@@ -622,6 +622,19 @@ class TransactionTests(unittest.TestCase):
         self.assertNotIn("hidden_truth", serialized)
         self.assertNotIn("true_measurement_errors", serialized)
 
+    def test_observable_signature_does_not_claim_complete_truth(self):
+        env = TransactionalPSSEEnv()
+        env.reset(
+            {
+                "scenario_id": "observable-signature-only",
+                "case": {},
+                "measurements": [1.0],
+                "unresolved_signatures": ["measurement_residual_outlier"],
+            }
+        )
+
+        self.assertFalse(env.get_oracle_state().hidden_truth["truth_complete"])
+
 
 class CandidateQualityTests(unittest.TestCase):
     def setUp(self):
@@ -1552,13 +1565,16 @@ class ReplayAndEvaluationTests(unittest.TestCase):
             "rejected_candidate_recovery",
             "accepted_partial_continuation",
             "invalid_precondition_recovery",
-            "terminal_decision",
+            "terminal_resolved",
+            "terminal_operator_escalation",
             "loop_repetition",
         ]
         rows = [{"id": f"{name}-{index}", "state_class": name} for name in classes for index in range(10)]
         sampled = BalancedReplayBuffer(rows).sample(20, rng=random.Random(0))
         counts = {name: sum(row["state_class"] == name for row in sampled) for name in classes}
-        self.assertEqual(counts, dict(zip(classes, [6, 5, 4, 2, 2, 1])))
+        self.assertEqual(counts, dict(zip(classes, [6, 5, 4, 2, 1, 1, 1])))
+        self.assertEqual(counts["terminal_resolved"], 1)
+        self.assertEqual(counts["terminal_operator_escalation"], 1)
 
     def test_grouped_split_keeps_root_branches_together(self):
         rows = [

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import math
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from psse_env.providers import MatpowerDeploymentProviders
 from psse_env.providers.scenario_generator import (
@@ -41,6 +43,8 @@ def _quick_plan() -> dict[str, int]:
         "measurement+parameter": 1,
         "measurement+topology": 1,
         "measurement+hif": 1,
+        "three_phase_unbalance": 1,
+        "telemetry_no_disturbance": 1,
     }
 
 
@@ -89,20 +93,67 @@ class ScenarioConstructionTests(unittest.TestCase):
         indices = {fault["index"] for fault in scenario["true_measurement_errors"]}
         self.assertGreater(len(indices), 1)
 
+    def test_measurement_tolerance_uses_combined_estimator_reference_noise(self) -> None:
+        for family in ("measurement", "multi_measurement"):
+            with self.subTest(family=family):
+                scenario = self.by_family[family]
+                indices = [
+                    int(fault["index"])
+                    for fault in scenario["true_measurement_errors"]
+                ]
+                expected = max(
+                    1e-6,
+                    3.0
+                    * math.sqrt(2.0)
+                    * max(float(self.generator.noise_profile()[index]) for index in indices),
+                )
+                release_audit = scenario["release_audit"]
+                self.assertAlmostEqual(
+                    release_audit["tolerances"]["measurement_abs"], expected
+                )
+                self.assertEqual(
+                    release_audit["measurement_tolerance_basis"],
+                    "three_sigma_independent_estimator_and_reference_noise",
+                )
+
+    def test_measurement_release_targets_are_globally_clean(self) -> None:
+        for family in ("measurement", "multi_measurement"):
+            with self.subTest(family=family):
+                scenario = self.by_family[family]
+                statistic = self.generator._chi2_statistic(
+                    "case14", scenario["clean_measurements"]
+                )
+                self.assertLess(statistic, self.generator.chi2_limit)
+
+    def test_each_multi_measurement_fault_is_individually_detectable(self) -> None:
+        scenario = self.by_family["multi_measurement"]
+        for fault in scenario["true_measurement_errors"]:
+            probe = list(scenario["clean_measurements"])
+            probe[int(fault["index"])] = float(fault["observed"])
+            with self.subTest(index=fault["index"]):
+                self.assertGreaterEqual(
+                    self.generator._chi2_statistic("case14", probe),
+                    self.generator.chi2_limit,
+                )
+
     def test_parameter_scenario_carries_scans_and_stale_model(self) -> None:
         scenario = self.by_family["parameter"]
         self.assertEqual(scenario["case"], "case14")
+        self.assertEqual(scenario["network_case"], "case14")
         self.assertNotEqual(scenario["clean_case"], "case14")
         scans = scenario["metadata"]["parameter_scans"]
         self.assertTrue(scans["z_scans"] and scans["initial_states"])
         fault = scenario["true_parameter_errors"][0]
         self.assertIn("clean_r", fault)
         self.assertIn("clean_x", fault)
+        self.assertNotIn("parameter_correction_realizability", scenario)
+        self.assertNotIn("parameter_correction_realizability", scenario["metadata"])
 
     def test_topology_scenario_is_synthesized_with_derived_clean_case(self) -> None:
         scenario = self.by_family["topology"]
         fault = scenario["true_topology_errors"][0]
         self.assertEqual(scenario["case"], "case14")
+        self.assertEqual(scenario["network_case"], "case14")
         self.assertTrue(Path(scenario["clean_case"]).is_file())
         self.assertEqual(int(fault["expected_status"]), 0)
         self.assertEqual(int(fault["line_index1"]), int(fault["branch_row0"]) + 1)
@@ -132,6 +183,27 @@ class ScenarioConstructionTests(unittest.TestCase):
             scenario["unresolved_signatures"], ["hif_suspected_zero_sequence"]
         )
         self.assertTrue(scenario["hidden_truth"]["true_hif_errors"])
+
+    def test_unbalance_scenario_uses_distinct_observable_signature(self) -> None:
+        scenario = self.by_family["three_phase_unbalance"]
+        self.assertEqual(
+            scenario["unresolved_signatures"],
+            ["three_phase_unbalance vuf_threshold_exceeded"],
+        )
+        self.assertTrue(scenario["metadata"]["three_phase_voltages"])
+        self.assertTrue(scenario["hidden_truth"]["true_unbalance_errors"])
+        self.assertEqual(scenario["error_cardinality"], 1)
+
+    def test_telemetry_negative_control_is_balanced_and_truth_clean(self) -> None:
+        scenario = self.by_family["telemetry_no_disturbance"]
+        self.assertNotIn("unresolved_signatures", scenario)
+        self.assertEqual(scenario["error_cardinality"], 0)
+        self.assertEqual(scenario["source_tier"], "derived_negative_control")
+        for bus in scenario["metadata"]["three_phase_voltages"]:
+            self.assertEqual(len(set(bus["vln_pu"])), 1)
+            a, b, c = bus["ang_deg"]
+            self.assertAlmostEqual(a - b, 120.0)
+            self.assertAlmostEqual(c - a, 120.0)
 
     def test_tracked_hif_fallback_promotes_legacy_rows_to_scan_windows(self) -> None:
         generator = Round0ScenarioGenerator(
@@ -218,6 +290,104 @@ class ValidationGateTests(unittest.TestCase):
         self.assertEqual(
             caught.exception.reason, "corrected_configuration_still_anomalous"
         )
+
+    @patch(
+        "psse_env.providers.scenario_generator._param_correction_json",
+        return_value={"success": False, "error": "did not converge"},
+    )
+    def test_parameter_solver_failure_records_offline_metrics(self, mocked) -> None:
+        generator = Round0ScenarioGenerator(seed=5)
+        with self.assertRaises(ScenarioRejected) as caught:
+            generator._require_parameter_correction_realizable(
+                line_row0=6,
+                clean_r=0.01,
+                clean_x=0.05,
+                z_scans=[[0.0]],
+                initial_states=[[0.0]],
+                measurements=[0.0],
+                final_case_abs_tolerance=0.02,
+            )
+
+        self.assertEqual(
+            caught.exception.reason, "parameter_correction_unrealizable"
+        )
+        self.assertEqual(caught.exception.metrics["line_index1"], 7)
+        self.assertFalse(caught.exception.metrics["solver_success"])
+        mocked.assert_called_once()
+
+        generator._record_skip(
+            "measurement+parameter", "fixture", caught.exception
+        )
+        self.assertEqual(
+            generator.skipped[-1]["metrics"], caught.exception.metrics
+        )
+
+    @patch(
+        "psse_env.providers.scenario_generator._param_correction_json",
+        return_value={"success": True, "corrected_params": [0.05, 0.20]},
+    )
+    def test_parameter_estimate_must_meet_declared_final_tolerance(self, mocked) -> None:
+        generator = Round0ScenarioGenerator(seed=5)
+        with self.assertRaises(ScenarioRejected) as caught:
+            generator._require_parameter_correction_realizable(
+                line_row0=1,
+                clean_r=0.01,
+                clean_x=0.05,
+                z_scans=[[0.0]],
+                initial_states=[[0.0]],
+                measurements=[0.0],
+                final_case_abs_tolerance=0.02,
+            )
+
+        self.assertEqual(
+            caught.exception.reason,
+            "parameter_correction_outside_release_tolerance",
+        )
+        self.assertGreater(
+            caught.exception.metrics["max_abs_error"],
+            caught.exception.metrics["final_case_abs_tolerance"],
+        )
+        mocked.assert_called_once()
+
+    @patch(
+        "psse_env.providers.scenario_generator._param_correction_json",
+        return_value={"success": True, "corrected_params": [0.01, 0.05]},
+    )
+    def test_parameter_candidate_must_pass_observable_wls_criteria(self, mocked) -> None:
+        generator = Round0ScenarioGenerator(seed=5)
+        generator._parameter_gate_provider.run_wls = Mock(
+            return_value={
+                "target_fixed": False,
+                "target_metric_value": 4.2,
+                "target_metric_threshold": 3.0,
+                "chi_square_statistic": 100.0,
+                "chi_square_threshold": 130.0,
+                "post_action_resolved": True,
+                "globally_resolved": False,
+                "physical_constraints_ok": True,
+                "physical_evidence_scope": "observed_snapshot_topology_vm_rate_a",
+            }
+        )
+
+        with self.assertRaises(ScenarioRejected) as caught:
+            generator._require_parameter_correction_realizable(
+                line_row0=1,
+                clean_r=0.01,
+                clean_x=0.05,
+                z_scans=[[0.0]],
+                initial_states=[[0.0]],
+                measurements=[0.0],
+                final_case_abs_tolerance=0.02,
+            )
+
+        self.assertEqual(
+            caught.exception.reason,
+            "parameter_correction_candidate_unresolved",
+        )
+        self.assertFalse(caught.exception.metrics["target_fixed"])
+        self.assertTrue(caught.exception.metrics["post_action_resolved"])
+        self.assertTrue(caught.exception.metrics["physical_constraints_ok"])
+        mocked.assert_called_once()
 
 
 class WlsSignatureEmissionTests(unittest.TestCase):
@@ -640,6 +810,8 @@ class EpisodeTruthAuditTests(unittest.TestCase):
         scenario = {
             "scenario_id": "r0_x",
             "scenario_family": "measurement+topology",
+            "case": "case14",
+            "measurements": [0.0] * 122,
             "true_measurement_errors": [{"index": 100}],
             "true_topology_errors": [{"line_index1": 17}],
         }
@@ -654,12 +826,20 @@ class EpisodeTruthAuditTests(unittest.TestCase):
                 {
                     "source_action": {
                         "tool": "correct_measurements",
-                        "arguments": {"suspect_group": [25, 100]},
+                        "arguments": {"suspect_group": [100]},
                     }
                 },
             ]
         }
-        audit = audit_episode_against_truth(scenario, final_state, terminal=True)
+        audit = audit_episode_against_truth(
+            scenario,
+            final_state,
+            terminal=True,
+            active_physical_state={
+                "case": "case14",
+                "measurements": [0.0] * 122,
+            },
+        )
         self.assertFalse(audit["quarantined"])
 
 

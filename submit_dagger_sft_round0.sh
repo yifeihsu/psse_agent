@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=dagger_sft_round0
-#SBATCH --output=/scratch/yx3882/psse_agent/artifacts/logs/dagger_sft_%x_%j.log
-#SBATCH --error=/scratch/yx3882/psse_agent/artifacts/logs/dagger_sft_%x_%j.err
+#SBATCH --job-name=bc0_sft_round0
+#SBATCH --output=/scratch/yx3882/psse_agent/artifacts/logs/bc0_sft_%x_%j.log
+#SBATCH --error=/scratch/yx3882/psse_agent/artifacts/logs/bc0_sft_%x_%j.err
 #SBATCH --chdir=/scratch/yx3882/psse_agent
 #SBATCH --account=torch_pr_627_general
 #SBATCH --nodes=1
@@ -14,7 +14,7 @@
 #SBATCH --mail-user=yx3882@nyu.edu
 
 # Staged launcher for a newly generated, provenance-bound, canonical round-0
-# recovery-balanced DAgger aggregate.  The historical
+# recovery-balanced observable-expert BC aggregate.  The historical
 # data/round0_aggregate_20260719 directory is intentionally not the default:
 # it predates physical-root fingerprints, explicit eligibility, and current
 # registry/source provenance and must fail the release gate.
@@ -40,10 +40,10 @@ ALLOW_DOWNLOAD=${ALLOW_DOWNLOAD:-0}
 MODEL_NAME=${MODEL_NAME:-unsloth/gemma-4-31B-it}
 MODEL_REVISION=${MODEL_REVISION:-8a796db4df380b178065ed910849477ff0e99c87}
 AGGREGATE_DIR=${AGGREGATE_DIR:-data/round0_aggregate_release}
-TRAIN_FILE=${TRAIN_FILE:-$AGGREGATE_DIR/aggregate.train.jsonl}
+TRAIN_FILE=${TRAIN_FILE:-$AGGREGATE_DIR/aggregate.train_view.jsonl}
 VALIDATION_FILE=${VALIDATION_FILE:-$AGGREGATE_DIR/aggregate.validation.jsonl}
 TEST_FILE=${TEST_FILE:-$AGGREGATE_DIR/aggregate.test.jsonl}
-OUTPUT_DIR=${OUTPUT_DIR:-/scratch/yx3882/psse_agent/outputs/dagger_gemma4_31b_round0}
+OUTPUT_DIR=${OUTPUT_DIR:-/scratch/yx3882/psse_agent/outputs/bc0_gemma4_31b_round0}
 MAX_LENGTH=${MAX_LENGTH:-6144}
 ROWS_MIN=${ROWS_MIN:-1024}
 ROWS_MAX=${ROWS_MAX:-4096}
@@ -108,7 +108,7 @@ if [[ -f "$AGGREGATE_DIR/SHA256SUMS" ]]; then
     }
 fi
 
-echo "===== DAgger Gemma 4 round-0 stage ====="
+echo "===== BC0 Gemma 4 round-0 stage ====="
 echo "job:       ${SLURM_JOB_ID:-interactive}"
 echo "host:      $(hostname)"
 echo "stage:     $STAGE"

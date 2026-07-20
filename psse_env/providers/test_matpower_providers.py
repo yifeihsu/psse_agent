@@ -82,6 +82,68 @@ class WlsRunnerTests(unittest.TestCase):
         metrics = self.providers.run_wls(self.state)
         self.assertEqual(metrics["execution_status"], "failure")
 
+    def test_topology_target_uses_structural_status_not_branch_multiplier(self) -> None:
+        ppc = _load_python_case("case14")
+        ppc["branch"][0, 10] = 0.0
+
+        evidence = self.providers._target_evidence(
+            {
+                "tool": "correct_topology",
+                "arguments": {"branch_row0": 0, "status": 0},
+            },
+            residuals=[12.0],
+            lambda_values=[250.0, -175.0],
+            nl=len(ppc["branch"]),
+            candidate_case=ppc,
+        )
+
+        self.assertIsNotNone(evidence)
+        self.assertIs(evidence["target_fixed"], True)
+        self.assertEqual(evidence["target_metric_kind"], "branch_status_mismatch")
+        self.assertEqual(evidence["target_metric_value"], 0.0)
+        self.assertIs(evidence["topology_target_status_matches_requested"], True)
+        self.assertEqual(evidence["topology_target_branch_multiplier"], 250.0)
+        self.assertIs(evidence["topology_target_branch_multiplier_cleared"], False)
+
+    def test_topology_target_rejects_candidate_status_mismatch(self) -> None:
+        ppc = _load_python_case("case14")
+        ppc["branch"][0, 10] = 0.0
+
+        evidence = self.providers._target_evidence(
+            {
+                "tool": "correct_topology",
+                "arguments": {"branch_row0": 0, "status": 1},
+            },
+            residuals=[0.0],
+            lambda_values=[0.0, 0.0],
+            nl=len(ppc["branch"]),
+            candidate_case=ppc,
+        )
+
+        self.assertIsNotNone(evidence)
+        self.assertIs(evidence["target_fixed"], False)
+        self.assertEqual(evidence["target_metric_value"], 1.0)
+        self.assertIs(evidence["topology_target_status_matches_requested"], False)
+
+    def test_parameter_target_retains_branch_multiplier_evidence(self) -> None:
+        ppc = _load_python_case("case14")
+
+        evidence = self.providers._target_evidence(
+            {
+                "tool": "correct_parameters",
+                "arguments": {"branch_row0": 0},
+            },
+            residuals=[0.0],
+            lambda_values=[250.0, -175.0],
+            nl=len(ppc["branch"]),
+            candidate_case=ppc,
+        )
+
+        self.assertIsNotNone(evidence)
+        self.assertIs(evidence["target_fixed"], False)
+        self.assertEqual(evidence["target_metric_kind"], "max_abs_branch_multiplier")
+        self.assertEqual(evidence["target_metric_value"], 250.0)
+
     def test_hif_evidence_inventory_reports_only_completed_ladder(self) -> None:
         state = {
             **self.state,
@@ -259,7 +321,7 @@ class MeasurementContextTests(unittest.TestCase):
             "metadata": {},
         }
 
-    def test_context_flags_injected_error_and_supports_group_correction(self) -> None:
+    def test_context_preserves_singletons_before_bounded_fallbacks(self) -> None:
         metrics = self.providers.get_measurement_context(self.state)
         self.assertNotIn("execution_status", metrics)
         findings = metrics["measurement_findings"]
@@ -268,9 +330,353 @@ class MeasurementContextTests(unittest.TestCase):
         self.assertIn(self.error_index, flagged)
         supported = metrics["supported_corrections"]
         self.assertTrue(supported)
-        group = supported[0]["arguments"]["suspect_group"]
-        self.assertEqual(sorted(group), sorted(flagged))
+        self.assertEqual(len(supported[0]["arguments"]["suspect_group"]), 1)
+        self.assertIn(supported[0]["arguments"]["suspect_group"][0], flagged)
+        singleton_targets = {
+            proposal["arguments"]["suspect_group"][0]
+            for proposal in supported
+            if len(proposal["arguments"]["suspect_group"]) == 1
+        }
+        self.assertEqual(singleton_targets, flagged)
+        self.assertTrue(
+            all(
+                set(proposal["arguments"]["suspect_group"]) <= flagged
+                for proposal in supported
+            )
+        )
         self.assertEqual(supported[0]["tool"], "correct_measurements")
+
+    def test_context_appends_bounded_vm_group_after_singletons(self) -> None:
+        baseline = self.providers.get_measurement_context(self.state)
+        bounded_targets = sorted(
+            item["index0"] for item in baseline["measurement_findings"][:2]
+        )
+        with patch.object(
+            self.providers,
+            "_physical_vm_joint_targets",
+            return_value=bounded_targets,
+        ):
+            metrics = self.providers.get_measurement_context(self.state)
+
+        self.assertEqual(metrics["physical_vm_joint_targets"], bounded_targets)
+        groups = [
+            action["arguments"]["suspect_group"]
+            for action in metrics["supported_corrections"]
+        ]
+        self.assertIn(sorted(bounded_targets), groups)
+        self.assertEqual(len(groups[0]), 1)
+        finding_indices = {
+            item["index0"] for item in metrics["measurement_findings"]
+        }
+        self.assertLessEqual(
+            set(metrics["physical_vm_closure_targets"]), finding_indices
+        )
+        self.assertTrue(
+            any(
+                len(action["arguments"]["suspect_group"]) == 1
+                for action in metrics["supported_corrections"]
+            )
+        )
+
+    def test_coupled_fallback_contains_only_ranked_residual_targets(self) -> None:
+        metrics = self.providers.get_measurement_context(self.state)
+        findings = [item["index0"] for item in metrics["measurement_findings"]]
+
+        self.assertEqual(
+            metrics["coupled_measurement_fallback_targets"],
+            sorted(findings[:2]),
+        )
+        self.assertLessEqual(
+            set(metrics["coupled_measurement_fallback_targets"]), set(findings)
+        )
+
+    def test_in_bound_vm_residuals_never_enter_the_physical_joint_group(self) -> None:
+        solved = self.providers._solve(self.state)
+        bus = np.asarray(solved["ppc"]["bus"], dtype=float)
+        z = list(solved["z"])
+        for row in (0, 1):
+            z[row] = 0.5 * (float(bus[row, 11]) + float(bus[row, 12]))
+        solved = {**solved, "z": z}
+        evidence = [
+            {
+                "index0": row,
+                "channel": "Vm",
+                "channel_offset": row,
+                "value": self.providers.residual_threshold + 1.0,
+            }
+            for row in (0, 1)
+        ]
+
+        self.assertEqual(
+            self.providers._physical_vm_joint_targets(solved, evidence), []
+        )
+
+    def test_non_vm_outliers_never_enter_the_physical_joint_group(self) -> None:
+        solved = self.providers._solve(self.state)
+        pf_slice = solved["index_map"]["Pf"]
+        evidence = [
+            {
+                "index0": int(pf_slice.start) + row,
+                "channel": "Pf",
+                "channel_offset": row,
+                "value": self.providers.residual_threshold + 10.0,
+            }
+            for row in (0, 1)
+        ]
+
+        self.assertEqual(
+            self.providers._physical_vm_joint_targets(solved, evidence), []
+        )
+
+    def test_only_residual_ranked_out_of_bound_vm_members_enter_joint_group(
+        self,
+    ) -> None:
+        solved = self.providers._solve(self.state)
+        bus = np.asarray(solved["ppc"]["bus"], dtype=float)
+        z = list(solved["z"])
+        for row in (0, 1):
+            z[row] = (
+                float(bus[row, 11])
+                + self.providers.vm_bound_tolerance_pu
+                + 0.01
+            )
+        # A third out-of-bound Vm is intentionally absent from evidence and
+        # therefore cannot be added to the executable group.
+        z[2] = (
+            float(bus[2, 11])
+            + self.providers.vm_bound_tolerance_pu
+            + 0.01
+        )
+        solved = {**solved, "z": z}
+        evidence = [
+            {
+                "index0": row,
+                "channel": "Vm",
+                "channel_offset": row,
+                "value": self.providers.residual_threshold + 1.0,
+            }
+            for row in (0, 1)
+        ]
+
+        self.assertEqual(
+            self.providers._physical_vm_joint_targets(solved, evidence), [0, 1]
+        )
+
+    def test_context_can_jointly_refine_previously_accepted_targets(self) -> None:
+        state = copy.deepcopy(self.state)
+        state["policy_observation"] = {
+            "accepted_corrections": [
+                {
+                    "source_action": {
+                        "tool": "correct_measurements",
+                        "arguments": {"suspect_group": [self.error_index]},
+                    }
+                },
+                {
+                    "source_action": {
+                        "tool": "correct_measurements",
+                        "arguments": {"suspect_group": [self.error_index + 1]},
+                    }
+                },
+            ]
+        }
+
+        metrics = self.providers.get_measurement_context(state)
+
+        groups = [
+            proposal["arguments"]["suspect_group"]
+            for proposal in metrics["supported_corrections"]
+        ]
+        self.assertIn([self.error_index, self.error_index + 1], groups)
+        self.assertTrue(metrics["accepted_target_refinement"])
+
+    def test_context_defers_refinement_while_new_singleton_dominates(self) -> None:
+        state = copy.deepcopy(self.state)
+        accepted = [self.error_index + 1, self.error_index + 2]
+        state["policy_observation"] = {
+            "accepted_corrections": [
+                {
+                    "source_action": {
+                        "tool": "correct_measurements",
+                        "arguments": {"suspect_group": [index]},
+                    }
+                }
+                for index in accepted
+            ]
+        }
+
+        metrics = self.providers.get_measurement_context(state)
+
+        groups = [
+            proposal["arguments"]["suspect_group"]
+            for proposal in metrics["supported_corrections"]
+        ]
+        self.assertFalse(metrics["accepted_target_refinement"])
+        self.assertNotIn(accepted, groups)
+        self.assertIn(self.error_index, metrics["accepted_target_refinement_blocked_by"])
+        self.assertTrue(
+            metrics["accepted_target_refinement_dominant_target_unaccepted"]
+        )
+
+    def test_context_refines_accepted_targets_in_budgeted_ambiguity_band(self) -> None:
+        state = copy.deepcopy(self.state)
+        accepted = [self.error_index + 1, self.error_index + 2]
+        state["policy_observation"] = {
+            "remaining_budget": 8,
+            "accepted_corrections": [
+                {
+                    "source_action": {
+                        "tool": "correct_measurements",
+                        "arguments": {"suspect_group": [index]},
+                    }
+                }
+                for index in accepted
+            ],
+        }
+        statistic = self.providers.get_measurement_context(state)[
+            "chi_square_statistic"
+        ]
+
+        with patch(
+            "psse_env.providers.matpower.chi2_threshold",
+            return_value=statistic / 1.05,
+        ):
+            metrics = self.providers.get_measurement_context(state)
+
+        groups = [
+            proposal["arguments"]["suspect_group"]
+            for proposal in metrics["supported_corrections"]
+        ]
+        self.assertTrue(metrics["accepted_target_refinement"])
+        self.assertTrue(
+            metrics["accepted_target_refinement_near_threshold_override"]
+        )
+        self.assertAlmostEqual(
+            metrics["accepted_target_refinement_anomaly_ratio"], 1.05
+        )
+        self.assertEqual(
+            metrics["accepted_target_refinement_remaining_budget"], 8
+        )
+        self.assertIn(accepted, groups)
+
+    def test_context_does_not_repeat_an_accepted_joint_refinement(self) -> None:
+        state = copy.deepcopy(self.state)
+        accepted = [self.error_index + 1, self.error_index + 2]
+        state["policy_observation"] = {
+            "accepted_corrections": [
+                {
+                    "source_action": {
+                        "tool": "correct_measurements",
+                        "arguments": {"suspect_group": accepted},
+                    }
+                }
+            ]
+        }
+
+        metrics = self.providers.get_measurement_context(state)
+
+        groups = [
+            proposal["arguments"]["suspect_group"]
+            for proposal in metrics["supported_corrections"]
+        ]
+        self.assertFalse(metrics["accepted_target_refinement"])
+        self.assertTrue(metrics["accepted_target_refinement_already_accepted"])
+        self.assertNotIn(accepted, groups)
+
+    def test_context_reestimates_an_accepted_meter_after_branch_repair(self) -> None:
+        state = copy.deepcopy(self.state)
+        state["policy_observation"] = {
+            "accepted_corrections": [
+                {
+                    "source_action": {
+                        "tool": "correct_measurements",
+                        "arguments": {"suspect_group": [self.error_index]},
+                    }
+                },
+                {
+                    "source_action": {
+                        "tool": "correct_parameters",
+                        "arguments": {"line_index": 1},
+                    }
+                },
+            ]
+        }
+
+        metrics = self.providers.get_measurement_context(state)
+
+        groups = [
+            proposal["arguments"]["suspect_group"]
+            for proposal in metrics["supported_corrections"]
+        ]
+        self.assertTrue(metrics["accepted_target_refinement"])
+        self.assertEqual(
+            metrics["accepted_target_refinement_kind"],
+            "post_branch_model_reestimate",
+        )
+        self.assertIn([self.error_index], groups)
+
+    def test_post_branch_reestimate_excludes_colocated_flow_target(self) -> None:
+        state = copy.deepcopy(self.state)
+        direct_flow_index = 3 * 14
+        state["measurements"] = list(_fixture()["z_obs"])
+        state["measurements"][direct_flow_index] += 5.0
+        state["policy_observation"] = {
+            "accepted_corrections": [
+                {
+                    "source_action": {
+                        "tool": "correct_measurements",
+                        "arguments": {"suspect_group": [direct_flow_index]},
+                    }
+                },
+                {
+                    "source_action": {
+                        "tool": "correct_parameters",
+                        "arguments": {"line_index": 1},
+                    }
+                },
+            ]
+        }
+
+        metrics = self.providers.get_measurement_context(state)
+
+        groups = [
+            proposal["arguments"]["suspect_group"]
+            for proposal in metrics["supported_corrections"]
+        ]
+        self.assertFalse(metrics["accepted_target_refinement"])
+        self.assertIn(
+            direct_flow_index,
+            metrics["accepted_target_refinement_suppressed_colocated_indices"],
+        )
+        self.assertNotIn([direct_flow_index], groups)
+
+    def test_context_suppresses_direct_flow_residual_on_repaired_branch(self) -> None:
+        state = copy.deepcopy(self.state)
+        direct_flow_index = 3 * 14
+        state["measurements"] = list(_fixture()["z_obs"])
+        state["measurements"][direct_flow_index] += 5.0
+        state["policy_observation"] = {
+            "accepted_corrections": [
+                {
+                    "source_action": {
+                        "tool": "correct_parameters",
+                        "arguments": {"line_index": 1},
+                    }
+                }
+            ]
+        }
+
+        metrics = self.providers.get_measurement_context(state)
+
+        groups = [
+            proposal["arguments"]["suspect_group"]
+            for proposal in metrics["supported_corrections"]
+        ]
+        self.assertIn(
+            direct_flow_index,
+            metrics["suppressed_colocated_post_branch_indices"],
+        )
+        self.assertNotIn([direct_flow_index], groups)
 
     def test_lambda_contexts_expose_branch_targets(self) -> None:
         parameter = self.providers.get_parameter_context(self.state)
@@ -637,7 +1043,7 @@ class EndToEndEnvironmentTests(unittest.TestCase):
             state.get("candidate_disposition"),
             {"ACCEPT_FINAL", "ACCEPT_PARTIAL", "REJECT", "INCONCLUSIVE"},
         )
-        # The grouped correction must reduce the observable WLS objective.
+        # The strongest-residual singleton must reduce the observable WLS objective.
         metrics = verify_output["tool_metrics"]
         self.assertLess(
             metrics["wls_objective"], wls_output["tool_metrics"]["wls_objective"]

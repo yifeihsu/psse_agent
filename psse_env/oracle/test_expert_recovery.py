@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from psse_env.actions import action_signature
-from psse_env.oracle import ExpertPolicyOracle
+from psse_env.oracle import ExpertPolicyOracle, ProcessValidityOracle
 
 
 def _context_event(tool: str, state_id: str, corrections: list[dict]) -> dict:
@@ -269,6 +269,95 @@ class SequentialRecoveryTests(unittest.TestCase):
         self.assertNotIn("finalize_diagnosis", {action["tool"] for action in actions})
         self.assertFalse(self.oracle.process_oracle.check(state, final)["process_valid"])
 
+    def test_locally_fixed_rejected_branch_diversifies_to_meter_probe(self) -> None:
+        state_id = "r0_5e9369fe6e44:s0"
+        candidate_id = "r0_5e9369fe6e44:s1"
+        first_branch = {
+            "tool": "correct_parameters",
+            "arguments": {"state_id": state_id, "line_index": 20},
+        }
+        next_branch = {
+            "tool": "correct_parameters",
+            "arguments": {"state_id": state_id, "line_index": 17},
+        }
+        meter = {
+            "tool": "correct_measurements",
+            "arguments": {"state_id": state_id, "suspect_group": [16]},
+        }
+        history = [
+            _context_event(
+                "get_parameter_context", state_id, [first_branch, next_branch]
+            ),
+            {"action": first_branch, "tool_output": {"execution_status": "success"}},
+            {
+                "action": {
+                    "tool": "run_wls",
+                    "arguments": {"state_id": candidate_id},
+                },
+                "tool_output": {
+                    "execution_status": "success",
+                    "tool_metrics": {
+                        "state_id": candidate_id,
+                        "target_metric_value": 1.418,
+                        "target_metric_threshold": 3.0,
+                        "global_progress": 0.2889,
+                        "globally_resolved": False,
+                        "physical_constraints_ok": True,
+                    },
+                },
+            },
+            {
+                "action": {
+                    "tool": "rollback_state",
+                    "arguments": {"candidate_state_id": candidate_id},
+                },
+                "tool_output": {"execution_status": "success"},
+            },
+        ]
+        state = {
+            "active_state_id": state_id,
+            "last_tool": "rollback_state",
+            "unresolved_signatures": [
+                "wls_residual_outlier index=16 channel=Pinj",
+                "wls_branch_multiplier line_status_or_parameter line=20",
+            ],
+            "has_fresh_parameter_context": True,
+            "parameter_context_state_id": state_id,
+            "has_fresh_measurement_context": False,
+            "requires_measurement_context": True,
+            "rejected_hypotheses": [
+                {
+                    "candidate_parent_id": state_id,
+                    "candidate_state_id": candidate_id,
+                    "source_action": first_branch,
+                }
+            ],
+            "remaining_budget": 12,
+        }
+        oracle = ExpertPolicyOracle(
+            process_oracle=ProcessValidityOracle(
+                executor_hydrated_corrections=True
+            )
+        )
+
+        actions = oracle.next_actions(state, history)
+        self.assertEqual(actions[0]["tool"], "get_measurement_context")
+        self.assertNotIn(next_branch, actions)
+
+        measurement_event = _context_event(
+            "get_measurement_context", state_id, [meter]
+        )
+        history.append(measurement_event)
+        state.update(
+            {
+                "last_tool": "get_measurement_context",
+                "last_tool_output": measurement_event["tool_output"],
+                "has_fresh_measurement_context": True,
+                "measurement_context_state_id": state_id,
+            }
+        )
+        actions = oracle.next_actions(state, history)
+        self.assertEqual(actions[0], meter)
 
 class ReleaseMixedErrorRecoveryTests(unittest.TestCase):
     @staticmethod
@@ -315,6 +404,7 @@ class ReleaseMixedErrorRecoveryTests(unittest.TestCase):
                 env.step(action)
 
             self.assertTrue(env.is_terminal(), source["scenario_id"])
+            self.assertEqual(env.terminal_outcome, "resolved", source["scenario_id"])
             self.assertEqual(
                 len(correction_signatures),
                 len(set(correction_signatures)),
@@ -356,17 +446,31 @@ class ReleaseMixedErrorRecoveryTests(unittest.TestCase):
             self.assertTrue(actions)
             env.step(actions[0])
 
+        final_state = env.current_state()
         audit = audit_episode_against_truth(
             source,
-            env.current_state(),
+            final_state,
             terminal=env.is_terminal(),
             terminal_outcome=env.terminal_outcome,
+            active_physical_state=env.store.get_state(
+                str(final_state["active_state_id"])
+            ),
+            remaining_truth=None,
         )
         self.assertTrue(env.is_terminal())
         self.assertEqual(audit["problems"], [])
+        remaining_check = audit["checks"]["remaining_true_faults"]
+        self.assertEqual(remaining_check["status"], "passed")
+        self.assertEqual(remaining_check["derived_remaining_fault_count"], 0)
+        self.assertEqual(
+            remaining_check["evidence_source"],
+            "offline_scenario_truth_derivation",
+        )
 
-    def test_measurement_parameter_ambiguity_hands_off_before_budget_deadlock(self) -> None:
-        from psse_env.actions import RECOVERY_BUDGET_EXHAUSTED_REQUEST
+    def test_measurement_parameter_ambiguity_resolves_with_exact_targets(self) -> None:
+        from psse_env.examples.generate_round0_aggregate import (
+            audit_episode_against_truth,
+        )
         from psse_env.providers import MatpowerDeploymentProviders
         from psse_env.providers.scenario_generator import Round0ScenarioGenerator
         from psse_env.transactional_env import TransactionalPSSEEnv
@@ -389,12 +493,20 @@ class ReleaseMixedErrorRecoveryTests(unittest.TestCase):
             env.step(actions[0])
 
         self.assertTrue(env.is_terminal())
-        self.assertFalse(env.current_state()["has_open_candidate"])
-        self.assertEqual(env.terminal_outcome, "operator_escalation")
-        self.assertEqual(
-            env.history[-1]["action"]["arguments"]["request"],
-            RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+        final_state = env.current_state()
+        self.assertFalse(final_state["has_open_candidate"])
+        self.assertEqual(env.terminal_outcome, "resolved")
+        audit = audit_episode_against_truth(
+            source,
+            final_state,
+            terminal=True,
+            terminal_outcome=env.terminal_outcome,
+            active_physical_state=env.store.get_state(
+                str(final_state["active_state_id"])
+            ),
+            remaining_truth=None,
         )
+        self.assertEqual(audit["problems"], [])
 
 
 if __name__ == "__main__":

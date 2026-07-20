@@ -75,6 +75,7 @@ class CandidateQualityOracle:
         min_branch_target_progress: float = 0.80,
         min_branch_global_progress: float = 0.50,
         max_branch_target_threshold_ratio: float = 1.25,
+        min_topology_structural_global_progress: float = 0.95,
         max_new_violations: int = 0,
         mode: str = "auto",
         case_differ: Any = None,
@@ -88,6 +89,9 @@ class CandidateQualityOracle:
         self.min_branch_global_progress = float(min_branch_global_progress)
         self.max_branch_target_threshold_ratio = float(
             max_branch_target_threshold_ratio
+        )
+        self.min_topology_structural_global_progress = float(
+            min_topology_structural_global_progress
         )
         self.max_new_violations = int(max_new_violations)
         if mode not in {"auto", "synthetic", "deployment"}:
@@ -149,6 +153,27 @@ class CandidateQualityOracle:
             and global_progress is not None
             and global_progress >= self.min_branch_global_progress
         )
+        topology_multiplier = _optional_float(
+            verification.get("topology_target_branch_multiplier")
+        )
+        topology_multiplier_threshold = _optional_float(
+            verification.get("topology_target_branch_multiplier_threshold")
+        )
+        topology_structural_target_ambiguous = bool(
+            not synthetic_truth
+            and action_family == "topology"
+            and target_fixed is True
+            and verification.get("topology_target_status_matches_requested") is True
+            and topology_multiplier is not None
+            and topology_multiplier_threshold is not None
+            and topology_multiplier_threshold > 0.0
+            and topology_multiplier
+            > self.max_branch_target_threshold_ratio * topology_multiplier_threshold
+            and (
+                global_progress is None
+                or global_progress < self.min_topology_structural_global_progress
+            )
+        )
         remaining_true_faults = self._remaining_true_faults(
             action, target_fixed, verification, truth, candidate_meta, parent, candidate
         )
@@ -199,6 +224,22 @@ class CandidateQualityOracle:
             disposition = CandidateDisposition.REJECT
             progress_class = "ambiguous_cross_family_measurement_cleanup"
             rationale.append("independent_measurement_evidence_missing")
+        elif topology_structural_target_ambiguous:
+            # Exact status equality proves that the requested topology edit
+            # landed, but it does not by itself identify the correct outage.
+            # When the same row still carries a non-marginal multiplier, only
+            # an exceptional global reduction supports retaining it as a
+            # sequential partial repair.  This rejects healthy-line outages
+            # that merely absorb part of a mixed-error residual pattern.
+            disposition = CandidateDisposition.REJECT
+            progress_class = "ambiguous_structural_topology_target"
+            rationale.extend(
+                [
+                    "topology_status_applied",
+                    "topology_multiplier_not_cleared",
+                    "topology_global_progress_below_structural_threshold",
+                ]
+            )
         elif (
             target_fixed is True
             and global_resolved is False

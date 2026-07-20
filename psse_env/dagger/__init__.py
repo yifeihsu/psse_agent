@@ -19,7 +19,19 @@ from .dataset_builder import (
     validate_tool_schemas,
     write_jsonl,
 )
-from .evaluator import EvaluationResult, RecoveryMetrics, recovery_score
+from .evaluator import (
+    ClosedLoopEvaluator,
+    ClosedLoopRolloutEvaluator,
+    EpisodeEvaluation,
+    EvaluationResult,
+    RecoveryMetrics,
+    evaluate_closed_loop,
+    evaluate_closed_loop_rollouts,
+    evaluate_rollout_suites,
+    recovery_score,
+    summarize_episode_evaluations,
+    write_evaluation_artifact,
+)
 from .policy_adapter import LocalAliasPolicyAdapter
 from .replay_buffer import BalancedReplayBuffer
 from .rollout_collector import (
@@ -43,8 +55,11 @@ __all__ = [
     "CostBasedActionRanker",
     "CostWeights",
     "CounterfactualGenerator",
+    "ClosedLoopEvaluator",
+    "ClosedLoopRolloutEvaluator",
     "DaggerRolloutCollector",
     "DaggerTrainer",
+    "EpisodeEvaluation",
     "EvaluationResult",
     "LocalAliasPolicyAdapter",
     "RecoveryMetrics",
@@ -56,6 +71,9 @@ __all__ = [
     "audit_teacher_realizability",
     "bind_controller_action",
     "evaluate_top_l_actions",
+    "evaluate_closed_loop",
+    "evaluate_closed_loop_rollouts",
+    "evaluate_rollout_suites",
     "examples_to_chat_sft",
     "grouped_scenario_split",
     "load_jsonl",
@@ -64,6 +82,8 @@ __all__ = [
     "recovery_score",
     "run_dagger",
     "to_pairwise_examples",
+    "summarize_episode_evaluations",
+    "write_evaluation_artifact",
     "validate_policy_payload",
     "validate_policy_provenance",
     "validate_tool_schemas",

@@ -40,6 +40,11 @@ from .actions import (
 )
 from .oracle.candidate_quality import CandidateAssessment, CandidateDisposition, CandidateQualityOracle
 from .oracle.expert_types import matching_evidence_codes
+from .oracle.measurement_recovery_evidence import (
+    accepted_measurement_indices,
+    eligible_joint_measurement_targets,
+    measurement_target_indices,
+)
 from .oracle.process_validity import ProcessValidityOracle
 from .state_store import (
     CandidateLifecycle,
@@ -472,7 +477,6 @@ class TransactionalPSSEEnv:
             "remaining_true_faults",
             "remaining_true_fault_count",
             "remaining_fault_count",
-            "unresolved_signatures",
         }
         truth_was_supplied = bool(scenario.get("hidden_truth"))
         for key in truth_keys:
@@ -1020,6 +1024,12 @@ class TransactionalPSSEEnv:
                 verification,
                 str(candidate.get("candidate_disposition") or ""),
                 min_partial_global_progress=partial_global_progress_floor,
+                min_topology_structural_global_progress=(
+                    self.candidate_quality_oracle.min_topology_structural_global_progress
+                ),
+                max_branch_target_threshold_ratio=(
+                    self.candidate_quality_oracle.max_branch_target_threshold_ratio
+                ),
             )
         )
         return {
@@ -1389,6 +1399,8 @@ class TransactionalPSSEEnv:
         supported_recovery_targets: list[str] = []
         exhausted_recovery_targets: set[str] = set()
         safety_blocked_recovery_targets: set[str] = set()
+        conditional_measurement_targets: dict[str, set[int]] = {}
+        eligible_joint_measurement_signature: str | None = None
         outstanding_recovery_targets: list[str] = []
         missing_required_contexts: list[str] = []
         if request == HIF_DIAGNOSTICS_EXHAUSTED_REQUEST:
@@ -1530,6 +1542,7 @@ class TransactionalPSSEEnv:
                 if not isinstance(raw_supported, (list, tuple)):
                     missing.append(f"{context_tool}_supported_corrections_missing")
                     continue
+                validated_supported: list[dict[str, Any]] = []
                 for raw_action in raw_supported:
                     if not isinstance(raw_action, Mapping):
                         missing.append(f"{context_tool}_supported_correction_malformed")
@@ -1546,7 +1559,51 @@ class TransactionalPSSEEnv:
                     if signature is None:
                         missing.append(f"{context_tool}_supported_correction_malformed")
                         continue
+                    validated_supported.append(normalized_supported)
                     supported_recovery_targets.append(signature)
+                if context_tool == GET_MEASUREMENT_CONTEXT:
+                    accepted_indices = accepted_measurement_indices(summary)
+                    eligible_new_targets = eligible_joint_measurement_targets(
+                        summary,
+                        self.history,
+                        active_id=active_id,
+                        supported_actions=validated_supported,
+                        accepted_indices=accepted_indices,
+                    )
+                    eligible_targets = accepted_indices | set(eligible_new_targets)
+                    if len(eligible_targets) >= 2:
+                        eligible_joint_measurement_signature = (
+                            _semantic_correction_signature(
+                                {
+                                    "tool": CORRECT_MEASUREMENTS,
+                                    "arguments": {
+                                        "state_id": active_id,
+                                        "suspect_group": sorted(eligible_targets),
+                                    },
+                                }
+                            )
+                        )
+                    refinement_ready = (
+                        bound_event[1].get("accepted_target_refinement") is True
+                    )
+                    for supported_action in validated_supported:
+                        targets = measurement_target_indices(supported_action)
+                        if len(targets) < 2:
+                            continue
+                        is_immediate_refinement = bool(
+                            refinement_ready
+                            and accepted_indices
+                            and targets == accepted_indices
+                        )
+                        if is_immediate_refinement:
+                            continue
+                        conditional_signature = _semantic_correction_signature(
+                            supported_action
+                        )
+                        if conditional_signature is not None:
+                            conditional_measurement_targets[
+                                conditional_signature
+                            ] = targets - accepted_indices
 
             for record in summary.get("rejected_hypotheses") or []:
                 if not isinstance(record, Mapping):
@@ -1602,6 +1659,34 @@ class TransactionalPSSEEnv:
             supported_recovery_targets = list(
                 dict.fromkeys(supported_recovery_targets)
             )
+            supported_recovery_target_set = set(supported_recovery_targets)
+            for signature, new_targets in conditional_measurement_targets.items():
+                if signature == eligible_joint_measurement_signature:
+                    continue
+                singleton_signatures = {
+                    _semantic_correction_signature(
+                        {
+                            "tool": CORRECT_MEASUREMENTS,
+                            "arguments": {
+                                "state_id": active_id,
+                                "suspect_group": [target],
+                            },
+                        }
+                    )
+                    for target in new_targets
+                }
+                # A conditional group is unavailable only after every new
+                # constituent singleton is both provider-supported and
+                # exhausted.  Before then the ordinary singleton inventory
+                # keeps a handoff fail-closed.  If the shared evidence gate
+                # admits the exact group, it remains outstanding until tried.
+                if (
+                    singleton_signatures
+                    and None not in singleton_signatures
+                    and singleton_signatures <= supported_recovery_target_set
+                    and singleton_signatures <= exhausted_recovery_targets
+                ):
+                    safety_blocked_recovery_targets.add(signature)
             accepted_measurement_partial = any(
                 safe_normalize_action(
                     item.get("source_action") or item.get("action") or {}
@@ -2434,6 +2519,12 @@ class TransactionalPSSEEnv:
                     metrics,
                     assessment.disposition.value,
                     min_partial_global_progress=partial_global_progress_floor,
+                    min_topology_structural_global_progress=(
+                        self.candidate_quality_oracle.min_topology_structural_global_progress
+                    ),
+                    max_branch_target_threshold_ratio=(
+                        self.candidate_quality_oracle.max_branch_target_threshold_ratio
+                    ),
                 )
                 if decision_missing:
                     return self._standard_output(
@@ -2688,6 +2779,8 @@ class TransactionalPSSEEnv:
         disposition: str,
         *,
         min_partial_global_progress: float = 0.20,
+        min_topology_structural_global_progress: float = 0.95,
+        max_branch_target_threshold_ratio: float = 1.25,
     ) -> list[str]:
         """Require observable metrics that distinguish the proposed disposition."""
         disposition = str(disposition or "")
@@ -2701,6 +2794,10 @@ class TransactionalPSSEEnv:
 
         target_progress = number("target_progress")
         global_progress = number("global_progress")
+        topology_multiplier = number("topology_target_branch_multiplier")
+        topology_multiplier_threshold = number(
+            "topology_target_branch_multiplier_threshold"
+        )
         score = number("remaining_anomaly_score")
         threshold = number("anomaly_threshold")
         if threshold is None:
@@ -2776,6 +2873,19 @@ class TransactionalPSSEEnv:
                     metrics.get("target_fixed") is True
                     and global_progress is not None
                     and global_progress < float(min_partial_global_progress)
+                )
+                or (
+                    metrics.get("target_fixed") is True
+                    and metrics.get("topology_target_status_matches_requested") is True
+                    and topology_multiplier is not None
+                    and topology_multiplier_threshold is not None
+                    and topology_multiplier_threshold > 0.0
+                    and topology_multiplier
+                    > float(max_branch_target_threshold_ratio)
+                    * topology_multiplier_threshold
+                    and global_progress is not None
+                    and global_progress
+                    < float(min_topology_structural_global_progress)
                 )
                 or (violations is not None and violations > 0)
             )

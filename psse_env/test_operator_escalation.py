@@ -6,6 +6,7 @@ from psse_env.actions import (
     ASK_FOR_MORE_EVIDENCE,
     CORRECT_MEASUREMENTS,
     RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+    RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
 )
 from psse_env.oracle import ExpertPolicyOracle
 from psse_env.providers import MatpowerDeploymentProviders
@@ -55,6 +56,91 @@ class OperatorEscalationContractTests(unittest.TestCase):
         env.reset(scenario)
         return env, oracle
 
+    def _joint_fallback_audit_fixture(
+        self,
+        *,
+        second_physical_ok: bool,
+        second_violation_index: int | None = None,
+    ):
+        env, _ = self._environment(seed=31)
+        active_id = env.current_state()["active_state_id"]
+        env.step({"tool": "run_wls", "arguments": {"state_id": active_id}})
+        env.step(
+            {"tool": "get_measurement_context", "arguments": {"state_id": active_id}}
+        )
+        singleton_actions = [
+            {
+                "tool": CORRECT_MEASUREMENTS,
+                "arguments": {"state_id": active_id, "suspect_group": [target]},
+            }
+            for target in (67, 69)
+        ]
+        joint_action = {
+            "tool": CORRECT_MEASUREMENTS,
+            "arguments": {"state_id": active_id, "suspect_group": [67, 69]},
+        }
+        context_metrics = env.history[-1]["tool_output"]["tool_metrics"]
+        context_metrics["supported_corrections"] = [
+            *singleton_actions,
+            joint_action,
+        ]
+        context_metrics["physical_vm_joint_targets"] = []
+        context_metrics["physical_vm_closure_targets"] = []
+        context_metrics["coupled_measurement_fallback_targets"] = [67, 69]
+        context_metrics["accepted_target_refinement"] = False
+
+        candidate_ids = [f"{active_id}:joint-proof-{offset}" for offset in (1, 2)]
+        env.context_flags["rejected_hypotheses"] = [
+            {
+                "candidate_parent_id": active_id,
+                "candidate_state_id": candidate_id,
+                "source_action": source_action,
+            }
+            for candidate_id, source_action in zip(
+                candidate_ids, singleton_actions, strict=True
+            )
+        ]
+        for offset, candidate_id in enumerate(candidate_ids):
+            physical_ok = offset == 0 or second_physical_ok
+            violations = (
+                []
+                if physical_ok or second_violation_index is None
+                else [
+                    {
+                        "type": "bus_voltage_out_of_bounds",
+                        "measurement_index0": second_violation_index,
+                    }
+                ]
+            )
+            env.history.append(
+                {
+                    "action": {
+                        "tool": "run_wls",
+                        "arguments": {"state_id": candidate_id},
+                    },
+                    "tool_output": {
+                        "execution_status": "success",
+                        "tool_metrics": {
+                            "target_metric_value": 0.01,
+                            "target_metric_threshold": 3.0,
+                            "target_progress": 0.99,
+                            "global_progress": 0.15,
+                            "globally_resolved": False,
+                            "physical_constraints_ok": physical_ok,
+                            "physical_bound_violations": violations,
+                        },
+                    },
+                }
+            )
+        handoff = {
+            "tool": ASK_FOR_MORE_EVIDENCE,
+            "arguments": {
+                "state_id": active_id,
+                "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+            },
+        }
+        return env, handoff, joint_action
+
     def test_premature_handoff_fails_closed_and_does_not_terminalize(self) -> None:
         env, _ = self._environment()
         action = {
@@ -99,6 +185,55 @@ class OperatorEscalationContractTests(unittest.TestCase):
             output["error_detail"],
         )
         self.assertFalse(env.is_terminal())
+
+    def test_safe_low_progress_joint_remains_outstanding_until_tried(self) -> None:
+        env, handoff, joint_action = self._joint_fallback_audit_fixture(
+            second_physical_ok=True
+        )
+
+        before = env._operator_escalation_audit(handoff)
+
+        joint_signature = _semantic_correction_signature(joint_action)
+        self.assertFalse(before["sufficient"])
+        self.assertIn(
+            "same_state_supported_corrections_unexhausted", before["missing"]
+        )
+        self.assertEqual(
+            before["ledger"]["outstanding_recovery_targets"], [joint_signature]
+        )
+        self.assertNotIn(
+            joint_signature,
+            before["ledger"]["safety_blocked_recovery_targets"],
+        )
+
+        active_id = env.current_state()["active_state_id"]
+        env.context_flags["rejected_hypotheses"].append(
+            {
+                "candidate_parent_id": active_id,
+                "candidate_state_id": f"{active_id}:joint-tried",
+                "source_action": joint_action,
+            }
+        )
+        after = env._operator_escalation_audit(handoff)
+
+        self.assertTrue(after["sufficient"], after["missing"])
+        self.assertEqual(after["ledger"]["outstanding_recovery_targets"], [])
+
+    def test_uncovered_physical_violation_safety_blocks_conditional_joint(self) -> None:
+        env, handoff, joint_action = self._joint_fallback_audit_fixture(
+            second_physical_ok=False,
+            second_violation_index=999,
+        )
+
+        audit = env._operator_escalation_audit(handoff)
+
+        joint_signature = _semantic_correction_signature(joint_action)
+        self.assertTrue(audit["sufficient"], audit["missing"])
+        self.assertEqual(audit["ledger"]["outstanding_recovery_targets"], [])
+        self.assertIn(
+            joint_signature,
+            audit["ledger"]["safety_blocked_recovery_targets"],
+        )
 
     def test_handoff_rejects_unbound_supported_correction_inventory(self) -> None:
         env, _ = self._environment()
@@ -234,7 +369,10 @@ class OperatorEscalationContractTests(unittest.TestCase):
         self.assertEqual(env.terminal_outcome, "operator_escalation")
 
     def test_unbound_inventory_response_cannot_terminalize(self) -> None:
-        env, oracle = self._environment()
+        # Seed 31 is the deterministic safe-handoff episode.  The former
+        # default fixture now resolves autonomously, so it cannot exercise an
+        # unbound escalation-provider response.
+        env, oracle = self._environment(seed=31)
         escalation = None
         for _ in range(24):
             actions = oracle.next_actions(env.get_oracle_state(env.history), env.history)

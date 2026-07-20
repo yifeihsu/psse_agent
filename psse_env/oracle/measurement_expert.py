@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from typing import Any, Mapping, Sequence
 
 from psse_env.actions import (
@@ -19,6 +18,11 @@ from psse_env.oracle.expert_types import (
     policy_state_view,
     state_value,
 )
+from psse_env.oracle.measurement_recovery_evidence import (
+    accepted_measurement_indices,
+    eligible_joint_measurement_targets,
+    measurement_target_indices,
+)
 
 
 class MeasurementExpert:
@@ -26,6 +30,9 @@ class MeasurementExpert:
 
     source_expert = "measurement_expert"
     _TOOLS = {GET_MEASUREMENT_CONTEXT, CORRECT_MEASUREMENTS}
+    _COUPLED_REFINEMENT_MAX_ANOMALY_RATIO = 1.10
+    _COUPLED_REFINEMENT_MIN_REMAINING_BUDGET = 8
+    _REJECTED_TARGET_JOINT_MIN_REMAINING_BUDGET = 4
 
     def propose(
         self,
@@ -68,6 +75,9 @@ class MeasurementExpert:
         measurement_dominant = bool(
             matching_evidence_codes(measurement_codes, "dominant")
         )
+        homogeneous_multi_residual_signal = self._homogeneous_residual_channel(
+            measurement_codes
+        )
         branch_rejected = self._rejected_branch_hypothesis(
             state, CORRECT_PARAMETERS
         ) and self._rejected_branch_hypothesis(state, CORRECT_TOPOLOGY)
@@ -85,6 +95,10 @@ class MeasurementExpert:
             )
         )
         partial_measurement = self._accepted_partial_measurement(state)
+        accepted_measurement_indices = self._accepted_measurement_indices(state)
+        accepted_target_refinement = self._has_fresh_accepted_target_refinement(
+            history, active_id=active_id
+        )
         # After a partial measurement commit, any still-current branch evidence
         # must be resolved (or explicitly exhausted) before another measurement
         # correction may use that model's residuals.  Otherwise the second
@@ -93,18 +107,32 @@ class MeasurementExpert:
             partial_measurement and branch_codes and not measurement_dominant
         )
         proposals: list[ExpertActionProposal] = []
-
-        for action in normalized_hint_actions(
+        normalized_measurement_hints = normalized_hint_actions(
             list(oracle_hints or ()),
             allowed_tools={CORRECT_MEASUREMENTS},
             active_state_id=active_id,
-        ):
-            if action["tool"] == CORRECT_MEASUREMENTS and not measurement_hint_allowed:
-                continue
+        )
+
+        for action in normalized_measurement_hints:
+            if action["tool"] == CORRECT_MEASUREMENTS:
+                target_indices = self._measurement_target_indices(action)
+                is_observable_refinement = bool(
+                    accepted_target_refinement
+                    and target_indices
+                    and target_indices == accepted_measurement_indices
+                )
+                # Provider-declared multi-target fallbacks are executable
+                # context contracts, not immediate labels.  They become an
+                # expert proposal only after the same-state rejected-candidate
+                # proof below establishes the exact bounded union.  The sole
+                # immediate grouped route is a provider-flagged refinement of
+                # already accepted targets.
+                if len(target_indices) >= 2 and not is_observable_refinement:
+                    continue
+                if not measurement_hint_allowed and not is_observable_refinement:
+                    continue
             if (
                 action["tool"] == CORRECT_MEASUREMENTS
-                and branch_codes
-                and not measurement_dominant
                 and self._measurement_target_indices(action)
                 & colocated_post_branch_indices
             ):
@@ -117,14 +145,70 @@ class MeasurementExpert:
                 ExpertActionProposal(
                     action=action,
                     source_expert=self.source_expert,
-                    confidence=0.98,
-                    evidence_codes=["oracle_action_hint", "measurement_family"],
+                    confidence=0.995 if is_observable_refinement else 0.98,
+                    evidence_codes=(
+                        [
+                            "observable_accepted_target_refinement",
+                            "same_state_measurement_context",
+                        ]
+                        if is_observable_refinement
+                        else ["oracle_action_hint", "measurement_family"]
+                    ),
                     admissible=(
                         action["tool"] != CORRECT_MEASUREMENTS
                         or not requires_context
                         or has_context
                     ),
                     estimated_immediate_risk=0.12 if action["tool"] == CORRECT_MEASUREMENTS else 0.02,
+                )
+            )
+
+        # Two individually verified singleton corrections can each fix their
+        # local residual while missing the 20% partial-progress floor because
+        # their errors are coupled.  Once both candidates have been rolled
+        # back, retry only those same provider-supported targets as a joint
+        # transaction, jointly re-estimating any previously accepted targets.
+        # This does not admit an unsupported meter: each new target must have
+        # target-local success, positive global progress, complete physical
+        # safety evidence, and still-current same-state context support, while
+        # every other target was already transactionally accepted.  The normal
+        # candidate-quality gate and offline exact-target audit remain
+        # authoritative for the joint candidate.
+        joint_rejected_targets = self._joint_locally_fixed_rejected_targets(
+            state,
+            history,
+            active_id=active_id,
+            supported_actions=normalized_measurement_hints,
+            accepted_indices=accepted_measurement_indices,
+        )
+        joint_retry_targets = sorted(
+            accepted_measurement_indices | set(joint_rejected_targets)
+        )
+        if (
+            measurement_hint_allowed
+            and has_context
+            and joint_rejected_targets
+            and not (set(joint_retry_targets) & colocated_post_branch_indices)
+        ):
+            proposals.append(
+                ExpertActionProposal(
+                    action={
+                        "tool": CORRECT_MEASUREMENTS,
+                        "arguments": {
+                            "state_id": active_id,
+                            "suspect_group": joint_retry_targets,
+                        },
+                    },
+                    source_expert=self.source_expert,
+                    confidence=0.997,
+                    evidence_codes=[
+                        "locally_fixed_singletons_rejected",
+                        "physical_safety_verified_per_target",
+                        "previously_accepted_targets_jointly_reestimated",
+                        "same_state_joint_retry",
+                    ],
+                    admissible=True,
+                    estimated_immediate_risk=0.10,
                 )
             )
 
@@ -152,9 +236,16 @@ class MeasurementExpert:
         # never reuse the parent state's context after an ACCEPT_PARTIAL
         # commit: that context is stale even when its old findings still appear
         # in bounded history.
+        near_threshold_refinement = self._near_threshold_refinement_needed(
+            state, accepted_measurement_indices
+        )
         partial_refresh = bool(
             partial_measurement
-            and (not branch_codes or measurement_dominant)
+            and (
+                not branch_codes
+                or measurement_dominant
+                or near_threshold_refinement
+            )
         )
         if (measurement_signal or partial_refresh) and not has_context and active_id:
             evidence = ["measurement_context_missing"]
@@ -167,6 +258,8 @@ class MeasurementExpert:
                         "fresh_post_commit_context_required",
                     ]
                 )
+            if near_threshold_refinement:
+                evidence.append("near_threshold_accepted_target_refinement")
             proposals.append(
                 ExpertActionProposal(
                     action={"tool": GET_MEASUREMENT_CONTEXT, "arguments": {"state_id": active_id}},
@@ -174,7 +267,10 @@ class MeasurementExpert:
                     confidence=(
                         1.0
                         if partial_refresh
-                        else dominance_confidence(0.87, measurement_codes)
+                        else max(
+                            dominance_confidence(0.87, measurement_codes),
+                            0.89 if homogeneous_multi_residual_signal else 0.0,
+                        )
                     ),
                     evidence_codes=evidence,
                     admissible=True,
@@ -197,6 +293,56 @@ class MeasurementExpert:
                 )
             )
         return proposals
+
+    @staticmethod
+    def _homogeneous_residual_channel(codes: Sequence[Any]) -> bool:
+        """Return true for at least three residual findings on one channel."""
+        channels: list[str] = []
+        for code in codes:
+            text = str(code)
+            marker = "channel="
+            if marker not in text:
+                continue
+            channel = text.rsplit(marker, 1)[1].split(maxsplit=1)[0].strip()
+            if channel:
+                channels.append(channel)
+        return len(channels) >= 3 and len(set(channels)) == 1
+
+    @classmethod
+    def _near_threshold_refinement_needed(
+        cls, state: Any, accepted_indices: set[int]
+    ) -> bool:
+        if len(accepted_indices) < 2:
+            return False
+        try:
+            score = float(state_value(state, "remaining_anomaly_score", 0.0))
+            budget = int(state_value(state, "remaining_budget", 0))
+        except (TypeError, ValueError, OverflowError):
+            return False
+        return bool(
+            1.0 <= score <= cls._COUPLED_REFINEMENT_MAX_ANOMALY_RATIO
+            and budget >= cls._COUPLED_REFINEMENT_MIN_REMAINING_BUDGET
+        )
+
+    @classmethod
+    def _joint_locally_fixed_rejected_targets(
+        cls,
+        state: Any,
+        history: Sequence[Mapping[str, Any]],
+        *,
+        active_id: Any,
+        supported_actions: Sequence[Mapping[str, Any]],
+        accepted_indices: set[int],
+    ) -> list[int]:
+        """Return an evidence-closed rejected target set for one bounded retry."""
+        return eligible_joint_measurement_targets(
+            state,
+            history,
+            active_id=active_id,
+            supported_actions=supported_actions,
+            accepted_indices=accepted_indices,
+            min_remaining_budget=cls._REJECTED_TARGET_JOINT_MIN_REMAINING_BUDGET,
+        )
 
     @staticmethod
     def _rejected_branch_hypothesis(state: Any, tool: str) -> bool:
@@ -227,6 +373,40 @@ class MeasurementExpert:
             # operationally partial; no privileged disposition is needed.
             if not state_value(state, "no_material_anomaly_remaining", False):
                 return True
+        return False
+
+    @classmethod
+    def _accepted_measurement_indices(cls, state: Any) -> set[int]:
+        return accepted_measurement_indices(state)
+
+    @staticmethod
+    def _has_fresh_accepted_target_refinement(
+        history: Sequence[Mapping[str, Any]], *, active_id: Any
+    ) -> bool:
+        """Recognize the provider's same-state observable joint-refinement gate."""
+        if active_id is None:
+            return False
+        for event in reversed(history):
+            if not isinstance(event, Mapping):
+                continue
+            action = event.get("action") or event.get("executed_action") or {}
+            if history_action_tool(action) != GET_MEASUREMENT_CONTEXT:
+                continue
+            arguments = action.get("arguments") if isinstance(action, Mapping) else None
+            arguments = arguments if isinstance(arguments, Mapping) else {}
+            if arguments.get("state_id") is not None and str(
+                arguments["state_id"]
+            ) != str(active_id):
+                continue
+            output = event.get("tool_output")
+            if not isinstance(output, Mapping) or output.get("execution_status") != "success":
+                return False
+            metrics = output.get("tool_metrics")
+            if not isinstance(metrics, Mapping):
+                return False
+            if str(metrics.get("state_id")) != str(active_id):
+                return False
+            return metrics.get("accepted_target_refinement") is True
         return False
 
     @staticmethod
@@ -268,16 +448,12 @@ class MeasurementExpert:
         """Return direct-flow measurement targets co-located with repaired rows."""
         if not accepted_branch_rows or active_id is None:
             return set()
-        signature_rows: set[int] = set()
-        for signature in state_value(state, "unresolved_signatures", []) or []:
-            if "wls_branch_multiplier" not in str(signature):
-                continue
-            match = re.search(r"(?:^|\s)line=(\d+)(?:\s|$)", str(signature))
-            if match:
-                signature_rows.add(int(match.group(1)) - 1)
-        candidate_rows = accepted_branch_rows & signature_rows
-        if not candidate_rows:
-            return set()
+        # Once a branch repair has been accepted, direct-flow residuals on
+        # that same row are not independent meter evidence.  They often arise
+        # from bounded parameter-estimation error even after the branch
+        # multiplier signature itself disappears, so requiring that stale
+        # signature let a measurement correction mask the repaired branch.
+        candidate_rows = accepted_branch_rows
 
         findings: Sequence[Any] = ()
         for event in reversed(history):
@@ -326,16 +502,4 @@ class MeasurementExpert:
 
     @staticmethod
     def _measurement_target_indices(action: Mapping[str, Any]) -> set[int]:
-        arguments = action.get("arguments")
-        arguments = arguments if isinstance(arguments, Mapping) else {}
-        group = arguments.get("suspect_group")
-        if isinstance(group, (list, tuple)):
-            values = group
-        else:
-            updates = arguments.get("measurement_updates")
-            values = updates.keys() if isinstance(updates, Mapping) else ()
-        indices: set[int] = set()
-        for value in values:
-            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-                indices.add(value)
-        return indices
+        return measurement_target_indices(action)

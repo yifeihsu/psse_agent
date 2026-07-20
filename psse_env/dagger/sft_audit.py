@@ -169,6 +169,47 @@ def semantic_action_key(
     return _stable_json(canonical_semantic_action(action, observation))
 
 
+def admissible_semantic_action_count(example: Mapping[str, Any]) -> int:
+    """Count distinct admissible labels after controller-ID canonicalization.
+
+    Raw oracle proposal lists can contain actions that differ only by ephemeral
+    state identifiers.  Those are one learning target, not multiple competing
+    labels.  Conversely, genuinely different tools or arguments must not be
+    collapsed merely because the rank-one teacher selected one of them.
+    """
+    valid_actions = example.get("valid_next_actions")
+    if not isinstance(valid_actions, list) or not valid_actions:
+        return int(_example_target(example) is not None)
+    observation = _example_observation(example)
+    if observation is None:
+        return 0
+    already_model_visible = not any(
+        isinstance(example.get(key), Mapping)
+        for key in ("policy_observation", "state_summary")
+    )
+    raw_history = None if already_model_visible else example.get("history_window")
+    history = (
+        list(raw_history)
+        if raw_history is not None
+        and not isinstance(raw_history, (str, bytes, Mapping))
+        else None
+    )
+    distinct_actions: set[str] = set()
+    for action in valid_actions:
+        try:
+            semantic_action = canonical_semantic_action(
+                action,
+                observation,
+                history=history,
+                already_model_visible=already_model_visible,
+            )
+        except ValueError:
+            continue
+        if semantic_action["tool"] != INVALID_ACTION:
+            distinct_actions.add(_stable_json(semantic_action))
+    return len(distinct_actions) or int(_example_target(example) is not None)
+
+
 def _chat_observation(example: Mapping[str, Any]) -> Mapping[str, Any] | None:
     messages = example.get("messages")
     if not isinstance(messages, list):
@@ -507,7 +548,7 @@ def _feature_distance(left: Mapping[str, float], right: Mapping[str, float]) -> 
     return math.sqrt(squared / len(keys))
 
 
-def _example_cost_margin(example: Mapping[str, Any]) -> float | None:
+def example_cost_margin(example: Mapping[str, Any]) -> float | None:
     sources = [example]
     for key in ("metadata", "labels"):
         nested = example.get(key)
@@ -530,6 +571,23 @@ def _example_cost_margin(example: Mapping[str, Any]) -> float | None:
     return None
 
 
+def _example_requires_cost_margin(example: Mapping[str, Any]) -> bool:
+    sources = [example]
+    for key in ("metadata", "labels"):
+        nested = example.get(key)
+        if isinstance(nested, Mapping):
+            sources.append(nested)
+    for source in sources:
+        value = source.get("admissible_semantic_action_count")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return int(value) > 1
+    # Native collector rows carry the admissible semantic set directly.  Do
+    # not let the release gate silently treat those rows as single-action just
+    # because they have not yet passed through the chat exporter, where the
+    # explicit count is added to non-model metadata.
+    return admissible_semantic_action_count(example) > 1
+
+
 def audit_approximate_teacher_realizability(
     examples: Iterable[Mapping[str, Any]],
     *,
@@ -539,6 +597,12 @@ def audit_approximate_teacher_realizability(
     perturbation_radius: float = 0.25,
     low_cost_margin_threshold: float = 0.05,
     require_cost_margins: bool = False,
+    require_cost_margins_for_multi_action: bool = False,
+    minimum_nearest_neighbor_comparisons: int = 0,
+    minimum_nearest_neighbor_coverage: float = 0.0,
+    local_perturbation_tolerance: float | None = None,
+    minimum_local_perturbation_comparisons: int = 0,
+    minimum_local_perturbation_coverage: float = 0.0,
     max_conflict_details: int = 100,
 ) -> dict[str, Any]:
     """Audit label stability for nearby continuous WLS observations.
@@ -553,13 +617,23 @@ def audit_approximate_teacher_realizability(
     for value, name in (
         (conflict_tolerance, "conflict_tolerance"),
         (nearest_neighbor_tolerance, "nearest_neighbor_tolerance"),
+        (minimum_nearest_neighbor_coverage, "minimum_nearest_neighbor_coverage"),
+        (minimum_local_perturbation_coverage, "minimum_local_perturbation_coverage"),
     ):
         if not 0.0 <= float(value) <= 1.0:
             raise ValueError(f"{name} must be between 0 and 1.")
+    if local_perturbation_tolerance is not None and not 0.0 <= float(
+        local_perturbation_tolerance
+    ) <= 1.0:
+        raise ValueError("local_perturbation_tolerance must be between 0 and 1.")
+    if minimum_nearest_neighbor_comparisons < 0 or minimum_local_perturbation_comparisons < 0:
+        raise ValueError("minimum comparison counts must be nonnegative.")
 
     records: list[dict[str, Any]] = []
     invalid: list[dict[str, Any]] = []
     margins: list[float] = []
+    required_margin_examples = 0
+    required_margin_present = 0
     for index, example in enumerate(examples):
         example_id = str(example.get("example_id", f"row_{index}"))
         observation = _example_observation(example)
@@ -594,9 +668,12 @@ def audit_approximate_teacher_realizability(
         except ValueError as exc:
             invalid.append({"example_id": example_id, "reason": str(exc)})
             continue
-        margin = _example_cost_margin(example)
+        margin = example_cost_margin(example)
+        margin_required = _example_requires_cost_margin(example)
+        required_margin_examples += int(margin_required)
         if margin is not None and math.isfinite(margin):
             margins.append(margin)
+            required_margin_present += int(margin_required)
         records.append(
             {
                 "example_id": example_id,
@@ -672,11 +749,25 @@ def audit_approximate_teacher_realizability(
     local_rate = local_disagreements / local_total if local_total else 0.0
     low_margin = sum(margin <= low_cost_margin_threshold for margin in margins)
     margin_coverage = len(margins) / labeled if labeled else 0.0
+    nearest_coverage = nearest_total / labeled if labeled else 0.0
+    local_coverage = local_total / labeled if labeled else 0.0
     passed = (
         not invalid
         and conflict_rate <= conflict_tolerance
         and nearest_rate <= nearest_neighbor_tolerance
+        and nearest_total >= int(minimum_nearest_neighbor_comparisons)
+        and nearest_coverage >= float(minimum_nearest_neighbor_coverage)
+        and local_total >= int(minimum_local_perturbation_comparisons)
+        and local_coverage >= float(minimum_local_perturbation_coverage)
+        and (
+            local_perturbation_tolerance is None
+            or local_rate <= float(local_perturbation_tolerance)
+        )
         and (not require_cost_margins or len(margins) == labeled)
+        and (
+            not require_cost_margins_for_multi_action
+            or required_margin_present == required_margin_examples
+        )
     )
     return {
         "total_examples": len(records) + len(invalid),
@@ -689,6 +780,13 @@ def audit_approximate_teacher_realizability(
         "conflict_tolerance": conflict_tolerance,
         "conditional_action_entropy_bits": entropy_weighted / labeled if labeled else 0.0,
         "nearest_neighbor_compared_examples": nearest_total,
+        "nearest_neighbor_comparison_coverage": nearest_coverage,
+        "minimum_nearest_neighbor_comparisons": int(
+            minimum_nearest_neighbor_comparisons
+        ),
+        "minimum_nearest_neighbor_coverage": float(
+            minimum_nearest_neighbor_coverage
+        ),
         "nearest_neighbor_action_disagreement_rate": nearest_rate,
         "nearest_neighbor_tolerance": nearest_neighbor_tolerance,
         "mean_nearest_neighbor_distance": (
@@ -696,12 +794,28 @@ def audit_approximate_teacher_realizability(
         ),
         "perturbation_radius": perturbation_radius,
         "local_perturbation_compared_examples": local_total,
+        "local_perturbation_comparison_coverage": local_coverage,
         "local_perturbation_action_disagreement_rate": local_rate,
+        "local_perturbation_tolerance": local_perturbation_tolerance,
+        "minimum_local_perturbation_comparisons": int(
+            minimum_local_perturbation_comparisons
+        ),
+        "minimum_local_perturbation_coverage": float(
+            minimum_local_perturbation_coverage
+        ),
         "cost_margin_examples": len(margins),
         "cost_margin_coverage": margin_coverage,
         "low_cost_margin_threshold": low_cost_margin_threshold,
         "low_cost_margin_rate": low_margin / len(margins) if margins else None,
         "cost_margins_required": require_cost_margins,
+        "multi_action_cost_margins_required": require_cost_margins_for_multi_action,
+        "multi_action_examples": required_margin_examples,
+        "multi_action_cost_margin_examples": required_margin_present,
+        "multi_action_cost_margin_coverage": (
+            required_margin_present / required_margin_examples
+            if required_margin_examples
+            else 1.0
+        ),
         "normalization": "provider-normalized residuals, threshold ratios, and rank patterns",
         "passed": passed,
         "conflicts": conflicts[:max_conflict_details],
@@ -801,6 +915,7 @@ def audit_chat_sft_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 __all__ = [
+    "admissible_semantic_action_count",
     "audit_approximate_teacher_realizability",
     "audit_chat_sft_rows",
     "audit_teacher_realizability",
@@ -808,6 +923,7 @@ __all__ = [
     "canonical_semantic_action",
     "canonicalize_state_identifiers",
     "count_model_history_locations",
+    "example_cost_margin",
     "policy_observation_hash",
     "semantic_action_key",
 ]

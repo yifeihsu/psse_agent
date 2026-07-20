@@ -128,30 +128,92 @@ missing or malformed inputs leave it null/inconclusive, so acceptance remains
 fail-closed. Topology fixtures clamp PYPOWER generator voltage setpoints to
 their declared bus bounds before synthesis.
 
+## Round-0 BC0 release path
+
 `providers/scenario_generator.py` builds the round-0 offline aggregate from
-real physics: `Round0ScenarioGenerator` adapts the merged measurement corpus
+real physics. `Round0ScenarioGenerator` adapts the merged measurement corpus
 (single and multi gross outliers, corrupted-parameter cases with multi-scan
 data, harmonic and HIF rows with their runtime side channels), synthesizes
-topology scenarios via pypower power flows on status-flipped IEEE-14 cases,
-and composes measurement overlays on top of other families. Every scenario
-passes a physical validation gate (anomalous as observed, clean once the
-truth is restored — harmonic/HIF rows are anomalous by nature and gate on
-solvability), and scenario IDs are opaque hashes: the family lives only in
-the generator manifest, never in policy-visible metadata.
-`examples/generate_round0_aggregate.py` drives expert-only collection
-(β=1.0) over a family plan, injects bounded per-family counterfactual
-recovery branches, audits every episode against hidden truth (masking
-commits are quarantined), splits by root scenario, and exports canonical
-chat SFT with the native-row, teacher-realizability, and target-aware
-audits.
+topology scenarios through pypower power flows on status-flipped IEEE-14
+cases, and composes measurement overlays with other families. The plan also
+contains pure three-phase-unbalance roots and a telemetry-present,
+no-disturbance negative control. Every scenario passes its physical validation
+gate, and scenario IDs are opaque hashes; family, cardinality, network case,
+and source tier remain audit/split metadata rather than policy-visible hints.
 
-The preflight report treats a terminal decision and a resolved diagnosis as
-different outcomes. `terminal_scenario_matrix` records `resolved` and
-`operator_escalation` counts and IDs separately. `release_terminal_coverage`
-accepts either a resolved episode or an audited, state-bound operator handoff;
-`release_resolution_coverage` is true only when every episode resolves.
-Nonterminal, quarantined, or terminal episodes with an unknown outcome fail
-the release gate.
+`examples/generate_round0_aggregate.py` is expert-only collection at
+`β=1.0`. It produces a candidate BC0 behavioral-cloning corpus, not a DAgger
+iteration. Before the environment, policy, or online expert receives a root,
+the collector deep-copies it and removes `true_*`, `clean_*`, `hidden_truth`,
+and oracle action hints. The original scenario is retained outside the online
+trajectory and is supplied only after termination to the strict offline audit
+in `dagger/release_audit.py`; audit truth and audit results are never merged
+into model observations or SFT targets.
+
+The strict audit quarantines an episode unless its claimed outcome is supported
+by the hidden physical truth. Every accepted correction must name an exact
+same-family truth target: a grouped measurement correction may not include a
+healthy index, and parameter and topology targets remain distinct even on the
+same branch. A `resolved` episode additionally requires the active physical
+store payload, zero faults in the independently derived remaining-truth
+ledger, preservation of healthy measurements and all non-target case fields,
+and final target measurements/case fields matching clean truth within their
+separately declared tolerances (topology status is exact). A caller-supplied
+remaining ledger is optional, but an incomplete or false ledger is rejected
+and a complete ledger must agree with the derived count.
+
+Harmonic, HIF, and three-phase-unbalance explanations must match both the true
+family and the declared localization tolerance; unbalance may declare an
+explicit top-k localization allowance. A resolved check can be skipped only
+through that check's named, reason-bearing `not_applicable` declaration.
+Explanation-only waveform scenarios therefore declare final fundamental
+measurement matching as N/A because diagnosis does not rewrite that snapshot.
+N/A does not remove a fault from the derived remaining ledger, so it cannot
+turn an unlocalized diagnostic fault into a resolution.
+
+Terminality is not synonymous with successful recovery. The state classes
+`terminal_resolved` and `terminal_operator_escalation` are separate, and
+`terminal_scenario_matrix` records their counts and physical-root IDs by
+family. A verified operator handoff is an auditable safe outcome, but it does
+not count as resolution. Release policy therefore enforces per-family minimum
+root counts, resolution floors, and escalation ceilings; nonterminal,
+quarantined, or unknown terminal outcomes fail. The difficult mixed-error and
+unbalance families currently require at least 20 roots, at least 95%
+resolution, and at most 5% escalation. The telemetry negative control requires
+20 roots, 100% resolution, and no escalation. HIF's currently tracked 17-root
+suite retains a separately reported handoff allowance and must not be reported
+as general recovery success.
+
+Splits are assigned before descendants are generated and group every row by
+`physical_root_fingerprint`. The deterministic split is stratified by network
+case, family combination, error cardinality, and source tier, with validation
+and test root floors for critical families; the split audit fails closed on
+root overlap or coverage deficits. `aggregate.raw.jsonl` is the immutable
+eligible natural population. `aggregate.validation.jsonl` and
+`aggregate.test.jsonl` preserve their natural held-out distributions.
+`aggregate.train_view.jsonl` is the only balanced view: it is deterministically
+sampled from natural train rows across state class, target tool/category,
+scenario family, cardinality, terminal outcome, and physical root, with bounded
+duplication and low-cost-margin exclusions. Balancing never rewrites or
+resamples a held-out split.
+
+Release realizability is evaluated on the immutable natural aggregate, not
+only on the balanced training view. Exact teacher conflicts must be zero, and
+the approximate audit must have real nearest-neighbor and local-perturbation
+comparison coverage, bounded disagreement, and cost-margin coverage for
+multi-action states. The same approximate gates run separately by scenario
+family and by `state_class` decision stage; an empty comparison set is not a
+pass. The balanced training view is audited independently as an additional
+training-input gate.
+
+Checkpoint decisions must also persist a reproducible closed-loop evaluator
+report on fixed scenario suites. The evaluator isolates policy observations
+from truth and reports physical correctness, resolution versus escalation,
+healthy-component corruption, false commit/rollback/finalization, partial-fix
+retention, invalid-action recovery, loops, WLS and specialized-tool use, and
+tool regret, grouped by suite, family, cardinality, case, split, source tier,
+and physical root. This report is a required release artifact, not a substitute
+for corpus preflight or strict episode auditing.
 
 `CandidateQualityOracle(mode="synthetic")` requires hidden truth.
 `mode="deployment"` ignores it and relies on observable WLS/physics evidence.
@@ -160,9 +222,10 @@ model; deterministic safety rules remain authoritative for final acceptance.
 
 The DAgger collector records complete `(s_t, a_t, o_{t+1}, s_{t+1})`
 transitions, catches policy/JSON failures, uses updated history for next-state
-labels, balances aggregate replay by recovery class, and selects the best
-validation checkpoint. Counterfactual recovery generation and top-L
-AggreVaTe-lite ranking both use isolated environment clones.
+labels, constructs a deterministic balanced training view without mutating the
+natural aggregate, and selects the best validation checkpoint. Counterfactual
+recovery generation and top-L AggreVaTe-lite ranking both use isolated
+environment clones.
 Branch collaborators must therefore be stateless functions or deepcopyable
 callable objects. Functions that close over mutable state and non-copyable
 solver clients are rejected before branch execution; integrations should wrap
@@ -197,17 +260,22 @@ are explicitly approved deterministic pilot adapters. Production labels for
 domain context, correction, commit, rollback, and finalization require the
 corresponding observable evidence. Bounded context findings and exact
 `supported_corrections` remain model-visible, and production correction targets
-must match them exactly. The grouped pilot generator splits root
-scenarios before chat export and runs native-row, teacher-realizability, and
-target-aware replay audits.
+must match them exactly. Round-0 generation performs the grouped split before
+chat export and records the strict truth audit, native/chat schema checks,
+exact and approximate realizability reports, target-aware state-class audit,
+terminal family matrix, and generation provenance in its preflight artifacts.
 
-Current launch status is deliberately narrower than full training: the 90-row
-pilot, exact pinned 31B processor/template/mask gate, and local E2B QLoRA smoke
-are approved. Full 31B SFT remains **NO-GO** until the exact 31B checkpoint
-passes forward/backward and tiny-overfit gates on suitable HPC hardware and a
-short held-out recovery evaluation passes. The bundled pilot contains standard
-successful paths, not the required recovery-class coverage. See
-`SFT_PILOT_VALIDATION.md`.
+Current release decision: **BC0 training, exact 31B training, and full
+learner-in-the-loop DAgger are all NO-GO until every gate above passes on a
+new aggregate generated from a clean tracked source.** Historical pilot and
+round-0 artifacts are evidence inputs only; they are not release-eligible by
+inheritance. BC0 additionally requires the fixed-suite closed-loop baseline
+artifact. The exact 31B checkpoint must then pass its processor/template/mask,
+forward/backward, and tiny-overfit gates on that release aggregate plus the
+held-out closed-loop evaluation. Full DAgger may start only after a BC0
+checkpoint is selected through those gates and new learner-controlled roots
+can be collected without truth leakage. No expert-only `β=1.0` corpus or
+checkpoint should be labeled as DAgger.
 
 Run the dedicated gate with:
 

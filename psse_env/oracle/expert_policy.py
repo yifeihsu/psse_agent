@@ -199,6 +199,17 @@ class ExpertPolicyOracle:
                 hif_fault_present="hif" in context.oracle_fault_families,
             )
         )
+        diversification = self._cross_family_diversification_proposals(
+            policy, context.history, proposals
+        )
+        if diversification:
+            return self._rank_and_filter(
+                diversification,
+                policy,
+                seen_signatures=seen_signatures,
+                blocked_correction_tools=blocked_correction_tools,
+                mandatory=False,
+            )
         ranked = self._rank_and_filter(
             proposals,
             policy,
@@ -216,6 +227,144 @@ class ExpertPolicyOracle:
             blocked_correction_tools=blocked_correction_tools,
             mandatory=False,
         )
+
+    def _cross_family_diversification_proposals(
+        self,
+        policy: PolicyObservation | Mapping[str, Any],
+        history: Sequence[Mapping[str, Any]],
+        proposals: Sequence[ExpertActionProposal],
+    ) -> list[ExpertActionProposal]:
+        """Probe meter evidence after a locally successful branch repair is rejected.
+
+        A branch candidate can fix its exact multiplier target yet miss the
+        branch partial-progress floor because an independent meter error still
+        dominates the global statistic.  Repeatedly trying lower-ranked lines
+        in that state spends the recovery budget without testing the competing
+        observable mechanism.  Diversification is deliberately narrow: the
+        rejected branch target must be below its local threshold, its global
+        progress must be positive but below the configured acceptance floor,
+        physical checks must pass, residual evidence must remain, and branch
+        dominance must not suppress the measurement route.
+        """
+
+        if self._get(policy, "has_open_candidate", False):
+            return []
+        active_id = self._get(policy, "active_state_id")
+        if active_id is None or not self._locally_fixed_rejected_branch(
+            policy, history, active_id=active_id
+        ):
+            return []
+
+        signatures = self._get(policy, "unresolved_signatures", []) or []
+        signature_text = [str(item) for item in signatures]
+        measurement_markers = (
+            "measurement",
+            "bad_data",
+            "large_residual",
+            "meter",
+            "residual_outlier",
+        )
+        measurement_signal = any(
+            any(marker in item.lower() for marker in measurement_markers)
+            for item in signature_text
+        )
+        measurement_dominant = any(
+            "wls_residual_outlier_dominant" in item for item in signature_text
+        )
+        branch_dominant = any(
+            "wls_branch_multiplier_dominant" in item for item in signature_text
+        )
+        if not measurement_signal or (branch_dominant and not measurement_dominant):
+            return []
+
+        fresh_measurement_context = bool(
+            self._get(policy, "has_fresh_measurement_context", False)
+            and str(self._get(policy, "measurement_context_state_id"))
+            == str(active_id)
+        )
+        preferred_tool = (
+            CORRECT_MEASUREMENTS if fresh_measurement_context else GET_MEASUREMENT_CONTEXT
+        )
+        diversified: list[ExpertActionProposal] = []
+        for proposal in proposals:
+            if safe_normalize_action(proposal.action)["tool"] != preferred_tool:
+                continue
+            diversified.append(
+                ExpertActionProposal(
+                    action=proposal.action,
+                    source_expert=proposal.source_expert,
+                    confidence=1.0,
+                    evidence_codes=[
+                        *proposal.evidence_codes,
+                        "locally_fixed_branch_rejected",
+                        "positive_but_insufficient_global_progress",
+                        "cross_family_measurement_probe",
+                    ],
+                    admissible=proposal.admissible,
+                    estimated_immediate_risk=proposal.estimated_immediate_risk,
+                )
+            )
+        return diversified
+
+    def _locally_fixed_rejected_branch(
+        self,
+        policy: PolicyObservation | Mapping[str, Any],
+        history: Sequence[Mapping[str, Any]],
+        *,
+        active_id: Any,
+    ) -> bool:
+        rejected_candidate_ids: set[str] = set()
+        for record in self._get(policy, "rejected_hypotheses", []) or []:
+            if not isinstance(record, Mapping):
+                continue
+            source = safe_normalize_action(record.get("source_action") or {})
+            if source["tool"] not in {CORRECT_PARAMETERS, CORRECT_TOPOLOGY}:
+                continue
+            parent_id = record.get("candidate_parent_id")
+            requested = source["arguments"].get("state_id")
+            if parent_id is not None and str(parent_id) != str(active_id):
+                continue
+            if requested is not None and str(requested) != str(active_id):
+                continue
+            candidate_id = record.get("candidate_state_id")
+            if candidate_id is not None:
+                rejected_candidate_ids.add(str(candidate_id))
+        if not rejected_candidate_ids:
+            return False
+
+        floor = float(self.candidate_oracle.min_branch_partial_global_progress)
+        for event in reversed(history):
+            if not isinstance(event, Mapping):
+                continue
+            action = safe_normalize_action(
+                event.get("action") or event.get("executed_action") or {}
+            )
+            if action["tool"] != RUN_WLS:
+                continue
+            candidate_id = action["arguments"].get("state_id")
+            if str(candidate_id) not in rejected_candidate_ids:
+                continue
+            output = event.get("tool_output")
+            if not isinstance(output, Mapping) or output.get("execution_status") != "success":
+                continue
+            metrics = output.get("tool_metrics")
+            if not isinstance(metrics, Mapping):
+                continue
+            try:
+                target_value = float(metrics["target_metric_value"])
+                target_threshold = float(metrics["target_metric_threshold"])
+                global_progress = float(metrics["global_progress"])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+            if (
+                target_threshold > 0.0
+                and target_value < target_threshold
+                and 0.0 < global_progress < floor
+                and metrics.get("globally_resolved") is False
+                and metrics.get("physical_constraints_ok") is True
+            ):
+                return True
+        return False
 
     def enumerate_admissible_actions(
         self,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import math
 import random
 from collections import Counter, defaultdict
@@ -14,8 +15,18 @@ DEFAULT_REPLAY_WEIGHTS: dict[str, float] = {
     "accepted_partial_commit": 0.10,
     "accepted_final_commit": 0.10,
     "invalid_precondition_recovery": 0.10,
-    "terminal_decision": 0.10,
+    "terminal_resolved": 0.07,
+    "terminal_operator_escalation": 0.03,
     "loop_repetition": 0.05,
+}
+
+DEFAULT_TRAINING_TOOL_CATEGORY_WEIGHTS: dict[str, float] = {
+    "baseline_diagnostics": 0.20,
+    "context_acquisition": 0.15,
+    "corrections": 0.20,
+    "verification_lifecycle": 0.20,
+    "terminal_or_handoff": 0.10,
+    "specialized_diagnostics": 0.15,
 }
 
 
@@ -57,6 +68,69 @@ def _allocate_counts(size: int, weights: Mapping[str, float]) -> dict[str, int]:
     for key in order[:remainder]:
         counts[key] += 1
     return counts
+
+
+def _capacity_aware_counts(
+    *,
+    size: int,
+    weights: Mapping[str, float],
+    capacities: Mapping[str, int],
+) -> tuple[dict[str, int], dict[str, dict[str, int]]]:
+    """Return the closest weighted targets that fit marginal source capacity.
+
+    The unconstrained allocation is retained in the report.  Values whose
+    desired count exceeds their duplicate- and root-limited capacity are
+    clipped, then the displaced count is deterministically redistributed to
+    values with spare capacity.  This is appropriate for secondary balancing
+    axes, where equal representation is a sampling objective rather than a
+    release requirement.
+    """
+    desired = _allocate_counts(size, weights)
+    if set(desired) != set(capacities):
+        raise ValueError("capacity-aware targets require one capacity per value")
+    effective = {
+        value: min(int(target), int(capacities[value]))
+        for value, target in desired.items()
+    }
+    remaining = int(size) - sum(effective.values())
+    while remaining:
+        candidates = [
+            value
+            for value in sorted(effective)
+            if effective[value] < int(capacities[value])
+        ]
+        if not candidates:
+            raise ValueError(
+                "capacity-aware targets cannot satisfy the requested training view"
+            )
+        # Fill the value furthest below its weighted fair share.  The value
+        # name is the deterministic final tie-break.
+        chosen = min(
+            candidates,
+            key=lambda value: (
+                effective[value] / float(weights[value]),
+                value,
+            ),
+        )
+        effective[chosen] += 1
+        remaining -= 1
+
+    adjustments: dict[str, dict[str, int]] = {}
+    for value in sorted(desired):
+        if effective[value] == desired[value]:
+            continue
+        adjustments[value] = {
+            "unconstrained_target": int(desired[value]),
+            "capacity_adjusted_target": int(effective[value]),
+            "maximum_achievable": int(capacities[value]),
+            "necessary_reduction": max(
+                int(desired[value]) - int(capacities[value]), 0
+            ),
+            "redistributed_increase": max(
+                int(effective[value]) - int(desired[value]), 0
+            ),
+        }
+    return effective, adjustments
 
 
 def _minimum_feasible_root_cap(
@@ -412,3 +486,432 @@ def balanced_replay_sample(
         late_iteration_model_fraction=late_iteration_model_fraction,
         require_late_iteration_model_quota=require_late_iteration_model_quota,
     ).sample(size, rng=random.Random(seed))
+
+
+def _nonmodel_value(row: Mapping[str, Any], field: str) -> Any:
+    if row.get(field) is not None:
+        return row.get(field)
+    metadata = row.get("metadata")
+    if isinstance(metadata, Mapping):
+        if metadata.get(field) is not None:
+            return metadata.get(field)
+        labels = metadata.get("labels")
+        if isinstance(labels, Mapping) and labels.get(field) is not None:
+            return labels.get(field)
+    labels = row.get("labels")
+    if isinstance(labels, Mapping):
+        return labels.get(field)
+    return None
+
+
+def _target_tool(row: Mapping[str, Any]) -> str:
+    action = row.get("preferred_action")
+    if isinstance(action, Mapping) and action.get("tool"):
+        return str(action["tool"])
+    messages = row.get("messages")
+    if isinstance(messages, list):
+        for message in messages:
+            if not isinstance(message, Mapping) or message.get("role") != "assistant":
+                continue
+            calls = message.get("tool_calls")
+            if isinstance(calls, list) and calls:
+                function = calls[0].get("function") if isinstance(calls[0], Mapping) else None
+                if isinstance(function, Mapping) and function.get("name"):
+                    return str(function["name"])
+    return "unknown"
+
+
+def _tool_category(tool: str) -> str:
+    if tool in {"run_wls", "wls_from_path"}:
+        return "baseline_diagnostics"
+    if tool.startswith("get_") and tool.endswith("_context"):
+        return "context_acquisition"
+    if tool.startswith("correct_"):
+        return "corrections"
+    if tool in {"verify_candidate", "commit_state", "rollback_state"}:
+        return "verification_lifecycle"
+    if tool in {"finalize_diagnosis", "ask_for_more_evidence"}:
+        return "terminal_or_handoff"
+    return "specialized_diagnostics"
+
+
+def _known_cost_margin(row: Mapping[str, Any]) -> float | None:
+    for source in (row, row.get("metadata"), row.get("labels")):
+        if not isinstance(source, Mapping):
+            continue
+        value = source.get("cost_margin")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    return None
+
+
+def _training_view_summary(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    materialized = list(rows)
+    axes = {
+        "state_class": Counter(),
+        "target_tool": Counter(),
+        "tool_category": Counter(),
+        "scenario_family": Counter(),
+        "error_cardinality": Counter(),
+        "terminal_outcome": Counter(),
+        "physical_root": Counter(),
+    }
+    for index, row in enumerate(materialized):
+        tool = _target_tool(row)
+        axes["state_class"][str(_state_class(row))] += 1
+        axes["target_tool"][tool] += 1
+        axes["tool_category"][_tool_category(tool)] += 1
+        axes["scenario_family"][str(_nonmodel_value(row, "scenario_family") or "unknown")] += 1
+        axes["error_cardinality"][str(_nonmodel_value(row, "error_cardinality") or 0)] += 1
+        axes["terminal_outcome"][str(
+            _nonmodel_value(row, "episode_terminal_outcome")
+            or _nonmodel_value(row, "terminal_outcome")
+            or "unknown"
+        )] += 1
+        axes["physical_root"][_root_key(row, index)] += 1
+    return {
+        "rows": len(materialized),
+        **{axis: dict(sorted(counts.items())) for axis, counts in axes.items()},
+    }
+
+
+def build_balanced_training_view(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    size: int | None = None,
+    seed: int = 0,
+    tool_category_weights: Mapping[str, float] | None = None,
+    max_duplicate_count: int = 2,
+    max_rows_per_root: int | None = None,
+    low_cost_margin_threshold: float = 0.05,
+    maximum_tool_category_target_deviation: float = 0.10,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Build a deterministic multi-axis balanced SFT training view.
+
+    The immutable aggregate remains untouched. Known low-margin rows are
+    excluded from single-label SFT, while state class, target tool/category,
+    scenario family, error cardinality, terminal outcome, and physical-root
+    contribution jointly drive the greedy deficit sampler. Tool-category
+    proportions are strict release targets. The other axes use deterministic
+    capacity-aware equalization, so a rare state cannot make a full-size view
+    mathematically impossible merely because uniform representation is not a
+    declared release requirement.
+    """
+    source = [dict(row) for row in rows]
+    if not source:
+        raise ValueError("cannot build a training view from an empty aggregate")
+    if max_duplicate_count < 1:
+        raise ValueError("max_duplicate_count must be positive")
+    if not 0.0 <= float(maximum_tool_category_target_deviation) <= 1.0:
+        raise ValueError(
+            "maximum_tool_category_target_deviation must be between 0 and 1"
+        )
+    excluded_low_margin = [
+        row
+        for row in source
+        if (margin := _known_cost_margin(row)) is not None
+        and margin <= float(low_cost_margin_threshold)
+    ]
+    eligible = [row for row in source if row not in excluded_low_margin]
+    if not eligible:
+        raise ValueError("all training rows were excluded by the cost-margin gate")
+    requested_size = len(eligible) if size is None else int(size)
+    if requested_size <= 0:
+        raise ValueError("training-view size must be positive")
+    if requested_size > len(eligible) * int(max_duplicate_count):
+        raise ValueError("training-view size exceeds duplicate-limited capacity")
+
+    category_weights = dict(
+        DEFAULT_TRAINING_TOOL_CATEGORY_WEIGHTS
+        if tool_category_weights is None
+        else tool_category_weights
+    )
+    if any(value < 0 for value in category_weights.values()) or not any(
+        value > 0 for value in category_weights.values()
+    ):
+        raise ValueError("tool-category weights must contain positive mass")
+
+    axis_values: dict[int, dict[str, str]] = {}
+    roots: dict[int, str] = {}
+    for index, row in enumerate(eligible):
+        tool = _target_tool(row)
+        state_class = _state_class(row)
+        if state_class not in DEFAULT_REPLAY_WEIGHTS:
+            raise ValueError(f"Unknown training-view state class: {state_class}")
+        axis_values[index] = {
+            "state_class": state_class,
+            "target_tool": tool,
+            "tool_category": _tool_category(tool),
+            "scenario_family": str(_nonmodel_value(row, "scenario_family") or "unknown"),
+            "error_cardinality": str(_nonmodel_value(row, "error_cardinality") or 0),
+            "terminal_outcome": str(
+                _nonmodel_value(row, "episode_terminal_outcome")
+                or _nonmodel_value(row, "terminal_outcome")
+                or "unknown"
+            ),
+        }
+        roots[index] = _root_key(row, index)
+
+    available_categories = {
+        values["tool_category"] for values in axis_values.values()
+    }
+    missing_weight = sorted(available_categories - set(category_weights))
+    if missing_weight:
+        raise ValueError(
+            "Missing tool-category training weights: " + ", ".join(missing_weight)
+        )
+    zero_mass_categories = sorted(
+        category
+        for category in available_categories
+        if float(category_weights[category]) <= 0.0
+    )
+    if zero_mass_categories:
+        raise ValueError(
+            "Available tool categories must receive positive training-weight mass: "
+            + ", ".join(zero_mass_categories)
+        )
+    root_capacities = Counter(roots.values())
+    root_capacities = Counter(
+        {root: count * int(max_duplicate_count) for root, count in root_capacities.items()}
+    )
+    root_cap = max_rows_per_root
+    if root_cap is None:
+        root_cap = _minimum_feasible_root_cap(
+            size=requested_size, root_capacities=root_capacities
+        )
+    if sum(min(int(root_cap), count) for count in root_capacities.values()) < requested_size:
+        raise ValueError("max_rows_per_root cannot satisfy the requested training view")
+
+    secondary_axes = (
+        "state_class",
+        "target_tool",
+        "scenario_family",
+        "error_cardinality",
+        "terminal_outcome",
+    )
+    axis_capacities: dict[str, dict[str, int]] = {}
+    for axis in ("tool_category", *secondary_axes):
+        capacities: dict[str, int] = {}
+        for value in sorted({item[axis] for item in axis_values.values()}):
+            capacity_by_root: Counter[str] = Counter(
+                roots[index]
+                for index, values in axis_values.items()
+                if values[axis] == value
+            )
+            capacities[value] = min(
+                requested_size,
+                sum(
+                    min(
+                        int(root_cap),
+                        int(count) * int(max_duplicate_count),
+                    )
+                    for count in capacity_by_root.values()
+                ),
+            )
+        axis_capacities[axis] = capacities
+
+    strict_category_weights = {
+        category: category_weights[category]
+        for category in sorted(available_categories)
+    }
+    strict_category_targets = _allocate_counts(
+        requested_size, strict_category_weights
+    )
+    unconstrained_target_counts: dict[str, dict[str, int]] = {
+        "tool_category": dict(strict_category_targets)
+    }
+    target_counts: dict[str, dict[str, int]] = {
+        "tool_category": dict(strict_category_targets)
+    }
+    capacity_adjustments: dict[str, dict[str, dict[str, int]]] = {}
+    for axis in secondary_axes:
+        values = sorted(axis_capacities[axis])
+        weights = {value: 1.0 for value in values}
+        unconstrained_target_counts[axis] = _allocate_counts(
+            requested_size, weights
+        )
+        adjusted, adjustments = _capacity_aware_counts(
+            size=requested_size,
+            weights=weights,
+            capacities=axis_capacities[axis],
+        )
+        target_counts[axis] = adjusted
+        if adjustments:
+            capacity_adjustments[axis] = adjustments
+
+    necessary_feasibility_shortfalls: dict[str, dict[str, dict[str, int]]] = {}
+    for axis, targets in target_counts.items():
+        axis_shortfalls: dict[str, dict[str, int]] = {}
+        for value, target in targets.items():
+            maximum_achievable = axis_capacities[axis][value]
+            shortfall = max(int(target) - int(maximum_achievable), 0)
+            if shortfall:
+                axis_shortfalls[value] = {
+                    "target": int(target),
+                    "maximum_achievable": int(maximum_achievable),
+                    "shortfall": int(shortfall),
+                }
+        if axis_shortfalls:
+            necessary_feasibility_shortfalls[axis] = dict(
+                sorted(axis_shortfalls.items())
+            )
+
+    selected: list[int] = []
+    occurrences: Counter[int] = Counter()
+    root_counts: Counter[str] = Counter()
+    observed: dict[str, Counter[str]] = {
+        axis: Counter() for axis in target_counts
+    }
+    tie_break = {
+        index: int.from_bytes(
+            hashlib.sha256(
+                f"{seed}:{eligible[index].get('example_id', index)}".encode("utf-8")
+            ).digest()[:8],
+            "big",
+        )
+        for index in range(len(eligible))
+    }
+
+    def candidate_score(index: int) -> tuple[float, int]:
+        values = axis_values[index]
+        score = 0.0
+        for axis, targets in target_counts.items():
+            value = values[axis]
+            target = max(int(targets.get(value, 0)), 1)
+            deficit = target - observed[axis][value]
+            multiplier = 4.0 if axis == "tool_category" else 1.0
+            score += multiplier * deficit / target
+        score -= occurrences[index] * 0.5
+        score -= root_counts[roots[index]] / max(int(root_cap), 1)
+        return score, -tie_break[index]
+
+    while len(selected) < requested_size:
+        candidates = [
+            index
+            for index in range(len(eligible))
+            if occurrences[index] < int(max_duplicate_count)
+            and root_counts[roots[index]] < int(root_cap)
+        ]
+        if not candidates:
+            raise ValueError("training-view constraints exhausted before reaching requested size")
+        chosen = max(candidates, key=candidate_score)
+        selected.append(chosen)
+        occurrences[chosen] += 1
+        root_counts[roots[chosen]] += 1
+        for axis, value in axis_values[chosen].items():
+            observed[axis][value] += 1
+
+    # Stable hash ordering makes the persisted view byte-reproducible without
+    # retaining curriculum-like blocks from greedy selection.
+    selected.sort(
+        key=lambda index: hashlib.sha256(
+            f"view:{seed}:{eligible[index].get('example_id', index)}:{occurrences[index]}".encode(
+                "utf-8"
+            )
+        ).hexdigest()
+    )
+    view = [copy.deepcopy(eligible[index]) for index in selected]
+    achieved_counts = {
+        axis: dict(sorted(counts.items())) for axis, counts in observed.items()
+    }
+    target_deviation: dict[str, dict[str, Any]] = {}
+    for axis, targets in target_counts.items():
+        achieved = observed[axis]
+        value_deviations: dict[str, dict[str, float | int]] = {}
+        total_shortfall = 0
+        total_excess = 0
+        for value in sorted(set(targets) | set(achieved)):
+            target = int(targets.get(value, 0))
+            actual = int(achieved.get(value, 0))
+            shortfall = max(target - actual, 0)
+            excess = max(actual - target, 0)
+            absolute_deviation = abs(actual - target)
+            relative_deviation = absolute_deviation / max(target, 1)
+            total_shortfall += shortfall
+            total_excess += excess
+            value_deviations[value] = {
+                "target": target,
+                "achieved": actual,
+                "shortfall": shortfall,
+                "excess": excess,
+                "absolute_deviation": absolute_deviation,
+                # A target of zero uses a denominator of one, so an unexpected
+                # selected row remains finite JSON and fails a 10% release gate.
+                "relative_deviation": relative_deviation,
+            }
+        total_absolute_deviation = total_shortfall + total_excess
+        target_deviation[axis] = {
+            "values": value_deviations,
+            "target_total": sum(int(value) for value in targets.values()),
+            "achieved_total": sum(int(value) for value in achieved.values()),
+            "total_shortfall": total_shortfall,
+            "total_excess": total_excess,
+            "total_absolute_deviation": total_absolute_deviation,
+            "relative_deviation": total_absolute_deviation
+            / max(sum(int(value) for value in targets.values()), 1),
+            "maximum_value_relative_deviation": max(
+                (
+                    float(details["relative_deviation"])
+                    for details in value_deviations.values()
+                ),
+                default=0.0,
+            ),
+        }
+    achieved_tool_category_target_deviation = float(
+        target_deviation["tool_category"]["maximum_value_relative_deviation"]
+    )
+    feasibility_shortfall_total = sum(
+        details["shortfall"]
+        for axis_shortfalls in necessary_feasibility_shortfalls.values()
+        for details in axis_shortfalls.values()
+    )
+    capacity_adjustment_total = sum(
+        details["necessary_reduction"]
+        for axis_adjustments in capacity_adjustments.values()
+        for details in axis_adjustments.values()
+    )
+    passed = (
+        feasibility_shortfall_total == 0
+        and achieved_tool_category_target_deviation
+        <= float(maximum_tool_category_target_deviation)
+    )
+    report = {
+        "seed": int(seed),
+        "requested_size": requested_size,
+        "returned_size": len(view),
+        "low_cost_margin_threshold": float(low_cost_margin_threshold),
+        "excluded_low_margin_rows": len(excluded_low_margin),
+        "max_duplicate_count": int(max_duplicate_count),
+        "duplicate_occurrences": sum(max(count - 1, 0) for count in occurrences.values()),
+        "max_rows_per_root": int(root_cap),
+        "target_contract": {
+            "size_policy": "requested_full_size_with_bounded_replacement",
+            "strict_target_axes": ["tool_category"],
+            "capacity_aware_target_axes": list(secondary_axes),
+            "capacity_aware_policy": "uniform_then_clip_and_redistribute_v1",
+        },
+        "unconstrained_target_counts": {
+            axis: dict(sorted(counts.items()))
+            for axis, counts in unconstrained_target_counts.items()
+        },
+        "target_counts": {
+            axis: dict(sorted(counts.items())) for axis, counts in target_counts.items()
+        },
+        "capacity_adjustments": capacity_adjustments,
+        "capacity_adjustment_total": capacity_adjustment_total,
+        "achieved_counts": achieved_counts,
+        "target_deviation": target_deviation,
+        "necessary_feasibility_shortfalls": necessary_feasibility_shortfalls,
+        "necessary_feasibility_shortfall_total": feasibility_shortfall_total,
+        "maximum_tool_category_target_deviation": float(
+            maximum_tool_category_target_deviation
+        ),
+        "achieved_tool_category_target_deviation": (
+            achieved_tool_category_target_deviation
+        ),
+        "passed": passed,
+        "release_ready": passed,
+        "before": _training_view_summary(source),
+        "after": _training_view_summary(view),
+    }
+    return view, report

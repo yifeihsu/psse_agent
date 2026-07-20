@@ -11,6 +11,7 @@ from psse_env.dagger.dataset_builder import (
     validate_tool_schemas,
 )
 from psse_env.dagger.sft_audit import (
+    admissible_semantic_action_count,
     audit_approximate_teacher_realizability,
     audit_chat_sft_rows,
     audit_teacher_realizability,
@@ -94,6 +95,82 @@ class NativeToolExportTests(unittest.TestCase):
         self.assertEqual(row["dataset_mode"], "production")
         self.assertEqual(row["metadata"]["dataset_mode"], "production")
         self.assertNotIn("production", row["messages"][1]["content"])
+
+    def test_scenario_and_action_ranking_metadata_survive_export(self) -> None:
+        example = _example()
+        state_id = example["policy_observation"]["active_state_id"]
+        second_action = {
+            "tool": "get_measurement_context",
+            "arguments": {"state_id": state_id},
+        }
+        action_costs = [
+            {
+                "action": example["preferred_action"],
+                "q_cost": 1.0,
+                "near_optimal": True,
+            },
+            {
+                "action": second_action,
+                "q_cost": 1.25,
+                "near_optimal": False,
+            },
+        ]
+        example.update(
+            {
+                "scenario_family": "measurement_parameter_mixed_unique",
+                "error_cardinality": 2,
+                "network_case": "case14_release_unique",
+                "source_tier": "tracked_physical_unique",
+                "episode_terminal_outcome": "terminal_resolved_unique",
+                "valid_next_actions": [example["preferred_action"], second_action],
+                "cost_margin": 0.25,
+                "action_costs": action_costs,
+            }
+        )
+
+        row = examples_to_chat_sft([example])[0]
+
+        self.assertEqual(
+            {
+                key: row[key]
+                for key in (
+                    "scenario_family",
+                    "error_cardinality",
+                    "network_case",
+                    "source_tier",
+                    "episode_terminal_outcome",
+                )
+            },
+            {
+                "scenario_family": "measurement_parameter_mixed_unique",
+                "error_cardinality": 2,
+                "network_case": "case14_release_unique",
+                "source_tier": "tracked_physical_unique",
+                "episode_terminal_outcome": "terminal_resolved_unique",
+            },
+        )
+        self.assertEqual(
+            row["metadata"]["scenario_family"],
+            "measurement_parameter_mixed_unique",
+        )
+        self.assertEqual(row["metadata"]["error_cardinality"], 2)
+        self.assertEqual(row["metadata"]["network_case"], "case14_release_unique")
+        self.assertEqual(row["metadata"]["source_tier"], "tracked_physical_unique")
+        self.assertEqual(
+            row["metadata"]["terminal_outcome"], "terminal_resolved_unique"
+        )
+        self.assertEqual(row["metadata"]["admissible_semantic_action_count"], 2)
+        self.assertEqual(row["metadata"]["cost_margin"], 0.25)
+        self.assertEqual(row["metadata"]["action_costs"], action_costs)
+
+        visible = json.dumps(row["messages"], sort_keys=True)
+        for non_model_value in (
+            "measurement_parameter_mixed_unique",
+            "case14_release_unique",
+            "tracked_physical_unique",
+            "terminal_resolved_unique",
+        ):
+            self.assertNotIn(non_model_value, visible)
 
     def test_explicitly_ineligible_auxiliary_row_fails_closed(self) -> None:
         example = _example()
@@ -484,6 +561,97 @@ class TeacherRealizabilityAuditTests(unittest.TestCase):
         report = audit_approximate_teacher_realizability([first, second])
         self.assertEqual(report["cost_margin_coverage"], 1.0)
         self.assertEqual(report["low_cost_margin_rate"], 0.5)
+
+    def test_multi_action_state_without_cost_margin_fails_release_gate(self) -> None:
+        duplicate = _example(episode="duplicate_action_margin_episode0")
+        duplicate["valid_next_actions"] = [
+            duplicate["preferred_action"],
+            dict(duplicate["preferred_action"]),
+        ]
+        deduplicated = audit_approximate_teacher_realizability(
+            [duplicate],
+            require_cost_margins_for_multi_action=True,
+        )
+        self.assertTrue(deduplicated["passed"])
+        self.assertEqual(deduplicated["multi_action_examples"], 0)
+        self.assertEqual(admissible_semantic_action_count(duplicate), 1)
+        exported_duplicate = examples_to_chat_sft([duplicate])[0]
+        self.assertEqual(
+            exported_duplicate["metadata"]["admissible_semantic_action_count"], 1
+        )
+
+        example = _example(episode="multi_action_margin_episode0")
+        state_id = example["policy_observation"]["active_state_id"]
+        example["valid_next_actions"] = [
+            example["preferred_action"],
+            {
+                "tool": "get_measurement_context",
+                "arguments": {"state_id": state_id},
+            },
+        ]
+
+        explicit_single = dict(example)
+        explicit_single["metadata"] = {"admissible_semantic_action_count": 1}
+        explicit = audit_approximate_teacher_realizability(
+            [explicit_single],
+            require_cost_margins_for_multi_action=True,
+        )
+        self.assertTrue(explicit["passed"])
+        self.assertEqual(explicit["multi_action_examples"], 0)
+
+        missing = audit_approximate_teacher_realizability(
+            [example],
+            require_cost_margins_for_multi_action=True,
+        )
+        self.assertFalse(missing["passed"])
+        self.assertEqual(missing["multi_action_examples"], 1)
+        self.assertEqual(missing["multi_action_cost_margin_examples"], 0)
+        self.assertEqual(missing["multi_action_cost_margin_coverage"], 0.0)
+        self.assertEqual(admissible_semantic_action_count(example), 2)
+
+        example["cost_margin"] = 0.2
+        covered = audit_approximate_teacher_realizability(
+            [example],
+            require_cost_margins_for_multi_action=True,
+        )
+        self.assertTrue(covered["passed"])
+        self.assertEqual(covered["multi_action_cost_margin_coverage"], 1.0)
+
+    def test_release_gate_requires_neighbor_and_local_comparison_coverage(self) -> None:
+        singleton = _example(episode="coverage_singleton_episode0")
+        insufficient = audit_approximate_teacher_realizability(
+            [singleton],
+            minimum_nearest_neighbor_comparisons=1,
+            minimum_nearest_neighbor_coverage=0.5,
+            local_perturbation_tolerance=0.0,
+            minimum_local_perturbation_comparisons=1,
+            minimum_local_perturbation_coverage=0.5,
+        )
+        self.assertFalse(insufficient["passed"])
+        self.assertEqual(insufficient["nearest_neighbor_compared_examples"], 0)
+        self.assertEqual(insufficient["nearest_neighbor_comparison_coverage"], 0.0)
+        self.assertEqual(insufficient["local_perturbation_compared_examples"], 0)
+        self.assertEqual(
+            insufficient["local_perturbation_comparison_coverage"], 0.0
+        )
+
+        pair = [
+            _example(episode="coverage_pair_a_episode0"),
+            _example(episode="coverage_pair_b_episode0"),
+        ]
+        sufficient = audit_approximate_teacher_realizability(
+            pair,
+            minimum_nearest_neighbor_comparisons=2,
+            minimum_nearest_neighbor_coverage=1.0,
+            local_perturbation_tolerance=0.0,
+            minimum_local_perturbation_comparisons=2,
+            minimum_local_perturbation_coverage=1.0,
+        )
+        self.assertTrue(sufficient["passed"])
+        self.assertEqual(sufficient["nearest_neighbor_compared_examples"], 2)
+        self.assertEqual(sufficient["nearest_neighbor_comparison_coverage"], 1.0)
+        self.assertEqual(sufficient["local_perturbation_compared_examples"], 2)
+        self.assertEqual(sufficient["local_perturbation_comparison_coverage"], 1.0)
 
     def test_verbose_history_and_provenance_do_not_hide_same_visible_conflict(self) -> None:
         measurement = _example(

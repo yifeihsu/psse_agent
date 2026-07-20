@@ -5,10 +5,45 @@ import unittest
 from pathlib import Path
 
 from psse_env.dagger.splits import (
+    StratifiedSplitError,
     audit_physical_split_disjointness,
+    audit_stratified_split_coverage,
     grouped_scenario_split,
     physical_root_fingerprint,
+    scenario_split_stratum,
+    stratified_grouped_scenario_split,
 )
+
+
+def _split_root(
+    index: int,
+    *,
+    family: str = "measurement",
+    case_id: str = "case14",
+    cardinality: int = 1,
+    source_tier: str = "measured",
+) -> dict[str, object]:
+    return {
+        "scenario_id": f"root_{family}_{case_id}_{source_tier}_{index}",
+        "root_scenario_id": f"root_{family}_{case_id}_{source_tier}_{index}",
+        "physical_root_fingerprint": (
+            f"physical_v2_{family}_{case_id}_{source_tier}_{index}"
+        ),
+        "case_id": case_id,
+        "error_family_combination": family,
+        "error_cardinality": cardinality,
+        "source_tier": source_tier,
+    }
+
+
+def _ownership(
+    splits: dict[str, list[dict[str, object]]],
+) -> dict[str, str]:
+    return {
+        str(row["physical_root_fingerprint"]): split
+        for split, rows in splits.items()
+        for row in rows
+    }
 
 
 class PhysicalRootSplitTests(unittest.TestCase):
@@ -93,6 +128,161 @@ class PhysicalRootSplitTests(unittest.TestCase):
         )
         self.assertFalse(report["passed"])
         self.assertIn("physical_v1_x", report["overlapping_fingerprints"])
+
+
+class StratifiedPhysicalRootSplitTests(unittest.TestCase):
+    def test_stratum_aliases_and_truth_lists_are_canonicalized(self) -> None:
+        stratum = scenario_split_stratum(
+            {
+                "case": "case14",
+                "scenario_family": "topology+measurement",
+                "metadata": {"source_tier": "engineering"},
+                "true_measurement_errors": [{"index": 1}],
+                "hidden_truth": {
+                    "true_measurement_errors": [{"index": 1}],
+                    "true_topology_errors": [{"line_index1": 2}],
+                },
+            }
+        )
+        self.assertEqual(stratum.case_id, "case14")
+        self.assertEqual(
+            stratum.error_family_combination, "measurement+topology"
+        )
+        self.assertEqual(stratum.error_cardinality, 2)
+        self.assertEqual(stratum.source_tier, "engineering")
+
+    def test_deterministic_assignment_is_grouped_and_stratified(self) -> None:
+        rows: list[dict[str, object]] = []
+        for source_tier in ("measured", "synthetic"):
+            for index in range(8):
+                root = _split_root(index, source_tier=source_tier)
+                rows.extend(
+                    [
+                        {**root, "example_id": f"{root['scenario_id']}_a"},
+                        {**root, "example_id": f"{root['scenario_id']}_b"},
+                    ]
+                )
+
+        first = stratified_grouped_scenario_split(
+            rows, train_fraction=0.5, validation_fraction=0.25, seed=17
+        )
+        second = stratified_grouped_scenario_split(
+            reversed(rows), train_fraction=0.5, validation_fraction=0.25, seed=17
+        )
+        self.assertEqual(_ownership(first), _ownership(second))
+        self.assertTrue(audit_physical_split_disjointness(first)["passed"])
+
+        for source_tier in ("measured", "synthetic"):
+            actual = {
+                split: len(
+                    {
+                        row["physical_root_fingerprint"]
+                        for row in split_rows
+                        if row["source_tier"] == source_tier
+                    }
+                )
+                for split, split_rows in first.items()
+            }
+            self.assertEqual(actual, {"train": 4, "validation": 2, "test": 2})
+
+    def test_critical_family_minima_rebalance_stratum_quotas(self) -> None:
+        rows = [
+            _split_root(index, source_tier="measured" if index < 6 else "synthetic")
+            for index in range(12)
+        ]
+        splits = stratified_grouped_scenario_split(
+            rows,
+            train_fraction=0.8,
+            validation_fraction=0.1,
+            seed=23,
+            critical_families=["measurement"],
+            minimum_roots_per_critical_family={"validation": 3, "test": 3},
+        )
+        report = audit_stratified_split_coverage(
+            splits,
+            critical_families=["measurement"],
+            minimum_roots_per_critical_family={"validation": 3, "test": 3},
+        )
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(
+            report["root_counts_by_family_and_split"]["measurement"],
+            {"train": 6, "validation": 3, "test": 3},
+        )
+
+    def test_infeasible_critical_family_coverage_fails_closed(self) -> None:
+        rows = [_split_root(index) for index in range(9)]
+        with self.assertRaises(StratifiedSplitError) as caught:
+            stratified_grouped_scenario_split(
+                rows,
+                seed=2,
+                critical_families=["measurement"],
+                minimum_roots_per_critical_family={
+                    "validation": 5,
+                    "test": 5,
+                },
+            )
+        diagnostic = caught.exception.diagnostics[
+            "infeasible_critical_family_coverage"
+        ][0]
+        self.assertEqual(diagnostic["available_independent_roots"], 9)
+        self.assertEqual(diagnostic["required_independent_roots"], 10)
+
+    def test_missing_source_tier_fails_closed_with_row_diagnostic(self) -> None:
+        row = _split_root(0)
+        del row["source_tier"]
+        with self.assertRaises(StratifiedSplitError) as caught:
+            stratified_grouped_scenario_split([row])
+        diagnostic = caught.exception.diagnostics
+        self.assertEqual(diagnostic["input_error_count"], 1)
+        self.assertEqual(
+            diagnostic["input_errors"][0]["code"], "invalid_split_stratum"
+        )
+        self.assertIn("source_tier", diagnostic["input_errors"][0]["error"])
+
+    def test_one_physical_root_cannot_carry_multiple_strata(self) -> None:
+        first = _split_root(0)
+        second = {**first, "source_tier": "synthetic", "example_id": "branch_b"}
+        with self.assertRaises(StratifiedSplitError) as caught:
+            stratified_grouped_scenario_split([first, second])
+        self.assertEqual(
+            caught.exception.diagnostics["input_errors"][0]["code"],
+            "physical_root_has_multiple_strata",
+        )
+
+    def test_coverage_audit_reports_manual_family_deficit(self) -> None:
+        validation = _split_root(0)
+        report = audit_stratified_split_coverage(
+            {"train": [], "validation": [validation], "test": []},
+            critical_families=["measurement"],
+            minimum_roots_per_critical_family={"validation": 1, "test": 1},
+        )
+        self.assertFalse(report["passed"])
+        self.assertEqual(
+            report["coverage_deficits"],
+            [
+                {
+                    "family": "measurement",
+                    "split": "test",
+                    "required": 1,
+                    "actual": 0,
+                    "deficit": 1,
+                }
+            ],
+        )
+
+    def test_coverage_audit_rejects_one_root_with_multiple_strata(self) -> None:
+        first = _split_root(0)
+        report = audit_stratified_split_coverage(
+            {
+                "train": [first, {**first, "source_tier": "synthetic"}],
+                "validation": [],
+                "test": [],
+            }
+        )
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            first["physical_root_fingerprint"], report["inconsistent_root_strata"]
+        )
 
 
 if __name__ == "__main__":

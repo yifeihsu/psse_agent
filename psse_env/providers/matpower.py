@@ -80,6 +80,16 @@ from trace_protocol import (  # noqa: E402  (repo-root module)
 )
 
 
+# When the global chi-square score is only marginally above its threshold,
+# independent singleton estimates can leave enough coupled energy for a
+# healthy channel to become the largest residual.  A single, bounded
+# re-estimation of already accepted targets is safer than expanding the repair
+# set in that ambiguity band.  Eight remaining actions preserve room for a
+# rejected refinement plus one normal correction/verification transaction.
+_COUPLED_REFINEMENT_MAX_ANOMALY_RATIO = 1.10
+_COUPLED_REFINEMENT_MIN_REMAINING_BUDGET = 8
+
+
 def measurement_index_map(nb: int, nl: int) -> dict[str, slice]:
     """Channel layout of the full measurement vector."""
     return {
@@ -486,13 +496,20 @@ class MatpowerDeploymentProviders:
         residuals: Sequence[float],
         lambda_values: Sequence[float],
         nl: int,
+        *,
+        candidate_case: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Observable target-progress evidence for a candidate verification.
 
         Derived solely from the candidate solve: a measurement target is fixed
-        when every corrected index sits below the residual threshold; a branch
-        target is fixed when its Lagrange multipliers sit below the multiplier
-        threshold. ``remaining_suspect_count`` counts non-target residual and
+        when every corrected index sits below the residual threshold; a
+        parameter target is fixed when its Lagrange multipliers sit below the
+        multiplier threshold; and a topology target is fixed when the
+        candidate case structurally carries the exact requested branch status.
+        A remaining independent meter error can keep the corrected branch's
+        multiplier elevated, so using that multiplier as the topology target
+        test would incorrectly roll back a structurally verified outage repair.
+        ``remaining_suspect_count`` counts non-target residual and
         branch-multiplier threshold violations. It is observable diagnostic
         evidence, not an estimate of physical-error cardinality.
         """
@@ -526,6 +543,35 @@ class MatpowerDeploymentProviders:
             ]
             return max(values, default=0.0)
 
+        topology_status_matches: bool | None = None
+        if tool == CORRECT_TOPOLOGY:
+            requested_status = arguments.get("status", arguments.get("expected_status"))
+            if arguments.get("desired_status") is not None and requested_status is None:
+                requested_status = int(bool(arguments["desired_status"]))
+            try:
+                requested_status = int(requested_status)
+                row0 = next(iter(target_rows))
+                branch = candidate_case["branch"] if candidate_case is not None else None
+                raw_candidate_status = float(branch[row0][10])
+                candidate_status = int(raw_candidate_status)
+            except (
+                KeyError,
+                IndexError,
+                TypeError,
+                ValueError,
+                OverflowError,
+                StopIteration,
+            ):
+                return None
+            if (
+                requested_status not in {0, 1}
+                or not math.isfinite(raw_candidate_status)
+                or raw_candidate_status != float(candidate_status)
+                or candidate_status not in {0, 1}
+            ):
+                return None
+            topology_status_matches = candidate_status == requested_status
+
         if target_measurements:
             target_values = [
                 abs(float(residuals[index]))
@@ -534,6 +580,10 @@ class MatpowerDeploymentProviders:
             ]
             target_metric_kind = "max_abs_normalized_residual"
             target_metric_threshold = self.residual_threshold
+        elif tool == CORRECT_TOPOLOGY:
+            target_values = [0.0 if topology_status_matches else 1.0]
+            target_metric_kind = "branch_status_mismatch"
+            target_metric_threshold = 0.5
         else:
             target_values = [row_lambda(row0) for row0 in target_rows]
             target_metric_kind = "max_abs_branch_multiplier"
@@ -551,7 +601,7 @@ class MatpowerDeploymentProviders:
             for row0 in range(nl)
             if row0 not in target_rows and row_lambda(row0) >= self.lambda_threshold
         )
-        return {
+        evidence = {
             "target_fixed": bool(target_fixed),
             "target_progress": 1.0 if target_fixed else 0.0,
             "target_metric_kind": target_metric_kind,
@@ -559,6 +609,32 @@ class MatpowerDeploymentProviders:
             "target_metric_threshold": float(target_metric_threshold),
             "remaining_suspect_count": int(remaining),
         }
+        if tool == CORRECT_TOPOLOGY:
+            topology_multiplier = max(
+                (row_lambda(row0) for row0 in target_rows), default=math.inf
+            )
+            if not math.isfinite(topology_multiplier):
+                return None
+            evidence.update(
+                {
+                    # Structural equality proves that the requested mutation
+                    # landed on the intended row.  The residual branch
+                    # multiplier remains a separate ambiguity signal used by
+                    # the deployment quality gate; it is not the topology
+                    # target-locality predicate itself.
+                    "topology_target_branch_multiplier": float(topology_multiplier),
+                    "topology_target_branch_multiplier_threshold": float(
+                        self.lambda_threshold
+                    ),
+                    "topology_target_branch_multiplier_cleared": bool(
+                        topology_multiplier < self.lambda_threshold
+                    ),
+                    "topology_target_status_matches_requested": bool(
+                        topology_status_matches
+                    ),
+                }
+            )
+        return evidence
 
     def _steady_state_physical_evidence(
         self, solved: Mapping[str, Any]
@@ -722,6 +798,7 @@ class MatpowerDeploymentProviders:
                     item = {
                         "type": "bus_voltage_out_of_bounds",
                         "bus": bus_id,
+                        "measurement_index0": int(index_map["Vm"].start) + row,
                         "observed_vm_pu": observed,
                         "vmin_pu": vmin,
                         "vmax_pu": vmax,
@@ -924,6 +1001,7 @@ class MatpowerDeploymentProviders:
                 residuals,
                 [float(value) for value in payload.get("lambdaN") or []],
                 nl,
+                candidate_case=solved["ppc"],
             )
             if target_evidence is not None:
                 resolved = bool(statistic < threshold)
@@ -958,23 +1036,250 @@ class MatpowerDeploymentProviders:
             residuals, solved["index_map"], k=self.top_k, min_abs=self.residual_threshold
         )
         state_id = str(state.get("state_id") or "")
-        suspect_indices = sorted(int(item["index0"]) for item in evidence)
+        observation = state.get("policy_observation")
+        observation = observation if isinstance(observation, Mapping) else {}
+        accepted_branch_rows: set[int] = set()
+        for accepted in observation.get("accepted_corrections") or []:
+            if not isinstance(accepted, Mapping):
+                continue
+            accepted_action = accepted.get("source_action") or accepted.get("action")
+            if not isinstance(accepted_action, Mapping) or str(
+                accepted_action.get("tool") or ""
+            ) not in {CORRECT_PARAMETERS, CORRECT_TOPOLOGY}:
+                continue
+            accepted_arguments = accepted_action.get("arguments")
+            accepted_arguments = (
+                accepted_arguments if isinstance(accepted_arguments, Mapping) else {}
+            )
+            try:
+                if accepted_arguments.get("branch_row0") is not None:
+                    accepted_branch_rows.add(int(accepted_arguments["branch_row0"]))
+                elif accepted_arguments.get("line_index1") is not None:
+                    accepted_branch_rows.add(int(accepted_arguments["line_index1"]) - 1)
+                elif accepted_arguments.get("line_index") is not None:
+                    accepted_branch_rows.add(int(accepted_arguments["line_index"]) - 1)
+            except (TypeError, ValueError, OverflowError):
+                continue
+        suppressed_colocated = sorted(
+            int(item["index0"])
+            for item in evidence
+            if str(item.get("channel") or "") in {"Pf", "Qf", "Pt", "Qt"}
+            and item.get("channel_offset") in accepted_branch_rows
+        )
+        if accepted_branch_rows:
+            evidence = [
+                item
+                for item in evidence
+                if not (
+                    str(item.get("channel") or "") in {"Pf", "Qf", "Pt", "Qt"}
+                    and item.get("channel_offset") in accepted_branch_rows
+                )
+            ]
+        # Preserve residual-strength ordering for singleton hypotheses.  The
+        # only joint action allowed ahead of them is the physically bounded Vm
+        # group below; a broad top-k correction could rewrite healthy channels
+        # and is never emitted.
+        ranked_indices = list(
+            dict.fromkeys(int(item["index0"]) for item in evidence)
+        )
+        physical_vm_joint_targets = self._physical_vm_joint_targets(
+            solved, evidence
+        )
         supported: list[dict[str, Any]] = []
-        if suspect_indices:
+        for index in ranked_indices:
             supported.append(
                 {
                     "tool": CORRECT_MEASUREMENTS,
-                    "arguments": {"state_id": state_id, "suspect_group": suspect_indices},
+                    "arguments": {"state_id": state_id, "suspect_group": [index]},
                 }
             )
-            for index in suspect_indices:
-                if len(suspect_indices) > 1:
-                    supported.append(
-                        {
-                            "tool": CORRECT_MEASUREMENTS,
-                            "arguments": {"state_id": state_id, "suspect_group": [index]},
-                        }
-                    )
+        if len(physical_vm_joint_targets) >= 2:
+            supported.append(
+                {
+                    "tool": CORRECT_MEASUREMENTS,
+                    "arguments": {
+                        "state_id": state_id,
+                        "suspect_group": physical_vm_joint_targets,
+                    },
+                }
+            )
+        highest_remaining_vm_residual = next(
+            (
+                index
+                for index in ranked_indices
+                if index not in set(physical_vm_joint_targets)
+            ),
+            None,
+        )
+        physical_vm_closure_targets = (
+            sorted({*physical_vm_joint_targets, highest_remaining_vm_residual})
+            if physical_vm_joint_targets
+            and highest_remaining_vm_residual is not None
+            else []
+        )
+        if len(physical_vm_closure_targets) >= 2:
+            supported.append(
+                {
+                    "tool": CORRECT_MEASUREMENTS,
+                    "arguments": {
+                        "state_id": state_id,
+                        "suspect_group": physical_vm_closure_targets,
+                    },
+                }
+            )
+        accepted_records = observation.get("accepted_corrections") or []
+        accepted_indices: set[int] = set()
+        accepted_index_counts: dict[int, int] = {}
+        accepted_joint_groups: set[frozenset[int]] = set()
+        for accepted in accepted_records:
+            if not isinstance(accepted, Mapping):
+                continue
+            accepted_action = accepted.get("source_action") or accepted.get("action")
+            if not isinstance(accepted_action, Mapping):
+                continue
+            if str(accepted_action.get("tool") or "") != CORRECT_MEASUREMENTS:
+                continue
+            accepted_arguments = accepted_action.get("arguments")
+            accepted_arguments = (
+                accepted_arguments if isinstance(accepted_arguments, Mapping) else {}
+            )
+            accepted_group = accepted_arguments.get("suspect_group")
+            accepted_updates = accepted_arguments.get("measurement_updates")
+            raw_indices = (
+                accepted_group
+                if isinstance(accepted_group, Sequence)
+                and not isinstance(accepted_group, (str, bytes))
+                else accepted_updates.keys()
+                if isinstance(accepted_updates, Mapping)
+                else ()
+            )
+            accepted_group_indices: set[int] = set()
+            for raw_index in raw_indices:
+                try:
+                    index = int(raw_index)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                accepted_indices.add(index)
+                accepted_index_counts[index] = accepted_index_counts.get(index, 0) + 1
+                accepted_group_indices.add(index)
+            if len(accepted_group_indices) >= 2:
+                accepted_joint_groups.add(frozenset(accepted_group_indices))
+
+        statistic = float(payload.get("global_residual_sum") or 0.0)
+        dof = max(1, len(residuals) - (2 * int(solved["nb"]) - 1))
+        threshold = float(chi2_threshold(dof, self.chi2_alpha))
+        colocated_accepted_indices: set[int] = set()
+        if accepted_branch_rows:
+            for index in accepted_indices:
+                for channel in ("Pf", "Qf", "Pt", "Qt"):
+                    channel_slice = solved["index_map"].get(channel)
+                    if (
+                        channel_slice is not None
+                        and channel_slice.start <= index < channel_slice.stop
+                        and index - channel_slice.start in accepted_branch_rows
+                    ):
+                        colocated_accepted_indices.add(index)
+                        break
+        refinement_targets = sorted(accepted_indices - colocated_accepted_indices)
+        unaccepted_targets_in_rank_order = [
+            index for index in ranked_indices if index not in accepted_indices
+        ]
+        unaccepted_ranked_targets = sorted(set(unaccepted_targets_in_rank_order))
+        dominant_unaccepted_target = bool(
+            ranked_indices and ranked_indices[0] not in accepted_indices
+        )
+        try:
+            remaining_budget = int(observation.get("remaining_budget") or 0)
+        except (TypeError, ValueError, OverflowError):
+            remaining_budget = 0
+        anomaly_ratio = statistic / threshold if threshold > 0.0 else math.inf
+        near_threshold_refinement_override = bool(
+            dominant_unaccepted_target
+            and anomaly_ratio <= _COUPLED_REFINEMENT_MAX_ANOMALY_RATIO
+            and remaining_budget >= _COUPLED_REFINEMENT_MIN_REMAINING_BUDGET
+        )
+        refinement_already_accepted = bool(
+            refinement_targets
+            and (
+                frozenset(refinement_targets) in accepted_joint_groups
+                or (
+                    len(refinement_targets) == 1
+                    and accepted_index_counts.get(refinement_targets[0], 0) >= 2
+                )
+            )
+        )
+        # A sequence of independently estimated singleton corrections can
+        # leave coupled residual energy on an otherwise healthy channel.  Do
+        # one joint re-estimation of the already accepted targets after no new
+        # residual-dominant singleton remains.  There is one narrow exception:
+        # inside a 10% chi-square ambiguity band, and only with enough budget
+        # to survive a rejected transaction, refine the accepted set before
+        # expanding it.  This observable guard prevents a weak collateral
+        # residual from turning a fully repaired episode into a healthy-meter
+        # rewrite while still prioritizing clear new faults.
+        coupled_refinement_ready = bool(
+            len(refinement_targets) >= 2
+            and statistic >= threshold
+            and (
+                not dominant_unaccepted_target
+                or near_threshold_refinement_override
+            )
+            and not refinement_already_accepted
+        )
+        # A meter corrected before a branch-model repair was estimated against
+        # the stale model.  If the global statistic remains above threshold,
+        # permit one re-estimation of only those already accepted meter targets
+        # on the repaired model.  This cannot introduce a new target, excludes
+        # direct-flow channels on the repaired branch, and still has to pass the
+        # normal transactional candidate verification before it can commit.
+        post_branch_refinement_ready = bool(
+            accepted_branch_rows
+            and refinement_targets
+            and statistic >= threshold
+            and not refinement_already_accepted
+        )
+        refinement_ready = coupled_refinement_ready or post_branch_refinement_ready
+        coupled_fallback_targets = (
+            sorted(
+                set(refinement_targets)
+                | set(unaccepted_targets_in_rank_order[:2])
+            )
+            if len(unaccepted_targets_in_rank_order) >= 2
+            else []
+        )
+        if len(coupled_fallback_targets) >= 2:
+            fallback_action = {
+                "tool": CORRECT_MEASUREMENTS,
+                "arguments": {
+                    "state_id": state_id,
+                    "suspect_group": coupled_fallback_targets,
+                },
+            }
+            if fallback_action not in supported:
+                supported.append(fallback_action)
+        if refinement_ready:
+            all_residual_evidence = build_residual_evidence(
+                residuals,
+                solved["index_map"],
+                k=len(residuals),
+                min_abs=0.0,
+            )
+            present = {int(item["index0"]) for item in evidence}
+            evidence.extend(
+                item
+                for item in all_residual_evidence
+                if int(item["index0"]) in accepted_indices
+                and int(item["index0"]) not in present
+            )
+            refinement_action = {
+                "tool": CORRECT_MEASUREMENTS,
+                "arguments": {
+                    "state_id": state_id,
+                    "suspect_group": refinement_targets,
+                },
+            }
+            if refinement_action not in supported:
+                supported.append(refinement_action)
         return {
             **self._binding(state),
             "evidence_source": "deployment_context:wls_residuals",
@@ -982,7 +1287,102 @@ class MatpowerDeploymentProviders:
             "finding_count": len(evidence),
             "measurement_findings": evidence,
             "supported_corrections": supported,
+            "physical_vm_joint_targets": physical_vm_joint_targets,
+            "physical_vm_closure_targets": physical_vm_closure_targets,
+            "coupled_measurement_fallback_targets": coupled_fallback_targets,
+            "suppressed_colocated_post_branch_indices": suppressed_colocated,
+            "accepted_target_refinement": bool(
+                refinement_ready
+            ),
+            "accepted_target_refinement_blocked_by": unaccepted_ranked_targets,
+            "accepted_target_refinement_dominant_target_unaccepted": (
+                dominant_unaccepted_target
+            ),
+            "accepted_target_refinement_near_threshold_override": (
+                near_threshold_refinement_override
+            ),
+            "accepted_target_refinement_anomaly_ratio": anomaly_ratio,
+            "accepted_target_refinement_remaining_budget": remaining_budget,
+            "accepted_target_refinement_already_accepted": (
+                refinement_already_accepted
+            ),
+            "accepted_target_refinement_kind": (
+                "post_branch_model_reestimate"
+                if post_branch_refinement_ready
+                else "coupled_measurement_reestimate"
+                if coupled_refinement_ready
+                else None
+            ),
+            "accepted_target_refinement_suppressed_colocated_indices": sorted(
+                colocated_accepted_indices
+            ),
+            "chi_square_statistic": statistic,
+            "chi_square_threshold": threshold,
         }
+
+    def _physical_vm_joint_targets(
+        self,
+        solved: Mapping[str, Any],
+        evidence: Sequence[Mapping[str, Any]],
+    ) -> list[int]:
+        """Group only residual-ranked Vm channels outside declared limits.
+
+        Multiple corrupted voltage-magnitude meters can make every singleton
+        candidate fail the absolute physical check because the other bad Vm
+        channels remain outside VMIN/VMAX.  This bounded proposal contains
+        only current residual findings that independently exceed the residual
+        threshold and whose raw telemetry violates the corresponding case
+        limit by more than the configured physical tolerance.  It never adds
+        an in-bound residual or a non-Vm channel, and singleton alternatives
+        remain in the context response for transactional fallback.
+        """
+        try:
+            bus = solved["ppc"]["bus"]
+            z = solved["z"]
+            vm_slice = solved["index_map"]["Vm"]
+            nb = int(solved["nb"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return []
+        try:
+            if len(bus) != nb or len(z) < int(vm_slice.stop):
+                return []
+        except (TypeError, AttributeError):
+            return []
+
+        targets: list[int] = []
+        for item in evidence:
+            if not isinstance(item, Mapping) or str(item.get("channel") or "") != "Vm":
+                continue
+            try:
+                index = int(item["index0"])
+                channel_offset = int(item["channel_offset"])
+                residual_value = abs(float(item["value"]))
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+            if (
+                residual_value < self.residual_threshold
+                or index != int(vm_slice.start) + channel_offset
+                or not 0 <= channel_offset < nb
+            ):
+                continue
+            try:
+                if int(round(float(bus[channel_offset][1]))) == 4:
+                    continue
+                observed = float(z[index])
+                vmax = float(bus[channel_offset][11])
+                vmin = float(bus[channel_offset][12])
+            except (IndexError, TypeError, ValueError, OverflowError):
+                continue
+            if not all(math.isfinite(value) for value in (observed, vmin, vmax)):
+                continue
+            if vmin <= 0.0 or vmax < vmin:
+                continue
+            if (
+                observed < vmin - self.vm_bound_tolerance_pu
+                or observed > vmax + self.vm_bound_tolerance_pu
+            ):
+                targets.append(index)
+        return sorted(set(targets))
 
     def _lambda_findings(self, solved: Mapping[str, Any]) -> list[dict[str, Any]]:
         payload = solved["payload"]
