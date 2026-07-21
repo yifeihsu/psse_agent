@@ -22,7 +22,11 @@ from psse_env.dagger.rollout_collector import (
     classify_state_example,
 )
 from psse_env.oracle.expert_policy import ExpertPolicyOracle
-from psse_env.state_store import OracleState, PolicyObservation
+from psse_env.state_store import (
+    OracleState,
+    PolicyObservation,
+    find_forbidden_policy_paths,
+)
 from psse_env.transactional_env import TransactionalPSSEEnv
 
 
@@ -335,6 +339,655 @@ class ProductionConfigurationTests(unittest.TestCase):
 
 
 class ProductionEvidenceTests(unittest.TestCase):
+    def test_durable_recovery_evidence_recursively_strips_forbidden_fields(self):
+        @_deterministic_adapter
+        def leaky_wls(state):
+            metrics = _wls_adapter(state)
+            if state.get("parent_state_id"):
+                metrics["physical_bound_violations"] = [
+                    {
+                        "constraint": "voltage",
+                        "nested": {
+                            "hidden_truth": {"fault": "private"},
+                            "true_parameter_errors": [{"line": 3}],
+                        },
+                    }
+                ]
+            return metrics
+
+        @_deterministic_adapter
+        def leaky_context(state):
+            return {
+                "context_rows": [{"state_hash": state["state_hash"]}],
+                "unresolved_signatures": ["measurement_residual_outlier"],
+                "supported_corrections": [
+                    {
+                        "tool": CORRECT_MEASUREMENTS,
+                        "arguments": {
+                            "state_id": state["state_id"],
+                            "measurement_updates": {0: 8.0},
+                        },
+                    }
+                ],
+                "measurement_findings": [
+                    {
+                        "index": 0,
+                        "nested": {
+                            "oracle_action_hints": [{"tool": "private"}],
+                            "true_measurement_errors": [{"index": 0}],
+                        },
+                    }
+                ],
+            }
+
+        env = _production_env(
+            wls=leaky_wls,
+            contexts={
+                GET_MEASUREMENT_CONTEXT: leaky_context,
+                GET_PARAMETER_CONTEXT: _context_adapter,
+                GET_TOPOLOGY_CONTEXT: _context_adapter,
+            },
+        )
+        state = env.reset(_measurement_scenario())
+        active_id = state["active_state_id"]
+        env.step({"tool": RUN_WLS, "arguments": {"state_id": active_id}})
+        _, context_output = env.step(
+            {"tool": GET_MEASUREMENT_CONTEXT, "arguments": {"state_id": active_id}}
+        )
+        observation = env.get_policy_observation()
+        self.assertEqual(
+            find_forbidden_policy_paths(observation.fresh_context_evidence), []
+        )
+
+        action = context_output["tool_metrics"]["supported_corrections"][0]
+        _, correction_output = env.step(action)
+        candidate_id = correction_output["candidate_state_id"]
+        env.step({"tool": RUN_WLS, "arguments": {"state_id": candidate_id}})
+        env.step(
+            {"tool": ROLLBACK_STATE, "arguments": {"candidate_state_id": candidate_id}}
+        )
+        verification_summary = env.get_policy_observation().rejected_hypotheses[-1][
+            "verification_summary"
+        ]
+        self.assertEqual(find_forbidden_policy_paths(verification_summary), [])
+        self.assertEqual(
+            verification_summary["physical_bound_violations"][0]["constraint"],
+            "voltage",
+        )
+
+    def test_second_same_family_context_replaces_durable_inventory(self):
+        call_count = 0
+
+        @_deterministic_adapter
+        def changing_context(state):
+            nonlocal call_count
+            call_count += 1
+            value = float(call_count)
+            result = {
+                "context_rows": [{"state_hash": state["state_hash"]}],
+                "unresolved_signatures": ["measurement_residual_outlier"],
+                "supported_corrections": [
+                    {
+                        "tool": CORRECT_MEASUREMENTS,
+                        "arguments": {
+                            "state_id": state["state_id"],
+                            "measurement_updates": {0: value},
+                        },
+                    }
+                ],
+            }
+            if call_count == 1:
+                result["measurement_findings"] = [{"inventory": "first"}]
+            return result
+
+        env = _production_env(
+            contexts={
+                GET_MEASUREMENT_CONTEXT: changing_context,
+                GET_PARAMETER_CONTEXT: _context_adapter,
+                GET_TOPOLOGY_CONTEXT: _context_adapter,
+            }
+        )
+        active_id = env.reset(_measurement_scenario())["active_state_id"]
+        env.step({"tool": RUN_WLS, "arguments": {"state_id": active_id}})
+        action = {
+            "tool": GET_MEASUREMENT_CONTEXT,
+            "arguments": {"state_id": active_id},
+        }
+        env.step(action)
+        _, second_output = env.step(action)
+
+        durable = env.get_policy_observation().fresh_context_evidence[
+            "measurement"
+        ]
+        self.assertEqual(
+            durable["supported_corrections"],
+            second_output["tool_metrics"]["supported_corrections"],
+        )
+        self.assertNotIn("measurement_findings", durable)
+
+    def test_context_evidence_survives_same_state_rollback(self):
+        @_deterministic_adapter
+        def no_progress_context(state):
+            return {
+                "context_rows": [{"state_hash": state["state_hash"]}],
+                "unresolved_signatures": ["measurement_residual_outlier"],
+                "supported_corrections": [
+                    {
+                        "tool": CORRECT_MEASUREMENTS,
+                        "arguments": {
+                            "state_id": state["state_id"],
+                            "measurement_updates": {0: 8.0},
+                        },
+                    }
+                ],
+            }
+
+        env = _production_env(
+            contexts={
+                GET_MEASUREMENT_CONTEXT: no_progress_context,
+                GET_PARAMETER_CONTEXT: _context_adapter,
+                GET_TOPOLOGY_CONTEXT: _context_adapter,
+            }
+        )
+        state = env.reset(_measurement_scenario())
+        active_id = state["active_state_id"]
+        env.step({"tool": RUN_WLS, "arguments": {"state_id": active_id}})
+        _, context_output = env.step(
+            {"tool": GET_MEASUREMENT_CONTEXT, "arguments": {"state_id": active_id}}
+        )
+        action = context_output["tool_metrics"]["supported_corrections"][0]
+        before = env.get_policy_observation().fresh_context_evidence
+
+        _, correction_output = env.step(action)
+        candidate_id = correction_output["candidate_state_id"]
+        env.step({"tool": RUN_WLS, "arguments": {"state_id": candidate_id}})
+        env.step(
+            {"tool": ROLLBACK_STATE, "arguments": {"candidate_state_id": candidate_id}}
+        )
+        observation = env.get_policy_observation()
+
+        self.assertEqual(observation.fresh_context_evidence, before)
+        self.assertTrue(observation.has_fresh_measurement_context)
+        self.assertEqual(
+            observation.rejected_hypotheses[-1]["verification_summary"][
+                "global_progress"
+            ],
+            0.0,
+        )
+
+    def test_context_evidence_is_cleared_when_candidate_commits(self):
+        env = _production_env()
+        state = env.reset(_measurement_scenario())
+        active_id = state["active_state_id"]
+        env.step({"tool": RUN_WLS, "arguments": {"state_id": active_id}})
+        _, context_output = env.step(
+            {"tool": GET_MEASUREMENT_CONTEXT, "arguments": {"state_id": active_id}}
+        )
+        action = context_output["tool_metrics"]["supported_corrections"][0]
+        self.assertTrue(env.get_policy_observation().fresh_context_evidence)
+        env.context_flags["rejected_hypotheses"] = [
+            {
+                "candidate_parent_id": active_id,
+                "candidate_state_id": f"{active_id}:rejected-before-commit",
+                "source_action": action,
+            }
+        ]
+        self.assertTrue(env.get_policy_observation().rejected_hypotheses)
+
+        _, correction_output = env.step(action)
+        candidate_id = correction_output["candidate_state_id"]
+        env.step({"tool": RUN_WLS, "arguments": {"state_id": candidate_id}})
+        env.step(
+            {"tool": COMMIT_STATE, "arguments": {"candidate_state_id": candidate_id}}
+        )
+        observation = env.get_policy_observation()
+
+        self.assertEqual(observation.fresh_context_evidence, {})
+        self.assertFalse(observation.has_fresh_measurement_context)
+        self.assertEqual(observation.rejected_hypotheses, [])
+
+    def test_malformed_direct_context_inventory_fails_atomically(self):
+        @_deterministic_adapter
+        def malformed_context(state):
+            return {
+                "context_rows": [{"state_hash": state["state_hash"]}],
+                "supported_corrections": [
+                    {
+                        "tool": CORRECT_MEASUREMENTS,
+                        "arguments": {
+                            "state_id": state["state_id"],
+                            "measurement_updates": {0: 1.0},
+                        },
+                    },
+                    {
+                        "tool": CORRECT_MEASUREMENTS,
+                        "arguments": {
+                            "state_id": "wrong-state",
+                            "measurement_updates": {0: 1.0},
+                        },
+                    },
+                ],
+            }
+
+        env = _production_env(
+            contexts={
+                GET_MEASUREMENT_CONTEXT: malformed_context,
+                GET_PARAMETER_CONTEXT: _context_adapter,
+                GET_TOPOLOGY_CONTEXT: _context_adapter,
+            }
+        )
+        active_id = env.reset(_measurement_scenario())["active_state_id"]
+        env.step({"tool": RUN_WLS, "arguments": {"state_id": active_id}})
+
+        _, output = env.step(
+            {
+                "tool": GET_MEASUREMENT_CONTEXT,
+                "arguments": {"state_id": active_id},
+            }
+        )
+
+        self.assertEqual(output["execution_status"], "failure")
+        observation = env.get_policy_observation()
+        self.assertFalse(observation.has_fresh_measurement_context)
+        self.assertEqual(observation.fresh_context_evidence, {})
+
+    def test_production_branch_route_contract_rejects_incoherent_status(self):
+        missing = object()
+        cases = (
+            ("missing", missing, True),
+            ("unknown", "unknown", True),
+            ("actionable_empty", "actionable", False),
+            ("complete_negative_nonempty", "complete_negative", True),
+            (
+                "unavailable_nonempty",
+                "unavailable_or_inconclusive",
+                True,
+            ),
+        )
+        for name, route_status, with_action in cases:
+            with self.subTest(name=name):
+                @_deterministic_adapter
+                def branch_context(state):
+                    payload = {
+                        "parameter_findings": [{"line_row0": 0}],
+                        "supported_corrections": (
+                            [
+                                {
+                                    "tool": CORRECT_PARAMETERS,
+                                    "arguments": {
+                                        "state_id": state["state_id"],
+                                        "line_index": 1,
+                                    },
+                                }
+                            ]
+                            if with_action
+                            else []
+                        ),
+                    }
+                    if route_status is not missing:
+                        payload["route_status"] = route_status
+                    return payload
+
+                env = _production_env(
+                    contexts={
+                        GET_MEASUREMENT_CONTEXT: _context_adapter,
+                        GET_PARAMETER_CONTEXT: branch_context,
+                        GET_TOPOLOGY_CONTEXT: _context_adapter,
+                    }
+                )
+                active_id = env.reset(_measurement_scenario())["active_state_id"]
+                _, output = env.step(
+                    {
+                        "tool": GET_PARAMETER_CONTEXT,
+                        "arguments": {"state_id": active_id},
+                    }
+                )
+
+                self.assertEqual(output["execution_status"], "failure")
+                self.assertEqual(
+                    output["error_detail"],
+                    "get_parameter_context_route_contract_invalid",
+                )
+                observation = env.get_policy_observation()
+                self.assertFalse(observation.has_fresh_parameter_context)
+                self.assertNotIn(
+                    "parameter", observation.fresh_context_evidence
+                )
+
+    def test_production_branch_route_contract_accepts_coherent_status(self):
+        cases = (
+            ("actionable", True),
+            ("complete_negative", False),
+            ("unavailable_or_inconclusive", False),
+        )
+        for route_status, with_action in cases:
+            with self.subTest(route_status=route_status):
+                @_deterministic_adapter
+                def branch_context(state):
+                    return {
+                        "parameter_findings": [{"line_row0": 0}],
+                        "supported_corrections": (
+                            [
+                                {
+                                    "tool": CORRECT_PARAMETERS,
+                                    "arguments": {
+                                        "state_id": state["state_id"],
+                                        "line_index": 1,
+                                    },
+                                }
+                            ]
+                            if with_action
+                            else []
+                        ),
+                        "route_status": route_status,
+                    }
+
+                env = _production_env(
+                    contexts={
+                        GET_MEASUREMENT_CONTEXT: _context_adapter,
+                        GET_PARAMETER_CONTEXT: branch_context,
+                        GET_TOPOLOGY_CONTEXT: _context_adapter,
+                    }
+                )
+                active_id = env.reset(_measurement_scenario())["active_state_id"]
+                _, output = env.step(
+                    {
+                        "tool": GET_PARAMETER_CONTEXT,
+                        "arguments": {"state_id": active_id},
+                    }
+                )
+
+                self.assertEqual(output["execution_status"], "success")
+                observation = env.get_policy_observation()
+                self.assertTrue(observation.has_fresh_parameter_context)
+                self.assertEqual(
+                    observation.fresh_context_evidence["parameter"][
+                        "route_status"
+                    ],
+                    route_status,
+                )
+
+    def test_malformed_bundled_inventory_does_not_close_branch_route(self):
+        @_deterministic_adapter
+        def bundled_context(state):
+            return {
+                "context_rows": [{"state_hash": state["state_hash"]}],
+                "supported_corrections": [
+                    {
+                        "tool": CORRECT_MEASUREMENTS,
+                        "arguments": {
+                            "state_id": state["state_id"],
+                            "measurement_updates": {0: 1.0},
+                        },
+                    }
+                ],
+                "branch_route_screening": {
+                    "parameter": {
+                        "state_id": state["state_id"],
+                        "state_hash": state["state_hash"],
+                        "evidence_source": "deployment_context:test",
+                        "context_tool": GET_PARAMETER_CONTEXT,
+                        "route_status": "complete_negative",
+                        "supported_corrections": [
+                            {
+                                "tool": CORRECT_PARAMETERS,
+                                "arguments": {"state_id": "wrong-state"},
+                            }
+                        ],
+                    }
+                },
+            }
+
+        env = _production_env(
+            contexts={
+                GET_MEASUREMENT_CONTEXT: bundled_context,
+                GET_PARAMETER_CONTEXT: _context_adapter,
+                GET_TOPOLOGY_CONTEXT: _context_adapter,
+            }
+        )
+        active_id = env.reset(_measurement_scenario())["active_state_id"]
+        env.step({"tool": RUN_WLS, "arguments": {"state_id": active_id}})
+        _, output = env.step(
+            {
+                "tool": GET_MEASUREMENT_CONTEXT,
+                "arguments": {"state_id": active_id},
+            }
+        )
+
+        self.assertEqual(output["execution_status"], "success")
+        observation = env.get_policy_observation()
+        self.assertTrue(observation.has_fresh_measurement_context)
+        self.assertFalse(observation.has_fresh_parameter_context)
+        self.assertNotIn("parameter", observation.fresh_context_evidence)
+
+    def test_incoherent_bundled_route_status_does_not_expose_correction(self):
+        @_deterministic_adapter
+        def bundled_context(state):
+            return {
+                "context_rows": [{"state_hash": state["state_hash"]}],
+                "supported_corrections": [
+                    {
+                        "tool": CORRECT_MEASUREMENTS,
+                        "arguments": {
+                            "state_id": state["state_id"],
+                            "measurement_updates": {0: 1.0},
+                        },
+                    }
+                ],
+                "branch_route_screening": {
+                    "parameter": {
+                        "state_id": state["state_id"],
+                        "state_hash": state["state_hash"],
+                        "evidence_source": "deployment_context:test",
+                        "context_tool": GET_PARAMETER_CONTEXT,
+                        "route_status": "unavailable_or_inconclusive",
+                        "supported_corrections": [
+                            {
+                                "tool": CORRECT_PARAMETERS,
+                                "arguments": {
+                                    "state_id": state["state_id"],
+                                    "line_index": 1,
+                                },
+                            }
+                        ],
+                    }
+                },
+            }
+
+        env = _production_env(
+            contexts={
+                GET_MEASUREMENT_CONTEXT: bundled_context,
+                GET_PARAMETER_CONTEXT: _context_adapter,
+                GET_TOPOLOGY_CONTEXT: _context_adapter,
+            }
+        )
+        active_id = env.reset(_measurement_scenario())["active_state_id"]
+        _, output = env.step(
+            {
+                "tool": GET_MEASUREMENT_CONTEXT,
+                "arguments": {"state_id": active_id},
+            }
+        )
+
+        self.assertEqual(output["execution_status"], "success")
+        observation = env.get_policy_observation()
+        self.assertTrue(observation.has_fresh_measurement_context)
+        self.assertFalse(observation.has_fresh_parameter_context)
+        self.assertNotIn("parameter", observation.fresh_context_evidence)
+
+    def test_bundled_branch_inventory_supports_training_decision_audit(self):
+        captured_action = None
+
+        @_deterministic_adapter
+        def bundled_context(state):
+            nonlocal captured_action
+            captured_action = {
+                "tool": CORRECT_PARAMETERS,
+                "arguments": {
+                    "state_id": state["state_id"],
+                    "line_index": 1,
+                },
+            }
+            return {
+                "context_rows": [{"state_hash": state["state_hash"]}],
+                "supported_corrections": [
+                    {
+                        "tool": CORRECT_MEASUREMENTS,
+                        "arguments": {
+                            "state_id": state["state_id"],
+                            "measurement_updates": {0: 1.0},
+                        },
+                    }
+                ],
+                "branch_route_screening": {
+                    "parameter": {
+                        "state_id": state["state_id"],
+                        "state_hash": state["state_hash"],
+                        "evidence_source": "deployment_context:test",
+                        "context_tool": GET_PARAMETER_CONTEXT,
+                        "route_status": "actionable",
+                        "supported_corrections": [captured_action],
+                    },
+                    "topology": {
+                        "state_id": state["state_id"],
+                        "state_hash": state["state_hash"],
+                        "evidence_source": "deployment_context:test",
+                        "context_tool": GET_TOPOLOGY_CONTEXT,
+                        "route_status": "complete_negative",
+                        "supported_corrections": [],
+                    },
+                },
+            }
+
+        env = _production_env(
+            contexts={
+                GET_MEASUREMENT_CONTEXT: bundled_context,
+                GET_PARAMETER_CONTEXT: _context_adapter,
+                GET_TOPOLOGY_CONTEXT: _context_adapter,
+            }
+        )
+        active_id = env.reset(_measurement_scenario())["active_state_id"]
+        _, output = env.step(
+            {
+                "tool": GET_MEASUREMENT_CONTEXT,
+                "arguments": {"state_id": active_id},
+            }
+        )
+
+        self.assertEqual(output["execution_status"], "success")
+        self.assertIsNotNone(captured_action)
+        env.assert_training_decision_evidence(captured_action)
+
+    def test_malformed_terminal_closure_context_fails_atomically(self):
+        @_deterministic_adapter
+        def malformed_closure_context(state):
+            closure = {
+                "tool": CORRECT_MEASUREMENTS,
+                "arguments": {
+                    "state_id": state["state_id"],
+                    "suspect_group": [0, 1],
+                },
+            }
+            exhausted = {
+                family: {
+                    "state_id": state["state_id"],
+                    "state_hash": state["state_hash"],
+                    "evidence_source": "deployment_context:test",
+                    "context_tool": context_tool,
+                    "route_status": "complete_negative",
+                    "supported_corrections": [],
+                }
+                for family, context_tool in (
+                    ("parameter", GET_PARAMETER_CONTEXT),
+                    ("topology", GET_TOPOLOGY_CONTEXT),
+                )
+            }
+            return {
+                "context_rows": [{"state_hash": state["state_hash"]}],
+                "supported_corrections": [closure],
+                "verified_terminal_measurement_closure_targets": [0, 1],
+                # The target marker must never authorize a closure without the
+                # companion candidate-quality attestation.
+                "branch_route_screening": exhausted,
+            }
+
+        env = _production_env(
+            contexts={
+                GET_MEASUREMENT_CONTEXT: malformed_closure_context,
+                GET_PARAMETER_CONTEXT: _context_adapter,
+                GET_TOPOLOGY_CONTEXT: _context_adapter,
+            }
+        )
+        active_id = env.reset(_measurement_scenario())["active_state_id"]
+        env.context_flags["accepted_corrections"] = [
+            {
+                "source_action": {
+                    "tool": CORRECT_MEASUREMENTS,
+                    "arguments": {
+                        "state_id": "production-measurement:s0",
+                        "suspect_group": [0],
+                    },
+                }
+            }
+        ]
+
+        _, output = env.step(
+            {
+                "tool": GET_MEASUREMENT_CONTEXT,
+                "arguments": {"state_id": active_id},
+            }
+        )
+
+        self.assertEqual(output["execution_status"], "failure")
+        self.assertEqual(
+            output["error_detail"],
+            "get_measurement_context_terminal_closure_contract_invalid",
+        )
+        observation = env.get_policy_observation()
+        self.assertFalse(observation.has_fresh_measurement_context)
+        self.assertFalse(observation.has_fresh_parameter_context)
+        self.assertFalse(observation.has_fresh_topology_context)
+        self.assertEqual(observation.fresh_context_evidence, {})
+
+    def test_nonactionable_route_inventory_is_not_an_observable_expert_hint(self):
+        active_id = "episode:s1"
+        action = {
+            "tool": CORRECT_PARAMETERS,
+            "arguments": {"state_id": active_id, "line_index": 1},
+        }
+        for route_status in ("unavailable_or_inconclusive", None):
+            with self.subTest(route_status=route_status):
+                metrics = {
+                    "state_id": active_id,
+                    "route_status": route_status,
+                    "supported_corrections": [action],
+                }
+                policy = {
+                    "active_state_id": active_id,
+                    "has_fresh_parameter_context": True,
+                    "parameter_context_state_id": active_id,
+                    "fresh_context_evidence": {"parameter": metrics},
+                }
+                history = [
+                    {
+                        "action": {
+                            "tool": GET_PARAMETER_CONTEXT,
+                            "arguments": {"state_id": active_id},
+                        },
+                        "tool_output": {
+                            "execution_status": "success",
+                            "tool_metrics": metrics,
+                        },
+                    }
+                ]
+
+                self.assertEqual(
+                    ExpertPolicyOracle._observable_supported_corrections(
+                        policy, history
+                    ),
+                    [],
+                )
+
     def test_measurement_context_requirement_cannot_encode_scenario_family(self):
         env = _production_env()
         for supplied in (False, True):

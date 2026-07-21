@@ -217,11 +217,15 @@ class DiagnosticsExpert:
         *,
         active_state_id: str | None = None,
     ) -> dict[str, Mapping[str, Any]]:
-        """Map successfully executed diagnostic tools to their latest metrics.
+        """Map attempted diagnostic tools to their latest observable outcome.
 
         Accepts both raw collector transitions (``action``/``tool_output``)
         and the summarized model history window (``tool``/``outcome``/
-        ``observable_metrics``).
+        ``observable_metrics``). Failed HIF estimators are retained so the
+        ladder can fall back from multiscan to single-scan. Execution failure
+        is never converted into a diagnostic rejection: if every configured
+        estimator fails operationally, the release terminality gate must
+        expose that infrastructure defect.
         """
         completed: dict[str, Mapping[str, Any]] = {}
         for item in history:
@@ -248,13 +252,19 @@ class DiagnosticsExpert:
             if isinstance(output, Mapping):
                 status = output.get("execution_status")
                 metrics = output.get("tool_metrics")
+                error_code = output.get("error_code")
             elif isinstance(outcome, Mapping):
                 status = outcome.get("execution_status")
                 metrics = item.get("observable_metrics")
+                error_code = outcome.get("error_code")
             else:
-                status, metrics = None, None
-            if status == "success":
-                completed[tool] = metrics if isinstance(metrics, Mapping) else {}
+                status, metrics, error_code = None, None, None
+            if status in {"success", "failure"}:
+                observed = dict(metrics) if isinstance(metrics, Mapping) else {}
+                observed["_execution_status"] = status
+                if error_code is not None:
+                    observed["_error_code"] = str(error_code)
+                completed[tool] = observed
         return completed
 
     @staticmethod
@@ -280,7 +290,11 @@ class DiagnosticsExpert:
         if not isinstance(metrics, Mapping):
             return False
         acceptance = metrics.get("diagnostic_acceptance")
-        return isinstance(acceptance, Mapping) and acceptance.get("accepted") is False
+        return (
+            metrics.get("_execution_status") == "success"
+            and isinstance(acceptance, Mapping)
+            and acceptance.get("accepted") is False
+        )
 
 
 __all__ = [

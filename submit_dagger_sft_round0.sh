@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=bc0_sft_round0
-#SBATCH --output=/scratch/yx3882/psse_agent/artifacts/logs/bc0_sft_%x_%j.log
-#SBATCH --error=/scratch/yx3882/psse_agent/artifacts/logs/bc0_sft_%x_%j.err
+#SBATCH --output=/scratch/yx3882/psse_agent/bc0_sft_%j.log
+#SBATCH --error=/scratch/yx3882/psse_agent/bc0_sft_%j.err
 #SBATCH --chdir=/scratch/yx3882/psse_agent
 #SBATCH --account=torch_pr_627_general
 #SBATCH --nodes=1
@@ -10,6 +10,7 @@
 #SBATCH --mem=128G
 #SBATCH --time=24:00:00
 #SBATCH --gres=gpu:1
+#SBATCH --constraint="h200|h100"
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=yx3882@nyu.edu
 
@@ -19,10 +20,8 @@
 # it predates physical-root fingerprints, explicit eligibility, and current
 # registry/source provenance and must fail the release gate.
 # Submit STAGE=gate, one-batch, tiny-overfit, and round0 in that order on a
-# high-memory GPU (--constraint="h200|h100|rtx6000"; on a 48GB rtx6000 the
-# 6144-token batches leave little headroom — if the one-batch stage OOMs
-# there, resubmit that job with an h200/h100-only constraint rather than
-# shrinking MAX_LENGTH). STAGE=round0 refuses to train until the observable
+# pinned high-memory H200/H100 constraint above. STAGE=round0 refuses to train
+# until the observable
 # expert passes the full content-pinned fixed-suite gate and the exact pinned
 # base model supplies complete, reproducible identity/evaluation evidence. Base
 # performance failures remain in the baseline report but do not block BC0
@@ -37,10 +36,11 @@
 set -euo pipefail
 
 REPO_ROOT=${REPO_ROOT:-/scratch/yx3882/psse_agent}
-ENV_PREFIX=${ENV_PREFIX:-/scratch/yx3882/.conda/envs/dagger_gemma4_sft}
+ENV_PREFIX=${ENV_PREFIX:-/scratch/yx3882/.conda/envs/unsloth_sft}
 PYTHON=${PYTHON:-$ENV_PREFIX/bin/python}
 STAGE=${STAGE:-gate}
 ALLOW_DOWNLOAD=${ALLOW_DOWNLOAD:-0}
+REVIEWED_SOURCE_COMMIT=${REVIEWED_SOURCE_COMMIT:-}
 
 MODEL_NAME=${MODEL_NAME:-unsloth/gemma-4-31B-it}
 MODEL_REVISION=${MODEL_REVISION:-8a796db4df380b178065ed910849477ff0e99c87}
@@ -53,11 +53,11 @@ MAX_LENGTH=${MAX_LENGTH:-6144}
 ROWS_MIN=${ROWS_MIN:-1024}
 ROWS_MAX=${ROWS_MAX:-4096}
 TINY_OVERFIT_STEPS=${TINY_OVERFIT_STEPS:-20}
-TINY_OVERFIT_LR=${TINY_OVERFIT_LR:-0.001}
+TINY_OVERFIT_LR=${TINY_OVERFIT_LR:-0.0001}
 TRAIN_LR=${TRAIN_LR:-0.0001}
 TRAIN_EPOCHS=${TRAIN_EPOCHS:-2}
 GRADIENT_ACCUMULATION_STEPS=${GRADIENT_ACCUMULATION_STEPS:-4}
-EVALUATION_SUITE=${EVALUATION_SUITE:-artifacts/evaluations/bc0_frozen_suite.json}
+EVALUATION_SUITE=${EVALUATION_SUITE:-psse_env/dagger/suites/bc0_eval_suite_v1.json}
 EVALUATION_POLICY=${EVALUATION_POLICY:-psse_env/dagger/bc0_evaluation_policy.json}
 EXPERT_BASELINE_EVALUATION=${EXPERT_BASELINE_EVALUATION:-artifacts/evaluations/expert_baseline_evaluation.json}
 BASE_GEMMA_EVALUATION=${BASE_GEMMA_EVALUATION:-artifacts/evaluations/base_gemma_evaluation.json}
@@ -85,6 +85,11 @@ if [[ ! "$MODEL_REVISION" =~ ^[0-9a-fA-F]{40}$ ]]; then
     echo "ERROR: MODEL_REVISION must be a pinned 40-character Hugging Face commit." >&2
     exit 2
 fi
+if [[ ! "$REVIEWED_SOURCE_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    echo "ERROR: REVIEWED_SOURCE_COMMIT must be the externally reviewed 40-hex freeze commit." >&2
+    exit 2
+fi
+REVIEWED_SOURCE_COMMIT=${REVIEWED_SOURCE_COMMIT,,}
 
 module purge
 module load anaconda3/2025.06
@@ -92,6 +97,11 @@ source /share/apps/anaconda3/2025.06/etc/profile.d/conda.sh
 conda activate "$ENV_PREFIX"
 
 cd "$REPO_ROOT"
+CURRENT_SOURCE_COMMIT=$(git rev-parse HEAD 2>/dev/null || true)
+if [[ "$CURRENT_SOURCE_COMMIT" != "$REVIEWED_SOURCE_COMMIT" ]]; then
+    echo "ERROR: checkout $CURRENT_SOURCE_COMMIT is not reviewed freeze commit $REVIEWED_SOURCE_COMMIT." >&2
+    exit 2
+fi
 mkdir -p artifacts/logs "$OUTPUT_DIR"
 mkdir -p /scratch/yx3882/.cache/huggingface /scratch/yx3882/.cache/torch
 
@@ -166,6 +176,7 @@ echo "stage:     $STAGE"
 echo "python:    $PYTHON"
 echo "model:     $MODEL_NAME"
 echo "revision:  $MODEL_REVISION"
+echo "source:    $REVIEWED_SOURCE_COMMIT"
 echo "train:     $TRAIN_FILE"
 echo "output:    $OUTPUT_DIR"
 echo "downloads: $ALLOW_DOWNLOAD"
@@ -175,6 +186,54 @@ if [[ "$STAGE" == "round0" || "$STAGE" == "checkpoint-gate" ]]; then
 fi
 nvidia-smi
 "$PYTHON" -c 'import accelerate, bitsandbytes, datasets, peft, torch, transformers, trl; print({"torch": torch.__version__, "cuda": torch.version.cuda, "cuda_available": torch.cuda.is_available(), "bf16": torch.cuda.is_bf16_supported(), "transformers": transformers.__version__, "trl": trl.__version__, "peft": peft.__version__, "bitsandbytes": bitsandbytes.__version__, "datasets": datasets.__version__, "accelerate": accelerate.__version__})'
+"$PYTHON" -m pip check
+"$PYTHON" - "$REPO_ROOT/psse_env/requirements-sft.txt" <<'PY'
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+import sys
+
+from packaging.requirements import Requirement
+
+failures = []
+for raw_line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#"):
+        continue
+    requirement = Requirement(line)
+    try:
+        installed = version(requirement.name)
+    except PackageNotFoundError:
+        failures.append(f"{requirement.name}: not installed")
+        continue
+    if requirement.specifier and installed not in requirement.specifier:
+        failures.append(
+            f"{requirement.name}: installed {installed}, requires {requirement.specifier}"
+        )
+try:
+    import opendssdirect as dss
+
+    opendss_banner = str(dss.Basic.Version()).strip()
+except Exception as exc:
+    opendss_banner = ""
+    failures.append(
+        "OpenDSSDirect native runtime: "
+        f"{type(exc).__name__}: {exc}"
+    )
+else:
+    for marker in (
+        "DSS C-API Library version 0.14.5",
+        "DSS-Python version: 0.15.7",
+        "OpenDSSDirect.py version: 0.9.4",
+    ):
+        if marker not in opendss_banner:
+            failures.append(f"OpenDSSDirect native runtime missing {marker!r}")
+if failures:
+    raise SystemExit("SFT environment does not match requirements-sft.txt:\n- " + "\n- ".join(failures))
+print(
+    "SFT environment matches psse_env/requirements-sft.txt; "
+    "OpenDSS native runtime loaded"
+)
+PY
 
 COMMON_ARGS=(
     --model "$MODEL_NAME"
@@ -182,8 +241,6 @@ COMMON_ARGS=(
     --train "$TRAIN_FILE"
     --validation "$VALIDATION_FILE"
     --max-length "$MAX_LENGTH"
-    --pilot-min-rows "$ROWS_MIN"
-    --pilot-max-rows "$ROWS_MAX"
 )
 if [[ "$ALLOW_DOWNLOAD" == "1" ]]; then
     COMMON_ARGS+=(--allow-download)
@@ -194,19 +251,26 @@ fi
 
 case "$STAGE" in
     gate)
-        COMMAND=("$PYTHON" -m psse_env.sft gate "${COMMON_ARGS[@]}" --test "$TEST_FILE" --report-output "$OUTPUT_DIR/gate_report.json")
+        # Training and smoke size the optimizer-visible train+validation rows.
+        # The gate additionally audits test, so offset its total-row bounds by
+        # the exact number of non-empty JSONL test records.  Without this
+        # adjustment a corpus could pass gate and fail unchanged downstream.
+        TEST_ROWS=$(awk 'NF { count += 1 } END { print count + 0 }' "$TEST_FILE")
+        GATE_ROWS_MIN=$((ROWS_MIN + TEST_ROWS))
+        GATE_ROWS_MAX=$((ROWS_MAX + TEST_ROWS))
+        COMMAND=("$PYTHON" -m psse_env.sft gate "${COMMON_ARGS[@]}" --test "$TEST_FILE" --pilot-min-rows "$GATE_ROWS_MIN" --pilot-max-rows "$GATE_ROWS_MAX" --report-output "$OUTPUT_DIR/gate_report.json")
         ;;
     one-batch)
-        COMMAND=("$PYTHON" -m psse_env.sft smoke "${COMMON_ARGS[@]}" --mode one-batch --load-in-4bit)
+        COMMAND=("$PYTHON" -m psse_env.sft smoke "${COMMON_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --mode one-batch --load-in-4bit)
         ;;
     tiny-overfit)
-        COMMAND=("$PYTHON" -m psse_env.sft smoke "${COMMON_ARGS[@]}" --mode tiny-overfit --tiny-overfit-steps "$TINY_OVERFIT_STEPS" --learning-rate "$TINY_OVERFIT_LR" --load-in-4bit)
+        COMMAND=("$PYTHON" -m psse_env.sft smoke "${COMMON_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --mode tiny-overfit --tiny-overfit-steps "$TINY_OVERFIT_STEPS" --learning-rate "$TINY_OVERFIT_LR" --load-in-4bit)
         ;;
     round0)
-        COMMAND=("$PYTHON" -m psse_env.sft train "${COMMON_ARGS[@]}" --output-dir "$OUTPUT_DIR" --batch-size 1 --gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS" --learning-rate "$TRAIN_LR" --epochs "$TRAIN_EPOCHS" --smoke-steps 1 --load-in-4bit --evaluation-suite "$EVALUATION_SUITE" --evaluation-policy "$EVALUATION_POLICY" --expert-baseline-evaluation "$EXPERT_BASELINE_EVALUATION" --base-baseline-evaluation "$BASE_GEMMA_EVALUATION" --expert-policy-identity "$EXPERT_POLICY_IDENTITY" --baseline-evaluation-report-output "$BASELINE_EVALUATION_REPORT")
+        COMMAND=("$PYTHON" -m psse_env.sft train "${COMMON_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --output-dir "$OUTPUT_DIR" --batch-size 1 --gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS" --learning-rate "$TRAIN_LR" --epochs "$TRAIN_EPOCHS" --smoke-steps 1 --load-in-4bit --evaluation-suite "$EVALUATION_SUITE" --evaluation-policy "$EVALUATION_POLICY" --expert-baseline-evaluation "$EXPERT_BASELINE_EVALUATION" --base-baseline-evaluation "$BASE_GEMMA_EVALUATION" --expert-policy-identity "$EXPERT_POLICY_IDENTITY" --baseline-evaluation-report-output "$BASELINE_EVALUATION_REPORT")
         ;;
     checkpoint-gate)
-        COMMAND=("$PYTHON" -m psse_env.dagger.validate_evaluation --role checkpoint-promotion --artifact "$CHECKPOINT_EVALUATION" --policy "$EVALUATION_POLICY" --expected-source-commit HEAD --expected-suite "$EVALUATION_SUITE" --expected-protocol canonical --expected-model-id "$CHECKPOINT_MODEL_ID" --expected-model-revision "$CHECKPOINT_MODEL_REVISION" --reference-artifact "$BASE_GEMMA_EVALUATION" --reference-model-id "$MODEL_NAME" --reference-model-revision "$MODEL_REVISION" --report-output "$CHECKPOINT_GATE_REPORT")
+        COMMAND=("$PYTHON" -m psse_env.dagger.validate_evaluation --role checkpoint-promotion --artifact "$CHECKPOINT_EVALUATION" --policy "$EVALUATION_POLICY" --expected-source-commit "$REVIEWED_SOURCE_COMMIT" --expected-suite "$EVALUATION_SUITE" --expected-protocol canonical --expected-model-id "$CHECKPOINT_MODEL_ID" --expected-model-revision "$CHECKPOINT_MODEL_REVISION" --reference-artifact "$BASE_GEMMA_EVALUATION" --reference-model-id "$MODEL_NAME" --reference-model-revision "$MODEL_REVISION" --report-output "$CHECKPOINT_GATE_REPORT")
         ;;
 esac
 

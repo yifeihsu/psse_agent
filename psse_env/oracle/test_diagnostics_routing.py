@@ -38,6 +38,17 @@ def _successful_step(tool: str, metrics: dict | None = None) -> dict:
     }
 
 
+def _failed_step(tool: str, error_code: str) -> dict:
+    return {
+        "action": {"tool": tool, "arguments": {"state_id": "episode:s0"}},
+        "tool_output": {
+            "execution_status": "failure",
+            "error_code": error_code,
+            "tool_metrics": {},
+        },
+    }
+
+
 class DiagnosticsExpertRoutingTests(unittest.TestCase):
     def setUp(self) -> None:
         self.expert = DiagnosticsExpert()
@@ -190,6 +201,94 @@ class DiagnosticsExpertRoutingTests(unittest.TestCase):
         handoff = self.expert.propose(state, history)
         self.assertEqual(handoff[0].action["tool"], "ask_for_more_evidence")
 
+    def test_failed_hif_estimators_fall_back_without_false_handoff(self) -> None:
+        state = _policy_state(
+            unresolved_signatures=["hif_suspected_zero_sequence"],
+            available_evidence=["nlm_diagnostic", "hif_scan_window"],
+        )
+        history = [
+            _successful_step(
+                "run_three_phase_nlm_from_path",
+                {
+                    "nlm_summary": {
+                        "top_hif_groups": [{"rank": 1, "branch_row0": 12}]
+                    }
+                },
+            ),
+            _failed_step(
+                "estimate_hif_location_magnitude_multiscan_from_path",
+                "hif_multiscan_failure",
+            ),
+        ]
+        follow_up = self.expert.propose(state, history)
+        self.assertEqual(
+            follow_up[0].action["tool"],
+            "estimate_hif_location_magnitude_from_path",
+        )
+
+        history.append(
+            _failed_step(
+                "estimate_hif_location_magnitude_from_path",
+                "hif_estimation_failure",
+            )
+        )
+        # Two solver failures are an infrastructure defect.  They do not
+        # satisfy the environment's audited handoff contract, which requires
+        # successful, state-bound estimates with explicit rejected fits.
+        self.assertEqual(self.expert.propose(state, history), [])
+
+    def test_summarized_failed_multiscan_history_uses_the_same_safe_fallback(self) -> None:
+        state = _policy_state(
+            unresolved_signatures=["hif_suspected_zero_sequence"],
+            available_evidence=["nlm_diagnostic", "hif_scan_window"],
+        )
+        history = [
+            {
+                "tool": "run_three_phase_nlm_from_path",
+                "arguments": {"state_id": "episode:s0"},
+                "outcome": {"execution_status": "success"},
+                "observable_metrics": {
+                    "nlm_summary": {
+                        "top_hif_groups": [{"rank": 1, "branch_row0": 12}]
+                    }
+                },
+            },
+            {
+                "tool": "estimate_hif_location_magnitude_multiscan_from_path",
+                "arguments": {
+                    "state_id": "episode:s0",
+                    "candidate_branch_row0": 12,
+                },
+                "outcome": {
+                    "execution_status": "failure",
+                    "error_code": "hif_multiscan_failure",
+                },
+                "observable_metrics": {},
+            },
+        ]
+
+        follow_up = self.expert.propose(state, history)
+
+        self.assertEqual(
+            follow_up[0].action["tool"],
+            "estimate_hif_location_magnitude_from_path",
+        )
+        history.append(
+            {
+                "tool": "estimate_hif_location_magnitude_from_path",
+                "arguments": {
+                    "state_id": "episode:s0",
+                    "candidate_branch_row0": 12,
+                },
+                "outcome": {
+                    "execution_status": "failure",
+                    "error_code": "hif_estimation_failure",
+                },
+                "observable_metrics": {},
+            }
+        )
+        self.assertEqual(self.expert.propose(state, history), [])
+
     def test_accepted_hif_estimator_never_requests_operator_handoff(self) -> None:
         state = _policy_state(
             unresolved_signatures=["hif_suspected_zero_sequence"],
@@ -245,14 +344,62 @@ class DiagnosticsExpertRoutingTests(unittest.TestCase):
 
 
 class OrchestratorRoutingTests(unittest.TestCase):
-    def test_harmonic_route_outranks_baseline_wls(self) -> None:
+    def test_harmonic_route_suppresses_redundant_baseline_wls(self) -> None:
         oracle = ExpertPolicyOracle()
         state = _policy_state(
             unresolved_signatures=["harmonic_distortion_detected"],
             available_evidence=["harmonic_measurements"],
         )
         actions = oracle.next_actions(state, [])
-        self.assertEqual(actions[0]["tool"], "get_harmonic_context")
+        self.assertEqual(
+            [action["tool"] for action in actions], ["get_harmonic_context"]
+        )
+
+    def test_hif_route_suppresses_redundant_baseline_wls(self) -> None:
+        oracle = ExpertPolicyOracle()
+        state = _policy_state(
+            unresolved_signatures=["hif_suspected_zero_sequence"],
+            available_evidence=["nlm_diagnostic", "hif_scan_window"],
+        )
+        actions = oracle.next_actions(state, [])
+        self.assertEqual(
+            [action["tool"] for action in actions],
+            ["run_three_phase_nlm_from_path"],
+        )
+
+    def test_specific_context_routes_suppress_redundant_baseline_wls(self) -> None:
+        oracle = ExpertPolicyOracle()
+        cases = {
+            "parameter": (
+                "wls_branch_multiplier_dominant line_status_or_parameter line=3",
+                {"get_parameter_context", "get_topology_context"},
+            ),
+            "topology": (
+                "breaker_status_mismatch line=3",
+                {"get_topology_context"},
+            ),
+        }
+        for name, (signature, expected_tools) in cases.items():
+            with self.subTest(name=name):
+                actions = oracle.next_actions(
+                    _policy_state(unresolved_signatures=[signature]), []
+                )
+                tools = {action["tool"] for action in actions}
+                self.assertEqual(tools, expected_tools)
+                self.assertNotIn("run_wls", tools)
+
+    def test_wls_remains_the_only_fallback_without_a_domain_proposal(self) -> None:
+        actions = ExpertPolicyOracle().next_actions(_policy_state(), [])
+        self.assertEqual([action["tool"] for action in actions], ["run_wls"])
+
+    def test_mandatory_initial_baseline_wls_is_not_suppressed(self) -> None:
+        state = _policy_state(
+            last_tool=None,
+            remaining_anomaly_score=None,
+            available_evidence=["harmonic_measurements"],
+        )
+        actions = ExpertPolicyOracle().next_actions(state, [])
+        self.assertEqual([action["tool"] for action in actions], ["run_wls"])
 
     def test_measurement_markers_still_route_to_measurement_context(self) -> None:
         oracle = ExpertPolicyOracle()

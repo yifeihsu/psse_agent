@@ -66,6 +66,97 @@ class SequentialRecoveryTests(unittest.TestCase):
         self.assertEqual(actions[0], alternative)
         self.assertNotIn(wrong, actions)
 
+    def test_rollback_uses_durable_context_inventory_after_bounded_history_drops_context(
+        self,
+    ) -> None:
+        state_id = "episode:s0"
+        rejected = {
+            "tool": "correct_measurements",
+            "arguments": {"state_id": state_id, "suspect_group": [3]},
+        }
+        untried = {
+            "tool": "correct_measurements",
+            "arguments": {"state_id": state_id, "suspect_group": [12]},
+        }
+        # The context event is deliberately absent: a release observation keeps
+        # only four transitions, while the same-state provider contract remains
+        # fresh after rollback.  Its already-visible action inventory is the
+        # bounded-memory bridge to the remaining alternative.
+        history = [
+            {
+                "action": rejected,
+                "tool_output": {
+                    "execution_status": "success",
+                    "candidate_state_id": "episode:s1",
+                },
+            },
+            {
+                "action": {"tool": "run_wls", "arguments": {"state_id": "episode:s1"}},
+                "tool_output": {"execution_status": "success"},
+            },
+            {
+                "action": {
+                    "tool": "rollback_state",
+                    "arguments": {"candidate_state_id": "episode:s1"},
+                },
+                "tool_output": {"execution_status": "success"},
+            },
+        ]
+        state = {
+            "active_state_id": state_id,
+            "last_tool": "rollback_state",
+            "last_tool_status": "success",
+            "last_tool_output": {"execution_status": "success"},
+            "remaining_anomaly_score": 5.0,
+            "unresolved_signatures": [
+                "wls_residual_outlier_dominant index=12 channel=Vm"
+            ],
+            "has_fresh_measurement_context": True,
+            "measurement_context_state_id": state_id,
+            "fresh_context_evidence": {
+                "measurement": {
+                    "state_id": state_id,
+                    "supported_corrections": [rejected, untried],
+                }
+            },
+            "rejected_hypotheses": [{"source_action": rejected}],
+        }
+
+        release_oracle = ExpertPolicyOracle(
+            process_oracle=ProcessValidityOracle(
+                executor_hydrated_corrections=True
+            )
+        )
+        actions = release_oracle.next_actions(state, history)
+
+        self.assertTrue(actions)
+        self.assertEqual(actions[0], untried)
+        self.assertNotIn(rejected, actions)
+
+    def test_durable_context_inventory_rejects_stale_state_binding(self) -> None:
+        stale = {
+            "tool": "correct_measurements",
+            "arguments": {"state_id": "episode:s0", "suspect_group": [3]},
+        }
+        state = {
+            "active_state_id": "episode:s1",
+            "last_tool": "rollback_state",
+            "remaining_anomaly_score": 5.0,
+            "unresolved_signatures": ["measurement_residual_outlier"],
+            "has_fresh_measurement_context": True,
+            "measurement_context_state_id": "episode:s1",
+            "fresh_context_evidence": {
+                "measurement": {
+                    "state_id": "episode:s0",
+                    "supported_corrections": [stale],
+                }
+            },
+        }
+
+        actions = self.oracle.next_actions(state, [])
+
+        self.assertNotIn(stale, actions)
+
     def test_missing_parameter_scans_suppresses_entire_family_on_same_state(self) -> None:
         state_id = "episode:s0"
         parameter_actions = [

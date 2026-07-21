@@ -1,0 +1,12 @@
+{
+  "no_error": 24,
+  "measurement": 36,
+  "multi_measurement": 24,
+  "parameter": 36,
+  "topology": 36,
+  "harmonic": 24,
+  "hif": 17,
+  "measurement+parameter": 20,
+  "measurement+topology": 20,
+  "measurement+hif": 8
+}

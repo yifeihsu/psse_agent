@@ -7,7 +7,11 @@ from psse_env.actions import (
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,
     GET_MEASUREMENT_CONTEXT,
+    GET_PARAMETER_CONTEXT,
+    GET_TOPOLOGY_CONTEXT,
     RUN_WLS,
+    action_signature,
+    safe_normalize_action,
 )
 from psse_env.oracle.expert_types import (
     ExpertActionProposal,
@@ -16,12 +20,14 @@ from psse_env.oracle.expert_types import (
     matching_evidence_codes,
     normalized_hint_actions,
     policy_state_view,
+    recovery_record_applies_to_state,
     state_value,
 )
 from psse_env.oracle.measurement_recovery_evidence import (
     accepted_measurement_indices,
     eligible_joint_measurement_targets,
     measurement_target_indices,
+    verified_terminal_measurement_closure_action,
 )
 
 
@@ -78,9 +84,9 @@ class MeasurementExpert:
         homogeneous_multi_residual_signal = self._homogeneous_residual_channel(
             measurement_codes
         )
-        branch_rejected = self._rejected_branch_hypothesis(
-            state, CORRECT_PARAMETERS
-        ) and self._rejected_branch_hypothesis(state, CORRECT_TOPOLOGY)
+        branch_routes_exhausted = self._branch_recovery_routes_exhausted(
+            state, history, active_id=active_id
+        )
         partial_branch_rows = self._accepted_partial_branch_rows(state)
         colocated_post_branch_indices = self._colocated_post_branch_measurement_indices(
             state,
@@ -91,20 +97,29 @@ class MeasurementExpert:
         measurement_signal = (
             bool(measurement_codes)
             and not (
-                branch_dominant and not measurement_dominant and not branch_rejected
+                branch_dominant
+                and not measurement_dominant
+                and not branch_routes_exhausted
             )
         )
         partial_measurement = self._accepted_partial_measurement(state)
         accepted_measurement_indices = self._accepted_measurement_indices(state)
         accepted_target_refinement = self._has_fresh_accepted_target_refinement(
-            history, active_id=active_id
+            state, history, active_id=active_id
+        )
+        terminal_closure_action = self._fresh_terminal_closure_action(
+            state,
+            active_id=active_id,
+            accepted_targets=accepted_measurement_indices,
         )
         # After a partial measurement commit, any still-current branch evidence
         # must be resolved (or explicitly exhausted) before another measurement
         # correction may use that model's residuals.  Otherwise the second
         # correction can mask a real parameter/topology fault while passing WLS.
         measurement_hint_allowed = measurement_signal and not (
-            partial_measurement and branch_codes and not measurement_dominant
+            partial_measurement
+            and branch_codes
+            and not branch_routes_exhausted
         )
         proposals: list[ExpertActionProposal] = []
         normalized_measurement_hints = normalized_hint_actions(
@@ -121,15 +136,33 @@ class MeasurementExpert:
                     and target_indices
                     and target_indices == accepted_measurement_indices
                 )
+                is_observable_terminal_closure = bool(
+                    branch_routes_exhausted
+                    and terminal_closure_action is not None
+                    and action_signature(action)
+                    == action_signature(terminal_closure_action)
+                    and accepted_measurement_indices
+                    and accepted_measurement_indices < target_indices
+                    and len(target_indices - accepted_measurement_indices) == 1
+                )
                 # Provider-declared multi-target fallbacks are executable
                 # context contracts, not immediate labels.  They become an
                 # expert proposal only after the same-state rejected-candidate
-                # proof below establishes the exact bounded union.  The sole
-                # immediate grouped route is a provider-flagged refinement of
-                # already accepted targets.
-                if len(target_indices) >= 2 and not is_observable_refinement:
+                # proof below establishes the exact bounded union.  Immediate
+                # grouped routes are limited to a provider-flagged refinement
+                # of already accepted targets or the separately preverified
+                # terminal closure above.
+                if len(target_indices) >= 2 and not (
+                    is_observable_refinement or is_observable_terminal_closure
+                ):
                     continue
-                if not measurement_hint_allowed and not is_observable_refinement:
+                if (
+                    not measurement_hint_allowed
+                    and not (
+                        is_observable_refinement
+                        or is_observable_terminal_closure
+                    )
+                ):
                     continue
             if (
                 action["tool"] == CORRECT_MEASUREMENTS
@@ -145,8 +178,22 @@ class MeasurementExpert:
                 ExpertActionProposal(
                     action=action,
                     source_expert=self.source_expert,
-                    confidence=0.995 if is_observable_refinement else 0.98,
+                    confidence=(
+                        0.999
+                        if is_observable_terminal_closure
+                        else 0.995
+                        if is_observable_refinement
+                        else 0.98
+                    ),
                     evidence_codes=(
+                        [
+                            "provider_verified_terminal_measurement_closure",
+                            "singleton_target_accepted",
+                            "branch_routes_exhausted",
+                            "same_state_measurement_context",
+                        ]
+                        if is_observable_terminal_closure
+                        else
                         [
                             "observable_accepted_target_refinement",
                             "same_state_measurement_context",
@@ -239,14 +286,12 @@ class MeasurementExpert:
         near_threshold_refinement = self._near_threshold_refinement_needed(
             state, accepted_measurement_indices
         )
-        partial_refresh = bool(
-            partial_measurement
-            and (
-                not branch_codes
-                or measurement_dominant
-                or near_threshold_refinement
-            )
-        )
+        # Every accepted partial measurement invalidates the parent model's
+        # residual and branch inventories.  The fresh measurement context also
+        # carries same-state parameter/topology screening, so refresh it first
+        # even when branch evidence currently dominates; a surviving branch
+        # correction will then be routed from that bundled contract.
+        partial_refresh = bool(partial_measurement)
         if (measurement_signal or partial_refresh) and not has_context and active_id:
             evidence = ["measurement_context_missing"]
             if measurement_signal:
@@ -347,7 +392,10 @@ class MeasurementExpert:
     @staticmethod
     def _rejected_branch_hypothesis(state: Any, tool: str) -> bool:
         family = {CORRECT_PARAMETERS: "parameter", CORRECT_TOPOLOGY: "topology"}[tool]
+        active_id = state_value(state, "active_state_id")
         for item in state_value(state, "rejected_hypotheses", []) or []:
+            if not recovery_record_applies_to_state(item, active_id):
+                continue
             if history_action_tool(item) == tool:
                 return True
             if isinstance(item, Mapping):
@@ -359,6 +407,164 @@ class MeasurementExpert:
                 if f"{tool}:" in str(item.get("action_signature") or ""):
                     return True
         return False
+
+    @classmethod
+    def _branch_recovery_routes_exhausted(
+        cls,
+        state: Any,
+        history: Sequence[Mapping[str, Any]],
+        *,
+        active_id: Any,
+    ) -> bool:
+        """Return true only after both observable branch routes are closed.
+
+        A partial meter repair deliberately stands down while a current WLS
+        solve still carries branch evidence: correcting another residual can
+        otherwise mask a real parameter or topology fault.  A branch context
+        that explicitly returns no candidates is nevertheless just as closed
+        as a context whose complete candidate inventory has been tried and
+        rejected.  Treating the former as perpetually open stranded pure
+        multi-measurement episodes after harmless WLS branch cross-signals.
+
+        This predicate consumes only state-bound provider inventories and
+        rejected-candidate records already visible to the policy.  One
+        rejection is not enough when the same context exposes another branch
+        candidate.
+        """
+
+        if active_id is None:
+            return False
+        routes = (
+            ("parameter", GET_PARAMETER_CONTEXT, CORRECT_PARAMETERS),
+            ("topology", GET_TOPOLOGY_CONTEXT, CORRECT_TOPOLOGY),
+        )
+        return all(
+            cls._branch_recovery_route_exhausted(
+                state,
+                history,
+                active_id=active_id,
+                family=family,
+                context_tool=context_tool,
+                correction_tool=correction_tool,
+            )
+            for family, context_tool, correction_tool in routes
+        )
+
+    @classmethod
+    def _branch_recovery_route_exhausted(
+        cls,
+        state: Any,
+        history: Sequence[Mapping[str, Any]],
+        *,
+        active_id: Any,
+        family: str,
+        context_tool: str,
+        correction_tool: str,
+    ) -> bool:
+        if not (
+            state_value(state, f"has_fresh_{family}_context", False)
+            and str(state_value(state, f"{family}_context_state_id") or "")
+            == str(active_id)
+        ):
+            return False
+
+        supported: Sequence[Any] | None = None
+        route_status_present = False
+        route_status: str | None = None
+        fresh = state_value(state, "fresh_context_evidence", {})
+        if isinstance(fresh, Mapping):
+            evidence = fresh.get(family)
+            if (
+                isinstance(evidence, Mapping)
+                and str(evidence.get("state_id") or "") == str(active_id)
+                and isinstance(evidence.get("supported_corrections"), (list, tuple))
+            ):
+                supported = evidence["supported_corrections"]
+                if "route_status" in evidence:
+                    route_status_present = True
+                    raw_status = evidence.get("route_status")
+                    route_status = (
+                        str(raw_status) if raw_status is not None else None
+                    )
+
+        # Compact legacy observations may have fresh flags but omit the
+        # durable evidence mapping.  Recover only the latest successful,
+        # same-state provider contract from bounded observable history.
+        if supported is None:
+            for event in reversed(history):
+                if not isinstance(event, Mapping):
+                    continue
+                action = safe_normalize_action(
+                    event.get("action") or event.get("executed_action") or {}
+                )
+                if action["tool"] != context_tool:
+                    continue
+                requested = action["arguments"].get("state_id")
+                if requested is not None and str(requested) != str(active_id):
+                    continue
+                output = event.get("tool_output")
+                if (
+                    not isinstance(output, Mapping)
+                    or output.get("execution_status") != "success"
+                ):
+                    return False
+                metrics = output.get("tool_metrics")
+                if not isinstance(metrics, Mapping):
+                    return False
+                if str(metrics.get("state_id") or "") != str(active_id):
+                    return False
+                inventory = metrics.get("supported_corrections")
+                if not isinstance(inventory, (list, tuple)):
+                    return False
+                supported = inventory
+                if "route_status" in metrics:
+                    route_status_present = True
+                    raw_status = metrics.get("route_status")
+                    route_status = (
+                        str(raw_status) if raw_status is not None else None
+                    )
+                break
+        if supported is None:
+            return False
+
+        supported_signatures: set[str] = set()
+        for raw_action in supported:
+            if not isinstance(raw_action, Mapping):
+                return False
+            normalized = safe_normalize_action(raw_action)
+            if normalized["tool"] != correction_tool:
+                return False
+            requested = normalized["arguments"].get("state_id")
+            if requested is None or str(requested) != str(active_id):
+                return False
+            try:
+                supported_signatures.add(action_signature(normalized))
+            except (TypeError, ValueError):
+                return False
+
+        # An empty inventory closes the route only when the provider explicitly
+        # completed a negative diagnostic.  Missing repeated scans, an
+        # inconclusive candidate screen, or a legacy empty contract remains
+        # open and therefore cannot authorize another meter correction.
+        if not supported_signatures:
+            return route_status == "complete_negative"
+        if route_status_present and route_status != "actionable":
+            return False
+
+        rejected_signatures: set[str] = set()
+        for item in state_value(state, "rejected_hypotheses", []) or []:
+            if not recovery_record_applies_to_state(item, active_id):
+                continue
+            action = item.get("source_action") or item.get("action") or {}
+            if history_action_tool(action) != correction_tool:
+                continue
+            try:
+                rejected_signatures.add(
+                    action_signature(safe_normalize_action(action))
+                )
+            except (TypeError, ValueError):
+                continue
+        return supported_signatures <= rejected_signatures
 
     @staticmethod
     def _accepted_partial_measurement(state: Any) -> bool:
@@ -381,11 +587,24 @@ class MeasurementExpert:
 
     @staticmethod
     def _has_fresh_accepted_target_refinement(
-        history: Sequence[Mapping[str, Any]], *, active_id: Any
+        state: Any,
+        history: Sequence[Mapping[str, Any]],
+        *,
+        active_id: Any,
     ) -> bool:
         """Recognize the provider's same-state observable joint-refinement gate."""
         if active_id is None:
             return False
+        fresh_context_evidence = state_value(state, "fresh_context_evidence", {})
+        if isinstance(fresh_context_evidence, Mapping):
+            measurement_evidence = fresh_context_evidence.get("measurement")
+            if (
+                isinstance(measurement_evidence, Mapping)
+                and str(measurement_evidence.get("state_id") or "")
+                == str(active_id)
+                and measurement_evidence.get("accepted_target_refinement") is True
+            ):
+                return True
         for event in reversed(history):
             if not isinstance(event, Mapping):
                 continue
@@ -408,6 +627,28 @@ class MeasurementExpert:
                 return False
             return metrics.get("accepted_target_refinement") is True
         return False
+
+    @staticmethod
+    def _fresh_terminal_closure_action(
+        state: Any,
+        *,
+        active_id: Any,
+        accepted_targets: set[int],
+    ) -> dict[str, Any] | None:
+        """Read one atomically validated same-state terminal meter action."""
+
+        if active_id is None:
+            return None
+        fresh = state_value(state, "fresh_context_evidence", {})
+        if isinstance(fresh, Mapping):
+            evidence = fresh.get("measurement")
+            if isinstance(evidence, Mapping):
+                return verified_terminal_measurement_closure_action(
+                    evidence,
+                    active_id=active_id,
+                    accepted_targets=accepted_targets,
+                )
+        return None
 
     @staticmethod
     def _accepted_partial_branch_rows(state: Any) -> set[int]:
@@ -456,6 +697,17 @@ class MeasurementExpert:
         candidate_rows = accepted_branch_rows
 
         findings: Sequence[Any] = ()
+        fresh_context_evidence = state_value(state, "fresh_context_evidence", {})
+        if isinstance(fresh_context_evidence, Mapping):
+            measurement_evidence = fresh_context_evidence.get("measurement")
+            if (
+                isinstance(measurement_evidence, Mapping)
+                and str(measurement_evidence.get("state_id") or "")
+                == str(active_id)
+            ):
+                raw_findings = measurement_evidence.get("measurement_findings")
+                if isinstance(raw_findings, (list, tuple)):
+                    findings = raw_findings
         for event in reversed(history):
             if not isinstance(event, Mapping):
                 continue

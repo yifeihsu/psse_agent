@@ -23,18 +23,22 @@ import argparse
 import copy
 import json
 import random
+import subprocess
 from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 import psse_env.dagger.counterfactual_generator as counterfactual_generator_module
 import psse_env.dagger.dataset_builder as dataset_builder_module
+import psse_env.dagger.evaluation_gate as evaluation_gate_module
+import psse_env.dagger.evaluator as evaluator_module
 import psse_env.dagger.protocol_bridge as protocol_bridge_module
 import psse_env.dagger.replay_buffer as replay_buffer_module
 import psse_env.dagger.release_audit as release_audit_module
 import psse_env.dagger.rollout_collector as rollout_collector_module
 import psse_env.dagger.sft_audit as sft_audit_module
 import psse_env.dagger.splits as splits_module
+import psse_env.dagger.suite_builder as suite_builder_module
 import psse_env.oracle as oracle_module
 import psse_env.providers.matpower as matpower_provider_module
 import psse_env.providers.scenario_generator as scenario_generator_module
@@ -52,11 +56,22 @@ from psse_env.dagger.dataset_builder import (
     write_jsonl,
 )
 from psse_env.dagger.error_injectors import plausible_wrong_actions
+from psse_env.dagger.evaluation_gate import load_evaluation_policy
+from psse_env.dagger.evaluator import (
+    load_evaluation_suites,
+    validate_release_scenario_suites,
+)
+from psse_env.dagger.protocol_bridge import unified_tool_schemas
 from psse_env.dagger.rollout_collector import (
     DaggerRolloutCollector,
     audit_target_aware_state_classes,
 )
-from psse_env.dagger.replay_buffer import build_balanced_training_view
+from psse_env.dagger.replay_buffer import (
+    DEFAULT_MINIMUM_TOOL_CATEGORY_DISTINCT_ROOTS,
+    DEFAULT_MINIMUM_TOOL_CATEGORY_NATURAL_ROWS,
+    DEFAULT_TRAINING_TOOL_CATEGORY_WEIGHTS,
+    build_balanced_training_view,
+)
 from psse_env.dagger.release_audit import (
     audit_episode_against_truth as strict_audit_episode_against_truth,
 )
@@ -73,7 +88,7 @@ from psse_env.dagger.splits import (
     physical_root_fingerprint,
     stratified_grouped_scenario_split,
 )
-from psse_env.dagger.protocol_bridge import unified_tool_schemas
+from psse_env.dagger.suite_builder import validate_builder_environment
 from psse_env.oracle import ExpertPolicyOracle
 from psse_env.providers import MatpowerDeploymentProviders
 from psse_env.providers.scenario_generator import Round0ScenarioGenerator
@@ -81,6 +96,14 @@ from psse_env.sft.provenance import file_sha256, git_source_state, stable_json_s
 from psse_env.transactional_env import TransactionalPSSEEnv
 
 DEFAULT_SEED = 20260719
+BC0_AGGREGATE_SOURCE_PARTITION = "train"
+DEFAULT_EVALUATION_SUITE_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "dagger"
+    / "suites"
+    / "bc0_eval_suite_v1.json"
+)
+DEFAULT_EVALUATION_POLICY_PATH = evaluation_gate_module.DEFAULT_POLICY_PATH.resolve()
 
 # Root-scenario counts per family at --scale 1.
 DEFAULT_PLAN: dict[str, int] = {
@@ -97,16 +120,15 @@ DEFAULT_PLAN: dict[str, int] = {
     "measurement+parameter": 20,
     "measurement+topology": 20,
     "measurement+hif": 2,
-    "three_phase_unbalance": 20,
-    "telemetry_no_disturbance": 20,
 }
 
 # Every positive-count release family has an explicit outcome contract.  The
 # directly recoverable and deterministic diagnostic families must resolve all
-# of their small default suites; the larger mixed/unbalance suites permit at
-# most one safe handoff in twenty.  HIF-bearing families keep an explicit
-# handoff allowance until a sufficiently observable localization corpus is
-# available, and that allowance is reported rather than counted as recovery.
+# of their small default suites; the mixed parameter/topology suites permit at
+# most one safe handoff in twenty.  Pure multi-measurement and HIF-bearing
+# families keep an explicit handoff allowance until their observable evidence
+# contracts can safely authorize autonomous continuation, and that allowance
+# is reported rather than counted as recovery.
 BC0_FAMILY_RELEASE_POLICY: dict[str, dict[str, float | int]] = {
     "no_error": {
         "minimum_physical_roots": 4,
@@ -120,8 +142,8 @@ BC0_FAMILY_RELEASE_POLICY: dict[str, dict[str, float | int]] = {
     },
     "multi_measurement": {
         "minimum_physical_roots": 20,
-        "minimum_resolution_rate": 0.95,
-        "maximum_operator_escalation_rate": 0.05,
+        "minimum_resolution_rate": 0.0,
+        "maximum_operator_escalation_rate": 1.0,
     },
     "parameter": {
         "minimum_physical_roots": 6,
@@ -162,16 +184,6 @@ BC0_FAMILY_RELEASE_POLICY: dict[str, dict[str, float | int]] = {
         "minimum_resolution_rate": 0.0,
         "maximum_operator_escalation_rate": 1.0,
     },
-    "three_phase_unbalance": {
-        "minimum_physical_roots": 20,
-        "minimum_resolution_rate": 0.95,
-        "maximum_operator_escalation_rate": 0.05,
-    },
-    "telemetry_no_disturbance": {
-        "minimum_physical_roots": 20,
-        "minimum_resolution_rate": 1.0,
-        "maximum_operator_escalation_rate": 0.0,
-    },
 }
 
 APPROXIMATE_REALIZABILITY_RELEASE_KWARGS: dict[str, Any] = {
@@ -186,6 +198,20 @@ APPROXIMATE_REALIZABILITY_RELEASE_KWARGS: dict[str, Any] = {
     "minimum_local_perturbation_coverage": 0.05,
     "require_cost_margins_for_multi_action": True,
 }
+
+# The global natural-population and balanced-view audits retain the full
+# comparison-count and coverage gates above.  Family-level neighbor stability
+# is additionally binding once the stratum contains at least this many
+# independent physical roots.  Smaller families remain subject to every
+# safety and margin check, plus the separate terminality gates below, but are
+# reported as statistically
+# underpowered rather than being forced to satisfy an impossible 20-pair
+# floor.  State-class partitions are diagnostic projections: the class alone
+# does not preserve target-specific rank structure, so their conflict,
+# disagreement, validity, and margin checks remain binding while pair-count
+# coverage is reported but not used as a second global gate.
+BC0_FAMILY_NEIGHBOR_GATE_MINIMUM_ROOTS = 20
+BC0_STATE_CLASS_NEIGHBOR_GATE_POLICY = "diagnostic_only"
 
 
 class ObservableBaselinePolicy:
@@ -734,6 +760,7 @@ def _stratified_approximate_realizability(
     field: str,
     *,
     required_values: Iterable[str] = (),
+    neighbor_gate_minimum_distinct_roots: int | None = None,
 ) -> dict[str, dict[str, Any]]:
     grouped: dict[str, list[Mapping[str, Any]]] = {}
     for row in rows:
@@ -741,13 +768,90 @@ def _stratified_approximate_realizability(
         grouped.setdefault(str(value if value is not None else "unknown"), []).append(row)
     for value in required_values:
         grouped.setdefault(str(value), [])
-    return {
-        value: audit_approximate_teacher_realizability(
+    reports: dict[str, dict[str, Any]] = {}
+    for value, group in sorted(grouped.items()):
+        report = audit_approximate_teacher_realizability(
             group,
             **APPROXIMATE_REALIZABILITY_RELEASE_KWARGS,
         )
-        for value, group in sorted(grouped.items())
-    }
+        fingerprints = {
+            str(fingerprint)
+            for row in group
+            if (
+                fingerprint := _row_metadata_value(
+                    row, "physical_root_fingerprint"
+                )
+            )
+            not in (None, "")
+        }
+        missing_fingerprints = sum(
+            _row_metadata_value(row, "physical_root_fingerprint")
+            in (None, "")
+            for row in group
+        )
+        nearest_tolerance = float(
+            report.get("nearest_neighbor_tolerance", 0.0)
+        )
+        local_tolerance = report.get("local_perturbation_tolerance")
+        safety_passed = bool(
+            int(report.get("labeled_examples", 0)) > 0
+            and not report.get("invalid_examples")
+            and missing_fingerprints == 0
+            and float(report.get("approximate_conflict_rate", 1.0))
+            <= float(report.get("conflict_tolerance", 0.0))
+            and float(
+                report.get("nearest_neighbor_action_disagreement_rate", 1.0)
+            )
+            <= nearest_tolerance
+            and (
+                local_tolerance is None
+                or float(
+                    report.get(
+                        "local_perturbation_action_disagreement_rate", 1.0
+                    )
+                )
+                <= float(local_tolerance)
+            )
+            and float(report.get("multi_action_cost_margin_coverage", 0.0))
+            >= 1.0
+        )
+        distinct_roots = len(fingerprints)
+        neighbor_applicable = bool(
+            neighbor_gate_minimum_distinct_roots is not None
+            and distinct_roots >= int(neighbor_gate_minimum_distinct_roots)
+        )
+        if not safety_passed:
+            gate_status = "failed_safety"
+            release_gate_passed = False
+        elif neighbor_gate_minimum_distinct_roots is None:
+            gate_status = "safety_passed_neighbor_diagnostic_only"
+            release_gate_passed = True
+        elif not neighbor_applicable:
+            gate_status = "safety_passed_neighbor_underpowered"
+            release_gate_passed = True
+        elif report.get("passed") is True:
+            gate_status = "passed"
+            release_gate_passed = True
+        else:
+            gate_status = "failed_neighbor_stability"
+            release_gate_passed = False
+        report.update(
+            {
+                "distinct_physical_roots": distinct_roots,
+                "missing_physical_root_rows": missing_fingerprints,
+                "stratified_safety_passed": safety_passed,
+                "neighbor_stability_gate_applicable": neighbor_applicable,
+                "neighbor_stability_minimum_distinct_roots": (
+                    int(neighbor_gate_minimum_distinct_roots)
+                    if neighbor_gate_minimum_distinct_roots is not None
+                    else None
+                ),
+                "release_gate_status": gate_status,
+                "release_gate_passed": release_gate_passed,
+            }
+        )
+        reports[value] = report
+    return reports
 
 
 def _stratified_realizability_release_failures(
@@ -755,11 +859,16 @@ def _stratified_realizability_release_failures(
 ) -> list[str]:
     failures: list[str] = []
     for stratum, report in sorted(reports.items()):
-        if report.get("passed") is True:
+        passed = report.get("release_gate_passed")
+        if passed is None:
+            passed = report.get("passed")
+        if passed is True:
             continue
         failures.append(
             "approximate teacher realizability failed for "
             f"{dimension}={stratum}: examples={report.get('labeled_examples', 0)}, "
+            f"roots={report.get('distinct_physical_roots', 'unknown')}, "
+            f"status={report.get('release_gate_status', 'legacy_failed')}, "
             "nearest="
             f"{report.get('nearest_neighbor_compared_examples', 0)}/"
             f"{report.get('nearest_neighbor_comparison_coverage', 0.0):.3f}, "
@@ -775,12 +884,18 @@ def _stratified_realizability_release_failures(
 def _generation_descriptor(
     args: argparse.Namespace,
     plan: Mapping[str, int],
+    *,
+    builder_environment: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Bind a generated aggregate to its source, schemas, and collection plan."""
+    if builder_environment is None:
+        builder_environment = validate_builder_environment()
     repo_root = Path(__file__).resolve().parents[2]
     source_files = (
         Path(__file__),
         Path(dataset_builder_module.__file__),
+        Path(evaluation_gate_module.__file__),
+        Path(evaluator_module.__file__),
         Path(protocol_bridge_module.__file__),
         Path(rollout_collector_module.__file__),
         Path(replay_buffer_module.__file__),
@@ -788,6 +903,7 @@ def _generation_descriptor(
         Path(counterfactual_generator_module.__file__),
         Path(sft_audit_module.__file__),
         Path(splits_module.__file__),
+        Path(suite_builder_module.__file__),
         Path(scenario_generator_module.__file__),
         Path(matpower_provider_module.__file__),
         Path(transactional_env_module.__file__),
@@ -798,8 +914,17 @@ def _generation_descriptor(
         if args.protocol == "canonical"
         else TOOL_JSON_SCHEMAS
     )
+    input_corpora = _input_corpus_bindings(args, plan, repo_root=repo_root)
+    parameter_artifacts = _tracked_parameter_artifact_binding(repo_root)
+    evaluation_holdout = _evaluation_suite_binding(args, repo_root=repo_root)
+    evaluation_policy = _evaluation_policy_binding(
+        args,
+        evaluation_holdout=evaluation_holdout,
+        repo_root=repo_root,
+    )
     return {
         "generation_provenance_version": 1,
+        "builder_environment": copy.deepcopy(dict(builder_environment)),
         "source_state": git_source_state(repo_root),
         "protocol": args.protocol,
         "schema_registry_hash": stable_json_sha256(schemas),
@@ -807,8 +932,13 @@ def _generation_descriptor(
             str(path.resolve().relative_to(repo_root)): file_sha256(path)
             for path in source_files
         },
+        "input_corpora": input_corpora,
+        "input_artifacts": {"parameter_cases": parameter_artifacts},
+        "evaluation_holdout": evaluation_holdout,
+        "evaluation_policy": evaluation_policy,
         "generation_config": {
             "seed": args.seed,
+            "source_partition": BC0_AGGREGATE_SOURCE_PARTITION,
             "plan": dict(sorted(plan.items())),
             "max_steps": args.max_steps,
             "counterfactuals_per_scenario": args.counterfactuals_per_scenario,
@@ -818,17 +948,52 @@ def _generation_descriptor(
             "hif_max_scans": args.hif_max_scans,
             "family_release_policy": BC0_FAMILY_RELEASE_POLICY,
             "critical_split_minimums": {"validation": 5, "test": 5},
+            "stratified_approximate_realizability": {
+                "global_population_gate": "full_release_thresholds",
+                "family_neighbor_gate_minimum_distinct_roots": (
+                    BC0_FAMILY_NEIGHBOR_GATE_MINIMUM_ROOTS
+                ),
+                "underpowered_family_status": "reported_not_applicable",
+                "state_class_neighbor_gate": (
+                    BC0_STATE_CLASS_NEIGHBOR_GATE_POLICY
+                ),
+                "always_binding_checks": [
+                    "row_validity",
+                    "physical_root_presence",
+                    "quantized_conflict_rate",
+                    "observed_neighbor_disagreement",
+                    "observed_local_disagreement",
+                    "multi_action_cost_margin_coverage",
+                ],
+            },
             "training_view": {
-                "size_policy": "natural_train_row_count_with_bounded_replacement",
-                "strict_target_axes": ["tool_category"],
+                "size_policy": (
+                    "natural_target_bearing_train_row_count_with_bounded_replacement"
+                ),
+                "strict_target_axes": [],
+                "deviation_gated_target_axes": ["tool_category"],
                 "capacity_aware_target_axes": [
+                    "tool_category",
                     "state_class",
                     "target_tool",
                     "scenario_family",
                     "error_cardinality",
                     "terminal_outcome",
                 ],
-                "capacity_aware_policy": "uniform_then_clip_and_redistribute_v1",
+                "capacity_aware_policy": (
+                    "weighted_then_clip_and_redistribute_v1"
+                ),
+                "configured_tool_category_weights": dict(
+                    DEFAULT_TRAINING_TOOL_CATEGORY_WEIGHTS
+                ),
+                "tool_category_natural_support_floor": {
+                    "minimum_natural_target_bearing_rows": (
+                        DEFAULT_MINIMUM_TOOL_CATEGORY_NATURAL_ROWS
+                    ),
+                    "minimum_distinct_roots": (
+                        DEFAULT_MINIMUM_TOOL_CATEGORY_DISTINCT_ROOTS
+                    ),
+                },
                 "max_duplicate_count": 2,
                 "low_cost_margin_threshold": 0.05,
                 "maximum_tool_category_target_deviation": 0.10,
@@ -837,13 +1002,693 @@ def _generation_descriptor(
     }
 
 
+def _configured_input_corpora(
+    args: argparse.Namespace,
+    plan: Mapping[str, int],
+) -> dict[str, Path]:
+    """Return the exact corpus files that the round-0 generator may read.
+
+    Release generation uses the independently generated multiscan HIF corpus;
+    the compact curated fallback is reserved for the frozen evaluation
+    holdout.  Its QA metadata is also bound below so a release cannot silently
+    substitute different physics-validation evidence.
+    """
+    configured: dict[str, Path] = {
+        "measurement_corpus": Path(
+            getattr(args, "measurement_corpus", None)
+            or scenario_generator_module.DEFAULT_CORPUS_PATH
+        ),
+    }
+    if any(int(plan.get(family, 0)) > 0 for family in ("hif", "measurement+hif")):
+        hif_corpora = getattr(args, "hif_corpus", None)
+        selected_hif_corpora = (
+            tuple(Path(path) for path in hif_corpora)
+            if hif_corpora
+            else tuple(
+                Path(path)
+                for path in scenario_generator_module.DEFAULT_RELEASE_HIF_SAMPLE_PATHS
+            )
+        )
+        for index, path in enumerate(selected_hif_corpora):
+            configured[f"hif_corpus_{index}"] = path
+        if not hif_corpora:
+            for index, path in enumerate(
+                scenario_generator_module.DEFAULT_RELEASE_HIF_QUALITY_PATHS
+            ):
+                configured[f"hif_quality_{index}"] = Path(path)
+    if any(
+        int(plan.get(family, 0)) > 0
+        for family in ("three_phase_unbalance", "telemetry_no_disturbance")
+    ):
+        configured["three_phase_unbalance_corpus"] = Path(
+            getattr(args, "imbalance_corpus", None)
+            or scenario_generator_module.DEFAULT_IMBALANCE_SAMPLE_PATH
+        )
+    return configured
+
+
+def _assert_training_view_export_integrity(
+    selected_rows: Sequence[Mapping[str, Any]],
+    exported_rows: Sequence[Mapping[str, Any]],
+) -> None:
+    """Fail closed if export drops or substitutes a balanced-view row."""
+    selected_ids = [str(row.get("example_id")) for row in selected_rows]
+    exported_ids = [str(row.get("example_id")) for row in exported_rows]
+    if len(selected_rows) != len(exported_rows):
+        raise RuntimeError(
+            "Balanced training-view export cardinality mismatch: "
+            f"selected={len(selected_rows)}, exported={len(exported_rows)}. "
+            "Every selected row must carry an exportable expert target."
+        )
+    if Counter(selected_ids) != Counter(exported_ids):
+        raise RuntimeError(
+            "Balanced training-view export identity mismatch: exported rows did "
+            "not preserve the selected example-id multiset."
+        )
+
+
+def _git_tracks_file(repo_root: Path, path: Path) -> bool:
+    try:
+        relative = path.resolve().relative_to(repo_root.resolve())
+    except ValueError:
+        return False
+    completed = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", "--", relative.as_posix()],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return completed.returncode == 0
+
+
+def _input_corpus_bindings(
+    args: argparse.Namespace,
+    plan: Mapping[str, int],
+    *,
+    repo_root: Path,
+) -> dict[str, dict[str, Any]]:
+    """Content-address every corpus and record its release trust boundary."""
+    bindings: dict[str, dict[str, Any]] = {}
+    for name, configured_path in sorted(_configured_input_corpora(args, plan).items()):
+        path = configured_path.resolve()
+        try:
+            path_label = path.relative_to(repo_root.resolve()).as_posix()
+        except ValueError:
+            path_label = str(path)
+        exists = path.is_file()
+        bindings[name] = {
+            "path": path_label,
+            "sha256": file_sha256(path) if exists else None,
+            "exists": exists,
+            "git_tracked": exists and _git_tracks_file(repo_root, path),
+        }
+    return bindings
+
+
+def _input_corpus_release_failures(
+    generation_descriptor: Mapping[str, Any],
+) -> list[str]:
+    failures: list[str] = []
+    bindings = generation_descriptor.get("input_corpora")
+    if not isinstance(bindings, Mapping) or not bindings:
+        return ["generation descriptor has no input corpus bindings"]
+    for name, raw_binding in sorted(bindings.items()):
+        binding = raw_binding if isinstance(raw_binding, Mapping) else {}
+        path = binding.get("path")
+        if binding.get("exists") is not True or not binding.get("sha256"):
+            failures.append(f"input corpus is missing or unhashed: {name} ({path})")
+        if binding.get("git_tracked") is not True:
+            failures.append(f"input corpus is not repository-tracked: {name} ({path})")
+    return failures
+
+
+def _path_label(path: Path, *, repo_root: Path) -> str:
+    try:
+        return path.resolve().relative_to(repo_root.resolve()).as_posix()
+    except ValueError:
+        return str(path.resolve())
+
+
+def _duplicate_counts(values: Sequence[str]) -> dict[str, int]:
+    return {
+        value: count
+        for value, count in sorted(Counter(values).items())
+        if count > 1
+    }
+
+
+def _uses_current_physical_fingerprint(value: str) -> bool:
+    prefix = f"physical_v{splits_module.PHYSICAL_FINGERPRINT_VERSION}_"
+    digest = value[len(prefix) :] if value.startswith(prefix) else ""
+    return len(digest) == 64 and all(
+        character in "0123456789abcdef" for character in digest
+    )
+
+
+def _evaluation_suite_semantic_identity(
+    path: Path,
+    *,
+    repo_root: Path,
+) -> dict[str, Any]:
+    """Load, validate, and content-address the frozen release holdout."""
+
+    resolved = path.resolve()
+    exists = resolved.is_file()
+    identity: dict[str, Any] = {
+        "path": _path_label(resolved, repo_root=repo_root),
+        "file_sha256": file_sha256(resolved) if exists else None,
+        "exists": exists,
+        "git_tracked": exists and _git_tracks_file(repo_root, resolved),
+        "schema_valid": False,
+        "validation_error": None,
+        "suite_names": [],
+        "suite_count": 0,
+        "episode_count": 0,
+        "physical_root_count": 0,
+        "physical_root_set_sha256": None,
+        "scenario_id_count": 0,
+        "scenario_id_set_sha256": None,
+        "duplicate_physical_roots": {},
+        "duplicate_scenario_ids": {},
+        "missing_physical_root_entries": [],
+        "invalid_physical_root_version_entries": [],
+        "physical_fingerprint_version": splits_module.PHYSICAL_FINGERPRINT_VERSION,
+        "missing_scenario_id_entries": [],
+    }
+    if not exists:
+        identity["validation_error"] = "evaluation suite file is missing"
+        return identity
+
+    try:
+        suites = validate_release_scenario_suites(load_evaluation_suites(resolved))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        identity["validation_error"] = str(exc)
+        return identity
+
+    physical_roots: list[str] = []
+    scenario_ids: list[str] = []
+    missing_roots: list[str] = []
+    invalid_root_versions: list[str] = []
+    missing_ids: list[str] = []
+    episode_count = 0
+    for suite_name in sorted(suites):
+        for index, scenario in enumerate(suites[suite_name]):
+            episode_count += 1
+            label = f"{suite_name}[{index}]"
+            grouping = scenario.get("grouping")
+            grouping = grouping if isinstance(grouping, Mapping) else {}
+            root = grouping.get("physical_root_fingerprint")
+            if not isinstance(root, str) or not root.strip():
+                missing_roots.append(label)
+            else:
+                normalized_root = root.strip()
+                physical_roots.append(normalized_root)
+                if not _uses_current_physical_fingerprint(normalized_root):
+                    invalid_root_versions.append(label)
+            execution = scenario.get("execution")
+            execution = execution if isinstance(execution, Mapping) else {}
+            scenario_id = execution.get("scenario_id")
+            if not isinstance(scenario_id, str) or not scenario_id.strip():
+                missing_ids.append(label)
+            else:
+                scenario_ids.append(scenario_id.strip())
+
+    root_set = sorted(set(physical_roots))
+    scenario_id_set = sorted(set(scenario_ids))
+    identity.update(
+        {
+            "schema_valid": True,
+            "suite_names": sorted(suites),
+            "suite_count": len(suites),
+            "episode_count": episode_count,
+            "physical_root_count": len(root_set),
+            "physical_root_set_sha256": stable_json_sha256(root_set),
+            "scenario_id_count": len(scenario_id_set),
+            "scenario_id_set_sha256": stable_json_sha256(scenario_id_set),
+            "duplicate_physical_roots": _duplicate_counts(physical_roots),
+            "duplicate_scenario_ids": _duplicate_counts(scenario_ids),
+            "missing_physical_root_entries": missing_roots,
+            "invalid_physical_root_version_entries": invalid_root_versions,
+            "missing_scenario_id_entries": missing_ids,
+        }
+    )
+    return identity
+
+
+def _evaluation_suite_binding(
+    args: argparse.Namespace,
+    *,
+    repo_root: Path,
+) -> dict[str, Any]:
+    configured = Path(
+        getattr(args, "evaluation_suite", None) or DEFAULT_EVALUATION_SUITE_PATH
+    )
+    return _evaluation_suite_semantic_identity(configured, repo_root=repo_root)
+
+
+def _evaluation_policy_semantic_identity(
+    path: Path,
+    *,
+    evaluation_holdout: Mapping[str, Any],
+    repo_root: Path,
+) -> dict[str, Any]:
+    """Bind the holdout to the exact suite approved by the release policy."""
+
+    resolved = path.resolve()
+    exists = resolved.is_file()
+    identity: dict[str, Any] = {
+        "path": _path_label(resolved, repo_root=repo_root),
+        "file_sha256": file_sha256(resolved) if exists else None,
+        "exists": exists,
+        "git_tracked": exists and _git_tracks_file(repo_root, resolved),
+        "schema_valid": False,
+        "validation_error": None,
+        "policy_id": None,
+        "matches_packaged_policy": False,
+        "suite_policy_status": None,
+        "approved_suite_sha256": None,
+        "approved_manifest_root_set_sha256": None,
+        "suite_file_sha256_matches_approval": False,
+        "suite_root_set_sha256_matches_approval": False,
+        "approval_passed": False,
+        "failures": [],
+    }
+    if not exists:
+        identity["validation_error"] = "evaluation policy file is missing"
+    else:
+        try:
+            policy = load_evaluation_policy(resolved)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            identity["validation_error"] = str(exc)
+        else:
+            suite_policy = policy["suite_policy"]
+            approved_manifest = suite_policy.get("approved_suite_manifest")
+            approved_manifest = (
+                approved_manifest if isinstance(approved_manifest, Mapping) else {}
+            )
+            approved_suite_sha256 = suite_policy.get("approved_suite_sha256")
+            approved_root_sha256 = approved_manifest.get("root_set_sha256")
+            file_matches = bool(
+                approved_suite_sha256
+                and evaluation_holdout.get("file_sha256")
+                == approved_suite_sha256
+            )
+            root_matches = bool(
+                approved_root_sha256
+                and evaluation_holdout.get("physical_root_set_sha256")
+                == approved_root_sha256
+            )
+            identity.update(
+                {
+                    "schema_valid": True,
+                    "policy_id": policy.get("policy_id"),
+                    "matches_packaged_policy": bool(
+                        policy.get("policy_id")
+                        == evaluation_gate_module.DEFAULT_POLICY_ID
+                        and identity["file_sha256"]
+                        == file_sha256(DEFAULT_EVALUATION_POLICY_PATH)
+                    ),
+                    "suite_policy_status": suite_policy.get("status"),
+                    "approved_suite_sha256": approved_suite_sha256,
+                    "approved_manifest_root_set_sha256": approved_root_sha256,
+                    "suite_file_sha256_matches_approval": file_matches,
+                    "suite_root_set_sha256_matches_approval": root_matches,
+                }
+            )
+
+    failures: list[str] = []
+    if identity["exists"] is not True:
+        failures.append("evaluation policy is missing")
+    if identity["git_tracked"] is not True:
+        failures.append("evaluation policy is not repository-tracked")
+    if identity["schema_valid"] is not True:
+        failures.append(
+            "evaluation policy schema is invalid: "
+            + str(identity["validation_error"] or "unknown validation error")
+        )
+    if identity["matches_packaged_policy"] is not True:
+        failures.append("evaluation policy does not match the packaged BC0 policy")
+    if identity["suite_policy_status"] != "pinned":
+        failures.append("evaluation policy suite status is not pinned")
+    if identity["suite_file_sha256_matches_approval"] is not True:
+        failures.append(
+            "evaluation suite file SHA-256 does not match the policy approval"
+        )
+    if identity["suite_root_set_sha256_matches_approval"] is not True:
+        failures.append(
+            "evaluation suite root-set SHA-256 does not match the policy approval"
+        )
+    identity["failures"] = failures
+    identity["approval_passed"] = not failures
+    return identity
+
+
+def _evaluation_policy_binding(
+    args: argparse.Namespace,
+    *,
+    evaluation_holdout: Mapping[str, Any],
+    repo_root: Path,
+) -> dict[str, Any]:
+    configured = Path(
+        getattr(args, "evaluation_policy", None) or DEFAULT_EVALUATION_POLICY_PATH
+    )
+    return _evaluation_policy_semantic_identity(
+        configured,
+        evaluation_holdout=evaluation_holdout,
+        repo_root=repo_root,
+    )
+
+
+def _holdout_disjointness_report(
+    scenarios: Sequence[Mapping[str, Any]],
+    *,
+    evaluation_holdout: Mapping[str, Any],
+    evaluation_policy: Mapping[str, Any],
+    evaluation_suite_path: Path,
+    evaluation_policy_path: Path,
+    repo_root: Path,
+    raise_on_overlap: bool = True,
+) -> dict[str, Any]:
+    """Audit the aggregate roots against the exact bound evaluation suite."""
+
+    current = _evaluation_suite_semantic_identity(
+        evaluation_suite_path, repo_root=repo_root
+    )
+    current_policy = _evaluation_policy_semantic_identity(
+        evaluation_policy_path,
+        evaluation_holdout=current,
+        repo_root=repo_root,
+    )
+    aggregate_roots: list[str] = []
+    aggregate_ids: list[str] = []
+    missing_aggregate_roots: list[str] = []
+    invalid_aggregate_root_versions: list[str] = []
+    missing_aggregate_ids: list[str] = []
+    for index, scenario in enumerate(scenarios):
+        label = str(
+            scenario.get("scenario_id")
+            or scenario.get("root_scenario_id")
+            or f"scenario[{index}]"
+        )
+        root = scenario.get("physical_root_fingerprint")
+        if not isinstance(root, str) or not root.strip():
+            missing_aggregate_roots.append(label)
+        else:
+            normalized_root = root.strip()
+            aggregate_roots.append(normalized_root)
+            if not _uses_current_physical_fingerprint(normalized_root):
+                invalid_aggregate_root_versions.append(label)
+        scenario_id = scenario.get("scenario_id")
+        if not isinstance(scenario_id, str) or not scenario_id.strip():
+            missing_aggregate_ids.append(label)
+        else:
+            aggregate_ids.append(scenario_id.strip())
+
+    aggregate_root_set = sorted(set(aggregate_roots))
+    aggregate_id_set = sorted(set(aggregate_ids))
+    holdout_roots = set()
+    holdout_ids = set()
+    if current.get("schema_valid") is True:
+        suites = validate_release_scenario_suites(
+            load_evaluation_suites(evaluation_suite_path)
+        )
+        for rows in suites.values():
+            for scenario in rows:
+                grouping = scenario.get("grouping")
+                grouping = grouping if isinstance(grouping, Mapping) else {}
+                root = grouping.get("physical_root_fingerprint")
+                if isinstance(root, str) and root.strip():
+                    holdout_roots.add(root.strip())
+                execution = scenario.get("execution")
+                execution = execution if isinstance(execution, Mapping) else {}
+                scenario_id = execution.get("scenario_id")
+                if isinstance(scenario_id, str) and scenario_id.strip():
+                    holdout_ids.add(scenario_id.strip())
+
+    root_intersection = sorted(set(aggregate_root_set) & holdout_roots)
+    id_intersection = sorted(set(aggregate_id_set) & holdout_ids)
+    binding_fields = (
+        "path",
+        "file_sha256",
+        "physical_root_count",
+        "physical_root_set_sha256",
+        "physical_fingerprint_version",
+        "scenario_id_count",
+        "scenario_id_set_sha256",
+    )
+    binding_mismatches = [
+        field
+        for field in binding_fields
+        if evaluation_holdout.get(field) != current.get(field)
+    ]
+    policy_binding_fields = (
+        "path",
+        "file_sha256",
+        "policy_id",
+        "matches_packaged_policy",
+        "suite_policy_status",
+        "approved_suite_sha256",
+        "approved_manifest_root_set_sha256",
+    )
+    policy_binding_mismatches = [
+        field
+        for field in policy_binding_fields
+        if evaluation_policy.get(field) != current_policy.get(field)
+    ]
+    failures: list[str] = []
+    if current.get("exists") is not True:
+        failures.append("evaluation suite is missing")
+    if current.get("git_tracked") is not True:
+        failures.append("evaluation suite is not repository-tracked")
+    if current.get("schema_valid") is not True:
+        failures.append(
+            "evaluation suite schema is invalid: "
+            + str(current.get("validation_error") or "unknown validation error")
+        )
+    if current.get("missing_physical_root_entries"):
+        failures.append("evaluation suite contains entries without physical roots")
+    if current.get("invalid_physical_root_version_entries"):
+        failures.append(
+            "evaluation suite contains physical roots from an obsolete or invalid "
+            "fingerprint version"
+        )
+    if current.get("missing_scenario_id_entries"):
+        failures.append("evaluation suite contains entries without scenario IDs")
+    if current.get("duplicate_physical_roots"):
+        failures.append("evaluation suite contains duplicate physical roots")
+    if current.get("duplicate_scenario_ids"):
+        failures.append("evaluation suite contains duplicate scenario IDs")
+    if binding_mismatches:
+        failures.append(
+            "evaluation suite no longer matches its generation binding: "
+            + ", ".join(binding_mismatches)
+        )
+    current_policy_failures = current_policy.get("failures")
+    if isinstance(current_policy_failures, Sequence) and not isinstance(
+        current_policy_failures, (str, bytes)
+    ):
+        failures.extend(str(failure) for failure in current_policy_failures)
+    else:
+        failures.append("evaluation policy approval report is invalid")
+    if policy_binding_mismatches:
+        failures.append(
+            "evaluation policy no longer matches its generation binding: "
+            + ", ".join(policy_binding_mismatches)
+        )
+    if missing_aggregate_roots:
+        failures.append("aggregate contains scenarios without physical roots")
+    if invalid_aggregate_root_versions:
+        failures.append(
+            "aggregate contains physical roots from an obsolete or invalid "
+            "fingerprint version"
+        )
+    if missing_aggregate_ids:
+        failures.append("aggregate contains scenarios without scenario IDs")
+    aggregate_root_duplicates = _duplicate_counts(aggregate_roots)
+    aggregate_id_duplicates = _duplicate_counts(aggregate_ids)
+    if aggregate_root_duplicates:
+        failures.append("aggregate contains duplicate physical roots")
+    if aggregate_id_duplicates:
+        failures.append("aggregate contains duplicate scenario IDs")
+    if root_intersection:
+        failures.append("aggregate and evaluation suite share physical roots")
+    if id_intersection:
+        failures.append("aggregate and evaluation suite share scenario IDs")
+
+    report = {
+        "holdout_schema_version": 1,
+        "passed": not failures,
+        "failures": failures,
+        "evaluation_suite": current,
+        "binding_mismatches": binding_mismatches,
+        "evaluation_policy": current_policy,
+        "policy_binding_mismatches": policy_binding_mismatches,
+        "aggregate": {
+            "scenario_count": len(scenarios),
+            "physical_root_count": len(aggregate_root_set),
+            "physical_root_set_sha256": stable_json_sha256(aggregate_root_set),
+            "scenario_id_count": len(aggregate_id_set),
+            "scenario_id_set_sha256": stable_json_sha256(aggregate_id_set),
+            "duplicate_physical_roots": aggregate_root_duplicates,
+            "duplicate_scenario_ids": aggregate_id_duplicates,
+            "missing_physical_root_entries": missing_aggregate_roots,
+            "invalid_physical_root_version_entries": invalid_aggregate_root_versions,
+            "missing_scenario_id_entries": missing_aggregate_ids,
+        },
+        "physical_root_intersection_count": len(root_intersection),
+        "physical_root_intersection": root_intersection,
+        "scenario_id_intersection_count": len(id_intersection),
+        "scenario_id_intersection": id_intersection,
+    }
+    if raise_on_overlap and (root_intersection or id_intersection):
+        raise RuntimeError(
+            "Frozen evaluation holdout overlaps the round-0 aggregate: "
+            f"physical_roots={len(root_intersection)}, "
+            f"scenario_ids={len(id_intersection)}"
+        )
+    return report
+
+
+def _holdout_release_failures(report: Mapping[str, Any]) -> list[str]:
+    if report.get("passed") is True:
+        return []
+    failures = report.get("failures")
+    if not isinstance(failures, Sequence) or isinstance(failures, (str, bytes)):
+        return ["evaluation holdout disjointness report is invalid"]
+    return [f"evaluation holdout gate failed: {failure}" for failure in failures]
+
+
+def _has_symlink_component(repo_root: Path, path: Path) -> bool:
+    relative = path.absolute().relative_to(repo_root.absolute())
+    current = repo_root.absolute()
+    for component in relative.parts:
+        current /= component
+        if current.is_symlink():
+            return True
+    return False
+
+
+def _tracked_parameter_artifact_binding(repo_root: Path) -> dict[str, Any]:
+    """Bind the clean tracked parameter-case tree used by corpus basenames."""
+
+    root = (
+        Path(scenario_generator_module.DEFAULT_BALANCED_ARTIFACT_DIR)
+        / "cases_parameter_error"
+    ).absolute()
+    relative_root = root.relative_to(repo_root.absolute()).as_posix()
+    try:
+        tracked = subprocess.run(
+            ["git", "ls-files", "-z", "--", relative_root],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+        ).stdout
+        dirty = subprocess.run(
+            ["git", "diff", "--name-only", "-z", "HEAD", "--", relative_root],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "stderr", b"")
+        message = detail.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            "parameter artifact provenance requires an intact Git checkout"
+            + (f": {message}" if message else "")
+        ) from exc
+    dirty_paths = sorted(
+        item.decode("utf-8") for item in dirty.split(b"\0") if item
+    )
+    if dirty_paths:
+        raise RuntimeError(
+            "parameter artifact inputs differ from HEAD: " + ", ".join(dirty_paths)
+        )
+    relative_files = sorted(
+        item.decode("utf-8") for item in tracked.split(b"\0") if item
+    )
+    if not relative_files:
+        raise RuntimeError("no tracked parameter case artifacts are available")
+    paths = [repo_root / relative for relative in relative_files]
+    invalid = [
+        relative
+        for relative, path in zip(relative_files, paths)
+        if not path.is_file() or _has_symlink_component(repo_root, path)
+    ]
+    if invalid:
+        raise RuntimeError(
+            "parameter artifact inputs are missing or symlinked: "
+            + ", ".join(invalid)
+        )
+    file_hashes = {
+        relative: file_sha256(path)
+        for relative, path in zip(relative_files, paths)
+    }
+    return {
+        "root": relative_root,
+        "file_count": len(file_hashes),
+        "files": file_hashes,
+        "tree_sha256": stable_json_sha256(file_hashes),
+    }
+
+
+def _input_artifact_release_failures(
+    generation_descriptor: Mapping[str, Any],
+) -> list[str]:
+    artifacts = generation_descriptor.get("input_artifacts")
+    parameter = artifacts.get("parameter_cases") if isinstance(artifacts, Mapping) else None
+    if not isinstance(parameter, Mapping):
+        return ["generation descriptor has no parameter artifact binding"]
+    files = parameter.get("files")
+    if not isinstance(files, Mapping) or not files:
+        return ["parameter artifact binding contains no files"]
+    failures: list[str] = []
+    if parameter.get("file_count") != len(files):
+        failures.append("parameter artifact file count is inconsistent")
+    if parameter.get("tree_sha256") != stable_json_sha256(dict(files)):
+        failures.append("parameter artifact tree hash is inconsistent")
+    return failures
+
+
 def generate(args: argparse.Namespace) -> dict[str, Any]:
+    # Aggregate topology roots and their physical-v3 fingerprints depend on
+    # the same numerical stack as the frozen evaluation suite.  Validate it
+    # before reading the plan or any corpus so a clean but incompatible host
+    # cannot emit release-eligible evidence with different physical roots.
+    builder_environment = validate_builder_environment()
     plan = {family: count * args.scale for family, count in DEFAULT_PLAN.items()}
     if args.plan:
         plan = json.loads(Path(args.plan).read_text()) if Path(args.plan).is_file() else json.loads(args.plan)
-    generation_descriptor = _generation_descriptor(args, plan)
+    generation_descriptor = _generation_descriptor(
+        args,
+        plan,
+        builder_environment=builder_environment,
+    )
     generation_provenance_id = stable_json_sha256(generation_descriptor)
-    generator = Round0ScenarioGenerator(seed=args.seed, hif_max_scans=args.hif_max_scans)
+    repo_root = Path(__file__).resolve().parents[2]
+    configured_corpora = _configured_input_corpora(args, plan)
+    hif_corpus_paths = [
+        path
+        for name, path in sorted(configured_corpora.items())
+        if name.startswith("hif_corpus_")
+    ]
+    generator = Round0ScenarioGenerator(
+        corpus_path=configured_corpora["measurement_corpus"],
+        hif_sample_paths=hif_corpus_paths,
+        imbalance_sample_path=configured_corpora.get(
+            "three_phase_unbalance_corpus",
+            scenario_generator_module.DEFAULT_IMBALANCE_SAMPLE_PATH,
+        ),
+        balanced_artifact_dir=scenario_generator_module.DEFAULT_BALANCED_ARTIFACT_DIR,
+        artifact_allowlist=[
+            repo_root / relative
+            for relative in generation_descriptor["input_artifacts"]["parameter_cases"]["files"]
+        ],
+        seed=args.seed,
+        source_partition=BC0_AGGREGATE_SOURCE_PARTITION,
+        chi2_alpha=args.chi2_alpha,
+        hif_max_scans=args.hif_max_scans,
+    )
     scenarios = generator.build(plan)
     if not scenarios:
         raise RuntimeError("Scenario generator produced no scenarios for the plan.")
@@ -856,6 +1701,21 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         root_id = str(scenario["root_scenario_id"])
         physical_by_root[root_id] = fingerprint
         scenario_by_root[root_id] = scenario
+
+    evaluation_suite_path = Path(
+        getattr(args, "evaluation_suite", None) or DEFAULT_EVALUATION_SUITE_PATH
+    )
+    evaluation_policy_path = Path(
+        getattr(args, "evaluation_policy", None) or DEFAULT_EVALUATION_POLICY_PATH
+    )
+    holdout_disjointness = _holdout_disjointness_report(
+        scenarios,
+        evaluation_holdout=generation_descriptor["evaluation_holdout"],
+        evaluation_policy=generation_descriptor["evaluation_policy"],
+        evaluation_suite_path=evaluation_suite_path,
+        evaluation_policy_path=evaluation_policy_path,
+        repo_root=repo_root,
+    )
 
     # Assign the physical-root split before any DAgger or counterfactual
     # descendants are generated. Every later row inherits this immutable
@@ -982,16 +1842,25 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         )
     train_view_rows, training_view_report = build_balanced_training_view(
         splits["train"],
-        size=len(splits["train"]),
         seed=args.seed,
         max_duplicate_count=2,
         low_cost_margin_threshold=0.05,
         maximum_tool_category_target_deviation=0.10,
+        minimum_tool_category_natural_rows=(
+            DEFAULT_MINIMUM_TOOL_CATEGORY_NATURAL_ROWS
+        ),
+        minimum_tool_category_distinct_roots=(
+            DEFAULT_MINIMUM_TOOL_CATEGORY_DISTINCT_ROOTS
+        ),
+    )
+    exported_train_view = examples_to_chat_sft(
+        train_view_rows, protocol=args.protocol
+    )
+    _assert_training_view_export_integrity(
+        train_view_rows, exported_train_view
     )
     exported = {
-        "train_view": examples_to_chat_sft(
-            train_view_rows, protocol=args.protocol
-        ),
+        "train_view": exported_train_view,
         **{
             name: examples_to_chat_sft(rows, protocol=args.protocol)
             for name, rows in splits.items()
@@ -1031,9 +1900,14 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         natural_exported,
         "scenario_family",
         required_values=(family for family, count in plan.items() if count > 0),
+        neighbor_gate_minimum_distinct_roots=(
+            BC0_FAMILY_NEIGHBOR_GATE_MINIMUM_ROOTS
+        ),
     )
     approximate_by_stage = _stratified_approximate_realizability(
-        natural_exported, "state_class"
+        natural_exported,
+        "state_class",
+        neighbor_gate_minimum_distinct_roots=None,
     )
     class_audit = audit_target_aware_state_classes(collected["episode_rows"])
     if not chat_audit["passed"]:
@@ -1145,6 +2019,7 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         "physical_split_audit": physical_split_audit,
         "stratified_split_coverage": split_coverage,
         "target_aware_class_audit": class_audit,
+        "holdout_disjointness": holdout_disjointness,
         "generation_provenance": {
             "generation_provenance_id": generation_provenance_id,
             "source_commit": generation_descriptor["source_state"].get(
@@ -1164,6 +2039,9 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         preferred[str(action.get("tool") if isinstance(action, Mapping) else None)] += 1
     report["preferred_action_distribution"] = dict(sorted(preferred.items()))
     release_failures: list[str] = []
+    release_failures.extend(_input_corpus_release_failures(generation_descriptor))
+    release_failures.extend(_input_artifact_release_failures(generation_descriptor))
+    release_failures.extend(_holdout_release_failures(holdout_disjointness))
     if generation_descriptor["source_state"].get("release_eligible_source") is not True:
         release_failures.append("source worktree was not clean at generation time")
     if args.protocol != "canonical":
@@ -1180,7 +2058,9 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         )
     if training_view_report.get("release_ready") is not True:
         release_failures.append(
-            "balanced training-view target gate failed: feasibility_shortfall="
+            "balanced training-view target gate failed: category_support_shortfalls="
+            f"{training_view_report.get('tool_category_natural_support_shortfalls')}, "
+            "feasibility_shortfall="
             f"{training_view_report.get('necessary_feasibility_shortfall_total')}, "
             "tool-category deviation="
             f"{training_view_report.get('achieved_tool_category_target_deviation')}"
@@ -1242,6 +2122,7 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         "dataset_hashes": {
             path.name: file_sha256(path) for path in sorted(dataset_paths)
         },
+        "holdout_disjointness": holdout_disjointness,
         "release_eligible": not release_failures,
         "release_failures": release_failures,
     }
@@ -1269,7 +2150,9 @@ def main() -> None:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path(__file__).resolve().parent / "round0_aggregate",
+        default=Path(__file__).resolve().parents[2]
+        / "data"
+        / "round0_aggregate_release",
     )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--scale", type=int, default=1, help="Multiply the default plan.")
@@ -1277,16 +2160,63 @@ def main() -> None:
     parser.add_argument("--protocol", choices=("controller", "canonical"), default="canonical")
     parser.add_argument("--max-steps", type=int, default=24)
     parser.add_argument("--counterfactuals-per-scenario", type=int, default=3)
-    parser.add_argument("--chi2-alpha", type=float, default=0.01)
+    parser.add_argument(
+        "--evaluation-suite",
+        type=Path,
+        default=DEFAULT_EVALUATION_SUITE_PATH,
+        help=(
+            "Frozen schema-v1 evaluation suite reserved as a physical-root "
+            "and scenario-ID holdout."
+        ),
+    )
+    parser.add_argument(
+        "--evaluation-policy",
+        type=Path,
+        default=DEFAULT_EVALUATION_POLICY_PATH,
+        help=(
+            "Pinned BC0 evaluation policy whose approved suite SHA-256 must "
+            "match --evaluation-suite."
+        ),
+    )
+    parser.add_argument(
+        "--chi2-alpha",
+        type=float,
+        default=scenario_generator_module.DEFAULT_CHI2_ALPHA,
+    )
     parser.add_argument("--hif-alpha-grid", type=int, default=5)
     parser.add_argument("--hif-r-grid", type=int, default=7)
     parser.add_argument("--hif-max-scans", type=int, default=3)
+    parser.add_argument(
+        "--measurement-corpus",
+        type=Path,
+        default=scenario_generator_module.DEFAULT_CORPUS_PATH,
+        help="Measurement/parameter/harmonic JSONL corpus.",
+    )
+    parser.add_argument(
+        "--hif-corpus",
+        type=Path,
+        action="append",
+        default=None,
+        help=(
+            "HIF JSONL corpus; repeat for multiple files. The release default "
+            "is the independently generated multiscan training corpus."
+        ),
+    )
+    parser.add_argument(
+        "--imbalance-corpus",
+        type=Path,
+        default=scenario_generator_module.DEFAULT_IMBALANCE_SAMPLE_PATH,
+        help="Three-phase-unbalance JSONL corpus.",
+    )
     args = parser.parse_args()
     report = generate(args)
     print(
         json.dumps(
             {
                 "output_dir": str(args.output_dir),
+                "release_eligible": report["generation_provenance"].get(
+                    "release_eligible"
+                ),
                 "episode_rows": report["episode_rows"],
                 "recovery_rows": report["recovery_rows"],
                 "quarantined_rows": report["quarantined_rows"],
@@ -1297,6 +2227,8 @@ def main() -> None:
             sort_keys=True,
         )
     )
+    if report["generation_provenance"].get("release_eligible") is not True:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

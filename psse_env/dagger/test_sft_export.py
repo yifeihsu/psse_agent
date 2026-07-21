@@ -261,6 +261,22 @@ class ControllerAliasTests(unittest.TestCase):
         self.assertNotIn(state_id, visible)
         self.assertIn("active", visible)
 
+    def test_stale_candidate_id_only_retained_in_signature_gets_local_alias(self) -> None:
+        example = _example()
+        stale_candidate = "case14_measurement_seed42_episode0:s999"
+        example["policy_observation"]["tried_action_signatures"] = [
+            f'correct_parameters:{{"state_id":"{stale_candidate}","line_index1":4}}'
+        ]
+        row = examples_to_chat_sft([example])[0]
+        visible = row["messages"][1]["content"]
+        self.assertNotIn(stale_candidate, visible)
+        aliases = row["metadata"]["controller"]["state_aliases"]
+        stale_alias = next(
+            alias for alias, identifier in aliases.items() if identifier == stale_candidate
+        )
+        self.assertRegex(stale_alias, r"^s[0-9]+$")
+        self.assertIn(stale_alias, visible)
+
     def test_short_episode_id_does_not_corrupt_semantic_strings(self) -> None:
         example = _example(episode="e", tool="verify_candidate")
         row = examples_to_chat_sft([example])

@@ -66,6 +66,7 @@ IDENTIFIER_BEARING_TEXT_KEYS = frozenset(
         "tried_action_signatures",
     }
 )
+_CONTROLLER_STATE_RE = re.compile(r"[A-Za-z0-9_.-]{8,}:s[0-9]+")
 NON_MODEL_VISIBLE_KEYS = frozenset(
     {
         "semantic_field_provenance",
@@ -631,6 +632,28 @@ def _iter_identifier_values(value: Any) -> Iterable[tuple[str, str]]:
             key_text = str(key)
             if key_text in POLICY_IDENTIFIER_KEYS and item is not None:
                 yield key_text, str(item)
+            if key_text in IDENTIFIER_BEARING_TEXT_KEYS:
+                text_values: list[str] = []
+
+                def collect_text(candidate: Any) -> None:
+                    if isinstance(candidate, str):
+                        text_values.append(candidate)
+                    elif isinstance(candidate, Mapping):
+                        for nested in candidate.values():
+                            collect_text(nested)
+                    elif isinstance(candidate, (list, tuple)):
+                        for nested in candidate:
+                            collect_text(nested)
+
+                collect_text(item)
+                for text in text_values:
+                    for match in _CONTROLLER_STATE_RE.finditer(text):
+                        # A tried-action ledger can outlive the bounded history
+                        # event that introduced its rejected candidate.  Keep
+                        # that equality signal, but allocate a local alias even
+                        # when this serialized signature is the identifier's
+                        # only remaining occurrence.
+                        yield key_text, match.group(0)
             yield from _iter_identifier_values(item)
     elif isinstance(value, (list, tuple)):
         for item in value:
@@ -998,7 +1021,6 @@ def prepare_model_policy_observation(
 
 
 _OPAQUE_HASH_RE = re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{64}(?![0-9a-fA-F])")
-_CONTROLLER_STATE_RE = re.compile(r"[A-Za-z0-9_.-]{8,}:s[0-9]+")
 
 
 def find_model_identifier_leaks(value: Any, prefix: str = "$") -> list[str]:

@@ -135,11 +135,17 @@ real physics. `Round0ScenarioGenerator` adapts the merged measurement corpus
 (single and multi gross outliers, corrupted-parameter cases with multi-scan
 data, harmonic and HIF rows with their runtime side channels), synthesizes
 topology scenarios through pypower power flows on status-flipped IEEE-14
-cases, and composes measurement overlays with other families. The plan also
-contains pure three-phase-unbalance roots and a telemetry-present,
-no-disturbance negative control. Every scenario passes its physical validation
-gate, and scenario IDs are opaque hashes; family, cardinality, network case,
-and source tier remain audit/split metadata rather than policy-visible hints.
+cases, and composes measurement overlays with other families. The generator
+supports twelve scenario capabilities, but the BC0 default aggregate and
+frozen evaluation policy select ten: no-error, measurement,
+multi-measurement, parameter, topology, harmonic, HIF,
+measurement+parameter, measurement+topology, and measurement+HIF.
+Three-phase unbalance and telemetry-no-disturbance remain supported generator
+capabilities outside the BC0 family policy; a future freeze must add explicit
+quotas and thresholds before claiming either one. Every selected scenario
+passes its physical validation gate, and scenario IDs are opaque hashes;
+family, cardinality, network case, and source tier remain audit/split metadata
+rather than policy-visible hints.
 
 `examples/generate_round0_aggregate.py` is expert-only collection at
 `β=1.0`. It produces a candidate BC0 behavioral-cloning corpus, not a DAgger
@@ -149,6 +155,20 @@ and oracle action hints. The original scenario is retained outside the online
 trajectory and is supplied only after termination to the strict offline audit
 in `dagger/release_audit.py`; audit truth and audit results are never merged
 into model observations or SFT targets.
+
+The release regeneration uses the tracked ten-family row-budget plan rather
+than `--scale 2`, which would incorrectly request 34 HIF roots from the
+17-root training inventory:
+
+```bash
+python -m psse_env.examples.generate_round0_aggregate \
+  --plan data/round0_plan_20260719.json \
+  --output-dir data/round0_aggregate_release
+```
+
+That plan has 245 roots and preserves every current family minimum while
+keeping the expected optimizer-visible train-plus-validation rows inside the
+launcher budget. The regenerated artifact, not this estimate, is authoritative.
 
 The strict audit quarantines an episode unless its claimed outcome is supported
 by the hidden physical truth. Every accepted correction must name an exact
@@ -186,12 +206,19 @@ Terminality is not synonymous with successful recovery. The state classes
 family. A verified operator handoff is an auditable safe outcome, but it does
 not count as resolution. Release policy therefore enforces per-family minimum
 root counts, resolution floors, and escalation ceilings; nonterminal,
-quarantined, or unknown terminal outcomes fail. The difficult mixed-error and
-unbalance families currently require at least 20 roots, at least 95%
-resolution, and at most 5% escalation. The telemetry negative control requires
-20 roots, 100% resolution, and no escalation. HIF's currently tracked 17-root
-suite retains a separately reported handoff allowance and must not be reported
-as general recovery success.
+quarantined, or unknown terminal outcomes fail. `measurement+parameter` and
+`measurement+topology` each require at least 20 roots, at least 95% resolution,
+and at most 5% escalation. The 20-root pure `multi_measurement` family is
+currently an audited safety/handoff family with a 0% resolution floor and a
+100% escalation ceiling. This is an explicit non-claim of autonomous
+multi-meter recovery: after a verified partial meter commit, an unavailable or
+inconclusive same-state branch route cannot safely authorize another meter
+correction. Every such handoff must still be terminal, retain accepted targets,
+avoid healthy-component corruption, and record zero false commits,
+finalizations, or rollbacks. HIF requires 17 roots and measurement+HIF requires
+two roots, both with an explicit audited handoff allowance. The remaining
+direct BC0 families require full resolution and no escalation. Audited HIF or
+multi-measurement handoff must not be reported as general recovery success.
 
 Splits are assigned before descendants are generated and group every row by
 `physical_root_fingerprint`. The deterministic split is stratified by network
@@ -246,12 +273,56 @@ hashes, binds the artifact to the current clean commit and frozen suite,
 enforces strict audit v3, exact-matches schema-v1 evaluator configuration and approved
 factory identities, and checks hard safety, terminality, loop, invalid-call,
 and per-family root/outcome constraints before any scalar score is considered.
-The packaged policy is deliberately not a release approval: its suite status is
-`unconfigured`, its approved suite identities are null, and every factory
-approval list is empty. It therefore fails closed until reviewers pin a real
-schema-v1 artifact containing the five required suites (standard success, forced-error
-recovery, partial-success retention, invalid-action recovery, and efficiency)
-and the exact reviewed environment, policy, and case-loader factories.
+The packaged policy pins the repository-tracked schema-v1 suite and the exact
+reviewed environment, observable-expert, Gemma-policy, and case-loader factory
+module. The suite contains 21 globally unique physical roots in each of the
+five required operational suites (standard success, forced-error recovery,
+partial-success retention, invalid-action recovery, and efficiency), for 105
+globally unique roots. The environment factory requires production dataset
+mode, a deployment candidate oracle, and the 24-step protocol. The expert
+factory consumes policy-safe observations only and exposes identity
+`bc0-observable-expert-v1`. The Gemma factory loads only the exact local
+`unsloth/gemma-4-31B-it@8a796db4df380b178065ed910849477ff0e99c87`
+snapshot, verifies its byte manifest, and content-addresses any PEFT adapter.
+The case loader resolves repository-root paths deterministically through the
+production MATPOWER parser.
+
+The freeze is atomic: suite artifact, builder, factories, policy/family matrix,
+tests, and HIF training/QA inputs land in one commit. At that exact clean
+commit, run `scripts/build_bc0_evaluation_suite.py --check`, recompute the suite
+SHA-256 and fingerprint manifest, pin every factory `import_spec` and source
+SHA-256, set policy status to `pinned`, and only then regenerate aggregate and
+evaluation evidence. Any later edit to a frozen input invalidates that evidence.
+
+`python scripts/build_bc0_evaluation_suite.py --check` deterministically
+reconstructs the suite from tracked inputs. BC0 freezes the ten release-policy
+families represented in the default aggregate; excluding three-phase unbalance
+and telemetry-no-disturbance is a scope decision, not a statement that every
+included family has a correction tool. Seed `20260734` controls evaluation-suite
+generation order only. Aggregate generation, closed-loop episodes, and suite
+fingerprinting use `20260719`; different seeds do not establish independence.
+The builder fails before reading suite inputs unless it is running on Python
+3.12.x with `numpy==2.3.5`, `scipy==1.16.3`, `PYPOWER==5.1.19`,
+`fastmcp==2.12.4`, `OpenDSSDirect.py==0.9.4`, `dss-python==0.15.7`, and
+`dss-python-backend==0.14.5`. The OpenDSS pins are part of the builder
+contract because aggregate HIF diagnostics execute in this same environment;
+an unavailable solver is an infrastructure failure, not negative diagnostic
+evidence. The full Python patch version and package versions are reported as
+rebuild provenance, but changing that report cannot make `--check` accept
+different suite bytes. Development interpreters may run the unit tests, but
+cannot build or bless the frozen release artifact.
+
+Shared tabular sources are separated before sampling by
+`sha256_physical_content_modulo_v1`: bucket 0 of 5 is evaluation, while buckets
+1--4 are training. IDs and path aliases are excluded from the physical-content
+digest so renamed duplicates stay together. This boundary covers shared
+no-error, measurement, multi-measurement, parameter, harmonic, and
+measurement+parameter sources. Evaluation HIF uses the curated 17-root
+single-scan corpus; training HIF uses the independently generated, QA-passing
+17-by-20 diverse multiscan corpus and its tracked QA files. Synthetic topology
+families remain protected by the final physical-v3-root and scenario-ID overlap
+gate. Aggregate provenance fails release eligibility on any overlap, duplicate,
+missing identity, untracked input, or changed suite binding.
 
 Roles have different blocking semantics. The expert baseline must pass both
 evidence and performance. The base-model baseline records the same performance
@@ -337,6 +408,38 @@ checkpoint is selected through those gates and new learner-controlled roots
 can be collected without truth leakage. No expert-only `β=1.0` corpus or
 checkpoint should be labeled as DAgger.
 
+HPC release prerequisites are H200 or H100 hardware, Python 3.12, the exact
+`requirements-sft.txt` versions, a passing `pip check` and launcher version
+audit, and a complete local pinned Gemma snapshot. Release evaluation cannot
+download or fall back to another revision. Smoke-stage timing must justify the
+24-hour allocation for the two-epoch 31B run. The launcher accepts only a
+legitimate audited aggregate within `ROWS_MIN=1024` and `ROWS_MAX=4096`; if a
+valid aggregate exceeds the upper bound, raise `ROWS_MAX` rather than trimming
+rows. Those bounds apply to optimizer-visible train plus validation rows; the
+gate still audits the held-out test split and offsets its total-row check by the
+test count so every stage enforces the same training-corpus size.
+
+Both HPC launchers require the reviewed freeze commit as an external input;
+they never bless the checkout's current `HEAD` on their own.  The release
+evaluator also fixes all outputs below `artifacts/evaluations/`, rejects path
+aliases that could overwrite the persisted base artifact, and requires
+checkpoint evaluation to point at the final adapter directory (`output/lora`),
+not a Trainer checkpoint containing optimizer state.  Submit the base and one
+content-addressed checkpoint evaluation as follows:
+
+```bash
+FREEZE_COMMIT=$(git rev-parse HEAD)
+sbatch --export=ALL,REVIEWED_SOURCE_COMMIT="$FREEZE_COMMIT",EVALUATION_MODE=base \
+  submit_dagger_release_eval.sh
+
+sbatch --export=ALL,REVIEWED_SOURCE_COMMIT="$FREEZE_COMMIT",EVALUATION_MODE=checkpoint,CHECKPOINT_PATH=/absolute/output/lora \
+  submit_dagger_release_eval.sh
+```
+
+Pass the same `REVIEWED_SOURCE_COMMIT` to every
+`submit_dagger_sft_round0.sh` stage. Slurm logs are written at the repository
+root so submission does not depend on a pre-existing untracked log directory.
+
 Run the dedicated gate with:
 
 ```bash
@@ -345,7 +448,12 @@ uv run --with 'pytest>=8,<9' pytest -q \
   psse_env/verifier/test_hardening.py \
   psse_env/dagger/test_evaluator.py \
   psse_env/dagger/test_evaluation_gate.py \
+  psse_env/dagger/test_suite_builder.py \
+  psse_env/dagger/test_release_factories.py \
+  psse_env/dagger/test_release_eval_launcher.py \
   psse_env/dagger/test_sft_export.py \
+  psse_env/providers/test_scenario_generator.py \
+  psse_env/examples/test_generate_round0_aggregate.py \
   psse_env/test_production_mode.py \
   psse_env/sft/tests/test_gates.py
 ```

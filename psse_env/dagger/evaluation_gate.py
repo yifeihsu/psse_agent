@@ -20,13 +20,28 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from psse_env.actions import (
+    CORRECT_MEASUREMENTS,
+    DIAGNOSTIC_TOOLS,
+    INVALID_ACTION,
+    RUN_WLS,
+    VERIFY_CANDIDATE,
+    action_signature,
+    invalid_action,
+)
 from psse_env.dagger.dataset_builder import TOOL_JSON_SCHEMAS
 from psse_env.dagger.evaluator import (
+    evaluation_intervention_contract,
     fingerprint_evaluation_suites,
     load_evaluation_suites,
+    trace_progress_advanced,
     validate_release_scenario_suites,
 )
-from psse_env.dagger.protocol_bridge import unified_tool_schemas
+from psse_env.dagger.protocol_bridge import (
+    INTERNAL_TO_CANONICAL_TOOL,
+    unified_tool_schemas,
+)
+from psse_env.sft.gates import GateError, _validate_json_instance
 from psse_env.sft.provenance import file_sha256, git_source_state, stable_json_sha256
 
 
@@ -98,6 +113,7 @@ _REQUIRED_EPISODE_FIELDS = frozenset(
         "source_tier",
         "physical_root",
         "steps",
+        "policy_steps",
         "terminal",
         "terminal_outcome",
         "final_physical_success",
@@ -108,8 +124,17 @@ _REQUIRED_EPISODE_FIELDS = frozenset(
         "false_commit_count",
         "false_rollback_count",
         "false_finalization_count",
+        "partial_fix_count",
+        "retained_partial_fix_count",
         "invalid_action_count",
+        "recovered_invalid_action_count",
         "loop_detected",
+        "wls_calls",
+        "specialized_tool_calls",
+        "tool_regret_total",
+        "tool_regret_samples",
+        "evaluation_intervention",
+        "trace",
         "evaluator_error",
         "release_environment_attestation",
         "policy_identity_attestation",
@@ -156,6 +181,116 @@ def current_registry_sha256(protocol: str = "canonical") -> str:
     else:
         raise ValueError("protocol must be canonical or controller")
     return stable_json_sha256(registry)
+
+
+def _function_schema_map(
+    registry: Sequence[Mapping[str, Any]],
+) -> dict[str, Mapping[str, Any]]:
+    schemas: dict[str, Mapping[str, Any]] = {}
+    for raw_schema in registry:
+        function = raw_schema.get("function") if isinstance(raw_schema, Mapping) else None
+        if not isinstance(function, Mapping):
+            continue
+        name = function.get("name")
+        parameters = function.get("parameters")
+        if isinstance(name, str) and isinstance(parameters, Mapping):
+            schemas[name] = parameters
+    return schemas
+
+
+_TRACE_CONTROLLER_SCHEMAS = _function_schema_map(TOOL_JSON_SCHEMAS)
+_TRACE_CANONICAL_SCHEMAS = _function_schema_map(unified_tool_schemas())
+_TRACE_TARGET_ONLY_MEASUREMENT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "state_id": copy.deepcopy(
+            _TRACE_CONTROLLER_SCHEMAS[CORRECT_MEASUREMENTS]["properties"]["state_id"]
+        ),
+        "suspect_group": copy.deepcopy(
+            _TRACE_CANONICAL_SCHEMAS["correct_measurements_from_path"]["properties"]
+            ["suspect_group"]
+        ),
+    },
+    "required": ["state_id", "suspect_group"],
+    "additionalProperties": False,
+}
+_INVALID_ACTION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "error_code": {"type": "string"},
+        "error_detail": {"type": "string"},
+    },
+    "required": ["error_code"],
+    "additionalProperties": False,
+}
+_TRACE_PROGRESS_FIELDS = frozenset(
+    {
+        "state_before",
+        "state_after",
+        "state_before_sha256",
+        "state_after_sha256",
+        "state_mutated",
+        "terminal_after",
+    }
+)
+
+
+def _trace_action_schema_failure(
+    action: Mapping[str, Any], *, index: int
+) -> str | None:
+    """Validate one executed action against either registered protocol form."""
+
+    tool = str(action.get("tool") or "")
+    arguments = action.get("arguments")
+    if tool == INVALID_ACTION:
+        parameters = _INVALID_ACTION_SCHEMA
+        try:
+            _validate_json_instance(
+                arguments,
+                parameters,
+                path=f"episode trace[{index}].action.arguments",
+            )
+        except GateError as exc:
+            return str(exc)
+        return None
+
+    controller_parameters = _TRACE_CONTROLLER_SCHEMAS.get(tool)
+    canonical_tool = INTERNAL_TO_CANONICAL_TOOL.get(tool)
+    if (
+        controller_parameters is None
+        or canonical_tool not in _TRACE_CANONICAL_SCHEMAS
+    ):
+        return (
+            f"episode trace[{index}] action tool {tool!r} is not in the "
+            "unified release registry"
+        )
+    try:
+        _validate_json_instance(
+            arguments,
+            controller_parameters,
+            path=f"episode trace[{index}].action.arguments",
+        )
+        return None
+    except GateError as controller_failure:
+        # The deployment bridge has exactly one execution form that is valid
+        # but absent from the controller registry: a model-visible
+        # correct_measurements_from_path target is reverse-mapped to
+        # correct_measurements(state_id=..., suspect_group=...), then the
+        # provider hydrates replacement values.  Validate those raw arguments
+        # against an explicit, non-lossy internal schema.  Do not canonicalize
+        # arbitrary controller failures here: that bridge intentionally drops
+        # execution-only values and could otherwise hide malformed evidence.
+        if tool != CORRECT_MEASUREMENTS:
+            return str(controller_failure)
+        try:
+            _validate_json_instance(
+                arguments,
+                _TRACE_TARGET_ONLY_MEASUREMENT_SCHEMA,
+                path=f"episode trace[{index}].action.arguments",
+            )
+        except GateError as exc:
+            return str(exc)
+        return None
 
 
 def _nonnegative_integer(value: Any, *, field: str) -> int:
@@ -743,6 +878,502 @@ def _strict_episode_audit_failures(
     return evidence_failures, performance_failures
 
 
+def _intervention_failures(
+    episode: Mapping[str, Any], expected_contract: Any
+) -> tuple[list[str], list[str]]:
+    """Validate policy-hidden intervention evidence and suite-local outcomes."""
+
+    evidence_failures: list[str] = []
+    performance_failures: list[str] = []
+    evidence = episode.get("evaluation_intervention")
+    fields = {
+        "contract",
+        "applied",
+        "pre_policy_step_count",
+        "injected_failure_count",
+        "injected_invalid_action_count",
+        "recovered_failure_count",
+        "retention_opportunity_count",
+        "retained_opportunity_count",
+    }
+    if not isinstance(evidence, Mapping) or set(evidence) != fields:
+        return ["evaluation intervention evidence has an invalid schema"], []
+    if evidence.get("contract") != expected_contract:
+        evidence_failures.append(
+            "evaluation intervention does not match the frozen suite"
+        )
+    if evidence.get("applied") is not True:
+        evidence_failures.append("evaluation intervention was not applied")
+
+    counts: dict[str, int] = {}
+    for name in sorted(fields - {"contract", "applied"}):
+        try:
+            counts[name] = _nonnegative_integer(
+                evidence.get(name), field=f"evaluation_intervention.{name}"
+            )
+        except ValueError as exc:
+            evidence_failures.append(str(exc))
+            counts[name] = -1
+    if not isinstance(expected_contract, Mapping):
+        evidence_failures.append("frozen suite intervention contract is missing")
+        return evidence_failures, performance_failures
+
+    kind = expected_contract.get("kind")
+    expected_pre_steps = 0
+    expected_failures = 0
+    expected_invalid = 0
+    expected_opportunities = 0
+    if kind == "pre_policy_failure":
+        expected_pre_steps = 1
+        expected_failures = 1
+        expected_invalid = int(expected_contract.get("failure_mode") == "malformed")
+    elif kind == "committed_partial_correction":
+        setup_actions = expected_contract.get("setup_actions")
+        expected_pre_steps = len(setup_actions) if isinstance(setup_actions, list) else -1
+        expected_opportunities = 1
+    elif kind not in {"none", "efficiency_budget"}:
+        evidence_failures.append("frozen suite intervention kind is invalid")
+
+    expected_counts = {
+        "pre_policy_step_count": expected_pre_steps,
+        "injected_failure_count": expected_failures,
+        "injected_invalid_action_count": expected_invalid,
+        "retention_opportunity_count": expected_opportunities,
+    }
+    for name, expected in expected_counts.items():
+        if counts.get(name) != expected:
+            evidence_failures.append(
+                f"evaluation intervention {name} does not match the frozen contract"
+            )
+    retained = counts.get("retained_opportunity_count", -1)
+    if not 0 <= retained <= max(expected_opportunities, 0):
+        evidence_failures.append(
+            "evaluation intervention retained_opportunity_count is inconsistent"
+        )
+    recovered_failures = counts.get("recovered_failure_count", -1)
+    injected_failures = counts.get("injected_failure_count", -1)
+    if not 0 <= recovered_failures <= max(injected_failures, 0):
+        evidence_failures.append(
+            "evaluation intervention recovered_failure_count is inconsistent"
+        )
+
+    def episode_integer(name: str) -> int | None:
+        try:
+            return _nonnegative_integer(
+                episode.get(name), field=f"episode.{name}"
+            )
+        except ValueError as exc:
+            evidence_failures.append(str(exc))
+            return None
+
+    policy_steps = episode_integer("policy_steps")
+    invalid_actions = episode_integer("invalid_action_count")
+    recovered_invalid = episode_integer("recovered_invalid_action_count")
+    partial_fixes = episode_integer("partial_fix_count")
+    retained_partial = episode_integer("retained_partial_fix_count")
+    wls_calls = episode_integer("wls_calls")
+    specialized_calls = episode_integer("specialized_tool_calls")
+    episode_integer("tool_regret_samples")
+    regret_value = episode.get("tool_regret_total")
+    if isinstance(regret_value, bool) or not isinstance(regret_value, (int, float)):
+        evidence_failures.append("episode.tool_regret_total must be finite and non-negative")
+        regret_total: float | None = None
+    else:
+        regret_total = float(regret_value)
+        if not math.isfinite(regret_total) or regret_total < 0.0:
+            evidence_failures.append(
+                "episode.tool_regret_total must be finite and non-negative"
+            )
+            regret_total = None
+
+    raw_trace = episode.get("trace")
+    trace = list(raw_trace) if isinstance(raw_trace, list) else []
+    steps = episode_integer("steps")
+    if not isinstance(raw_trace, list) or steps != len(trace):
+        evidence_failures.append("episode trace does not match the reported step count")
+    trace_policy_steps = 0
+    trace_wls_calls = 0
+    trace_specialized_calls = 0
+    prefix_count = max(expected_pre_steps, 0)
+    trace_fields = {
+        "step",
+        "intervention",
+        "observation_hash",
+        "action",
+        "execution_status",
+        "advanced",
+        "error_code",
+        "candidate_disposition_offline",
+        "tool_regret",
+        "terminal_outcome",
+        *_TRACE_PROGRESS_FIELDS,
+    }
+    policy_rows: list[tuple[int, Mapping[str, Any], str, str, bool]] = []
+    previous_state_after: Mapping[str, Any] | None = None
+    previous_state_after_sha256: str | None = None
+    terminal_marker_indices: list[int] = []
+    terminal_after_indices: list[int] = []
+    for index, raw_row in enumerate(trace):
+        if not isinstance(raw_row, Mapping):
+            evidence_failures.append(f"episode trace[{index}] must be a mapping")
+            continue
+        if set(raw_row) != trace_fields:
+            evidence_failures.append(
+                f"episode trace[{index}] has a noncanonical schema"
+            )
+        if raw_row.get("step") != index:
+            evidence_failures.append(f"episode trace[{index}] has a noncanonical step index")
+        expected_intervention = index < prefix_count
+        if raw_row.get("intervention") is not expected_intervention:
+            evidence_failures.append(
+                f"episode trace[{index}] intervention marker is inconsistent"
+            )
+        reported_advanced = raw_row.get("advanced")
+        if not isinstance(reported_advanced, bool):
+            evidence_failures.append(
+                f"episode trace[{index}] advanced must be an explicit boolean"
+            )
+        action = raw_row.get("action")
+        if (
+            not isinstance(action, Mapping)
+            or set(action) != {"tool", "arguments"}
+            or not isinstance(action.get("arguments"), Mapping)
+            or not str(action.get("tool") or "").strip()
+        ):
+            evidence_failures.append(
+                f"episode trace[{index}] action is not canonical"
+            )
+            action = {}
+        else:
+            action_failure = _trace_action_schema_failure(action, index=index)
+            if action_failure is not None:
+                evidence_failures.append(action_failure)
+        tool = str(action.get("tool") or "")
+        status = str(raw_row.get("execution_status") or "")
+        if status not in {"success", "failure"}:
+            evidence_failures.append(
+                f"episode trace[{index}] execution_status is invalid"
+            )
+        if status == "failure" and raw_row.get("advanced") is not False:
+            evidence_failures.append(
+                f"episode trace[{index}] failed action cannot advance"
+            )
+        if tool == INVALID_ACTION and status != "failure":
+            evidence_failures.append(
+                f"episode trace[{index}] invalid action must fail"
+            )
+        if status == "failure" and not str(raw_row.get("error_code") or "").strip():
+            evidence_failures.append(
+                f"episode trace[{index}] failed action lacks an error code"
+            )
+        if status == "success" and raw_row.get("error_code") is not None:
+            evidence_failures.append(
+                f"episode trace[{index}] successful action carries an error code"
+            )
+
+        progress_evidence = {
+            field: raw_row.get(field) for field in _TRACE_PROGRESS_FIELDS
+        }
+        try:
+            progress_advanced = trace_progress_advanced(progress_evidence)
+        except ValueError as exc:
+            evidence_failures.append(
+                f"episode trace[{index}] progress evidence is invalid: {exc}"
+            )
+            progress_advanced = False
+        effective_advanced = bool(
+            tool != INVALID_ACTION
+            and status == "success"
+            and progress_advanced
+        )
+        if isinstance(reported_advanced, bool) and reported_advanced != effective_advanced:
+            evidence_failures.append(
+                f"episode trace[{index}] advanced does not match progress evidence"
+            )
+        state_before = progress_evidence.get("state_before")
+        state_before_sha256 = progress_evidence.get("state_before_sha256")
+        if index > 0 and (
+            state_before != previous_state_after
+            or state_before_sha256 != previous_state_after_sha256
+        ):
+            evidence_failures.append(
+                f"episode trace[{index}] state evidence is not continuous"
+            )
+        state_after = progress_evidence.get("state_after")
+        previous_state_after = (
+            state_after if isinstance(state_after, Mapping) else None
+        )
+        after_hash = progress_evidence.get("state_after_sha256")
+        previous_state_after_sha256 = (
+            after_hash if isinstance(after_hash, str) else None
+        )
+        if progress_evidence.get("terminal_after") is True:
+            terminal_after_indices.append(index)
+        if raw_row.get("terminal_outcome") is not None:
+            terminal_marker_indices.append(index)
+        regret = raw_row.get("tool_regret")
+        if regret is not None and (
+            isinstance(regret, bool)
+            or not isinstance(regret, (int, float))
+            or not math.isfinite(float(regret))
+            or float(regret) < 0.0
+        ):
+            evidence_failures.append(
+                f"episode trace[{index}] tool_regret must be null or finite and non-negative"
+            )
+        if expected_intervention:
+            if raw_row.get("observation_hash") is not None:
+                evidence_failures.append(
+                    f"episode trace[{index}] intervention observation hash must be null"
+                )
+            if raw_row.get("tool_regret") is not None:
+                evidence_failures.append(
+                    f"episode trace[{index}] intervention tool regret must be null"
+                )
+            if raw_row.get("terminal_outcome") is not None:
+                evidence_failures.append(
+                    f"episode trace[{index}] intervention cannot be terminal"
+                )
+            continue
+        observation_hash = raw_row.get("observation_hash")
+        if not isinstance(observation_hash, str) or _SHA256.fullmatch(
+            observation_hash
+        ) is None:
+            evidence_failures.append(
+                f"episode trace[{index}] policy observation hash is invalid"
+            )
+        trace_policy_steps += 1
+        if tool in {RUN_WLS, VERIFY_CANDIDATE}:
+            trace_wls_calls += 1
+        if tool in DIAGNOSTIC_TOOLS:
+            trace_specialized_calls += 1
+        policy_rows.append(
+            (index, action, tool, status, effective_advanced)
+        )
+
+    episode_terminal = episode.get("terminal") is True
+    episode_outcome = episode.get("terminal_outcome")
+    final_index = len(trace) - 1
+    if episode_terminal:
+        if terminal_marker_indices != [final_index] or (
+            final_index >= 0
+            and _mapping(trace[final_index]).get("terminal_outcome")
+            != episode_outcome
+        ):
+            evidence_failures.append(
+                "terminal episode must have exactly one matching marker on the final trace row"
+            )
+        if terminal_after_indices != [final_index]:
+            evidence_failures.append(
+                "terminal episode lifecycle marker must occur only on the final trace row"
+            )
+    else:
+        if episode_outcome is not None or terminal_marker_indices:
+            evidence_failures.append(
+                "nonterminal episode cannot carry a terminal outcome marker"
+            )
+        if terminal_after_indices:
+            evidence_failures.append(
+                "nonterminal episode cannot carry a terminal lifecycle marker"
+            )
+
+    nonadvancing_signatures: set[str] = set()
+    derived_loop_detected = False
+    for _index, action, _tool, _status, advanced in policy_rows:
+        if advanced:
+            nonadvancing_signatures.clear()
+            continue
+        signature = action_signature(action)
+        if signature in nonadvancing_signatures:
+            derived_loop_detected = True
+        nonadvancing_signatures.add(signature)
+    if episode.get("loop_detected") is not derived_loop_detected:
+        evidence_failures.append(
+            "episode loop_detected does not match the policy trace no-progress epochs"
+        )
+
+    prefix = [row for row in trace[:prefix_count] if isinstance(row, Mapping)]
+    if len(prefix) != prefix_count:
+        evidence_failures.append(
+            "episode trace does not contain the complete intervention prefix"
+        )
+    if kind == "pre_policy_failure" and len(prefix) == 1:
+        row = prefix[0]
+        action = row.get("action")
+        action = action if isinstance(action, Mapping) else {}
+        arguments = action.get("arguments")
+        arguments = arguments if isinstance(arguments, Mapping) else {}
+        if expected_contract.get("failure_mode") == "well_formed":
+            valid_injected_action = bool(
+                action.get("tool") == RUN_WLS
+                and set(arguments) == {"state_id"}
+                and str(arguments.get("state_id") or "").strip()
+            )
+        else:
+            valid_injected_action = action == invalid_action(
+                str(expected_contract.get("error_code") or "")
+            )
+        if not valid_injected_action:
+            evidence_failures.append(
+                "pre-policy failure trace action does not match the frozen contract"
+            )
+        if not (
+            row.get("execution_status") == "failure"
+            and row.get("advanced") is False
+            and row.get("error_code") == expected_contract.get("error_code")
+            and row.get("candidate_disposition_offline") is None
+        ):
+            evidence_failures.append(
+                "pre-policy failure trace outcome does not match the frozen contract"
+            )
+    elif kind == "committed_partial_correction" and len(prefix) == prefix_count:
+        setup_actions = expected_contract.get("setup_actions")
+        setup_actions = setup_actions if isinstance(setup_actions, list) else []
+        active_aliases: list[str] = []
+        candidate_aliases: list[str] = []
+        for index, (row, expected_action) in enumerate(zip(prefix, setup_actions)):
+            actual_action = row.get("action")
+            actual_action = actual_action if isinstance(actual_action, Mapping) else {}
+            actual_arguments = actual_action.get("arguments")
+            actual_arguments = (
+                actual_arguments if isinstance(actual_arguments, Mapping) else {}
+            )
+            expected_action = (
+                expected_action if isinstance(expected_action, Mapping) else {}
+            )
+            expected_arguments = expected_action.get("arguments")
+            expected_arguments = (
+                expected_arguments if isinstance(expected_arguments, Mapping) else {}
+            )
+            if (
+                actual_action.get("tool") != expected_action.get("tool")
+                or set(actual_arguments) != set(expected_arguments)
+            ):
+                evidence_failures.append(
+                    f"partial intervention trace[{index}] action does not match its contract"
+                )
+            for field, expected_value in expected_arguments.items():
+                actual_value = actual_arguments.get(field)
+                if isinstance(expected_value, str) and expected_value in {
+                    "$active",
+                    "$candidate",
+                }:
+                    normalized = str(actual_value or "").strip()
+                    if not normalized or normalized.startswith("$"):
+                        evidence_failures.append(
+                            f"partial intervention trace[{index}] has an unresolved state alias"
+                        )
+                    elif expected_value == "$active":
+                        active_aliases.append(normalized)
+                    else:
+                        candidate_aliases.append(normalized)
+                elif actual_value != expected_value:
+                    evidence_failures.append(
+                        f"partial intervention trace[{index}] arguments do not match its contract"
+                    )
+            expected_disposition = (
+                "ACCEPT_PARTIAL" if index == len(setup_actions) - 1 else None
+            )
+            if not (
+                row.get("execution_status") == "success"
+                and row.get("error_code") is None
+                and row.get("candidate_disposition_offline") == expected_disposition
+            ):
+                evidence_failures.append(
+                    f"partial intervention trace[{index}] outcome is invalid"
+                )
+        if (
+            not active_aliases
+            or len(set(active_aliases)) != 1
+            or not candidate_aliases
+            or len(set(candidate_aliases)) != 1
+            or active_aliases[0] == candidate_aliases[0]
+        ):
+            evidence_failures.append(
+                "partial intervention state aliases are inconsistent"
+            )
+
+    safe_terminal = bool(
+        episode.get("final_physical_success") is True
+        or (
+            episode.get("terminal") is True
+            and episode.get("terminal_outcome") == "operator_escalation"
+            and episode.get("healthy_preservation_known") is True
+            and episode.get("healthy_components_preserved") is True
+        )
+    )
+    derived_invalid_indices = [
+        index
+        for index, _action, tool, status, _advanced in policy_rows
+        if tool == INVALID_ACTION or status != "success"
+    ]
+    advancing_indices = [
+        index
+        for index, _action, tool, status, advanced in policy_rows
+        if tool != INVALID_ACTION and status == "success" and advanced
+    ]
+    derived_recovered_invalid = (
+        sum(
+            any(advancing_index > invalid_index for advancing_index in advancing_indices)
+            for invalid_index in derived_invalid_indices
+        )
+        if safe_terminal
+        else 0
+    )
+    if invalid_actions is not None and invalid_actions != len(derived_invalid_indices):
+        evidence_failures.append(
+            "episode invalid_action_count does not match the policy trace"
+        )
+    if recovered_invalid is not None and recovered_invalid != derived_recovered_invalid:
+        evidence_failures.append(
+            "episode recovered_invalid_action_count does not match the policy trace"
+        )
+    derived_recovered_failures = int(
+        expected_failures > 0 and safe_terminal and bool(advancing_indices)
+    )
+    if recovered_failures != derived_recovered_failures:
+        evidence_failures.append(
+            "evaluation intervention recovered_failure_count does not match the trace"
+        )
+    for name, reported, observed in (
+        ("policy_steps", policy_steps, trace_policy_steps),
+        ("wls_calls", wls_calls, trace_wls_calls),
+        ("specialized_tool_calls", specialized_calls, trace_specialized_calls),
+    ):
+        if reported is not None and reported != observed:
+            evidence_failures.append(
+                f"episode {name} does not match the policy trace"
+            )
+
+    if kind == "pre_policy_failure":
+        if derived_recovered_failures < 1:
+            performance_failures.append("pre-policy failure was not recovered")
+    elif kind == "committed_partial_correction":
+        if partial_fixes is not None and partial_fixes < 1:
+            evidence_failures.append("partial setup did not create a retention opportunity")
+        if retained_partial is not None and retained_partial < retained:
+            evidence_failures.append(
+                "partial retention evidence exceeds the episode retention count"
+            )
+        if retained < 1:
+            performance_failures.append("committed partial correction was not retained")
+    elif kind == "efficiency_budget":
+        limits = _mapping(expected_contract.get("limits"))
+        observed_limits = {
+            "maximum_policy_steps": policy_steps,
+            "maximum_wls_calls": wls_calls,
+            "maximum_specialized_tool_calls": specialized_calls,
+        }
+        for name, observed in observed_limits.items():
+            allowed = limits.get(name)
+            if observed is not None and isinstance(allowed, (int, float)) and observed > allowed:
+                performance_failures.append(
+                    f"episode efficiency limit {name} failed: observed {observed} > allowed {allowed}"
+                )
+
+    return evidence_failures, performance_failures
+
+
 def validate_evaluation_artifact(
     artifact: str | Path | Mapping[str, Any],
     *,
@@ -1156,6 +1787,7 @@ def validate_evaluation_artifact(
     }
     terminal = resolved = escalated = invalid = loops = evaluator_errors = 0
     false_commit = false_rollback = false_finalization = corruption = 0
+    injected_failures = recovered_injected = injected_failure_episodes = 0
     maximum_episode_invalid = 0
     max_steps_seen = 0
     for index, raw_episode in enumerate(episodes):
@@ -1228,6 +1860,9 @@ def validate_evaluation_artifact(
             "source_tier": episode.get("source_tier"),
             "physical_root": root,
             "seed": episode_seed,
+            "evaluation_intervention": _mapping(
+                episode.get("evaluation_intervention")
+            ).get("contract"),
         }
         if expected_episode is None or observed_episode_identity != expected_episode:
             failures.append(
@@ -1282,6 +1917,34 @@ def validate_evaluation_artifact(
             f"episode {key!r} audit performance: {failure}"
             for failure in audit_performance
         )
+        intervention_evidence, intervention_performance = _intervention_failures(
+            episode,
+            _mapping(expected_episode).get("evaluation_intervention"),
+        )
+        failures.extend(
+            f"episode {key!r} intervention evidence: {failure}"
+            for failure in intervention_evidence
+        )
+        performance_failures.extend(
+            f"episode {key!r} intervention performance: {failure}"
+            for failure in intervention_performance
+        )
+        intervention_summary = _mapping(episode.get("evaluation_intervention"))
+        raw_injected = intervention_summary.get("injected_failure_count")
+        raw_recovered_injected = intervention_summary.get("recovered_failure_count")
+        if (
+            isinstance(raw_injected, int)
+            and not isinstance(raw_injected, bool)
+            and raw_injected >= 0
+        ):
+            injected_failures += raw_injected
+            injected_failure_episodes += int(raw_injected > 0)
+        if (
+            isinstance(raw_recovered_injected, int)
+            and not isinstance(raw_recovered_injected, bool)
+            and raw_recovered_injected >= 0
+        ):
+            recovered_injected += raw_recovered_injected
         episode_environment = _mapping(
             episode.get("release_environment_attestation")
         )
@@ -1315,7 +1978,19 @@ def validate_evaluation_artifact(
         loops += int(episode.get("loop_detected") is True)
         evaluator_errors += int(episode.get("evaluator_error") is not None)
         steps = episode_integer("steps")
-        max_steps_seen = max(max_steps_seen, steps)
+        policy_steps = episode_integer("policy_steps")
+        pre_policy_steps = _mapping(
+            episode.get("evaluation_intervention")
+        ).get("pre_policy_step_count")
+        if (
+            isinstance(pre_policy_steps, bool)
+            or not isinstance(pre_policy_steps, int)
+            or steps != policy_steps + max(pre_policy_steps, 0)
+        ):
+            failures.append(
+                f"episode {key!r} step count does not match policy plus intervention steps"
+            )
+        max_steps_seen = max(max_steps_seen, policy_steps)
         if (
             episode.get("healthy_preservation_known") is True
             and episode.get("healthy_components_preserved") is False
@@ -1360,6 +2035,13 @@ def validate_evaluation_artifact(
         ("false_finalization_count", false_finalization),
         ("healthy_component_corruption_episodes", corruption),
         ("invalid_action_count", invalid),
+        ("injected_failure_count", injected_failures),
+        ("recovered_injected_failures", recovered_injected),
+        (
+            "injected_failure_recovery_rate",
+            recovered_injected / injected_failures if injected_failures else 0.0,
+        ),
+        ("episodes_with_injected_failures", injected_failure_episodes),
         ("loop_episodes", loops),
         ("evaluator_error_episodes", evaluator_errors),
     ):

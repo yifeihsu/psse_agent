@@ -4,6 +4,7 @@ import copy
 import hashlib
 import io
 import json
+import platform
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -235,6 +236,14 @@ class _ReleaseScriptEnv(_ScriptEnv):
         return super().reset(payload)
 
 
+class _PartialSetupEnv(_ScriptEnv):
+    def step(self, action: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        next_state, output = super().step(action)
+        if action.get("tool") == CORRECT_MEASUREMENTS:
+            output["state_mutated"] = True
+        return next_state, output
+
+
 def _resolved_scenario() -> dict[str, Any]:
     dirty_measurements = [0.0] * 8
     dirty_measurements[7] = 9.0
@@ -304,6 +313,10 @@ def _partitioned_resolved_scenario() -> dict[str, Any]:
             )
         },
         "audit": {
+            "evaluation_intervention": {
+                "intervention_schema_version": 1,
+                "kind": "none",
+            },
             "truth": {
                 "clean_case": copy.deepcopy(source["clean_case"]),
                 "clean_measurements": copy.deepcopy(source["clean_measurements"]),
@@ -336,6 +349,74 @@ def _release_partitioned_resolved_scenario() -> dict[str, Any]:
     return scenario
 
 
+def _pre_policy_failure_scenario(*, malformed: bool) -> dict[str, Any]:
+    scenario = _partitioned_resolved_scenario()
+    scenario["execution"]["script"] = copy.deepcopy(_resolved_scenario()["script"][1:])
+    scenario["audit"]["evaluation_intervention"] = {
+        "intervention_schema_version": 1,
+        "kind": "pre_policy_failure",
+        "failure_mode": "malformed" if malformed else "well_formed",
+        "error_code": (
+            "injected_invalid_action"
+            if malformed
+            else "injected_transient_tool_failure"
+        ),
+    }
+    return scenario
+
+
+def _partial_retention_scenario() -> dict[str, Any]:
+    scenario = _partitioned_resolved_scenario()
+    correction = {
+        "tool": CORRECT_MEASUREMENTS,
+        "arguments": {
+            "state_id": "$active",
+            "measurement_updates": {"7": 1.0},
+        },
+    }
+    scenario["audit"]["evaluation_intervention"] = {
+        "intervention_schema_version": 1,
+        "kind": "committed_partial_correction",
+        "setup_actions": [
+            {
+                "tool": "get_measurement_context",
+                "arguments": {"state_id": "$active"},
+            },
+            correction,
+            {"tool": RUN_WLS, "arguments": {"state_id": "$candidate"}},
+            {
+                "tool": COMMIT_STATE,
+                "arguments": {"candidate_state_id": "$candidate"},
+            },
+        ],
+        "retention_required": True,
+    }
+    scenario["execution"]["script"] = [
+        {"phase": "unused-context", "remaining": 2},
+        {"phase": "unused-correction", "remaining": 2},
+        {
+            "phase": "unused-verification",
+            "candidate_state_id": "candidate-1",
+            "remaining": 1,
+        },
+        {
+            "phase": "unused-commit",
+            "candidate_state_id": "candidate-1",
+            "disposition": "ACCEPT_PARTIAL",
+            "remaining": 1,
+            "accepted_action": {
+                "tool": CORRECT_MEASUREMENTS,
+                "arguments": {
+                    "state_id": "active",
+                    "measurement_updates": {7: 1.0},
+                },
+            },
+        },
+        {"phase": "finalize", "remaining": 0, "terminal_outcome": "resolved"},
+    ]
+    return scenario
+
+
 def _escalation_scenario() -> dict[str, Any]:
     return {
         "scenario_id": "escalated-root",
@@ -363,6 +444,92 @@ def _escalation_scenario() -> dict[str, Any]:
 
 
 class ClosedLoopEvaluatorTests(unittest.TestCase):
+    def test_policy_hidden_failure_interventions_are_injected_before_policy(self) -> None:
+        for malformed, suite, expected_tool in (
+            (False, "forced_error_recovery", RUN_WLS),
+            (True, "invalid_action_recovery", "__invalid_action__"),
+        ):
+            observations: list[dict[str, Any]] = []
+            with self.subTest(suite=suite):
+                result = evaluate_rollout_suites(
+                    {suite: [_pre_policy_failure_scenario(malformed=malformed)]},
+                    env_factory=_ScriptEnv,
+                    policy_factory=lambda: _ScriptPolicy(observations),
+                    max_steps=8,
+                )
+                episode = result.suite_metrics["episodes"][0]
+                injected = episode["evaluation_intervention"]
+                self.assertTrue(injected["applied"])
+                self.assertEqual(injected["pre_policy_step_count"], 1)
+                self.assertEqual(injected["injected_failure_count"], 1)
+                self.assertEqual(
+                    injected["injected_invalid_action_count"], int(malformed)
+                )
+                self.assertEqual(injected["recovered_failure_count"], 1)
+                self.assertEqual(episode["invalid_action_count"], 0)
+                self.assertEqual(episode["recovered_invalid_action_count"], 0)
+                self.assertEqual(episode["policy_steps"], 4)
+                self.assertEqual(episode["steps"], 5)
+                first_history = observations[0]["history_window"][-1]
+                self.assertEqual(first_history["action"]["tool"], expected_tool)
+                self.assertEqual(
+                    first_history["tool_output"]["execution_status"], "failure"
+                )
+                self.assertFalse(first_history["tool_output"]["state_mutated"])
+                self.assertNotIn("evaluation_intervention", json.dumps(observations))
+
+    def test_partial_retention_intervention_requires_a_real_committed_setup(self) -> None:
+        observations: list[dict[str, Any]] = []
+        result = evaluate_rollout_suites(
+            {"partial_success_retention": [_partial_retention_scenario()]},
+            env_factory=_PartialSetupEnv,
+            policy_factory=lambda: _ScriptPolicy(observations),
+            max_steps=4,
+        )
+        episode = result.suite_metrics["episodes"][0]
+        evidence = episode["evaluation_intervention"]
+        self.assertEqual(evidence["pre_policy_step_count"], 4)
+        self.assertEqual(evidence["retention_opportunity_count"], 1)
+        self.assertEqual(evidence["retained_opportunity_count"], 1)
+        self.assertEqual(episode["partial_fix_count"], 1)
+        self.assertEqual(episode["retained_partial_fix_count"], 1)
+        self.assertEqual(episode["policy_steps"], 1)
+        self.assertEqual(
+            [row["advanced"] for row in episode["trace"][:4]],
+            [False, True, False, True],
+        )
+        self.assertEqual(len(observations[0]["history_window"]), 2)
+        self.assertEqual(
+            observations[0]["history_window"][-1]["action"]["tool"], COMMIT_STATE
+        )
+        observable_payload = json.dumps(observations)
+        self.assertNotIn("evaluation_intervention", observable_payload)
+        self.assertNotIn("retention_required", observable_payload)
+
+        mislabeled = _partial_retention_scenario()
+        mislabeled["execution"]["script"][3]["disposition"] = "ACCEPT_FINAL"
+        with self.assertRaisesRegex(ValueError, "requires ACCEPT_PARTIAL"):
+            evaluate_rollout_suites(
+                {"partial_success_retention": [mislabeled]},
+                env_factory=_PartialSetupEnv,
+                policy_factory=lambda: _ScriptPolicy([]),
+                max_steps=4,
+            )
+
+    def test_release_intervention_schema_is_suite_specific_and_fail_closed(self) -> None:
+        wrong_kind = _release_partitioned_resolved_scenario()
+        wrong_kind["audit"]["evaluation_intervention"] = {
+            "intervention_schema_version": 1,
+            "kind": "none",
+        }
+        with self.assertRaisesRegex(ValueError, "requires intervention kind"):
+            evaluate_rollout_suites(
+                {"efficiency": [wrong_kind]},
+                env_factory=_ReleaseScriptEnv,
+                policy_factory=lambda: _ScriptPolicy([]),
+                require_release_environment=True,
+            )
+
     def test_executes_suites_and_reports_recovery_safety_and_groups(self) -> None:
         observed: list[dict[str, Any]] = []
 
@@ -408,6 +575,17 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             set(result.suite_metrics["by_physical_root"]),
             {"fp-escalated", "fp-resolved"},
         )
+        for episode in result.suite_metrics["episodes"]:
+            terminal_rows = [
+                index
+                for index, row in enumerate(episode["trace"])
+                if row["terminal_outcome"] is not None
+            ]
+            self.assertEqual(terminal_rows, [len(episode["trace"]) - 1])
+            self.assertEqual(
+                episode["trace"][-1]["terminal_outcome"],
+                episode["terminal_outcome"],
+            )
         self.assertTrue(observed)
         for observation in observed:
             self.assertNotIn("hidden_truth", observation)
@@ -916,6 +1094,27 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             ValueError, r"\$\.metadata\.finalPhysicalState"
         ):
             strip_offline_truth(scenario)
+
+        for key, path in (
+            ("z_clean", r"\$\.metadata\.hif_scan_window\.scans\[0\]\.z_clean"),
+            ("detected_top1", r"\$\.metadata\.nlm_diagnostic\.detected_top1"),
+            ("initial_states", r"\$\.metadata\.parameter_scans\.initial_states"),
+        ):
+            candidate = _partitioned_resolved_scenario()
+            if key == "z_clean":
+                candidate["execution"]["metadata"] = {
+                    "hif_scan_window": {"scans": [{key: [1.0]}]}
+                }
+            elif key == "initial_states":
+                candidate["execution"]["metadata"] = {
+                    "parameter_scans": {key: [[1.0]]}
+                }
+            else:
+                candidate["execution"]["metadata"] = {
+                    "nlm_diagnostic": {key: True}
+                }
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, path):
+                strip_offline_truth(candidate)
 
     def test_partition_markers_are_versioned_complete_and_collision_safe(self) -> None:
         for malformed in (
@@ -1433,6 +1632,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             max_steps=8,
         ).suite_metrics["episodes"][0]
         self.assertEqual(escalated["invalid_action_count"], 1)
+        self.assertFalse(escalated["healthy_preservation_known"])
         self.assertEqual(escalated["recovered_invalid_action_count"], 0)
 
         physically_wrong = _resolved_scenario()
@@ -1505,6 +1705,33 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             changed_configuration["suite_content_sha256"],
         )
         self.assertEqual(first["root_set_sha256"], changed_configuration["root_set_sha256"])
+
+    def test_provenance_rejects_import_spec_callable_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            input_path = Path(temporary_directory) / "suite.json"
+            input_path.write_text(
+                json.dumps(
+                    {"standard_success": [_release_partitioned_resolved_scenario()]}
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ValueError,
+                "factory import spec does not resolve to the supplied callable",
+            ):
+                build_evaluation_provenance(
+                    input_suite_path=input_path,
+                    environment_factory_spec=(
+                        "psse_env.dagger.test_evaluator:_ReleaseScriptEnv"
+                    ),
+                    environment_factory=_cli_policy_factory,
+                    policy_factory_spec=(
+                        "psse_env.dagger.test_evaluator:_cli_policy_factory"
+                    ),
+                    policy_factory=_cli_policy_factory,
+                    model_id="test/script-policy",
+                    model_revision="a" * 40,
+                )
 
     def test_cli_persists_deterministic_release_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1638,6 +1865,14 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             )
             self.assertEqual(
                 provenance["protocol_registry"]["protocol"], "canonical"
+            )
+            self.assertEqual(
+                provenance["runtime_environment"]["python_implementation"],
+                platform.python_implementation(),
+            )
+            self.assertIn("torch", provenance["runtime_environment"]["packages"])
+            self.assertIn(
+                "transformers", provenance["runtime_environment"]["packages"]
             )
             self.assertEqual(
                 len(provenance["protocol_registry"]["registry_sha256"]), 64

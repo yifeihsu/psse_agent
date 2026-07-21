@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from psse_env.oracle import ExpertPolicyOracle, ProcessValidityOracle
 from psse_env.oracle.measurement_expert import MeasurementExpert
 from psse_env.oracle.candidate_quality import (
     CandidateDisposition,
@@ -160,6 +161,119 @@ class MultiMeasurementContinuationTests(unittest.TestCase):
         }
 
         self.assertIn(joint, [proposal.action for proposal in proposals])
+
+    def test_joint_retry_survives_aged_out_context_and_first_verification(self) -> None:
+        state_id = "episode:s0"
+        singleton_67 = {
+            "tool": "correct_measurements",
+            "arguments": {"state_id": state_id, "suspect_group": [67]},
+        }
+        singleton_69 = {
+            "tool": "correct_measurements",
+            "arguments": {"state_id": state_id, "suspect_group": [69]},
+        }
+        joint = {
+            "tool": "correct_measurements",
+            "arguments": {"state_id": state_id, "suspect_group": [67, 69]},
+        }
+        verification = {
+            "target_metric_value": 0.01,
+            "target_metric_threshold": 3.0,
+            "target_progress": 0.99,
+            "global_progress": 0.15,
+            "globally_resolved": False,
+            "physical_constraints_ok": True,
+            "physical_bound_violations": [],
+        }
+        state = _state(
+            [
+                "wls_residual_outlier index=67 channel=Qf",
+                "wls_residual_outlier index=69 channel=Qf",
+            ]
+        )
+        state.update(
+            {
+                "active_state_id": state_id,
+                "last_tool": "rollback_state",
+                "last_tool_status": "success",
+                "last_tool_output": {"execution_status": "success"},
+                "remaining_anomaly_score": 5.0,
+                "remaining_budget": 4,
+                "requires_measurement_context": True,
+                "has_fresh_measurement_context": True,
+                "measurement_context_state_id": state_id,
+                "fresh_context_evidence": {
+                    "measurement": {
+                        "state_id": state_id,
+                        "supported_corrections": [
+                            singleton_67,
+                            singleton_69,
+                            joint,
+                        ],
+                    }
+                },
+                "rejected_hypotheses": [
+                    {
+                        "candidate_parent_id": state_id,
+                        "candidate_state_id": f"{state_id}:c1",
+                        "source_action": singleton_67,
+                        "verification_summary": verification,
+                    },
+                    {
+                        "candidate_parent_id": state_id,
+                        "candidate_state_id": f"{state_id}:c2",
+                        "source_action": singleton_69,
+                        "verification_summary": verification,
+                    },
+                ],
+            }
+        )
+        # The four-event release window has lost both the context transition and
+        # c1's WLS verification.  All inputs needed for the conditional retry are
+        # therefore read from the active-state observable recovery ledger.
+        history = [
+            {
+                "action": {
+                    "tool": "rollback_state",
+                    "arguments": {"candidate_state_id": f"{state_id}:c1"},
+                },
+                "tool_output": {"execution_status": "success"},
+            },
+            {
+                "action": singleton_69,
+                "tool_output": {
+                    "execution_status": "success",
+                    "candidate_state_id": f"{state_id}:c2",
+                },
+            },
+            {
+                "action": {
+                    "tool": "run_wls",
+                    "arguments": {"state_id": f"{state_id}:c2"},
+                },
+                "tool_output": {
+                    "execution_status": "success",
+                    "tool_metrics": verification,
+                },
+            },
+            {
+                "action": {
+                    "tool": "rollback_state",
+                    "arguments": {"candidate_state_id": f"{state_id}:c2"},
+                },
+                "tool_output": {"execution_status": "success"},
+            },
+        ]
+        oracle = ExpertPolicyOracle(
+            process_oracle=ProcessValidityOracle(
+                executor_hydrated_corrections=True
+            )
+        )
+
+        actions = oracle.next_actions(state, history)
+
+        self.assertTrue(actions)
+        self.assertEqual(actions[0], joint)
 
     def test_joint_retry_requires_physical_safety_and_budget(self) -> None:
         state_id = "episode:s0"
@@ -521,6 +635,101 @@ class MultiMeasurementContinuationTests(unittest.TestCase):
         self.assertEqual(proposal.action["tool"], "get_measurement_context")
         self.assertGreater(proposal.confidence, 0.87)
 
+    def test_homogeneous_residuals_do_not_hide_branch_routes_before_partial_commit(
+        self,
+    ) -> None:
+        state = _state(
+            [
+                "wls_residual_outlier index=67 channel=Qf",
+                "wls_residual_outlier index=68 channel=Qf",
+                "wls_residual_outlier index=69 channel=Qf",
+                "wls_branch_multiplier line_status_or_parameter line=7",
+            ]
+        )
+
+        parameter = ParameterExpert().propose(state, [])
+        topology = TopologyExpert().propose(state, [])
+
+        self.assertEqual(parameter[0].action["tool"], "get_parameter_context")
+        self.assertEqual(topology[0].action["tool"], "get_topology_context")
+
+    def test_homogeneous_partial_measurement_keeps_weak_branch_routes_live(
+        self,
+    ) -> None:
+        state = _state(
+            [
+                "wls_residual_outlier index=67 channel=Qf",
+                "wls_residual_outlier index=68 channel=Qf",
+                "wls_residual_outlier index=69 channel=Qf",
+                "wls_branch_multiplier line_status_or_parameter line=7",
+            ]
+        )
+        state["accepted_corrections"] = [
+            {
+                "candidate_state_id": "episode:s1",
+                "source_action": {
+                    "tool": "correct_measurements",
+                    "arguments": {
+                        "state_id": "episode:s0",
+                        "suspect_group": [64],
+                    },
+                },
+            }
+        ]
+
+        parameter = ParameterExpert().propose(state, [])
+        topology = TopologyExpert().propose(state, [])
+
+        self.assertEqual(parameter[0].action["tool"], "get_parameter_context")
+        self.assertEqual(topology[0].action["tool"], "get_topology_context")
+
+    def test_partial_joint_group_remains_conditional_without_singleton_closure(
+        self,
+    ) -> None:
+        active_id = "episode:s1"
+        singleton_68 = {
+            "tool": "correct_measurements",
+            "arguments": {"state_id": active_id, "suspect_group": [68]},
+        }
+        joint = {
+            "tool": "correct_measurements",
+            "arguments": {
+                "state_id": active_id,
+                "suspect_group": [67, 68, 69],
+            },
+        }
+        state = _state(
+            [
+                "wls_residual_outlier index=67 channel=Qf",
+                "wls_residual_outlier index=68 channel=Qf",
+                "wls_residual_outlier index=69 channel=Qf",
+            ]
+        )
+        state.update(
+            {
+                "has_fresh_measurement_context": True,
+                "measurement_context_state_id": active_id,
+                "accepted_corrections": [
+                    {
+                        "candidate_state_id": active_id,
+                        "source_action": {
+                            "tool": "correct_measurements",
+                            "arguments": {
+                                "state_id": "episode:s0",
+                                "suspect_group": [67],
+                            },
+                        },
+                    }
+                ],
+            }
+        )
+
+        proposals = MeasurementExpert().propose(
+            state, [], oracle_hints=[singleton_68, joint]
+        )
+
+        self.assertNotIn(joint, [proposal.action for proposal in proposals])
+
     def test_observable_joint_refinement_of_accepted_targets_is_admissible(self) -> None:
         state = _state([])
         state["has_fresh_measurement_context"] = True
@@ -706,6 +915,342 @@ class MultiMeasurementContinuationTests(unittest.TestCase):
             "fresh_post_commit_context_required", proposals[0].evidence_codes
         )
 
+    @staticmethod
+    def _partial_measurement_branch_inventory_state(
+        *, topology_rejected: bool
+    ) -> tuple[dict, dict]:
+        active_id = "episode:s1"
+        measurement_action = {
+            "tool": "correct_measurements",
+            "arguments": {"state_id": active_id, "suspect_group": [13]},
+        }
+        topology_action = {
+            "tool": "correct_topology",
+            "arguments": {"state_id": active_id, "line_index": 5, "status": 0},
+        }
+        state = _state(
+            [
+                "wls_residual_outlier index=13 channel=Vm",
+                "wls_branch_multiplier line_status_or_parameter line=5",
+            ]
+        )
+        state.update(
+            {
+                "active_state_id": active_id,
+                "remaining_anomaly_score": 1.05,
+                "remaining_budget": 12,
+                "accepted_corrections": [
+                    {
+                        "candidate_state_id": active_id,
+                        "source_action": {
+                            "tool": "correct_measurements",
+                            "arguments": {
+                                "state_id": "episode:s0",
+                                "suspect_group": [8],
+                            },
+                        },
+                    }
+                ],
+                "has_fresh_measurement_context": True,
+                "measurement_context_state_id": active_id,
+                "has_fresh_parameter_context": True,
+                "parameter_context_state_id": active_id,
+                "has_fresh_topology_context": True,
+                "topology_context_state_id": active_id,
+                "fresh_context_evidence": {
+                    "measurement": {
+                        "state_id": active_id,
+                        "supported_corrections": [measurement_action],
+                    },
+                    # An explicit empty provider inventory is affirmative
+                    # evidence that the parameter route is exhausted.
+                    "parameter": {
+                        "state_id": active_id,
+                        "supported_corrections": [],
+                        "route_status": "complete_negative",
+                    },
+                    "topology": {
+                        "state_id": active_id,
+                        "supported_corrections": [topology_action],
+                        "route_status": "actionable",
+                    },
+                },
+                "rejected_hypotheses": (
+                    [
+                        {
+                            "candidate_parent_id": active_id,
+                            "source_action": topology_action,
+                        }
+                    ]
+                    if topology_rejected
+                    else []
+                ),
+            }
+        )
+        return state, measurement_action
+
+    @staticmethod
+    def _install_terminal_closure_evidence(
+        state: dict,
+        closure: dict,
+    ) -> None:
+        active_id = state["active_state_id"]
+        state_hash = "observable-state-hash-s1"
+        targets = list(closure["arguments"]["suspect_group"])
+        state["fresh_context_evidence"]["measurement"].update(
+            {
+                "state_hash": state_hash,
+                "supported_corrections": [closure],
+                "verified_terminal_measurement_closure_targets": targets,
+                "verified_terminal_measurement_closure_evidence": {
+                    "eligible": True,
+                    "state_id": active_id,
+                    "state_hash": state_hash,
+                    "screening_method": (
+                        "singleton_then_grouped_deployment_candidate_quality"
+                    ),
+                    "new_target": 13,
+                    "closure_targets": targets,
+                    "attempts": [
+                        {
+                            "stage": "new_target_singleton",
+                            "targets": [13],
+                            "disposition": "ACCEPT_PARTIAL",
+                            "target_test_passed": True,
+                            "physical_constraints_ok": True,
+                        },
+                        {
+                            "stage": "accepted_targets_plus_singleton",
+                            "targets": targets,
+                            "disposition": "ACCEPT_FINAL",
+                            "target_test_passed": True,
+                            "globally_resolved": True,
+                            "physical_constraints_ok": True,
+                        },
+                    ],
+                },
+            }
+        )
+
+    def test_partial_measurement_resumes_after_branch_inventories_exhausted(
+        self,
+    ) -> None:
+        state, measurement_action = self._partial_measurement_branch_inventory_state(
+            topology_rejected=True
+        )
+
+        actions = ExpertPolicyOracle(
+            process_oracle=ProcessValidityOracle(
+                executor_hydrated_corrections=True
+            )
+        ).next_actions(state, [])
+
+        self.assertTrue(actions)
+        self.assertEqual(actions[0], measurement_action)
+
+    def test_partial_measurement_remains_blocked_while_branch_candidate_untried(
+        self,
+    ) -> None:
+        state, measurement_action = self._partial_measurement_branch_inventory_state(
+            topology_rejected=False
+        )
+
+        proposals = MeasurementExpert().propose(
+            state, [], oracle_hints=[measurement_action]
+        )
+
+        self.assertNotIn(
+            measurement_action, [proposal.action for proposal in proposals]
+        )
+
+    def test_provider_verified_terminal_closure_requires_exhausted_branches(
+        self,
+    ) -> None:
+        state, _ = self._partial_measurement_branch_inventory_state(
+            topology_rejected=True
+        )
+        active_id = state["active_state_id"]
+        closure = {
+            "tool": "correct_measurements",
+            "arguments": {
+                "state_id": active_id,
+                "suspect_group": [8, 13],
+            },
+        }
+        self._install_terminal_closure_evidence(state, closure)
+
+        proposals = MeasurementExpert().propose(
+            state, [], oracle_hints=[closure]
+        )
+
+        proposal = next(item for item in proposals if item.action == closure)
+        self.assertIn(
+            "provider_verified_terminal_measurement_closure",
+            proposal.evidence_codes,
+        )
+
+    def test_bare_terminal_closure_targets_do_not_authorize_hint(self) -> None:
+        state, _ = self._partial_measurement_branch_inventory_state(
+            topology_rejected=True
+        )
+        active_id = state["active_state_id"]
+        closure = {
+            "tool": "correct_measurements",
+            "arguments": {
+                "state_id": active_id,
+                "suspect_group": [8, 13],
+            },
+        }
+        state["fresh_context_evidence"]["measurement"].update(
+            {
+                "supported_corrections": [closure],
+                "verified_terminal_measurement_closure_targets": [8, 13],
+            }
+        )
+
+        proposals = MeasurementExpert().propose(
+            state, [], oracle_hints=[closure]
+        )
+
+        self.assertNotIn(closure, [proposal.action for proposal in proposals])
+
+    def test_terminal_closure_requires_exact_verified_action_signature(self) -> None:
+        state, _ = self._partial_measurement_branch_inventory_state(
+            topology_rejected=True
+        )
+        active_id = state["active_state_id"]
+        closure = {
+            "tool": "correct_measurements",
+            "arguments": {
+                "state_id": active_id,
+                "suspect_group": [8, 13],
+            },
+        }
+        self._install_terminal_closure_evidence(state, closure)
+        extra_payload = {
+            "tool": "correct_measurements",
+            "arguments": {
+                "state_id": active_id,
+                "suspect_group": [8, 13],
+                "measurement_updates": {13: 1.0},
+            },
+        }
+
+        proposals = MeasurementExpert().propose(
+            state, [], oracle_hints=[extra_payload]
+        )
+
+        self.assertNotIn(
+            extra_payload, [proposal.action for proposal in proposals]
+        )
+
+    def test_terminal_closure_cannot_bypass_live_topology_inventory(self) -> None:
+        state, _ = self._partial_measurement_branch_inventory_state(
+            topology_rejected=False
+        )
+        active_id = state["active_state_id"]
+        closure = {
+            "tool": "correct_measurements",
+            "arguments": {
+                "state_id": active_id,
+                "suspect_group": [8, 13],
+            },
+        }
+        self._install_terminal_closure_evidence(state, closure)
+
+        proposals = MeasurementExpert().propose(
+            state, [], oracle_hints=[closure]
+        )
+
+        self.assertNotIn(closure, [proposal.action for proposal in proposals])
+
+    def test_unavailable_parameter_route_cannot_authorize_measurement(self) -> None:
+        state, measurement_action = self._partial_measurement_branch_inventory_state(
+            topology_rejected=True
+        )
+        state["fresh_context_evidence"]["parameter"]["route_status"] = (
+            "unavailable_or_inconclusive"
+        )
+
+        proposals = MeasurementExpert().propose(
+            state, [], oracle_hints=[measurement_action]
+        )
+
+        self.assertNotIn(
+            measurement_action, [proposal.action for proposal in proposals]
+        )
+
+    def test_explicit_null_branch_status_cannot_authorize_measurement(self) -> None:
+        state, measurement_action = self._partial_measurement_branch_inventory_state(
+            topology_rejected=True
+        )
+        state["fresh_context_evidence"]["topology"]["route_status"] = None
+
+        proposals = MeasurementExpert().propose(
+            state, [], oracle_hints=[measurement_action]
+        )
+
+        self.assertNotIn(
+            measurement_action, [proposal.action for proposal in proposals]
+        )
+
+    def test_homogeneous_partial_joint_never_bypasses_branch_inventory(
+        self,
+    ) -> None:
+        state, measurement_action = self._partial_measurement_branch_inventory_state(
+            topology_rejected=False
+        )
+        active_id = state["active_state_id"]
+        second_measurement = {
+            "tool": "correct_measurements",
+            "arguments": {"state_id": active_id, "suspect_group": [14]},
+        }
+        joint = {
+            "tool": "correct_measurements",
+            "arguments": {"state_id": active_id, "suspect_group": [8, 13, 14]},
+        }
+        state["unresolved_signatures"] = [
+            "wls_residual_outlier index=8 channel=Vm",
+            "wls_residual_outlier index=13 channel=Vm",
+            "wls_residual_outlier index=14 channel=Vm",
+            "wls_branch_multiplier line_status_or_parameter line=5",
+        ]
+        state["fresh_context_evidence"]["measurement"][
+            "supported_corrections"
+        ] = [measurement_action, second_measurement, joint]
+
+        actions = ExpertPolicyOracle(
+            process_oracle=ProcessValidityOracle(
+                executor_hydrated_corrections=True
+            )
+        ).next_actions(state, [])
+
+        self.assertTrue(actions)
+        self.assertEqual(actions[0]["tool"], "correct_topology")
+        self.assertNotIn(
+            "correct_measurements", [action["tool"] for action in actions]
+        )
+
+        rejected_state, _ = self._partial_measurement_branch_inventory_state(
+            topology_rejected=True
+        )
+        rejected_state["unresolved_signatures"] = list(
+            state["unresolved_signatures"]
+        )
+        rejected_state["fresh_context_evidence"]["measurement"][
+            "supported_corrections"
+        ] = [measurement_action, second_measurement, joint]
+
+        resumed = ExpertPolicyOracle(
+            process_oracle=ProcessValidityOracle(
+                executor_hydrated_corrections=True
+            )
+        ).next_actions(rejected_state, [])
+
+        self.assertTrue(resumed)
+        self.assertEqual(resumed[0], measurement_action)
+        self.assertNotIn(joint, resumed)
+
     def test_partial_measurement_commit_does_not_manufacture_parameter_route(self) -> None:
         state = _state([])
         state["accepted_corrections"] = [
@@ -778,6 +1323,57 @@ class MultiMeasurementContinuationTests(unittest.TestCase):
         self.assertTrue(proposals)
         self.assertEqual(proposals[0].action["tool"], "get_parameter_context")
         self.assertIn("measurement_correction_rejected", proposals[0].evidence_codes)
+
+    def test_old_state_rejections_do_not_reroute_new_branch_dominant_state(self) -> None:
+        state = _state(
+            [
+                "wls_residual_outlier index=12 channel=Vm",
+                "wls_branch_multiplier_dominant line_status_or_parameter line=7",
+            ]
+        )
+        old_state_id = "episode:s0"
+        active_id = state["active_state_id"]
+        state["rejected_hypotheses"] = [
+            {
+                "candidate_parent_id": old_state_id,
+                "source_action": {
+                    "tool": "correct_parameters",
+                    "arguments": {"state_id": active_id, "line_index": 7},
+                },
+            },
+            {
+                "candidate_parent_id": active_id,
+                "source_action": {
+                    "tool": "correct_topology",
+                    "arguments": {"state_id": old_state_id, "line_index": 7},
+                },
+            },
+        ]
+        state["rejected_hypotheses"].append(
+            {
+                "candidate_parent_id": old_state_id,
+                "source_action": {
+                    "tool": "correct_measurements",
+                    "arguments": {
+                        "state_id": active_id,
+                        "suspect_group": [12],
+                    },
+                },
+            }
+        )
+
+        measurement_proposals = MeasurementExpert().propose(state, [])
+        parameter_proposals = ParameterExpert().propose(state, [])
+
+        self.assertNotIn(
+            "get_measurement_context",
+            [proposal.action["tool"] for proposal in measurement_proposals],
+        )
+        self.assertTrue(parameter_proposals)
+        self.assertNotIn(
+            "measurement_correction_rejected",
+            parameter_proposals[0].evidence_codes,
+        )
 
     def test_branch_dominance_retains_topology_route(self) -> None:
         state = _state(
@@ -1391,7 +1987,7 @@ class MultiMeasurementEndToEndRoutingTests(unittest.TestCase):
             "operator_escalation:recovery_options_exhausted",
         )
 
-    def test_partial_commit_refreshes_measurement_context_before_resolution(self) -> None:
+    def test_partial_commit_refreshes_context_before_safe_handoff(self) -> None:
         env, actions = self._run(20260719)
         tools = [action["tool"] for action in actions]
 
@@ -1401,11 +1997,32 @@ class MultiMeasurementEndToEndRoutingTests(unittest.TestCase):
             actions[commit_index + 1]["arguments"]["state_id"],
             actions[commit_index]["arguments"]["candidate_state_id"],
         )
+        # A partial measurement repair cannot use a measurement-dominant
+        # residual to skip live branch evidence.  The mandatory fresh meter
+        # context bundles both same-state branch inventories, closing them
+        # without spending two additional controller actions per singleton.
         self.assertNotIn("get_parameter_context", tools)
         self.assertNotIn("get_topology_context", tools)
+        screening = env.history[commit_index + 1]["tool_output"]["tool_metrics"][
+            "branch_route_screening"
+        ]
+        self.assertEqual(set(screening), {"parameter", "topology"})
+        for family in ("parameter", "topology"):
+            self.assertEqual(
+                screening[family]["state_id"],
+                actions[commit_index]["arguments"]["candidate_state_id"],
+            )
+            self.assertEqual(screening[family]["supported_corrections"], [])
+        self.assertEqual(
+            screening["parameter"]["route_status"],
+            "unavailable_or_inconclusive",
+        )
+        self.assertEqual(
+            screening["topology"]["route_status"], "complete_negative"
+        )
         self.assertTrue(env.is_terminal())
-        self.assertEqual(env.terminal_outcome, "resolved")
-        self.assertEqual(tools[-1], "finalize_diagnosis")
+        self.assertEqual(env.terminal_outcome, "operator_escalation")
+        self.assertEqual(tools[-1], "ask_for_more_evidence")
 
 
 if __name__ == "__main__":

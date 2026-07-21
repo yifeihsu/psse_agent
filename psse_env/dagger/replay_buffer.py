@@ -29,6 +29,9 @@ DEFAULT_TRAINING_TOOL_CATEGORY_WEIGHTS: dict[str, float] = {
     "specialized_diagnostics": 0.15,
 }
 
+DEFAULT_MINIMUM_TOOL_CATEGORY_NATURAL_ROWS = 16
+DEFAULT_MINIMUM_TOOL_CATEGORY_DISTINCT_ROOTS = 10
+
 
 def _state_class(row: Mapping[str, Any]) -> str:
     labels = row.get("labels")
@@ -81,9 +84,9 @@ def _capacity_aware_counts(
     The unconstrained allocation is retained in the report.  Values whose
     desired count exceeds their duplicate- and root-limited capacity are
     clipped, then the displaced count is deterministically redistributed to
-    values with spare capacity.  This is appropriate for secondary balancing
-    axes, where equal representation is a sampling objective rather than a
-    release requirement.
+    values with spare capacity. Release gates may still impose independent
+    source-support floors and an achieved-deviation bound against these
+    adjusted targets.
     """
     desired = _allocate_counts(size, weights)
     if set(desired) != set(capacities):
@@ -504,21 +507,27 @@ def _nonmodel_value(row: Mapping[str, Any], field: str) -> Any:
     return None
 
 
-def _target_tool(row: Mapping[str, Any]) -> str:
+def _target_tool(row: Mapping[str, Any]) -> str | None:
+    """Return the exact tool that the chat exporter would supervise.
+
+    Native collector rows normally carry ``preferred_action``.  Compatibility
+    rows may instead expose the first admissible action.  A row with neither
+    target is not an SFT example and must never acquire a synthetic
+    ``unknown``/``specialized_diagnostics`` label inside the balancer.
+    """
     action = row.get("preferred_action")
-    if isinstance(action, Mapping) and action.get("tool"):
+    if action is None:
+        valid = row.get("valid_next_actions")
+        if isinstance(valid, list) and valid:
+            action = valid[0]
+    if action is not None:
+        if not isinstance(action, Mapping) or not action.get("tool"):
+            raise ValueError(
+                "training-view target must be a mapping with a non-empty tool: "
+                f"{row.get('example_id')!r}"
+            )
         return str(action["tool"])
-    messages = row.get("messages")
-    if isinstance(messages, list):
-        for message in messages:
-            if not isinstance(message, Mapping) or message.get("role") != "assistant":
-                continue
-            calls = message.get("tool_calls")
-            if isinstance(calls, list) and calls:
-                function = calls[0].get("function") if isinstance(calls[0], Mapping) else None
-                if isinstance(function, Mapping) and function.get("name"):
-                    return str(function["name"])
-    return "unknown"
+    return None
 
 
 def _tool_category(tool: str) -> str:
@@ -558,6 +567,11 @@ def _training_view_summary(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     }
     for index, row in enumerate(materialized):
         tool = _target_tool(row)
+        if tool is None:
+            raise ValueError(
+                "training-view summary received a targetless row: "
+                f"{row.get('example_id', index)!r}"
+            )
         axes["state_class"][str(_state_class(row))] += 1
         axes["target_tool"][tool] += 1
         axes["tool_category"][_tool_category(tool)] += 1
@@ -585,17 +599,23 @@ def build_balanced_training_view(
     max_rows_per_root: int | None = None,
     low_cost_margin_threshold: float = 0.05,
     maximum_tool_category_target_deviation: float = 0.10,
+    minimum_tool_category_natural_rows: int = (
+        DEFAULT_MINIMUM_TOOL_CATEGORY_NATURAL_ROWS
+    ),
+    minimum_tool_category_distinct_roots: int = (
+        DEFAULT_MINIMUM_TOOL_CATEGORY_DISTINCT_ROOTS
+    ),
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Build a deterministic multi-axis balanced SFT training view.
 
     The immutable aggregate remains untouched. Known low-margin rows are
     excluded from single-label SFT, while state class, target tool/category,
     scenario family, error cardinality, terminal outcome, and physical-root
-    contribution jointly drive the greedy deficit sampler. Tool-category
-    proportions are strict release targets. The other axes use deterministic
-    capacity-aware equalization, so a rare state cannot make a full-size view
-    mathematically impossible merely because uniform representation is not a
-    declared release requirement.
+    contribution jointly drive the greedy deficit sampler. Every axis uses
+    deterministic capacity-aware targets. Tool-category targets retain a
+    strict achieved-deviation gate after capacity adjustment, and configured
+    nonzero categories must independently satisfy natural target-bearing row
+    and distinct-root support floors.
     """
     source = [dict(row) for row in rows]
     if not source:
@@ -606,15 +626,37 @@ def build_balanced_training_view(
         raise ValueError(
             "maximum_tool_category_target_deviation must be between 0 and 1"
         )
+    for value, name in (
+        (
+            minimum_tool_category_natural_rows,
+            "minimum_tool_category_natural_rows",
+        ),
+        (
+            minimum_tool_category_distinct_roots,
+            "minimum_tool_category_distinct_roots",
+        ),
+    ):
+        if isinstance(value, bool) or int(value) != value or int(value) < 0:
+            raise ValueError(f"{name} must be a nonnegative integer")
+    targetless_rows = [row for row in source if _target_tool(row) is None]
+    target_bearing_source = [
+        row for row in source if _target_tool(row) is not None
+    ]
     excluded_low_margin = [
         row
-        for row in source
+        for row in target_bearing_source
         if (margin := _known_cost_margin(row)) is not None
         and margin <= float(low_cost_margin_threshold)
     ]
-    eligible = [row for row in source if row not in excluded_low_margin]
+    eligible = [
+        row for row in target_bearing_source if row not in excluded_low_margin
+    ]
     if not eligible:
-        raise ValueError("all training rows were excluded by the cost-margin gate")
+        if targetless_rows and not target_bearing_source:
+            raise ValueError("all training rows are targetless")
+        raise ValueError(
+            "all target-bearing training rows were excluded by the cost-margin gate"
+        )
     requested_size = len(eligible) if size is None else int(size)
     if requested_size <= 0:
         raise ValueError("training-view size must be positive")
@@ -630,6 +672,11 @@ def build_balanced_training_view(
         value > 0 for value in category_weights.values()
     ):
         raise ValueError("tool-category weights must contain positive mass")
+    configured_category_weights = {
+        category: float(weight)
+        for category, weight in sorted(category_weights.items())
+        if float(weight) > 0.0
+    }
 
     axis_values: dict[int, dict[str, str]] = {}
     roots: dict[int, str] = {}
@@ -670,6 +717,49 @@ def build_balanced_training_view(
             "Available tool categories must receive positive training-weight mass: "
             + ", ".join(zero_mass_categories)
         )
+
+    natural_category_rows: Counter[str] = Counter()
+    natural_category_roots: dict[str, set[str]] = defaultdict(set)
+    for index, row in enumerate(target_bearing_source):
+        tool = _target_tool(row)
+        if tool is None:  # Defensive: target-bearing rows were filtered above.
+            continue
+        category = _tool_category(tool)
+        natural_category_rows[category] += 1
+        natural_category_roots[category].add(_root_key(row, index))
+    tool_category_natural_support: dict[str, dict[str, int | bool]] = {}
+    tool_category_natural_support_shortfalls: dict[
+        str, dict[str, int]
+    ] = {}
+    for category in configured_category_weights:
+        natural_rows = int(natural_category_rows[category])
+        distinct_roots = len(natural_category_roots[category])
+        row_shortfall = max(
+            int(minimum_tool_category_natural_rows) - natural_rows, 0
+        )
+        root_shortfall = max(
+            int(minimum_tool_category_distinct_roots) - distinct_roots, 0
+        )
+        tool_category_natural_support[category] = {
+            "natural_target_bearing_rows": natural_rows,
+            "distinct_roots": distinct_roots,
+            "minimum_natural_target_bearing_rows": int(
+                minimum_tool_category_natural_rows
+            ),
+            "minimum_distinct_roots": int(
+                minimum_tool_category_distinct_roots
+            ),
+            "row_shortfall": row_shortfall,
+            "root_shortfall": root_shortfall,
+            "passed": row_shortfall == 0 and root_shortfall == 0,
+        }
+        if row_shortfall or root_shortfall:
+            tool_category_natural_support_shortfalls[category] = {
+                "natural_target_bearing_rows": natural_rows,
+                "distinct_roots": distinct_roots,
+                "row_shortfall": row_shortfall,
+                "root_shortfall": root_shortfall,
+            }
     root_capacities = Counter(roots.values())
     root_capacities = Counter(
         {root: count * int(max_duplicate_count) for root, count in root_capacities.items()}
@@ -692,7 +782,12 @@ def build_balanced_training_view(
     axis_capacities: dict[str, dict[str, int]] = {}
     for axis in ("tool_category", *secondary_axes):
         capacities: dict[str, int] = {}
-        for value in sorted({item[axis] for item in axis_values.values()}):
+        values = (
+            sorted(configured_category_weights)
+            if axis == "tool_category"
+            else sorted({item[axis] for item in axis_values.values()})
+        )
+        for value in values:
             capacity_by_root: Counter[str] = Counter(
                 roots[index]
                 for index, values in axis_values.items()
@@ -710,20 +805,23 @@ def build_balanced_training_view(
             )
         axis_capacities[axis] = capacities
 
-    strict_category_weights = {
-        category: category_weights[category]
-        for category in sorted(available_categories)
-    }
-    strict_category_targets = _allocate_counts(
-        requested_size, strict_category_weights
+    unconstrained_category_targets = _allocate_counts(
+        requested_size, configured_category_weights
+    )
+    adjusted_category_targets, category_adjustments = _capacity_aware_counts(
+        size=requested_size,
+        weights=configured_category_weights,
+        capacities=axis_capacities["tool_category"],
     )
     unconstrained_target_counts: dict[str, dict[str, int]] = {
-        "tool_category": dict(strict_category_targets)
+        "tool_category": unconstrained_category_targets
     }
     target_counts: dict[str, dict[str, int]] = {
-        "tool_category": dict(strict_category_targets)
+        "tool_category": adjusted_category_targets
     }
     capacity_adjustments: dict[str, dict[str, dict[str, int]]] = {}
+    if category_adjustments:
+        capacity_adjustments["tool_category"] = category_adjustments
     for axis in secondary_axes:
         values = sorted(axis_capacities[axis])
         weights = {value: 1.0 for value in values}
@@ -774,24 +872,72 @@ def build_balanced_training_view(
 
     def candidate_score(index: int) -> tuple[float, int]:
         values = axis_values[index]
-        score = 0.0
-        for axis, targets in target_counts.items():
+        secondary_score = 0.0
+        for axis in secondary_axes:
+            targets = target_counts[axis]
             value = values[axis]
             target = max(int(targets.get(value, 0)), 1)
             deficit = target - observed[axis][value]
-            multiplier = 4.0 if axis == "tool_category" else 1.0
-            score += multiplier * deficit / target
-        score -= occurrences[index] * 0.5
-        score -= root_counts[roots[index]] / max(int(root_cap), 1)
-        return score, -tie_break[index]
+            secondary_score += deficit / target
+        secondary_score -= occurrences[index] * 0.5
+        secondary_score -= root_counts[roots[index]] / max(int(root_cap), 1)
+        return secondary_score, -tie_break[index]
+
+    def remaining_category_capacity(category: str) -> int:
+        capacity_by_root: Counter[str] = Counter()
+        for index, values in axis_values.items():
+            if values["tool_category"] != category:
+                continue
+            remaining_occurrences = int(max_duplicate_count) - occurrences[index]
+            if remaining_occurrences > 0:
+                capacity_by_root[roots[index]] += remaining_occurrences
+        return sum(
+            min(
+                max(int(root_cap) - root_counts[root], 0),
+                available,
+            )
+            for root, available in capacity_by_root.items()
+        )
 
     while len(selected) < requested_size:
-        candidates = [
-            index
-            for index in range(len(eligible))
-            if occurrences[index] < int(max_duplicate_count)
-            and root_counts[roots[index]] < int(root_cap)
-        ]
+        category_options: list[tuple[str, int, int]] = []
+        for category, target in target_counts["tool_category"].items():
+            remaining_target = int(target) - observed["tool_category"][category]
+            if remaining_target <= 0:
+                continue
+            remaining_capacity = remaining_category_capacity(category)
+            if remaining_capacity > 0:
+                category_options.append(
+                    (category, remaining_target, remaining_capacity)
+                )
+        if category_options:
+            chosen_category, _, _ = max(
+                category_options,
+                key=lambda item: (
+                    item[1] / item[2],
+                    item[1]
+                    / max(int(target_counts["tool_category"][item[0]]), 1),
+                    item[0],
+                ),
+            )
+            candidates = [
+                index
+                for index, values in axis_values.items()
+                if values["tool_category"] == chosen_category
+                and occurrences[index] < int(max_duplicate_count)
+                and root_counts[roots[index]] < int(root_cap)
+            ]
+        else:
+            # A marginally capacity-aware target can still become jointly
+            # infeasible after physical-root caps interact across categories.
+            # Finish the requested view deterministically and let the explicit
+            # adjusted-target deviation gate fail closed in the report.
+            candidates = [
+                index
+                for index in range(len(eligible))
+                if occurrences[index] < int(max_duplicate_count)
+                and root_counts[roots[index]] < int(root_cap)
+            ]
         if not candidates:
             raise ValueError("training-view constraints exhausted before reaching requested size")
         chosen = max(candidates, key=candidate_score)
@@ -871,7 +1017,8 @@ def build_balanced_training_view(
         for details in axis_adjustments.values()
     )
     passed = (
-        feasibility_shortfall_total == 0
+        not tool_category_natural_support_shortfalls
+        and feasibility_shortfall_total == 0
         and achieved_tool_category_target_deviation
         <= float(maximum_tool_category_target_deviation)
     )
@@ -879,6 +1026,9 @@ def build_balanced_training_view(
         "seed": int(seed),
         "requested_size": requested_size,
         "returned_size": len(view),
+        "input_rows": len(source),
+        "target_bearing_input_rows": len(target_bearing_source),
+        "excluded_targetless_rows": len(targetless_rows),
         "low_cost_margin_threshold": float(low_cost_margin_threshold),
         "excluded_low_margin_rows": len(excluded_low_margin),
         "max_duplicate_count": int(max_duplicate_count),
@@ -886,10 +1036,27 @@ def build_balanced_training_view(
         "max_rows_per_root": int(root_cap),
         "target_contract": {
             "size_policy": "requested_full_size_with_bounded_replacement",
-            "strict_target_axes": ["tool_category"],
-            "capacity_aware_target_axes": list(secondary_axes),
-            "capacity_aware_policy": "uniform_then_clip_and_redistribute_v1",
+            "strict_target_axes": [],
+            "deviation_gated_target_axes": ["tool_category"],
+            "capacity_aware_target_axes": ["tool_category", *secondary_axes],
+            "capacity_aware_policy": "weighted_then_clip_and_redistribute_v1",
+            "tool_category_natural_support_floor": {
+                "minimum_natural_target_bearing_rows": int(
+                    minimum_tool_category_natural_rows
+                ),
+                "minimum_distinct_roots": int(
+                    minimum_tool_category_distinct_roots
+                ),
+            },
         },
+        "configured_tool_category_weights": configured_category_weights,
+        "tool_category_natural_support": tool_category_natural_support,
+        "tool_category_natural_support_shortfalls": (
+            tool_category_natural_support_shortfalls
+        ),
+        "tool_category_natural_support_passed": (
+            not tool_category_natural_support_shortfalls
+        ),
         "unconstrained_target_counts": {
             axis: dict(sorted(counts.items()))
             for axis, counts in unconstrained_target_counts.items()
@@ -911,7 +1078,7 @@ def build_balanced_training_view(
         ),
         "passed": passed,
         "release_ready": passed,
-        "before": _training_view_summary(source),
+        "before": _training_view_summary(target_bearing_source),
         "after": _training_view_summary(view),
     }
     return view, report

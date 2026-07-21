@@ -21,7 +21,10 @@ from psse_env.actions import (
 )
 from psse_env.oracle.candidate_quality import CandidateQualityOracle
 from psse_env.oracle.diagnostics_expert import DiagnosticsExpert
-from psse_env.oracle.expert_types import ExpertActionProposal
+from psse_env.oracle.expert_types import (
+    ExpertActionProposal,
+    recovery_record_applies_to_state,
+)
 from psse_env.oracle.measurement_expert import MeasurementExpert
 from psse_env.oracle.parameter_expert import ParameterExpert
 from psse_env.oracle.process_validity import ProcessValidityOracle
@@ -199,6 +202,25 @@ class ExpertPolicyOracle:
                 hif_fault_present="hif" in context.oracle_fault_families,
             )
         )
+        # MeasurementExpert contributes RUN_WLS as the generic observable
+        # fallback when it has no family-specific proposal of its own.  Once
+        # the combined diagnosis stage has any concrete domain action, that
+        # fallback is redundant training supervision and can encourage the
+        # policy to repeat WLS instead of following the diagnostic route.
+        # Keep this suppression local to the non-mandatory combined stage so
+        # lifecycle, recovery, and initial-baseline WLS actions remain intact.
+        if any(
+            safe_normalize_action(proposal.action)["tool"] != RUN_WLS
+            for proposal in proposals
+        ):
+            proposals = [
+                proposal
+                for proposal in proposals
+                if not (
+                    proposal.source_expert == "measurement_expert"
+                    and safe_normalize_action(proposal.action)["tool"] == RUN_WLS
+                )
+            ]
         diversification = self._cross_family_diversification_proposals(
             policy, context.history, proposals
         )
@@ -315,16 +337,10 @@ class ExpertPolicyOracle:
     ) -> bool:
         rejected_candidate_ids: set[str] = set()
         for record in self._get(policy, "rejected_hypotheses", []) or []:
-            if not isinstance(record, Mapping):
+            if not recovery_record_applies_to_state(record, active_id):
                 continue
             source = safe_normalize_action(record.get("source_action") or {})
             if source["tool"] not in {CORRECT_PARAMETERS, CORRECT_TOPOLOGY}:
-                continue
-            parent_id = record.get("candidate_parent_id")
-            requested = source["arguments"].get("state_id")
-            if parent_id is not None and str(parent_id) != str(active_id):
-                continue
-            if requested is not None and str(requested) != str(active_id):
                 continue
             candidate_id = record.get("candidate_state_id")
             if candidate_id is not None:
@@ -543,6 +559,59 @@ class ExpertPolicyOracle:
 
         actions: list[dict[str, Any]] = []
         emitted: set[str] = set()
+        # A context remains valid after a rejected candidate is rolled back to
+        # the exact same active state, even when its original tool output has
+        # fallen outside the bounded history window.  The environment therefore
+        # exposes the provider-supported action inventory it already showed the
+        # policy.  Revalidate every action here against the current fresh-context
+        # flags and state binding before treating it as an expert hint.
+        correction_contracts = {
+            CORRECT_MEASUREMENTS: "measurement",
+            CORRECT_PARAMETERS: "parameter",
+            CORRECT_TOPOLOGY: "topology",
+        }
+        raw_context_evidence = policy.get("fresh_context_evidence")
+        if isinstance(raw_context_evidence, Mapping):
+            for family, raw_evidence in raw_context_evidence.items():
+                if not isinstance(raw_evidence, Mapping):
+                    continue
+                raw_inventory = raw_evidence.get("supported_corrections")
+                if not isinstance(raw_inventory, (list, tuple)):
+                    continue
+                expected_family = str(family)
+                if (
+                    expected_family in {"parameter", "topology"}
+                    and "route_status" in raw_evidence
+                    and raw_evidence.get("route_status") != "actionable"
+                ):
+                    continue
+                for raw_action in raw_inventory:
+                    if not isinstance(raw_action, Mapping):
+                        continue
+                    normalized = safe_normalize_action(raw_action)
+                    action_family = correction_contracts.get(normalized["tool"])
+                    if action_family != expected_family:
+                        continue
+                    if not (
+                        policy.get(f"has_fresh_{action_family}_context", False)
+                        and str(policy.get(f"{action_family}_context_state_id"))
+                        == str(active_id)
+                    ):
+                        continue
+                    evidence_state = raw_evidence.get("state_id")
+                    target_state = normalized["arguments"].get("state_id")
+                    if (
+                        evidence_state is None
+                        or str(evidence_state) != str(active_id)
+                        or target_state is None
+                        or str(target_state) != str(active_id)
+                    ):
+                        continue
+                    signature = cls._signature(normalized)
+                    if signature is None or signature in emitted:
+                        continue
+                    emitted.add(signature)
+                    actions.append(normalized)
         latest_context_seen: set[str] = set()
         for event in reversed(events):
             event_action = event.get("action") or event.get("executed_action")
@@ -571,6 +640,12 @@ class ExpertPolicyOracle:
                 continue
             raw_actions = metrics.get("supported_corrections")
             if not isinstance(raw_actions, (list, tuple)):
+                continue
+            if (
+                family in {"parameter", "topology"}
+                and "route_status" in metrics
+                and metrics.get("route_status") != "actionable"
+            ):
                 continue
             for raw_action in raw_actions:
                 if not isinstance(raw_action, Mapping):
@@ -667,13 +742,20 @@ class ExpertPolicyOracle:
             return False
         if cls._get(policy, "last_tool") is not None:
             return False
-        if history:
-            return False
+        # A release-suite intervention is represented as a failed transition
+        # in the policy-visible history without mutating the environment.  It
+        # must not suppress the first observable WLS baseline merely because
+        # that failure made the history non-empty.
         if cls._get(policy, "remaining_anomaly_score") is not None:
             return False
+        active_id = cls._get(policy, "active_state_id")
+        current_rejections = any(
+            recovery_record_applies_to_state(record, active_id)
+            for record in cls._get(policy, "rejected_hypotheses", []) or []
+        )
         if cls._get(policy, "unresolved_signatures", []) or cls._get(
             policy, "accepted_corrections", []
-        ) or cls._get(policy, "rejected_hypotheses", []):
+        ) or current_rejections:
             return False
         if any(
             cls._get(policy, f"has_fresh_{family}_context", False)
@@ -714,39 +796,11 @@ class ExpertPolicyOracle:
         ):
             return []
 
-        successful_current_wls = False
-        investigation_seen = False
-        investigation_tools = {
-            GET_MEASUREMENT_CONTEXT,
-            GET_PARAMETER_CONTEXT,
-            GET_TOPOLOGY_CONTEXT,
-            *CORRECTION_TOOLS,
-        }
-        for event in history:
-            if not isinstance(event, Mapping):
-                continue
-            event_action = safe_normalize_action(
-                event.get("action") or event.get("executed_action") or {}
+        successful_current_wls, investigation_seen = (
+            self._observable_recovery_prerequisites(
+                policy, history, active_id=active_id
             )
-            requested = event_action["arguments"].get("state_id")
-            output = event.get("tool_output")
-            success = (
-                isinstance(output, Mapping)
-                and output.get("execution_status") == "success"
-            )
-            if (
-                event_action["tool"] == RUN_WLS
-                and success
-                and requested is not None
-                and str(requested) == str(active_id)
-            ):
-                successful_current_wls = True
-            if (
-                event_action["tool"] in investigation_tools
-                and success
-                and (requested is None or str(requested) == str(active_id))
-            ):
-                investigation_seen = True
+        )
         if not (successful_current_wls and investigation_seen):
             return []
         return [
@@ -796,8 +850,70 @@ class ExpertPolicyOracle:
         ):
             return []
 
-        successful_current_wls = False
-        investigation_seen = False
+        successful_current_wls, investigation_seen = (
+            self._observable_recovery_prerequisites(
+                policy, history, active_id=active_id
+            )
+        )
+        if not (successful_current_wls and investigation_seen):
+            return []
+        return [
+            ExpertActionProposal(
+                action={
+                    "tool": ASK_FOR_MORE_EVIDENCE,
+                    "arguments": {
+                        "state_id": active_id,
+                        "request": RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+                    },
+                },
+                source_expert="recovery_expert",
+                confidence=1.0,
+                evidence_codes=[
+                    "autonomous_recovery_budget_exhausted",
+                    "operator_handoff_required",
+                ],
+                admissible=True,
+                estimated_immediate_risk=0.0,
+            )
+        ]
+
+    def _observable_recovery_prerequisites(
+        self,
+        policy: PolicyObservation | Mapping[str, Any],
+        history: Sequence[Mapping[str, Any]],
+        *,
+        active_id: Any,
+    ) -> tuple[bool, bool]:
+        """Find current WLS and investigation evidence within the policy boundary.
+
+        The production observation exposes only a bounded history window.  A
+        fresh context flag is therefore the durable, policy-visible proof that
+        a context provider investigated the current active state; requiring
+        the original context transition to remain in the short window can
+        strand an otherwise exhausted recovery episode.  The environment's
+        operator-escalation audit still verifies the complete history and the
+        provider ledger before accepting a handoff.
+        """
+
+        provenance = self._get(policy, "semantic_field_provenance", {})
+        score_source = (
+            str(provenance.get("remaining_anomaly_score") or "").strip().lower()
+            if isinstance(provenance, Mapping)
+            else ""
+        )
+        successful_current_wls = bool(
+            self._get(policy, "remaining_anomaly_score") is not None
+            and (
+                "wls" in score_source
+                or score_source.startswith("observable_candidate_verification")
+            )
+        )
+        investigation_seen = any(
+            bool(self._get(policy, f"has_fresh_{family}_context", False))
+            and str(self._get(policy, f"{family}_context_state_id") or "")
+            == str(active_id)
+            for family in ("measurement", "parameter", "topology")
+        )
         investigation_tools = {
             GET_MEASUREMENT_CONTEXT,
             GET_PARAMETER_CONTEXT,
@@ -829,27 +945,7 @@ class ExpertPolicyOracle:
                 and (requested is None or str(requested) == str(active_id))
             ):
                 investigation_seen = True
-        if not (successful_current_wls and investigation_seen):
-            return []
-        return [
-            ExpertActionProposal(
-                action={
-                    "tool": ASK_FOR_MORE_EVIDENCE,
-                    "arguments": {
-                        "state_id": active_id,
-                        "request": RECOVERY_BUDGET_EXHAUSTED_REQUEST,
-                    },
-                },
-                source_expert="recovery_expert",
-                confidence=1.0,
-                evidence_codes=[
-                    "autonomous_recovery_budget_exhausted",
-                    "operator_handoff_required",
-                ],
-                admissible=True,
-                estimated_immediate_risk=0.0,
-            )
-        ]
+        return successful_current_wls, investigation_seen
 
     def _seen_action_signatures(
         self,
@@ -873,6 +969,10 @@ class ExpertPolicyOracle:
         for field in ("rejected_hypotheses", "accepted_corrections"):
             for remembered in self._get(policy, field, []) or []:
                 if not isinstance(remembered, Mapping):
+                    continue
+                if field == "rejected_hypotheses" and not (
+                    recovery_record_applies_to_state(remembered, active_id)
+                ):
                     continue
                 if remembered.get("action_signature"):
                     text_signature = str(remembered["action_signature"])

@@ -17,10 +17,12 @@ import argparse
 import copy
 import hashlib
 import importlib
+import importlib.metadata
 import inspect
 import json
 import math
 import os
+import platform
 import random
 import re
 import tempfile
@@ -37,6 +39,9 @@ from psse_env.actions import (
     CORRECT_TOPOLOGY,
     DIAGNOSTIC_TOOLS,
     FINALIZE_DIAGNOSIS,
+    GET_MEASUREMENT_CONTEXT,
+    GET_PARAMETER_CONTEXT,
+    GET_TOPOLOGY_CONTEXT,
     INVALID_ACTION,
     ROLLBACK_STATE,
     RUN_WLS,
@@ -134,6 +139,7 @@ class EpisodeEvaluation:
     physical_root: str
     seed: int
     steps: int
+    policy_steps: int
     terminal: bool
     terminal_outcome: str | None
     final_physical_correct: bool
@@ -155,6 +161,7 @@ class EpisodeEvaluation:
     specialized_tool_counts: dict[str, int]
     tool_regret_total: float
     tool_regret_samples: int
+    evaluation_intervention: dict[str, Any]
     release_environment_attestation: dict[str, Any] = field(default_factory=dict)
     policy_identity_attestation: dict[str, Any] = field(default_factory=dict)
     audit: dict[str, Any] = field(default_factory=dict)
@@ -232,6 +239,9 @@ _OFFLINE_EXECUTION_KEYS = frozenset(
         "cost_labels",
         "data_source_tier",
         "dataset_split",
+        "detected",
+        "detected_top1",
+        "detected_top3",
         "evaluation_labels",
         "executed_cost",
         "expected_final_state",
@@ -240,6 +250,7 @@ _OFFLINE_EXECUTION_KEYS = frozenset(
         "final_state",
         "final_states",
         "hidden_truth",
+        "initial_states",
         "ground_truth",
         "label",
         "labels",
@@ -290,6 +301,7 @@ _OFFLINE_EXECUTION_KEYS = frozenset(
     }
 )
 _SCENARIO_SCHEMA_VERSION = 1
+_INTERVENTION_SCHEMA_VERSION = 1
 _SCENARIO_PARTITION_KEYS = frozenset(
     {"scenario_schema_version", "execution", "audit", "grouping"}
 )
@@ -374,6 +386,21 @@ _REQUIRED_RELEASE_ENVIRONMENT = {
     "candidate_quality_oracle_mode": "deployment",
 }
 
+_EXPECTED_INTERVENTION_KIND = {
+    "standard_success": "none",
+    "forced_error_recovery": "pre_policy_failure",
+    "partial_success_retention": "committed_partial_correction",
+    "invalid_action_recovery": "pre_policy_failure",
+    "efficiency": "efficiency_budget",
+}
+_EFFICIENCY_LIMIT_FIELDS = frozenset(
+    {
+        "maximum_policy_steps",
+        "maximum_wls_calls",
+        "maximum_specialized_tool_calls",
+    }
+)
+
 
 def _normalized_key(key: Any) -> str:
     separated = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(key).strip())
@@ -417,6 +444,7 @@ def _offline_execution_key(key: Any) -> bool:
         )
         or normalized.endswith(
             (
+                "_clean",
                 "_truth",
                 "_ground_truth",
                 "_label",
@@ -587,6 +615,187 @@ def _partitioned_scenario_parts(
         if not isinstance(grouping.get(key), str) or not grouping[key].strip():
             raise ValueError(f"partitioned scenario grouping.{key} must be non-empty")
     return execution, audit, grouping
+
+
+def evaluation_intervention_contract(
+    suite: str,
+    scenario: Mapping[str, Any],
+    *,
+    required: bool = True,
+) -> dict[str, Any] | None:
+    """Return the canonical policy-hidden intervention for one suite episode.
+
+    Interventions live only in the audit partition.  They are therefore
+    included in the frozen suite identity but never enter ``env.reset`` or a
+    policy observation.  Their observable effects (a prior failed transition
+    or a genuinely committed partial correction) are introduced by the
+    evaluator before the first policy call.
+    """
+
+    normalized_suite = str(suite).strip()
+    expected_kind = _EXPECTED_INTERVENTION_KIND.get(normalized_suite)
+    if expected_kind is None:
+        raise ValueError(f"unsupported evaluation suite {normalized_suite!r}")
+    if not _has_partition_marker(scenario):
+        if required:
+            raise ValueError("evaluation intervention requires a partitioned scenario")
+        return None
+    _, audit, _ = _partitioned_scenario_parts(scenario)
+    aliases = [
+        str(key)
+        for key in audit
+        if _normalized_key(key) == "evaluation_intervention"
+    ]
+    if aliases != ["evaluation_intervention"]:
+        if not aliases and not required:
+            return None
+        raise ValueError(
+            "scenario audit must contain exactly the canonical "
+            "evaluation_intervention field"
+        )
+    raw = audit.get("evaluation_intervention")
+    if not isinstance(raw, Mapping):
+        raise ValueError("audit.evaluation_intervention must be a mapping")
+    intervention = copy.deepcopy(dict(raw))
+    if (
+        type(intervention.get("intervention_schema_version")) is not int
+        or intervention.get("intervention_schema_version")
+        != _INTERVENTION_SCHEMA_VERSION
+    ):
+        raise ValueError("evaluation intervention schema version must be exactly 1")
+    if intervention.get("kind") != expected_kind:
+        raise ValueError(
+            f"suite {normalized_suite!r} requires intervention kind {expected_kind!r}"
+        )
+
+    if expected_kind == "none":
+        expected_fields = {"intervention_schema_version", "kind"}
+    elif expected_kind == "pre_policy_failure":
+        expected_fields = {
+            "intervention_schema_version",
+            "kind",
+            "failure_mode",
+            "error_code",
+        }
+        expected_mode = (
+            "well_formed"
+            if normalized_suite == "forced_error_recovery"
+            else "malformed"
+        )
+        expected_code = (
+            "injected_transient_tool_failure"
+            if expected_mode == "well_formed"
+            else "injected_invalid_action"
+        )
+        if intervention.get("failure_mode") != expected_mode:
+            raise ValueError(
+                f"suite {normalized_suite!r} requires failure_mode {expected_mode!r}"
+            )
+        if intervention.get("error_code") != expected_code:
+            raise ValueError(
+                f"suite {normalized_suite!r} requires error_code {expected_code!r}"
+            )
+    elif expected_kind == "committed_partial_correction":
+        expected_fields = {
+            "intervention_schema_version",
+            "kind",
+            "setup_actions",
+            "retention_required",
+        }
+        if intervention.get("retention_required") is not True:
+            raise ValueError("partial correction intervention must require retention")
+        raw_actions = intervention.get("setup_actions")
+        if not isinstance(raw_actions, list) or len(raw_actions) != 4:
+            raise ValueError(
+                "partial correction intervention requires exactly context, correction, "
+                "verification, and commit actions"
+            )
+        actions: list[dict[str, Any]] = []
+        for index, raw_action in enumerate(raw_actions):
+            if not isinstance(raw_action, Mapping):
+                raise ValueError(f"partial setup_actions[{index}] must be a mapping")
+            if set(raw_action) != {"tool", "arguments"} or not isinstance(
+                raw_action.get("arguments"), Mapping
+            ):
+                raise ValueError(
+                    f"partial setup_actions[{index}] must use canonical tool/arguments fields"
+                )
+            normalized = safe_normalize_action(raw_action)
+            if normalized.get("tool") == INVALID_ACTION:
+                raise ValueError(
+                    f"partial setup_actions[{index}] must be a canonical valid action"
+                )
+            actions.append(normalized)
+        matching_pairs = {
+            GET_MEASUREMENT_CONTEXT: CORRECT_MEASUREMENTS,
+            GET_PARAMETER_CONTEXT: CORRECT_PARAMETERS,
+            GET_TOPOLOGY_CONTEXT: CORRECT_TOPOLOGY,
+        }
+        if matching_pairs.get(actions[0]["tool"]) != actions[1]["tool"]:
+            raise ValueError(
+                "partial setup context action must match its correction action"
+            )
+        if actions[2]["tool"] not in {RUN_WLS, VERIFY_CANDIDATE}:
+            raise ValueError("partial setup third action must verify the candidate")
+        if actions[3]["tool"] != COMMIT_STATE:
+            raise ValueError("partial setup must end with commit_state")
+        for index, action in enumerate(actions):
+            arguments = action["arguments"]
+            for field, value in arguments.items():
+                if isinstance(value, str) and value in {
+                    "$active",
+                    "$candidate",
+                } and field not in {
+                    "state_id",
+                    "candidate_state_id",
+                }:
+                    raise ValueError(
+                        f"partial setup alias is not permitted in {field!r}"
+                    )
+            expected_alias = "$active" if index < 2 else "$candidate"
+            reference_field = "candidate_state_id" if index == 3 else "state_id"
+            other_reference = (
+                "state_id" if reference_field == "candidate_state_id" else "candidate_state_id"
+            )
+            if (
+                arguments.get(reference_field) != expected_alias
+                or other_reference in arguments
+            ):
+                raise ValueError(
+                    f"partial setup_actions[{index}] must target {expected_alias} "
+                    f"only through {reference_field}"
+                )
+    else:
+        expected_fields = {
+            "intervention_schema_version",
+            "kind",
+            "limits",
+        }
+        limits = intervention.get("limits")
+        if not isinstance(limits, Mapping) or set(limits) != _EFFICIENCY_LIMIT_FIELDS:
+            raise ValueError(
+                "efficiency intervention limits must contain exactly: "
+                + ", ".join(sorted(_EFFICIENCY_LIMIT_FIELDS))
+            )
+        normalized_limits = copy.deepcopy(dict(limits))
+        for name in (
+            "maximum_policy_steps",
+            "maximum_wls_calls",
+            "maximum_specialized_tool_calls",
+        ):
+            value = normalized_limits.get(name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"efficiency limit {name} must be a non-negative integer")
+        if normalized_limits["maximum_policy_steps"] < 1:
+            raise ValueError("efficiency maximum_policy_steps must be positive")
+        intervention["limits"] = normalized_limits
+
+    if set(intervention) != expected_fields:
+        raise ValueError(
+            f"evaluation intervention for {normalized_suite!r} must contain exactly: "
+            + ", ".join(sorted(expected_fields))
+        )
+    return intervention
 
 
 def strip_offline_truth(scenario: Mapping[str, Any]) -> dict[str, Any]:
@@ -989,11 +1198,14 @@ class ClosedLoopRolloutEvaluator:
             )
         env.reset(copy.deepcopy(execution_scenario))
         initial_state = _current_state(env)
+        intervention_contract = evaluation_intervention_contract(
+            suite, audit_scenario, required=False
+        )
         history: list[dict[str, Any]] = []
         trace: list[dict[str, Any]] = []
         tool_counts: Counter[str] = Counter()
         specialized_counts: Counter[str] = Counter()
-        seen_signatures: set[str] = set()
+        nonadvancing_signatures: set[str] = set()
         loop_detected = False
         invalid_indices: list[int] = []
         advancing_indices: list[int] = []
@@ -1007,8 +1219,196 @@ class ClosedLoopRolloutEvaluator:
         regret_total = 0.0
         regret_samples = 0
         evaluator_error: str | None = None
+        policy_steps = 0
+        intervention_evidence: dict[str, Any] = {
+            "contract": copy.deepcopy(intervention_contract),
+            "applied": intervention_contract is not None,
+            "pre_policy_step_count": 0,
+            "injected_failure_count": 0,
+            "injected_invalid_action_count": 0,
+            "recovered_failure_count": 0,
+            "retention_opportunity_count": 0,
+            "retained_opportunity_count": 0,
+        }
 
-        for step in range(self.max_steps):
+        if intervention_contract is not None:
+            intervention_kind = intervention_contract["kind"]
+            if intervention_kind == "pre_policy_failure":
+                failure_mode = intervention_contract["failure_mode"]
+                injected_state = _current_state(env)
+                if failure_mode == "well_formed":
+                    active_id = str(injected_state.get("active_state_id") or "active")
+                    injected_action = {
+                        "tool": RUN_WLS,
+                        "arguments": {"state_id": active_id},
+                    }
+                else:
+                    injected_action = invalid_action(
+                        intervention_contract["error_code"]
+                    )
+                injected_output = {
+                    "execution_status": "failure",
+                    "error_code": intervention_contract["error_code"],
+                    "state_mutated": False,
+                }
+                transition = {
+                    "state_id": injected_state.get("active_state_id"),
+                    "candidate_state_id": injected_state.get("candidate_state_id"),
+                    "action": policy_safe_copy(injected_action),
+                    "tool_output": policy_safe_copy(injected_output),
+                }
+                history.append(transition)
+                trace.append(
+                    {
+                        "step": 0,
+                        "intervention": True,
+                        "observation_hash": None,
+                        "action": policy_safe_copy(injected_action),
+                        "execution_status": "failure",
+                        "advanced": False,
+                        "error_code": intervention_contract["error_code"],
+                        "candidate_disposition_offline": None,
+                        "tool_regret": None,
+                        "terminal_outcome": None,
+                        **trace_progress_evidence(
+                            before=injected_state,
+                            after=injected_state,
+                            output=injected_output,
+                            terminal=False,
+                        ),
+                    }
+                )
+                intervention_evidence["pre_policy_step_count"] = 1
+                intervention_evidence["injected_failure_count"] = 1
+                intervention_evidence["injected_invalid_action_count"] = int(
+                    failure_mode == "malformed"
+                )
+            elif intervention_kind == "committed_partial_correction":
+                setup_actions = intervention_contract["setup_actions"]
+                committed_candidate_id: str | None = None
+                committed_signature: str | None = None
+                for setup_index, raw_setup_action in enumerate(setup_actions):
+                    current = _current_state(env)
+                    active_id = current.get("active_state_id")
+                    candidate_id = current.get("candidate_state_id")
+                    setup_action = safe_normalize_action(raw_setup_action)
+                    resolved_arguments = copy.deepcopy(setup_action["arguments"])
+                    for field, value in list(resolved_arguments.items()):
+                        if value == "$active":
+                            if active_id is None:
+                                raise ValueError(
+                                    "partial setup could not resolve $active"
+                                )
+                            resolved_arguments[field] = active_id
+                        elif value == "$candidate":
+                            if candidate_id is None:
+                                raise ValueError(
+                                    "partial setup could not resolve $candidate"
+                                )
+                            resolved_arguments[field] = candidate_id
+                    setup_action = {
+                        "tool": setup_action["tool"],
+                        "arguments": resolved_arguments,
+                    }
+                    pre_oracle = _oracle_state(env, history)
+                    disposition = _candidate_disposition(pre_oracle)
+                    if setup_index == len(setup_actions) - 1:
+                        if disposition != "ACCEPT_PARTIAL":
+                            raise ValueError(
+                                "partial setup commit requires ACCEPT_PARTIAL oracle disposition: "
+                                f"scenario={_scenario_id(audit_scenario, scenario_index)}, "
+                                f"observed={disposition}"
+                            )
+                        committed_candidate_id = str(candidate_id or "") or None
+                        if committed_candidate_id is None:
+                            raise ValueError(
+                                "partial setup commit has no current candidate"
+                            )
+                    try:
+                        next_state, raw_output = env.step(copy.deepcopy(setup_action))
+                    except Exception as exc:
+                        raise ValueError(
+                            "partial setup action raised "
+                            f"{type(exc).__name__} at index {setup_index}"
+                        ) from exc
+                    if not isinstance(raw_output, Mapping):
+                        raise ValueError("partial setup output must be a mapping")
+                    output = copy.deepcopy(dict(raw_output))
+                    if output.get("execution_status") != "success":
+                        raise ValueError(
+                            "partial setup action failed at index "
+                            f"{setup_index}: {output.get('error_code')!r}"
+                        )
+                    if setup_index in {1, 3} and output.get("state_mutated") is not True:
+                        raise ValueError(
+                            "partial setup correction/commit must report a real state mutation"
+                        )
+                    setup_terminal = _is_terminal(env, next_state)
+                    setup_advanced = _successful_action_advanced(
+                        before=current,
+                        after=next_state,
+                        output=output,
+                        terminal=setup_terminal,
+                    )
+                    transition = {
+                        "state_id": current.get("active_state_id"),
+                        "candidate_state_id": current.get("candidate_state_id"),
+                        "action": policy_safe_copy(setup_action),
+                        "tool_output": policy_safe_copy(output),
+                    }
+                    history.append(transition)
+                    trace.append(
+                        {
+                            "step": len(trace),
+                            "intervention": True,
+                            "observation_hash": None,
+                            "action": policy_safe_copy(setup_action),
+                            "execution_status": "success",
+                            "advanced": setup_advanced,
+                            "error_code": None,
+                            "candidate_disposition_offline": disposition,
+                            "tool_regret": None,
+                            "terminal_outcome": _output_terminal_outcome(output),
+                            **trace_progress_evidence(
+                                before=current,
+                                after=next_state,
+                                output=output,
+                                terminal=setup_terminal,
+                            ),
+                        }
+                    )
+                    if setup_index == 1:
+                        created_candidate = (
+                            output.get("candidate_state_id")
+                            or _current_state(env).get("candidate_state_id")
+                        )
+                        if created_candidate is None:
+                            raise ValueError(
+                                "partial setup correction did not create a candidate"
+                            )
+                        committed_signature = action_signature(setup_action)
+                    if setup_terminal:
+                        raise ValueError(
+                            "partial setup terminated the episode before policy evaluation"
+                        )
+                accepted_after_setup = _accepted_corrections(_current_state(env))
+                if not any(
+                    str(item.get("candidate_state_id")) == committed_candidate_id
+                    for item in accepted_after_setup
+                ):
+                    raise ValueError(
+                        "partial setup commit was not recorded in accepted corrections"
+                    )
+                assert committed_candidate_id is not None
+                assert committed_signature is not None
+                partial_candidate_ids.append(committed_candidate_id)
+                partial_action_signatures.append(committed_signature)
+                intervention_evidence["pre_policy_step_count"] = len(setup_actions)
+                intervention_evidence["retention_opportunity_count"] = 1
+
+        for policy_step in range(self.max_steps):
+            step = len(trace)
+            policy_steps += 1
             false_finalization_this_step = False
             observation = _policy_observation(env, history)
             # This check is repeated even for PolicyObservation implementations
@@ -1030,9 +1430,6 @@ class ClosedLoopRolloutEvaluator:
             state_before_action = _current_state(env)
             tool = action["tool"]
             signature = action_signature(action)
-            if signature in seen_signatures:
-                loop_detected = True
-            seen_signatures.add(signature)
             tool_counts[tool] += 1
             if tool in DIAGNOSTIC_TOOLS:
                 specialized_counts[tool] += 1
@@ -1098,17 +1495,27 @@ class ClosedLoopRolloutEvaluator:
             invalid = tool == INVALID_ACTION or status != "success"
             if invalid:
                 invalid_indices.append(step)
+            terminal_after = _is_terminal(env, next_state)
             advanced = bool(
                 not invalid
                 and _successful_action_advanced(
                     before=state_before_action,
                     after=next_state,
                     output=output,
-                    terminal=_is_terminal(env, next_state),
+                    terminal=terminal_after,
                 )
             )
             if advanced:
                 advancing_indices.append(step)
+                # A real state/lifecycle advance starts a new control epoch.
+                # Reusing a read-only action after that advance (for example,
+                # verifying a candidate and later re-running WLS after it is
+                # committed) is not a loop.
+                nonadvancing_signatures.clear()
+            else:
+                if signature in nonadvancing_signatures:
+                    loop_detected = True
+                nonadvancing_signatures.add(signature)
 
             label = _resolve_cost_label(
                 self.tool_cost_resolver,
@@ -1116,7 +1523,7 @@ class ClosedLoopRolloutEvaluator:
                 # in env.reset, the policy payload, or a live environment handle.
                 scenario=audit_scenario,
                 suite=suite,
-                step=step,
+                step=policy_step,
                 observation=observation,
                 action=action,
                 tool_output=output,
@@ -1137,6 +1544,7 @@ class ClosedLoopRolloutEvaluator:
             trace.append(
                 {
                     "step": step,
+                    "intervention": False,
                     "observation_hash": _stable_hash(observation),
                     "action": policy_safe_copy(action),
                     "execution_status": status,
@@ -1145,15 +1553,29 @@ class ClosedLoopRolloutEvaluator:
                     "candidate_disposition_offline": disposition,
                     "tool_regret": regret,
                     "terminal_outcome": _output_terminal_outcome(output),
+                    **trace_progress_evidence(
+                        before=state_before_action,
+                        after=next_state,
+                        output=output,
+                        terminal=terminal_after,
+                    ),
                 }
             )
-            if evaluator_error or _is_terminal(env, next_state):
+            if evaluator_error or terminal_after:
                 break
 
         final_state = _current_state(env)
         final_oracle = _oracle_state(env, history)
         terminal = _is_terminal(env, final_state)
         outcome = _terminal_outcome(env, trace)
+        # A release trace has one authoritative terminal marker: the final
+        # transition if and only if the episode is terminal.  Tool outputs can
+        # report the outcome in different fields, so normalize them only after
+        # deriving the environment-level outcome above.
+        for row in trace:
+            row["terminal_outcome"] = None
+        if terminal and outcome is not None and trace:
+            trace[-1]["terminal_outcome"] = outcome
         active_physical_state = _active_physical_state(env, final_state)
         default_audit = _default_physical_audit(
             scenario=audit_scenario,
@@ -1251,6 +1673,9 @@ class ClosedLoopRolloutEvaluator:
                 retained_partial = max(
                     0, min(int(override), len(partial_action_signatures))
                 )
+        intervention_evidence["retained_opportunity_count"] = min(
+            intervention_evidence["retention_opportunity_count"], retained_partial
+        )
 
         groups = _scenario_groups(audit_scenario)
         scenario_id = _scenario_id(audit_scenario, scenario_index)
@@ -1258,6 +1683,17 @@ class ClosedLoopRolloutEvaluator:
         final_success = bool(
             terminal and outcome == "resolved" and physical_correct
         )
+        safe_escalation = bool(
+            terminal
+            and outcome == "operator_escalation"
+            and healthy_known
+            and healthy_preserved
+        )
+        recovery_terminal = bool(final_success or safe_escalation)
+        if intervention_evidence["injected_failure_count"]:
+            intervention_evidence["recovered_failure_count"] = int(
+                recovery_terminal and bool(advancing_indices)
+            )
         recovered_invalid = (
             sum(
                 any(
@@ -1266,7 +1702,7 @@ class ClosedLoopRolloutEvaluator:
                 )
                 for invalid_index in invalid_indices
             )
-            if final_success
+            if recovery_terminal
             else 0
         )
         return EpisodeEvaluation(
@@ -1281,6 +1717,7 @@ class ClosedLoopRolloutEvaluator:
             physical_root=groups["physical_root"],
             seed=episode_seed,
             steps=len(trace),
+            policy_steps=policy_steps,
             terminal=terminal,
             terminal_outcome=outcome,
             final_physical_correct=physical_correct,
@@ -1302,6 +1739,7 @@ class ClosedLoopRolloutEvaluator:
             specialized_tool_counts=dict(sorted(specialized_counts.items())),
             tool_regret_total=regret_total,
             tool_regret_samples=regret_samples,
+            evaluation_intervention=copy.deepcopy(intervention_evidence),
             release_environment_attestation=copy.deepcopy(environment_attestation),
             policy_identity_attestation=copy.deepcopy(policy_attestation),
             audit=copy.deepcopy(audit),
@@ -1409,13 +1847,20 @@ def _callable_descriptor(
     *,
     repo_root: Path,
 ) -> dict[str, Any]:
+    normalized_spec = str(spec).strip()
+    resolved = _load_import_spec(normalized_spec, field="factory import spec")
+    if resolved is not value:
+        raise ValueError(
+            "factory import spec does not resolve to the supplied callable: "
+            f"{normalized_spec}"
+        )
     source_path: str | None = None
     try:
         source_path = inspect.getsourcefile(value) or inspect.getfile(value)
     except (OSError, TypeError):
         source_path = None
     return {
-        "import_spec": str(spec).strip(),
+        "import_spec": normalized_spec,
         "module": getattr(value, "__module__", None),
         "qualname": getattr(
             value,
@@ -1446,6 +1891,32 @@ def _protocol_registry_descriptor(protocol: str) -> dict[str, Any]:
         "registry_sha256": stable_json_sha256(registry),
         "registered_tool_count": len(names),
         "registered_tools": names,
+    }
+
+
+def _runtime_environment_descriptor() -> dict[str, Any]:
+    distributions = (
+        "torch",
+        "transformers",
+        "peft",
+        "bitsandbytes",
+        "accelerate",
+        "datasets",
+        "trl",
+        "sentencepiece",
+        "Pillow",
+    )
+    versions: dict[str, str | None] = {}
+    for distribution in distributions:
+        try:
+            versions[distribution] = importlib.metadata.version(distribution)
+        except importlib.metadata.PackageNotFoundError:
+            versions[distribution] = None
+    return {
+        "python_implementation": platform.python_implementation(),
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "packages": versions,
     }
 
 
@@ -1496,6 +1967,12 @@ def _evaluation_provenance_failures(provenance: Mapping[str, Any] | None) -> lis
                 source.get("sha256")
             ):
                 failures.append("case-loader source fingerprint is missing")
+
+    runtime_environment = provenance.get("runtime_environment")
+    if not isinstance(runtime_environment, Mapping) or not isinstance(
+        runtime_environment.get("packages"), Mapping
+    ):
+        failures.append("runtime environment package versions are missing")
 
     policy_identity = provenance.get("policy_identity")
     if not isinstance(policy_identity, Mapping):
@@ -1591,6 +2068,7 @@ def build_evaluation_provenance(
             "model_revision": normalized_revision,
         },
         "protocol_registry": _protocol_registry_descriptor(protocol),
+        "runtime_environment": _runtime_environment_descriptor(),
         "evaluator_source": _source_path_descriptor(__file__, repo_root=root),
     }
     core["identity_sha256"] = stable_json_sha256(core)
@@ -1877,9 +2355,10 @@ def summarize_episode_evaluations(
     rows = list(episodes)
     total = len(rows)
     terminal = sum(row.terminal for row in rows)
-    resolved = sum(
-        row.terminal and row.terminal_outcome == "resolved" for row in rows
-    )
+    # A resolved label is release evidence only when the strict physical audit
+    # also succeeds.  Counting outcome strings alone made evaluator summaries
+    # disagree with the fail-closed release gate for false finalizations.
+    resolved = sum(row.final_physical_success for row in rows)
     escalated = sum(
         row.terminal and row.terminal_outcome == "operator_escalation"
         for row in rows
@@ -1896,6 +2375,14 @@ def summarize_episode_evaluations(
     retained_partial = sum(row.retained_partial_fix_count for row in rows)
     invalid_count = sum(row.invalid_action_count for row in rows)
     recovered_invalid = sum(row.recovered_invalid_action_count for row in rows)
+    injected_failures = sum(
+        int(row.evaluation_intervention.get("injected_failure_count", 0))
+        for row in rows
+    )
+    recovered_injected = sum(
+        int(row.evaluation_intervention.get("recovered_failure_count", 0))
+        for row in rows
+    )
     regret_samples = sum(row.tool_regret_samples for row in rows)
     regret_total = sum(row.tool_regret_total for row in rows)
     tool_counts: Counter[str] = Counter()
@@ -1968,6 +2455,15 @@ def summarize_episode_evaluations(
         "invalid_action_count": invalid_count,
         "recovered_invalid_actions": recovered_invalid,
         "invalid_action_recovery_rate": _rate(recovered_invalid, invalid_count),
+        "injected_failure_count": injected_failures,
+        "recovered_injected_failures": recovered_injected,
+        "injected_failure_recovery_rate": _rate(
+            recovered_injected, injected_failures
+        ),
+        "episodes_with_injected_failures": sum(
+            int(row.evaluation_intervention.get("injected_failure_count", 0)) > 0
+            for row in rows
+        ),
         "episodes_with_invalid_actions": sum(
             row.invalid_action_count > 0 for row in rows
         ),
@@ -2000,7 +2496,7 @@ def _recovery_metrics(summary: Mapping[str, Any]) -> RecoveryMetrics:
         healthy_component_corruption=float(
             summary["healthy_component_corruption_rate"]
         ),
-        forced_error_recovery=float(summary["invalid_action_recovery_rate"]),
+        forced_error_recovery=float(summary["injected_failure_recovery_rate"]),
         tool_regret=float(summary["mean_tool_regret"] or 0.0),
         partial_success_retention=float(summary["partial_fix_retention_rate"]),
         false_rollback=float(summary["false_rollback_rate"]),
@@ -2231,6 +2727,9 @@ def fingerprint_evaluation_suites(
                     "seed": _episode_seed(
                         int(seed), suite_name, scenario_id, occurrence
                     ),
+                    "evaluation_intervention": evaluation_intervention_contract(
+                        suite_name, scenario, required=False
+                    ),
                 }
             )
     return {
@@ -2266,6 +2765,7 @@ def validate_release_scenario_suites(
                 continue
             try:
                 execution, _, _ = _partitioned_scenario_parts(scenario)
+                evaluation_intervention_contract(suite_name, scenario)
                 development_fields = sorted(
                     set(execution) & {"initial_physical_state", "script"}
                 )
@@ -2460,6 +2960,144 @@ def _successful_action_advanced(
             else 0
         )
         if after_count > before_count:
+            return True
+    return False
+
+
+_TRACE_STATE_FIELDS = frozenset(
+    {
+        "active_state_id",
+        "candidate_state_id",
+        "phase",
+        "accepted_correction_count",
+        "explained_anomaly_count",
+    }
+)
+_TRACE_PROGRESS_FIELDS = frozenset(
+    {
+        "state_before",
+        "state_after",
+        "state_before_sha256",
+        "state_after_sha256",
+        "state_mutated",
+        "terminal_after",
+    }
+)
+
+
+def _trace_state_snapshot(state: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the observable lifecycle fields used to classify progress."""
+
+    def optional_text(value: Any) -> str | None:
+        if value is None:
+            return None
+        return str(getattr(value, "value", value))
+
+    def sequence_count(value: Any) -> int:
+        return (
+            len(value)
+            if isinstance(value, Sequence) and not isinstance(value, (str, bytes))
+            else 0
+        )
+
+    return {
+        "active_state_id": optional_text(state.get("active_state_id")),
+        "candidate_state_id": optional_text(state.get("candidate_state_id")),
+        "phase": optional_text(state.get("phase")),
+        "accepted_correction_count": sequence_count(
+            state.get("accepted_corrections")
+        ),
+        "explained_anomaly_count": sequence_count(
+            state.get("explained_anomalies")
+        ),
+    }
+
+
+def trace_progress_evidence(
+    *,
+    before: Mapping[str, Any],
+    after: Any,
+    output: Mapping[str, Any],
+    terminal: bool,
+) -> dict[str, Any]:
+    """Build stable, chainable evidence for one trace row's progress flag.
+
+    The state hashes cover the complete observable state while the embedded
+    snapshots retain the exact lifecycle fields used by
+    :func:`_successful_action_advanced`.  Persisting both lets the release gate
+    verify continuity without exposing any oracle-only state.
+    """
+
+    before_state = copy.deepcopy(dict(before))
+    after_state = (
+        copy.deepcopy(dict(after)) if isinstance(after, Mapping) else before_state
+    )
+    return {
+        "state_before": _trace_state_snapshot(before_state),
+        "state_after": _trace_state_snapshot(after_state),
+        "state_before_sha256": _stable_hash(before_state),
+        "state_after_sha256": _stable_hash(after_state),
+        "state_mutated": output.get("state_mutated") is True,
+        "terminal_after": bool(terminal),
+    }
+
+
+def trace_progress_advanced(evidence: Mapping[str, Any]) -> bool:
+    """Validate trace progress evidence and derive its advancement decision."""
+
+    if not isinstance(evidence, Mapping) or not _TRACE_PROGRESS_FIELDS.issubset(
+        evidence
+    ):
+        raise ValueError("trace progress evidence is incomplete")
+    before = evidence.get("state_before")
+    after = evidence.get("state_after")
+    if (
+        not isinstance(before, Mapping)
+        or set(before) != _TRACE_STATE_FIELDS
+        or not isinstance(after, Mapping)
+        or set(after) != _TRACE_STATE_FIELDS
+    ):
+        raise ValueError("trace progress state snapshot has an invalid schema")
+    for label, snapshot in (("before", before), ("after", after)):
+        for key in ("active_state_id", "candidate_state_id", "phase"):
+            value = snapshot.get(key)
+            if value is not None and not isinstance(value, str):
+                raise ValueError(
+                    f"trace progress {label}.{key} must be a string or null"
+                )
+        for key in ("accepted_correction_count", "explained_anomaly_count"):
+            value = snapshot.get(key)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(
+                    f"trace progress {label}.{key} must be a non-negative integer"
+                )
+    before_hash = evidence.get("state_before_sha256")
+    after_hash = evidence.get("state_after_sha256")
+    if (
+        not isinstance(before_hash, str)
+        or re.fullmatch(r"[0-9a-f]{64}", before_hash) is None
+        or not isinstance(after_hash, str)
+        or re.fullmatch(r"[0-9a-f]{64}", after_hash) is None
+    ):
+        raise ValueError("trace progress state hashes must be lowercase SHA-256")
+    state_mutated = evidence.get("state_mutated")
+    terminal_after = evidence.get("terminal_after")
+    if not isinstance(state_mutated, bool) or not isinstance(terminal_after, bool):
+        raise ValueError(
+            "trace progress state_mutated and terminal_after must be booleans"
+        )
+    if before != after and before_hash == after_hash:
+        raise ValueError("trace progress changed lifecycle state without changing hash")
+    if state_mutated and not terminal_after and before_hash == after_hash:
+        raise ValueError("trace progress claims mutation without a state hash change")
+
+    if terminal_after or state_mutated:
+        return True
+    for key in ("active_state_id", "candidate_state_id", "phase"):
+        if before.get(key) != after.get(key):
+            return True
+    for key in ("accepted_correction_count", "explained_anomaly_count"):
+        if int(after[key]) > int(before[key]):
             return True
     return False
 
@@ -3423,6 +4061,8 @@ __all__ = [
     "privileged_execution_paths",
     "strip_offline_truth",
     "summarize_episode_evaluations",
+    "trace_progress_advanced",
+    "trace_progress_evidence",
     "validate_release_scenario_suites",
     "write_evaluation_artifact",
 ]

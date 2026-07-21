@@ -7,7 +7,11 @@ from psse_env.actions import (
     GET_MEASUREMENT_CONTEXT,
     RUN_WLS,
 )
-from psse_env.oracle.expert_types import history_action_tool, state_value
+from psse_env.oracle.expert_types import (
+    history_action_tool,
+    recovery_record_applies_to_state,
+    state_value,
+)
 
 
 def measurement_target_indices(action: Mapping[str, Any]) -> set[int]:
@@ -41,6 +45,142 @@ def accepted_measurement_indices(state: Any) -> set[int]:
         if isinstance(action, Mapping):
             indices.update(measurement_target_indices(action))
     return indices
+
+
+def verified_terminal_measurement_closure_action(
+    context_evidence: Mapping[str, Any],
+    *,
+    active_id: Any,
+    active_state_hash: Any | None = None,
+    accepted_targets: set[int] | None = None,
+) -> dict[str, Any] | None:
+    """Validate one provider-attested terminal measurement closure action.
+
+    The closure is an exceptional authorization for an accepted-target-plus-
+    singleton grouped repair.  A target list alone is therefore insufficient:
+    the exact same-state action and ordered candidate-quality screening records
+    must be present in the context contract.
+    """
+
+    if active_id is None or not isinstance(context_evidence, Mapping):
+        return None
+    if str(context_evidence.get("state_id") or "") != str(active_id):
+        return None
+    context_hash = str(context_evidence.get("state_hash") or "")
+    if not context_hash or (
+        active_state_hash is not None
+        and context_hash != str(active_state_hash)
+    ):
+        return None
+
+    raw_targets = context_evidence.get(
+        "verified_terminal_measurement_closure_targets"
+    )
+    if not isinstance(raw_targets, (list, tuple)) or len(raw_targets) < 2:
+        return None
+    if any(
+        not isinstance(index, int) or isinstance(index, bool) or index < 0
+        for index in raw_targets
+    ):
+        return None
+    targets = list(raw_targets)
+    if targets != sorted(set(targets)):
+        return None
+
+    attestation = context_evidence.get(
+        "verified_terminal_measurement_closure_evidence"
+    )
+    if not isinstance(attestation, Mapping):
+        return None
+    if (
+        attestation.get("eligible") is not True
+        or str(attestation.get("state_id") or "") != str(active_id)
+        or str(attestation.get("state_hash") or "") != context_hash
+        or attestation.get("screening_method")
+        != "singleton_then_grouped_deployment_candidate_quality"
+        or attestation.get("closure_targets") != targets
+    ):
+        return None
+    new_target = attestation.get("new_target")
+    if (
+        not isinstance(new_target, int)
+        or isinstance(new_target, bool)
+        or new_target < 0
+        or new_target not in targets
+    ):
+        return None
+    if accepted_targets is not None and (
+        not accepted_targets
+        or new_target in accepted_targets
+        or set(targets) != accepted_targets | {new_target}
+        or len(set(targets) - accepted_targets) != 1
+    ):
+        return None
+
+    supported = context_evidence.get("supported_corrections")
+    if not isinstance(supported, (list, tuple)):
+        return None
+    exact_action: dict[str, Any] | None = None
+    for action in supported:
+        if (
+            not isinstance(action, Mapping)
+            or set(action) != {"tool", "arguments"}
+            or action.get("tool") != CORRECT_MEASUREMENTS
+        ):
+            continue
+        arguments = action.get("arguments")
+        if (
+            not isinstance(arguments, Mapping)
+            or set(arguments) != {"state_id", "suspect_group"}
+        ):
+            continue
+        if (
+            str(arguments.get("state_id") or "") == str(active_id)
+            and arguments.get("suspect_group") == targets
+        ):
+            exact_action = {
+                "tool": CORRECT_MEASUREMENTS,
+                "arguments": {
+                    "state_id": str(active_id),
+                    "suspect_group": targets,
+                },
+            }
+            break
+    if exact_action is None:
+        return None
+
+    attempts = attestation.get("attempts")
+    if not isinstance(attempts, (list, tuple)):
+        return None
+    singleton_index: int | None = None
+    closure_index: int | None = None
+    for index, attempt in enumerate(attempts):
+        if not isinstance(attempt, Mapping):
+            continue
+        if (
+            attempt.get("stage") == "new_target_singleton"
+            and attempt.get("targets") == [new_target]
+            and attempt.get("disposition") in {"ACCEPT_FINAL", "ACCEPT_PARTIAL"}
+            and attempt.get("target_test_passed") is True
+            and attempt.get("physical_constraints_ok") is True
+        ):
+            singleton_index = index
+        if (
+            attempt.get("stage") == "accepted_targets_plus_singleton"
+            and attempt.get("targets") == targets
+            and attempt.get("disposition") == "ACCEPT_FINAL"
+            and attempt.get("target_test_passed") is True
+            and attempt.get("globally_resolved") is True
+            and attempt.get("physical_constraints_ok") is True
+        ):
+            closure_index = index
+    if (
+        singleton_index is None
+        or closure_index is None
+        or singleton_index >= closure_index
+    ):
+        return None
+    return exact_action
 
 
 def eligible_joint_measurement_targets(
@@ -77,8 +217,9 @@ def eligible_joint_measurement_targets(
 
     rejected_by_candidate: dict[str, frozenset[int]] = {}
     rejected_order: list[str] = []
+    durable_verifications: dict[str, dict[str, Any]] = {}
     for item in state_value(state, "rejected_hypotheses", []) or []:
-        if not isinstance(item, Mapping):
+        if not recovery_record_applies_to_state(item, active_id):
             continue
         action = item.get("source_action") or item.get("action") or {}
         if history_action_tool(action) != CORRECT_MEASUREMENTS:
@@ -91,26 +232,39 @@ def eligible_joint_measurement_targets(
             or frozen_targets not in supported_target_sets
         ):
             continue
-        parent_id = item.get("candidate_parent_id")
-        requested = (
-            action.get("arguments", {}).get("state_id")
-            if isinstance(action, Mapping)
-            and isinstance(action.get("arguments"), Mapping)
-            else None
-        )
-        if parent_id is not None and str(parent_id) != str(active_id):
-            continue
-        if requested is not None and str(requested) != str(active_id):
-            continue
         candidate_id = item.get("candidate_state_id")
         if candidate_id is None:
             continue
         candidate_key = str(candidate_id)
         rejected_by_candidate[candidate_key] = frozen_targets
         rejected_order.append(candidate_key)
+        verification_summary = item.get("verification_summary")
+        if isinstance(verification_summary, Mapping):
+            durable_verifications[candidate_key] = dict(verification_summary)
 
     verified: dict[str, dict[str, Any]] = {}
-    for event in history:
+    verification_events = list(history)
+    # A rejected candidate's WLS transition can age out of the bounded policy
+    # window while its same-state context remains fresh.  The rejection record
+    # carries a compact copy of that already-observed verification evidence, so
+    # evaluate it through the exact same predicate as a live history event.
+    for candidate_key in rejected_order:
+        metrics = durable_verifications.get(candidate_key)
+        if metrics is None:
+            continue
+        verification_events.append(
+            {
+                "action": {
+                    "tool": RUN_WLS,
+                    "arguments": {"state_id": candidate_key},
+                },
+                "tool_output": {
+                    "execution_status": "success",
+                    "tool_metrics": metrics,
+                },
+            }
+        )
+    for event in verification_events:
         if not isinstance(event, Mapping):
             continue
         action = event.get("action") or event.get("executed_action") or {}
@@ -183,6 +337,19 @@ def eligible_joint_measurement_targets(
     violation_bound = [item for item in ordered if not item["physical_ok"]]
 
     context_physical_vm_targets: set[int] = set()
+    fresh_context_evidence = state_value(state, "fresh_context_evidence", {})
+    if isinstance(fresh_context_evidence, Mapping):
+        measurement_evidence = fresh_context_evidence.get("measurement")
+        if (
+            isinstance(measurement_evidence, Mapping)
+            and str(measurement_evidence.get("state_id") or "") == str(active_id)
+        ):
+            raw_targets = measurement_evidence.get("physical_vm_joint_targets")
+            if isinstance(raw_targets, (list, tuple)) and all(
+                isinstance(index, int) and not isinstance(index, bool) and index >= 0
+                for index in raw_targets
+            ):
+                context_physical_vm_targets = set(raw_targets)
     for event in reversed(history):
         if not isinstance(event, Mapping):
             continue

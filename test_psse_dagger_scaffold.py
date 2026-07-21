@@ -1306,7 +1306,7 @@ class ExpertPolicyTests(unittest.TestCase):
         }
         self.assertEqual(self.oracle.next_actions(state)[0]["tool"], "get_parameter_context")
 
-    def test_accepted_partial_measurement_fix_continues_observable_parameter_diagnosis(self):
+    def test_accepted_partial_measurement_fix_refreshes_measurement_context(self):
         state = {
             "active_state_id": "e:s1",
             "unresolved_signatures": [
@@ -1319,7 +1319,7 @@ class ExpertPolicyTests(unittest.TestCase):
                 }
             ],
         }
-        self.assertEqual(self.oracle.next_actions(state)[0]["tool"], "get_parameter_context")
+        self.assertEqual(self.oracle.next_actions(state)[0]["tool"], "get_measurement_context")
 
     def test_expert_does_not_repeat_rejected_action_signature(self):
         rejected = correct_measurement("e:s0")

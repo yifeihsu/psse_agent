@@ -127,6 +127,13 @@ class PolicyObservation:
     measurement_context_state_id: str | None = None
     parameter_context_state_id: str | None = None
     topology_context_state_id: str | None = None
+    # Compact provider evidence from context calls bound to the current active
+    # state.  Context freshness can outlive the bounded history window after a
+    # rejected candidate is rolled back, so retain the already-observed action
+    # inventory and the small set of fields needed to evaluate conditional
+    # retries.  The environment clears this ledger whenever the active state
+    # changes.
+    fresh_context_evidence: dict[str, dict[str, Any]] = field(default_factory=dict)
     requires_measurement_context: bool = False
     # Observable telemetry channels attached to the active state (harmonic
     # scans, HIF scan windows, repeated parameter scans, ...).  Knowing which
@@ -728,6 +735,9 @@ class PowerSystemStateStore:
             "measurement_context_state_id": flags.get("measurement_context_state_id"),
             "parameter_context_state_id": flags.get("parameter_context_state_id"),
             "topology_context_state_id": flags.get("topology_context_state_id"),
+            "fresh_context_evidence": policy_safe_copy(
+                dict(flags.get("fresh_context_evidence") or {})
+            ),
             "requires_measurement_context": bool(flags.get("requires_measurement_context", False)),
             "semantic_field_provenance": policy_safe_copy(semantic_field_provenance),
         }

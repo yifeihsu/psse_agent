@@ -30,6 +30,73 @@ def _row(
 
 
 class BalancedTrainingViewTests(unittest.TestCase):
+    def test_targetless_rows_are_excluded_before_balancing(self) -> None:
+        targetless = {
+            **_row("targetless", tool="run_wls"),
+            "preferred_action": None,
+            "valid_next_actions": [],
+        }
+        rows = [
+            targetless,
+            _row("baseline", tool="run_wls"),
+            _row("context", tool="get_measurement_context"),
+        ]
+
+        view, report = build_balanced_training_view(
+            rows,
+            seed=7,
+            tool_category_weights={
+                "baseline_diagnostics": 0.5,
+                "context_acquisition": 0.5,
+            },
+            max_duplicate_count=1,
+            max_rows_per_root=1,
+            minimum_tool_category_natural_rows=0,
+            minimum_tool_category_distinct_roots=0,
+        )
+
+        self.assertEqual(
+            {row["example_id"] for row in view}, {"baseline", "context"}
+        )
+        self.assertEqual(report["input_rows"], 3)
+        self.assertEqual(report["target_bearing_input_rows"], 2)
+        self.assertEqual(report["excluded_targetless_rows"], 1)
+        self.assertEqual(report["requested_size"], 2)
+        self.assertEqual(report["returned_size"], 2)
+        self.assertEqual(report["before"]["rows"], 2)
+        self.assertNotIn("unknown", report["before"]["target_tool"])
+        self.assertNotIn(
+            "specialized_diagnostics", report["before"]["tool_category"]
+        )
+
+    def test_all_targetless_rows_fail_closed(self) -> None:
+        row = {
+            **_row("targetless", tool="run_wls"),
+            "preferred_action": None,
+            "valid_next_actions": [],
+        }
+
+        with self.assertRaisesRegex(ValueError, "all training rows are targetless"):
+            build_balanced_training_view([row])
+
+    def test_already_exported_messages_do_not_become_balancer_targets(self) -> None:
+        row = {
+            **_row("chat-only", tool="run_wls"),
+            "preferred_action": None,
+            "valid_next_actions": [],
+            "messages": [
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {"function": {"name": "wls_from_path", "arguments": {}}}
+                    ],
+                }
+            ],
+        }
+
+        with self.assertRaisesRegex(ValueError, "all training rows are targetless"):
+            build_balanced_training_view([row])
+
     def test_feasible_targets_pass_with_explicit_achieved_deviation_report(self) -> None:
         rows = [
             _row(f"baseline-{index}", tool="run_wls")
@@ -49,6 +116,8 @@ class BalancedTrainingViewTests(unittest.TestCase):
             },
             max_duplicate_count=1,
             max_rows_per_root=1,
+            minimum_tool_category_natural_rows=0,
+            minimum_tool_category_distinct_roots=0,
         )
 
         expected_counts = {
@@ -72,7 +141,80 @@ class BalancedTrainingViewTests(unittest.TestCase):
             self.assertEqual(details["absolute_deviation"], 0)
             self.assertEqual(details["relative_deviation"], 0.0)
 
-    def test_infeasible_targets_fail_even_when_deviation_tolerance_is_loose(self) -> None:
+    def test_natural_support_floor_passes_at_rows_and_roots_boundary(self) -> None:
+        rows = [
+            _row(f"baseline-{index}", tool="run_wls")
+            for index in range(16)
+        ] + [
+            _row(f"context-{index}", tool="get_measurement_context")
+            for index in range(16)
+        ]
+
+        _, report = build_balanced_training_view(
+            rows,
+            size=32,
+            seed=4,
+            tool_category_weights={
+                "baseline_diagnostics": 0.5,
+                "context_acquisition": 0.5,
+            },
+            max_duplicate_count=1,
+            max_rows_per_root=1,
+        )
+
+        self.assertTrue(report["tool_category_natural_support_passed"])
+        self.assertEqual(report["tool_category_natural_support_shortfalls"], {})
+        self.assertTrue(report["release_ready"])
+        for support in report["tool_category_natural_support"].values():
+            self.assertEqual(support["natural_target_bearing_rows"], 16)
+            self.assertEqual(support["distinct_roots"], 16)
+            self.assertTrue(support["passed"])
+
+    def test_zero_capacity_configured_category_fails_natural_support_floor(self) -> None:
+        rows = [
+            _row(f"baseline-{index}", tool="run_wls")
+            for index in range(16)
+        ] + [
+            _row(f"context-{index}", tool="get_measurement_context")
+            for index in range(16)
+        ]
+
+        _, report = build_balanced_training_view(
+            rows,
+            size=32,
+            seed=5,
+            tool_category_weights={
+                "baseline_diagnostics": 0.45,
+                "context_acquisition": 0.45,
+                "specialized_diagnostics": 0.10,
+            },
+            max_duplicate_count=1,
+            max_rows_per_root=1,
+        )
+
+        self.assertEqual(
+            report["unconstrained_target_counts"]["tool_category"]
+            ["specialized_diagnostics"],
+            3,
+        )
+        self.assertEqual(
+            report["target_counts"]["tool_category"]["specialized_diagnostics"],
+            0,
+        )
+        self.assertEqual(
+            report["tool_category_natural_support_shortfalls"]
+            ["specialized_diagnostics"],
+            {
+                "natural_target_bearing_rows": 0,
+                "distinct_roots": 0,
+                "row_shortfall": 16,
+                "root_shortfall": 10,
+            },
+        )
+        self.assertFalse(report["tool_category_natural_support_passed"])
+        self.assertFalse(report["release_ready"])
+
+    def test_category_targets_clip_and_redistribute_before_deviation_gate(self) -> None:
         rows = [
             _row(f"baseline-{index}", tool="run_wls")
             for index in range(9)
@@ -88,24 +230,41 @@ class BalancedTrainingViewTests(unittest.TestCase):
             },
             max_duplicate_count=1,
             max_rows_per_root=1,
-            maximum_tool_category_target_deviation=1.0,
+            minimum_tool_category_natural_rows=0,
+            minimum_tool_category_distinct_roots=0,
         )
 
-        self.assertFalse(report["passed"])
-        self.assertFalse(report["release_ready"])
+        self.assertTrue(report["passed"])
+        self.assertTrue(report["release_ready"])
         self.assertEqual(
-            report["necessary_feasibility_shortfalls"]["tool_category"][
-                "context_acquisition"
-            ],
-            {"target": 5, "maximum_achievable": 1, "shortfall": 4},
+            report["unconstrained_target_counts"]["tool_category"],
+            {"baseline_diagnostics": 5, "context_acquisition": 5},
         )
-        self.assertGreater(report["necessary_feasibility_shortfall_total"], 0)
-        context_deviation = report["target_deviation"]["tool_category"]["values"][
-            "context_acquisition"
-        ]
-        self.assertEqual(context_deviation["shortfall"], 4)
-        self.assertEqual(context_deviation["absolute_deviation"], 4)
-        self.assertEqual(context_deviation["relative_deviation"], 0.8)
+        self.assertEqual(
+            report["target_counts"]["tool_category"],
+            {"baseline_diagnostics": 9, "context_acquisition": 1},
+        )
+        self.assertEqual(
+            report["capacity_adjustments"]["tool_category"],
+            {
+                "baseline_diagnostics": {
+                    "unconstrained_target": 5,
+                    "capacity_adjusted_target": 9,
+                    "maximum_achievable": 9,
+                    "necessary_reduction": 0,
+                    "redistributed_increase": 4,
+                },
+                "context_acquisition": {
+                    "unconstrained_target": 5,
+                    "capacity_adjusted_target": 1,
+                    "maximum_achievable": 1,
+                    "necessary_reduction": 4,
+                    "redistributed_increase": 0,
+                },
+            },
+        )
+        self.assertEqual(report["necessary_feasibility_shortfalls"], {})
+        self.assertEqual(report["achieved_tool_category_target_deviation"], 0.0)
 
     def test_secondary_axes_are_capacity_aware_without_relaxing_category_gate(self) -> None:
         rows = [
@@ -122,11 +281,20 @@ class BalancedTrainingViewTests(unittest.TestCase):
             tool_category_weights={"baseline_diagnostics": 1.0},
             max_duplicate_count=1,
             max_rows_per_root=1,
+            minimum_tool_category_natural_rows=0,
+            minimum_tool_category_distinct_roots=0,
         )
 
         self.assertTrue(report["release_ready"])
         self.assertEqual(
-            report["target_contract"]["strict_target_axes"], ["tool_category"]
+            report["target_contract"]["strict_target_axes"], []
+        )
+        self.assertEqual(
+            report["target_contract"]["deviation_gated_target_axes"],
+            ["tool_category"],
+        )
+        self.assertIn(
+            "tool_category", report["target_contract"]["capacity_aware_target_axes"]
         )
         self.assertEqual(
             report["unconstrained_target_counts"]["state_class"],
@@ -162,47 +330,38 @@ class BalancedTrainingViewTests(unittest.TestCase):
     def test_achieved_category_deviation_is_an_independent_release_gate(self) -> None:
         rows = [
             _row(
-                "e0",
+                "baseline-shared-root",
                 tool="run_wls",
-                physical_root="r1",
-                scenario_family="c",
-                error_cardinality=1,
-                terminal_outcome="resolved",
+                physical_root="shared",
             ),
             _row(
-                "e1",
+                "context-shared-root",
                 tool="get_measurement_context",
-                physical_root="r1",
-                scenario_family="a",
-                error_cardinality=2,
-                terminal_outcome="operator_escalation",
+                physical_root="shared",
             ),
             _row(
-                "e2",
-                tool="run_wls",
-                physical_root="r0",
-                scenario_family="b",
-                error_cardinality=2,
-                terminal_outcome="operator_escalation",
+                "terminal-r1",
+                tool="finalize_diagnosis",
+                physical_root="r1",
             ),
             _row(
-                "e3",
-                tool="get_measurement_context",
-                physical_root="r1",
-                scenario_family="a",
-                error_cardinality=2,
-                terminal_outcome="resolved",
+                "terminal-r2",
+                tool="finalize_diagnosis",
+                physical_root="r2",
             ),
         ]
         options = {
             "size": 3,
             "seed": 0,
             "tool_category_weights": {
-                "baseline_diagnostics": 0.5,
-                "context_acquisition": 0.5,
+                "baseline_diagnostics": 1.0,
+                "context_acquisition": 1.0,
+                "terminal_or_handoff": 1.0,
             },
             "max_duplicate_count": 1,
-            "max_rows_per_root": 2,
+            "max_rows_per_root": 1,
+            "minimum_tool_category_natural_rows": 0,
+            "minimum_tool_category_distinct_roots": 0,
         }
 
         _, strict = build_balanced_training_view(

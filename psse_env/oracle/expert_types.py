@@ -89,6 +89,36 @@ def history_action_tool(item: Any) -> str | None:
     return safe_normalize_action(action)["tool"]
 
 
+def recovery_record_applies_to_state(item: Any, active_state_id: Any) -> bool:
+    """Return whether state-bound recovery evidence belongs to the active state.
+
+    Older fixture records may omit both bindings; those remain usable for
+    backwards compatibility.  Once either the candidate parent or source
+    action declares a state, however, a mismatch must not influence routing on
+    a later committed state.
+    """
+    if not isinstance(item, Mapping):
+        return False
+    parent_id = item.get("candidate_parent_id")
+    if parent_id is not None and (
+        active_state_id is None or str(parent_id) != str(active_state_id)
+    ):
+        return False
+    action = item.get("source_action") or item.get("action") or item.get(
+        "executed_action"
+    )
+    if isinstance(action, Mapping):
+        normalized = safe_normalize_action(action)
+        requested = normalized["arguments"].get("state_id")
+        if requested is None:
+            requested = action.get("state_id")
+        if requested is not None and (
+            active_state_id is None or str(requested) != str(active_state_id)
+        ):
+            return False
+    return True
+
+
 def evidence_contains(signatures: Any, *needles: str) -> bool:
     return bool(matching_evidence_codes(signatures, *needles))
 

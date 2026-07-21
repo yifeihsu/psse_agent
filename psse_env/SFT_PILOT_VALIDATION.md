@@ -16,7 +16,7 @@ clean commit before any optimizer stage. The resulting checkpoint must then
 pass a real forward/backward step, tiny-overfit gate, and short
 physical-root-held-out recovery evaluation on suitable HPC hardware.
 
-## Review-blocker closure
+## Historical pilot gate results
 
 | Required gate | Result |
 | --- | --- |
@@ -102,13 +102,30 @@ python -m psse_env.sft smoke \
 The exact processor/model commands require the pinned checkpoints in the local
 Hugging Face cache or an explicitly download-enabled run.
 
+The `0.001` value above reproduces the archived E2B report and its displayed
+loss trajectory. It is not the current 31B release setting. On H200/H100, the
+reviewed launcher defaults the current tiny-overfit stage to `0.0001`:
+
+```bash
+TINY_OVERFIT_LR=0.0001 STAGE=tiny-overfit \
+  sbatch submit_dagger_sft_round0.sh
+```
+
 ## Remaining full-run work
 
-1. Replace the pilot's explicitly approved deterministic providers with the
-   deployment WLS/context/correction adapters.
-2. Generate grouped recovery classes: rejected rollback, accepted partial
-   continuation/commit, invalid-precondition recovery, tool failure, and loops.
-3. Run exact 31B one-batch and tiny-overfit gates on HPC.
-4. Run a short held-out recovery evaluation with more than one root group per
-   evaluation split.
-5. Only then generate the full DAgger aggregate and launch 31B SFT.
+1. Freeze the suite, four factories, policy, and hashes in one commit.
+2. Regenerate the release aggregate from that commit; require
+   `release_eligible=true`, `aggregate.train_view.jsonl`, and a legitimate row
+   count inside the launcher bounds.
+3. Run and validate the CPU observable-expert baseline.
+4. Run and validate the exact base-Gemma GPU baseline before any optimizer
+   stage with `submit_dagger_release_eval.sh`; supply the externally reviewed
+   freeze commit through `REVIEWED_SOURCE_COMMIT`.
+5. Execute `gate -> one-batch -> tiny-overfit -> round0` with `afterok`
+   dependencies, passing that same reviewed commit to every stage.
+6. Evaluate every produced `output/lora` adapter on the frozen suite with the
+   release-evaluation launcher. Its content digest names the evidence artifact,
+   and its output guard protects the persisted base reference.
+7. Run `STAGE=checkpoint-gate` against each persisted checkpoint evaluation and
+   the paired base artifact. This stage validates an existing evaluation
+   artifact; it does not run closed-loop evaluation itself.

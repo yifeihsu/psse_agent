@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -142,7 +143,12 @@ class ScenarioConstructionTests(unittest.TestCase):
         self.assertEqual(scenario["network_case"], "case14")
         self.assertNotEqual(scenario["clean_case"], "case14")
         scans = scenario["metadata"]["parameter_scans"]
-        self.assertTrue(scans["z_scans"] and scans["initial_states"])
+        self.assertTrue(scans["z_scans"])
+        self.assertNotIn("initial_states", scans)
+        self.assertEqual(
+            scans["initial_state_strategy"],
+            "observed_vm_plus_configured_case_angles_v1",
+        )
         fault = scenario["true_parameter_errors"][0]
         self.assertIn("clean_r", fault)
         self.assertIn("clean_x", fault)
@@ -283,7 +289,246 @@ class DeterminismTests(unittest.TestCase):
         )
 
 
+class PhysicalSourcePartitionTests(unittest.TestCase):
+    @staticmethod
+    def _write_corpus(path: Path, rows: list[dict]) -> None:
+        path.write_text(
+            "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _row(identifier: str, value: float, *, scenario: str = "no_error") -> dict:
+        return {
+            "id": identifier,
+            "scenario": scenario,
+            "z_true": [value, value + 0.1],
+            "z_obs": [value + 0.01, value + 0.11],
+            "label": {"error_type": scenario},
+            "op_point": {"load_scale": value},
+        }
+
+    def test_invalid_source_partition_fails_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "source_partition"):
+            Round0ScenarioGenerator(source_partition="validation")
+
+    def test_default_partition_preserves_all_tabular_rows(self) -> None:
+        rows = [self._row("a", 0.8), self._row("b", 1.2)]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            corpus_path = Path(temp_dir) / "corpus.jsonl"
+            self._write_corpus(corpus_path, rows)
+            generator = Round0ScenarioGenerator(
+                corpus_path=corpus_path,
+                source_partition=None,
+                validate=False,
+            )
+            selected = generator._corpus()["no_error"]
+
+        self.assertEqual(selected, rows)
+        metadata = generator.report()["source_partition"]
+        self.assertFalse(metadata["enabled"])
+        self.assertEqual(metadata["selected"], None)
+        self.assertEqual(metadata["rows_selected_by_corpus_scenario"]["no_error"], 2)
+
+    def test_partitions_are_complementary_and_group_duplicate_physics(self) -> None:
+        unique = [self._row(f"root-{index}", 0.7 + index / 100.0) for index in range(20)]
+        duplicate = dict(unique[4])
+        duplicate["id"] = "renamed-copy"
+        duplicate["correction_case_path"] = "/different/staging/name.m"
+        rows = [*unique, duplicate]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            corpus_path = Path(temp_dir) / "corpus.jsonl"
+            self._write_corpus(corpus_path, rows)
+            train = Round0ScenarioGenerator(
+                corpus_path=corpus_path,
+                source_partition="train",
+                validate=False,
+            )
+            evaluation = Round0ScenarioGenerator(
+                corpus_path=corpus_path,
+                source_partition="evaluation",
+                validate=False,
+            )
+            train_rows = train._corpus()["no_error"]
+            evaluation_rows = evaluation._corpus()["no_error"]
+
+        train_ids = {row["id"] for row in train_rows}
+        evaluation_ids = {row["id"] for row in evaluation_rows}
+        self.assertFalse(train_ids & evaluation_ids)
+        self.assertEqual(train_ids | evaluation_ids, {row["id"] for row in rows})
+        duplicate_ids = {"root-4", "renamed-copy"}
+        self.assertTrue(
+            duplicate_ids <= train_ids or duplicate_ids <= evaluation_ids,
+            "duplicate physical rows crossed the source partition",
+        )
+        train_digests = {
+            train._source_physical_digest(row) for row in train_rows
+        }
+        evaluation_digests = {
+            evaluation._source_physical_digest(row) for row in evaluation_rows
+        }
+        self.assertFalse(train_digests & evaluation_digests)
+
+        train_metadata = train.report()["source_partition"]
+        evaluation_metadata = evaluation.report()["source_partition"]
+        self.assertEqual(
+            train_metadata["algorithm"], "sha256_physical_content_modulo_v1"
+        )
+        self.assertEqual(train_metadata["modulus"], 5)
+        self.assertEqual(train_metadata["evaluation_buckets"], [0])
+        self.assertEqual(
+            train_metadata["physical_groups_total_by_corpus_scenario"]["no_error"],
+            20,
+        )
+        self.assertEqual(
+            train_metadata["physical_groups_selected_by_corpus_scenario"]["no_error"]
+            + evaluation_metadata["physical_groups_selected_by_corpus_scenario"][
+                "no_error"
+            ],
+            20,
+        )
+
+    def test_only_shared_tabular_sources_are_partitioned(self) -> None:
+        no_error_rows = [
+            self._row(f"clean-{index}", 0.8 + index / 100.0)
+            for index in range(10)
+        ]
+        topology_rows = [
+            self._row(f"topology-{index}", 1.1 + index / 100.0, scenario="topology_error")
+            for index in range(3)
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            corpus_path = Path(temp_dir) / "corpus.jsonl"
+            self._write_corpus(corpus_path, [*no_error_rows, *topology_rows])
+            for partition in ("train", "evaluation"):
+                with self.subTest(partition=partition):
+                    generator = Round0ScenarioGenerator(
+                        corpus_path=corpus_path,
+                        source_partition=partition,
+                        validate=False,
+                    )
+                    corpus = generator._corpus()
+                    self.assertEqual(corpus["topology_error"], topology_rows)
+
+    def test_hif_and_composed_hif_sources_ignore_tabular_partition(self) -> None:
+        hif_rows = [
+            {"id": "hif-a", "z_obs": [1.0], "z_true": [0.9]},
+            {"id": "hif-b", "z_obs": [1.1], "z_true": [0.9]},
+        ]
+        for partition in ("train", "evaluation"):
+            with self.subTest(partition=partition):
+                generator = Round0ScenarioGenerator(
+                    source_partition=partition,
+                    validate=False,
+                )
+                generator._corpus_by_class = {}
+                generator._hif_samples = hif_rows
+                direct_source, _ = generator._family_source("hif")
+                composed_source, _ = generator._family_source("measurement+hif")
+                self.assertEqual(direct_source, hif_rows)
+                self.assertEqual(composed_source, hif_rows)
+
+    def test_parameter_and_composed_parameter_share_the_same_partition(self) -> None:
+        parameter_rows = [
+            self._row(
+                f"parameter-{index}",
+                0.8 + index / 100.0,
+                scenario="parameter_error",
+            )
+            for index in range(12)
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            corpus_path = Path(temp_dir) / "corpus.jsonl"
+            self._write_corpus(corpus_path, parameter_rows)
+            generator = Round0ScenarioGenerator(
+                corpus_path=corpus_path,
+                source_partition="evaluation",
+                validate=False,
+            )
+            parameter_source, _ = generator._family_source("parameter")
+            composed_source, _ = generator._family_source("measurement+parameter")
+
+        self.assertEqual(parameter_source, composed_source)
+
+
 class ValidationGateTests(unittest.TestCase):
+    def test_mixed_parameter_probe_preserves_observable_scan_metadata(self) -> None:
+        generator = Round0ScenarioGenerator(seed=5, validate=True)
+        provider = Mock()
+        provider.run_wls.side_effect = [
+            {
+                "unresolved_signatures": [
+                    "wls_residual_outlier_dominant index=1 channel=Vm"
+                ],
+                "remaining_anomaly_score": 10.0,
+            },
+            {
+                "target_fixed": True,
+                "post_action_resolved": False,
+                "physical_constraints_ok": True,
+                "remaining_anomaly_score": 5.0,
+            },
+            {
+                "target_fixed": True,
+                "post_action_resolved": True,
+                "physical_constraints_ok": True,
+                "remaining_anomaly_score": 0.0,
+            },
+        ]
+        observed_parameter_states: list[dict] = []
+
+        def parameter_context(state):
+            observed_parameter_states.append(state)
+            return {
+                "supported_corrections": [
+                    {
+                        "tool": "correct_parameters",
+                        "arguments": {"state_id": state["state_id"], "line_index": 2},
+                    }
+                ]
+            }
+
+        provider.get_parameter_context.side_effect = parameter_context
+        provider.get_measurement_context.return_value = {
+            "supported_corrections": [
+                {
+                    "tool": "correct_measurements",
+                    "arguments": {
+                        "state_id": "offline_mixed_parameter_gate:measurement_context_0",
+                        "suspect_group": [1],
+                    },
+                }
+            ]
+        }
+        provider.correct_measurements.return_value = {
+            "modification": {"measurement_updates": {"1": 0.5}}
+        }
+        generator._parameter_gate_provider = provider
+        generator._parameter_gate_results["base-root"] = {
+            "corrected_case_path": "corrected_case.py"
+        }
+        metadata = {"parameter_scans": {"z_scans": [[1.0, 2.0, 3.0]]}}
+        scenario = {
+            "case": "case14",
+            "measurements": [1.0, 1.5],
+            "metadata": metadata,
+            "true_parameter_errors": [{"line_index1": 2}],
+            "true_measurement_errors": [{"index": 1, "clean": 0.5}],
+        }
+
+        generator._require_mixed_parameter_recovery_realizable(
+            scenario, base_scenario_id="base-root"
+        )
+
+        self.assertEqual(len(observed_parameter_states), 1)
+        self.assertEqual(observed_parameter_states[0]["metadata"], metadata)
+        self.assertIsNot(observed_parameter_states[0]["metadata"], metadata)
+        accepted = observed_parameter_states[0]["policy_observation"][
+            "accepted_corrections"
+        ]
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(accepted[0]["source_action"]["tool"], "correct_measurements")
+
     def test_clean_vector_is_rejected_as_undetectable_anomaly(self) -> None:
         generator = Round0ScenarioGenerator(seed=5)
         clean = next(
@@ -310,14 +555,14 @@ class ValidationGateTests(unittest.TestCase):
     )
     def test_parameter_solver_failure_records_offline_metrics(self, mocked) -> None:
         generator = Round0ScenarioGenerator(seed=5)
+        scan = json.loads(FIXTURE.read_text())["z_obs"]
         with self.assertRaises(ScenarioRejected) as caught:
             generator._require_parameter_correction_realizable(
                 line_row0=6,
                 clean_r=0.01,
                 clean_x=0.05,
-                z_scans=[[0.0]],
-                initial_states=[[0.0]],
-                measurements=[0.0],
+                z_scans=[scan],
+                measurements=scan,
                 final_case_abs_tolerance=0.02,
             )
 
@@ -341,14 +586,14 @@ class ValidationGateTests(unittest.TestCase):
     )
     def test_parameter_estimate_must_meet_declared_final_tolerance(self, mocked) -> None:
         generator = Round0ScenarioGenerator(seed=5)
+        scan = json.loads(FIXTURE.read_text())["z_obs"]
         with self.assertRaises(ScenarioRejected) as caught:
             generator._require_parameter_correction_realizable(
                 line_row0=1,
                 clean_r=0.01,
                 clean_x=0.05,
-                z_scans=[[0.0]],
-                initial_states=[[0.0]],
-                measurements=[0.0],
+                z_scans=[scan],
+                measurements=scan,
                 final_case_abs_tolerance=0.02,
             )
 
@@ -368,6 +613,7 @@ class ValidationGateTests(unittest.TestCase):
     )
     def test_parameter_candidate_must_pass_observable_wls_criteria(self, mocked) -> None:
         generator = Round0ScenarioGenerator(seed=5)
+        scan = json.loads(FIXTURE.read_text())["z_obs"]
         generator._parameter_gate_provider.run_wls = Mock(
             return_value={
                 "target_fixed": False,
@@ -387,9 +633,8 @@ class ValidationGateTests(unittest.TestCase):
                 line_row0=1,
                 clean_r=0.01,
                 clean_x=0.05,
-                z_scans=[[0.0]],
-                initial_states=[[0.0]],
-                measurements=[0.0],
+                z_scans=[scan],
+                measurements=scan,
                 final_case_abs_tolerance=0.02,
             )
 
@@ -401,6 +646,137 @@ class ValidationGateTests(unittest.TestCase):
         self.assertTrue(caught.exception.metrics["post_action_resolved"])
         self.assertTrue(caught.exception.metrics["physical_constraints_ok"])
         mocked.assert_called_once()
+
+    @patch(
+        "psse_env.providers.scenario_generator._param_correction_json",
+        return_value={"success": True, "corrected_params": [0.01, 0.05]},
+    )
+    def test_parameter_context_must_rank_declared_line_first(self, mocked) -> None:
+        generator = Round0ScenarioGenerator(seed=5)
+        scan = json.loads(FIXTURE.read_text())["z_obs"]
+        generator._parameter_gate_provider.run_wls = Mock(
+            return_value={
+                "target_fixed": True,
+                "post_action_resolved": True,
+                "globally_resolved": True,
+                "physical_constraints_ok": True,
+            }
+        )
+        generator._parameter_gate_provider.get_parameter_context = Mock(
+            return_value={
+                "supported_corrections": [
+                    {
+                        "tool": "correct_parameters",
+                        "arguments": {
+                            "state_id": "offline_parameter_context:l1",
+                            "line_index": 2,
+                        },
+                    },
+                    {
+                        "tool": "correct_parameters",
+                        "arguments": {
+                            "state_id": "offline_parameter_context:l1",
+                            "line_index": 1,
+                        },
+                    },
+                ]
+            }
+        )
+
+        with self.assertRaises(ScenarioRejected) as caught:
+            generator._require_parameter_correction_realizable(
+                line_row0=0,
+                clean_r=0.01,
+                clean_x=0.05,
+                z_scans=[scan],
+                measurements=scan,
+                final_case_abs_tolerance=0.02,
+            )
+
+        self.assertEqual(
+            caught.exception.reason, "parameter_context_target_ambiguous"
+        )
+        self.assertEqual(
+            caught.exception.metrics["parameter_context_supported_line_indices1"],
+            [2, 1],
+        )
+        self.assertEqual(
+            caught.exception.metrics["parameter_context_first_line_index1"], 2
+        )
+        mocked.assert_called_once()
+
+    @patch(
+        "psse_env.providers.scenario_generator._param_correction_json",
+        return_value={"success": True, "corrected_params": [0.01, 0.05]},
+    )
+    def test_parameter_context_true_first_target_remains_eligible(self, mocked) -> None:
+        generator = Round0ScenarioGenerator(seed=5)
+        scan = json.loads(FIXTURE.read_text())["z_obs"]
+        generator._parameter_gate_provider.run_wls = Mock(
+            return_value={
+                "target_fixed": True,
+                "post_action_resolved": True,
+                "globally_resolved": True,
+                "physical_constraints_ok": True,
+            }
+        )
+        generator._parameter_gate_provider.get_parameter_context = Mock(
+            return_value={
+                "supported_corrections": [
+                    {
+                        "tool": "correct_parameters",
+                        "arguments": {
+                            "state_id": "offline_parameter_context:l1",
+                            "line_index": 1,
+                        },
+                    },
+                    {
+                        "tool": "correct_parameters",
+                        "arguments": {
+                            "state_id": "offline_parameter_context:l1",
+                            "line_index": 2,
+                        },
+                    },
+                ]
+            }
+        )
+
+        result = generator._require_parameter_correction_realizable(
+            line_row0=0,
+            clean_r=0.01,
+            clean_x=0.05,
+            z_scans=[scan],
+            measurements=scan,
+            final_case_abs_tolerance=0.02,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["corrected_r"], 0.01)
+        self.assertEqual(result["corrected_x"], 0.05)
+        mocked.assert_called_once()
+
+    def test_known_ambiguous_parameter_root_is_rejected_by_context_rank(self) -> None:
+        generator = Round0ScenarioGenerator(seed=20260719)
+        row = next(
+            item
+            for item in generator._corpus()["parameter_error"]
+            if item.get("id") == "pe_428232230768"
+        )
+
+        with self.assertRaises(ScenarioRejected) as caught:
+            generator._parameter_scenario(row, 68)
+
+        self.assertEqual(
+            caught.exception.reason, "parameter_context_target_ambiguous"
+        )
+        self.assertEqual(caught.exception.metrics["line_index1"], 1)
+        self.assertEqual(
+            caught.exception.metrics["parameter_context_first_line_index1"], 2
+        )
+        self.assertEqual(
+            caught.exception.metrics["parameter_context_supported_line_indices1"][:2],
+            [2, 1],
+        )
 
 
 class WlsSignatureEmissionTests(unittest.TestCase):
@@ -511,7 +887,9 @@ class MeasurementRouteDisciplineTests(unittest.TestCase):
         tools = [proposal.action["tool"] for proposal in proposals]
         self.assertNotIn("get_measurement_context", tools)
 
-    def test_both_rejected_branch_families_lift_measurement_suppression(self) -> None:
+    def test_rejected_branch_actions_without_inventories_keep_measurement_suppressed(
+        self,
+    ) -> None:
         from psse_env.oracle.measurement_expert import MeasurementExpert
 
         state = self._policy_state(
@@ -526,7 +904,8 @@ class MeasurementRouteDisciplineTests(unittest.TestCase):
         ]
         proposals = MeasurementExpert().propose(state, [])
         tools = [proposal.action["tool"] for proposal in proposals]
-        self.assertIn("get_measurement_context", tools)
+        self.assertNotIn("get_measurement_context", tools)
+        self.assertIn("run_wls", tools)
 
     def test_measurement_route_engages_when_residuals_dominate(self) -> None:
         from psse_env.oracle.measurement_expert import MeasurementExpert
@@ -680,16 +1059,20 @@ class EndToEndRound0EpisodeTests(unittest.TestCase):
         tools = [action["tool"] for action, _ in executed]
         self.assertIn("get_parameter_context", tools)
         self.assertIn("get_topology_context", tools)
-        # Missing parameter scans reject that hypothesis without a hidden
-        # family choice; the observable topology context then supplies the
-        # bounded status flip that verifies and commits.
-        self.assertTrue(
-            any(
-                action["tool"] == "correct_parameters"
-                and output.get("error_code") == "parameter_scans_missing"
-                for action, output in executed
-            )
+        # Missing parameter scans close that hypothesis at the observable
+        # context boundary.  The expert must not emit a correction that the
+        # provider has already declined to support; topology context then
+        # supplies the bounded status flip that verifies and commits.
+        parameter_context = next(
+            output
+            for action, output in executed
+            if action["tool"] == "get_parameter_context"
         )
+        self.assertEqual(
+            parameter_context.get("tool_metrics", {}).get("supported_corrections"),
+            [],
+        )
+        self.assertNotIn("correct_parameters", tools)
         topology_action = next(
             action for action, output in executed
             if action["tool"] == "correct_topology"

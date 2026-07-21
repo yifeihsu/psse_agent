@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -379,7 +380,12 @@ class MeasurementContextTests(unittest.TestCase):
         )
 
     def test_coupled_fallback_contains_only_ranked_residual_targets(self) -> None:
-        metrics = self.providers.get_measurement_context(self.state)
+        with patch.object(
+            self.providers,
+            "_physical_vm_joint_targets",
+            return_value=[],
+        ):
+            metrics = self.providers.get_measurement_context(self.state)
         findings = [item["index0"] for item in metrics["measurement_findings"]]
 
         self.assertEqual(
@@ -388,6 +394,13 @@ class MeasurementContextTests(unittest.TestCase):
         )
         self.assertLessEqual(
             set(metrics["coupled_measurement_fallback_targets"]), set(findings)
+        )
+        executable_groups = [
+            action["arguments"]["suspect_group"]
+            for action in metrics["supported_corrections"]
+        ]
+        self.assertNotIn(
+            metrics["coupled_measurement_fallback_targets"], executable_groups
         )
 
     def test_in_bound_vm_residuals_never_enter_the_physical_joint_group(self) -> None:
@@ -679,17 +692,71 @@ class MeasurementContextTests(unittest.TestCase):
         self.assertNotIn([direct_flow_index], groups)
 
     def test_lambda_contexts_expose_branch_targets(self) -> None:
-        parameter = self.providers.get_parameter_context(self.state)
+        parameter_without_scans = self.providers.get_parameter_context(self.state)
+        self.assertNotIn("execution_status", parameter_without_scans)
+        self.assertTrue(parameter_without_scans["parameter_findings"])
+        self.assertIs(parameter_without_scans["parameter_scans_available"], False)
+        self.assertEqual(parameter_without_scans["parameter_scan_count"], 0)
+        self.assertEqual(parameter_without_scans["supported_corrections"], [])
+        self.assertEqual(
+            parameter_without_scans["route_status"],
+            "unavailable_or_inconclusive",
+        )
+
+        state_with_scans = copy.deepcopy(self.state)
+        state_with_scans["metadata"] = {
+            "parameter_scans": {"z_scans": [list(self.state["measurements"])]}
+        }
+        parameter = self.providers.get_parameter_context(state_with_scans)
         self.assertNotIn("execution_status", parameter)
         self.assertIn("parameter_findings", parameter)
+        self.assertIs(parameter["parameter_scans_available"], True)
+        self.assertEqual(parameter["parameter_scan_count"], 1)
+        self.assertTrue(parameter["supported_corrections"])
+        self.assertEqual(parameter["route_status"], "actionable")
         for proposal in parameter["supported_corrections"]:
             self.assertEqual(proposal["tool"], "correct_parameters")
             self.assertGreaterEqual(proposal["arguments"]["line_index"], 1)
+
+        for malformed_scans in (
+            [[1.0]],
+            [[float("nan")] * len(self.state["measurements"])],
+        ):
+            with self.subTest(malformed_scans=len(malformed_scans[0])):
+                malformed = copy.deepcopy(self.state)
+                malformed["metadata"] = {
+                    "parameter_scans": {"z_scans": malformed_scans}
+                }
+                context = self.providers.get_parameter_context(malformed)
+                self.assertIs(context["parameter_scans_available"], False)
+                self.assertEqual(context["parameter_scan_count"], 1)
+                self.assertEqual(context["supported_corrections"], [])
         topology = self.providers.get_topology_context(self.state)
         self.assertNotIn("execution_status", topology)
         for proposal in topology["supported_corrections"]:
             self.assertEqual(proposal["tool"], "correct_topology")
             self.assertIn(proposal["arguments"]["status"], (0, 1))
+
+    def test_topology_screen_preserves_mapping_case_transaction_parity(self) -> None:
+        wrapped = copy.deepcopy(self.state)
+        wrapped["case"] = {"case_path": self.state["case"]}
+
+        topology = self.providers.get_topology_context(wrapped)
+
+        self.assertTrue(topology["topology_candidate_screening"])
+        self.assertEqual(topology["supported_corrections"], [])
+        self.assertTrue(
+            all(
+                item["disposition"] == "REJECT"
+                for item in topology["topology_candidate_screening"]
+            )
+        )
+        self.assertTrue(
+            any(
+                item["progress_class"] == "healthy_component_corruption"
+                for item in topology["topology_candidate_screening"]
+            )
+        )
 
 
 class CorrectionExecutorTests(unittest.TestCase):
@@ -746,6 +813,36 @@ class CorrectionExecutorTests(unittest.TestCase):
         self.assertEqual(result["execution_status"], "failure")
         self.assertEqual(result["error_code"], "parameter_scans_missing")
 
+    @patch(
+        "psse_env.providers.matpower._param_correction_json",
+        return_value={"success": True, "corrected_params": [0.02, 0.08]},
+    )
+    def test_parameter_initial_states_are_derived_from_observations(self, mocked) -> None:
+        state = copy.deepcopy(self.state)
+        scan = list(_fixture()["z_obs"])
+        state["metadata"] = {
+            "parameter_scans": {
+                "z_scans": [scan],
+                "initial_states": [[999.0] * 28],
+            }
+        }
+
+        result = self.providers.correct_parameters(
+            state,
+            {
+                "tool": "correct_parameters",
+                "arguments": {"state_id": "episode:s0", "line_index": 3},
+            },
+        )
+
+        self.assertNotIn("execution_status", result)
+        supplied_starts = mocked.call_args.args[3]
+        self.assertEqual(supplied_starts[0][:14], scan[:14])
+        self.assertNotEqual(supplied_starts, state["metadata"]["parameter_scans"]["initial_states"])
+        configured = _load_python_case(state["case"])["bus"][:, 8]
+        configured = configured - configured[0]
+        np.testing.assert_allclose(supplied_starts[0][14:], configured)
+
     def test_topology_correction_writes_derived_case(self) -> None:
         result = self.providers.correct_topology(
             self.state,
@@ -770,6 +867,20 @@ class CorrectionExecutorTests(unittest.TestCase):
         )
         self.assertEqual(repeat["execution_status"], "failure")
         self.assertEqual(repeat["error_code"], "topology_correction_no_change")
+
+    def test_content_addressed_case_replaces_stale_existing_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            providers = MatpowerDeploymentProviders(derived_case_dir=directory)
+            case = _load_python_case("case14")
+            derived = Path(providers._derived_case(case, "determinism"))
+            expected = derived.read_bytes()
+            derived.write_bytes(b"stale-or-corrupt-case")
+
+            rebuilt = Path(providers._derived_case(case, "determinism"))
+
+            self.assertEqual(rebuilt, derived)
+            self.assertEqual(rebuilt.read_bytes(), expected)
+            self.assertEqual(_load_python_case(str(rebuilt))["branch"].shape, (20, 13))
 
 
 class DiagnosticProviderTests(unittest.TestCase):
@@ -904,6 +1015,34 @@ class DiagnosticProviderTests(unittest.TestCase):
         _, final = env.step({"tool": "finalize_diagnosis", "arguments": {}})
         self.assertEqual(final["execution_status"], "failure")
         self.assertEqual(final["error_code"], "terminal_condition_not_met")
+
+    def test_sanitized_cached_nlm_output_does_not_invent_detection_label(self) -> None:
+        diagnostic = {
+            "success": True,
+            "converged": True,
+            "method": "legacy_three_phase_nlm",
+            "top_hif_groups": [
+                {"rank": 1, "branch_row0": 3, "score": 0.9}
+            ],
+        }
+        env = self._env(
+            {"nlm_diagnostic": diagnostic},
+            unresolved_signatures=["hif_suspected_zero_sequence"],
+            semantic_field_provenance={
+                "unresolved_signatures": "deployment_sensor:waveform_capture"
+            },
+        )
+        active = env.current_state()["active_state_id"]
+        _, output = env.step(
+            {
+                "tool": "run_three_phase_nlm_from_path",
+                "arguments": {"state_id": active},
+            }
+        )
+        self.assertEqual(output["execution_status"], "success")
+        summary = output["tool_metrics"]["nlm_summary"]
+        self.assertNotIn("detected", summary)
+        self.assertEqual(summary["top_hif_groups"][0]["branch_row0"], 3)
 
     def test_hif_optimizer_requires_null_model_improvement_to_explain(self) -> None:
         state = {

@@ -1,0 +1,289 @@
+{
+  "case": "case14",
+  "baseMVA": 100.0,
+  "nb": 14,
+  "nl": 20,
+  "index_map": {
+    "Vm": [
+      0,
+      14
+    ],
+    "Pinj": [
+      14,
+      28
+    ],
+    "Qinj": [
+      28,
+      42
+    ],
+    "Pf": [
+      42,
+      62
+    ],
+    "Qf": [
+      62,
+      82
+    ],
+    "Pt": [
+      82,
+      102
+    ],
+    "Qt": [
+      102,
+      122
+    ]
+  },
+  "measurement_order": [
+    "Vm",
+    "Pinj",
+    "Qinj",
+    "Pf",
+    "Qf",
+    "Pt",
+    "Qt"
+  ],
+  "branch_info": [
+    {
+      "i": 0,
+      "from_bus": 1,
+      "to_bus": 2,
+      "is_line": true
+    },
+    {
+      "i": 1,
+      "from_bus": 1,
+      "to_bus": 5,
+      "is_line": true
+    },
+    {
+      "i": 2,
+      "from_bus": 2,
+      "to_bus": 3,
+      "is_line": true
+    },
+    {
+      "i": 3,
+      "from_bus": 2,
+      "to_bus": 4,
+      "is_line": true
+    },
+    {
+      "i": 4,
+      "from_bus": 2,
+      "to_bus": 5,
+      "is_line": true
+    },
+    {
+      "i": 5,
+      "from_bus": 3,
+      "to_bus": 4,
+      "is_line": true
+    },
+    {
+      "i": 6,
+      "from_bus": 4,
+      "to_bus": 5,
+      "is_line": true
+    },
+    {
+      "i": 7,
+      "from_bus": 4,
+      "to_bus": 7,
+      "is_line": false
+    },
+    {
+      "i": 8,
+      "from_bus": 4,
+      "to_bus": 9,
+      "is_line": false
+    },
+    {
+      "i": 9,
+      "from_bus": 5,
+      "to_bus": 6,
+      "is_line": false
+    },
+    {
+      "i": 10,
+      "from_bus": 6,
+      "to_bus": 11,
+      "is_line": true
+    },
+    {
+      "i": 11,
+      "from_bus": 6,
+      "to_bus": 12,
+      "is_line": true
+    },
+    {
+      "i": 12,
+      "from_bus": 6,
+      "to_bus": 13,
+      "is_line": true
+    },
+    {
+      "i": 13,
+      "from_bus": 7,
+      "to_bus": 8,
+      "is_line": true
+    },
+    {
+      "i": 14,
+      "from_bus": 7,
+      "to_bus": 9,
+      "is_line": true
+    },
+    {
+      "i": 15,
+      "from_bus": 9,
+      "to_bus": 10,
+      "is_line": true
+    },
+    {
+      "i": 16,
+      "from_bus": 9,
+      "to_bus": 14,
+      "is_line": true
+    },
+    {
+      "i": 17,
+      "from_bus": 10,
+      "to_bus": 11,
+      "is_line": true
+    },
+    {
+      "i": 18,
+      "from_bus": 12,
+      "to_bus": 13,
+      "is_line": true
+    },
+    {
+      "i": 19,
+      "from_bus": 13,
+      "to_bus": 14,
+      "is_line": true
+    }
+  ],
+  "hif": {
+    "scenario": "high_impedance_fault",
+    "eligible_branch_row0": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19
+    ],
+    "branch_order": [
+      "Line.1-2",
+      "Line.1-5",
+      "Line.2-3",
+      "Line.2-4",
+      "Line.2-5",
+      "Line.3-4",
+      "Line.4-5",
+      "Transformer.4-7",
+      "Transformer.4-9",
+      "Transformer.5-6",
+      "Line.6-11",
+      "Line.6-12",
+      "Line.6-13",
+      "Line.7-8",
+      "Line.7-9",
+      "Line.9-10",
+      "Line.9-14",
+      "Line.10-11",
+      "Line.12-13",
+      "Line.13-14"
+    ],
+    "bus_order": [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6",
+      "b7",
+      "b8",
+      "b9",
+      "b10",
+      "b11",
+      "b12",
+      "b13",
+      "b14"
+    ],
+    "load_scale_range": [
+      0.8,
+      1.25
+    ],
+    "r_hif_pu_range": [
+      20.0,
+      200.0
+    ],
+    "split_ratio_range": [
+      0.25,
+      0.75
+    ],
+    "branch_sampling": "balanced",
+    "scan_window": {
+      "scans_per_window": 20,
+      "operating_point_mode": "diverse",
+      "shared_parameters": [
+        "branch_row0",
+        "split_ratio",
+        "phase",
+        "r_hif_pu"
+      ],
+      "scan_specific_fields": [
+        "z_clean",
+        "z_obs",
+        "three_phase_voltages",
+        "op_point"
+      ],
+      "operating_point_schema": [
+        "load_scale",
+        "bus_load_scales",
+        "generator_dispatch_kw",
+        "voltage_setpoints_pu",
+        "source_voltage_pu"
+      ],
+      "bus_load_scale_semantics": "profile_factor_multiplied_by_load_scale",
+      "note": "identical_noise repeats one operating point; diverse varies spatial load, dispatch, and voltage setpoints while preserving the HIF."
+    },
+    "generation": {
+      "seed": 20260714,
+      "noise_scale": 1.0,
+      "scan_load_log_std": 0.08,
+      "scan_dispatch_fraction": 0.2,
+      "scan_voltage_std": 0.008,
+      "rng_streams": "event_labels, operating_points, and measurement_noise are independent"
+    },
+    "phases": [
+      "A",
+      "B",
+      "C"
+    ],
+    "measurement_vector": "operator IEEE-14 122-entry z; hidden fault bus excluded",
+    "nlm_diagnostic": {
+      "fields": [
+        "success",
+        "converged",
+        "top_hif_groups",
+        "detected_top1",
+        "detected_top3"
+      ],
+      "note": "Generated HIF samples use the legacy three-phase NLM bridge when scenario models are available; metadata fallback is only for adapter smoke tests without model-backed evidence."
+    }
+  }
+}

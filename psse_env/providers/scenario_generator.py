@@ -54,9 +54,11 @@ from psse_env.providers.matpower import (
     MatpowerDeploymentProviders,
     _render_matpower_case,
     measurement_index_map,
+    observable_parameter_initial_states,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CHI2_ALPHA = 0.01
 
 DEFAULT_CORPUS_PATH = _REPO_ROOT / "data" / "measurements_5class_merged.jsonl"
 DEFAULT_HIF_SAMPLE_PATHS = (
@@ -77,6 +79,21 @@ DEFAULT_HIF_FALLBACK_SAMPLE_PATHS = (
     / "measurements"
     / "out_measurements_hif_representative_20260705_curated17"
     / "samples.jsonl",
+)
+# BC0 reserves the compact curated fallback above for the frozen evaluation
+# holdout. The release aggregate trains on this independently generated,
+# physics-validated multiscan population so no HIF physical root crosses the
+# train/evaluation boundary.
+DEFAULT_RELEASE_HIF_SAMPLE_PATHS = (
+    _REPO_ROOT
+    / "artifacts"
+    / "measurements"
+    / "hif_multiscan_benchmark_fixed_diverse_17x20_20260714"
+    / "samples.jsonl",
+)
+DEFAULT_RELEASE_HIF_QUALITY_PATHS = (
+    DEFAULT_RELEASE_HIF_SAMPLE_PATHS[0].with_name("meta.json"),
+    DEFAULT_RELEASE_HIF_SAMPLE_PATHS[0].with_name("quality_report.json"),
 )
 DEFAULT_IMBALANCE_SAMPLE_PATH = (
     _REPO_ROOT
@@ -131,6 +148,33 @@ _WAVEFORM_PROVENANCE = "deployment_sensor:waveform_capture"
 HARMONIC_SIGNATURE = "harmonic_distortion_detected"
 HIF_SIGNATURE = "hif_suspected_zero_sequence"
 UNBALANCE_SIGNATURE = "three_phase_unbalance vuf_threshold_exceeded"
+
+# The tabular measurement corpus is shared by both the round-0 aggregate and
+# the frozen evaluation-suite builder.  Assign its physical source rows before
+# seeded sampling so changing a corpus row id (or copying the same physical row
+# under a second id) cannot move that realization across the release boundary.
+_SOURCE_PARTITION_FAMILIES = (
+    "no_error",
+    "measurement",
+    "multi_measurement",
+    "parameter",
+    "harmonic",
+    "measurement+parameter",
+)
+_SOURCE_PARTITION_CORPUS_SCENARIOS = frozenset(
+    {"no_error", "measurement_error", "parameter_error", "harmonic_anomaly"}
+)
+_SOURCE_PARTITION_MODULUS = 5
+_SOURCE_PARTITION_EVALUATION_BUCKETS = frozenset({0})
+_SOURCE_PARTITION_ALGORITHM = "sha256_physical_content_modulo_v1"
+_SOURCE_NONPHYSICAL_TOP_LEVEL_KEYS = frozenset(
+    {
+        "id",
+        "example_id",
+        "scenario_id",
+        "root_scenario_id",
+    }
+)
 
 _EXPLANATION_ONLY_RELEASE_AUDIT = {
     "explanation_only_contract": "explanation_only_diagnostic_localization_v1",
@@ -198,15 +242,21 @@ class Round0ScenarioGenerator:
         hif_sample_paths: Sequence[str | Path] | None = None,
         imbalance_sample_path: str | Path | None = None,
         balanced_artifact_dir: str | Path | None = None,
+        artifact_allowlist: Sequence[str | Path] | None = None,
         derived_case_dir: str | Path | None = None,
         seed: int = 20260719,
         validate: bool = True,
-        chi2_alpha: float = 0.01,
+        chi2_alpha: float = DEFAULT_CHI2_ALPHA,
         anomaly_margin: float = 1.25,
         topology_noise_scale: float = 0.8,
         hif_max_scans: int = 8,
         noise_profile_rows: int = 200,
+        source_partition: str | None = None,
     ) -> None:
+        if source_partition not in (None, "train", "evaluation"):
+            raise ValueError(
+                "source_partition must be None, 'train', or 'evaluation'"
+            )
         self.corpus_path = Path(corpus_path or DEFAULT_CORPUS_PATH)
         uses_default_hif_paths = hif_sample_paths is None
         self.hif_sample_paths = [
@@ -228,6 +278,12 @@ class Round0ScenarioGenerator:
         self.balanced_artifact_dir = Path(
             balanced_artifact_dir or DEFAULT_BALANCED_ARTIFACT_DIR
         )
+        self.artifact_allowlist = (
+            {Path(path).absolute() for path in artifact_allowlist}
+            if artifact_allowlist is not None
+            else None
+        )
+        self.consumed_artifacts: set[Path] = set()
         self.derived_case_dir = Path(
             derived_case_dir
             or os.path.join(tempfile.gettempdir(), "psse_round0_cases")
@@ -239,6 +295,32 @@ class Round0ScenarioGenerator:
         self.topology_noise_scale = float(topology_noise_scale)
         self.hif_max_scans = int(hif_max_scans)
         self.noise_profile_rows = int(noise_profile_rows)
+        self.source_partition = source_partition
+        self._source_partition_metadata: dict[str, Any] = {
+            "selected": source_partition,
+            "enabled": source_partition is not None,
+            "algorithm": (
+                _SOURCE_PARTITION_ALGORITHM
+                if source_partition is not None
+                else "disabled"
+            ),
+            "eligible_families": list(_SOURCE_PARTITION_FAMILIES),
+            "modulus": (
+                _SOURCE_PARTITION_MODULUS
+                if source_partition is not None
+                else None
+            ),
+            "evaluation_buckets": (
+                sorted(_SOURCE_PARTITION_EVALUATION_BUCKETS)
+                if source_partition is not None
+                else []
+            ),
+            "corpus_loaded": False,
+            "rows_total_by_corpus_scenario": {},
+            "rows_selected_by_corpus_scenario": {},
+            "physical_groups_total_by_corpus_scenario": {},
+            "physical_groups_selected_by_corpus_scenario": {},
+        }
         self._parameter_gate_provider = MatpowerDeploymentProviders(
             chi2_alpha=self.chi2_alpha,
             derived_case_dir=str(self.derived_case_dir),
@@ -261,13 +343,95 @@ class Round0ScenarioGenerator:
 
     # ------------------------------------------------------------ data access
 
+    @staticmethod
+    def _source_physical_digest(row: Mapping[str, Any]) -> str:
+        """Return a stable digest of raw physical content, excluding aliases.
+
+        The measurements, operating point, injected-error label, repeated
+        scans, and any diagnostic telemetry remain in the payload.  Row ids
+        and staging paths do not: they identify packaging rather than a
+        physical realization.  The shared corpus already carries the physical
+        parameter realization in its telemetry and label, so a renamed copy of
+        the corresponding case file must not cross the partition boundary.
+        """
+
+        physical = {
+            str(key): value
+            for key, value in row.items()
+            if str(key) not in _SOURCE_NONPHYSICAL_TOP_LEVEL_KEYS
+            and not str(key).endswith(("_path", "_dir"))
+        }
+        encoded = json.dumps(
+            {
+                "partition_schema_version": 1,
+                "physical_source": physical,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    @classmethod
+    def _row_source_partition(cls, row: Mapping[str, Any]) -> str:
+        return cls._digest_source_partition(cls._source_physical_digest(row))
+
+    @staticmethod
+    def _digest_source_partition(digest: str) -> str:
+        raw_digest = bytes.fromhex(digest)
+        bucket = (
+            int.from_bytes(raw_digest[:8], byteorder="big")
+            % _SOURCE_PARTITION_MODULUS
+        )
+        if bucket in _SOURCE_PARTITION_EVALUATION_BUCKETS:
+            return "evaluation"
+        return "train"
+
     def _corpus(self) -> dict[str, list[dict[str, Any]]]:
         if self._corpus_by_class is None:
             grouped: dict[str, list[dict[str, Any]]] = {}
+            total_rows: dict[str, int] = {}
+            selected_rows: dict[str, int] = {}
+            total_groups: dict[str, set[str]] = {}
+            selected_groups: dict[str, set[str]] = {}
             with open(self.corpus_path, encoding="utf-8") as handle:
                 for line in handle:
                     row = json.loads(line)
-                    grouped.setdefault(str(row.get("scenario")), []).append(row)
+                    corpus_scenario = str(row.get("scenario"))
+                    if corpus_scenario in _SOURCE_PARTITION_CORPUS_SCENARIOS:
+                        total_rows[corpus_scenario] = (
+                            total_rows.get(corpus_scenario, 0) + 1
+                        )
+                        selected_rows.setdefault(corpus_scenario, 0)
+                        if self.source_partition is not None:
+                            digest = self._source_physical_digest(row)
+                            total_groups.setdefault(corpus_scenario, set()).add(digest)
+                            selected_groups.setdefault(corpus_scenario, set())
+                            assigned_partition = self._digest_source_partition(digest)
+                            if assigned_partition != self.source_partition:
+                                continue
+                            selected_groups.setdefault(corpus_scenario, set()).add(
+                                digest
+                            )
+                        selected_rows[corpus_scenario] += 1
+                    grouped.setdefault(corpus_scenario, []).append(row)
+            self._source_partition_metadata.update(
+                {
+                    "corpus_loaded": True,
+                    "rows_total_by_corpus_scenario": dict(sorted(total_rows.items())),
+                    "rows_selected_by_corpus_scenario": dict(
+                        sorted(selected_rows.items())
+                    ),
+                    "physical_groups_total_by_corpus_scenario": {
+                        key: len(value) for key, value in sorted(total_groups.items())
+                    },
+                    "physical_groups_selected_by_corpus_scenario": {
+                        key: len(value)
+                        for key, value in sorted(selected_groups.items())
+                    },
+                }
+            )
             self._corpus_by_class = grouped
         return self._corpus_by_class
 
@@ -403,7 +567,6 @@ class Round0ScenarioGenerator:
         clean_r: float,
         clean_x: float,
         z_scans: Sequence[Sequence[float]],
-        initial_states: Sequence[Sequence[float]],
         measurements: Sequence[float],
         final_case_abs_tolerance: float,
     ) -> dict[str, Any] | None:
@@ -418,11 +581,17 @@ class Round0ScenarioGenerator:
         if not self.validate:
             return None
         line_index1 = int(line_row0) + 1
+        normalized_scans = [
+            [float(value) for value in scan] for scan in z_scans
+        ]
+        initial_states = observable_parameter_initial_states(
+            self._clean_case14(), normalized_scans
+        )
         payload = _param_correction_json(
             "case14",
             line_index1,
-            [[float(value) for value in scan] for scan in z_scans],
-            [[float(value) for value in scan] for scan in initial_states],
+            normalized_scans,
+            initial_states,
         )
         success = bool(payload.get("success"))
         corrected = payload.get("corrected_params") or []
@@ -559,6 +728,96 @@ class Round0ScenarioGenerator:
                 ),
                 metrics=metrics,
             )
+
+        # Directly applying the truth-selected correction above proves that a
+        # root *can* be repaired, but release eligibility also requires the
+        # deployed observable route to select that target.  A healthy line can
+        # absorb enough of a confounded residual pattern to pass the partial
+        # candidate gate before the true line is tried.  The ensuing cleanup
+        # may then mask the still-present physical fault.  Exercise the exact
+        # production parameter-context provider on the stale root and require
+        # its first supported correction to name the declared line.  This is a
+        # truth-side construction gate only: neither the expected target nor
+        # this comparison is attached to the scenario seen by the policy.
+        context_state_id = f"offline_parameter_context:l{line_index1}"
+        context_metrics = self._parameter_gate_provider.get_parameter_context(
+            {
+                "state_id": context_state_id,
+                "case": "case14",
+                "measurements": [float(value) for value in measurements],
+                "metadata": {
+                    "parameter_scans": {
+                        "z_scans": copy.deepcopy(normalized_scans),
+                    }
+                },
+                "policy_observation": {},
+            }
+        )
+        if context_metrics.get("execution_status") == "failure":
+            metrics["parameter_context_error_code"] = context_metrics.get(
+                "error_code"
+            )
+            if context_metrics.get("error_detail"):
+                metrics["parameter_context_error_detail"] = str(
+                    context_metrics["error_detail"]
+                )
+            raise ScenarioRejected(
+                "parameter_context_target_unavailable",
+                f"line {line_index1}: deployed parameter context failed",
+                metrics=metrics,
+            )
+
+        supported = context_metrics.get("supported_corrections")
+        supported_lines: list[int] = []
+        if isinstance(supported, (list, tuple)):
+            for raw_action in supported:
+                if not isinstance(raw_action, Mapping):
+                    continue
+                if str(raw_action.get("tool") or "") != "correct_parameters":
+                    continue
+                arguments = raw_action.get("arguments")
+                if not isinstance(arguments, Mapping):
+                    continue
+                raw_targets = [
+                    (key, arguments[key])
+                    for key in ("branch_row0", "line_index1", "line_index")
+                    if arguments.get(key) is not None
+                ]
+                if len(raw_targets) != 1:
+                    continue
+                target_key, raw_target = raw_targets[0]
+                if not isinstance(raw_target, int) or isinstance(raw_target, bool):
+                    continue
+                supported_line = (
+                    int(raw_target) + 1
+                    if target_key == "branch_row0"
+                    else int(raw_target)
+                )
+                if supported_line <= 0 or supported_line in supported_lines:
+                    continue
+                supported_lines.append(supported_line)
+
+        metrics["parameter_context_supported_line_indices1"] = supported_lines
+        if not supported_lines:
+            raise ScenarioRejected(
+                "parameter_context_target_unavailable",
+                (
+                    f"line {line_index1}: deployed parameter context exposed "
+                    "no valid correction target"
+                ),
+                metrics=metrics,
+            )
+        first_supported_line = supported_lines[0]
+        metrics["parameter_context_first_line_index1"] = first_supported_line
+        if first_supported_line != line_index1:
+            raise ScenarioRejected(
+                "parameter_context_target_ambiguous",
+                (
+                    f"line {line_index1}: deployed parameter context ranked "
+                    f"line {first_supported_line} first"
+                ),
+                metrics=metrics,
+            )
         return {
             "corrected_case_path": corrected_case_path,
             "corrected_r": corrected_r,
@@ -598,9 +857,12 @@ class Round0ScenarioGenerator:
 
     def _local_artifact(self, referenced_path: str, subdir: str) -> Path:
         basename = os.path.basename(str(referenced_path).replace("\\", "/"))
-        local = self.balanced_artifact_dir / subdir / basename
+        local = (self.balanced_artifact_dir / subdir / basename).absolute()
+        if self.artifact_allowlist is not None and local not in self.artifact_allowlist:
+            raise ScenarioRejected("artifact_missing", str(local))
         if not local.is_file():
             raise ScenarioRejected("artifact_missing", str(local))
+        self.consumed_artifacts.add(local)
         return local
 
     @staticmethod
@@ -776,7 +1038,7 @@ class Round0ScenarioGenerator:
         line_row0 = int(line_row0)
         if not 0 <= line_row0 < NL:
             raise ScenarioRejected("label_line_row_out_of_range", str(line_row0))
-        if not row.get("z_scans") or not row.get("initial_states"):
+        if not row.get("z_scans"):
             raise ScenarioRejected("parameter_scans_missing", str(row.get("id")))
         true_case = self._local_artifact(
             row.get("parameter_error_case_path") or "", "cases_parameter_error"
@@ -804,7 +1066,6 @@ class Round0ScenarioGenerator:
             clean_r=clean_r,
             clean_x=clean_x,
             z_scans=row["z_scans"],
-            initial_states=row["initial_states"],
             measurements=z_obs,
             final_case_abs_tolerance=final_case_abs_tolerance,
         )
@@ -837,9 +1098,7 @@ class Round0ScenarioGenerator:
         }
         scenario["metadata"]["parameter_scans"] = {
             "z_scans": [[float(v) for v in scan] for scan in row["z_scans"]],
-            "initial_states": [
-                [float(v) for v in scan] for scan in row["initial_states"]
-            ],
+            "initial_state_strategy": "observed_vm_plus_configured_case_angles_v1",
         }
         if gate_result is not None:
             self._parameter_gate_results[scenario["scenario_id"]] = gate_result
@@ -1181,6 +1440,14 @@ class Round0ScenarioGenerator:
                 "state_id": f"offline_mixed_parameter_gate:{stage}",
                 "case": current_case,
                 "measurements": current_measurements,
+                # The production parameter context only advertises a
+                # correction when policy-observable repeated scans are
+                # present and structurally usable.  Preserve that exact
+                # metadata in this offline release-admissibility probe; the
+                # prior probe silently omitted it, so every mixed parameter
+                # root was rejected as context-empty even though the online
+                # environment would expose the scans.
+                "metadata": copy.deepcopy(scenario.get("metadata") or {}),
                 "policy_observation": {
                     "accepted_corrections": copy.deepcopy(accepted),
                 },
@@ -1632,6 +1899,7 @@ class Round0ScenarioGenerator:
             "seed": self.seed,
             "chi2_alpha": self.chi2_alpha,
             "chi2_limit": self.chi2_limit,
+            "source_partition": copy.deepcopy(self._source_partition_metadata),
             "built_by_family": dict(sorted(family_counts.items())),
             "skipped_by_reason": dict(sorted(skip_reasons.items())),
             "skipped": list(self.skipped),
@@ -1648,6 +1916,9 @@ __all__ = [
     "DEFAULT_CORPUS_PATH",
     "DEFAULT_HIF_SAMPLE_PATHS",
     "DEFAULT_HIF_FALLBACK_SAMPLE_PATHS",
+    "DEFAULT_RELEASE_HIF_SAMPLE_PATHS",
+    "DEFAULT_RELEASE_HIF_QUALITY_PATHS",
     "DEFAULT_IMBALANCE_SAMPLE_PATH",
     "DEFAULT_BALANCED_ARTIFACT_DIR",
+    "DEFAULT_CHI2_ALPHA",
 ]

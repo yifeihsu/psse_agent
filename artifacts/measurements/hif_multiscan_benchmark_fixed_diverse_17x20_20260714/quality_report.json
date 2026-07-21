@@ -1,0 +1,129 @@
+{
+  "duplicate_event_window_count": 0,
+  "error_count": 0,
+  "event_count": 17,
+  "expected_scans_per_event": 20,
+  "issues": {},
+  "meta": "artifacts/measurements/hif_multiscan_benchmark_fixed_diverse_17x20_20260714/meta.json",
+  "operating_point_checks": {
+    "all_points_reconstructable": true,
+    "all_points_unique": true,
+    "all_schemas_equal": true,
+    "all_values_finite": true,
+    "topology_constant_within_event": true
+  },
+  "physics_checks": {
+    "clean_replay": {
+      "all_points_reconstructable": true,
+      "attempted": 340,
+      "failures": [],
+      "matched": 340,
+      "missing_clean": 0
+    },
+    "data": {
+      "balance_limit_pu": 0.03,
+      "bus_balance_passed": true,
+      "other_median_balance_residual_pu": 2.650917834882053e-06,
+      "secondary_median_balance_residual_pu": 3.5586636450085267e-06,
+      "transformer_abs_pt_over_abs_pf_median": 1.0,
+      "transformer_signature_passed": true,
+      "vector_count": 340
+    },
+    "engine_transformer_losses": {
+      "maximum_absolute_error_mw_mvar": 8.313463695230893e-15,
+      "passed": true,
+      "rows": [
+        {
+          "absolute_error_mw_mvar": [
+            8.313463695230893e-15,
+            0.0
+          ],
+          "element": "Transformer.4-7",
+          "exported_loss_mw_mvar": [
+            1.7763568394002505e-14,
+            1.7385604652582742
+          ],
+          "opendss_loss_mw_mvar": [
+            2.6077032089233398e-14,
+            1.7385604652582742
+          ]
+        },
+        {
+          "absolute_error_mw_mvar": [
+            2.207798388553784e-15,
+            2.220446049250313e-16
+          ],
+          "element": "Transformer.4-9",
+          "exported_loss_mw_mvar": [
+            -7.105427357601002e-15,
+            1.334234504419546
+          ],
+          "opendss_loss_mw_mvar": [
+            -9.313225746154786e-15,
+            1.3342345044195458
+          ]
+        },
+        {
+          "absolute_error_mw_mvar": [
+            7.450580596923828e-15,
+            1.7763568394002505e-15
+          ],
+          "element": "Transformer.5-6",
+          "exported_loss_mw_mvar": [
+            0.0,
+            4.530640961444943
+          ],
+          "opendss_loss_mw_mvar": [
+            7.450580596923828e-15,
+            4.530640961444945
+          ]
+        }
+      ]
+    }
+  },
+  "rank_diagnostics": {
+    "control_space_rank_by_event": [
+      16,
+      16,
+      17,
+      16,
+      16,
+      16,
+      16,
+      16,
+      16,
+      17,
+      17,
+      16,
+      16,
+      16,
+      16,
+      16,
+      16
+    ],
+    "measurement_effective_rank_by_event": [
+      19,
+      19,
+      19,
+      19,
+      19,
+      19,
+      19,
+      19,
+      19,
+      19,
+      19,
+      19,
+      19,
+      19,
+      19,
+      19,
+      19
+    ],
+    "minimum_control_space_rank": 16,
+    "minimum_measurement_effective_rank": 19
+  },
+  "samples": "artifacts/measurements/hif_multiscan_benchmark_fixed_diverse_17x20_20260714/samples.jsonl",
+  "snapshot_count": 340,
+  "success": true
+}

@@ -10,6 +10,7 @@ from psse_env.oracle.expert_types import (
     matching_evidence_codes,
     normalized_hint_actions,
     policy_state_view,
+    recovery_record_applies_to_state,
     state_value,
 )
 
@@ -102,6 +103,7 @@ class ParameterExpert:
             measurement_dominant
             and not branch_dominant
             and not explicit_parameter_codes
+            and not partial_measurement
         )
         diagnosis_needed = parameter_signal
         if diagnosis_needed and not has_context and active_id:
@@ -129,7 +131,10 @@ class ParameterExpert:
 
     @staticmethod
     def _rejected_measurement(state: Any) -> bool:
+        active_id = state_value(state, "active_state_id")
         for item in state_value(state, "rejected_hypotheses", []) or []:
+            if not recovery_record_applies_to_state(item, active_id):
+                continue
             if history_action_tool(item) == CORRECT_MEASUREMENTS:
                 return True
             if isinstance(item, Mapping):

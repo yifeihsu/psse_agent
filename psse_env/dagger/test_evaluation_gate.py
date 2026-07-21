@@ -10,9 +10,8 @@ from pathlib import Path
 from unittest import mock
 
 from psse_env.dagger.evaluation_gate import (
-    DEFAULT_POLICY_ID,
-    DEFAULT_POLICY_PATH,
     EvaluationGateResult,
+    _trace_action_schema_failure,
     current_registry_sha256,
     main as gate_main,
     validate_evaluation_artifact,
@@ -21,6 +20,7 @@ from psse_env.dagger.evaluator import (
     EVALUATION_SUITES,
     fingerprint_evaluation_suites,
     load_evaluation_suites,
+    trace_progress_evidence,
 )
 from psse_env.sft.provenance import file_sha256, stable_json_sha256
 
@@ -41,6 +41,60 @@ SUITE_MANIFEST_FIELDS = (
 )
 
 
+def _intervention(suite: str) -> dict:
+    if suite == "standard_success":
+        return {"intervention_schema_version": 1, "kind": "none"}
+    if suite == "forced_error_recovery":
+        return {
+            "intervention_schema_version": 1,
+            "kind": "pre_policy_failure",
+            "failure_mode": "well_formed",
+            "error_code": "injected_transient_tool_failure",
+        }
+    if suite == "invalid_action_recovery":
+        return {
+            "intervention_schema_version": 1,
+            "kind": "pre_policy_failure",
+            "failure_mode": "malformed",
+            "error_code": "injected_invalid_action",
+        }
+    if suite == "partial_success_retention":
+        return {
+            "intervention_schema_version": 1,
+            "kind": "committed_partial_correction",
+            "setup_actions": [
+                {
+                    "tool": "get_measurement_context",
+                    "arguments": {"state_id": "$active"},
+                },
+                {
+                    "tool": "correct_measurements",
+                    "arguments": {
+                        "state_id": "$active",
+                        "measurement_updates": {"0": 0.0},
+                    },
+                },
+                {"tool": "run_wls", "arguments": {"state_id": "$candidate"}},
+                {
+                    "tool": "commit_state",
+                    "arguments": {"candidate_state_id": "$candidate"},
+                },
+            ],
+            "retention_required": True,
+        }
+    if suite == "efficiency":
+        return {
+            "intervention_schema_version": 1,
+            "kind": "efficiency_budget",
+            "limits": {
+                "maximum_policy_steps": MAX_STEPS,
+                "maximum_wls_calls": 4,
+                "maximum_specialized_tool_calls": 4,
+            },
+        }
+    raise AssertionError(suite)
+
+
 def _suite_payload(
     *,
     names: tuple[str, ...] = TEST_SUITES,
@@ -57,6 +111,7 @@ def _suite_payload(
                     "measurements": [],
                 },
                 "audit": {
+                    "evaluation_intervention": _intervention(suite),
                     "truth": {
                         "clean_case": "ieee14",
                         "clean_measurements": [],
@@ -198,6 +253,50 @@ def _policy_identity(
     }
 
 
+def _canonical_policy_trace_row(
+    index: int,
+    *,
+    tool: str,
+    arguments: dict | None = None,
+    advanced: bool = True,
+    terminal_outcome: str | None = None,
+) -> dict:
+    default_arguments = (
+        {"state_id": "fixture-active"} if tool == "run_wls" else {}
+    )
+    before = {
+        "active_state_id": "fixture-active",
+        "candidate_state_id": None,
+        "accepted_corrections": [],
+        "explained_anomalies": [],
+        "trace_cursor": index,
+    }
+    after = {**before, "trace_cursor": index + 1}
+    terminal = terminal_outcome is not None
+    progress = trace_progress_evidence(
+        before=before,
+        after=after,
+        output={"state_mutated": bool(advanced and not terminal)},
+        terminal=terminal,
+    )
+    return {
+        "step": index,
+        "intervention": False,
+        "observation_hash": stable_json_sha256(["policy-observation", index]),
+        "action": {
+            "tool": tool,
+            "arguments": default_arguments if arguments is None else arguments,
+        },
+        "execution_status": "success",
+        "advanced": advanced,
+        "error_code": None,
+        "candidate_disposition_offline": None,
+        "tool_regret": None,
+        "terminal_outcome": terminal_outcome,
+        **progress,
+    }
+
+
 def _episode(
     manifest_row: dict,
     *,
@@ -220,6 +319,147 @@ def _episode(
                 "final_case_matches_clean": {"status": "passed"},
             }
         )
+    intervention = copy.deepcopy(manifest_row["evaluation_intervention"])
+    kind = intervention["kind"]
+    pre_policy_steps = (
+        1
+        if kind == "pre_policy_failure"
+        else len(intervention.get("setup_actions") or [])
+        if kind == "committed_partial_correction"
+        else 0
+    )
+    # Policy-action metrics exclude evaluator-injected challenge transitions.
+    invalid_actions = 0
+    retention_opportunities = int(kind == "committed_partial_correction")
+    active_state_id = f"{manifest_row['episode_key']}:active"
+    candidate_state_id = f"{manifest_row['episode_key']}:candidate"
+    current_state: dict = {
+        "active_state_id": active_state_id,
+        "candidate_state_id": None,
+        "accepted_corrections": [],
+        "explained_anomalies": [],
+        "trace_cursor": 0,
+    }
+
+    def progress_to(
+        after: dict,
+        *,
+        state_mutated: bool,
+        terminal_after: bool = False,
+    ) -> dict:
+        nonlocal current_state
+        evidence = trace_progress_evidence(
+            before=current_state,
+            after=after,
+            output={"state_mutated": state_mutated},
+            terminal=terminal_after,
+        )
+        current_state = copy.deepcopy(after)
+        return evidence
+
+    if kind == "pre_policy_failure":
+        injected_action = (
+            {"tool": "run_wls", "arguments": {"state_id": active_state_id}}
+            if intervention.get("failure_mode") == "well_formed"
+            else {
+                "tool": "__invalid_action__",
+                "arguments": {"error_code": intervention["error_code"]},
+            }
+        )
+        pre_trace = [
+            {
+                "step": 0,
+                "intervention": True,
+                "observation_hash": None,
+                "action": injected_action,
+                "execution_status": "failure",
+                "advanced": False,
+                "error_code": intervention["error_code"],
+                "candidate_disposition_offline": None,
+                "tool_regret": None,
+                "terminal_outcome": None,
+                **progress_to(copy.deepcopy(current_state), state_mutated=False),
+            }
+        ]
+    elif kind == "committed_partial_correction":
+        pre_trace = []
+        for index, action in enumerate(intervention["setup_actions"]):
+            resolved = copy.deepcopy(action)
+            for field, value in list(resolved["arguments"].items()):
+                if value == "$active":
+                    resolved["arguments"][field] = active_state_id
+                elif value == "$candidate":
+                    resolved["arguments"][field] = candidate_state_id
+            after_state = copy.deepcopy(current_state)
+            after_state["trace_cursor"] = int(current_state["trace_cursor"]) + 1
+            state_mutated = index in {1, 2, 3}
+            if index == 1:
+                after_state["candidate_state_id"] = candidate_state_id
+            elif index == 2:
+                after_state["candidate_verified"] = True
+            elif index == 3:
+                after_state["active_state_id"] = candidate_state_id
+                after_state["candidate_state_id"] = None
+                after_state["accepted_corrections"] = [
+                    {"candidate_state_id": candidate_state_id}
+                ]
+            pre_trace.append(
+                {
+                    "step": index,
+                    "intervention": True,
+                    "observation_hash": None,
+                    "action": resolved,
+                    "execution_status": "success",
+                    "advanced": index != 0,
+                    "error_code": None,
+                    "candidate_disposition_offline": (
+                        "ACCEPT_PARTIAL"
+                        if index == len(intervention["setup_actions"]) - 1
+                        else None
+                    ),
+                    "tool_regret": None,
+                    "terminal_outcome": None,
+                    **progress_to(
+                        after_state,
+                        state_mutated=state_mutated,
+                    ),
+                }
+            )
+    else:
+        pre_trace = []
+    policy_state_id = str(current_state["active_state_id"])
+    policy_tools = (
+        {"tool": "run_wls", "arguments": {"state_id": policy_state_id}},
+        {"tool": "finalize_diagnosis", "arguments": {}},
+    )
+    policy_trace = []
+    for index, action in enumerate(policy_tools):
+        final_policy_row = index == len(policy_tools) - 1
+        terminal_after = bool(final_policy_row and terminal)
+        after_state = copy.deepcopy(current_state)
+        after_state["trace_cursor"] = int(current_state["trace_cursor"]) + 1
+        advanced = terminal_after
+        policy_trace.append(
+            {
+                "step": pre_policy_steps + index,
+                "intervention": False,
+                "observation_hash": stable_json_sha256(
+                    [manifest_row["episode_key"], index]
+                ),
+                "action": action,
+                "execution_status": "success",
+                "advanced": advanced,
+                "error_code": None,
+                "candidate_disposition_offline": None,
+                "tool_regret": None,
+                "terminal_outcome": outcome if index == 1 else None,
+                **progress_to(
+                    after_state,
+                    state_mutated=False,
+                    terminal_after=terminal_after,
+                ),
+            }
+        )
     return {
         "episode_key": manifest_row["episode_key"],
         "scenario_id": manifest_row["scenario_id"],
@@ -231,7 +471,8 @@ def _episode(
         "split": manifest_row["split"],
         "source_tier": manifest_row["source_tier"],
         "physical_root": manifest_row["physical_root"],
-        "steps": 2,
+        "steps": 2 + pre_policy_steps,
+        "policy_steps": 2,
         "terminal": terminal,
         "terminal_outcome": outcome,
         "final_physical_success": bool(performance_ok),
@@ -242,8 +483,31 @@ def _episode(
         "false_commit_count": 0 if performance_ok else 1,
         "false_rollback_count": 0,
         "false_finalization_count": 0,
-        "invalid_action_count": 0,
+        "partial_fix_count": retention_opportunities,
+        "retained_partial_fix_count": retention_opportunities,
+        "invalid_action_count": invalid_actions,
+        "recovered_invalid_action_count": invalid_actions,
         "loop_detected": False,
+        "wls_calls": 1,
+        "specialized_tool_calls": 0,
+        "tool_regret_total": 0.0,
+        "tool_regret_samples": 0,
+        "evaluation_intervention": {
+            "contract": intervention,
+            "applied": True,
+            "pre_policy_step_count": pre_policy_steps,
+            "injected_failure_count": int(kind == "pre_policy_failure"),
+            "injected_invalid_action_count": int(
+                kind == "pre_policy_failure"
+                and intervention.get("failure_mode") == "malformed"
+            ),
+            "recovered_failure_count": int(
+                kind == "pre_policy_failure" and performance_ok
+            ),
+            "retention_opportunity_count": retention_opportunities,
+            "retained_opportunity_count": retention_opportunities,
+        },
+        "trace": [*pre_trace, *policy_trace],
         "evaluator_error": None,
         "release_environment_attestation": {
             "passed": True,
@@ -289,6 +553,14 @@ def _overall(episodes: list[dict]) -> dict:
         and row["terminal_outcome"] == "operator_escalation"
         for row in episodes
     )
+    injected = sum(
+        row["evaluation_intervention"]["injected_failure_count"]
+        for row in episodes
+    )
+    recovered_injected = sum(
+        row["evaluation_intervention"]["recovered_failure_count"]
+        for row in episodes
+    )
     return {
         "episodes": total,
         "terminal_episodes": terminal,
@@ -310,6 +582,15 @@ def _overall(episodes: list[dict]) -> dict:
             for row in episodes
         ),
         "invalid_action_count": sum(row["invalid_action_count"] for row in episodes),
+        "injected_failure_count": injected,
+        "recovered_injected_failures": recovered_injected,
+        "injected_failure_recovery_rate": (
+            recovered_injected / injected if injected else 0.0
+        ),
+        "episodes_with_injected_failures": sum(
+            row["evaluation_intervention"]["injected_failure_count"] > 0
+            for row in episodes
+        ),
         "loop_episodes": sum(row["loop_detected"] is True for row in episodes),
         "evaluator_error_episodes": sum(
             row["evaluator_error"] is not None for row in episodes
@@ -348,8 +629,41 @@ def _set_operator_escalation(
     episode["audit"]["strict_release_audit"][
         "terminal_outcome"
     ] = "operator_escalation"
+    episode["trace"][-1]["terminal_outcome"] = "operator_escalation"
+    episode["trace"][-1]["terminal_after"] = True
     suite_metrics["overall"] = _overall(suite_metrics["episodes"])
     _rehash(artifact)
+
+
+def _insert_nonadvancing_repeat(episode: dict) -> None:
+    """Insert a genuine repeated action in one no-progress policy epoch."""
+
+    first_policy_index = next(
+        index
+        for index, row in enumerate(episode["trace"])
+        if row["intervention"] is False
+    )
+    source = episode["trace"][first_policy_index]
+    repeated = copy.deepcopy(source)
+    repeated["observation_hash"] = stable_json_sha256(
+        [episode["episode_key"], "repeated-no-progress"]
+    )
+    repeated["advanced"] = False
+    repeated["terminal_outcome"] = None
+    repeated["state_before"] = copy.deepcopy(source["state_after"])
+    repeated["state_after"] = copy.deepcopy(source["state_after"])
+    repeated["state_before_sha256"] = source["state_after_sha256"]
+    repeated["state_after_sha256"] = source["state_after_sha256"]
+    repeated["state_mutated"] = False
+    repeated["terminal_after"] = False
+    episode["trace"].insert(first_policy_index + 1, repeated)
+    for index, row in enumerate(episode["trace"]):
+        row["step"] = index
+    episode["steps"] += 1
+    episode["policy_steps"] += 1
+    if repeated["action"]["tool"] in {"run_wls", "verify_candidate"}:
+        episode["wls_calls"] += 1
+    episode["loop_detected"] = True
 
 
 def _artifact(
@@ -516,6 +830,15 @@ class EvaluationGateV2Tests(unittest.TestCase):
         self.contract = _fingerprint(self.suite_path)
         self.policy = _policy(self.suite_path, self.contract)
 
+    def _fixture_for_suite(
+        self, suite: str
+    ) -> tuple[Path, dict, dict, dict]:
+        suite_path = self.root / f"{suite}-suite.json"
+        _write_json(suite_path, _suite_payload(names=(suite,)))
+        contract = _fingerprint(suite_path, required_suites=(suite,))
+        policy = _policy(suite_path, contract)
+        return suite_path, contract, policy, _artifact(suite_path, contract)
+
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
 
@@ -532,6 +855,451 @@ class EvaluationGateV2Tests(unittest.TestCase):
         self.assertTrue(result.performance_enforced)
         self.assertEqual(result.validation_role, "expert-baseline")
         self.assertEqual(result.frozen_suite_sha256, file_sha256(self.suite_path))
+
+    def test_episode_intervention_must_match_the_frozen_suite(self) -> None:
+        artifact = _artifact(self.suite_path, self.contract)
+        episode = artifact["evaluation"]["suite_metrics"]["episodes"][0]
+        episode["evaluation_intervention"]["contract"]["kind"] = "forged"
+        _rehash(artifact)
+
+        result = _validate(
+            artifact,
+            role="expert-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
+        )
+        self.assertFalse(result.evidence_passed)
+        self.assertTrue(
+            any(
+                "intervention does not match the frozen suite" in failure
+                for failure in result.evidence_failures
+            ),
+            result.evidence_failures,
+        )
+
+    def test_trace_actions_require_registered_tools_and_schema_valid_arguments(
+        self,
+    ) -> None:
+        for tamper, expected_failure in (
+            ("unknown_tool", "is not in the unified release registry"),
+            ("unknown_argument", "contains unsupported argument"),
+        ):
+            with self.subTest(tamper=tamper):
+                artifact = _artifact(self.suite_path, self.contract)
+                row = artifact["evaluation"]["suite_metrics"]["episodes"][0][
+                    "trace"
+                ][0]
+                if tamper == "unknown_tool":
+                    row["action"] = {"tool": "unknown_release_tool", "arguments": {}}
+                else:
+                    row["action"]["arguments"]["unexpected"] = True
+                _rehash(artifact)
+
+                result = _validate(
+                    artifact,
+                    role="expert-baseline",
+                    policy=self.policy,
+                    suite_path=self.suite_path,
+                )
+                self.assertFalse(result.evidence_passed)
+                self.assertTrue(
+                    any(
+                        expected_failure in failure
+                        for failure in result.evidence_failures
+                    ),
+                    result.evidence_failures,
+                )
+
+    def test_trace_measurement_correction_accepts_both_execution_forms(self) -> None:
+        actions = (
+            {
+                "tool": "correct_measurements",
+                "arguments": {
+                    "state_id": "fixture-active",
+                    "measurement_updates": {"7": 1.0},
+                },
+            },
+            {
+                "tool": "correct_measurements",
+                "arguments": {
+                    "state_id": "fixture-active",
+                    "suspect_group": [7],
+                },
+            },
+        )
+        for action in actions:
+            with self.subTest(arguments=action["arguments"]):
+                self.assertIsNone(_trace_action_schema_failure(action, index=3))
+
+        malformed = {
+            "tool": "correct_measurements",
+            "arguments": {
+                "state_id": "fixture-active",
+                "suspect_group": "7",
+            },
+        }
+        failure = _trace_action_schema_failure(malformed, index=3)
+        self.assertIsNotNone(failure)
+        self.assertIn("must have JSON type array", str(failure))
+
+    def test_trace_target_only_fallback_does_not_hide_malformed_values(self) -> None:
+        malformed_actions = (
+            {
+                "tool": "correct_measurements",
+                "arguments": {
+                    "state_id": "fixture-active",
+                    "measurement_updates": {"7": "not-a-number"},
+                },
+            },
+            {
+                "tool": "correct_parameters",
+                "arguments": {
+                    "state_id": "fixture-active",
+                    "line_index": 7,
+                    "field": 123,
+                    "value": "not-a-number",
+                },
+            },
+            {
+                "tool": "correct_topology",
+                "arguments": {
+                    "state_id": "fixture-active",
+                    "line_index": 7,
+                    "status": 0,
+                    "status_field": 123,
+                },
+            },
+        )
+        for action in malformed_actions:
+            with self.subTest(tool=action["tool"]):
+                self.assertIsNotNone(
+                    _trace_action_schema_failure(action, index=4)
+                )
+
+        extra_target_only_field = {
+            "tool": "correct_measurements",
+            "arguments": {
+                "state_id": "fixture-active",
+                "suspect_group": [7],
+                "measurement_updates": {"7": 1.0},
+            },
+        }
+        failure = _trace_action_schema_failure(extra_target_only_field, index=4)
+        self.assertIsNotNone(failure)
+        self.assertIn("unsupported argument", str(failure))
+
+    def test_trace_rejects_hidden_loop_forged_advancement_and_misplaced_terminal(
+        self,
+    ) -> None:
+        for tamper, expected_failure in (
+            ("hidden_loop", "loop_detected does not match"),
+            ("forged_advancement", "advanced does not match progress evidence"),
+            ("misplaced_terminal", "exactly one matching marker"),
+        ):
+            with self.subTest(tamper=tamper):
+                artifact = _artifact(self.suite_path, self.contract)
+                metrics = artifact["evaluation"]["suite_metrics"]
+                episode = metrics["episodes"][0]
+                if tamper == "hidden_loop":
+                    _insert_nonadvancing_repeat(episode)
+                    episode["loop_detected"] = False
+                    metrics["overall"] = _overall(metrics["episodes"])
+                elif tamper == "forged_advancement":
+                    episode["trace"][0]["advanced"] = True
+                else:
+                    episode["trace"][0]["terminal_outcome"] = "resolved"
+                    episode["trace"][-1]["terminal_outcome"] = None
+                _rehash(artifact)
+
+                result = _validate(
+                    artifact,
+                    role="expert-baseline",
+                    policy=self.policy,
+                    suite_path=self.suite_path,
+                )
+                self.assertFalse(result.evidence_passed)
+                self.assertTrue(
+                    any(
+                        expected_failure in failure
+                        for failure in result.evidence_failures
+                    ),
+                    result.evidence_failures,
+                )
+
+    def test_pre_policy_failure_prefix_rejects_action_and_outcome_tampering(
+        self,
+    ) -> None:
+        for tamper, expected_failure in (
+            ("action", "pre-policy failure trace action does not match"),
+            ("status", "pre-policy failure trace outcome does not match"),
+            ("error", "pre-policy failure trace outcome does not match"),
+            ("advanced", "pre-policy failure trace outcome does not match"),
+        ):
+            with self.subTest(tamper=tamper):
+                suite_path, _contract, policy, artifact = self._fixture_for_suite(
+                    "forced_error_recovery"
+                )
+                row = artifact["evaluation"]["suite_metrics"]["episodes"][0][
+                    "trace"
+                ][0]
+                if tamper == "action":
+                    row["action"] = {
+                        "tool": "finalize_diagnosis",
+                        "arguments": {},
+                    }
+                elif tamper == "status":
+                    row["execution_status"] = "success"
+                elif tamper == "error":
+                    row["error_code"] = "forged_failure"
+                else:
+                    row["advanced"] = True
+                _rehash(artifact)
+
+                result = _validate(
+                    artifact,
+                    role="expert-baseline",
+                    policy=policy,
+                    suite_path=suite_path,
+                )
+                self.assertFalse(result.evidence_passed)
+                self.assertTrue(
+                    any(
+                        expected_failure in failure
+                        for failure in result.evidence_failures
+                    ),
+                    result.evidence_failures,
+                )
+
+    def test_injected_failure_recovery_rejects_count_and_chronology_tampering(
+        self,
+    ) -> None:
+        for tamper, expected_failure in (
+            ("count", "recovered_failure_count does not match the trace"),
+            ("chronology", "advanced does not match progress evidence"),
+        ):
+            with self.subTest(tamper=tamper):
+                suite_path, _contract, policy, artifact = self._fixture_for_suite(
+                    "forced_error_recovery"
+                )
+                episode = artifact["evaluation"]["suite_metrics"]["episodes"][0]
+                if tamper == "count":
+                    episode["evaluation_intervention"][
+                        "recovered_failure_count"
+                    ] = 0
+                else:
+                    for row in episode["trace"][1:]:
+                        row["advanced"] = False
+                _rehash(artifact)
+
+                result = _validate(
+                    artifact,
+                    role="expert-baseline",
+                    policy=policy,
+                    suite_path=suite_path,
+                )
+                self.assertFalse(result.evidence_passed)
+                self.assertTrue(
+                    any(
+                        expected_failure in failure
+                        for failure in result.evidence_failures
+                    ),
+                    result.evidence_failures,
+                )
+
+    def test_policy_invalid_recovery_rejects_count_and_chronology_tampering(
+        self,
+    ) -> None:
+        for tamper, expected_failure in (
+            ("count", "invalid_action_count does not match the policy trace"),
+            (
+                "chronology",
+                "recovered_invalid_action_count does not match the policy trace",
+            ),
+        ):
+            with self.subTest(tamper=tamper):
+                suite_path, _contract, policy, artifact = self._fixture_for_suite(
+                    "invalid_action_recovery"
+                )
+                episode = artifact["evaluation"]["suite_metrics"]["episodes"][0]
+                episode["invalid_action_count"] = 1
+                if tamper == "chronology":
+                    episode["recovered_invalid_action_count"] = 1
+                    row = episode["trace"][-1]
+                    row["action"] = {
+                        "tool": "__invalid_action__",
+                        "arguments": {"error_code": "forged_policy_invalid"},
+                    }
+                    row["execution_status"] = "failure"
+                    row["advanced"] = False
+                    row["error_code"] = "forged_policy_invalid"
+                    row["terminal_outcome"] = None
+                _rehash(artifact)
+
+                result = _validate(
+                    artifact,
+                    role="expert-baseline",
+                    policy=policy,
+                    suite_path=suite_path,
+                )
+                self.assertFalse(result.evidence_passed)
+                self.assertTrue(
+                    any(
+                        expected_failure in failure
+                        for failure in result.evidence_failures
+                    ),
+                    result.evidence_failures,
+                )
+
+    def test_partial_prefix_rejects_alias_tool_status_and_disposition_tampering(
+        self,
+    ) -> None:
+        for tamper, expected_failure in (
+            ("alias", "has an unresolved state alias"),
+            ("tool", "action does not match its contract"),
+            ("status", "outcome is invalid"),
+            ("disposition", "outcome is invalid"),
+        ):
+            with self.subTest(tamper=tamper):
+                suite_path, _contract, policy, artifact = self._fixture_for_suite(
+                    "partial_success_retention"
+                )
+                episode = artifact["evaluation"]["suite_metrics"]["episodes"][0]
+                prefix = episode["trace"][:4]
+                if tamper == "alias":
+                    prefix[0]["action"]["arguments"]["state_id"] = "$active"
+                elif tamper == "tool":
+                    prefix[0]["action"]["tool"] = "run_wls"
+                elif tamper == "status":
+                    prefix[0]["execution_status"] = "failure"
+                    prefix[0]["advanced"] = False
+                    prefix[0]["error_code"] = "forged_setup_failure"
+                else:
+                    prefix[-1]["candidate_disposition_offline"] = None
+                _rehash(artifact)
+
+                result = _validate(
+                    artifact,
+                    role="expert-baseline",
+                    policy=policy,
+                    suite_path=suite_path,
+                )
+                self.assertFalse(result.evidence_passed)
+                self.assertTrue(
+                    any(
+                        expected_failure in failure
+                        for failure in result.evidence_failures
+                    ),
+                    result.evidence_failures,
+                )
+
+    def test_efficiency_intervention_enforces_its_per_episode_limits(self) -> None:
+        artifact = _artifact(self.suite_path, self.contract)
+        episode = next(
+            row
+            for row in artifact["evaluation"]["suite_metrics"]["episodes"]
+            if row["suite"] == "efficiency"
+        )
+        episode["policy_steps"] = MAX_STEPS + 1
+        episode["steps"] = MAX_STEPS + 1
+        episode["wls_calls"] = 0
+        episode["trace"] = [
+            _canonical_policy_trace_row(
+                index,
+                tool="finalize_diagnosis",
+                advanced=True,
+                terminal_outcome=(
+                    "resolved" if index == MAX_STEPS else None
+                ),
+            )
+            for index in range(MAX_STEPS + 1)
+        ]
+        _rehash(artifact)
+
+        result = _validate(
+            artifact,
+            role="expert-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
+        )
+        self.assertTrue(result.evidence_passed, result.evidence_failures)
+        self.assertFalse(result.performance_passed)
+        self.assertTrue(
+            any(
+                "episode efficiency limit maximum_policy_steps failed" in failure
+                for failure in result.performance_failures
+            ),
+            result.performance_failures,
+        )
+
+    def test_efficiency_call_limit_is_recomputed_from_policy_trace(self) -> None:
+        artifact = _artifact(self.suite_path, self.contract)
+        episode = next(
+            row
+            for row in artifact["evaluation"]["suite_metrics"]["episodes"]
+            if row["suite"] == "efficiency"
+        )
+        episode["policy_steps"] = 5
+        episode["steps"] = 5
+        episode["wls_calls"] = 5
+        episode["trace"] = [
+            _canonical_policy_trace_row(
+                index,
+                tool="run_wls",
+                advanced=True,
+                terminal_outcome="resolved" if index == 4 else None,
+            )
+            for index in range(5)
+        ]
+        _rehash(artifact)
+
+        result = _validate(
+            artifact,
+            role="expert-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
+        )
+        self.assertTrue(result.evidence_passed, result.evidence_failures)
+        self.assertFalse(result.performance_passed)
+        self.assertTrue(
+            any(
+                "episode efficiency limit maximum_wls_calls failed" in failure
+                for failure in result.performance_failures
+            ),
+            result.performance_failures,
+        )
+
+    def test_partial_suite_requires_a_retained_committed_opportunity(self) -> None:
+        suite_path = self.root / "partial-suite.json"
+        _write_json(
+            suite_path,
+            _suite_payload(names=("partial_success_retention",)),
+        )
+        contract = _fingerprint(
+            suite_path, required_suites=("partial_success_retention",)
+        )
+        policy = _policy(suite_path, contract)
+        artifact = _artifact(suite_path, contract)
+        episode = artifact["evaluation"]["suite_metrics"]["episodes"][0]
+        episode["retained_partial_fix_count"] = 0
+        episode["evaluation_intervention"]["retained_opportunity_count"] = 0
+        _rehash(artifact)
+
+        result = _validate(
+            artifact,
+            role="expert-baseline",
+            policy=policy,
+            suite_path=suite_path,
+            required_policy_id=TEST_POLICY_ID,
+        )
+        self.assertTrue(result.evidence_passed, result.evidence_failures)
+        self.assertFalse(result.performance_passed)
+        self.assertTrue(
+            any(
+                "committed partial correction was not retained" in failure
+                for failure in result.performance_failures
+            ),
+            result.performance_failures,
+        )
 
     def test_policy_pinned_suite_rejects_substitution(self) -> None:
         substitute_path = self.root / "easier-suite.json"
@@ -1232,7 +2000,7 @@ class EvaluationGateV2Tests(unittest.TestCase):
         candidate_episode = checkpoint_artifact["evaluation"]["suite_metrics"][
             "episodes"
         ][0]
-        candidate_episode["loop_detected"] = True
+        _insert_nonadvancing_repeat(candidate_episode)
         checkpoint_artifact["evaluation"]["suite_metrics"]["overall"] = _overall(
             checkpoint_artifact["evaluation"]["suite_metrics"]["episodes"]
         )
@@ -1260,8 +2028,9 @@ class EvaluationGateV2Tests(unittest.TestCase):
         self.assertEqual(regressions[0]["reference_safety_ordinal"], 1)
         self.assertEqual(regressions[0]["candidate_safety_ordinal"], 0)
 
-    def test_packaged_unconfigured_policy_fails_closed(self) -> None:
+    def test_unconfigured_policy_fails_closed(self) -> None:
         default_suite_path = self.root / "default-unconfigured-suite.json"
+        policy_path = self.root / "unconfigured-policy.json"
         _write_json(
             default_suite_path,
             _suite_payload(
@@ -1270,16 +2039,24 @@ class EvaluationGateV2Tests(unittest.TestCase):
                 suffix="-default",
             ),
         )
+        unconfigured = copy.deepcopy(self.policy)
+        unconfigured["approved_factories"] = {
+            role: [] for role in unconfigured["approved_factories"]
+        }
+        unconfigured["suite_policy"]["status"] = "unconfigured"
+        unconfigured["suite_policy"]["approved_suite_sha256"] = None
+        unconfigured["suite_policy"]["approved_suite_manifest"] = None
+        _write_json(policy_path, unconfigured)
         result = validate_evaluation_artifact(
             _artifact(self.suite_path, self.contract),
             role="expert-baseline",
-            policy=DEFAULT_POLICY_PATH,
+            policy=policy_path,
             expected_source_commit=COMMIT,
             expected_suite_path=default_suite_path,
             expected_protocol="canonical",
             expected_registry_sha256=current_registry_sha256("canonical"),
             expected_policy_identity="expert-v1",
-            required_gate_policy_id=DEFAULT_POLICY_ID,
+            required_gate_policy_id=TEST_POLICY_ID,
             repo_root=REPO_ROOT,
             require_current_clean_source=False,
         )

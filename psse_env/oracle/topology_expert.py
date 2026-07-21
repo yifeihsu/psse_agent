@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-from psse_env.actions import CORRECT_TOPOLOGY, GET_TOPOLOGY_CONTEXT
+from psse_env.actions import CORRECT_MEASUREMENTS, CORRECT_TOPOLOGY, GET_TOPOLOGY_CONTEXT
 from psse_env.oracle.expert_types import (
     ExpertActionProposal,
     dominance_confidence,
+    history_action_tool,
     matching_evidence_codes,
     normalized_hint_actions,
     policy_state_view,
@@ -82,6 +83,7 @@ class TopologyExpert:
             for code in topology_codes
             if not str(code).startswith("wls_branch_multiplier")
         ]
+        partial_measurement = self._accepted_partial_measurement(state)
         # The WLS solve emits a few bounded cross-family findings even for a
         # clear gross-measurement case.  A non-dominant branch multiplier is
         # useful ambiguity evidence only when measurement evidence is not
@@ -94,6 +96,7 @@ class TopologyExpert:
             measurement_dominant
             and not branch_dominant
             and not explicit_topology_codes
+            and not partial_measurement
         )
         if topology_signal and not has_context and active_id:
             evidence = ["topology_context_missing"]
@@ -109,3 +112,15 @@ class TopologyExpert:
                 )
             )
         return proposals
+
+    @staticmethod
+    def _accepted_partial_measurement(state: Any) -> bool:
+        for item in state_value(state, "accepted_corrections", []) or []:
+            if history_action_tool(item) != CORRECT_MEASUREMENTS:
+                if not isinstance(item, Mapping) or str(
+                    item.get("family") or item.get("action_family") or ""
+                ).lower() != "measurement":
+                    continue
+            if not state_value(state, "no_material_anomaly_remaining", False):
+                return True
+        return False

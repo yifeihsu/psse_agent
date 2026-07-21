@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 
-PHYSICAL_FINGERPRINT_VERSION = 2
+PHYSICAL_FINGERPRINT_VERSION = 3
 SPLIT_NAMES = ("train", "validation", "test")
 _PHYSICAL_ROOT_FIELDS = (
     "case",
@@ -26,6 +26,9 @@ _PHYSICAL_ROOT_FIELDS = (
     "true_measurement_errors",
     "true_parameter_errors",
     "true_topology_errors",
+    "true_harmonic_errors",
+    "true_hif_errors",
+    "true_unbalance_errors",
     "metadata",
     "telemetry_channel_configuration",
     "tool_failure_realization",
@@ -87,6 +90,21 @@ _NONPHYSICAL_REFERENCE_KEYS = frozenset(
         "dataset_source",
         "production_label_eligible",
         "generation_provenance_id",
+        # Derived diagnostics, truth-relative benchmark outcomes, and corpus
+        # bookkeeping are not part of the underlying physical realization.
+        # Leaving them in the root hash can make identical telemetry appear
+        # disjoint merely because an estimator or label changed.
+        "nlm_diagnostic",
+        "detected",
+        "detected_top1",
+        "detected_top3",
+        "z_clean",
+        "scan_window_path",
+        "source_kind",
+        "initial_state_strategy",
+        "event_id",
+        "sample_id",
+        "scan_index",
     }
 )
 
@@ -179,6 +197,16 @@ def physical_root_fingerprint(scenario: Mapping[str, Any]) -> str:
             if field in scenario
         },
     }
+    hidden_truth = scenario.get("hidden_truth")
+    if hidden_truth is not None and not isinstance(hidden_truth, Mapping):
+        raise ValueError("hidden_truth must be a mapping when fingerprinted")
+    for field in _TRUTH_ERROR_FIELDS:
+        if field in payload:
+            continue
+        if isinstance(hidden_truth, Mapping) and field in hidden_truth:
+            payload[field] = _canonical_physical_value(
+                hidden_truth[field], key=field
+            )
     encoded = json.dumps(
         payload,
         sort_keys=True,

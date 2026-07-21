@@ -5,8 +5,11 @@ import unittest
 from psse_env.actions import (
     ASK_FOR_MORE_EVIDENCE,
     CORRECT_MEASUREMENTS,
+    ESTIMATE_HIF_FROM_PATH,
+    HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
     RECOVERY_BUDGET_EXHAUSTED_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+    RUN_THREE_PHASE_NLM_FROM_PATH,
 )
 from psse_env.oracle import ExpertPolicyOracle
 from psse_env.providers import MatpowerDeploymentProviders
@@ -156,6 +159,69 @@ class OperatorEscalationContractTests(unittest.TestCase):
         self.assertEqual(output["execution_status"], "failure")
         self.assertFalse(env.is_terminal())
         self.assertIsNone(env.terminal_outcome)
+
+    def test_failed_hif_estimator_cannot_satisfy_handoff_audit(self) -> None:
+        env, _ = self._environment()
+        active_id = env.current_state()["active_state_id"]
+        active_hash = env.store.state_hash(active_id)
+        env.context_flags["unresolved_signatures"] = [
+            "hif_suspected_zero_sequence"
+        ]
+        env.context_flags.setdefault("semantic_field_provenance", {})[
+            "unresolved_signatures"
+        ] = "deployment_sensor:waveform_capture"
+        env.history.extend(
+            [
+                {
+                    "action": {
+                        "tool": RUN_THREE_PHASE_NLM_FROM_PATH,
+                        "arguments": {"state_id": active_id},
+                    },
+                    "tool_output": {
+                        "execution_status": "success",
+                        "tool_metrics": {
+                            "state_id": active_id,
+                            "state_hash": active_hash,
+                            "evidence_source": "deployment_diagnostic:three_phase_nlm",
+                            "nlm_summary": {
+                                "top_hif_groups": [{"branch_row0": 4}]
+                            },
+                        },
+                    },
+                },
+                {
+                    "action": {
+                        "tool": ESTIMATE_HIF_FROM_PATH,
+                        "arguments": {
+                            "state_id": active_id,
+                            "candidate_branch_row0": 4,
+                        },
+                    },
+                    "tool_output": {
+                        "execution_status": "failure",
+                        "error_code": "hif_estimation_failure",
+                        "tool_metrics": {},
+                    },
+                },
+            ]
+        )
+        handoff = {
+            "tool": ASK_FOR_MORE_EVIDENCE,
+            "arguments": {
+                "state_id": active_id,
+                "request": HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
+            },
+        }
+
+        audit = env._operator_escalation_audit(handoff)
+
+        self.assertFalse(audit["sufficient"])
+        self.assertIn(
+            f"{ESTIMATE_HIF_FROM_PATH}_successful_evidence_missing",
+            audit["missing"],
+        )
+        self.assertEqual(audit["ledger"]["rejected_estimators"], [])
+        self.assertFalse(env.is_terminal())
 
     def test_handoff_rejects_untried_same_state_supported_corrections(self) -> None:
         env, _ = self._environment()

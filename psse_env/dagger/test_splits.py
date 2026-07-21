@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import tempfile
 import unittest
 from pathlib import Path
@@ -27,7 +28,7 @@ def _split_root(
         "scenario_id": f"root_{family}_{case_id}_{source_tier}_{index}",
         "root_scenario_id": f"root_{family}_{case_id}_{source_tier}_{index}",
         "physical_root_fingerprint": (
-            f"physical_v2_{family}_{case_id}_{source_tier}_{index}"
+            f"physical_v3_{family}_{case_id}_{source_tier}_{index}"
         ),
         "case_id": case_id,
         "error_family_combination": family,
@@ -63,6 +64,75 @@ class PhysicalRootSplitTests(unittest.TestCase):
         changed = {**renamed, "measurements": [1.0, 2.1]}
         self.assertNotEqual(
             physical_root_fingerprint(base), physical_root_fingerprint(changed)
+        )
+
+    def test_hif_fingerprint_ignores_derived_diagnostics_but_keeps_physics(self) -> None:
+        truth = {
+            "branch_row0": 3,
+            "phase": "A",
+            "split_ratio": 0.4,
+            "r_hif_ohm": 120.0,
+        }
+        base = {
+            "case": "case14",
+            "measurements": [1.0, 2.0],
+            "metadata": {
+                "nlm_diagnostic": {
+                    "detected_top1": True,
+                    "top_hif_groups": [{"branch_row0": 3}],
+                },
+                "hif_scan_window": {
+                    "scan_window_path": "/tmp/corpus-a/event-1",
+                    "scans": [
+                        {
+                            "scan_index": 7,
+                            "z_obs": [1.0, 2.0],
+                            "z_clean": [0.9, 1.9],
+                        }
+                    ],
+                    "window_metadata": {"source_kind": "benchmark-a"},
+                },
+            },
+            "hidden_truth": {"true_hif_errors": [truth]},
+        }
+        changed_diagnostic = copy.deepcopy(base)
+        changed_diagnostic["metadata"]["nlm_diagnostic"] = {
+            "detected_top1": False,
+            "top_hif_groups": [{"branch_row0": 18}],
+        }
+        changed_diagnostic["metadata"]["hif_scan_window"]["scan_window_path"] = (
+            "/tmp/corpus-b/renamed"
+        )
+        changed_diagnostic["metadata"]["hif_scan_window"]["scans"][0][
+            "z_clean"
+        ] = [0.0, 0.0]
+        self.assertEqual(
+            physical_root_fingerprint(base),
+            physical_root_fingerprint(changed_diagnostic),
+        )
+
+        changed_telemetry = copy.deepcopy(base)
+        changed_telemetry["metadata"]["hif_scan_window"]["scans"][0][
+            "z_obs"
+        ][1] = 2.1
+        self.assertNotEqual(
+            physical_root_fingerprint(base),
+            physical_root_fingerprint(changed_telemetry),
+        )
+
+        changed_fault = copy.deepcopy(base)
+        changed_fault["hidden_truth"]["true_hif_errors"][0]["branch_row0"] = 4
+        self.assertNotEqual(
+            physical_root_fingerprint(base), physical_root_fingerprint(changed_fault)
+        )
+
+    def test_promoted_and_hidden_diagnostic_truth_have_one_root_identity(self) -> None:
+        base = {"case": "case14", "measurements": [1.0, 2.0]}
+        errors = [{"branch_row0": 2, "phase": "B"}]
+        hidden = {**base, "hidden_truth": {"true_hif_errors": errors}}
+        promoted = {**base, "true_hif_errors": errors}
+        self.assertEqual(
+            physical_root_fingerprint(hidden), physical_root_fingerprint(promoted)
         )
 
     def test_distinct_root_ids_with_same_physics_cannot_cross_splits(self) -> None:

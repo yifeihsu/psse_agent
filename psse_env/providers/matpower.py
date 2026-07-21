@@ -17,10 +17,11 @@ mapping with a ``case_path`` key) resolvable by the runtime, and
 Case-mutating corrections (parameters, topology) write a content-addressed
 derived ``.m`` case under ``derived_case_dir`` and return it as the candidate
 case, because a path-valued case cannot be patched in place.  Multi-scan
-parameter correction reads its repeated scans from state metadata
-(``parameter_scans`` with ``z_scans`` and ``initial_states``); when scans are
-absent the executor fails closed, which the environment records as a
-collectable no-op learner state.
+parameter correction reads repeated observed scans from state metadata and
+derives each numerical initial state from measured voltage magnitudes plus the
+configured case angles.  It never accepts truth-derived state initializers.
+When scans are absent the executor fails closed, which the environment records
+as a collectable no-op learner state.
 """
 
 from __future__ import annotations
@@ -54,6 +55,7 @@ from psse_env.actions import (
     RUN_THREE_PHASE_NLM_FROM_PATH,
     unexplained_signatures,
 )
+from psse_env.state_store import apply_modification
 
 from mcp_server.matpower_server import (  # noqa: E402  (repo-root package)
     _estimate_hif_location_magnitude_logic,
@@ -88,6 +90,9 @@ from trace_protocol import (  # noqa: E402  (repo-root module)
 # rejected refinement plus one normal correction/verification transaction.
 _COUPLED_REFINEMENT_MAX_ANOMALY_RATIO = 1.10
 _COUPLED_REFINEMENT_MIN_REMAINING_BUDGET = 8
+_ROUTE_ACTIONABLE = "actionable"
+_ROUTE_COMPLETE_NEGATIVE = "complete_negative"
+_ROUTE_UNAVAILABLE = "unavailable_or_inconclusive"
 
 
 def measurement_index_map(nb: int, nl: int) -> dict[str, slice]:
@@ -101,6 +106,39 @@ def measurement_index_map(nb: int, nl: int) -> dict[str, slice]:
         "Pt": slice(3 * nb + 2 * nl, 3 * nb + 3 * nl),
         "Qt": slice(3 * nb + 3 * nl, 3 * nb + 4 * nl),
     }
+
+
+def observable_parameter_initial_states(
+    ppc: Mapping[str, Any], z_scans: Sequence[Sequence[float]]
+) -> list[list[float]]:
+    """Build multi-scan solver starts from deployment-observable inputs only."""
+
+    import numpy as np
+
+    bus = np.asarray(ppc["bus"], dtype=float)
+    branch = np.asarray(ppc["branch"], dtype=float)
+    nb = int(bus.shape[0])
+    expected_measurements = 3 * nb + 4 * int(branch.shape[0])
+    reference_rows = np.flatnonzero(bus[:, 1].astype(int) == 3)
+    reference = int(reference_rows[0]) if reference_rows.size else 0
+    configured_angles = bus[:, 8].astype(float)
+    configured_angles = configured_angles - configured_angles[reference]
+    starts: list[list[float]] = []
+    for index, raw_scan in enumerate(z_scans):
+        scan = np.asarray(raw_scan, dtype=float).reshape(-1)
+        if scan.size != expected_measurements or not np.all(np.isfinite(scan)):
+            raise ValueError(
+                f"parameter scan {index} must contain {expected_measurements} finite values"
+            )
+        observed_vm = scan[:nb]
+        if np.any(observed_vm <= 0.0):
+            raise ValueError(f"parameter scan {index} has non-positive voltage magnitude")
+        starts.append(
+            np.concatenate((observed_vm, configured_angles)).astype(float).tolist()
+        )
+    if not starts:
+        raise ValueError("parameter correction requires at least one observed scan")
+    return starts
 
 
 def matpower_case_differ(parent_case_path: str, candidate_case_path: str) -> dict[str, Any]:
@@ -266,13 +304,11 @@ class MatpowerDeploymentProviders:
 
     def env_kwargs(self) -> dict[str, Any]:
         """Keyword arguments wiring this bundle into ``TransactionalPSSEEnv``."""
-        from psse_env.oracle import CandidateQualityOracle, ProcessValidityOracle
+        from psse_env.oracle import ProcessValidityOracle
 
         return {
             "process_oracle": ProcessValidityOracle(executor_hydrated_corrections=True),
-            "candidate_quality_oracle": CandidateQualityOracle(
-                mode="deployment", case_differ=matpower_case_differ
-            ),
+            "candidate_quality_oracle": self._deployment_candidate_quality_oracle(),
             "wls_runner": self.run_wls,
             "context_providers": {
                 GET_MEASUREMENT_CONTEXT: self.get_measurement_context,
@@ -293,6 +329,16 @@ class MatpowerDeploymentProviders:
                 ESTIMATE_HIF_MULTISCAN_FROM_PATH: self.estimate_hif_multiscan,
             },
         }
+
+    @staticmethod
+    def _deployment_candidate_quality_oracle() -> Any:
+        """Build the one deployment verdict policy used by screen and commit."""
+
+        from psse_env.oracle import CandidateQualityOracle
+
+        return CandidateQualityOracle(
+            mode="deployment", case_differ=matpower_case_differ
+        )
 
     def request_additional_evidence(self, state: Mapping[str, Any]) -> dict[str, Any]:
         """Report exhaustion of the configured HIF diagnostic inventory.
@@ -466,12 +512,33 @@ class MatpowerDeploymentProviders:
 
     def _derived_case(self, ppc: Mapping[str, Any], tag: str) -> str:
         text = _render_matpower_case(ppc, f"derived_{tag}")
-        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+        encoded = text.encode("utf-8")
+        digest = hashlib.sha256(encoded).hexdigest()
         os.makedirs(self.derived_case_dir, exist_ok=True)
         path = os.path.join(self.derived_case_dir, f"{tag}_{digest}.m")
-        if not os.path.isfile(path):
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write(text)
+        try:
+            with open(path, "rb") as handle:
+                if handle.read() == encoded:
+                    return path
+        except FileNotFoundError:
+            pass
+
+        # A content-addressed path must never trust stale bytes from a prior
+        # process.  Write and fsync a sibling file before an atomic replace so
+        # concurrent evaluators either observe the old complete file or these
+        # exact rendered bytes, never a partial case.
+        descriptor, temporary_path = tempfile.mkstemp(
+            prefix=f".{tag}_{digest}.", suffix=".tmp", dir=self.derived_case_dir
+        )
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, path)
+        finally:
+            if os.path.exists(temporary_path):
+                os.unlink(temporary_path)
         return path
 
     @staticmethod
@@ -1247,16 +1314,9 @@ class MatpowerDeploymentProviders:
             if len(unaccepted_targets_in_rank_order) >= 2
             else []
         )
-        if len(coupled_fallback_targets) >= 2:
-            fallback_action = {
-                "tool": CORRECT_MEASUREMENTS,
-                "arguments": {
-                    "state_id": state_id,
-                    "suspect_group": coupled_fallback_targets,
-                },
-            }
-            if fallback_action not in supported:
-                supported.append(fallback_action)
+        # Keep this legacy grouping only as diagnostic evidence.  Singleton
+        # support does not prove that every member of a broad residual group
+        # is a faulty meter, so it must never be advertised as executable.
         if refinement_ready:
             all_residual_evidence = build_residual_evidence(
                 residuals,
@@ -1280,6 +1340,38 @@ class MatpowerDeploymentProviders:
             }
             if refinement_action not in supported:
                 supported.append(refinement_action)
+        branch_route_screening = self._post_measurement_branch_route_screening(
+            state,
+            accepted_indices=accepted_indices,
+            anomaly_unresolved=statistic >= threshold,
+        )
+        branch_routes_exhausted = bool(
+            set(branch_route_screening) == {"parameter", "topology"}
+            and all(
+                branch_route_screening[family].get("route_status")
+                == _ROUTE_COMPLETE_NEGATIVE
+                and not branch_route_screening[family]["supported_corrections"]
+                for family in ("parameter", "topology")
+            )
+        )
+        terminal_closure_action: dict[str, Any] | None = None
+        terminal_closure_evidence: dict[str, Any] = {}
+        if branch_routes_exhausted and not accepted_branch_rows:
+            terminal_closure_action, terminal_closure_evidence = (
+                self._verified_terminal_measurement_closure(
+                    state,
+                    accepted_indices=accepted_indices,
+                    ranked_indices=ranked_indices,
+                    parent_score=(statistic / threshold if threshold > 0.0 else None),
+                )
+            )
+        if terminal_closure_action is not None:
+            supported.append(terminal_closure_action)
+        terminal_closure_targets = (
+            list(terminal_closure_action["arguments"]["suspect_group"])
+            if terminal_closure_action is not None
+            else []
+        )
         return {
             **self._binding(state),
             "evidence_source": "deployment_context:wls_residuals",
@@ -1316,9 +1408,266 @@ class MatpowerDeploymentProviders:
             "accepted_target_refinement_suppressed_colocated_indices": sorted(
                 colocated_accepted_indices
             ),
+            "branch_route_screening": branch_route_screening,
+            "verified_terminal_measurement_closure_targets": (
+                terminal_closure_targets
+            ),
+            "verified_terminal_measurement_closure_evidence": (
+                terminal_closure_evidence
+            ),
             "chi_square_statistic": statistic,
             "chi_square_threshold": threshold,
         }
+
+    def _post_measurement_branch_route_screening(
+        self,
+        state: Mapping[str, Any],
+        *,
+        accepted_indices: set[int],
+        anomaly_unresolved: bool,
+    ) -> dict[str, dict[str, Any]]:
+        """Bundle current branch inventories after a partial meter commit.
+
+        A fresh measurement solve is already required after every accepted
+        partial correction.  At that same immutable active state, collect the
+        independently observable parameter and topology inventories so the
+        controller need not spend two additional actions merely to prove that
+        both routes are empty.  Non-successful or unbound provider responses
+        are omitted, which leaves the corresponding route open (fail closed).
+        """
+
+        if not accepted_indices or not anomaly_unresolved:
+            return {}
+        state_id = str(state.get("state_id") or "")
+        state_hash = str(state.get("state_hash") or "")
+        contexts: dict[str, dict[str, Any]] = {}
+        for family, context_tool, provider in (
+            ("parameter", GET_PARAMETER_CONTEXT, self.get_parameter_context),
+            ("topology", GET_TOPOLOGY_CONTEXT, self.get_topology_context),
+        ):
+            metrics = provider(copy.deepcopy(dict(state)))
+            if (
+                not isinstance(metrics, Mapping)
+                or metrics.get("execution_status", "success") != "success"
+                or str(metrics.get("state_id") or "") != state_id
+                or str(metrics.get("state_hash") or "") != state_hash
+                or metrics.get("context_tool") != context_tool
+                or not isinstance(metrics.get("supported_corrections"), (list, tuple))
+            ):
+                continue
+            contexts[family] = copy.deepcopy(dict(metrics))
+        return contexts
+
+    def _verified_terminal_measurement_closure(
+        self,
+        state: Mapping[str, Any],
+        *,
+        accepted_indices: set[int],
+        ranked_indices: Sequence[int],
+        parent_score: float | None,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        """Return one preverified accepted-target-plus-singleton final repair.
+
+        The sole new target must first survive an ordinary singleton candidate
+        verdict.  Only then may already committed meter targets be jointly
+        re-estimated with it, and that exact grouped candidate must pass the
+        deployment physical/quality gate as ``ACCEPT_FINAL``.  This is much
+        narrower than a top-k residual group: it never introduces two untried
+        targets and it is emitted only after both branch inventories are empty.
+        """
+
+        from psse_env.oracle import CandidateDisposition
+
+        if not accepted_indices or parent_score is None:
+            return None, {}
+        state_id = str(state.get("state_id") or "")
+        attempted: list[dict[str, Any]] = []
+        for raw_target in ranked_indices:
+            target = int(raw_target)
+            if target in accepted_indices:
+                continue
+            singleton_action = {
+                "tool": CORRECT_MEASUREMENTS,
+                "arguments": {"state_id": state_id, "suspect_group": [target]},
+            }
+            singleton_assessment, singleton_verification, singleton_record = (
+                self._assess_measurement_candidate(
+                    state,
+                    singleton_action,
+                    parent_score=parent_score,
+                )
+            )
+            singleton_record["stage"] = "new_target_singleton"
+            attempted.append(singleton_record)
+            if singleton_assessment is None or singleton_assessment.disposition not in {
+                CandidateDisposition.ACCEPT_FINAL,
+                CandidateDisposition.ACCEPT_PARTIAL,
+            }:
+                continue
+            closure_targets = sorted(set(accepted_indices) | {target})
+            closure_action = {
+                "tool": CORRECT_MEASUREMENTS,
+                "arguments": {
+                    "state_id": state_id,
+                    "suspect_group": closure_targets,
+                },
+            }
+            closure_assessment, closure_verification, closure_record = (
+                self._assess_measurement_candidate(
+                    state,
+                    closure_action,
+                    parent_score=parent_score,
+                )
+            )
+            closure_record["stage"] = "accepted_targets_plus_singleton"
+            attempted.append(closure_record)
+            if (
+                closure_assessment is not None
+                and closure_assessment.disposition
+                == CandidateDisposition.ACCEPT_FINAL
+                and closure_verification.get("globally_resolved") is True
+                and closure_verification.get("target_fixed") is True
+                and closure_verification.get("physical_constraints_ok") is True
+            ):
+                return closure_action, {
+                    "eligible": True,
+                    "state_id": state_id,
+                    "state_hash": str(state.get("state_hash") or ""),
+                    "screening_method": (
+                        "singleton_then_grouped_deployment_candidate_quality"
+                    ),
+                    "new_target": target,
+                    "closure_targets": closure_targets,
+                    "attempts": attempted,
+                }
+        return None, {
+            "eligible": False,
+            "state_id": state_id,
+            "state_hash": str(state.get("state_hash") or ""),
+            "screening_method": "singleton_then_grouped_deployment_candidate_quality",
+            "attempts": attempted,
+        }
+
+    def _assess_measurement_candidate(
+        self,
+        state: Mapping[str, Any],
+        action: Mapping[str, Any],
+        *,
+        parent_score: float,
+    ) -> tuple[Any | None, dict[str, Any], dict[str, Any]]:
+        """Apply and assess a copied measurement candidate without mutation."""
+
+        arguments = action.get("arguments")
+        arguments = dict(arguments) if isinstance(arguments, Mapping) else {}
+        targets = [int(index) for index in arguments.get("suspect_group") or []]
+        record: dict[str, Any] = {
+            "targets": targets,
+            "screening_method": "deployment_candidate_quality_non_mutating",
+        }
+        try:
+            correction = self.correct_measurements(state, action)
+            if correction.get("execution_status", "success") != "success":
+                record.update(
+                    {
+                        "disposition": "REJECT",
+                        "progress_class": "correction_execution_failure",
+                        "rationale_codes": [
+                            str(correction.get("error_code") or "measurement_correction_failure")
+                        ],
+                    }
+                )
+                return None, {}, record
+            modification = correction.get("modification")
+            if not isinstance(modification, Mapping):
+                record.update(
+                    {
+                        "disposition": "REJECT",
+                        "progress_class": "candidate_modification_missing",
+                        "rationale_codes": ["measurement_candidate_modification_missing"],
+                    }
+                )
+                return None, {}, record
+            parent = copy.deepcopy(dict(state))
+            candidate = copy.deepcopy(parent)
+            candidate_case, candidate_measurements, candidate_metadata = apply_modification(
+                case=parent.get("case"),
+                measurements=parent.get("measurements"),
+                metadata=(
+                    parent.get("metadata")
+                    if isinstance(parent.get("metadata"), Mapping)
+                    else {}
+                ),
+                modification=modification,
+            )
+            digest = hashlib.sha256(
+                json.dumps(targets, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()[:12]
+            candidate.update(
+                {
+                    "state_id": (
+                        f"{str(state.get('state_id') or '')}:measurement-screen:{digest}"
+                    ),
+                    "parent_state_id": state.get("state_id"),
+                    "status": "candidate",
+                    "source_action": copy.deepcopy(dict(action)),
+                    "modification": copy.deepcopy(dict(modification)),
+                    "case": candidate_case,
+                    "measurements": candidate_measurements,
+                    "metadata": candidate_metadata,
+                }
+            )
+            candidate.pop("state_hash", None)
+            verification = self.run_wls(candidate)
+            if verification.get("execution_status", "success") != "success":
+                record.update(
+                    {
+                        "disposition": "REJECT",
+                        "progress_class": "verification_solver_failure",
+                        "rationale_codes": [
+                            str(verification.get("error_code") or "wls_failure")
+                        ],
+                    }
+                )
+                return None, verification, record
+            candidate_score = verification.get("remaining_anomaly_score")
+            try:
+                denominator = max(abs(float(parent_score)), 1e-12)
+                verification["global_progress"] = (
+                    float(parent_score) - float(candidate_score)
+                ) / denominator
+                verification["parent_anomaly_score"] = float(parent_score)
+            except (TypeError, ValueError, OverflowError):
+                pass
+            assessment = self._deployment_candidate_quality_oracle().label_candidate(
+                parent_state=parent,
+                source_action=action,
+                candidate_state=candidate,
+                verification_output=verification,
+                hidden_truth=None,
+            )
+            record.update(
+                {
+                    "disposition": assessment.disposition.value,
+                    "progress_class": assessment.progress_class,
+                    "global_progress": assessment.global_progress,
+                    "target_test_passed": verification.get("target_fixed"),
+                    "globally_resolved": verification.get("globally_resolved"),
+                    "physical_constraints_ok": verification.get(
+                        "physical_constraints_ok"
+                    ),
+                    "rationale_codes": list(assessment.rationale_codes),
+                }
+            )
+            return assessment, verification, record
+        except Exception as exc:
+            record.update(
+                {
+                    "disposition": "REJECT",
+                    "progress_class": "candidate_screening_failure",
+                    "rationale_codes": [f"screening_{type(exc).__name__}"],
+                }
+            )
+            return None, {}, record
 
     def _physical_vm_joint_targets(
         self,
@@ -1407,20 +1756,72 @@ class MatpowerDeploymentProviders:
             row0 = item.get("line_row0")
             if row0 is not None and row0 not in seen_rows:
                 seen_rows.append(int(row0))
-        supported = [
-            {
-                "tool": CORRECT_PARAMETERS,
-                "arguments": {"state_id": state_id, "line_index": row0 + 1},
-            }
-            for row0 in seen_rows
-        ]
+        metadata = state.get("metadata")
+        metadata = metadata if isinstance(metadata, Mapping) else {}
+        parameter_scans = metadata.get("parameter_scans")
+        z_scans = (
+            parameter_scans.get("z_scans")
+            if isinstance(parameter_scans, Mapping)
+            else None
+        )
+        scan_count = (
+            len(z_scans)
+            if isinstance(z_scans, Sequence)
+            and not isinstance(z_scans, (str, bytes))
+            else 0
+        )
+        scans_usable = False
+        if scan_count > 0:
+            try:
+                # Use the executor's exact observable-input validator before
+                # advertising a correction. Dimension, finiteness, and
+                # voltage-magnitude failures must remain diagnostic context,
+                # not a guaranteed invalid policy action.
+                observable_parameter_initial_states(solved["ppc"], z_scans)
+                scans_usable = True
+            except (KeyError, TypeError, ValueError, OverflowError):
+                scans_usable = False
+        # A branch multiplier is useful diagnostic evidence even when the
+        # repeated telemetry required by the parameter solver is unavailable.
+        # In that case the context must not advertise a correction that the
+        # same provider is guaranteed to reject; the expert can proceed to the
+        # independently observable topology route without manufacturing an
+        # invalid-action recovery example.
+        supported = (
+            [
+                {
+                    "tool": CORRECT_PARAMETERS,
+                    "arguments": {"state_id": state_id, "line_index": row0 + 1},
+                }
+                for row0 in seen_rows
+            ]
+            if scans_usable
+            else []
+        )
+        route_status = (
+            _ROUTE_ACTIONABLE
+            if supported
+            else _ROUTE_COMPLETE_NEGATIVE
+            if not findings
+            else _ROUTE_UNAVAILABLE
+        )
         return {
             **self._binding(state),
             "evidence_source": "deployment_context:wls_lagrange",
             "context_tool": GET_PARAMETER_CONTEXT,
             "finding_count": len(findings),
             "parameter_findings": findings,
+            "parameter_scans_available": scans_usable,
+            "parameter_scan_count": scan_count,
             "supported_corrections": supported,
+            "route_status": route_status,
+            "route_status_reason": (
+                "supported_parameter_candidates"
+                if route_status == _ROUTE_ACTIONABLE
+                else "no_parameter_findings"
+                if route_status == _ROUTE_COMPLETE_NEGATIVE
+                else "parameter_findings_require_repeated_scans"
+            ),
         }
 
     def get_topology_context(self, state: Mapping[str, Any]) -> dict[str, Any]:
@@ -1433,7 +1834,7 @@ class MatpowerDeploymentProviders:
         findings = self._lambda_findings(solved)
         state_id = str(state.get("state_id") or "")
         branch = solved["ppc"]["branch"]
-        supported: list[dict[str, Any]] = []
+        proposed: list[dict[str, Any]] = []
         seen_rows: set[int] = set()
         islanding_filtered: list[int] = []
         for item in findings:
@@ -1446,7 +1847,7 @@ class MatpowerDeploymentProviders:
             if self._flip_creates_island(branch, int(row0), proposed_status):
                 islanding_filtered.append(int(row0) + 1)
                 continue
-            supported.append(
+            proposed.append(
                 {
                     "tool": CORRECT_TOPOLOGY,
                     "arguments": {
@@ -1456,15 +1857,224 @@ class MatpowerDeploymentProviders:
                     },
                 }
             )
+        parent_score = self._remaining_anomaly_score(solved)
+        supported: list[dict[str, Any]] = []
+        candidate_screening: list[dict[str, Any]] = []
+        for action in proposed:
+            eligible, evidence = self._screen_topology_correction(
+                state,
+                action,
+                parent_score=parent_score,
+            )
+            candidate_screening.append(evidence)
+            if eligible:
+                supported.append(action)
+        screening_incomplete = any(
+            item.get("screening_complete") is not True
+            for item in candidate_screening
+        )
+        route_status = (
+            _ROUTE_UNAVAILABLE
+            if screening_incomplete
+            else _ROUTE_ACTIONABLE
+            if supported
+            else _ROUTE_COMPLETE_NEGATIVE
+        )
         return {
             **self._binding(state),
-            "evidence_source": "deployment_context:wls_lagrange",
+            "evidence_source": "deployment_context:wls_lagrange_candidate_screened",
             "context_tool": GET_TOPOLOGY_CONTEXT,
             "finding_count": len(findings),
             "topology_findings": findings,
             "supported_corrections": supported,
+            "proposed_correction_count": len(proposed),
+            "screened_correction_count": len(candidate_screening),
+            "topology_candidate_screening": candidate_screening,
             "islanding_filtered_lines": islanding_filtered,
+            "route_status": route_status,
+            "route_status_reason": (
+                "candidate_screening_incomplete"
+                if route_status == _ROUTE_UNAVAILABLE
+                else "supported_topology_candidates"
+                if route_status == _ROUTE_ACTIONABLE
+                else "all_topology_findings_observably_rejected"
+                if findings
+                else "no_topology_findings"
+            ),
         }
+
+    def _remaining_anomaly_score(self, solved: Mapping[str, Any]) -> float | None:
+        """Return the same normalized chi-square score emitted by ``run_wls``."""
+
+        try:
+            residuals = [float(value) for value in solved["payload"].get("r") or []]
+            dof = max(1, len(residuals) - (2 * int(solved["nb"]) - 1))
+            threshold = float(chi2_threshold(dof, self.chi2_alpha))
+            statistic = float(solved["payload"].get("global_residual_sum") or 0.0)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None
+        if not math.isfinite(statistic) or not math.isfinite(threshold) or threshold <= 0.0:
+            return None
+        return statistic / threshold
+
+    def _screen_topology_correction(
+        self,
+        state: Mapping[str, Any],
+        action: Mapping[str, Any],
+        *,
+        parent_score: float | None,
+    ) -> tuple[bool, dict[str, Any]]:
+        """Fail closed unless a topology hypothesis is observably admissible.
+
+        Screening is a non-mutating lookahead over a copied provider state.  It
+        applies the exact correction executor, reruns deployment WLS and the
+        scoped physical checks, and delegates the verdict to the same
+        deployment ``CandidateQualityOracle`` used by the environment.  The
+        real transaction remains authoritative if the policy later selects an
+        advertised action.
+        """
+
+        from psse_env.oracle import CandidateDisposition
+
+        normalized_action = copy.deepcopy(dict(action))
+        arguments = normalized_action.get("arguments")
+        arguments = dict(arguments) if isinstance(arguments, Mapping) else {}
+        line_index = arguments.get("line_index")
+        status = arguments.get("status")
+        evidence: dict[str, Any] = {
+            "state_id": str(state.get("state_id") or ""),
+            "state_hash": str(state.get("state_hash") or ""),
+            "line_index": line_index,
+            "status": status,
+            "screening_method": "deployment_candidate_quality_non_mutating",
+            "screening_complete": False,
+        }
+        try:
+            correction = self.correct_topology(state, normalized_action)
+            if correction.get("execution_status", "success") != "success":
+                evidence.update(
+                    {
+                        "eligible": False,
+                        "disposition": "INCONCLUSIVE",
+                        "progress_class": "correction_execution_failure",
+                        "rationale_codes": [
+                            str(
+                                correction.get("error_code")
+                                or "topology_correction_execution_failure"
+                            )
+                        ],
+                    }
+                )
+                return False, evidence
+            modification = correction.get("modification")
+            if not isinstance(modification, Mapping) or not modification.get("case"):
+                evidence.update(
+                    {
+                        "eligible": False,
+                        "disposition": "INCONCLUSIVE",
+                        "progress_class": "candidate_modification_missing",
+                        "rationale_codes": ["topology_candidate_case_missing"],
+                    }
+                )
+                return False, evidence
+
+            parent = copy.deepcopy(dict(state))
+            candidate = copy.deepcopy(parent)
+            candidate_case, candidate_measurements, candidate_metadata = apply_modification(
+                case=parent.get("case"),
+                measurements=parent.get("measurements"),
+                metadata=(
+                    parent.get("metadata")
+                    if isinstance(parent.get("metadata"), Mapping)
+                    else {}
+                ),
+                modification=modification,
+            )
+            screen_suffix = f"l{line_index}s{status}"
+            candidate.update(
+                {
+                    "state_id": (
+                        f"{str(state.get('state_id') or '')}:topology-screen:{screen_suffix}"
+                    ),
+                    "parent_state_id": state.get("state_id"),
+                    "status": "candidate",
+                    "source_action": normalized_action,
+                    "modification": copy.deepcopy(dict(modification)),
+                    "case": candidate_case,
+                    "measurements": candidate_measurements,
+                    "metadata": candidate_metadata,
+                }
+            )
+            candidate.pop("state_hash", None)
+            verification = self.run_wls(candidate)
+            if verification.get("execution_status", "success") != "success":
+                evidence.update(
+                    {
+                        "eligible": False,
+                        "disposition": "REJECT",
+                        "screening_complete": True,
+                        "progress_class": "verification_solver_failure",
+                        "rationale_codes": [
+                            str(verification.get("error_code") or "wls_failure")
+                        ],
+                    }
+                )
+                return False, evidence
+
+            candidate_score = verification.get("remaining_anomaly_score")
+            try:
+                if parent_score is not None and candidate_score is not None:
+                    denominator = max(abs(float(parent_score)), 1e-12)
+                    verification["global_progress"] = (
+                        float(parent_score) - float(candidate_score)
+                    ) / denominator
+                    verification["parent_anomaly_score"] = float(parent_score)
+            except (TypeError, ValueError, OverflowError):
+                pass
+            assessment = self._deployment_candidate_quality_oracle().label_candidate(
+                parent_state=parent,
+                source_action=normalized_action,
+                candidate_state=candidate,
+                verification_output=verification,
+                hidden_truth=None,
+            )
+            eligible = assessment.disposition in {
+                CandidateDisposition.ACCEPT_FINAL,
+                CandidateDisposition.ACCEPT_PARTIAL,
+            }
+            evidence.update(
+                {
+                    "eligible": eligible,
+                    "disposition": assessment.disposition.value,
+                    "screening_complete": (
+                        assessment.disposition.value != "INCONCLUSIVE"
+                    ),
+                    "progress_class": assessment.progress_class,
+                    "global_progress": assessment.global_progress,
+                    "target_test_passed": verification.get("target_fixed"),
+                    "physical_constraints_ok": verification.get(
+                        "physical_constraints_ok"
+                    ),
+                    "topology_target_status_matches_requested": verification.get(
+                        "topology_target_status_matches_requested"
+                    ),
+                    "topology_target_branch_multiplier": verification.get(
+                        "topology_target_branch_multiplier"
+                    ),
+                    "rationale_codes": list(assessment.rationale_codes),
+                }
+            )
+            return eligible, evidence
+        except Exception as exc:
+            evidence.update(
+                {
+                    "eligible": False,
+                    "disposition": "INCONCLUSIVE",
+                    "progress_class": "candidate_screening_failure",
+                    "rationale_codes": [f"screening_{type(exc).__name__}"],
+                }
+            )
+            return False, evidence
 
     @staticmethod
     def _flip_creates_island(branch: Any, row0: int, proposed_status: int) -> bool:
@@ -1566,20 +2176,20 @@ class MatpowerDeploymentProviders:
             return self._failure("parameter_correction_input_error", f"{type(exc).__name__}: {exc}")
         metadata = state.get("metadata") if isinstance(state.get("metadata"), Mapping) else {}
         scans = metadata.get("parameter_scans")
-        if not isinstance(scans, Mapping) or not scans.get("z_scans") or not scans.get(
-            "initial_states"
-        ):
+        if not isinstance(scans, Mapping) or not scans.get("z_scans"):
             return self._failure(
                 "parameter_scans_missing",
                 "multi-scan parameter correction requires metadata.parameter_scans "
-                "with z_scans and initial_states",
+                "with observed z_scans",
             )
         try:
+            z_scans = [list(map(float, scan)) for scan in scans["z_scans"]]
+            initial_states = observable_parameter_initial_states(ppc, z_scans)
             payload = _param_correction_json(
                 case_path,
                 row0 + 1,
-                [list(map(float, scan)) for scan in scans["z_scans"]],
-                [list(map(float, scan)) for scan in scans["initial_states"]],
+                z_scans,
+                initial_states,
             )
         except Exception as exc:
             return self._failure("parameter_correction_error", f"{type(exc).__name__}: {exc}")
@@ -1885,10 +2495,19 @@ class MatpowerDeploymentProviders:
         )
         if not payload.get("success"):
             return self._failure("nlm_failure", payload.get("error"))
+        summary = summarize_three_phase_nlm_payload(payload)
+        if isinstance(diagnostic, Mapping) and not any(
+            key in diagnostic
+            for key in ("detected", "detected_top1", "detected_top3")
+        ):
+            # A sanitized release row carries ranked observable output but not
+            # truth-relative localization labels.  Do not turn the runner's
+            # compatibility default into a misleading negative observation.
+            summary.pop("detected", None)
         metrics = {
             **self._binding(state),
             "evidence_source": "deployment_diagnostic:three_phase_nlm",
-            "nlm_summary": summarize_three_phase_nlm_payload(payload),
+            "nlm_summary": summary,
         }
         if unbalance_signal and not hif_signal:
             classification = str(payload.get("diagnostic_classification") or "")
@@ -2027,4 +2646,9 @@ class MatpowerDeploymentProviders:
         return metrics
 
 
-__all__ = ["MatpowerDeploymentProviders", "matpower_case_differ", "measurement_index_map"]
+__all__ = [
+    "MatpowerDeploymentProviders",
+    "matpower_case_differ",
+    "measurement_index_map",
+    "observable_parameter_initial_states",
+]

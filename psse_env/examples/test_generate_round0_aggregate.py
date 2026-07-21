@@ -1,26 +1,106 @@
 from __future__ import annotations
 
 import copy
+import json
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from psse_env.actions import RECOVERY_OPTIONS_EXHAUSTED_REQUEST
+from psse_env.dagger.evaluator import fingerprint_evaluation_suites
 from psse_env.dagger.rollout_collector import classify_state_example
+from psse_env.dagger.splits import PHYSICAL_FINGERPRINT_VERSION
 from psse_env.examples.generate_round0_aggregate import (
+    BC0_AGGREGATE_SOURCE_PARTITION,
     BC0_FAMILY_RELEASE_POLICY,
+    DEFAULT_EVALUATION_POLICY_PATH,
+    DEFAULT_EVALUATION_SUITE_PATH,
     DEFAULT_PLAN,
     _apply_single_label_eligibility,
+    _assert_training_view_export_integrity,
+    _configured_input_corpora,
+    _evaluation_policy_binding,
+    _evaluation_suite_binding,
     _family_resolution_release_failures,
     _generation_descriptor,
+    _holdout_disjointness_report,
+    _holdout_release_failures,
+    _input_artifact_release_failures,
+    _input_corpus_release_failures,
+    _stratified_approximate_realizability,
     _stratified_realizability_release_failures,
     _terminal_scenario_matrix,
     _truth_free_execution_scenario,
     audit_episode_against_truth,
+    generate,
+    main,
 )
+from psse_env.sft.provenance import file_sha256, stable_json_sha256
+
+
+_PHYSICAL_PREFIX = f"physical_v{PHYSICAL_FINGERPRINT_VERSION}_"
+_EVAL_PHYSICAL_1 = _PHYSICAL_PREFIX + "1" * 64
+_EVAL_PHYSICAL_2 = _PHYSICAL_PREFIX + "2" * 64
+_TRAIN_PHYSICAL_1 = _PHYSICAL_PREFIX + "3" * 64
+_EASY_EVAL_PHYSICAL = _PHYSICAL_PREFIX + "4" * 64
+
+
+class GeneratorCliTests(unittest.TestCase):
+    @staticmethod
+    def _report(*, release_eligible: bool) -> dict:
+        return {
+            "generation_provenance": {"release_eligible": release_eligible},
+            "episode_rows": 1,
+            "recovery_rows": 2,
+            "quarantined_rows": 0,
+            "split_rows": {"train_view": 1, "validation": 1, "test": 1},
+            "state_class_distribution": {"diagnosis": 1},
+        }
+
+    def test_cli_exits_nonzero_when_written_artifact_is_not_release_eligible(self) -> None:
+        with patch.object(sys, "argv", ["generate_round0_aggregate"]), patch(
+            "psse_env.examples.generate_round0_aggregate.generate",
+            return_value=self._report(release_eligible=False),
+        ), self.assertRaises(SystemExit) as raised:
+            main()
+
+        self.assertEqual(raised.exception.code, 1)
+
+    def test_cli_returns_normally_for_release_eligible_artifact(self) -> None:
+        with patch.object(sys, "argv", ["generate_round0_aggregate"]), patch(
+            "psse_env.examples.generate_round0_aggregate.generate",
+            return_value=self._report(release_eligible=True),
+        ):
+            self.assertIsNone(main())
 
 
 class TerminalScenarioMatrixTests(unittest.TestCase):
+    def test_training_view_export_integrity_rejects_dropped_rows(self) -> None:
+        selected = [
+            {"example_id": "row-a"},
+            {"example_id": "row-b"},
+        ]
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "Balanced training-view export cardinality mismatch: selected=2, exported=1",
+        ):
+            _assert_training_view_export_integrity(
+                selected, [{"example_id": "row-a"}]
+            )
+
+    def test_training_view_export_integrity_rejects_substitution(self) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError, "Balanced training-view export identity mismatch"
+        ):
+            _assert_training_view_export_integrity(
+                [{"example_id": "row-a"}],
+                [{"example_id": "row-b"}],
+            )
+
     def test_terminal_teacher_targets_use_distinct_replay_classes(self) -> None:
         resolved = classify_state_example(
             {}, preferred_action={"tool": "finalize_diagnosis", "arguments": {}}
@@ -397,6 +477,52 @@ class OfflineTruthBoundaryTests(unittest.TestCase):
 
 
 class AggregateReleaseContractTests(unittest.TestCase):
+    @staticmethod
+    def _holdout_payload(
+        *, scenario_id: str = "eval-root-1", physical_root: str = _EVAL_PHYSICAL_1
+    ) -> dict[str, list[dict[str, object]]]:
+        frozen = json.loads(DEFAULT_EVALUATION_SUITE_PATH.read_text(encoding="utf-8"))
+        row = copy.deepcopy(frozen["standard_success"][0])
+        row["execution"]["scenario_id"] = scenario_id
+        row["grouping"]["root_scenario_id"] = scenario_id
+        row["grouping"]["physical_root_fingerprint"] = physical_root
+        return {"standard_success": [row]}
+
+    @staticmethod
+    def _write_matching_policy(suite_path: Path, policy_path: Path) -> None:
+        suites = json.loads(suite_path.read_text(encoding="utf-8"))
+        fingerprint = fingerprint_evaluation_suites(
+            suites,
+            seed=20260719,
+            required_suites=["standard_success"],
+            minimum_suites=1,
+            minimum_episodes_per_suite=1,
+            minimum_roots_per_suite={"standard_success": 1},
+        )
+        manifest_fields = {
+            name: fingerprint[name]
+            for name in (
+                "suite_manifest",
+                "suite_content_hashes",
+                "suite_root_set_hashes",
+                "suite_content_sha256",
+                "root_set_sha256",
+            )
+        }
+        policy = json.loads(
+            DEFAULT_EVALUATION_POLICY_PATH.read_text(encoding="utf-8")
+        )
+        policy["suite_policy"].update(
+            {
+                "status": "pinned",
+                "approved_suite_sha256": file_sha256(suite_path),
+                "approved_suite_manifest": manifest_fields,
+                "required_suites": ["standard_success"],
+                "minimum_physical_roots_per_suite": {"standard_success": 1},
+            }
+        )
+        policy_path.write_text(json.dumps(policy), encoding="utf-8")
+
     def test_failed_approximate_family_stratum_blocks_release(self) -> None:
         reports = {
             "measurement+topology": {
@@ -419,6 +545,164 @@ class AggregateReleaseContractTests(unittest.TestCase):
         self.assertIn(
             "scenario_family=measurement+topology", failures[0]
         )
+
+    @staticmethod
+    def _safe_underpowered_approximate_report() -> dict[str, object]:
+        return {
+            "passed": False,
+            "labeled_examples": 1,
+            "invalid_examples": [],
+            "approximate_conflict_rate": 0.0,
+            "conflict_tolerance": 0.05,
+            "nearest_neighbor_action_disagreement_rate": 0.0,
+            "nearest_neighbor_tolerance": 0.10,
+            "nearest_neighbor_compared_examples": 0,
+            "nearest_neighbor_comparison_coverage": 0.0,
+            "local_perturbation_action_disagreement_rate": 0.0,
+            "local_perturbation_tolerance": 0.10,
+            "local_perturbation_compared_examples": 0,
+            "local_perturbation_comparison_coverage": 0.0,
+            "multi_action_cost_margin_coverage": 1.0,
+        }
+
+    def test_underpowered_family_reports_neighbor_gate_not_applicable(self) -> None:
+        row = {
+            "scenario_family": "hif",
+            "physical_root_fingerprint": _TRAIN_PHYSICAL_1,
+        }
+        with patch(
+            "psse_env.examples.generate_round0_aggregate."
+            "audit_approximate_teacher_realizability",
+            return_value=self._safe_underpowered_approximate_report(),
+        ):
+            reports = _stratified_approximate_realizability(
+                [row],
+                "scenario_family",
+                required_values=("hif",),
+                neighbor_gate_minimum_distinct_roots=20,
+            )
+
+        report = reports["hif"]
+        self.assertTrue(report["stratified_safety_passed"])
+        self.assertFalse(report["neighbor_stability_gate_applicable"])
+        self.assertTrue(report["release_gate_passed"])
+        self.assertEqual(
+            report["release_gate_status"],
+            "safety_passed_neighbor_underpowered",
+        )
+        self.assertEqual(
+            _stratified_realizability_release_failures(
+                reports, dimension="scenario_family"
+            ),
+            [],
+        )
+
+    def test_family_with_enough_roots_retains_neighbor_stability_gate(self) -> None:
+        rows = [
+            {
+                "scenario_family": "multi_measurement",
+                "physical_root_fingerprint": f"{_PHYSICAL_PREFIX}{index:064x}",
+            }
+            for index in range(20)
+        ]
+        with patch(
+            "psse_env.examples.generate_round0_aggregate."
+            "audit_approximate_teacher_realizability",
+            return_value=self._safe_underpowered_approximate_report(),
+        ):
+            reports = _stratified_approximate_realizability(
+                rows,
+                "scenario_family",
+                neighbor_gate_minimum_distinct_roots=20,
+            )
+
+        report = reports["multi_measurement"]
+        self.assertTrue(report["neighbor_stability_gate_applicable"])
+        self.assertFalse(report["release_gate_passed"])
+        self.assertEqual(report["release_gate_status"], "failed_neighbor_stability")
+
+    def test_state_class_neighbor_comparisons_are_diagnostic_only(self) -> None:
+        row = {
+            "state_class": "diagnosis",
+            "physical_root_fingerprint": _TRAIN_PHYSICAL_1,
+        }
+        with patch(
+            "psse_env.examples.generate_round0_aggregate."
+            "audit_approximate_teacher_realizability",
+            return_value=self._safe_underpowered_approximate_report(),
+        ):
+            reports = _stratified_approximate_realizability(
+                [row], "state_class", neighbor_gate_minimum_distinct_roots=None
+            )
+
+        report = reports["diagnosis"]
+        self.assertTrue(report["release_gate_passed"])
+        self.assertEqual(
+            report["release_gate_status"],
+            "safety_passed_neighbor_diagnostic_only",
+        )
+
+    def test_empty_required_family_fails_stratified_safety(self) -> None:
+        reports = _stratified_approximate_realizability(
+            [],
+            "scenario_family",
+            required_values=("measurement+hif",),
+            neighbor_gate_minimum_distinct_roots=20,
+        )
+
+        report = reports["measurement+hif"]
+        self.assertFalse(report["stratified_safety_passed"])
+        self.assertFalse(report["release_gate_passed"])
+        self.assertEqual(report["release_gate_status"], "failed_safety")
+
+    def test_release_gate_result_takes_precedence_over_raw_audit_result(self) -> None:
+        self.assertEqual(
+            _stratified_realizability_release_failures(
+                {
+                    "hif": {
+                        "passed": False,
+                        "release_gate_passed": True,
+                    }
+                },
+                dimension="scenario_family",
+            ),
+            [],
+        )
+        failures = _stratified_realizability_release_failures(
+            {
+                "multi_measurement": {
+                    "passed": True,
+                    "release_gate_passed": False,
+                    "release_gate_status": "failed_safety",
+                }
+            },
+            dimension="scenario_family",
+        )
+        self.assertEqual(len(failures), 1)
+        self.assertIn("status=failed_safety", failures[0])
+
+    def test_stratified_safety_failure_is_binding_without_neighbor_gate(self) -> None:
+        unsafe = self._safe_underpowered_approximate_report()
+        unsafe["invalid_examples"] = [
+            {"example_id": "bad-row", "reason": "missing target"}
+        ]
+        row = {
+            "state_class": "diagnosis",
+            "physical_root_fingerprint": _TRAIN_PHYSICAL_1,
+        }
+        with patch(
+            "psse_env.examples.generate_round0_aggregate."
+            "audit_approximate_teacher_realizability",
+            return_value=unsafe,
+        ):
+            reports = _stratified_approximate_realizability(
+                [row], "state_class", neighbor_gate_minimum_distinct_roots=None
+            )
+
+        report = reports["diagnosis"]
+        self.assertFalse(report["stratified_safety_passed"])
+        self.assertFalse(report["release_gate_passed"])
+        self.assertEqual(report["release_gate_status"], "failed_safety")
 
     def test_failed_approximate_state_stage_blocks_release(self) -> None:
         failures = _stratified_realizability_release_failures(
@@ -507,6 +791,17 @@ class AggregateReleaseContractTests(unittest.TestCase):
                 if int(requirements["minimum_physical_roots"]) >= evaluation_floor:
                     self.assertGreaterEqual(DEFAULT_PLAN[family], evaluation_floor)
 
+    def test_tracked_release_plan_is_ten_family_row_budget_plan(self) -> None:
+        plan_path = Path(__file__).resolve().parents[2] / "data" / "round0_plan_20260719.json"
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(set(plan), set(BC0_FAMILY_RELEASE_POLICY))
+        self.assertEqual(sum(plan.values()), 245)
+        self.assertEqual(plan["hif"], 17)
+        for family, minimum in DEFAULT_PLAN.items():
+            with self.subTest(family=family):
+                self.assertGreaterEqual(plan[family], minimum)
+
     def test_hif_bearing_families_have_explicit_handoff_allowance(self) -> None:
         for family in ("hif", "measurement+hif"):
             with self.subTest(family=family):
@@ -515,6 +810,16 @@ class AggregateReleaseContractTests(unittest.TestCase):
                 self.assertEqual(
                     requirements["maximum_operator_escalation_rate"], 1.0
                 )
+
+    def test_aggregate_family_policy_matches_evaluation_policy(self) -> None:
+        evaluation_policy = json.loads(
+            DEFAULT_EVALUATION_POLICY_PATH.read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(
+            BC0_FAMILY_RELEASE_POLICY,
+            evaluation_policy["family_policy"],
+        )
 
     def test_generation_descriptor_records_split_and_training_view_contracts(self) -> None:
         args = SimpleNamespace(
@@ -540,36 +845,600 @@ class AggregateReleaseContractTests(unittest.TestCase):
                 "psse_env.examples.generate_round0_aggregate.unified_tool_schemas",
                 return_value=[],
             ),
+            patch(
+                "psse_env.examples.generate_round0_aggregate._git_tracks_file",
+                return_value=True,
+            ),
+            patch(
+                "psse_env.examples.generate_round0_aggregate._tracked_parameter_artifact_binding",
+                return_value={
+                    "root": "artifacts/measurements/out_measurements_balanced/cases_parameter_error",
+                    "file_count": 1,
+                    "files": {"artifacts/parameter.m": "sha256-test"},
+                    "tree_sha256": "tree-sha256-test",
+                },
+            ),
+            patch(
+                "psse_env.examples.generate_round0_aggregate.validate_builder_environment",
+                return_value={
+                    "python_version": "3.12.3",
+                    "packages": {
+                        "numpy": "2.3.5",
+                        "scipy": "1.16.3",
+                        "PYPOWER": "5.1.19",
+                        "fastmcp": "2.12.4",
+                    },
+                },
+            ),
         ):
             descriptor = _generation_descriptor(args, DEFAULT_PLAN)
 
         config = descriptor["generation_config"]
         self.assertEqual(
+            descriptor["builder_environment"]["python_version"], "3.12.3"
+        )
+        self.assertEqual(BC0_AGGREGATE_SOURCE_PARTITION, "train")
+        self.assertEqual(
+            config["source_partition"], BC0_AGGREGATE_SOURCE_PARTITION
+        )
+        self.assertEqual(
             config["critical_split_minimums"], {"validation": 5, "test": 5}
+        )
+        self.assertEqual(
+            config["stratified_approximate_realizability"],
+            {
+                "global_population_gate": "full_release_thresholds",
+                "family_neighbor_gate_minimum_distinct_roots": 20,
+                "underpowered_family_status": "reported_not_applicable",
+                "state_class_neighbor_gate": "diagnostic_only",
+                "always_binding_checks": [
+                    "row_validity",
+                    "physical_root_presence",
+                    "quantized_conflict_rate",
+                    "observed_neighbor_disagreement",
+                    "observed_local_disagreement",
+                    "multi_action_cost_margin_coverage",
+                ],
+            },
         )
         self.assertEqual(
             config["training_view"],
             {
-                "size_policy": "natural_train_row_count_with_bounded_replacement",
-                "strict_target_axes": ["tool_category"],
+                "size_policy": (
+                    "natural_target_bearing_train_row_count_with_bounded_replacement"
+                ),
+                "strict_target_axes": [],
+                "deviation_gated_target_axes": ["tool_category"],
                 "capacity_aware_target_axes": [
+                    "tool_category",
                     "state_class",
                     "target_tool",
                     "scenario_family",
                     "error_cardinality",
                     "terminal_outcome",
                 ],
-                "capacity_aware_policy": "uniform_then_clip_and_redistribute_v1",
+                "capacity_aware_policy": (
+                    "weighted_then_clip_and_redistribute_v1"
+                ),
+                "configured_tool_category_weights": {
+                    "baseline_diagnostics": 0.20,
+                    "context_acquisition": 0.15,
+                    "corrections": 0.20,
+                    "verification_lifecycle": 0.20,
+                    "terminal_or_handoff": 0.10,
+                    "specialized_diagnostics": 0.15,
+                },
+                "tool_category_natural_support_floor": {
+                    "minimum_natural_target_bearing_rows": 16,
+                    "minimum_distinct_roots": 10,
+                },
                 "max_duplicate_count": 2,
                 "low_cost_margin_threshold": 0.05,
                 "maximum_tool_category_target_deviation": 0.10,
             },
         )
+
+        self.assertEqual(
+            descriptor["input_artifacts"]["parameter_cases"]["file_count"], 1
+        )
+        self.assertEqual(
+            descriptor["evaluation_holdout"]["path"],
+            "psse_env/dagger/suites/bc0_eval_suite_v1.json",
+        )
+        self.assertTrue(descriptor["evaluation_holdout"]["schema_valid"])
+        self.assertEqual(descriptor["evaluation_holdout"]["episode_count"], 105)
+        self.assertEqual(descriptor["evaluation_holdout"]["physical_root_count"], 105)
+        self.assertEqual(descriptor["evaluation_holdout"]["scenario_id_count"], 105)
+        self.assertEqual(
+            descriptor["evaluation_policy"]["path"],
+            "psse_env/dagger/bc0_evaluation_policy.json",
+        )
+        self.assertTrue(descriptor["evaluation_policy"]["schema_valid"])
+        self.assertEqual(
+            descriptor["evaluation_policy"]["suite_policy_status"], "pinned"
+        )
+        self.assertTrue(descriptor["evaluation_policy"]["approved_suite_sha256"])
         self.assertEqual(config["family_release_policy"], BC0_FAMILY_RELEASE_POLICY)
         self.assertIn(
             "psse_env/dagger/replay_buffer.py", descriptor["generator_hashes"]
         )
         self.assertIn("psse_env/dagger/splits.py", descriptor["generator_hashes"])
+        self.assertIn(
+            "psse_env/dagger/suite_builder.py", descriptor["generator_hashes"]
+        )
+        self.assertEqual(
+            descriptor["input_corpora"],
+            {
+                "hif_corpus_0": {
+                    "path": (
+                        "artifacts/measurements/"
+                        "hif_multiscan_benchmark_fixed_diverse_17x20_20260714/"
+                        "samples.jsonl"
+                    ),
+                    "sha256": "sha256-test",
+                    "exists": True,
+                    "git_tracked": True,
+                },
+                "hif_quality_0": {
+                    "path": (
+                        "artifacts/measurements/"
+                        "hif_multiscan_benchmark_fixed_diverse_17x20_20260714/"
+                        "meta.json"
+                    ),
+                    "sha256": "sha256-test",
+                    "exists": True,
+                    "git_tracked": True,
+                },
+                "hif_quality_1": {
+                    "path": (
+                        "artifacts/measurements/"
+                        "hif_multiscan_benchmark_fixed_diverse_17x20_20260714/"
+                        "quality_report.json"
+                    ),
+                    "sha256": "sha256-test",
+                    "exists": True,
+                    "git_tracked": True,
+                },
+                "measurement_corpus": {
+                    "path": "data/measurements_5class_merged.jsonl",
+                    "sha256": "sha256-test",
+                    "exists": True,
+                    "git_tracked": True,
+                },
+            },
+        )
+
+    def test_generation_rejects_unapproved_runtime_before_reading_plan(self) -> None:
+        with patch(
+            "psse_env.examples.generate_round0_aggregate.validate_builder_environment",
+            side_effect=RuntimeError("unapproved numerical runtime"),
+        ), self.assertRaisesRegex(RuntimeError, "unapproved numerical runtime"):
+            generate(SimpleNamespace())
+
+    def test_release_defaults_to_multiscan_hif_training_corpus_and_qa_bindings(
+        self,
+    ) -> None:
+        args = SimpleNamespace(
+            measurement_corpus=None,
+            hif_corpus=None,
+            imbalance_corpus=None,
+        )
+
+        configured = _configured_input_corpora(args, DEFAULT_PLAN)
+
+        self.assertEqual(
+            [
+                path.name
+                for name, path in configured.items()
+                if name.startswith("hif_corpus_")
+            ],
+            ["samples.jsonl"],
+        )
+        self.assertIn(
+            "hif_multiscan_benchmark_fixed_diverse_17x20_20260714",
+            configured["hif_corpus_0"].as_posix(),
+        )
+        self.assertEqual(
+            {
+                name: path.name
+                for name, path in configured.items()
+                if name.startswith("hif_quality_")
+            },
+            {"hif_quality_0": "meta.json", "hif_quality_1": "quality_report.json"},
+        )
+
+    def test_evaluation_suite_binding_records_file_and_semantic_identities(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            suite_path = Path(temporary) / "holdout.json"
+            suite_path.write_text(
+                json.dumps(self._holdout_payload()), encoding="utf-8"
+            )
+            args = SimpleNamespace(evaluation_suite=suite_path)
+            with patch(
+                "psse_env.examples.generate_round0_aggregate._git_tracks_file",
+                return_value=True,
+            ):
+                binding = _evaluation_suite_binding(
+                    args, repo_root=Path(temporary)
+                )
+
+        self.assertTrue(binding["schema_valid"])
+        self.assertTrue(binding["git_tracked"])
+        self.assertEqual(binding["episode_count"], 1)
+        self.assertEqual(binding["physical_root_count"], 1)
+        self.assertEqual(
+            binding["physical_fingerprint_version"], PHYSICAL_FINGERPRINT_VERSION
+        )
+        self.assertEqual(binding["invalid_physical_root_version_entries"], [])
+        self.assertEqual(
+            binding["physical_root_set_sha256"],
+            stable_json_sha256([_EVAL_PHYSICAL_1]),
+        )
+        self.assertEqual(binding["scenario_id_count"], 1)
+        self.assertEqual(
+            binding["scenario_id_set_sha256"],
+            stable_json_sha256(["eval-root-1"]),
+        )
+
+    def test_obsolete_holdout_fingerprint_version_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo_root = Path(temporary)
+            suite_path = repo_root / "holdout.json"
+            suite_path.write_text(
+                json.dumps(
+                    self._holdout_payload(
+                        physical_root="physical_v2_" + "5" * 64
+                    )
+                ),
+                encoding="utf-8",
+            )
+            policy_path = repo_root / "evaluation_policy.json"
+            self._write_matching_policy(suite_path, policy_path)
+            with (
+                patch(
+                    "psse_env.examples.generate_round0_aggregate._git_tracks_file",
+                    return_value=True,
+                ),
+                patch(
+                    "psse_env.examples.generate_round0_aggregate.DEFAULT_EVALUATION_POLICY_PATH",
+                    policy_path,
+                ),
+            ):
+                args = SimpleNamespace(
+                    evaluation_suite=suite_path,
+                    evaluation_policy=policy_path,
+                )
+                binding = _evaluation_suite_binding(args, repo_root=repo_root)
+                policy_binding = _evaluation_policy_binding(
+                    args,
+                    evaluation_holdout=binding,
+                    repo_root=repo_root,
+                )
+                report = _holdout_disjointness_report(
+                    [
+                        {
+                            "scenario_id": "train-root-1",
+                            "physical_root_fingerprint": _TRAIN_PHYSICAL_1,
+                        }
+                    ],
+                    evaluation_holdout=binding,
+                    evaluation_policy=policy_binding,
+                    evaluation_suite_path=suite_path,
+                    evaluation_policy_path=policy_path,
+                    repo_root=repo_root,
+                )
+
+        self.assertFalse(report["passed"])
+        self.assertEqual(
+            binding["invalid_physical_root_version_entries"],
+            ["standard_success[0]"],
+        )
+        self.assertIn(
+            "evaluation suite contains physical roots from an obsolete or invalid "
+            "fingerprint version",
+            report["failures"],
+        )
+
+    def test_holdout_disjointness_passes_for_distinct_roots_and_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo_root = Path(temporary)
+            suite_path = repo_root / "holdout.json"
+            suite_path.write_text(
+                json.dumps(self._holdout_payload()), encoding="utf-8"
+            )
+            policy_path = repo_root / "evaluation_policy.json"
+            self._write_matching_policy(suite_path, policy_path)
+            with (
+                patch(
+                    "psse_env.examples.generate_round0_aggregate._git_tracks_file",
+                    return_value=True,
+                ),
+                patch(
+                    "psse_env.examples.generate_round0_aggregate.DEFAULT_EVALUATION_POLICY_PATH",
+                    policy_path,
+                ),
+            ):
+                args = SimpleNamespace(
+                    evaluation_suite=suite_path,
+                    evaluation_policy=policy_path,
+                )
+                binding = _evaluation_suite_binding(args, repo_root=repo_root)
+                policy_binding = _evaluation_policy_binding(
+                    args,
+                    evaluation_holdout=binding,
+                    repo_root=repo_root,
+                )
+                report = _holdout_disjointness_report(
+                    [
+                        {
+                            "scenario_id": "train-root-1",
+                            "physical_root_fingerprint": _TRAIN_PHYSICAL_1,
+                        }
+                    ],
+                    evaluation_holdout=binding,
+                    evaluation_policy=policy_binding,
+                    evaluation_suite_path=suite_path,
+                    evaluation_policy_path=policy_path,
+                    repo_root=repo_root,
+                )
+
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["physical_root_intersection_count"], 0)
+        self.assertEqual(report["scenario_id_intersection_count"], 0)
+        self.assertEqual(_holdout_release_failures(report), [])
+
+    def test_holdout_disjointness_rejects_physical_or_id_overlap(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo_root = Path(temporary)
+            suite_path = repo_root / "holdout.json"
+            suite_path.write_text(
+                json.dumps(self._holdout_payload()), encoding="utf-8"
+            )
+            policy_path = repo_root / "evaluation_policy.json"
+            self._write_matching_policy(suite_path, policy_path)
+            with patch(
+                "psse_env.examples.generate_round0_aggregate._git_tracks_file",
+                return_value=True,
+            ):
+                args = SimpleNamespace(
+                    evaluation_suite=suite_path,
+                    evaluation_policy=policy_path,
+                )
+                binding = _evaluation_suite_binding(args, repo_root=repo_root)
+                policy_binding = _evaluation_policy_binding(
+                    args,
+                    evaluation_holdout=binding,
+                    repo_root=repo_root,
+                )
+                with self.assertRaisesRegex(
+                    RuntimeError, "Frozen evaluation holdout overlaps"
+                ):
+                    _holdout_disjointness_report(
+                        [
+                            {
+                                "scenario_id": "eval-root-1",
+                                "physical_root_fingerprint": _EVAL_PHYSICAL_1,
+                            }
+                        ],
+                        evaluation_holdout=binding,
+                        evaluation_policy=policy_binding,
+                        evaluation_suite_path=suite_path,
+                        evaluation_policy_path=policy_path,
+                        repo_root=repo_root,
+                    )
+
+    def test_holdout_suite_change_after_binding_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo_root = Path(temporary)
+            suite_path = repo_root / "holdout.json"
+            suite_path.write_text(
+                json.dumps(self._holdout_payload()), encoding="utf-8"
+            )
+            policy_path = repo_root / "evaluation_policy.json"
+            self._write_matching_policy(suite_path, policy_path)
+            with patch(
+                "psse_env.examples.generate_round0_aggregate._git_tracks_file",
+                return_value=True,
+            ):
+                args = SimpleNamespace(
+                    evaluation_suite=suite_path,
+                    evaluation_policy=policy_path,
+                )
+                binding = _evaluation_suite_binding(args, repo_root=repo_root)
+                policy_binding = _evaluation_policy_binding(
+                    args,
+                    evaluation_holdout=binding,
+                    repo_root=repo_root,
+                )
+                suite_path.write_text(
+                    json.dumps(
+                        self._holdout_payload(
+                            scenario_id="eval-root-2",
+                            physical_root=_EVAL_PHYSICAL_2,
+                        )
+                    ),
+                    encoding="utf-8",
+                )
+                report = _holdout_disjointness_report(
+                    [
+                        {
+                            "scenario_id": "train-root-1",
+                            "physical_root_fingerprint": _TRAIN_PHYSICAL_1,
+                        }
+                    ],
+                    evaluation_holdout=binding,
+                    evaluation_policy=policy_binding,
+                    evaluation_suite_path=suite_path,
+                    evaluation_policy_path=policy_path,
+                    repo_root=repo_root,
+                )
+
+        self.assertFalse(report["passed"])
+        self.assertIn("file_sha256", report["binding_mismatches"])
+        self.assertTrue(_holdout_release_failures(report))
+
+    def test_tracked_alternate_suite_must_match_policy_approved_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo_root = Path(temporary)
+            suite_path = repo_root / "alternate_holdout.json"
+            suite_path.write_text(
+                json.dumps(self._holdout_payload()), encoding="utf-8"
+            )
+            policy_path = repo_root / "evaluation_policy.json"
+            self._write_matching_policy(suite_path, policy_path)
+            suite_path.write_text(
+                json.dumps(
+                    self._holdout_payload(
+                        scenario_id="easy-eval-root",
+                        physical_root=_EASY_EVAL_PHYSICAL,
+                    )
+                ),
+                encoding="utf-8",
+            )
+            args = SimpleNamespace(
+                evaluation_suite=suite_path,
+                evaluation_policy=policy_path,
+            )
+            with patch(
+                "psse_env.examples.generate_round0_aggregate._git_tracks_file",
+                return_value=True,
+            ):
+                binding = _evaluation_suite_binding(args, repo_root=repo_root)
+                policy_binding = _evaluation_policy_binding(
+                    args,
+                    evaluation_holdout=binding,
+                    repo_root=repo_root,
+                )
+                report = _holdout_disjointness_report(
+                    [
+                        {
+                            "scenario_id": "train-root-1",
+                            "physical_root_fingerprint": _TRAIN_PHYSICAL_1,
+                        }
+                    ],
+                    evaluation_holdout=binding,
+                    evaluation_policy=policy_binding,
+                    evaluation_suite_path=suite_path,
+                    evaluation_policy_path=policy_path,
+                    repo_root=repo_root,
+                )
+
+        self.assertFalse(policy_binding["suite_file_sha256_matches_approval"])
+        self.assertFalse(policy_binding["suite_root_set_sha256_matches_approval"])
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "evaluation suite file SHA-256 does not match the policy approval",
+            report["failures"],
+        )
+
+    def test_unpinned_evaluation_policy_blocks_holdout_release(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo_root = Path(temporary)
+            suite_path = repo_root / "holdout.json"
+            suite_path.write_text(
+                json.dumps(self._holdout_payload()), encoding="utf-8"
+            )
+            policy_path = repo_root / "evaluation_policy.json"
+            self._write_matching_policy(suite_path, policy_path)
+            policy = json.loads(policy_path.read_text(encoding="utf-8"))
+            policy["suite_policy"].update(
+                {
+                    "status": "unconfigured",
+                    "approved_suite_sha256": None,
+                    "approved_suite_manifest": None,
+                }
+            )
+            policy["approved_factories"] = {
+                role: [] for role in policy["approved_factories"]
+            }
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+            args = SimpleNamespace(
+                evaluation_suite=suite_path,
+                evaluation_policy=policy_path,
+            )
+            with patch(
+                "psse_env.examples.generate_round0_aggregate._git_tracks_file",
+                return_value=True,
+            ):
+                binding = _evaluation_suite_binding(args, repo_root=repo_root)
+                policy_binding = _evaluation_policy_binding(
+                    args,
+                    evaluation_holdout=binding,
+                    repo_root=repo_root,
+                )
+                report = _holdout_disjointness_report(
+                    [
+                        {
+                            "scenario_id": "train-root-1",
+                            "physical_root_fingerprint": _TRAIN_PHYSICAL_1,
+                        }
+                    ],
+                    evaluation_holdout=binding,
+                    evaluation_policy=policy_binding,
+                    evaluation_suite_path=suite_path,
+                    evaluation_policy_path=policy_path,
+                    repo_root=repo_root,
+                )
+
+        self.assertTrue(policy_binding["schema_valid"])
+        self.assertEqual(policy_binding["suite_policy_status"], "unconfigured")
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "evaluation policy suite status is not pinned", report["failures"]
+        )
+
+    def test_untracked_or_missing_input_corpus_blocks_release(self) -> None:
+        failures = _input_corpus_release_failures(
+            {
+                "input_corpora": {
+                    "untracked": {
+                        "path": "artifacts/private/samples.jsonl",
+                        "sha256": "a" * 64,
+                        "exists": True,
+                        "git_tracked": False,
+                    },
+                    "missing": {
+                        "path": "data/missing.jsonl",
+                        "sha256": None,
+                        "exists": False,
+                        "git_tracked": False,
+                    },
+                }
+            }
+        )
+
+        self.assertIn(
+            "input corpus is not repository-tracked: untracked "
+            "(artifacts/private/samples.jsonl)",
+            failures,
+        )
+        self.assertIn(
+            "input corpus is missing or unhashed: missing (data/missing.jsonl)",
+            failures,
+        )
+        self.assertIn(
+            "input corpus is not repository-tracked: missing (data/missing.jsonl)",
+            failures,
+        )
+
+    def test_parameter_artifact_binding_must_be_content_consistent(self) -> None:
+        files = {"artifacts/parameter.m": "a" * 64}
+        valid = {
+            "input_artifacts": {
+                "parameter_cases": {
+                    "file_count": 1,
+                    "files": files,
+                    "tree_sha256": stable_json_sha256(files),
+                }
+            }
+        }
+        self.assertEqual(_input_artifact_release_failures(valid), [])
+        invalid = copy.deepcopy(valid)
+        invalid["input_artifacts"]["parameter_cases"]["file_count"] = 2
+        self.assertIn(
+            "parameter artifact file count is inconsistent",
+            _input_artifact_release_failures(invalid),
+        )
 
 
 if __name__ == "__main__":

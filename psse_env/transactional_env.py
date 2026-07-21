@@ -39,11 +39,15 @@ from .actions import (
     unexplained_signatures,
 )
 from .oracle.candidate_quality import CandidateAssessment, CandidateDisposition, CandidateQualityOracle
-from .oracle.expert_types import matching_evidence_codes
+from .oracle.expert_types import (
+    matching_evidence_codes,
+    recovery_record_applies_to_state,
+)
 from .oracle.measurement_recovery_evidence import (
     accepted_measurement_indices,
     eligible_joint_measurement_targets,
     measurement_target_indices,
+    verified_terminal_measurement_closure_action,
 )
 from .oracle.process_validity import ProcessValidityOracle
 from .state_store import (
@@ -213,6 +217,55 @@ def _observable_provenance_source(source: Any) -> bool:
             "production",
         )
     )
+
+
+_BRANCH_ROUTE_STATUSES = frozenset(
+    {"actionable", "complete_negative", "unavailable_or_inconclusive"}
+)
+
+
+def _branch_route_contract_valid(
+    route_status: Any,
+    supported: list[dict[str, Any]],
+) -> bool:
+    if not isinstance(route_status, str) or route_status not in _BRANCH_ROUTE_STATUSES:
+        return False
+    return bool(supported) == (route_status == "actionable")
+
+
+def _terminal_closure_branch_screening_valid(
+    screening: Any,
+    *,
+    state_id: str,
+    state_hash: str,
+) -> bool:
+    if not isinstance(screening, Mapping) or set(screening) != {
+        "parameter",
+        "topology",
+    }:
+        return False
+    contracts = {
+        "parameter": GET_PARAMETER_CONTEXT,
+        "topology": GET_TOPOLOGY_CONTEXT,
+    }
+    for family, context_tool in contracts.items():
+        evidence = screening.get(family)
+        if not isinstance(evidence, Mapping):
+            return False
+        inventory = evidence.get("supported_corrections")
+        if (
+            evidence.get("context_tool") != context_tool
+            or str(evidence.get("state_id") or "") != state_id
+            or str(evidence.get("state_hash") or "") != state_hash
+            or not _observable_provenance_source(evidence.get("evidence_source"))
+            or not isinstance(inventory, (list, tuple))
+            or not _branch_route_contract_valid(
+                evidence.get("route_status"), list(inventory)
+            )
+            or evidence.get("route_status") != "complete_negative"
+        ):
+            return False
+    return True
 
 
 def _semantic_correction_signature(action: Mapping[str, Any] | str) -> str | None:
@@ -663,6 +716,9 @@ class TransactionalPSSEEnv:
             measurement_context_state_id=summary.get("measurement_context_state_id"),
             parameter_context_state_id=summary.get("parameter_context_state_id"),
             topology_context_state_id=summary.get("topology_context_state_id"),
+            fresh_context_evidence=policy_safe_copy(
+                dict(summary.get("fresh_context_evidence") or {})
+            ),
             requires_measurement_context=bool(summary.get("requires_measurement_context")),
             available_evidence=self._observable_evidence_channels(),
             semantic_field_provenance=policy_safe_copy(
@@ -1063,8 +1119,13 @@ class TransactionalPSSEEnv:
             signature_text = " ".join(
                 str(item).lower() for item in state.get("unresolved_signatures") or []
             )
+            active_id = state.get("active_state_id")
+            current_rejection = any(
+                recovery_record_applies_to_state(item, active_id)
+                for item in state.get("rejected_hypotheses") or []
+            )
             observable_recovery_route = family == "parameter" and bool(
-                state.get("rejected_hypotheses") or state.get("accepted_corrections")
+                current_rejection or state.get("accepted_corrections")
             )
             if family == "measurement" and not state.get(
                 "no_material_anomaly_remaining"
@@ -1504,11 +1565,14 @@ class TransactionalPSSEEnv:
                 required_contexts.add(GET_TOPOLOGY_CONTEXT)
 
             context_contracts = {
-                GET_MEASUREMENT_CONTEXT: CORRECT_MEASUREMENTS,
-                GET_PARAMETER_CONTEXT: CORRECT_PARAMETERS,
-                GET_TOPOLOGY_CONTEXT: CORRECT_TOPOLOGY,
+                "measurement": (GET_MEASUREMENT_CONTEXT, CORRECT_MEASUREMENTS),
+                "parameter": (GET_PARAMETER_CONTEXT, CORRECT_PARAMETERS),
+                "topology": (GET_TOPOLOGY_CONTEXT, CORRECT_TOPOLOGY),
             }
-            for context_tool, correction_tool in context_contracts.items():
+            for context_family, (
+                context_tool,
+                correction_tool,
+            ) in context_contracts.items():
                 bound_event: tuple[Mapping[str, Any], Mapping[str, Any]] | None = None
                 for event in reversed(self.history):
                     if not isinstance(event, Mapping):
@@ -1533,6 +1597,94 @@ class TransactionalPSSEEnv:
                         continue
                     bound_event = event_action, metrics
                     break
+                # A post-commit measurement investigation can atomically
+                # bundle parameter and topology route contracts.  Preserve a
+                # literal same-family context event as the authoritative audit
+                # record; only use the bundle when that direct event is absent.
+                # Cross-check the accepted durable ledger and revalidate the
+                # raw history contract so stale or tampered evidence fails
+                # closed.
+                if bound_event is None and context_family in {"parameter", "topology"}:
+                    fresh_contexts = summary.get("fresh_context_evidence")
+                    durable_evidence = (
+                        fresh_contexts.get(context_family)
+                        if isinstance(fresh_contexts, Mapping)
+                        else None
+                    )
+                    for event in reversed(self.history):
+                        if not isinstance(event, Mapping):
+                            continue
+                        event_action = safe_normalize_action(event.get("action") or {})
+                        if event_action["tool"] != GET_MEASUREMENT_CONTEXT:
+                            continue
+                        requested = event_action["arguments"].get("state_id")
+                        if requested is not None and str(requested) != active_id:
+                            continue
+                        output = event.get("tool_output")
+                        if (
+                            not isinstance(output, Mapping)
+                            or output.get("execution_status") != "success"
+                        ):
+                            continue
+                        metrics = output.get("tool_metrics")
+                        bundled = (
+                            metrics.get("branch_route_screening")
+                            if isinstance(metrics, Mapping)
+                            else None
+                        )
+                        raw_evidence = (
+                            bundled.get(context_family)
+                            if isinstance(bundled, Mapping)
+                            else None
+                        )
+                        raw_inventory = (
+                            raw_evidence.get("supported_corrections")
+                            if isinstance(raw_evidence, Mapping)
+                            else None
+                        )
+                        if not (
+                            summary.get(f"has_fresh_{context_family}_context")
+                            is True
+                            and str(
+                                summary.get(
+                                    f"{context_family}_context_state_id"
+                                )
+                                or ""
+                            )
+                            == active_id
+                            and isinstance(durable_evidence, Mapping)
+                            and isinstance(raw_evidence, Mapping)
+                            and raw_evidence.get("context_tool") == context_tool
+                            and str(raw_evidence.get("state_id") or "") == active_id
+                            and str(raw_evidence.get("state_hash") or "")
+                            == active_hash
+                            and _observable_provenance_source(
+                                raw_evidence.get("evidence_source")
+                            )
+                            and isinstance(raw_inventory, (list, tuple))
+                            and _branch_route_contract_valid(
+                                raw_evidence.get("route_status"), raw_inventory
+                            )
+                            and str(durable_evidence.get("state_id") or "")
+                            == active_id
+                            and str(durable_evidence.get("state_hash") or "")
+                            == active_hash
+                            and durable_evidence.get("evidence_source")
+                            == raw_evidence.get("evidence_source")
+                            and durable_evidence.get("route_status")
+                            == raw_evidence.get("route_status")
+                            and durable_evidence.get("supported_corrections")
+                            == raw_inventory
+                        ):
+                            continue
+                        bound_event = (
+                            {
+                                "tool": context_tool,
+                                "arguments": {"state_id": active_id},
+                            },
+                            raw_evidence,
+                        )
+                        break
                 if bound_event is None:
                     if context_tool in required_contexts:
                         missing_required_contexts.append(context_tool)
@@ -1695,10 +1847,23 @@ class TransactionalPSSEEnv:
                 for item in summary.get("accepted_corrections") or []
                 if isinstance(item, Mapping)
             )
+            fresh_evidence = summary.get("fresh_context_evidence")
+            unavailable_branch_routes: set[str] = set()
+            if isinstance(fresh_evidence, Mapping):
+                for branch_family in ("parameter", "topology"):
+                    branch_evidence = fresh_evidence.get(branch_family)
+                    if (
+                        isinstance(branch_evidence, Mapping)
+                        and branch_evidence.get("route_status")
+                        == "unavailable_or_inconclusive"
+                    ):
+                        unavailable_branch_routes.add(branch_family)
             if (
                 accepted_measurement_partial
-                and parameter_signal
-                and not measurement_dominant
+                and (
+                    unavailable_branch_routes
+                    or (parameter_signal and not measurement_dominant)
+                )
             ):
                 # A residual correction can mask the still-observable branch
                 # anomaly after a partial measurement commit.  These provider
@@ -2125,29 +2290,79 @@ class TransactionalPSSEEnv:
 
     def _supported_correction_signatures(self, context_family: str) -> set[str]:
         context_tool = f"get_{context_family}_context"
-        for event in reversed(self.history):
-            if not isinstance(event, Mapping):
-                continue
-            event_action = event.get("action")
-            if safe_normalize_action(event_action or {})["tool"] != context_tool:
-                continue
-            output = event.get("tool_output")
-            if not isinstance(output, Mapping):
+        correction_tool = {
+            "measurement": CORRECT_MEASUREMENTS,
+            "parameter": CORRECT_PARAMETERS,
+            "topology": CORRECT_TOPOLOGY,
+        }[context_family]
+        state = self.current_state()
+        active_id = str(state.get("active_state_id") or "")
+
+        def bound_signatures(evidence: Mapping[str, Any]) -> set[str]:
+            if str(evidence.get("state_id") or "") != active_id:
                 return set()
-            metrics = output.get("tool_metrics")
-            if not isinstance(metrics, Mapping):
+            if (
+                context_family in {"parameter", "topology"}
+                and "route_status" in evidence
+                and evidence.get("route_status") != "actionable"
+            ):
                 return set()
-            raw_actions = metrics.get("supported_corrections")
+            raw_actions = evidence.get("supported_corrections")
             if not isinstance(raw_actions, (list, tuple)):
                 return set()
             signatures: set[str] = set()
             for raw_action in raw_actions:
                 if not isinstance(raw_action, Mapping):
-                    continue
+                    return set()
                 normalized = safe_normalize_action(raw_action)
-                if normalized["tool"] in CORRECTION_TOOLS:
-                    signatures.add(action_signature(normalized))
+                if normalized["tool"] != correction_tool:
+                    return set()
+                target_state = normalized["arguments"].get("state_id")
+                if target_state is None or str(target_state) != active_id:
+                    return set()
+                signatures.add(action_signature(normalized))
             return signatures
+
+        if (
+            state.get(f"has_fresh_{context_family}_context")
+            and str(state.get(f"{context_family}_context_state_id") or "")
+            == active_id
+        ):
+            fresh = state.get("fresh_context_evidence")
+            evidence = (
+                fresh.get(context_family)
+                if isinstance(fresh, Mapping)
+                else None
+            )
+            if isinstance(evidence, Mapping):
+                # This ledger includes branch inventories bundled by a fresh
+                # measurement context, and remains authoritative after a
+                # rejected candidate rolls back to the same active state.
+                return bound_signatures(evidence)
+
+        # Legacy fallback for observations created before the durable context
+        # ledger existed.  The newest matching context is authoritative even
+        # when its inventory is empty.
+        for event in reversed(self.history):
+            if not isinstance(event, Mapping):
+                continue
+            event_action = event.get("action")
+            normalized_event = safe_normalize_action(event_action or {})
+            if normalized_event["tool"] != context_tool:
+                continue
+            requested = normalized_event["arguments"].get("state_id")
+            if requested is not None and str(requested) != active_id:
+                continue
+            output = event.get("tool_output")
+            if (
+                not isinstance(output, Mapping)
+                or output.get("execution_status") != "success"
+            ):
+                return set()
+            metrics = output.get("tool_metrics")
+            if not isinstance(metrics, Mapping):
+                return set()
+            return bound_signatures(metrics)
         return set()
 
     def enumerate_available_actions(self, state: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -2611,8 +2826,210 @@ class TransactionalPSSEEnv:
             )
         context_state_id = str(action["arguments"].get("state_id") or state["active_state_id"])
         family = tool.removeprefix("get_").removesuffix("_context")
+        correction_tool = {
+            "measurement": CORRECT_MEASUREMENTS,
+            "parameter": CORRECT_PARAMETERS,
+            "topology": CORRECT_TOPOLOGY,
+        }[family]
+        supported: list[dict[str, Any]] = []
+        raw_supported = metrics.get("supported_corrections")
+        invalid_supported_contract = False
+        if isinstance(raw_supported, (list, tuple)):
+            for item in raw_supported:
+                if not isinstance(item, Mapping):
+                    invalid_supported_contract = True
+                    continue
+                normalized_supported = safe_normalize_action(item)
+                if normalized_supported["tool"] != correction_tool:
+                    invalid_supported_contract = True
+                    continue
+                target_state_id = normalized_supported["arguments"].get("state_id")
+                if (
+                    target_state_id is None
+                    or str(target_state_id) != context_state_id
+                ):
+                    invalid_supported_contract = True
+                    continue
+                supported.append(normalized_supported)
+        elif raw_supported is not None:
+            invalid_supported_contract = True
+        if invalid_supported_contract:
+            return self._standard_output(
+                execution_status="failure",
+                error_code="insufficient_observable_evidence",
+                error_detail=f"{tool}_supported_correction_contract_invalid",
+                state_mutated=False,
+                tool_metrics={
+                    "state_id": context_state_id,
+                    "state_hash": active_payload["state_hash"],
+                    "evidence_source": metrics.get("evidence_source"),
+                },
+            )
+        route_status_present = "route_status" in metrics
+        route_contract_required = family in {"parameter", "topology"} and (
+            self.production_dataset_mode or route_status_present
+        )
+        if route_contract_required and not _branch_route_contract_valid(
+            metrics.get("route_status"), supported
+        ):
+            return self._standard_output(
+                execution_status="failure",
+                error_code="insufficient_observable_evidence",
+                error_detail=f"{tool}_route_contract_invalid",
+                state_mutated=False,
+                tool_metrics={
+                    "state_id": context_state_id,
+                    "state_hash": active_payload["state_hash"],
+                    "evidence_source": metrics.get("evidence_source"),
+                },
+            )
+        raw_terminal_targets = metrics.get(
+            "verified_terminal_measurement_closure_targets"
+        )
+        raw_terminal_evidence = metrics.get(
+            "verified_terminal_measurement_closure_evidence"
+        )
+        terminal_targets_claimed = (
+            bool(raw_terminal_targets)
+            if isinstance(raw_terminal_targets, (list, tuple))
+            else raw_terminal_targets is not None
+        )
+        terminal_closure_claimed = family == "measurement" and (
+            terminal_targets_claimed
+            or (
+                isinstance(raw_terminal_evidence, Mapping)
+                and raw_terminal_evidence.get("eligible") is True
+            )
+        )
+        accepted_targets = accepted_measurement_indices(
+            self.get_policy_observation()
+        )
+        if terminal_closure_claimed and (
+            verified_terminal_measurement_closure_action(
+                metrics,
+                active_id=context_state_id,
+                active_state_hash=active_payload["state_hash"],
+                accepted_targets=accepted_targets,
+            )
+            is None
+            or not _terminal_closure_branch_screening_valid(
+                metrics.get("branch_route_screening"),
+                state_id=context_state_id,
+                state_hash=str(active_payload["state_hash"]),
+            )
+        ):
+            return self._standard_output(
+                execution_status="failure",
+                error_code="insufficient_observable_evidence",
+                error_detail=f"{tool}_terminal_closure_contract_invalid",
+                state_mutated=False,
+                tool_metrics={
+                    "state_id": context_state_id,
+                    "state_hash": active_payload["state_hash"],
+                    "evidence_source": metrics.get("evidence_source"),
+                },
+            )
         self.context_flags[f"has_fresh_{family}_context"] = True
         self.context_flags[f"{family}_context_state_id"] = context_state_id
+        context_evidence = dict(self.context_flags.get("fresh_context_evidence") or {})
+        durable_metrics = {
+            "state_id": context_state_id,
+            "state_hash": active_payload["state_hash"],
+            "evidence_source": metrics.get("evidence_source"),
+            "supported_corrections": supported,
+        }
+        for key in (
+            "accepted_target_refinement",
+            "verified_terminal_measurement_closure_targets",
+            "verified_terminal_measurement_closure_evidence",
+            "physical_vm_joint_targets",
+            "measurement_findings",
+            "parameter_findings",
+            "topology_findings",
+            "topology_candidate_screening",
+            "route_status",
+            "route_status_reason",
+        ):
+            if key in metrics:
+                durable_metrics[key] = policy_safe_copy(metrics[key])
+        context_evidence[family] = policy_safe_copy(durable_metrics)
+        # A post-commit measurement context may bundle the two independently
+        # observable branch inventories for this exact active state.  Accept
+        # only fully bound, correctly typed provider contracts; an omitted or
+        # malformed family remains fresh=False so recovery fails closed and
+        # the dedicated context action is still required.
+        bundled = metrics.get("branch_route_screening")
+        if family == "measurement" and isinstance(bundled, Mapping):
+            bundled_contracts = {
+                "parameter": (GET_PARAMETER_CONTEXT, CORRECT_PARAMETERS),
+                "topology": (GET_TOPOLOGY_CONTEXT, CORRECT_TOPOLOGY),
+            }
+            for bundled_family, (bundled_tool, bundled_correction) in (
+                bundled_contracts.items()
+            ):
+                raw_evidence = bundled.get(bundled_family)
+                if not isinstance(raw_evidence, Mapping):
+                    continue
+                if (
+                    raw_evidence.get("context_tool") != bundled_tool
+                    or str(raw_evidence.get("state_id") or "") != context_state_id
+                    or str(raw_evidence.get("state_hash") or "")
+                    != str(active_payload["state_hash"])
+                    or not _observable_provenance_source(
+                        str(raw_evidence.get("evidence_source") or "")
+                    )
+                ):
+                    continue
+                raw_inventory = raw_evidence.get("supported_corrections")
+                if not isinstance(raw_inventory, (list, tuple)):
+                    continue
+                bundled_supported: list[dict[str, Any]] = []
+                invalid_bundled_contract = False
+                for item in raw_inventory:
+                    if not isinstance(item, Mapping):
+                        invalid_bundled_contract = True
+                        continue
+                    normalized = safe_normalize_action(item)
+                    if (
+                        normalized["tool"] != bundled_correction
+                        or str(normalized["arguments"].get("state_id") or "")
+                        != context_state_id
+                    ):
+                        invalid_bundled_contract = True
+                        continue
+                    bundled_supported.append(normalized)
+                if invalid_bundled_contract:
+                    continue
+                route_status = raw_evidence.get("route_status")
+                if not _branch_route_contract_valid(
+                    route_status, bundled_supported
+                ):
+                    continue
+                self.context_flags[f"has_fresh_{bundled_family}_context"] = True
+                self.context_flags[f"{bundled_family}_context_state_id"] = (
+                    context_state_id
+                )
+                bundled_durable = {
+                    "state_id": context_state_id,
+                    "state_hash": active_payload["state_hash"],
+                    "evidence_source": raw_evidence.get("evidence_source"),
+                    "supported_corrections": bundled_supported,
+                    "route_status": str(route_status),
+                    "route_status_reason": raw_evidence.get(
+                        "route_status_reason"
+                    ),
+                }
+                for key in (
+                    "parameter_findings",
+                    "topology_findings",
+                    "topology_candidate_screening",
+                ):
+                    if key in raw_evidence:
+                        bundled_durable[key] = policy_safe_copy(raw_evidence[key])
+                context_evidence[bundled_family] = policy_safe_copy(
+                    bundled_durable
+                )
+        self.context_flags["fresh_context_evidence"] = context_evidence
         self._persist_observable_semantics(
             metrics,
             source=f"context_provider:{tool}",
@@ -2700,6 +3117,11 @@ class TransactionalPSSEEnv:
         for family in ("measurement", "parameter", "topology"):
             self.context_flags[f"has_fresh_{family}_context"] = False
             self.context_flags[f"{family}_context_state_id"] = None
+        self.context_flags["fresh_context_evidence"] = {}
+        # Rejected candidates are evidence about alternatives to the old
+        # active parent.  They remain durable across a same-state rollback, but
+        # become stale as soon as another candidate is committed.
+        self.context_flags["rejected_hypotheses"] = []
 
     def _set_semantic_provenance(self, field: str, source: str) -> None:
         if field not in _SEMANTIC_POLICY_FIELDS:
@@ -2905,6 +3327,22 @@ class TransactionalPSSEEnv:
 
     def _remember_rejected_hypothesis(self, candidate_payload: Mapping[str, Any]) -> None:
         source_action = candidate_payload.get("source_action") or {}
+        raw_verification = candidate_payload.get("verification_output")
+        verification_summary: dict[str, Any] = {}
+        if isinstance(raw_verification, Mapping):
+            for key in (
+                "state_id",
+                "evidence_source",
+                "target_metric_value",
+                "target_metric_threshold",
+                "target_progress",
+                "global_progress",
+                "globally_resolved",
+                "physical_constraints_ok",
+                "physical_bound_violations",
+            ):
+                if key in raw_verification:
+                    verification_summary[key] = policy_safe_copy(raw_verification[key])
         self.context_flags.setdefault("rejected_hypotheses", []).append(
             policy_safe_copy(
                 {
@@ -2912,6 +3350,7 @@ class TransactionalPSSEEnv:
                     "candidate_parent_id": candidate_payload.get("parent_state_id"),
                     "source_action": source_action,
                     "action_signature": action_signature(source_action) if source_action else None,
+                    "verification_summary": verification_summary,
                 }
             )
         )

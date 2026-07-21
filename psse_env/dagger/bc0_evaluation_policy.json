@@ -1,9 +1,29 @@
 {
   "approved_factories": {
-    "case_loader": [],
-    "environment": [],
-    "expert_policy": [],
-    "model_policy": []
+    "case_loader": [
+      {
+        "import_spec": "psse_env.dagger.release_factories:deterministic_case_loader",
+        "source_sha256": "c2d657751c11811e40144fb520322d4014b9db6d1bf87721428f61332ef4b872"
+      }
+    ],
+    "environment": [
+      {
+        "import_spec": "psse_env.dagger.release_factories:production_environment_factory",
+        "source_sha256": "c2d657751c11811e40144fb520322d4014b9db6d1bf87721428f61332ef4b872"
+      }
+    ],
+    "expert_policy": [
+      {
+        "import_spec": "psse_env.dagger.release_factories:observable_expert_policy_factory",
+        "source_sha256": "c2d657751c11811e40144fb520322d4014b9db6d1bf87721428f61332ef4b872"
+      }
+    ],
+    "model_policy": [
+      {
+        "import_spec": "psse_env.dagger.release_factories:gemma_release_policy_factory",
+        "source_sha256": "c2d657751c11811e40144fb520322d4014b9db6d1bf87721428f61332ef4b872"
+      }
+    ]
   },
   "role_policy": {
     "base-baseline": "identity_and_measurement_only",
@@ -11,8 +31,57 @@
     "expert-baseline": "teacher_release"
   },
   "suite_policy": {
-    "approved_suite_manifest": null,
-    "approved_suite_sha256": null,
+    "approved_suite_manifest": {
+      "root_set_sha256": "922bbe8f13b0eb6d7d3a870527e85ef511905b7e625007e8f7f72779ffcf3209",
+      "suite_content_hashes": {
+        "efficiency": "5ac64bcd5e23449b97a0eb9485672ffe6fccac651a1edce0a89803b8bdc2606c",
+        "forced_error_recovery": "50dab9112b841cfdb315cf9fd34f5e057bf3427de639b9af0d6e71041ed5bb2a",
+        "invalid_action_recovery": "241b46b238bce7063772dbd797ba7471c3670961bd3b4e7205a983b2a0079322",
+        "partial_success_retention": "82f9ccfece6624de08a9e06490f2f0043ae7c776c006e5f36b853ce2578cba2d",
+        "standard_success": "02ee495aa17d1db1bb6aeb514a99b25615b3ae4eb7c287845923c8765863a1e2"
+      },
+      "suite_content_sha256": "0ae88898cd974f41eb17ec4c8900998659eaba577df33186dec6bc635eb7c952",
+      "suite_manifest": {
+        "efficiency": {
+          "content_sha256": "5ac64bcd5e23449b97a0eb9485672ffe6fccac651a1edce0a89803b8bdc2606c",
+          "distinct_physical_roots": 21,
+          "episodes": 21,
+          "root_set_sha256": "52589757e3da5173c1a76f8e79c305d2bbd04cb4e3ca0ea3d74abc7f52f49910"
+        },
+        "forced_error_recovery": {
+          "content_sha256": "50dab9112b841cfdb315cf9fd34f5e057bf3427de639b9af0d6e71041ed5bb2a",
+          "distinct_physical_roots": 21,
+          "episodes": 21,
+          "root_set_sha256": "9f6ef00c9e49e8ff8149ff544685782f6f17932ddd4a13447702b6787f4341bc"
+        },
+        "invalid_action_recovery": {
+          "content_sha256": "241b46b238bce7063772dbd797ba7471c3670961bd3b4e7205a983b2a0079322",
+          "distinct_physical_roots": 21,
+          "episodes": 21,
+          "root_set_sha256": "4e0b962c9ed93cca375608d6c2b6113331fce2fd632063f2f425fc63e6777d3f"
+        },
+        "partial_success_retention": {
+          "content_sha256": "82f9ccfece6624de08a9e06490f2f0043ae7c776c006e5f36b853ce2578cba2d",
+          "distinct_physical_roots": 21,
+          "episodes": 21,
+          "root_set_sha256": "4a758b91368617ba607e3f36c0781f4b1493167600c36942722027aa519f838c"
+        },
+        "standard_success": {
+          "content_sha256": "02ee495aa17d1db1bb6aeb514a99b25615b3ae4eb7c287845923c8765863a1e2",
+          "distinct_physical_roots": 21,
+          "episodes": 21,
+          "root_set_sha256": "4e5c10ea44687d8ce012fa944562af761acdd0c0b0e9f8a2eb113dd4d1bc8b6f"
+        }
+      },
+      "suite_root_set_hashes": {
+        "efficiency": "52589757e3da5173c1a76f8e79c305d2bbd04cb4e3ca0ea3d74abc7f52f49910",
+        "forced_error_recovery": "9f6ef00c9e49e8ff8149ff544685782f6f17932ddd4a13447702b6787f4341bc",
+        "invalid_action_recovery": "4e0b962c9ed93cca375608d6c2b6113331fce2fd632063f2f425fc63e6777d3f",
+        "partial_success_retention": "4a758b91368617ba607e3f36c0781f4b1493167600c36942722027aa519f838c",
+        "standard_success": "4e5c10ea44687d8ce012fa944562af761acdd0c0b0e9f8a2eb113dd4d1bc8b6f"
+      }
+    },
+    "approved_suite_sha256": "c93183f48b95d89849066a7733b9b5d841e53a77f0116160f7448364773b3c5c",
     "evaluator_seed": 20260719,
     "max_steps": 24,
     "scenario_schema_version": 1,
@@ -30,7 +99,7 @@
       "invalid_action_recovery",
       "efficiency"
     ],
-    "status": "unconfigured"
+    "status": "pinned"
   },
   "family_policy": {
     "harmonic": {
@@ -64,9 +133,9 @@
       "minimum_resolution_rate": 0.95
     },
     "multi_measurement": {
-      "maximum_operator_escalation_rate": 0.05,
+      "maximum_operator_escalation_rate": 1.0,
       "minimum_physical_roots": 20,
-      "minimum_resolution_rate": 0.95
+      "minimum_resolution_rate": 0.0
     },
     "no_error": {
       "maximum_operator_escalation_rate": 0.0,
@@ -77,16 +146,6 @@
       "maximum_operator_escalation_rate": 0.0,
       "minimum_physical_roots": 6,
       "minimum_resolution_rate": 1.0
-    },
-    "telemetry_no_disturbance": {
-      "maximum_operator_escalation_rate": 0.0,
-      "minimum_physical_roots": 20,
-      "minimum_resolution_rate": 1.0
-    },
-    "three_phase_unbalance": {
-      "maximum_operator_escalation_rate": 0.05,
-      "minimum_physical_roots": 20,
-      "minimum_resolution_rate": 0.95
     },
     "topology": {
       "maximum_operator_escalation_rate": 0.0,
