@@ -27,6 +27,7 @@ from psse_env.sft.provenance import (
     file_sha256,
     stable_json_sha256,
     validate_generation_provenance,
+    validate_release_gate_report,
 )
 import psse_env.sft.training as training_module
 from psse_env.sft.training import (
@@ -514,6 +515,206 @@ class TestGenerationProvenance(unittest.TestCase):
                 pilot_maximum_rows=4,
             )
 
+    def test_release_training_requires_auto_processor(self) -> None:
+        source_rows = [row("g0", "a"), row("g1", "b")]
+        grouped = SimpleNamespace(passed=True, failures=[])
+        gate = SimpleNamespace(failures=[], prepared=[])
+        settings = TrainerSettings(
+            revision="a" * 40,
+            required_processor_loader="AutoProcessor",
+        )
+
+        def prepare_with(loader: str) -> None:
+            with (
+                mock.patch(
+                    "psse_env.sft.training.load_jsonl",
+                    side_effect=[source_rows, source_rows],
+                ),
+                mock.patch(
+                    "psse_env.sft.training.validate_grouped_pilot",
+                    return_value=grouped,
+                ),
+                mock.patch(
+                    "psse_env.sft.training.validate_generation_provenance",
+                    return_value={"passed": True, "failures": []},
+                ),
+                mock.patch(
+                    "psse_env.sft.training.load_exact_processor",
+                    return_value=(FakeProcessor(), loader),
+                ),
+                mock.patch(
+                    "psse_env.sft.training.audit_dataset", return_value=gate
+                ),
+            ):
+                training_module._prepare_pilot(
+                    train_file="train.jsonl",
+                    validation_file="validation.jsonl",
+                    settings=settings,
+                    pilot_minimum_rows=2,
+                    pilot_maximum_rows=4,
+                )
+
+        with self.assertRaisesRegex(GateError, "requires AutoProcessor"):
+            prepare_with("AutoTokenizer")
+        prepare_with("AutoProcessor")
+
+    def test_full_training_forces_auto_processor_for_programmatic_callers(
+        self,
+    ) -> None:
+        captured: dict[str, TrainerSettings] = {}
+
+        def stop_after_settings(**kwargs):
+            captured["settings"] = kwargs["settings"]
+            raise GateError("stop after processor contract")
+
+        with (
+            mock.patch(
+                "psse_env.sft.training._prepare_pilot",
+                side_effect=stop_after_settings,
+            ),
+            self.assertRaisesRegex(GateError, "stop after processor contract"),
+        ):
+            training_module.run_lora_training(
+                train_file="train.jsonl",
+                validation_file="validation.jsonl",
+                settings=TrainerSettings(revision="a" * 40),
+            )
+
+        self.assertEqual(
+            captured["settings"].required_processor_loader, "AutoProcessor"
+        )
+
+
+class TestReleaseGateReport(unittest.TestCase):
+    @staticmethod
+    def _report(root: Path) -> tuple[Path, dict[str, Path], dict]:
+        datasets = {
+            split: root / f"aggregate.{split}.jsonl"
+            for split in ("train", "validation", "test")
+        }
+        for split, path in datasets.items():
+            path.write_text(json.dumps({"split": split}) + "\n", encoding="utf-8")
+        source_commit = "a" * 40
+        revision = "b" * 40
+        split_gate = {
+            "passed": True,
+            "length_audit": {
+                "prompt_truncated_rows": 0,
+                "target_truncated_rows": 0,
+            },
+        }
+        payload = {
+            "passed": True,
+            "release_eligible": True,
+            "processor_loader": "AutoProcessor",
+            "processor_loader_requirement": "AutoProcessor",
+            "processor_loader_passed": True,
+            "model": "unsloth/gemma-4-31B-it",
+            "revision": revision,
+            "max_length": 6144,
+            "provenance": {
+                "release_eligible_source": True,
+                "source_commit": source_commit,
+                "processor_revision": revision,
+                "dataset_hashes": {
+                    split: file_sha256(path) for split, path in datasets.items()
+                },
+            },
+            "generation_provenance": {
+                "passed": True,
+                "release_eligible": True,
+                "source_commit": source_commit,
+            },
+            **{split: copy.deepcopy(split_gate) for split in datasets},
+        }
+        report_path = root / "gate_report.json"
+        report_path.write_text(
+            json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+        )
+        return report_path, datasets, payload
+
+    @staticmethod
+    def _validate(report_path: Path, datasets: dict[str, Path]) -> dict:
+        return validate_release_gate_report(
+            report_path,
+            model="unsloth/gemma-4-31B-it",
+            revision="b" * 40,
+            source_commit="a" * 40,
+            datasets=datasets,
+            max_length=6144,
+        )
+
+    def test_exact_auto_processor_report_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_path, datasets, _ = self._report(Path(temp_dir))
+            result = self._validate(report_path, datasets)
+        self.assertTrue(result["passed"], result["failures"])
+
+    def test_stale_or_tokenizer_report_fails_closed(self) -> None:
+        mutations = {
+            "tokenizer fallback": lambda payload: payload.update(
+                processor_loader="AutoTokenizer"
+            ),
+            "stale source": lambda payload: payload["provenance"].update(
+                source_commit="c" * 40
+            ),
+            "wrong model": lambda payload: payload.update(model="other/model"),
+            "wrong revision": lambda payload: payload.update(revision="c" * 40),
+            "wrong max length": lambda payload: payload.update(max_length=4096),
+            "stale aggregate source": lambda payload: payload[
+                "generation_provenance"
+            ].update(source_commit="c" * 40),
+            "wrong dataset": lambda payload: payload["provenance"][
+                "dataset_hashes"
+            ].update(train="0" * 64),
+            "prompt truncation": lambda payload: payload["train"][
+                "length_audit"
+            ].update(prompt_truncated_rows=1),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as temp_dir:
+                report_path, datasets, payload = self._report(Path(temp_dir))
+                mutate(payload)
+                report_path.write_text(
+                    json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+                )
+                result = self._validate(report_path, datasets)
+                self.assertFalse(result["passed"])
+                self.assertTrue(result["failures"])
+
+    def test_missing_or_empty_report_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            report_path, datasets, _ = self._report(root)
+            report_path.unlink()
+            missing = self._validate(report_path, datasets)
+            report_path.write_text("{}\n", encoding="utf-8")
+            empty = self._validate(report_path, datasets)
+        self.assertFalse(missing["passed"])
+        self.assertFalse(empty["passed"])
+
+    def test_round0_launcher_uses_one_strict_processor_gate_path(self) -> None:
+        repo_root = Path(__file__).resolve().parents[3]
+        launcher = (repo_root / "submit_dagger_sft_round0.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("--require-auto-processor", launcher)
+        self.assertIn(
+            '--report-output "$PROCESSOR_GATE_REPORT"', launcher
+        )
+        self.assertNotIn(
+            '--report-output "$OUTPUT_DIR/gate_report.json"', launcher
+        )
+        self.assertIn("validate_release_gate_report", launcher)
+        for value in (
+            '"$REVIEWED_SOURCE_COMMIT"',
+            '"$TRAIN_FILE"',
+            '"$VALIDATION_FILE"',
+            '"$TEST_FILE"',
+            '"$MAX_LENGTH"',
+        ):
+            self.assertIn(value, launcher)
+
 
 class TestBaselineEvaluationGate(unittest.TestCase):
     @staticmethod
@@ -770,6 +971,112 @@ class TestExactLoader(unittest.TestCase):
                     ]
                 )
             self.assertEqual(result, 2)
+
+    def test_cli_strict_gate_rejects_tokenizer_fallback_and_writes_report(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            paths = {
+                split: root / f"{split}.jsonl"
+                for split in ("train", "validation", "test")
+            }
+            for split, path in paths.items():
+                source = row(split)
+                source["metadata"]["protocol"] = "canonical"
+                path.write_text(json.dumps(source) + "\n", encoding="utf-8")
+            report_path = root / "gate_report.json"
+            gate = SimpleNamespace(
+                passed=True,
+                to_dict=lambda: {
+                    "passed": True,
+                    "length_audit": {
+                        "prompt_truncated_rows": 0,
+                        "target_truncated_rows": 0,
+                    },
+                },
+            )
+            provenance = {
+                "release_eligible_source": True,
+                "source_commit": "a" * 40,
+            }
+            with (
+                mock.patch(
+                    "psse_env.sft.cli.load_exact_processor",
+                    return_value=(FakeProcessor(), "AutoTokenizer"),
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.audit_dataset", return_value=gate
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.build_gate_provenance",
+                    return_value=provenance,
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.validate_generation_provenance",
+                    return_value={"passed": True},
+                ),
+            ):
+                result = cli_main(
+                    [
+                        "gate",
+                        "--model",
+                        "unsloth/gemma-4-31B-it",
+                        "--revision",
+                        "a" * 40,
+                        "--train",
+                        str(paths["train"]),
+                        "--validation",
+                        str(paths["validation"]),
+                        "--test",
+                        str(paths["test"]),
+                        "--pilot-min-rows",
+                        "3",
+                        "--pilot-max-rows",
+                        "3",
+                        "--require-auto-processor",
+                        "--report-output",
+                        str(report_path),
+                    ]
+                )
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result, 2)
+        self.assertFalse(report["passed"])
+        self.assertFalse(report["release_eligible"])
+        self.assertEqual(report["processor_loader"], "AutoTokenizer")
+        self.assertEqual(
+            report["processor_loader_requirement"], "AutoProcessor"
+        )
+        self.assertFalse(report["processor_loader_passed"])
+
+    def test_cli_train_wires_auto_processor_requirement(self) -> None:
+        result_object = SimpleNamespace(metrics={"train_loss": 1.0})
+        with (
+            mock.patch(
+                "psse_env.sft.cli._baseline_evaluation_gate", return_value={}
+            ),
+            mock.patch(
+                "psse_env.sft.cli.run_lora_training", return_value=result_object
+            ) as run_training,
+        ):
+            result = cli_main(
+                [
+                    "train",
+                    "--model",
+                    "unsloth/gemma-4-31B-it",
+                    "--revision",
+                    "a" * 40,
+                    "--train",
+                    "train.jsonl",
+                    "--validation",
+                    "validation.jsonl",
+                ]
+            )
+
+        self.assertEqual(result, 0)
+        settings = run_training.call_args.kwargs["settings"]
+        self.assertEqual(settings.required_processor_loader, "AutoProcessor")
 
 
 class TinyLM(unittest.TestCase):

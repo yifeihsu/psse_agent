@@ -125,6 +125,11 @@ TINY_OVERFIT_LR=0.0001 STAGE=tiny-overfit \
    freeze commit through `REVIEWED_SOURCE_COMMIT`.
 5. Execute `gate -> one-batch -> tiny-overfit -> round0` with `afterok`
    dependencies, passing that same reviewed commit to every stage.
+   Keep `PROCESSOR_GATE_REPORT` identical across the chain (or retain one
+   shared `OUTPUT_DIR` so its default path is identical). The gate report is
+   durable prerequisite evidence: `round0` requires it to be release-eligible,
+   bound to the current split bytes and source commit, and produced with
+   `AutoProcessor` rather than the tokenizer fallback.
 6. Evaluate every produced `output/lora` adapter on the frozen suite with the
    release-evaluation launcher. Its content digest names the evidence artifact,
    and its output guard protects the persisted base reference.

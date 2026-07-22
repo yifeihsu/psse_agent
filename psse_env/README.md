@@ -166,7 +166,7 @@ python -m psse_env.examples.generate_round0_aggregate \
   --output-dir data/round0_aggregate_release
 ```
 
-That plan has 245 roots and preserves every current family minimum while
+That plan has 249 roots and preserves every current family minimum while
 keeping the expected optimizer-visible train-plus-validation rows inside the
 launcher budget. The regenerated artifact, not this estimate, is authoritative.
 
@@ -438,7 +438,7 @@ evaluator also fixes all outputs below `artifacts/evaluations/`, rejects path
 aliases that could overwrite the persisted base artifact, and requires
 checkpoint evaluation to point at the final adapter directory (`output/lora`),
 not a Trainer checkpoint containing optimizer state.  Submit the base and one
-content-addressed checkpoint evaluation as follows:
+content-addressed checkpoint evaluation around the SFT stages as follows:
 
 ```bash
 FREEZE_COMMIT=$(git rev-parse HEAD)
@@ -447,7 +447,13 @@ sbatch --export=ALL,REVIEWED_SOURCE_COMMIT="$FREEZE_COMMIT",EVALUATION_MODE=expe
 
 sbatch --export=ALL,REVIEWED_SOURCE_COMMIT="$FREEZE_COMMIT",EVALUATION_MODE=base \
   submit_dagger_release_eval.sh
+```
 
+After both baseline gates pass, run `gate -> one-batch -> tiny-overfit ->
+round0` in that order. Only after `round0` produces `output/lora` should the
+checkpoint evaluation run:
+
+```bash
 sbatch --export=ALL,REVIEWED_SOURCE_COMMIT="$FREEZE_COMMIT",EVALUATION_MODE=checkpoint,CHECKPOINT_PATH=/absolute/output/lora \
   submit_dagger_release_eval.sh
 ```
@@ -455,6 +461,12 @@ sbatch --export=ALL,REVIEWED_SOURCE_COMMIT="$FREEZE_COMMIT",EVALUATION_MODE=chec
 Pass the same `REVIEWED_SOURCE_COMMIT` to every
 `submit_dagger_sft_round0.sh` stage. Slurm logs are written at the repository
 root so submission does not depend on a pre-existing untracked log directory.
+`STAGE=gate` writes the durable `PROCESSOR_GATE_REPORT` (default
+`$OUTPUT_DIR/gate_report.json`); every stage must share that path or the same
+`OUTPUT_DIR`. `STAGE=round0` revalidates that report against the exact source,
+model revision, maximum length, and train/validation/test bytes and requires
+that it used `AutoProcessor`. The checkpoint evaluation is followed by
+`STAGE=checkpoint-gate`; it is not part of the baseline submission group.
 
 Run the dedicated gate with:
 

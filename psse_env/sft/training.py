@@ -67,6 +67,7 @@ class TrainerSettings:
     trust_remote_code: bool = False
     allow_prompt_truncation: bool = False
     allow_nonrelease_artifacts: bool = False
+    required_processor_loader: str | None = None
 
     def validate(self) -> None:
         if "gemma-4" not in self.model_name.lower():
@@ -84,6 +85,10 @@ class TrainerSettings:
             raise GateError("save_strategy must be 'epoch' or 'steps'.")
         if self.eval_strategy == "steps" and self.eval_steps <= 0:
             raise GateError("eval_steps must be positive for step-based validation.")
+        if self.required_processor_loader not in {None, "AutoProcessor"}:
+            raise GateError(
+                "required_processor_loader must be None or 'AutoProcessor'."
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -317,12 +322,21 @@ def _prepare_pilot(
             "Generation provenance gate failed: "
             + " | ".join(generation["failures"])
         )
-    processor, _ = load_exact_processor(
+    processor, processor_loader = load_exact_processor(
         settings.model_name,
         settings.revision,
         local_files_only=settings.local_files_only,
         trust_remote_code=settings.trust_remote_code,
     )
+    if (
+        settings.required_processor_loader is not None
+        and processor_loader != settings.required_processor_loader
+    ):
+        raise GateError(
+            "Release SFT requires "
+            f"{settings.required_processor_loader}; loaded {processor_loader}. "
+            "Repair the pinned processor cache before running a model stage."
+        )
     train_gate = audit_dataset(
         train_rows,
         processor,
@@ -433,6 +447,11 @@ def run_lora_training(
     smoke_steps: int = 1,
 ) -> Any:
     """Run all pilot gates, a real optimizer smoke step, then TRL LoRA SFT."""
+    # Full training is always release-facing, including programmatic callers
+    # that bypass the CLI.  Keep the loader fallback available for standalone
+    # diagnostics and optional smoke runs, but never for checkpoint-producing
+    # training.
+    settings = replace(settings, required_processor_loader="AutoProcessor")
     processor, train_examples, validation_examples = _prepare_pilot(
         train_file=train_file,
         validation_file=validation_file,

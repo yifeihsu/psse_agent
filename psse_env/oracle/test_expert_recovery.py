@@ -634,7 +634,7 @@ class MeasurementTargetIndexContractTests(unittest.TestCase):
 
 
 class NoEvidenceInvestigationTests(unittest.TestCase):
-    def test_failed_insufficient_evidence_context_counts_as_investigation(self) -> None:
+    def test_exact_provider_no_evidence_context_counts_as_investigation(self) -> None:
         oracle = ExpertPolicyOracle()
         state_id = "episode:s1"
         history = [
@@ -650,6 +650,9 @@ class NoEvidenceInvestigationTests(unittest.TestCase):
                 "tool_output": {
                     "execution_status": "failure",
                     "error_code": "insufficient_observable_evidence",
+                    "error_detail": (
+                        "get_measurement_context_provider_returned_no_evidence"
+                    ),
                 },
             },
         ]
@@ -658,6 +661,73 @@ class NoEvidenceInvestigationTests(unittest.TestCase):
         )
         self.assertTrue(wls_seen)
         self.assertTrue(investigation_seen)
+
+    def test_other_insufficient_evidence_details_do_not_count(self) -> None:
+        oracle = ExpertPolicyOracle()
+        state_id = "episode:s1"
+        invalid_details = (
+            None,
+            "get_measurement_context_provider_evidence_unbound",
+            "get_measurement_context_supported_correction_contract_invalid",
+            "get_measurement_context_route_contract_invalid",
+            "get_measurement_context_terminal_closure_contract_invalid",
+            "get_parameter_context_provider_returned_no_evidence",
+        )
+        for detail in invalid_details:
+            with self.subTest(error_detail=detail):
+                output = {
+                    "execution_status": "failure",
+                    "error_code": "insufficient_observable_evidence",
+                }
+                if detail is not None:
+                    output["error_detail"] = detail
+                history = [
+                    {
+                        "action": {
+                            "tool": "get_measurement_context",
+                            "arguments": {"state_id": state_id},
+                        },
+                        "tool_output": output,
+                    },
+                ]
+                _, investigation_seen = oracle._observable_recovery_prerequisites(
+                    {"active_state_id": state_id}, history, active_id=state_id
+                )
+                self.assertFalse(investigation_seen)
+
+    def test_latest_integrity_failure_shadows_older_no_evidence(self) -> None:
+        oracle = ExpertPolicyOracle()
+        state_id = "episode:s1"
+        action = {
+            "tool": "get_measurement_context",
+            "arguments": {"state_id": state_id},
+        }
+        history = [
+            {
+                "action": action,
+                "tool_output": {
+                    "execution_status": "failure",
+                    "error_code": "insufficient_observable_evidence",
+                    "error_detail": (
+                        "get_measurement_context_provider_returned_no_evidence"
+                    ),
+                },
+            },
+            {
+                "action": action,
+                "tool_output": {
+                    "execution_status": "failure",
+                    "error_code": "insufficient_observable_evidence",
+                    "error_detail": (
+                        "get_measurement_context_provider_evidence_unbound"
+                    ),
+                },
+            },
+        ]
+        _, investigation_seen = oracle._observable_recovery_prerequisites(
+            {"active_state_id": state_id}, history, active_id=state_id
+        )
+        self.assertFalse(investigation_seen)
 
     def test_failed_context_on_other_state_does_not_count(self) -> None:
         oracle = ExpertPolicyOracle()
@@ -670,6 +740,9 @@ class NoEvidenceInvestigationTests(unittest.TestCase):
                 "tool_output": {
                     "execution_status": "failure",
                     "error_code": "insufficient_observable_evidence",
+                    "error_detail": (
+                        "get_measurement_context_provider_returned_no_evidence"
+                    ),
                 },
             },
         ]
@@ -730,6 +803,10 @@ class NoEvidenceInvestigationTests(unittest.TestCase):
         self.assertEqual(context["execution_status"], "failure")
         self.assertEqual(
             context["error_code"], "insufficient_observable_evidence"
+        )
+        self.assertEqual(
+            context["error_detail"],
+            f"{GET_MEASUREMENT_CONTEXT}_provider_returned_no_evidence",
         )
 
         executed: list[str] = []

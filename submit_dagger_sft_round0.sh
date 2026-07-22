@@ -63,6 +63,7 @@ EXPERT_BASELINE_EVALUATION=${EXPERT_BASELINE_EVALUATION:-artifacts/evaluations/e
 BASE_GEMMA_EVALUATION=${BASE_GEMMA_EVALUATION:-artifacts/evaluations/base_gemma_evaluation.json}
 EXPERT_POLICY_IDENTITY=${EXPERT_POLICY_IDENTITY:-bc0-observable-expert-v1}
 BASELINE_EVALUATION_REPORT=${BASELINE_EVALUATION_REPORT:-$OUTPUT_DIR/baseline_evaluation_gate.json}
+PROCESSOR_GATE_REPORT=${PROCESSOR_GATE_REPORT:-$OUTPUT_DIR/gate_report.json}
 CHECKPOINT_EVALUATION=${CHECKPOINT_EVALUATION:-}
 CHECKPOINT_MODEL_ID=${CHECKPOINT_MODEL_ID:-}
 CHECKPOINT_MODEL_REVISION=${CHECKPOINT_MODEL_REVISION:-}
@@ -116,6 +117,52 @@ if [[ ! -x "$PYTHON" ]]; then
     echo "ERROR: Python environment not found at $PYTHON; create it from psse_env/requirements-sft.txt first." >&2
     exit 2
 fi
+if [[ "$STAGE" == "round0" ]]; then
+    # Validate cheap, immutable prerequisite evidence before importing the
+    # GPU stack or running native-runtime checks on an expensive allocation.
+    "$PYTHON" - \
+        "$PROCESSOR_GATE_REPORT" \
+        "$MODEL_NAME" \
+        "$MODEL_REVISION" \
+        "$REVIEWED_SOURCE_COMMIT" \
+        "$TRAIN_FILE" \
+        "$VALIDATION_FILE" \
+        "$TEST_FILE" \
+        "$MAX_LENGTH" <<'PY'
+import sys
+
+from psse_env.sft.provenance import validate_release_gate_report
+
+(
+    report_path,
+    model,
+    revision,
+    source_commit,
+    train_file,
+    validation_file,
+    test_file,
+    max_length,
+) = sys.argv[1:]
+result = validate_release_gate_report(
+    report_path,
+    model=model,
+    revision=revision,
+    source_commit=source_commit,
+    datasets={
+        "train": train_file,
+        "validation": validation_file,
+        "test": test_file,
+    },
+    max_length=int(max_length),
+)
+if not result["passed"]:
+    raise SystemExit(
+        "Round0 prerequisite processor/data gate is NO-GO:\n- "
+        + "\n- ".join(result["failures"])
+    )
+print("Round0 prerequisite processor/data gate passed with AutoProcessor")
+PY
+fi
 if [[ "$STAGE" != "checkpoint-gate" ]]; then
     for path in "$TRAIN_FILE" "$VALIDATION_FILE" "$TEST_FILE"; do
         if [[ ! -f "$path" ]]; then
@@ -143,9 +190,9 @@ if [[ "$STAGE" == "round0" || "$STAGE" == "checkpoint-gate" ]]; then
     done
 fi
 if [[ "$STAGE" == "round0" ]]; then
-    for path in "$EXPERT_BASELINE_EVALUATION" "$BASE_GEMMA_EVALUATION"; do
+    for path in "$EXPERT_BASELINE_EVALUATION" "$BASE_GEMMA_EVALUATION" "$PROCESSOR_GATE_REPORT"; do
         if [[ ! -f "$path" ]]; then
-            echo "ERROR: STAGE=round0 requires baseline evaluation artifact: $path" >&2
+            echo "ERROR: STAGE=round0 requires prerequisite evidence: $path" >&2
             exit 2
         fi
     done
@@ -180,6 +227,9 @@ echo "source:    $REVIEWED_SOURCE_COMMIT"
 echo "train:     $TRAIN_FILE"
 echo "output:    $OUTPUT_DIR"
 echo "downloads: $ALLOW_DOWNLOAD"
+if [[ "$STAGE" == "gate" || "$STAGE" == "round0" ]]; then
+    echo "processor gate: $PROCESSOR_GATE_REPORT"
+fi
 if [[ "$STAGE" == "round0" || "$STAGE" == "checkpoint-gate" ]]; then
     echo "eval suite: $EVALUATION_SUITE"
     echo "eval policy: $EVALUATION_POLICY"
@@ -270,6 +320,7 @@ COMMON_ARGS=(
     --train "$TRAIN_FILE"
     --validation "$VALIDATION_FILE"
     --max-length "$MAX_LENGTH"
+    --require-auto-processor
 )
 if [[ "$ALLOW_DOWNLOAD" == "1" ]]; then
     case "$STAGE" in
@@ -293,7 +344,7 @@ case "$STAGE" in
         TEST_ROWS=$(awk 'NF { count += 1 } END { print count + 0 }' "$TEST_FILE")
         GATE_ROWS_MIN=$((ROWS_MIN + TEST_ROWS))
         GATE_ROWS_MAX=$((ROWS_MAX + TEST_ROWS))
-        COMMAND=("$PYTHON" -m psse_env.sft gate "${COMMON_ARGS[@]}" --test "$TEST_FILE" --pilot-min-rows "$GATE_ROWS_MIN" --pilot-max-rows "$GATE_ROWS_MAX" --report-output "$OUTPUT_DIR/gate_report.json")
+        COMMAND=("$PYTHON" -m psse_env.sft gate "${COMMON_ARGS[@]}" --test "$TEST_FILE" --pilot-min-rows "$GATE_ROWS_MIN" --pilot-max-rows "$GATE_ROWS_MAX" --report-output "$PROCESSOR_GATE_REPORT")
         ;;
     one-batch)
         COMMAND=("$PYTHON" -m psse_env.sft smoke "${COMMON_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --mode one-batch --load-in-4bit)

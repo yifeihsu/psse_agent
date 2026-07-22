@@ -946,19 +946,35 @@ class ExpertPolicyOracle:
                 and (requested is None or str(requested) == str(active_id))
             ):
                 investigation_seen = True
-            # A context provider that observably reports insufficient evidence
-            # for the current state IS the investigation outcome: there is
-            # nothing further an autonomous policy can observe.  Without this,
-            # a post-commit state whose provider has no per-target evidence
-            # can never open the safe-handoff hatch and the episode deadlocks.
+        # A context provider that observably reports no evidence for the
+        # current state has completed that investigation route.  Match the
+        # environment's fail-closed contract exactly: only the latest
+        # same-state mapping output for each context tool may establish this
+        # outcome.  A later integrity failure must shadow an older exhausted
+        # result rather than reopening the safe-handoff path.
+        latest_context_outputs_seen: set[str] = set()
+        for event in reversed(history):
+            if not isinstance(event, Mapping):
+                continue
+            event_action = safe_normalize_action(
+                event.get("action") or event.get("executed_action") or {}
+            )
+            tool = event_action["tool"]
+            if tool not in CONTEXT_TOOLS or tool in latest_context_outputs_seen:
+                continue
+            requested = event_action["arguments"].get("state_id")
+            if requested is None or str(requested) != str(active_id):
+                continue
+            output = event.get("tool_output")
+            if not isinstance(output, Mapping):
+                continue
+            latest_context_outputs_seen.add(tool)
             if (
-                event_action["tool"] in CONTEXT_TOOLS
-                and isinstance(output, Mapping)
-                and output.get("execution_status") == "failure"
+                output.get("execution_status") == "failure"
                 and str(output.get("error_code") or "")
                 == "insufficient_observable_evidence"
-                and requested is not None
-                and str(requested) == str(active_id)
+                and str(output.get("error_detail") or "")
+                == f"{tool}_provider_returned_no_evidence"
             ):
                 investigation_seen = True
         return successful_current_wls, investigation_seen

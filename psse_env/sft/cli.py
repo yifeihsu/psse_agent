@@ -44,6 +44,14 @@ def _common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--allow-download", action="store_true", help="Permit Hugging Face downloads; default is cache-only.")
     parser.add_argument("--trust-remote-code", action="store_true")
     parser.add_argument("--allow-prompt-truncation", action="store_true")
+    parser.add_argument(
+        "--require-auto-processor",
+        action="store_true",
+        help=(
+            "Fail if the pinned model loads only through AutoTokenizer. "
+            "Required by the BC0 release launcher."
+        ),
+    )
     parser.add_argument("--pilot-min-rows", type=int, default=32)
     parser.add_argument("--pilot-max-rows", type=int, default=128)
     parser.add_argument(
@@ -157,6 +165,9 @@ def _gate_payload(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
         local_files_only=not args.allow_download,
         trust_remote_code=args.trust_remote_code,
     )
+    processor_loader_passed = (
+        not args.require_auto_processor or loader == "AutoProcessor"
+    )
     train_gate = audit_dataset(
         train_rows,
         processor,
@@ -183,7 +194,8 @@ def _gate_payload(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
         else None
     )
     data_passed = (
-        grouped.passed
+        processor_loader_passed
+        and grouped.passed
         and train_gate.passed
         and validation_gate.passed
         and (test_gate is None or test_gate.passed)
@@ -216,8 +228,13 @@ def _gate_payload(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
             args.allow_dirty_source and not provenance_passed
         ),
         "processor_loader": loader,
+        "processor_loader_requirement": (
+            "AutoProcessor" if args.require_auto_processor else None
+        ),
+        "processor_loader_passed": processor_loader_passed,
         "model": args.model,
         "revision": args.revision,
+        "max_length": args.max_length,
         "provenance": provenance,
         "generation_provenance": generation,
         "grouped_pilot": grouped.to_dict(),
@@ -374,6 +391,11 @@ def main(argv: list[str] | None = None) -> int:
             trust_remote_code=args.trust_remote_code,
             allow_prompt_truncation=args.allow_prompt_truncation,
             allow_nonrelease_artifacts=args.allow_dirty_source,
+            required_processor_loader=(
+                "AutoProcessor"
+                if args.command == "train" or args.require_auto_processor
+                else None
+            ),
         )
         lora = LoraSettings(rank=args.lora_rank, alpha=args.lora_alpha, dropout=args.lora_dropout)
         if args.command == "smoke":

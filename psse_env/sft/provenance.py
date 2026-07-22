@@ -134,6 +134,127 @@ def build_gate_provenance(
     return payload
 
 
+def validate_release_gate_report(
+    report_path: str | Path,
+    *,
+    model: str,
+    revision: str,
+    source_commit: str,
+    datasets: Mapping[str, str | Path],
+    max_length: int,
+) -> dict[str, Any]:
+    """Bind the round-0 prerequisite gate to exact release inputs.
+
+    The standalone data gate intentionally records an ``AutoTokenizer``
+    fallback for diagnostics.  Full BC0 training is stricter: it may proceed
+    only from an eligible gate that used ``AutoProcessor`` on the same commit,
+    model revision, maximum length, and split bytes.
+    """
+
+    failures: list[str] = []
+    source = Path(report_path)
+    payload: Mapping[str, Any] = {}
+    try:
+        decoded = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        failures.append(
+            f"Release gate report is unreadable: {type(exc).__name__}: {exc}"
+        )
+    else:
+        if isinstance(decoded, Mapping):
+            payload = decoded
+        else:
+            failures.append("Release gate report must contain a JSON object.")
+
+    if not payload:
+        failures.append("Release gate report has no gate payload.")
+    else:
+        if payload.get("passed") is not True:
+            failures.append("Release gate report did not pass.")
+        if payload.get("release_eligible") is not True:
+            failures.append("Release gate report is not release eligible.")
+        if payload.get("processor_loader") != "AutoProcessor":
+            failures.append(
+                "Release gate must use AutoProcessor; got "
+                f"{payload.get('processor_loader')!r}."
+            )
+        if payload.get("processor_loader_passed") is not True:
+            failures.append(
+                "Release gate did not enforce its AutoProcessor requirement."
+            )
+        if payload.get("processor_loader_requirement") != "AutoProcessor":
+            failures.append("Release gate did not declare AutoProcessor as required.")
+        if payload.get("model") != model:
+            failures.append("Release gate model identity does not match round0.")
+        if payload.get("revision") != revision:
+            failures.append("Release gate model revision does not match round0.")
+        if payload.get("max_length") != max_length:
+            failures.append("Release gate max_length does not match round0.")
+
+        provenance = payload.get("provenance")
+        provenance = provenance if isinstance(provenance, Mapping) else {}
+        if provenance.get("release_eligible_source") is not True:
+            failures.append("Release gate source was not clean and release eligible.")
+        if provenance.get("source_commit") != source_commit:
+            failures.append("Release gate source commit does not match round0.")
+        if provenance.get("processor_revision") != revision:
+            failures.append("Release gate processor revision does not match round0.")
+
+        generation = payload.get("generation_provenance")
+        generation = generation if isinstance(generation, Mapping) else {}
+        if generation.get("passed") is not True:
+            failures.append("Release aggregate generation provenance did not pass.")
+        if generation.get("release_eligible") is not True:
+            failures.append("Release aggregate generation provenance is ineligible.")
+        if generation.get("source_commit") != source_commit:
+            failures.append(
+                "Release aggregate generation commit does not match round0."
+            )
+
+        expected_splits = {"train", "validation", "test"}
+        if set(datasets) != expected_splits:
+            failures.append(
+                "Release gate validation requires train, validation, and test splits."
+            )
+        recorded_hashes = provenance.get("dataset_hashes")
+        recorded_hashes = (
+            recorded_hashes if isinstance(recorded_hashes, Mapping) else {}
+        )
+        for split_name, dataset_path in sorted(datasets.items()):
+            path = Path(dataset_path)
+            if not path.is_file():
+                failures.append(f"Release dataset is missing: {path}.")
+                continue
+            if recorded_hashes.get(split_name) != file_sha256(path):
+                failures.append(
+                    f"Release gate dataset hash does not match {split_name}."
+                )
+            split_report = payload.get(split_name)
+            split_report = (
+                split_report if isinstance(split_report, Mapping) else {}
+            )
+            if split_report.get("passed") is not True:
+                failures.append(f"Release gate {split_name} audit did not pass.")
+            length_audit = split_report.get("length_audit")
+            length_audit = (
+                length_audit if isinstance(length_audit, Mapping) else {}
+            )
+            if length_audit.get("prompt_truncated_rows") != 0:
+                failures.append(
+                    f"Release gate {split_name} contains prompt truncation."
+                )
+            if length_audit.get("target_truncated_rows") != 0:
+                failures.append(
+                    f"Release gate {split_name} contains target truncation."
+                )
+
+    return {
+        "passed": not failures,
+        "failures": failures,
+        "report_path": str(source),
+    }
+
+
 def validate_generation_provenance(
     *,
     repo_root: str | Path,
@@ -220,4 +341,5 @@ __all__ = [
     "stable_json_sha256",
     "tool_schema_hashes",
     "validate_generation_provenance",
+    "validate_release_gate_report",
 ]
