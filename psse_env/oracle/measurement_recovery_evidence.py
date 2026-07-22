@@ -28,6 +28,13 @@ def measurement_target_indices(action: Mapping[str, Any]) -> set[int]:
     for value in values:
         if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
             indices.add(value)
+        elif isinstance(value, str):
+            # measurement_updates keys arrive as strings after any JSON round
+            # trip (JSON object keys are always strings); accept only the
+            # canonical non-negative decimal form.
+            text = value.strip()
+            if text.isdigit():
+                indices.add(int(text))
     return indices
 
 

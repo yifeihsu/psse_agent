@@ -600,5 +600,158 @@ class ReleaseMixedErrorRecoveryTests(unittest.TestCase):
         self.assertEqual(audit["problems"], [])
 
 
+class MeasurementTargetIndexContractTests(unittest.TestCase):
+    def test_measurement_updates_keys_survive_json_round_trip(self) -> None:
+        """JSON object keys are always strings; frozen-suite setup actions
+        arrive in that form and their indices must still count as targets."""
+        from psse_env.oracle.measurement_recovery_evidence import (
+            accepted_measurement_indices,
+            measurement_target_indices,
+        )
+
+        action = {
+            "tool": "correct_measurements",
+            "arguments": {
+                "state_id": "episode:s0",
+                "measurement_updates": {"19": -0.027},
+            },
+        }
+        self.assertEqual(measurement_target_indices(action), {19})
+        self.assertEqual(
+            measurement_target_indices(
+                {
+                    "tool": "correct_measurements",
+                    "arguments": {
+                        "state_id": "episode:s0",
+                        "measurement_updates": {"nonsense": 1.0, "-3": 1.0},
+                    },
+                }
+            ),
+            set(),
+        )
+        state = {"accepted_corrections": [{"source_action": action}]}
+        self.assertEqual(accepted_measurement_indices(state), {19})
+
+
+class NoEvidenceInvestigationTests(unittest.TestCase):
+    def test_failed_insufficient_evidence_context_counts_as_investigation(self) -> None:
+        oracle = ExpertPolicyOracle()
+        state_id = "episode:s1"
+        history = [
+            {
+                "action": {"tool": "run_wls", "arguments": {"state_id": state_id}},
+                "tool_output": {"execution_status": "success"},
+            },
+            {
+                "action": {
+                    "tool": "get_measurement_context",
+                    "arguments": {"state_id": state_id},
+                },
+                "tool_output": {
+                    "execution_status": "failure",
+                    "error_code": "insufficient_observable_evidence",
+                },
+            },
+        ]
+        wls_seen, investigation_seen = oracle._observable_recovery_prerequisites(
+            {"active_state_id": state_id}, history, active_id=state_id
+        )
+        self.assertTrue(wls_seen)
+        self.assertTrue(investigation_seen)
+
+    def test_failed_context_on_other_state_does_not_count(self) -> None:
+        oracle = ExpertPolicyOracle()
+        history = [
+            {
+                "action": {
+                    "tool": "get_measurement_context",
+                    "arguments": {"state_id": "episode:s0"},
+                },
+                "tool_output": {
+                    "execution_status": "failure",
+                    "error_code": "insufficient_observable_evidence",
+                },
+            },
+        ]
+        _, investigation_seen = oracle._observable_recovery_prerequisites(
+            {"active_state_id": "episode:s1"}, history, active_id="episode:s1"
+        )
+        self.assertFalse(investigation_seen)
+
+    def test_no_evidence_provider_outcome_supports_audited_handoff(self) -> None:
+        """A provider observably reporting no evidence for the active state
+        must open the safe-handoff path end to end: the expert proposes the
+        escalation and the environment's audit accepts it as terminal."""
+        from psse_env.actions import GET_MEASUREMENT_CONTEXT
+        from psse_env.providers import MatpowerDeploymentProviders
+        from psse_env.providers.scenario_generator import Round0ScenarioGenerator
+        from psse_env.transactional_env import TransactionalPSSEEnv
+
+        source = Round0ScenarioGenerator(seed=7).build({"measurement": 1})[0]
+        scenario = {
+            key: value
+            for key, value in source.items()
+            if not key.startswith(("true_", "clean_"))
+            and key not in {"hidden_truth", "oracle_action_hints"}
+        }
+        providers = MatpowerDeploymentProviders(chi2_alpha=0.01)
+        kwargs = providers.env_kwargs()
+
+        def no_evidence_context(payload: dict) -> dict:
+            del payload
+            return {
+                "context_tool": GET_MEASUREMENT_CONTEXT,
+                "execution_status": "failure",
+                "error_code": "insufficient_observable_evidence",
+                "error_detail": (
+                    f"{GET_MEASUREMENT_CONTEXT}_provider_returned_no_evidence"
+                ),
+            }
+
+        no_evidence_context.provider_kind = "deployment"
+        kwargs["context_providers"] = {
+            **kwargs["context_providers"],
+            GET_MEASUREMENT_CONTEXT: no_evidence_context,
+        }
+        env = TransactionalPSSEEnv(
+            **kwargs, production_dataset_mode=True, max_steps=24
+        )
+        oracle = ExpertPolicyOracle(process_oracle=env.process_oracle)
+        env.reset(scenario)
+        active_id = str(env.current_state()["active_state_id"])
+        _, wls = env.step({"tool": "run_wls", "arguments": {"state_id": active_id}})
+        self.assertEqual(wls["execution_status"], "success")
+        _, context = env.step(
+            {
+                "tool": GET_MEASUREMENT_CONTEXT,
+                "arguments": {"state_id": active_id},
+            }
+        )
+        self.assertEqual(context["execution_status"], "failure")
+        self.assertEqual(
+            context["error_code"], "insufficient_observable_evidence"
+        )
+
+        executed: list[str] = []
+        for _ in range(6):
+            if env.is_terminal():
+                break
+            proposals = oracle.next_actions(
+                env.get_oracle_state(env.history), env.history
+            )
+            self.assertTrue(
+                proposals,
+                f"expert returned no action after {executed}; deadlock",
+            )
+            action = proposals[0]
+            executed.append(action["tool"])
+            _, output = env.step(action)
+            self.assertEqual(output["execution_status"], "success", executed)
+
+        self.assertTrue(env.is_terminal(), executed)
+        self.assertEqual(env.terminal_outcome, "operator_escalation")
+        self.assertEqual(executed[-1], "ask_for_more_evidence")
+
+
 if __name__ == "__main__":
     unittest.main()

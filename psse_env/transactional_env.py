@@ -1686,6 +1686,39 @@ class TransactionalPSSEEnv:
                         )
                         break
                 if bound_event is None:
+                    # A provider that observably reported insufficient
+                    # evidence for this exact active state is a complete
+                    # investigation outcome contributing zero recovery
+                    # targets; requiring a successful context here would make
+                    # a safe handoff unreachable in states the provider
+                    # cannot describe.  Only the provider-returned-no-evidence
+                    # detail qualifies: an unbound provider response is an
+                    # integrity failure, not exhaustion.
+                    exhausted_by_provider = False
+                    for event in reversed(self.history):
+                        if not isinstance(event, Mapping):
+                            continue
+                        event_action = safe_normalize_action(event.get("action") or {})
+                        if event_action["tool"] != context_tool:
+                            continue
+                        requested = event_action["arguments"].get("state_id")
+                        if requested is None or str(requested) != active_id:
+                            continue
+                        output = event.get("tool_output")
+                        if not isinstance(output, Mapping):
+                            continue
+                        if (
+                            output.get("execution_status") == "failure"
+                            and str(output.get("error_code") or "")
+                            == "insufficient_observable_evidence"
+                            and str(output.get("error_detail") or "")
+                            == f"{context_tool}_provider_returned_no_evidence"
+                        ):
+                            exhausted_by_provider = True
+                        break
+                    if exhausted_by_provider:
+                        investigation_tools.append(context_tool)
+                        continue
                     if context_tool in required_contexts:
                         missing_required_contexts.append(context_tool)
                     continue

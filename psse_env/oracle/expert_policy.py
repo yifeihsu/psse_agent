@@ -6,6 +6,7 @@ from typing import Any, Mapping, Sequence
 
 from psse_env.actions import (
     ASK_FOR_MORE_EVIDENCE,
+    CONTEXT_TOOLS,
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,
@@ -943,6 +944,21 @@ class ExpertPolicyOracle:
                 event_action["tool"] in investigation_tools
                 and success
                 and (requested is None or str(requested) == str(active_id))
+            ):
+                investigation_seen = True
+            # A context provider that observably reports insufficient evidence
+            # for the current state IS the investigation outcome: there is
+            # nothing further an autonomous policy can observe.  Without this,
+            # a post-commit state whose provider has no per-target evidence
+            # can never open the safe-handoff hatch and the episode deadlocks.
+            if (
+                event_action["tool"] in CONTEXT_TOOLS
+                and isinstance(output, Mapping)
+                and output.get("execution_status") == "failure"
+                and str(output.get("error_code") or "")
+                == "insufficient_observable_evidence"
+                and requested is not None
+                and str(requested) == str(active_id)
             ):
                 investigation_seen = True
         return successful_current_wls, investigation_seen
