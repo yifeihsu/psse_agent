@@ -14,6 +14,10 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=yx3882@nyu.edu
 
+# Step 4 (persist the observable-expert baseline; CPU-sufficient, submit with
+# for example --gres=gpu:0 --constraint= to skip the GPU allocation):
+#   sbatch --export=ALL,REVIEWED_SOURCE_COMMIT=<freeze-commit>,EVALUATION_MODE=expert \
+#     submit_dagger_release_eval.sh
 # Step 5 (persist the pinned base baseline):
 #   sbatch --export=ALL,REVIEWED_SOURCE_COMMIT=<freeze-commit>,EVALUATION_MODE=base \
 #     submit_dagger_release_eval.sh
@@ -41,19 +45,27 @@ REVIEWED_SOURCE_COMMIT=${REVIEWED_SOURCE_COMMIT:-}
 
 BASE_MODEL_ID=unsloth/gemma-4-31B-it
 BASE_MODEL_REVISION=8a796db4df380b178065ed910849477ff0e99c87
+EXPERT_POLICY_IDENTITY=bc0-observable-expert-v1
+EXPERT_EVALUATION_ARTIFACT=artifacts/evaluations/expert_baseline_evaluation.json
 ENV_FACTORY=psse_env.dagger.release_factories:production_environment_factory
-POLICY_FACTORY=psse_env.dagger.release_factories:gemma_release_policy_factory
 CASE_LOADER=psse_env.dagger.release_factories:deterministic_case_loader
+if [[ "$EVALUATION_MODE" == "expert" ]]; then
+    POLICY_FACTORY=psse_env.dagger.release_factories:observable_expert_policy_factory
+    POLICY_FACTORY_ROLE=expert_policy
+else
+    POLICY_FACTORY=psse_env.dagger.release_factories:gemma_release_policy_factory
+    POLICY_FACTORY_ROLE=model_policy
+fi
 
 case "$EVALUATION_MODE" in
-    base|checkpoint) ;;
+    expert|base|checkpoint) ;;
     *)
-        echo "ERROR: EVALUATION_MODE must be base or checkpoint; got '$EVALUATION_MODE'." >&2
+        echo "ERROR: EVALUATION_MODE must be expert, base, or checkpoint; got '$EVALUATION_MODE'." >&2
         exit 2
         ;;
 esac
-if [[ "$EVALUATION_MODE" == "base" && ( -n "$CHECKPOINT_PATH" || -n "$CHECKPOINT_REVISION" ) ]]; then
-    echo "ERROR: checkpoint identity variables are invalid in base mode." >&2
+if [[ "$EVALUATION_MODE" != "checkpoint" && ( -n "$CHECKPOINT_PATH" || -n "$CHECKPOINT_REVISION" ) ]]; then
+    echo "ERROR: checkpoint identity variables are only valid in checkpoint mode." >&2
     exit 2
 fi
 if [[ "$EVALUATION_MODE" == "checkpoint" ]]; then
@@ -105,10 +117,16 @@ for path in "$EVALUATION_SUITE" "$EVALUATION_POLICY" psse_env/requirements-sft.t
     fi
 done
 
-GPU_NAMES=$(nvidia-smi --query-gpu=name --format=csv,noheader)
-if [[ ! "$GPU_NAMES" =~ (H100|H200) ]]; then
-    echo "ERROR: release evaluation requires an allocated H100 or H200; got '$GPU_NAMES'." >&2
-    exit 2
+# The observable expert runs WLS on CPU; only model-backed modes need the
+# exact release GPU class.
+if [[ "$EVALUATION_MODE" == "expert" ]]; then
+    GPU_NAMES=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo "none")
+else
+    GPU_NAMES=$(nvidia-smi --query-gpu=name --format=csv,noheader)
+    if [[ ! "$GPU_NAMES" =~ (H100|H200) ]]; then
+        echo "ERROR: release evaluation requires an allocated H100 or H200; got '$GPU_NAMES'." >&2
+        exit 2
+    fi
 fi
 
 # Audit the reviewed Python 3.12 environment without contacting an index.
@@ -171,7 +189,7 @@ PY
 # the source is one clean tracked commit. The validator receives that exact
 # commit instead of resolving a potentially changed HEAD after evaluation.
 SOURCE_COMMIT=$("$PYTHON" - "$EVALUATION_SUITE" "$EVALUATION_POLICY" \
-    "$ENV_FACTORY" "$POLICY_FACTORY" "$CASE_LOADER" <<'PY'
+    "$POLICY_FACTORY_ROLE" "$ENV_FACTORY" "$POLICY_FACTORY" "$CASE_LOADER" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -180,6 +198,7 @@ from psse_env.dagger.evaluation_gate import DEFAULT_POLICY_PATH, load_evaluation
 from psse_env.sft.provenance import file_sha256, git_source_state, stable_json_sha256
 
 suite_path, policy_path = map(Path, sys.argv[1:3])
+policy_factory_role = sys.argv[3]
 selected = load_evaluation_policy(policy_path)
 packaged = load_evaluation_policy(DEFAULT_POLICY_PATH)
 if stable_json_sha256(selected) != stable_json_sha256(packaged):
@@ -190,7 +209,7 @@ if suite_policy.get("status") != "pinned":
 if file_sha256(suite_path) != suite_policy.get("approved_suite_sha256"):
     raise SystemExit("evaluation suite bytes do not match the packaged policy")
 factory_hash = file_sha256("psse_env/dagger/release_factories.py")
-for role, spec in zip(("environment", "model_policy", "case_loader"), sys.argv[3:]):
+for role, spec in zip(("environment", policy_factory_role, "case_loader"), sys.argv[4:]):
     identity = {"import_spec": spec, "source_sha256": factory_hash}
     if identity not in selected["approved_factories"].get(role, []):
         raise SystemExit(f"{role} factory is not approved by the packaged policy")
@@ -206,7 +225,12 @@ if [[ "$SOURCE_COMMIT" != "$REVIEWED_SOURCE_COMMIT" ]]; then
     exit 2
 fi
 
-if [[ "$EVALUATION_MODE" == "base" ]]; then
+if [[ "$EVALUATION_MODE" == "expert" ]]; then
+    MODEL_ID=""
+    MODEL_REVISION=""
+    ROLE=expert-baseline
+    EVALUATION_ARTIFACT=$EXPERT_EVALUATION_ARTIFACT
+elif [[ "$EVALUATION_MODE" == "base" ]]; then
     MODEL_ID=$BASE_MODEL_ID
     MODEL_REVISION=$BASE_MODEL_REVISION
     ROLE=base-baseline
@@ -299,8 +323,6 @@ EVALUATE=(
     --env-factory "$ENV_FACTORY"
     --policy-factory "$POLICY_FACTORY"
     --case-loader "$CASE_LOADER"
-    --model-id "$MODEL_ID"
-    --model-revision "$MODEL_REVISION"
     --protocol canonical
     --seed 20260719
     --max-steps 24
@@ -321,10 +343,15 @@ GATE=(
     --expected-source-commit "$SOURCE_COMMIT"
     --expected-suite "$EVALUATION_SUITE"
     --expected-protocol canonical
-    --expected-model-id "$MODEL_ID"
-    --expected-model-revision "$MODEL_REVISION"
     --report-output "$GATE_REPORT"
 )
+if [[ "$EVALUATION_MODE" == "expert" ]]; then
+    EVALUATE+=(--policy-identity "$EXPERT_POLICY_IDENTITY")
+    GATE+=(--expected-policy-identity "$EXPERT_POLICY_IDENTITY")
+else
+    EVALUATE+=(--model-id "$MODEL_ID" --model-revision "$MODEL_REVISION")
+    GATE+=(--expected-model-id "$MODEL_ID" --expected-model-revision "$MODEL_REVISION")
+fi
 if [[ "$EVALUATION_MODE" == "checkpoint" ]]; then
     GATE+=(
         --reference-artifact "$BASE_EVALUATION_ARTIFACT"
@@ -339,7 +366,11 @@ echo "host:      $(hostname)"
 echo "gpu:       $GPU_NAMES"
 echo "mode:      $EVALUATION_MODE"
 echo "source:    $SOURCE_COMMIT"
-echo "model:     $MODEL_ID@$MODEL_REVISION"
+if [[ "$EVALUATION_MODE" == "expert" ]]; then
+    echo "policy:    $EXPERT_POLICY_IDENTITY"
+else
+    echo "model:     $MODEL_ID@$MODEL_REVISION"
+fi
 echo "artifact:  $EVALUATION_ARTIFACT"
 echo "gate:      $GATE_REPORT"
 echo "downloads: disabled"

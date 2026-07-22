@@ -34,7 +34,7 @@ def validate_release_evaluation_paths(
     if not root.is_dir():
         raise ValueError(f"repository root is not a directory: {root}")
     normalized_mode = str(mode).strip().lower()
-    if normalized_mode not in {"base", "checkpoint"}:
+    if normalized_mode not in {"expert", "base", "checkpoint"}:
         raise ValueError(f"unsupported release evaluation mode: {mode!r}")
 
     output_root = (root / "artifacts" / "evaluations").resolve(strict=False)
@@ -65,7 +65,7 @@ def validate_release_evaluation_paths(
             raise ValueError(f"base reference is not a regular file: {reference}")
         protected.add(reference)
     elif reference_artifact is not None:
-        raise ValueError("base mode must not provide a comparison reference")
+        raise ValueError("only checkpoint mode may provide a comparison reference")
 
     collisions = {
         label: str(path) for label, path in outputs.items() if path in protected
@@ -95,7 +95,7 @@ def validate_release_evaluation_paths(
                 continue
             raise ValueError(f"{label} must not be written inside the checkpoint tree")
     elif checkpoint_path is not None:
-        raise ValueError("base mode must not provide checkpoint_path")
+        raise ValueError("only checkpoint mode may provide checkpoint_path")
 
     return {
         "artifact": str(outputs["artifact"]),

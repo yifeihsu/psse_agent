@@ -226,11 +226,13 @@ class BC0SuiteBuilderTests(unittest.TestCase):
         plan = family_plan_from_policy()
         validate_quota_matrix(plan)
         self.assertEqual(len(plan), 10)
-        self.assertEqual(sum(plan.values()), 105)
+        self.assertEqual(sum(plan.values()), 115)
         self.assertEqual(set(BC0_SUITE_FAMILY_QUOTAS), set(EVALUATION_SUITES))
+        expected_suite_sizes = {suite: 21 for suite in EVALUATION_SUITES}
+        expected_suite_sizes["efficiency"] = 31
         self.assertEqual(
             {suite: sum(rows.values()) for suite, rows in BC0_SUITE_FAMILY_QUOTAS.items()},
-            {suite: 21 for suite in EVALUATION_SUITES},
+            expected_suite_sizes,
         )
 
         family_policy = json.loads(
@@ -249,7 +251,7 @@ class BC0SuiteBuilderTests(unittest.TestCase):
                 self.assertEqual(
                     family_policy[family],
                     {
-                        "minimum_physical_roots": 20,
+                        "minimum_physical_roots": 22,
                         "minimum_resolution_rate": 0.95,
                         "maximum_operator_escalation_rate": 0.05,
                     },
@@ -290,8 +292,8 @@ class BC0SuiteBuilderTests(unittest.TestCase):
             for suite_rows in suites.values()
             for row in suite_rows
         ]
-        self.assertEqual(len(roots), 105)
-        self.assertEqual(len(set(roots)), 105)
+        self.assertEqual(len(roots), 115)
+        self.assertEqual(len(set(roots)), 115)
         self.assertTrue(all(root.startswith("physical_v3_") for root in roots))
 
         module_sha256 = file_sha256(Path(release_factories.__file__))
@@ -379,8 +381,8 @@ class BC0SuiteBuilderTests(unittest.TestCase):
             for suite_rows in first.values()
             for row in suite_rows
         ]
-        self.assertEqual(len(roots), 105)
-        self.assertEqual(len(set(roots)), 105)
+        self.assertEqual(len(roots), 115)
+        self.assertEqual(len(set(roots)), 115)
         expected_kinds = {
             "standard_success": "none",
             "forced_error_recovery": "pre_policy_failure",
@@ -389,7 +391,9 @@ class BC0SuiteBuilderTests(unittest.TestCase):
             "efficiency": "efficiency_budget",
         }
         for suite, suite_rows in first.items():
-            self.assertEqual(len(suite_rows), 21)
+            self.assertEqual(
+                len(suite_rows), 31 if suite == "efficiency" else 21
+            )
             self.assertEqual(
                 {
                     row["audit"]["evaluation_intervention"]["kind"]

@@ -108,17 +108,17 @@ DEFAULT_EVALUATION_POLICY_PATH = evaluation_gate_module.DEFAULT_POLICY_PATH.reso
 # Root-scenario counts per family at --scale 1.
 DEFAULT_PLAN: dict[str, int] = {
     "no_error": 4,
-    "measurement": 6,
+    "measurement": 8,
     "multi_measurement": 20,
-    "parameter": 6,
-    "topology": 6,
+    "parameter": 8,
+    "topology": 8,
     "harmonic": 4,
     # The clean checkout carries 17 independent tracked HIF roots.  HIF has a
     # separately reported handoff allowance until additional localization
     # roots are checked in.
     "hif": 17,
-    "measurement+parameter": 20,
-    "measurement+topology": 20,
+    "measurement+parameter": 22,
+    "measurement+topology": 22,
     "measurement+hif": 2,
 }
 
@@ -136,7 +136,7 @@ BC0_FAMILY_RELEASE_POLICY: dict[str, dict[str, float | int]] = {
         "maximum_operator_escalation_rate": 0.0,
     },
     "measurement": {
-        "minimum_physical_roots": 6,
+        "minimum_physical_roots": 8,
         "minimum_resolution_rate": 1.0,
         "maximum_operator_escalation_rate": 0.0,
     },
@@ -146,12 +146,12 @@ BC0_FAMILY_RELEASE_POLICY: dict[str, dict[str, float | int]] = {
         "maximum_operator_escalation_rate": 1.0,
     },
     "parameter": {
-        "minimum_physical_roots": 6,
+        "minimum_physical_roots": 8,
         "minimum_resolution_rate": 1.0,
         "maximum_operator_escalation_rate": 0.0,
     },
     "topology": {
-        "minimum_physical_roots": 6,
+        "minimum_physical_roots": 8,
         "minimum_resolution_rate": 1.0,
         "maximum_operator_escalation_rate": 0.0,
     },
@@ -168,12 +168,12 @@ BC0_FAMILY_RELEASE_POLICY: dict[str, dict[str, float | int]] = {
         "maximum_operator_escalation_rate": 1.0,
     },
     "measurement+parameter": {
-        "minimum_physical_roots": 20,
+        "minimum_physical_roots": 22,
         "minimum_resolution_rate": 0.95,
         "maximum_operator_escalation_rate": 0.05,
     },
     "measurement+topology": {
-        "minimum_physical_roots": 20,
+        "minimum_physical_roots": 22,
         "minimum_resolution_rate": 0.95,
         "maximum_operator_escalation_rate": 0.05,
     },

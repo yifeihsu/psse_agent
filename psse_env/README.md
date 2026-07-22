@@ -275,10 +275,14 @@ factory identities, and checks hard safety, terminality, loop, invalid-call,
 and per-family root/outcome constraints before any scalar score is considered.
 The packaged policy pins the repository-tracked schema-v1 suite and the exact
 reviewed environment, observable-expert, Gemma-policy, and case-loader factory
-module. The suite contains 21 globally unique physical roots in each of the
-five required operational suites (standard success, forced-error recovery,
-partial-success retention, invalid-action recovery, and efficiency), for 105
-globally unique roots. The environment factory requires production dataset
+module. The suite contains 21 globally unique physical roots in each of standard
+success, forced-error recovery, partial-success retention, and invalid-action
+recovery, plus 31 in the efficiency suite, for 115 globally unique roots.  The
+efficiency suite deliberately mixes the diagnostic families (HIF,
+measurement+HIF, harmonic) with core state-estimation families (measurement,
+parameter, topology, measurement+parameter, measurement+topology) so
+checkpoint promotion bounds tool-call efficiency for mixed-error recovery,
+not only diagnostic escalation. The environment factory requires production dataset
 mode, a deployment candidate oracle, and the 24-step protocol. The expert
 factory consumes policy-safe observations only and exposes identity
 `bc0-observable-expert-v1`. The Gemma factory loads only the exact local
@@ -411,7 +415,16 @@ checkpoint should be labeled as DAgger.
 HPC release prerequisites are H200 or H100 hardware, Python 3.12, the exact
 `requirements-sft.txt` versions, a passing `pip check` and launcher version
 audit, and a complete local pinned Gemma snapshot. Release evaluation cannot
-download or fall back to another revision. Smoke-stage timing must justify the
+download or fall back to another revision. SFT training loads through the same
+byte-verified snapshot path as release evaluation: the trainer refuses any
+model identity other than the pinned base, verifies the snapshot manifest
+before and after loading, accepts only the Gemma 4 conditional model class
+with no `AutoModelForCausalLM` fallback, writes a durable
+`base_snapshot_attestation.json` beside the training output, and normalizes
+the saved adapter's `base_model_name_or_path` back to the pinned Hub ID so the
+checkpoint gate can promote it. The launcher additionally asserts Python 3.12,
+`torch 2.10.0+cu128`, and an H100/H200 for every optimizer stage, and forbids
+`ALLOW_DOWNLOAD=1` outside the dataset-only gate stage. Smoke-stage timing must justify the
 24-hour allocation for the two-epoch 31B run. The launcher accepts only a
 legitimate audited aggregate within `ROWS_MIN=1024` and `ROWS_MAX=4096`; if a
 valid aggregate exceeds the upper bound, raise `ROWS_MAX` rather than trimming
@@ -429,6 +442,9 @@ content-addressed checkpoint evaluation as follows:
 
 ```bash
 FREEZE_COMMIT=$(git rev-parse HEAD)
+sbatch --export=ALL,REVIEWED_SOURCE_COMMIT="$FREEZE_COMMIT",EVALUATION_MODE=expert \
+  submit_dagger_release_eval.sh
+
 sbatch --export=ALL,REVIEWED_SOURCE_COMMIT="$FREEZE_COMMIT",EVALUATION_MODE=base \
   submit_dagger_release_eval.sh
 

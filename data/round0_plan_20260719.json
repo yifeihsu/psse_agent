@@ -6,7 +6,7 @@
   "topology": 36,
   "harmonic": 24,
   "hif": 17,
-  "measurement+parameter": 20,
-  "measurement+topology": 20,
+  "measurement+parameter": 22,
+  "measurement+topology": 22,
   "measurement+hif": 8
 }

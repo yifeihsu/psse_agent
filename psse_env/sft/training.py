@@ -200,15 +200,41 @@ def build_trl_config(settings: TrainerSettings, *, has_validation: bool) -> Any:
     return SFTConfig(**_supported_kwargs(SFTConfig.__init__, trl_config_kwargs(settings, has_validation=has_validation)))
 
 
-def _load_model(settings: TrainerSettings) -> Any:
+def _load_model(settings: TrainerSettings) -> tuple[Any, dict[str, Any]]:
+    """Load the byte-verified pinned base snapshot used by release evaluation.
+
+    Training must consume exactly the snapshot the release evaluator attests,
+    so the checkpoint gate's paired comparison is against the same base bytes.
+    Returns the model together with a durable snapshot attestation record.
+    """
+    from psse_env.dagger.release_factories import (
+        BASE_MODEL_ID,
+        BASE_MODEL_REVISION,
+        BASE_SNAPSHOT_FILE_MANIFEST,
+        BASE_SNAPSHOT_OPTIONAL_FILE_MANIFEST,
+        _require_loaded_from_snapshot,
+        _resolve_base_snapshot,
+        _verify_snapshot_tree,
+    )
+
+    if settings.model_name != BASE_MODEL_ID or settings.revision != BASE_MODEL_REVISION:
+        raise GateError(
+            "Release SFT trains only the reviewed base snapshot "
+            f"{BASE_MODEL_ID}@{BASE_MODEL_REVISION}; got "
+            f"{settings.model_name!r}@{settings.revision!r}."
+        )
+    if not settings.local_files_only or settings.trust_remote_code:
+        raise GateError(
+            "Release SFT requires local_files_only=True and trust_remote_code=False."
+        )
+    snapshot = _resolve_base_snapshot()
     try:
-        from transformers import AutoModelForCausalLM
+        from transformers import AutoModelForImageTextToText
     except Exception as exc:  # pragma: no cover
         raise GateError(f"Transformers model classes are unavailable: {exc}") from exc
     kwargs: dict[str, Any] = {
-        "revision": settings.revision,
-        "local_files_only": settings.local_files_only,
-        "trust_remote_code": settings.trust_remote_code,
+        "local_files_only": True,
+        "trust_remote_code": False,
         "device_map": "auto",
     }
     if settings.load_in_4bit:
@@ -225,21 +251,40 @@ def _load_model(settings: TrainerSettings) -> Any:
             bnb_4bit_compute_dtype=compute_dtype,
         )
         kwargs["dtype"] = compute_dtype
-    errors: list[str] = []
-    image_text_cls = None
     try:
-        from transformers import AutoModelForImageTextToText
-        image_text_cls = AutoModelForImageTextToText
-    except Exception:
-        pass
-    for model_cls in (image_text_cls, AutoModelForCausalLM):
-        if model_cls is None:
-            continue
-        try:
-            return model_cls.from_pretrained(settings.model_name, **kwargs)
-        except Exception as exc:
-            errors.append(f"{model_cls.__name__}: {type(exc).__name__}: {exc}")
-    raise GateError("Unable to load the pinned Gemma 4 training model. " + " | ".join(errors))
+        model = AutoModelForImageTextToText.from_pretrained(str(snapshot), **kwargs)
+    except Exception as exc:
+        raise GateError(
+            "Exact pinned Gemma training-model load failed; no loader fallback was used: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+    config = getattr(model, "config", None)
+    if getattr(config, "model_type", None) != "gemma4":
+        raise GateError("Loaded training model config is not Gemma 4")
+    if type(model).__name__ != "Gemma4ForConditionalGeneration":
+        raise GateError(
+            "Loaded training model class is not the reviewed Gemma 4 conditional model: "
+            f"{type(model).__name__}"
+        )
+    _require_loaded_from_snapshot(config, snapshot, label="training model")
+    # The shared Hub cache was verified before the loader opened it.  Hash the
+    # exact tree again after the read so a concurrent replacement cannot leave
+    # the loaded model carrying only a pre-load attestation.  The processor is
+    # loaded by (id, pinned revision, local_files_only), which the Hub resolves
+    # from this same verified snapshot directory.
+    _verify_snapshot_tree(
+        snapshot,
+        BASE_SNAPSHOT_FILE_MANIFEST,
+        BASE_SNAPSHOT_OPTIONAL_FILE_MANIFEST,
+    )
+    attestation = {
+        "model_id": BASE_MODEL_ID,
+        "model_revision": BASE_MODEL_REVISION,
+        "snapshot_path": str(snapshot),
+        "verified_files": sorted(BASE_SNAPSHOT_FILE_MANIFEST),
+        "model_class": type(model).__name__,
+    }
+    return model, attestation
 
 
 def _prepare_pilot(
@@ -339,7 +384,7 @@ def run_lora_smoke(
         pilot_minimum_rows=pilot_minimum_rows,
         pilot_maximum_rows=pilot_maximum_rows,
     )
-    model = _load_model(settings)
+    model, _snapshot_attestation = _load_model(settings)
     required_side_inputs = infer_required_side_input_names(model, processor, settings.model_name)
     train_examples = ensure_required_side_inputs(train_examples, required_side_inputs)
     model = _attach_lora(model, settings, lora)
@@ -395,7 +440,7 @@ def run_lora_training(
         pilot_minimum_rows=pilot_minimum_rows,
         pilot_maximum_rows=pilot_maximum_rows,
     )
-    model = _load_model(settings)
+    model, snapshot_attestation = _load_model(settings)
     required_side_inputs = infer_required_side_input_names(model, processor, settings.model_name)
     train_examples = ensure_required_side_inputs(train_examples, required_side_inputs)
     validation_examples = ensure_required_side_inputs(validation_examples, required_side_inputs)
@@ -452,4 +497,41 @@ def run_lora_training(
     model.save_pretrained(str(output))
     if hasattr(processor, "save_pretrained"):
         processor.save_pretrained(str(output))
+    _normalize_adapter_base_reference(output, snapshot_attestation)
+    import json as _json
+
+    attestation_path = Path(settings.output_dir) / "base_snapshot_attestation.json"
+    attestation_path.write_text(
+        _json.dumps(snapshot_attestation, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     return result
+
+
+def _normalize_adapter_base_reference(
+    adapter_dir: Path, attestation: Mapping[str, Any]
+) -> None:
+    """Rewrite the adapter's base reference from the snapshot path to the ID.
+
+    The model is loaded from the verified local snapshot directory, so PEFT
+    records that path in ``adapter_config.json``.  The checkpoint gate requires
+    ``base_model_name_or_path`` to equal the pinned Hub model ID; leaving the
+    machine-local path would make every trained adapter unpromotable.
+    """
+    import json as _json
+
+    config_path = adapter_dir / "adapter_config.json"
+    if not config_path.is_file():
+        raise GateError("PEFT save produced no adapter_config.json to normalize.")
+    adapter_config = _json.loads(config_path.read_text(encoding="utf-8"))
+    recorded = adapter_config.get("base_model_name_or_path")
+    if recorded not in (attestation["snapshot_path"], attestation["model_id"]):
+        raise GateError(
+            "Saved adapter references an unexpected base model: "
+            f"{recorded!r} is neither the verified snapshot path nor the pinned ID."
+        )
+    adapter_config["base_model_name_or_path"] = attestation["model_id"]
+    config_path.write_text(
+        _json.dumps(adapter_config, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )

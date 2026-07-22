@@ -16,6 +16,8 @@ from psse_env.actions import (
     COMMIT_STATE,
     CORRECT_MEASUREMENTS,
     FINALIZE_DIAGNOSIS,
+    RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+    RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     ROLLBACK_STATE,
     RUN_WLS,
 )
@@ -399,9 +401,14 @@ class RealProductionExpertRecoveryTests(unittest.TestCase):
                     episode["trace"][-1]["action"]["tool"],
                     ASK_FOR_MORE_EVIDENCE,
                 )
-                self.assertEqual(
+                # Which exhausted-handoff path fires depends on the root's
+                # remaining step budget; both are designed safe escalations.
+                self.assertIn(
                     episode["trace"][-1]["action"]["arguments"]["request"],
-                    "operator_escalation:recovery_options_exhausted",
+                    {
+                        RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                        RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+                    },
                 )
 
     def test_every_forced_five_meter_root_terminates_without_invalid_actions(self) -> None:

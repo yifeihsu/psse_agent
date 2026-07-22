@@ -192,11 +192,11 @@ class TerminalScenarioMatrixTests(unittest.TestCase):
                 "scenario_family": "measurement+parameter",
                 "terminal": True,
                 "terminal_outcome": (
-                    "resolved" if index < 19 else "operator_escalation"
+                    "resolved" if index < 38 else "operator_escalation"
                 ),
                 "quarantined": False,
             }
-            for index in range(20)
+            for index in range(40)
         ]
 
         entry = _terminal_scenario_matrix(audits)["measurement+parameter"]
@@ -796,7 +796,7 @@ class AggregateReleaseContractTests(unittest.TestCase):
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
 
         self.assertEqual(set(plan), set(BC0_FAMILY_RELEASE_POLICY))
-        self.assertEqual(sum(plan.values()), 245)
+        self.assertEqual(sum(plan.values()), 249)
         self.assertEqual(plan["hif"], 17)
         for family, minimum in DEFAULT_PLAN.items():
             with self.subTest(family=family):
@@ -946,9 +946,9 @@ class AggregateReleaseContractTests(unittest.TestCase):
             "psse_env/dagger/suites/bc0_eval_suite_v1.json",
         )
         self.assertTrue(descriptor["evaluation_holdout"]["schema_valid"])
-        self.assertEqual(descriptor["evaluation_holdout"]["episode_count"], 105)
-        self.assertEqual(descriptor["evaluation_holdout"]["physical_root_count"], 105)
-        self.assertEqual(descriptor["evaluation_holdout"]["scenario_id_count"], 105)
+        self.assertEqual(descriptor["evaluation_holdout"]["episode_count"], 115)
+        self.assertEqual(descriptor["evaluation_holdout"]["physical_root_count"], 115)
+        self.assertEqual(descriptor["evaluation_holdout"]["scenario_id_count"], 115)
         self.assertEqual(
             descriptor["evaluation_policy"]["path"],
             "psse_env/dagger/bc0_evaluation_policy.json",

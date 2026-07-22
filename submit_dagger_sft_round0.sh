@@ -186,6 +186,35 @@ if [[ "$STAGE" == "round0" || "$STAGE" == "checkpoint-gate" ]]; then
 fi
 nvidia-smi
 "$PYTHON" -c 'import accelerate, bitsandbytes, datasets, peft, torch, transformers, trl; print({"torch": torch.__version__, "cuda": torch.version.cuda, "cuda_available": torch.cuda.is_available(), "bf16": torch.cuda.is_bf16_supported(), "transformers": transformers.__version__, "trl": trl.__version__, "peft": peft.__version__, "bitsandbytes": bitsandbytes.__version__, "datasets": datasets.__version__, "accelerate": accelerate.__version__})'
+# Fail-closed runtime identity: the same interpreter, Torch CUDA build, and
+# GPU class the release evaluator attests.  A mismatched runtime here would
+# produce training evidence the paired checkpoint gate cannot vouch for.
+"$PYTHON" - "$STAGE" <<'PY'
+import sys
+
+stage = sys.argv[1]
+failures = []
+if sys.version_info[:2] != (3, 12):
+    failures.append(f"python: running {sys.version.split()[0]}, requires 3.12")
+import torch
+
+if torch.__version__ != "2.10.0+cu128":
+    failures.append(f"torch: installed {torch.__version__}, requires 2.10.0+cu128")
+if not torch.cuda.is_available():
+    failures.append("torch.cuda.is_available() is false")
+elif not torch.cuda.is_bf16_supported():
+    failures.append("allocated GPU does not support bf16")
+elif stage in {"one-batch", "tiny-overfit", "round0", "checkpoint-gate"}:
+    names = {torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())}
+    if not any("H100" in name or "H200" in name for name in names):
+        failures.append(f"release SFT model stages require an H100 or H200; got {sorted(names)}")
+if failures:
+    raise SystemExit(
+        "SFT runtime does not match the release evaluation contract:\n- "
+        + "\n- ".join(failures)
+    )
+print("SFT runtime matches the release evaluation contract (py3.12, torch 2.10.0+cu128, H100/H200)")
+PY
 "$PYTHON" -m pip check
 "$PYTHON" - "$REPO_ROOT/psse_env/requirements-sft.txt" <<'PY'
 from importlib.metadata import PackageNotFoundError, version
@@ -243,6 +272,12 @@ COMMON_ARGS=(
     --max-length "$MAX_LENGTH"
 )
 if [[ "$ALLOW_DOWNLOAD" == "1" ]]; then
+    case "$STAGE" in
+        one-batch|tiny-overfit|round0|checkpoint-gate)
+            echo "ERROR: ALLOW_DOWNLOAD=1 is forbidden for STAGE=$STAGE; the reviewed model must come from the verified local snapshot." >&2
+            exit 2
+            ;;
+    esac
     COMMON_ARGS+=(--allow-download)
 elif [[ "$ALLOW_DOWNLOAD" != "0" ]]; then
     echo "ERROR: ALLOW_DOWNLOAD must be 0 or 1." >&2

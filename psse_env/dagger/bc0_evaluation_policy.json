@@ -32,56 +32,56 @@
   },
   "suite_policy": {
     "approved_suite_manifest": {
-      "root_set_sha256": "922bbe8f13b0eb6d7d3a870527e85ef511905b7e625007e8f7f72779ffcf3209",
+      "root_set_sha256": "beb822e6979d728b3b3914fc090a9ec56e001ca9b0db78cf39a8f092e87397a1",
       "suite_content_hashes": {
-        "efficiency": "5ac64bcd5e23449b97a0eb9485672ffe6fccac651a1edce0a89803b8bdc2606c",
-        "forced_error_recovery": "50dab9112b841cfdb315cf9fd34f5e057bf3427de639b9af0d6e71041ed5bb2a",
-        "invalid_action_recovery": "241b46b238bce7063772dbd797ba7471c3670961bd3b4e7205a983b2a0079322",
-        "partial_success_retention": "82f9ccfece6624de08a9e06490f2f0043ae7c776c006e5f36b853ce2578cba2d",
-        "standard_success": "02ee495aa17d1db1bb6aeb514a99b25615b3ae4eb7c287845923c8765863a1e2"
+        "efficiency": "6fe91ebe7f9d38ec05dd501d9d97ad4d74c1ad03b07b5fdd66e56e9d9c387a35",
+        "forced_error_recovery": "35a40da8d78ad1541c9cc91bcbe3b783c64361fa7e07b9e58bc5a031818ea7a8",
+        "invalid_action_recovery": "013d6fb558b54aef49b124c1f23e858d8f0f1b3745d9f77df0967d7e5c8e7a36",
+        "partial_success_retention": "ba03f5b9fd155d02ba2819e3a082a13488abd60943d3b0f57a4acfcbc112986d",
+        "standard_success": "e4c77327565ce2e316651da9a86f8c509751714f69589ccaaabed395c349f085"
       },
-      "suite_content_sha256": "0ae88898cd974f41eb17ec4c8900998659eaba577df33186dec6bc635eb7c952",
+      "suite_content_sha256": "e51c54e75551cda384e4ce7f7ce128d093f90b54892eaaad77270d6a4ee0dd5a",
       "suite_manifest": {
         "efficiency": {
-          "content_sha256": "5ac64bcd5e23449b97a0eb9485672ffe6fccac651a1edce0a89803b8bdc2606c",
-          "distinct_physical_roots": 21,
-          "episodes": 21,
-          "root_set_sha256": "52589757e3da5173c1a76f8e79c305d2bbd04cb4e3ca0ea3d74abc7f52f49910"
+          "content_sha256": "6fe91ebe7f9d38ec05dd501d9d97ad4d74c1ad03b07b5fdd66e56e9d9c387a35",
+          "distinct_physical_roots": 31,
+          "episodes": 31,
+          "root_set_sha256": "445fd54187cc75ab668998dcd7e425590616460f3d4a18eeb720526fa8860174"
         },
         "forced_error_recovery": {
-          "content_sha256": "50dab9112b841cfdb315cf9fd34f5e057bf3427de639b9af0d6e71041ed5bb2a",
+          "content_sha256": "35a40da8d78ad1541c9cc91bcbe3b783c64361fa7e07b9e58bc5a031818ea7a8",
           "distinct_physical_roots": 21,
           "episodes": 21,
-          "root_set_sha256": "9f6ef00c9e49e8ff8149ff544685782f6f17932ddd4a13447702b6787f4341bc"
+          "root_set_sha256": "6aa00ed92e2347ad1de39006400819de2a068857b6957dacd46e11c2690db003"
         },
         "invalid_action_recovery": {
-          "content_sha256": "241b46b238bce7063772dbd797ba7471c3670961bd3b4e7205a983b2a0079322",
+          "content_sha256": "013d6fb558b54aef49b124c1f23e858d8f0f1b3745d9f77df0967d7e5c8e7a36",
           "distinct_physical_roots": 21,
           "episodes": 21,
-          "root_set_sha256": "4e0b962c9ed93cca375608d6c2b6113331fce2fd632063f2f425fc63e6777d3f"
+          "root_set_sha256": "d7e46bbe848c8e288f6258a32a56dcb737c18793421b52371e5f8a13fdaadf65"
         },
         "partial_success_retention": {
-          "content_sha256": "82f9ccfece6624de08a9e06490f2f0043ae7c776c006e5f36b853ce2578cba2d",
+          "content_sha256": "ba03f5b9fd155d02ba2819e3a082a13488abd60943d3b0f57a4acfcbc112986d",
           "distinct_physical_roots": 21,
           "episodes": 21,
-          "root_set_sha256": "4a758b91368617ba607e3f36c0781f4b1493167600c36942722027aa519f838c"
+          "root_set_sha256": "6aa5ef0214906cf0df11d6ee2def567a9010a46c5a2413dea2013fdd3f809b96"
         },
         "standard_success": {
-          "content_sha256": "02ee495aa17d1db1bb6aeb514a99b25615b3ae4eb7c287845923c8765863a1e2",
+          "content_sha256": "e4c77327565ce2e316651da9a86f8c509751714f69589ccaaabed395c349f085",
           "distinct_physical_roots": 21,
           "episodes": 21,
-          "root_set_sha256": "4e5c10ea44687d8ce012fa944562af761acdd0c0b0e9f8a2eb113dd4d1bc8b6f"
+          "root_set_sha256": "2c913f870ea2b969698770f1c423a8581f0841106543ac8b716e1e4bd877a1fd"
         }
       },
       "suite_root_set_hashes": {
-        "efficiency": "52589757e3da5173c1a76f8e79c305d2bbd04cb4e3ca0ea3d74abc7f52f49910",
-        "forced_error_recovery": "9f6ef00c9e49e8ff8149ff544685782f6f17932ddd4a13447702b6787f4341bc",
-        "invalid_action_recovery": "4e0b962c9ed93cca375608d6c2b6113331fce2fd632063f2f425fc63e6777d3f",
-        "partial_success_retention": "4a758b91368617ba607e3f36c0781f4b1493167600c36942722027aa519f838c",
-        "standard_success": "4e5c10ea44687d8ce012fa944562af761acdd0c0b0e9f8a2eb113dd4d1bc8b6f"
+        "efficiency": "445fd54187cc75ab668998dcd7e425590616460f3d4a18eeb720526fa8860174",
+        "forced_error_recovery": "6aa00ed92e2347ad1de39006400819de2a068857b6957dacd46e11c2690db003",
+        "invalid_action_recovery": "d7e46bbe848c8e288f6258a32a56dcb737c18793421b52371e5f8a13fdaadf65",
+        "partial_success_retention": "6aa5ef0214906cf0df11d6ee2def567a9010a46c5a2413dea2013fdd3f809b96",
+        "standard_success": "2c913f870ea2b969698770f1c423a8581f0841106543ac8b716e1e4bd877a1fd"
       }
     },
-    "approved_suite_sha256": "c93183f48b95d89849066a7733b9b5d841e53a77f0116160f7448364773b3c5c",
+    "approved_suite_sha256": "c1f58ae6f2b1806c333a59bc77b34fc8ab1be743619706de4ab93696155384b2",
     "evaluator_seed": 20260719,
     "max_steps": 24,
     "scenario_schema_version": 1,
@@ -114,7 +114,7 @@
     },
     "measurement": {
       "maximum_operator_escalation_rate": 0.0,
-      "minimum_physical_roots": 6,
+      "minimum_physical_roots": 8,
       "minimum_resolution_rate": 1.0
     },
     "measurement+hif": {
@@ -124,12 +124,12 @@
     },
     "measurement+parameter": {
       "maximum_operator_escalation_rate": 0.05,
-      "minimum_physical_roots": 20,
+      "minimum_physical_roots": 22,
       "minimum_resolution_rate": 0.95
     },
     "measurement+topology": {
       "maximum_operator_escalation_rate": 0.05,
-      "minimum_physical_roots": 20,
+      "minimum_physical_roots": 22,
       "minimum_resolution_rate": 0.95
     },
     "multi_measurement": {
@@ -144,12 +144,12 @@
     },
     "parameter": {
       "maximum_operator_escalation_rate": 0.0,
-      "minimum_physical_roots": 6,
+      "minimum_physical_roots": 8,
       "minimum_resolution_rate": 1.0
     },
     "topology": {
       "maximum_operator_escalation_rate": 0.0,
-      "minimum_physical_roots": 6,
+      "minimum_physical_roots": 8,
       "minimum_resolution_rate": 1.0
     }
   },

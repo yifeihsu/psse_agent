@@ -47,8 +47,12 @@ class ReleaseEvaluationLauncherTests(unittest.TestCase):
 
     def test_modes_gate_immutable_model_identities(self) -> None:
         for contract in (
+            "ROLE=expert-baseline",
             "ROLE=base-baseline",
             "ROLE=checkpoint-promotion",
+            "EXPERT_POLICY_IDENTITY=bc0-observable-expert-v1",
+            'EVALUATE+=(--policy-identity "$EXPERT_POLICY_IDENTITY")',
+            'GATE+=(--expected-policy-identity "$EXPERT_POLICY_IDENTITY")',
             "inspect_release_checkpoint",
             "CHECKPOINT_PATH\" != /*",
             "^[0-9a-fA-F]{64}$",
@@ -78,7 +82,7 @@ class ReleaseEvaluationLauncherTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(invalid.returncode, 2)
-        self.assertIn("must be base or checkpoint", invalid.stderr)
+        self.assertIn("must be expert, base, or checkpoint", invalid.stderr)
 
         missing_review = subprocess.run(
             ["bash", str(launcher_path)],

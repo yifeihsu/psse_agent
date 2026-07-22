@@ -117,7 +117,9 @@ TINY_OVERFIT_LR=0.0001 STAGE=tiny-overfit \
 2. Regenerate the release aggregate from that commit; require
    `release_eligible=true`, `aggregate.train_view.jsonl`, and a legitimate row
    count inside the launcher bounds.
-3. Run and validate the CPU observable-expert baseline.
+3. Run and validate the CPU observable-expert baseline
+   (`EVALUATION_MODE=expert` on `submit_dagger_release_eval.sh`, or the
+   `evaluate_release`/`validate_evaluation` CLIs directly).
 4. Run and validate the exact base-Gemma GPU baseline before any optimizer
    stage with `submit_dagger_release_eval.sh`; supply the externally reviewed
    freeze commit through `REVIEWED_SOURCE_COMMIT`.
