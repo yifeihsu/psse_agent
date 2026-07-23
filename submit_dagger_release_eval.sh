@@ -365,7 +365,7 @@ fi
 echo "===== BC0 closed-loop release evaluation ====="
 echo "job:       ${SLURM_JOB_ID:-interactive}"
 echo "host:      $(hostname)"
-echo "gpu:       $GPU_NAMES"
+echo "gpu:       $GPU_INVENTORY"
 echo "mode:      $EVALUATION_MODE"
 echo "source:    $SOURCE_COMMIT"
 if [[ "$EVALUATION_MODE" == "expert" ]]; then

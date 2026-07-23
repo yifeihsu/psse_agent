@@ -25,6 +25,7 @@ class ReleaseEvaluationLauncherTests(unittest.TestCase):
             '#SBATCH --comment="preemption=yes;requeue=true"',
             "--query-gpu=name,memory.total,driver_version",
             "psse_env.sft.release_hardware",
+            'echo "gpu:       $GPU_INVENTORY"',
             "sys.version_info[:2] != (3, 12)",
             'torch.__version__ != "2.10.0+cu128"',
             "export HF_HUB_OFFLINE=1",
@@ -35,6 +36,7 @@ class ReleaseEvaluationLauncherTests(unittest.TestCase):
             self.assertIn(contract, self.launcher)
         self.assertNotIn("--allow-dirty-source", self.launcher)
         self.assertNotIn("--allow-download", self.launcher)
+        self.assertNotIn("$GPU_NAMES", self.launcher)
 
     def test_invokes_exact_release_factories_and_suite_contract(self) -> None:
         for contract in (
