@@ -20,7 +20,11 @@ class ReleaseEvaluationLauncherTests(unittest.TestCase):
 
     def test_targets_reviewed_offline_hardware_environment(self) -> None:
         for contract in (
-            '#SBATCH --constraint="h200|h100"',
+            "#SBATCH --gres=gpu:1",
+            '#SBATCH --constraint="h200|h100|rtx6000"',
+            '#SBATCH --comment="preemption=yes;requeue=true"',
+            "--query-gpu=name,memory.total,driver_version",
+            "psse_env.sft.release_hardware",
             "sys.version_info[:2] != (3, 12)",
             'torch.__version__ != "2.10.0+cu128"',
             "export HF_HUB_OFFLINE=1",

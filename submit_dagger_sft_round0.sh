@@ -10,7 +10,8 @@
 #SBATCH --mem=128G
 #SBATCH --time=24:00:00
 #SBATCH --gres=gpu:1
-#SBATCH --constraint="h200|h100"
+#SBATCH --constraint="h200|h100|rtx6000"
+#SBATCH --comment="preemption=yes;requeue=true"
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=yx3882@nyu.edu
 
@@ -20,8 +21,9 @@
 # it predates physical-root fingerprints, explicit eligibility, and current
 # registry/source provenance and must fail the release gate.
 # Submit STAGE=gate, one-batch, tiny-overfit, and round0 in that order on a
-# pinned high-memory H200/H100 constraint above. STAGE=round0 refuses to train
-# until the observable
+# pinned high-memory H200/H100/RTX 6000 constraint above. RTX 6000 is accepted
+# only when runtime attestation reports at least 90,000 MiB. STAGE=round0
+# refuses to train until the observable
 # expert passes the full content-pinned fixed-suite gate and the exact pinned
 # base model supplies complete, reproducible identity/evaluation evidence. Base
 # performance failures remain in the baseline report but do not block BC0
@@ -234,15 +236,20 @@ if [[ "$STAGE" == "round0" || "$STAGE" == "checkpoint-gate" ]]; then
     echo "eval suite: $EVALUATION_SUITE"
     echo "eval policy: $EVALUATION_POLICY"
 fi
-nvidia-smi
+GPU_INVENTORY=$(nvidia-smi \
+    --query-gpu=name,memory.total,driver_version \
+    --format=csv,noheader)
+echo "GPU inventory: $GPU_INVENTORY"
 "$PYTHON" -c 'import accelerate, bitsandbytes, datasets, peft, torch, transformers, trl; print({"torch": torch.__version__, "cuda": torch.version.cuda, "cuda_available": torch.cuda.is_available(), "bf16": torch.cuda.is_bf16_supported(), "transformers": transformers.__version__, "trl": trl.__version__, "peft": peft.__version__, "bitsandbytes": bitsandbytes.__version__, "datasets": datasets.__version__, "accelerate": accelerate.__version__})'
 # Fail-closed runtime identity: the same interpreter, Torch CUDA build, and
 # GPU class the release evaluator attests.  A mismatched runtime here would
 # produce training evidence the paired checkpoint gate cannot vouch for.
-"$PYTHON" - "$STAGE" <<'PY'
+"$PYTHON" - <<'PY'
+import json
 import sys
 
-stage = sys.argv[1]
+from psse_env.sft.release_hardware import validate_torch_release_accelerator
+
 failures = []
 if sys.version_info[:2] != (3, 12):
     failures.append(f"python: running {sys.version.split()[0]}, requires 3.12")
@@ -250,20 +257,20 @@ import torch
 
 if torch.__version__ != "2.10.0+cu128":
     failures.append(f"torch: installed {torch.__version__}, requires 2.10.0+cu128")
-if not torch.cuda.is_available():
-    failures.append("torch.cuda.is_available() is false")
-elif not torch.cuda.is_bf16_supported():
-    failures.append("allocated GPU does not support bf16")
-elif stage in {"one-batch", "tiny-overfit", "round0", "checkpoint-gate"}:
-    names = {torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())}
-    if not any("H100" in name or "H200" in name for name in names):
-        failures.append(f"release SFT model stages require an H100 or H200; got {sorted(names)}")
+try:
+    accelerator = validate_torch_release_accelerator(torch)
+except RuntimeError as exc:
+    failures.append(str(exc))
 if failures:
     raise SystemExit(
         "SFT runtime does not match the release evaluation contract:\n- "
         + "\n- ".join(failures)
     )
-print("SFT runtime matches the release evaluation contract (py3.12, torch 2.10.0+cu128, H100/H200)")
+print(
+    "SFT runtime matches the release evaluation contract "
+    "(py3.12, torch 2.10.0+cu128, H100/H200/high-memory RTX 6000): "
+    + json.dumps(accelerator, sort_keys=True)
+)
 PY
 "$PYTHON" -m pip check
 "$PYTHON" - "$REPO_ROOT/psse_env/requirements-sft.txt" <<'PY'

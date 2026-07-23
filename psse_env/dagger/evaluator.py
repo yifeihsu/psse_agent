@@ -25,6 +25,7 @@ import os
 import platform
 import random
 import re
+import subprocess
 import tempfile
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -64,6 +65,7 @@ from psse_env.dagger.release_audit import (
 )
 from psse_env.state_store import OracleState, PolicyObservation, policy_safe_copy
 from psse_env.sft.provenance import file_sha256, git_source_state, stable_json_sha256
+from psse_env.sft.release_hardware import normalize_accelerator_class
 
 
 @dataclass(frozen=True)
@@ -1894,6 +1896,119 @@ def _protocol_registry_descriptor(protocol: str) -> dict[str, Any]:
     }
 
 
+def _nvidia_driver_version() -> str | None:
+    """Read the NVIDIA driver version without making provenance collection fatal."""
+
+    try:
+        completed = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=driver_version",
+                "--format=csv,noheader",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    versions = sorted(
+        {
+            line.strip()
+            for line in completed.stdout.splitlines()
+            if line.strip()
+        }
+    )
+    if not versions:
+        return None
+    return ",".join(versions)
+
+
+def _accelerator_environment_descriptor() -> dict[str, Any]:
+    descriptor: dict[str, Any] = {
+        "backend": "cpu",
+        "cuda_available": False,
+        "torch_cuda_version": None,
+        "driver_version": None,
+        "device_count": 0,
+        "bf16_supported": False,
+        "devices": [],
+    }
+    try:
+        torch = importlib.import_module("torch")
+    except (ImportError, OSError):
+        return descriptor
+
+    torch_version = getattr(torch, "version", None)
+    cuda_runtime = getattr(torch_version, "cuda", None)
+    descriptor["torch_cuda_version"] = (
+        str(cuda_runtime).strip() if cuda_runtime is not None else None
+    )
+    cuda = getattr(torch, "cuda", None)
+    if cuda is None:
+        return descriptor
+    try:
+        cuda_available = bool(cuda.is_available())
+    except (AttributeError, RuntimeError):
+        return descriptor
+    descriptor["cuda_available"] = cuda_available
+    if not cuda_available:
+        return descriptor
+
+    try:
+        device_count = int(cuda.device_count())
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        device_count = 0
+    try:
+        bf16_supported = bool(cuda.is_bf16_supported()) if device_count else False
+    except (AttributeError, RuntimeError):
+        bf16_supported = False
+    devices: list[dict[str, Any]] = []
+    for index in range(max(0, device_count)):
+        try:
+            properties = cuda.get_device_properties(index)
+        except (AttributeError, RuntimeError):
+            continue
+        name = str(getattr(properties, "name", "") or "").strip()
+        total_memory = getattr(properties, "total_memory", None)
+        normalized_memory = (
+            int(total_memory)
+            if type(total_memory) is int and total_memory > 0
+            else 0
+        )
+        try:
+            raw_capability = cuda.get_device_capability(index)
+            capability = [int(raw_capability[0]), int(raw_capability[1])]
+        except (AttributeError, IndexError, RuntimeError, TypeError, ValueError):
+            capability = None
+        devices.append(
+            {
+                "index": index,
+                "name": name,
+                "total_memory_bytes": normalized_memory or None,
+                "compute_capability": capability,
+                "accelerator_class": (
+                    normalize_accelerator_class(name, normalized_memory)
+                    if name and normalized_memory
+                    else None
+                ),
+            }
+        )
+    descriptor.update(
+        {
+            "backend": "cuda",
+            "driver_version": _nvidia_driver_version(),
+            "device_count": device_count,
+            "bf16_supported": bf16_supported,
+            "devices": devices,
+        }
+    )
+    return descriptor
+
+
 def _runtime_environment_descriptor() -> dict[str, Any]:
     distributions = (
         "torch",
@@ -1917,6 +2032,7 @@ def _runtime_environment_descriptor() -> dict[str, Any]:
         "python_version": platform.python_version(),
         "platform": platform.platform(),
         "packages": versions,
+        "accelerator": _accelerator_environment_descriptor(),
     }
 
 
@@ -1973,6 +2089,8 @@ def _evaluation_provenance_failures(provenance: Mapping[str, Any] | None) -> lis
         runtime_environment.get("packages"), Mapping
     ):
         failures.append("runtime environment package versions are missing")
+    elif not isinstance(runtime_environment.get("accelerator"), Mapping):
+        failures.append("runtime environment accelerator identity is missing")
 
     policy_identity = provenance.get("policy_identity")
     if not isinstance(policy_identity, Mapping):

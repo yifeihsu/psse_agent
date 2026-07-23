@@ -43,6 +43,7 @@ from psse_env.dagger.protocol_bridge import (
 )
 from psse_env.sft.gates import GateError, _validate_json_instance
 from psse_env.sft.provenance import file_sha256, git_source_state, stable_json_sha256
+from psse_env.sft.release_hardware import normalize_accelerator_class
 
 
 DEFAULT_POLICY_PATH = Path(__file__).with_name("bc0_evaluation_policy.json")
@@ -559,6 +560,99 @@ def _artifact_content_sha256(payload: Mapping[str, Any]) -> str:
 
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _model_accelerator_attestation(
+    provenance: Mapping[str, Any],
+) -> tuple[tuple[str, ...], list[str]]:
+    """Validate and normalize the CUDA devices recorded by the evaluator."""
+
+    runtime_environment = _mapping(provenance.get("runtime_environment"))
+    accelerator = _mapping(runtime_environment.get("accelerator"))
+    failures: list[str] = []
+    if not accelerator:
+        return (), ["model evaluation accelerator attestation is missing"]
+    if accelerator.get("backend") != "cuda":
+        failures.append("model evaluation accelerator backend is not CUDA")
+    if accelerator.get("cuda_available") is not True:
+        failures.append("model evaluation CUDA availability was not attested")
+    if not str(accelerator.get("torch_cuda_version") or "").strip():
+        failures.append("model evaluation CUDA runtime version is missing")
+    if not str(accelerator.get("driver_version") or "").strip():
+        failures.append("model evaluation NVIDIA driver version is missing")
+    if accelerator.get("bf16_supported") is not True:
+        failures.append("model evaluation BF16 support was not attested")
+
+    raw_devices = accelerator.get("devices")
+    devices = raw_devices if isinstance(raw_devices, list) else []
+    device_count = accelerator.get("device_count")
+    if (
+        type(device_count) is not int
+        or device_count != 1
+        or device_count != len(devices)
+    ):
+        failures.append(
+            "model evaluation must attest exactly one accelerator device"
+        )
+
+    indexes: set[int] = set()
+    classes: set[str] = set()
+    for position, raw_device in enumerate(devices):
+        if not isinstance(raw_device, Mapping):
+            failures.append(
+                f"model evaluation accelerator device {position} is not an object"
+            )
+            continue
+        index = raw_device.get("index")
+        if type(index) is not int or index < 0 or index in indexes:
+            failures.append(
+                f"model evaluation accelerator device {position} index is invalid"
+            )
+        else:
+            indexes.add(index)
+        total_memory = raw_device.get("total_memory_bytes")
+        valid_memory = type(total_memory) is int and total_memory > 0
+        if not valid_memory:
+            failures.append(
+                f"model evaluation accelerator device {position} memory is missing"
+            )
+        name = str(raw_device.get("name") or "").strip()
+        normalized_class = (
+            normalize_accelerator_class(name, int(total_memory))
+            if name and valid_memory
+            else None
+        )
+        recorded_class = str(
+            raw_device.get("accelerator_class") or ""
+        ).strip()
+        if not name or normalized_class is None:
+            failures.append(
+                f"model evaluation accelerator device {position} is not an "
+                "approved release accelerator"
+            )
+        elif recorded_class != normalized_class:
+            failures.append(
+                f"model evaluation accelerator device {position} class "
+                "does not match its name"
+            )
+        else:
+            classes.add(normalized_class)
+        capability = raw_device.get("compute_capability")
+        if (
+            not isinstance(capability, list)
+            or len(capability) != 2
+            or any(
+                type(component) is not int or component < 0
+                for component in capability
+            )
+        ):
+            failures.append(
+                f"model evaluation accelerator device {position} "
+                "compute capability is missing"
+            )
+    if not classes:
+        failures.append("model evaluation accelerator class is missing")
+    return tuple(sorted(classes)), failures
 
 
 def _load_artifact_payload(
@@ -1670,6 +1764,13 @@ def validate_evaluation_artifact(
     observed_identity = dict(_mapping(provenance.get("policy_identity")))
     if observed_identity != expected_identity:
         failures.append("evaluated policy/model identity does not match exactly")
+    candidate_accelerator_classes: tuple[str, ...] = ()
+    if normalized_role in {"base-baseline", "checkpoint-promotion"}:
+        (
+            candidate_accelerator_classes,
+            accelerator_attestation_failures,
+        ) = _model_accelerator_attestation(provenance)
+        failures.extend(accelerator_attestation_failures)
 
     evaluation = _mapping(payload.get("evaluation"))
     suite_metrics = _mapping(evaluation.get("suite_metrics"))
@@ -2155,6 +2256,9 @@ def validate_evaluation_artifact(
         )
         reference_payload = _load_artifact_payload(reference_artifact)
         reference_provenance = _mapping(reference_payload.get("provenance"))
+        reference_accelerator_classes, _ = _model_accelerator_attestation(
+            reference_provenance
+        )
         reference_configuration = _mapping(
             _mapping(_mapping(reference_payload.get("evaluation")).get("suite_metrics")).get(
                 "configuration"
@@ -2186,6 +2290,10 @@ def validate_evaluation_artifact(
             "protocol_registry": (
                 protocol,
                 _mapping(reference_provenance.get("protocol_registry")),
+            ),
+            "accelerator_class": (
+                candidate_accelerator_classes,
+                reference_accelerator_classes,
             ),
             "evaluator_configuration": (
                 candidate_configuration_contract,
@@ -2257,6 +2365,12 @@ def validate_evaluation_artifact(
             "reference_performance_failures": list(
                 reference_result.performance_failures
             ),
+            "candidate_accelerator_classes": list(
+                candidate_accelerator_classes
+            ),
+            "reference_accelerator_classes": list(
+                reference_accelerator_classes
+            ),
             "failures": list(comparison_failures),
             "regressions": regressions,
             **paired_summary,
@@ -2278,6 +2392,7 @@ def validate_evaluation_artifact(
         "loop_episode_rate": loop_rate,
         "evaluator_error_episodes": evaluator_errors,
         "maximum_steps_per_episode": max_steps_seen,
+        "accelerator_classes": list(candidate_accelerator_classes),
         "families": family_observed,
         "suites": {
             suite_name: {

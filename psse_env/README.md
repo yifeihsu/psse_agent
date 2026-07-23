@@ -412,25 +412,31 @@ checkpoint is selected through those gates and new learner-controlled roots
 can be collected without truth leakage. No expert-only `β=1.0` corpus or
 checkpoint should be labeled as DAgger.
 
-HPC release prerequisites are H200 or H100 hardware, Python 3.12, the exact
-`requirements-sft.txt` versions, a passing `pip check` and launcher version
-audit, and a complete local pinned Gemma snapshot. Release evaluation cannot
-download or fall back to another revision. SFT training loads through the same
-byte-verified snapshot path as release evaluation: the trainer refuses any
-model identity other than the pinned base, verifies the snapshot manifest
-before and after loading, accepts only the Gemma 4 conditional model class
-with no `AutoModelForCausalLM` fallback, writes a durable
+HPC release prerequisites are H200, H100, or a high-memory RTX 6000, Python
+3.12, the exact `requirements-sft.txt` versions, a passing `pip check` and
+launcher version audit, and a complete local pinned Gemma snapshot. The Slurm
+feature permits `rtx6000`, but the runtime gate accepts that family only when
+exactly one GPU is visible, BF16 is supported, and total memory is at least
+90,000 MiB; this excludes 48-GB variants from the 31B release path. Release
+evaluation cannot download or fall back to another revision. SFT training loads
+through the same byte-verified snapshot path as release evaluation: the trainer
+refuses any model identity other than the pinned base, verifies the snapshot
+manifest before and after loading, accepts only the Gemma 4 conditional model
+class with no `AutoModelForCausalLM` fallback, writes a durable
 `base_snapshot_attestation.json` beside the training output, and normalizes
 the saved adapter's `base_model_name_or_path` back to the pinned Hub ID so the
 checkpoint gate can promote it. The launcher additionally asserts Python 3.12,
-`torch 2.10.0+cu128`, and an H100/H200 for every optimizer stage, and forbids
-`ALLOW_DOWNLOAD=1` outside the dataset-only gate stage. Smoke-stage timing must justify the
-24-hour allocation for the two-epoch 31B run. The launcher accepts only a
-legitimate audited aggregate within `ROWS_MIN=1024` and `ROWS_MAX=4096`; if a
-valid aggregate exceeds the upper bound, raise `ROWS_MAX` rather than trimming
-rows. Those bounds apply to optimizer-visible train plus validation rows; the
-gate still audits the held-out test split and offsets its total-row check by the
-test count so every stage enforces the same training-corpus size.
+`torch 2.10.0+cu128`, and an approved release accelerator, and forbids
+`ALLOW_DOWNLOAD=1` outside the dataset-only gate stage. Both launchers attach
+the Slurm comment `preemption=yes;requeue=true`; this is scheduler metadata and
+does not itself add signal-driven checkpointing or automatic resume to the BC0
+trainer. Smoke-stage timing must justify the 24-hour allocation for the
+two-epoch 31B run. The launcher accepts only a legitimate audited aggregate
+within `ROWS_MIN=1024` and `ROWS_MAX=4096`; if a valid aggregate exceeds the
+upper bound, raise `ROWS_MAX` rather than trimming rows. Those bounds apply to
+optimizer-visible train plus validation rows; the gate still audits the
+held-out test split and offsets its total-row check by the test count so every
+stage enforces the same training-corpus size.
 
 Both HPC launchers require the reviewed freeze commit as an external input;
 they never bless the checkout's current `HEAD` on their own.  The release
@@ -483,7 +489,8 @@ uv run --with 'pytest>=8,<9' pytest -q \
   psse_env/providers/test_scenario_generator.py \
   psse_env/examples/test_generate_round0_aggregate.py \
   psse_env/test_production_mode.py \
-  psse_env/sft/tests/test_gates.py
+  psse_env/sft/tests/test_gates.py \
+  psse_env/sft/tests/test_release_hardware.py
 ```
 
 See `BASELINE.md`, `TEST_MANIFEST.md`, and `EXPERIMENT_PROTOCOL.md` for the

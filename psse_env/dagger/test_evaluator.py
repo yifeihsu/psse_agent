@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Mapping
 from unittest import mock
 
@@ -23,12 +24,14 @@ from psse_env.actions import (
 )
 from psse_env.dagger.evaluator import (
     ClosedLoopRolloutEvaluator,
+    _runtime_environment_descriptor,
     build_evaluation_provenance,
     evaluate_rollout_suites,
     main as evaluator_main,
     strip_offline_truth,
     write_evaluation_artifact,
 )
+from psse_env.sft.release_hardware import normalize_accelerator_class
 
 
 class _ScriptPolicy:
@@ -1705,6 +1708,63 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             changed_configuration["suite_content_sha256"],
         )
         self.assertEqual(first["root_set_sha256"], changed_configuration["root_set_sha256"])
+
+    def test_runtime_environment_records_cuda_device_identity(self) -> None:
+        properties = SimpleNamespace(
+            name="NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+            total_memory=102_844_334_080,
+        )
+        fake_torch = SimpleNamespace(
+            version=SimpleNamespace(cuda="12.8"),
+            cuda=SimpleNamespace(
+                is_available=lambda: True,
+                device_count=lambda: 1,
+                is_bf16_supported=lambda: True,
+                get_device_properties=lambda index: properties,
+                get_device_capability=lambda index: (12, 0),
+            ),
+        )
+        completed = SimpleNamespace(
+            returncode=0,
+            stdout="570.124.06\n",
+        )
+
+        with mock.patch(
+            "psse_env.dagger.evaluator.subprocess.run",
+            return_value=completed,
+        ), mock.patch(
+            "psse_env.dagger.evaluator.importlib.import_module",
+            return_value=fake_torch,
+        ):
+            accelerator = _runtime_environment_descriptor()["accelerator"]
+
+        self.assertEqual(accelerator["backend"], "cuda")
+        self.assertTrue(accelerator["cuda_available"])
+        self.assertEqual(accelerator["torch_cuda_version"], "12.8")
+        self.assertEqual(accelerator["driver_version"], "570.124.06")
+        self.assertEqual(accelerator["device_count"], 1)
+        self.assertTrue(accelerator["bf16_supported"])
+        self.assertEqual(
+            accelerator["devices"],
+            [
+                {
+                    "index": 0,
+                    "name": (
+                        "NVIDIA RTX PRO 6000 Blackwell Workstation Edition"
+                    ),
+                    "total_memory_bytes": 102_844_334_080,
+                    "compute_capability": [12, 0],
+                    "accelerator_class": "rtx6000",
+                }
+            ],
+        )
+        self.assertEqual(
+            normalize_accelerator_class(
+                "NVIDIA H100 80GB HBM3",
+                85_899_345_920,
+            ),
+            "h100",
+        )
 
     def test_provenance_rejects_import_spec_callable_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

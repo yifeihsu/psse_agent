@@ -10,7 +10,8 @@
 #SBATCH --mem=128G
 #SBATCH --time=24:00:00
 #SBATCH --gres=gpu:1
-#SBATCH --constraint="h200|h100"
+#SBATCH --constraint="h200|h100|rtx6000"
+#SBATCH --comment="preemption=yes;requeue=true"
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=yx3882@nyu.edu
 
@@ -118,15 +119,16 @@ for path in "$EVALUATION_SUITE" "$EVALUATION_POLICY" psse_env/requirements-sft.t
 done
 
 # The observable expert runs WLS on CPU; only model-backed modes need the
-# exact release GPU class.
+# exact release GPU class. RTX 6000 is admitted only when the runtime check
+# confirms the high-memory variant rather than relying on the Slurm feature.
+GPU_INVENTORY=$(nvidia-smi \
+    --query-gpu=name,memory.total,driver_version \
+    --format=csv,noheader 2>/dev/null || echo "none")
+echo "GPU inventory: $GPU_INVENTORY"
 if [[ "$EVALUATION_MODE" == "expert" ]]; then
-    GPU_NAMES=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo "none")
+    :
 else
-    GPU_NAMES=$(nvidia-smi --query-gpu=name --format=csv,noheader)
-    if [[ ! "$GPU_NAMES" =~ (H100|H200) ]]; then
-        echo "ERROR: release evaluation requires an allocated H100 or H200; got '$GPU_NAMES'." >&2
-        exit 2
-    fi
+    "$PYTHON" -m psse_env.sft.release_hardware
 fi
 
 # Audit the reviewed Python 3.12 environment without contacting an index.

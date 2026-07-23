@@ -23,6 +23,7 @@ from psse_env.dagger.evaluator import (
     trace_progress_evidence,
 )
 from psse_env.sft.provenance import file_sha256, stable_json_sha256
+from psse_env.sft.release_hardware import normalize_accelerator_class
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -250,6 +251,51 @@ def _policy_identity(
         "explicit_policy_identity": explicit_identity,
         "model_id": model_id,
         "model_revision": model_revision,
+    }
+
+
+def _runtime_environment(
+    *,
+    accelerator_name: str | None,
+) -> dict:
+    if accelerator_name is None:
+        accelerator = {
+            "backend": "cpu",
+            "cuda_available": False,
+            "torch_cuda_version": None,
+            "driver_version": None,
+            "device_count": 0,
+            "bf16_supported": False,
+            "devices": [],
+        }
+    else:
+        total_memory_bytes = 143_771_721_728
+        accelerator = {
+            "backend": "cuda",
+            "cuda_available": True,
+            "torch_cuda_version": "12.8",
+            "driver_version": "570.124.06",
+            "device_count": 1,
+            "bf16_supported": True,
+            "devices": [
+                {
+                    "index": 0,
+                    "name": accelerator_name,
+                    "total_memory_bytes": total_memory_bytes,
+                    "compute_capability": [9, 0],
+                    "accelerator_class": normalize_accelerator_class(
+                        accelerator_name,
+                        total_memory_bytes,
+                    ),
+                }
+            ],
+        }
+    return {
+        "python_implementation": "CPython",
+        "python_version": "3.12.0",
+        "platform": "test-platform",
+        "packages": {"torch": "2.10.0+cu128"},
+        "accelerator": accelerator,
     }
 
 
@@ -674,6 +720,7 @@ def _artifact(
     model_id: str | None = None,
     model_revision: str | None = None,
     performance_ok: bool = True,
+    accelerator_name: str = "NVIDIA H200",
 ) -> dict:
     source_file = Path(__file__)
     evaluator_file = REPO_ROOT / "psse_env/dagger/evaluator.py"
@@ -757,6 +804,11 @@ def _artifact(
             "protocol": "canonical",
             "registry_sha256": current_registry_sha256("canonical"),
         },
+        "runtime_environment": _runtime_environment(
+            accelerator_name=(
+                accelerator_name if explicit_identity is None else None
+            )
+        ),
         "evaluator_source": _source_descriptor(evaluator_file),
     }
     core["identity_sha256"] = stable_json_sha256(core)
@@ -1907,6 +1959,160 @@ class EvaluationGateV2Tests(unittest.TestCase):
             result.observed["paired_nonregression"]["paired_episodes"],
             len(self.contract["episode_manifest"]),
         )
+
+    def test_model_role_requires_complete_accelerator_attestation(self) -> None:
+        base_artifact = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="base/gemma",
+            model_revision=MODEL_REVISION,
+        )
+        del base_artifact["provenance"]["runtime_environment"]["accelerator"]
+        _rehash_provenance(base_artifact)
+
+        result = _validate(
+            base_artifact,
+            role="base-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
+            explicit_identity=None,
+            model_id="base/gemma",
+            model_revision=MODEL_REVISION,
+        )
+
+        self.assertFalse(result.evidence_passed)
+        self.assertTrue(
+            any(
+                "accelerator attestation is missing" in failure
+                for failure in result.evidence_failures
+            ),
+            result.evidence_failures,
+        )
+
+    def test_model_role_requires_bf16_and_exactly_one_device(self) -> None:
+        def disable_bf16(artifact: dict) -> None:
+            artifact["provenance"]["runtime_environment"]["accelerator"][
+                "bf16_supported"
+            ] = False
+
+        def expose_second_device(artifact: dict) -> None:
+            accelerator = artifact["provenance"]["runtime_environment"][
+                "accelerator"
+            ]
+            second = copy.deepcopy(accelerator["devices"][0])
+            second["index"] = 1
+            accelerator["devices"].append(second)
+            accelerator["device_count"] = 2
+
+        def remove_driver_version(artifact: dict) -> None:
+            artifact["provenance"]["runtime_environment"]["accelerator"][
+                "driver_version"
+            ] = None
+
+        cases = (
+            ("bf16", disable_bf16, "BF16 support"),
+            ("two_devices", expose_second_device, "exactly one"),
+            ("driver", remove_driver_version, "driver version"),
+        )
+        for label, mutate, expected_failure in cases:
+            with self.subTest(label=label):
+                artifact = _artifact(
+                    self.suite_path,
+                    self.contract,
+                    explicit_identity=None,
+                    model_id="base/gemma",
+                    model_revision=MODEL_REVISION,
+                )
+                mutate(artifact)
+                _rehash_provenance(artifact)
+
+                result = _validate(
+                    artifact,
+                    role="base-baseline",
+                    policy=self.policy,
+                    suite_path=self.suite_path,
+                    explicit_identity=None,
+                    model_id="base/gemma",
+                    model_revision=MODEL_REVISION,
+                )
+
+                self.assertFalse(result.evidence_passed)
+                self.assertTrue(
+                    any(
+                        expected_failure in failure
+                        for failure in result.evidence_failures
+                    ),
+                    result.evidence_failures,
+                )
+
+    def test_checkpoint_and_base_must_use_same_accelerator_class(self) -> None:
+        checkpoint_artifact = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="checkpoint/bc0",
+            model_revision=MODEL_REVISION,
+            accelerator_name="NVIDIA H200",
+        )
+        reference_artifact = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="base/gemma",
+            model_revision=MODEL_REVISION,
+            accelerator_name="NVIDIA H100 80GB HBM3",
+        )
+
+        result = _validate(
+            checkpoint_artifact,
+            role="checkpoint-promotion",
+            policy=self.policy,
+            suite_path=self.suite_path,
+            explicit_identity=None,
+            model_id="checkpoint/bc0",
+            model_revision=MODEL_REVISION,
+            reference_artifact=reference_artifact,
+            reference_model_id="base/gemma",
+            reference_model_revision=MODEL_REVISION,
+        )
+
+        self.assertFalse(result.evidence_passed)
+        self.assertFalse(result.comparison_passed)
+        self.assertTrue(
+            any(
+                "accelerator_class" in failure
+                for failure in result.evidence_failures
+            ),
+            result.evidence_failures,
+        )
+        self.assertEqual(
+            result.observed["paired_nonregression"][
+                "candidate_accelerator_classes"
+            ],
+            ["h200"],
+        )
+        self.assertEqual(
+            result.observed["paired_nonregression"][
+                "reference_accelerator_classes"
+            ],
+            ["h100"],
+        )
+
+    def test_expert_cpu_artifact_does_not_require_cuda_attestation(self) -> None:
+        expert_artifact = _artifact(self.suite_path, self.contract)
+        del expert_artifact["provenance"]["runtime_environment"]["accelerator"]
+        _rehash_provenance(expert_artifact)
+
+        result = _validate(
+            expert_artifact,
+            role="expert-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
+        )
+
+        self.assertTrue(result.evidence_passed, result.evidence_failures)
+        self.assertEqual(result.observed["accelerator_classes"], [])
 
     def test_per_root_regression_fails_with_equal_aggregate_outcomes(self) -> None:
         policy = copy.deepcopy(self.policy)

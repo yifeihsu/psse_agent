@@ -698,6 +698,14 @@ class TestReleaseGateReport(unittest.TestCase):
         launcher = (repo_root / "submit_dagger_sft_round0.sh").read_text(
             encoding="utf-8"
         )
+        for contract in (
+            "#SBATCH --gres=gpu:1",
+            '#SBATCH --constraint="h200|h100|rtx6000"',
+            '#SBATCH --comment="preemption=yes;requeue=true"',
+            "--query-gpu=name,memory.total,driver_version",
+            "validate_torch_release_accelerator",
+        ):
+            self.assertIn(contract, launcher)
         self.assertIn("--require-auto-processor", launcher)
         self.assertIn(
             '--report-output "$PROCESSOR_GATE_REPORT"', launcher
