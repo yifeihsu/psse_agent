@@ -1521,7 +1521,85 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
     def test_grouped_correction_touching_one_healthy_meter_fails_preservation(self) -> None:
         scenario = _resolved_scenario()
         scenario["scenario_id"] = "broad-correction"
-        scenario["hidden_truth"].pop("true_harmonic_errors")
+        scenario["scenario_family"] = "measurement"
+        scenario["error_cardinality"] = 1
+        scenario["hidden_truth"] = {}
+        scenario["script"] = [
+            {
+                "phase": "partial_commit",
+                "candidate_state_id": "candidate-1",
+                "disposition": "ACCEPT_PARTIAL",
+                "remaining": 1,
+                "accepted_action": {
+                    "tool": CORRECT_MEASUREMENTS,
+                    "arguments": {
+                        "state_id": "active",
+                        "suspect_group": [6, 7],
+                    },
+                },
+            },
+            {"phase": "finalize", "remaining": 0, "terminal_outcome": "resolved"},
+        ]
+
+        result = evaluate_rollout_suites(
+            [scenario],
+            env_factory=_ScriptEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+        )
+        episode = result.suite_metrics["episodes"][0]
+        self.assertFalse(episode["healthy_components_preserved"])
+        self.assertFalse(episode["final_physical_correct"])
+        self.assertIn(
+            "measurement_healthy_targets_modified:[6]",
+            episode["audit"]["accepted_target_audit"]["problems"],
+        )
+        self.assertTrue(episode["audit"]["evidence_complete"])
+        self.assertIn(
+            "accepted_target_nonregression_false_target",
+            episode["audit"]["strict_release_audit"]["problems"],
+        )
+
+    def test_malformed_accepted_target_remains_an_evidence_gap(self) -> None:
+        scenario = _resolved_scenario()
+        scenario["scenario_id"] = "malformed-accepted-target"
+        scenario["scenario_family"] = "measurement"
+        scenario["error_cardinality"] = 1
+        scenario["hidden_truth"] = {}
+        scenario["script"] = [
+            {
+                "phase": "partial_commit",
+                "candidate_state_id": "candidate-1",
+                "disposition": "ACCEPT_PARTIAL",
+                "remaining": 1,
+                "accepted_action": {
+                    "tool": CORRECT_MEASUREMENTS,
+                    "arguments": {
+                        "state_id": "active",
+                        "suspect_group": [7.5],
+                    },
+                },
+            },
+            {"phase": "finalize", "remaining": 0, "terminal_outcome": "resolved"},
+        ]
+
+        result = evaluate_rollout_suites(
+            [scenario],
+            env_factory=_ScriptEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+        )
+        episode = result.suite_metrics["episodes"][0]
+        self.assertFalse(episode["audit"]["evidence_complete"])
+        self.assertIn(
+            "accepted_target_nonregression_target_evidence_invalid",
+            episode["audit"]["strict_release_audit"]["problems"],
+        )
+
+    def test_out_of_range_accepted_target_remains_an_evidence_gap(self) -> None:
+        scenario = _resolved_scenario()
+        scenario["scenario_id"] = "out-of-range-accepted-target"
+        scenario["scenario_family"] = "measurement"
+        scenario["error_cardinality"] = 1
+        scenario["hidden_truth"] = {}
         scenario["script"] = [
             {
                 "phase": "partial_commit",
@@ -1545,11 +1623,10 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             policy_factory=lambda: _ScriptPolicy([]),
         )
         episode = result.suite_metrics["episodes"][0]
-        self.assertFalse(episode["healthy_components_preserved"])
-        self.assertFalse(episode["final_physical_correct"])
+        self.assertFalse(episode["audit"]["evidence_complete"])
         self.assertIn(
-            "measurement_healthy_targets_modified:[99]",
-            episode["audit"]["accepted_target_audit"]["problems"],
+            "accepted_measurement_target_out_of_range_or_unverifiable",
+            episode["audit"]["strict_release_audit"]["problems"],
         )
 
     def test_default_audit_rejects_correct_target_with_wrong_final_value(self) -> None:

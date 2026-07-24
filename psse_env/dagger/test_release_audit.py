@@ -127,6 +127,13 @@ class AcceptedCorrectionTargetTests(unittest.TestCase):
         self.assertIn(
             "accepted_measurement_targets_outside_truth", result["problems"]
         )
+        self.assertIn(
+            "accepted_target_nonregression_false_target", result["problems"]
+        )
+        self.assertNotIn(
+            "accepted_target_nonregression_target_evidence_invalid",
+            result["problems"],
+        )
 
     def test_measurement_updates_are_unioned_with_suspect_group(self) -> None:
         scenario = _base_scenario()
@@ -146,6 +153,57 @@ class AcceptedCorrectionTargetTests(unittest.TestCase):
         )
         self.assertIn(
             "accepted_measurement_targets_outside_truth", result["problems"]
+        )
+
+    def test_out_of_range_measurement_target_is_not_a_policy_only_failure(
+        self,
+    ) -> None:
+        result = _audit_resolved(
+            _base_scenario(),
+            _final_state(
+                {
+                    "tool": "correct_measurements",
+                    "arguments": {"suspect_group": [1, 99]},
+                }
+            ),
+            active=_active(),
+            remaining={"remaining_true_fault_count": 0},
+        )
+        self.assertIn(
+            "accepted_measurement_target_out_of_range_or_unverifiable",
+            result["problems"],
+        )
+        self.assertIn(
+            "accepted_target_nonregression_target_evidence_invalid",
+            result["problems"],
+        )
+        self.assertNotIn(
+            "accepted_target_nonregression_false_target", result["problems"]
+        )
+
+    def test_malformed_truth_cannot_be_masked_by_an_in_range_wrong_target(
+        self,
+    ) -> None:
+        scenario = _base_scenario()
+        scenario["true_measurement_errors"] = "malformed"
+        result = _audit_resolved(
+            scenario,
+            _final_state(
+                {
+                    "tool": "correct_measurements",
+                    "arguments": {"suspect_group": [0]},
+                }
+            ),
+            active=_active(),
+            remaining={"remaining_true_fault_count": 0},
+        )
+        self.assertIn("true_measurement_targets_malformed", result["problems"])
+        self.assertIn(
+            "accepted_target_nonregression_target_evidence_invalid",
+            result["problems"],
+        )
+        self.assertNotIn(
+            "accepted_target_nonregression_false_target", result["problems"]
         )
 
     def test_fractional_measurement_index_fails_closed(self) -> None:
@@ -186,6 +244,9 @@ class AcceptedCorrectionTargetTests(unittest.TestCase):
             "accepted_parameter_target_outside_same_family_truth",
             result["problems"],
         )
+        self.assertIn(
+            "accepted_target_nonregression_false_target", result["problems"]
+        )
 
     def test_topology_correction_on_parameter_truth_line_fails(self) -> None:
         scenario = _base_scenario()
@@ -209,6 +270,72 @@ class AcceptedCorrectionTargetTests(unittest.TestCase):
         self.assertIn(
             "accepted_topology_target_outside_same_family_truth",
             result["problems"],
+        )
+        self.assertIn(
+            "accepted_target_nonregression_false_target", result["problems"]
+        )
+
+    def test_out_of_range_branch_target_is_not_a_policy_only_failure(self) -> None:
+        scenario = _base_scenario()
+        scenario["scenario_family"] = "parameter"
+        scenario["true_measurement_errors"] = []
+        scenario["measurements"] = [1.0, 2.0, 3.0]
+        scenario["clean_measurements"] = [1.0, 2.0, 3.0]
+        scenario["true_parameter_errors"] = [
+            {"branch_row0": 0, "clean_r": 0.01, "clean_x": 0.02}
+        ]
+        result = audit_episode_against_truth(
+            scenario,
+            _final_state(
+                {
+                    "tool": "correct_parameters",
+                    "arguments": {"branch_row0": 999},
+                }
+            ),
+            terminal=True,
+            terminal_outcome="operator_escalation",
+        )
+        self.assertIn(
+            "accepted_parameter_target_out_of_range_or_unverifiable",
+            result["problems"],
+        )
+        self.assertIn(
+            "accepted_target_nonregression_target_evidence_invalid",
+            result["problems"],
+        )
+
+    def test_out_of_range_other_family_truth_cannot_validate_a_branch(
+        self,
+    ) -> None:
+        scenario = _base_scenario()
+        scenario["scenario_family"] = "topology"
+        scenario["true_measurement_errors"] = []
+        scenario["measurements"] = [1.0, 2.0, 3.0]
+        scenario["clean_measurements"] = [1.0, 2.0, 3.0]
+        scenario["true_topology_errors"] = [
+            {"branch_row0": 999, "expected_status": 0}
+        ]
+        result = audit_episode_against_truth(
+            scenario,
+            _final_state(
+                {
+                    "tool": "correct_parameters",
+                    "arguments": {"branch_row0": 999},
+                }
+            ),
+            terminal=True,
+            terminal_outcome="operator_escalation",
+        )
+        self.assertIn(
+            "accepted_parameter_target_out_of_range_or_unverifiable",
+            result["problems"],
+        )
+        self.assertIn(
+            "accepted_target_nonregression_target_evidence_invalid",
+            result["problems"],
+        )
+        self.assertNotIn(
+            "accepted_target_nonregression_false_target", result["problems"]
         )
 
 

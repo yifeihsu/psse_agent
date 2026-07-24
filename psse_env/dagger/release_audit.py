@@ -348,7 +348,10 @@ def _measurement_action_targets(arguments: Mapping[str, Any]) -> set[int] | None
 
 
 def _audit_accepted_targets(
-    scenario: Mapping[str, Any], final_state: Mapping[str, Any]
+    scenario: Mapping[str, Any],
+    final_state: Mapping[str, Any],
+    *,
+    case_loader: Callable[[Any], Any] | None,
 ) -> tuple[
     list[str],
     set[int],
@@ -366,6 +369,20 @@ def _audit_accepted_targets(
     truth_topology = _branch_truth_targets(
         scenario, "true_topology_errors", problems
     )
+    measurement_rows = _as_sequence(scenario.get("measurements"))
+    scenario_branches = _case_branches(scenario.get("case"), case_loader)
+    known_branch_targets = truth_parameters | truth_topology
+
+    def branch_target_is_resolvable(target: tuple[str, Any]) -> bool:
+        if target[0] == "branch_row0":
+            if scenario_branches is None:
+                return False
+            row0 = int(target[1])
+            return 0 <= row0 < len(scenario_branches)
+        # Named branch identities are not represented in a MATPOWER row.
+        # Another truth family may establish the same named physical target.
+        return target in known_branch_targets
+
     corrections, well_formed = _accepted_corrections(final_state)
     accepted_measurements: set[int] = set()
     accepted_parameters: set[tuple[str, Any]] = set()
@@ -390,9 +407,16 @@ def _audit_accepted_targets(
             elif not targets:
                 problems.append("accepted_measurement_targets_missing")
             elif not targets.issubset(truth_measurements):
-                # This catches both completely wrong and broad grouped
-                # corrections that include even one healthy meter.
-                problems.append("accepted_measurement_targets_outside_truth")
+                if measurement_rows is None or any(
+                    index >= len(measurement_rows) for index in targets
+                ):
+                    problems.append(
+                        "accepted_measurement_target_out_of_range_or_unverifiable"
+                    )
+                else:
+                    # This catches both completely wrong and broad grouped
+                    # corrections that include even one healthy meter.
+                    problems.append("accepted_measurement_targets_outside_truth")
             else:
                 accepted_measurements.update(targets)
         elif family in {"parameter", "topology"}:
@@ -402,7 +426,14 @@ def _audit_accepted_targets(
                 continue
             family_truth = truth_parameters if family == "parameter" else truth_topology
             if target not in family_truth:
-                problems.append(f"accepted_{family}_target_outside_same_family_truth")
+                if branch_target_is_resolvable(target):
+                    problems.append(
+                        f"accepted_{family}_target_outside_same_family_truth"
+                    )
+                else:
+                    problems.append(
+                        f"accepted_{family}_target_out_of_range_or_unverifiable"
+                    )
             elif family == "parameter":
                 accepted_parameters.add(target)
             else:
@@ -1027,6 +1058,14 @@ _PARAMETER_CLEAN_FIELDS = {
     9: "clean_shift",
 }
 
+_ACCEPTED_TARGET_POLICY_FAILURES = frozenset(
+    {
+        "accepted_measurement_targets_outside_truth",
+        "accepted_parameter_target_outside_same_family_truth",
+        "accepted_topology_target_outside_same_family_truth",
+    }
+)
+
 
 def _case_branches(
     value: Any, case_loader: Callable[[Any], Any] | None
@@ -1087,6 +1126,11 @@ def _accepted_target_nonregression(
     problems: list[str] = []
     evidence: list[dict[str, Any]] = []
     if target_problems:
+        if set(target_problems).issubset(_ACCEPTED_TARGET_POLICY_FAILURES):
+            # The action and hidden truth are both well formed here: the
+            # learner chose a healthy or wrong-family target.  That is a
+            # safety/performance failure, not an evidence-integrity gap.
+            return ["accepted_target_nonregression_false_target"], evidence
         return ["accepted_target_nonregression_target_evidence_invalid"], evidence
 
     initial_measurements = _as_sequence(scenario.get("measurements"))
@@ -1567,7 +1611,11 @@ def audit_episode_against_truth(
         accepted_measurement_targets,
         accepted_parameter_targets,
         accepted_topology_targets,
-    ) = _audit_accepted_targets(scenario, final_state)
+    ) = _audit_accepted_targets(
+        scenario,
+        final_state,
+        case_loader=case_loader,
+    )
     record(ACCEPTED_TARGETS_CHECK, target_problems)
 
     outcome = str(terminal_outcome) if terminal_outcome is not None else None
