@@ -82,6 +82,33 @@ class UnifiedSchemaTests(unittest.TestCase):
         self.assertEqual(sorted(wls["properties"]), ["case_path"])
         self.assertEqual(wls["required"], ["case_path"])
 
+    def test_unified_registry_exposes_only_controller_executable_options(
+        self,
+    ) -> None:
+        functions = {
+            schema["function"]["name"]: schema["function"]
+            for schema in unified_tool_schemas()
+        }
+        schemas = {
+            name: function["parameters"] for name, function in functions.items()
+        }
+        self.assertEqual(
+            sorted(schemas["get_parameter_context"]["properties"]),
+            ["case_path"],
+        )
+        self.assertEqual(
+            sorted(schemas["get_verification_snapshot"]["properties"]),
+            ["case_path"],
+        )
+        self.assertEqual(
+            sorted(schemas["correct_measurements_from_path"]["properties"]),
+            ["case_path", "suspect_group"],
+        )
+        self.assertNotIn(
+            "stage",
+            functions["get_verification_snapshot"]["description"].lower(),
+        )
+
 
 class ActionMappingTests(unittest.TestCase):
     def test_every_macro_action_maps_and_round_trips_by_name(self) -> None:
@@ -118,6 +145,20 @@ class ActionMappingTests(unittest.TestCase):
             internal_to_canonical_action(
                 {"tool": "correct_measurements", "arguments": {"state_id": "active"}}
             )
+
+    def test_parameter_context_maps_only_the_executable_state_reference(self) -> None:
+        self.assertEqual(
+            canonical_to_internal_action(
+                {
+                    "tool": "get_parameter_context",
+                    "arguments": {"case_path": "active"},
+                }
+            ),
+            {
+                "tool": "get_parameter_context",
+                "arguments": {"state_id": "active"},
+            },
+        )
 
     def test_parameter_correction_normalizes_branch_targets(self) -> None:
         by_row0 = internal_to_canonical_action(
@@ -179,14 +220,57 @@ class ActionMappingTests(unittest.TestCase):
         )
         self.assertEqual(action["tool"], "get_verification_snapshot")
         self.assertEqual(action["arguments"], {"case_path": "candidate"})
-        stage_only = canonical_to_internal_action(
+        without_reference = canonical_to_internal_action(
+            {"tool": "get_verification_snapshot", "arguments": {}}
+        )
+        self.assertEqual(
+            without_reference,
+            {"tool": "verify_candidate", "arguments": {"state_id": "candidate"}},
+        )
+
+    def test_bridge_rejects_canonical_options_the_controller_cannot_execute(
+        self,
+    ) -> None:
+        actions = (
+            {
+                "tool": "correct_measurements_from_path",
+                "arguments": {
+                    "case_path": "active",
+                    "suspect_group": [7],
+                    "enable_correction": True,
+                },
+            },
+            {
+                "tool": "correct_measurements_from_path",
+                "arguments": {
+                    "case_path": "active",
+                    "suspect_group": [7],
+                    "max_correction_iterations": 4,
+                },
+            },
+            {
+                "tool": "correct_measurements_from_path",
+                "arguments": {
+                    "case_path": "active",
+                    "suspect_group": [7],
+                    "error_tolerance": 1e-4,
+                },
+            },
+            {
+                "tool": "get_parameter_context",
+                "arguments": {"case_path": "active", "line_index": 7},
+            },
             {
                 "tool": "get_verification_snapshot",
                 "arguments": {"stage": "post_measurement_correction"},
-            }
+            },
         )
-        self.assertEqual(stage_only["tool"], "verify_candidate")
-        self.assertEqual(stage_only["arguments"]["state_id"], "candidate")
+        for action in actions:
+            with self.subTest(tool=action["tool"]):
+                with self.assertRaisesRegex(
+                    ValueError, "outside the executable release registry"
+                ):
+                    canonical_to_internal_action(action)
 
     def test_specialized_diagnostics_map_state_references(self) -> None:
         internal = {

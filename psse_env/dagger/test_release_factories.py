@@ -884,6 +884,55 @@ class GeneratedToolCallValidationTests(unittest.TestCase):
                 "call:wls_from_path{}", self.schemas
             )
 
+    def test_release_registry_rejects_nonexecutable_canonical_options(self) -> None:
+        calls = (
+            (
+                "correct_measurements_from_path",
+                {
+                    "case_path": "active",
+                    "suspect_group": [7],
+                    "enable_correction": True,
+                },
+            ),
+            (
+                "correct_measurements_from_path",
+                {
+                    "case_path": "active",
+                    "suspect_group": [7],
+                    "enable_correction": False,
+                },
+            ),
+            (
+                "correct_measurements_from_path",
+                {
+                    "case_path": "active",
+                    "suspect_group": [7],
+                    "max_correction_iterations": 4,
+                },
+            ),
+            (
+                "correct_measurements_from_path",
+                {
+                    "case_path": "active",
+                    "suspect_group": [7],
+                    "error_tolerance": 1e-4,
+                },
+            ),
+            (
+                "get_parameter_context",
+                {"case_path": "active", "line_index": 7},
+            ),
+            (
+                "get_verification_snapshot",
+                {"stage": "post_measurement_correction"},
+            ),
+        )
+        for tool, arguments in calls:
+            rendered = f"call:{tool}{json.dumps(arguments, separators=(',', ':'))}"
+            with self.subTest(tool=tool):
+                with self.assertRaisesRegex(GateError, "unsupported arguments"):
+                    factories._validated_generated_action(rendered, self.schemas)
+
 
 class CanonicalGemmaInferenceTests(unittest.TestCase):
     def test_prompt_generation_parse_bridge_and_alias_binding_match_sft(self) -> None:

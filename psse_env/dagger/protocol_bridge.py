@@ -26,6 +26,7 @@ the deterministic pilot adapters do not support that yet.
 from __future__ import annotations
 
 import copy
+from functools import lru_cache
 from typing import Any, Mapping
 
 from psse_env.actions import (
@@ -231,23 +232,51 @@ def _require_registry() -> list[dict[str, Any]]:
 def unified_tool_schemas() -> list[dict[str, Any]]:
     """Return the canonical registry extended with transactional DAgger tools.
 
-    Canonical schemas are preserved verbatim except for three deliberate,
-    additive relaxations required by the transactional environment:
+    Canonical schemas are preserved except for the reviewed execution boundary
+    required by the transactional environment:
 
     - ``get_verification_snapshot`` gains an optional ``case_path`` so a
-      verification can reference the open candidate explicitly.
+      verification can reference the open candidate explicitly, while its
+      presentation-only ``stage`` hint is removed.
+    - ``get_parameter_context`` omits its unused ``line_index`` hint.
+    - ``correct_measurements_from_path`` exposes only the target group; solver
+      switches and tolerances remain pinned provider configuration rather than
+      model-controlled action arguments.
     - ``correct_parameters_from_path`` and ``correct_topology_from_path`` gain
       the additive branch-target conventions and require only ``case_path``;
       the environment enforces exactly one branch target at execution time.
+
+    These restrictions are not cosmetic.  Every generated call is validated
+    against this registry before canonical-to-controller bridging, so the
+    recorded controller action must have the same executable meaning as the
+    model-visible call.
     """
     schemas = _require_registry()
     by_name = {schema["function"]["name"]: schema for schema in schemas}
 
-    verification = by_name[GET_VERIFICATION_SNAPSHOT]["function"]["parameters"]
+    parameter_context = by_name[GET_PARAMETER_CONTEXT]["function"]["parameters"]
+    parameter_context["properties"].pop("line_index", None)
+
+    verification_function = by_name[GET_VERIFICATION_SNAPSHOT]["function"]
+    verification_function["description"] = (
+        "Verify the open transactional candidate. Optionally provide its "
+        "candidate case identifier; otherwise the controller binds the open "
+        "candidate alias."
+    )
+    verification = verification_function["parameters"]
+    verification["properties"].pop("stage", None)
     verification["properties"].setdefault(
         "case_path",
         {"type": "string", "description": "Optional candidate case identifier to verify."},
     )
+
+    measurement = by_name[CORRECT_MEASUREMENTS_FROM_PATH]["function"]["parameters"]
+    measurement["properties"] = {
+        key: copy.deepcopy(measurement["properties"][key])
+        for key in ("case_path", "suspect_group")
+    }
+    measurement["required"] = ["case_path", "suspect_group"]
+
     for name in (CORRECT_PARAMETERS_FROM_PATH, CORRECT_TOPOLOGY_FROM_PATH):
         parameters = by_name[name]["function"]["parameters"]
         for key, prop in _ADDITIVE_BRANCH_TARGET_PROPERTIES.items():
@@ -256,6 +285,19 @@ def unified_tool_schemas() -> list[dict[str, Any]]:
 
     schemas.extend(copy.deepcopy(_TRANSACTIONAL_TOOL_SCHEMAS))
     return schemas
+
+
+@lru_cache(maxsize=1)
+def _executable_canonical_argument_names() -> dict[str, frozenset[str]]:
+    """Cache immutable argument-name sets for the per-step bridge boundary."""
+
+    return {
+        str(schema["function"]["name"]): frozenset(
+            str(name)
+            for name in schema["function"]["parameters"].get("properties", {})
+        )
+        for schema in unified_tool_schemas()
+    }
 
 
 def canonical_tool_names() -> set[str]:
@@ -338,12 +380,23 @@ def canonical_to_internal_action(action: Mapping[str, Any] | str) -> dict[str, A
     if tool not in CANONICAL_TO_INTERNAL_TOOL:
         return normalized
 
+    properties = _executable_canonical_argument_names()[tool]
     internal = CANONICAL_TO_INTERNAL_TOOL[tool]
+    bridge_consumed = (
+        {"case_path"} if internal in _SCAN_WINDOW_REFERENCE_TOOLS else set()
+    )
+    unsupported = sorted(set(arguments) - properties - bridge_consumed)
+    if unsupported:
+        raise ValueError(
+            f"Canonical tool {tool!r} has arguments outside the executable "
+            f"release registry: {unsupported}"
+        )
+
     if internal in _CANDIDATE_REFERENCE_TOOLS:
         _move_key(arguments, "case_path", "candidate_state_id")
     elif internal == VERIFY_CANDIDATE:
         _move_key(arguments, "case_path", "state_id")
-        # A stage-only verification references the open candidate by alias.
+        # A verification without a case reference targets the open candidate.
         arguments.setdefault("state_id", "candidate")
     elif internal in _SCAN_WINDOW_REFERENCE_TOOLS:
         # The persistent scan window is bound to the controller state whose

@@ -1768,6 +1768,54 @@ class EvaluationGateV2Tests(unittest.TestCase):
             incomplete.failures,
         )
 
+    def test_truth_audited_false_finalization_is_performance_not_evidence(
+        self,
+    ) -> None:
+        base_artifact = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="base/gemma",
+            model_revision=MODEL_REVISION,
+        )
+        metrics = base_artifact["evaluation"]["suite_metrics"]
+        for episode in metrics["episodes"]:
+            episode["final_physical_success"] = False
+            episode["final_physical_correct"] = False
+            episode["false_finalization_count"] = 1
+            strict = episode["audit"]["strict_release_audit"]
+            strict["problems"] = ["remaining_true_faults"]
+            strict["quarantined"] = True
+            episode["audit"]["quarantined"] = True
+            for name in (
+                "remaining_true_faults",
+                "final_measurements_match_clean",
+                "final_case_matches_clean",
+            ):
+                strict["checks"][name] = {"status": "failed"}
+        metrics["overall"] = _overall(metrics["episodes"])
+        _rehash(base_artifact)
+
+        result = _validate(
+            base_artifact,
+            role="base-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
+            explicit_identity=None,
+            model_id="base/gemma",
+            model_revision=MODEL_REVISION,
+        )
+        self.assertTrue(result.passed, result.evidence_failures)
+        self.assertTrue(result.evidence_passed)
+        self.assertFalse(result.performance_passed)
+        self.assertTrue(
+            any(
+                "did not achieve complete physical safety" in failure
+                for failure in result.performance_failures
+            ),
+            result.performance_failures,
+        )
+
     def test_same_performance_failure_blocks_expert_and_checkpoint(self) -> None:
         expert = _validate(
             _artifact(

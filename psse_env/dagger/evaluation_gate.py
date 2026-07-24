@@ -1987,7 +1987,7 @@ def validate_evaluation_artifact(
         is_escalated = bool(is_terminal and outcome == "operator_escalation")
         resolved += int(is_resolved)
         escalated += int(is_escalated)
-        if is_terminal and not is_resolved and not is_escalated:
+        if is_terminal and outcome not in {"resolved", "operator_escalation"}:
             failures.append(f"episode {key!r} has an unknown or unaudited terminal outcome")
         if episode.get("healthy_components_preserved") is True and episode.get(
             "healthy_preservation_known"

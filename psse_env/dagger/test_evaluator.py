@@ -18,6 +18,7 @@ from psse_env.actions import (
     COMMIT_STATE,
     CORRECT_MEASUREMENTS,
     FINALIZE_DIAGNOSIS,
+    INVALID_ACTION,
     ROLLBACK_STATE,
     RUN_HSE_FROM_PATH,
     RUN_WLS,
@@ -447,6 +448,35 @@ def _escalation_scenario() -> dict[str, Any]:
 
 
 class ClosedLoopEvaluatorTests(unittest.TestCase):
+    def test_policy_exception_is_recorded_as_a_schema_valid_invalid_action(
+        self,
+    ) -> None:
+        class RaisingPolicy:
+            def act(self, _observation: Mapping[str, Any]) -> Any:
+                raise ValueError("unsupported canonical release argument")
+
+        scenario = _partitioned_resolved_scenario()
+        scenario["execution"]["script"] = [
+            {
+                "phase": "unused",
+                "status": "failure",
+                "error_code": "invalid_action",
+                "remaining": 1,
+            }
+        ]
+        result = evaluate_rollout_suites(
+            {"standard_success": [scenario]},
+            env_factory=_ScriptEnv,
+            policy_factory=RaisingPolicy,
+            max_steps=1,
+        )
+        episode = result.suite_metrics["episodes"][0]
+        action = episode["trace"][0]["action"]
+        self.assertEqual(action["tool"], INVALID_ACTION)
+        self.assertEqual(action["arguments"]["error_code"], "policy_exception")
+        self.assertIn("ValueError", action["arguments"]["error_detail"])
+        self.assertEqual(episode["invalid_action_count"], 1)
+
     def test_policy_hidden_failure_interventions_are_injected_before_policy(self) -> None:
         for malformed, suite, expected_tool in (
             (False, "forced_error_recovery", RUN_WLS),
