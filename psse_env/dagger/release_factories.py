@@ -26,6 +26,7 @@ import re
 import stat
 import tempfile
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -102,7 +103,17 @@ BASE_SNAPSHOT_OPTIONAL_FILE_MANIFEST: dict[str, tuple[int, str, str]] = {
 }
 MODEL_TREE_DIGEST_VERSION = "bc0-peft-tree-sha256-v1"
 BC0_CHI2_ALPHA = DEFAULT_CHI2_ALPHA
-MAX_NEW_TOKENS = 256
+# Release evaluation uses the same bounded HIF search resolution as the
+# reviewed round-0 aggregate builder.  The general provider defaults remain
+# available outside this frozen release path, but a learner cannot turn one
+# evaluation action into a 31 x 35 x 10 OpenDSS sweep.
+BC0_HIF_ALPHA_GRID_SIZE = 5
+BC0_HIF_R_GRID_SIZE = 7
+BC0_HIF_MAX_SCANS = 3
+# Frozen round-0 tool-call targets are at most 42 tokens. Keep a small
+# malformed-output allowance, but fail boundedly when a checkpoint does not
+# emit Gemma's pinned tool-response stop token.
+MAX_NEW_TOKENS = 64
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -120,7 +131,12 @@ def production_environment_factory(
     # The frozen suite and round-0 aggregate are validated at the same
     # significance level.  Relying on the provider's general-purpose default
     # made healthy release roots anomalous only at evaluation time.
-    providers = MatpowerDeploymentProviders(chi2_alpha=BC0_CHI2_ALPHA)
+    providers = MatpowerDeploymentProviders(
+        chi2_alpha=BC0_CHI2_ALPHA,
+        hif_alpha_grid_size=BC0_HIF_ALPHA_GRID_SIZE,
+        hif_r_grid_size=BC0_HIF_R_GRID_SIZE,
+        hif_max_scans=BC0_HIF_MAX_SCANS,
+    )
     env = TransactionalPSSEEnv(
         **providers.env_kwargs(),
         production_dataset_mode=True,
@@ -1069,8 +1085,16 @@ class _CanonicalGemmaPolicy:
             str(row["function"]["name"]): row["function"]["parameters"]
             for row in self._tools
         }
+        self._last_action_metrics: dict[str, Any] = {}
+
+    @property
+    def last_action_metrics(self) -> dict[str, Any]:
+        """Return non-semantic inference telemetry for release progress logs."""
+
+        return copy.deepcopy(self._last_action_metrics)
 
     def act(self, observation: Mapping[str, Any]) -> dict[str, Any]:
+        self._last_action_metrics = {}
         if not isinstance(observation, Mapping):
             raise TypeError("Gemma policy requires a model-observation mapping")
         payload = {"state": copy.deepcopy(dict(observation))}
@@ -1115,13 +1139,26 @@ class _CanonicalGemmaPolicy:
             or key.endswith("token_type_ids")
         }
         self._bundle.model.eval()
+        generation_started = time.perf_counter()
         with torch.inference_mode():
             generated = self._bundle.model.generate(
                 **inputs,
                 max_new_tokens=MAX_NEW_TOKENS,
                 do_sample=False,
+                use_cache=True,
             )
+        generation_seconds = time.perf_counter() - generation_started
         output_ids = generated[0][prompt_length:].detach().cpu()
+        generated_tokens = int(output_ids.numel())
+        self._last_action_metrics = {
+            "prompt_tokens": int(prompt_length),
+            "generated_tokens": generated_tokens,
+            "generation_seconds": float(generation_seconds),
+            "hit_max_new_tokens": generated_tokens >= MAX_NEW_TOKENS,
+            "last_token_id": (
+                int(output_ids[-1].item()) if generated_tokens else None
+            ),
+        }
         decoder = (
             self._bundle.processor
             if callable(getattr(self._bundle.processor, "decode", None))
@@ -1135,8 +1172,9 @@ class GemmaReleasePolicy:
     """Canonical-generation policy with controller alias binding and identity."""
 
     def __init__(self, bundle: _ModelBundle) -> None:
+        self._canonical_policy = _CanonicalGemmaPolicy(bundle)
         self._adapter = LocalAliasPolicyAdapter(
-            _CanonicalGemmaPolicy(bundle), protocol="canonical"
+            self._canonical_policy, protocol="canonical"
         )
         self._model_id = bundle.model_id
         self._model_revision = bundle.model_revision
@@ -1150,6 +1188,12 @@ class GemmaReleasePolicy:
             "model_id": self._model_id,
             "model_revision": self._model_revision,
         }
+
+    @property
+    def last_action_metrics(self) -> dict[str, Any]:
+        """Expose timing/token counts without exposing model or prompt state."""
+
+        return self._canonical_policy.last_action_metrics
 
     def act(self, observation: Mapping[str, Any]) -> dict[str, Any]:
         validate_policy_payload(observation)

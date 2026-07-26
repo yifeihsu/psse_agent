@@ -43,6 +43,7 @@ PYTHON=${PYTHON:-$ENV_PREFIX/bin/python}
 STAGE=${STAGE:-gate}
 ALLOW_DOWNLOAD=${ALLOW_DOWNLOAD:-0}
 REVIEWED_SOURCE_COMMIT=${REVIEWED_SOURCE_COMMIT:-}
+ENABLE_WANDB=${ENABLE_WANDB:-0}
 
 MODEL_NAME=${MODEL_NAME:-unsloth/gemma-4-31B-it}
 MODEL_REVISION=${MODEL_REVISION:-8a796db4df380b178065ed910849477ff0e99c87}
@@ -83,6 +84,18 @@ case "$STAGE" in
         exit 2
         ;;
 esac
+case "$ENABLE_WANDB" in
+    0|1)
+        ;;
+    *)
+        echo "ERROR: ENABLE_WANDB must be 0 or 1; got '$ENABLE_WANDB'." >&2
+        exit 2
+        ;;
+esac
+WANDB_ACTIVE=0
+if [[ "$ENABLE_WANDB" == "1" && "$STAGE" == "round0" ]]; then
+    WANDB_ACTIVE=1
+fi
 
 if [[ ! "$MODEL_REVISION" =~ ^[0-9a-fA-F]{40}$ ]]; then
     echo "ERROR: MODEL_REVISION must be a pinned 40-character Hugging Face commit." >&2
@@ -114,6 +127,52 @@ export TORCH_HOME=${TORCH_HOME:-/scratch/yx3882/.cache/torch}
 export TOKENIZERS_PARALLELISM=false
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-${SLURM_CPUS_PER_TASK:-16}}
+
+if [[ "$WANDB_ACTIVE" == "1" ]]; then
+    WANDB_MODE=${WANDB_MODE:-online}
+    case "$WANDB_MODE" in
+        online|offline)
+            ;;
+        *)
+            echo "ERROR: WANDB_MODE must be online or offline when W&B is enabled; got '$WANDB_MODE'." >&2
+            exit 2
+            ;;
+    esac
+
+    WANDB_SOURCE_SHORT=${REVIEWED_SOURCE_COMMIT:0:12}
+    WANDB_SLURM_JOB_ID=${SLURM_JOB_ID:-interactive}
+    WANDB_SCRATCH_ROOT=${WANDB_SCRATCH_ROOT:-/scratch/${USER:-yx3882}/wandb}
+    WANDB_DIR=${WANDB_DIR:-$WANDB_SCRATCH_ROOT/runs}
+    WANDB_CACHE_DIR=${WANDB_CACHE_DIR:-$WANDB_SCRATCH_ROOT/cache}
+    WANDB_DATA_DIR=${WANDB_DATA_DIR:-$WANDB_SCRATCH_ROOT/data}
+    WANDB_CONFIG_DIR=${WANDB_CONFIG_DIR:-$WANDB_SCRATCH_ROOT/config}
+    WANDB_ARTIFACT_DIR=${WANDB_ARTIFACT_DIR:-$WANDB_SCRATCH_ROOT/artifacts}
+    mkdir -p \
+        "$WANDB_DIR" \
+        "$WANDB_CACHE_DIR" \
+        "$WANDB_DATA_DIR" \
+        "$WANDB_CONFIG_DIR" \
+        "$WANDB_ARTIFACT_DIR"
+
+    export WANDB_PROJECT=${WANDB_PROJECT:-psse-agent-bc0}
+    if [[ -n "${WANDB_ENTITY:-}" ]]; then
+        export WANDB_ENTITY
+    else
+        unset WANDB_ENTITY
+    fi
+    export WANDB_RUN_GROUP=${WANDB_RUN_GROUP:-bc0-round0-$WANDB_SOURCE_SHORT}
+    export WANDB_TAGS=${WANDB_TAGS:-bc0,round0,gemma4-31b,source-$WANDB_SOURCE_SHORT}
+    export WANDB_JOB_TYPE=${WANDB_JOB_TYPE:-bc0-round0-sft}
+    WANDB_RUN_ID_DEFAULT=bc0-r0-$WANDB_SOURCE_SHORT-$WANDB_SLURM_JOB_ID
+    export WANDB_RUN_ID=${WANDB_RUN_ID:-$WANDB_RUN_ID_DEFAULT}
+    export WANDB_NAME=${WANDB_NAME:-$WANDB_RUN_ID}
+    export WANDB_RESUME=allow
+    export WANDB_LOG_MODEL=false
+    export WANDB_WATCH=false
+    export WANDB_MODE
+    export WANDB_DIR WANDB_CACHE_DIR WANDB_DATA_DIR WANDB_CONFIG_DIR
+    export WANDB_ARTIFACT_DIR
+fi
 
 if [[ ! -x "$PYTHON" ]]; then
     echo "ERROR: Python environment not found at $PYTHON; create it from psse_env/requirements-sft.txt first." >&2
@@ -229,6 +288,13 @@ echo "source:    $REVIEWED_SOURCE_COMMIT"
 echo "train:     $TRAIN_FILE"
 echo "output:    $OUTPUT_DIR"
 echo "downloads: $ALLOW_DOWNLOAD"
+if [[ "$WANDB_ACTIVE" == "1" ]]; then
+    echo "wandb:     enabled ($WANDB_MODE; project=$WANDB_PROJECT; run=$WANDB_RUN_ID)"
+elif [[ "$ENABLE_WANDB" == "1" ]]; then
+    echo "wandb:     inactive for STAGE=$STAGE (monitoring starts only at round0)"
+else
+    echo "wandb:     disabled"
+fi
 if [[ "$STAGE" == "gate" || "$STAGE" == "round0" ]]; then
     echo "processor gate: $PROCESSOR_GATE_REPORT"
 fi
@@ -320,6 +386,45 @@ print(
     "OpenDSS native runtime loaded"
 )
 PY
+if [[ "$WANDB_ACTIVE" == "1" ]]; then
+    "$PYTHON" - "$REPO_ROOT/psse_env/requirements-wandb.txt" <<'PY'
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+import sys
+
+from packaging.requirements import Requirement
+
+requirements = [
+    Requirement(line.strip())
+    for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+    if line.strip() and not line.lstrip().startswith("#")
+]
+if len(requirements) != 1 or requirements[0].name.lower() != "wandb":
+    raise SystemExit(
+        "requirements-wandb.txt must contain exactly one pinned wandb requirement"
+    )
+requirement = requirements[0]
+try:
+    installed = version(requirement.name)
+except PackageNotFoundError as exc:
+    raise SystemExit(
+        "W&B monitoring requested but wandb is not installed; "
+        "rerun setup_unsloth_env.sh with INSTALL_WANDB=1"
+    ) from exc
+if requirement.specifier and installed not in requirement.specifier:
+    raise SystemExit(
+        f"wandb: installed {installed}, requires {requirement.specifier}"
+    )
+try:
+    import wandb  # noqa: F401
+except Exception as exc:
+    raise SystemExit(
+        f"W&B monitoring requested but wandb cannot be imported: "
+        f"{type(exc).__name__}: {exc}"
+    ) from exc
+print(f"W&B monitoring dependency verified: wandb {installed}")
+PY
+fi
 
 COMMON_ARGS=(
     --model "$MODEL_NAME"
@@ -329,6 +434,9 @@ COMMON_ARGS=(
     --max-length "$MAX_LENGTH"
     --require-auto-processor
 )
+if [[ "$WANDB_ACTIVE" == "1" ]]; then
+    COMMON_ARGS+=(--report-to wandb --run-name "$WANDB_NAME")
+fi
 if [[ "$ALLOW_DOWNLOAD" == "1" ]]; then
     case "$STAGE" in
         one-batch|tiny-overfit|round0|checkpoint-gate)

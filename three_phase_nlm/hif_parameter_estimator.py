@@ -8,6 +8,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from IEEE_14_OpenDSS.constants import BUS_ORDER
+from hif_search_limits import validate_hif_search_limits
 
 from .dss_hif_injector import (
     _line_matcher,
@@ -442,16 +443,16 @@ def estimate_hif_location_magnitude(
     refine_top_n: int = 3,
     uncertainty_tolerance: float = 0.01,
 ) -> dict[str, Any]:
+    alpha_grid_size, r_grid_size, _ = validate_hif_search_limits(
+        alpha_grid_size=alpha_grid_size,
+        r_grid_size=r_grid_size,
+    )
     if z_obs is None:
         return {
             "success": False,
             "method": "model_based_hif_parameter_search",
             "error": "z_obs is required for HIF parameter estimation.",
         }
-    if int(alpha_grid_size) < 2:
-        raise ValueError("alpha_grid_size must be at least 2")
-    if int(r_grid_size) < 2:
-        raise ValueError("r_grid_size must be at least 2")
     if float(r_hif_pu_min) <= 0.0 or float(r_hif_pu_max) <= float(r_hif_pu_min):
         raise ValueError("Require 0 < r_hif_pu_min < r_hif_pu_max")
 

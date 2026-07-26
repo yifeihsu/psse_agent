@@ -1,0 +1,3 @@
+# Optional experiment-monitoring dependency for STAGE=round0 only.
+# Keep this separate so the reviewed SFT environment remains W&B-free by default.
+wandb==0.27.0

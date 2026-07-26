@@ -8,6 +8,15 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 
+from hif_search_limits import (
+    HIF_ALPHA_GRID_SIZE_MAX,
+    HIF_ALPHA_GRID_SIZE_MIN,
+    HIF_MAX_SCANS_MAX,
+    HIF_MAX_SCANS_MIN,
+    HIF_R_GRID_SIZE_MAX,
+    HIF_R_GRID_SIZE_MIN,
+)
+
 
 MEASUREMENT_ORDER = ["Vm", "Pinj", "Qinj", "Pf", "Qf", "Pt", "Qt"]
 ERROR_FAMILIES = [
@@ -442,8 +451,18 @@ CANONICAL_POWER_TOOLS: list[dict[str, Any]] = [
                         "description": "Optional phase hint. If omitted or null, all phases are searched.",
                     },
                     "top_k": {"type": "integer", "default": 5},
-                    "alpha_grid_size": {"type": "integer", "default": 31},
-                    "r_grid_size": {"type": "integer", "default": 35},
+                    "alpha_grid_size": {
+                        "type": "integer",
+                        "minimum": HIF_ALPHA_GRID_SIZE_MIN,
+                        "maximum": HIF_ALPHA_GRID_SIZE_MAX,
+                        "default": HIF_ALPHA_GRID_SIZE_MAX,
+                    },
+                    "r_grid_size": {
+                        "type": "integer",
+                        "minimum": HIF_R_GRID_SIZE_MIN,
+                        "maximum": HIF_R_GRID_SIZE_MAX,
+                        "default": HIF_R_GRID_SIZE_MAX,
+                    },
                     "r_hif_pu_min": {"type": "number", "default": 5.0},
                     "r_hif_pu_max": {"type": "number", "default": 1000.0},
                 },
@@ -481,15 +500,30 @@ CANONICAL_POWER_TOOLS: list[dict[str, Any]] = [
                         "enum": ["shared", "scan_specific_smooth"],
                         "default": "shared",
                     },
-                    "max_scans": {"type": "integer", "default": 10},
+                    "max_scans": {
+                        "type": "integer",
+                        "minimum": HIF_MAX_SCANS_MIN,
+                        "maximum": HIF_MAX_SCANS_MAX,
+                        "default": HIF_MAX_SCANS_MAX,
+                    },
                     "scan_selection": {
                         "type": "string",
                         "enum": ["all", "diversity_greedy", "information_greedy"],
                         "default": "information_greedy",
                     },
                     "top_k": {"type": "integer", "default": 5},
-                    "alpha_grid_size": {"type": "integer", "default": 31},
-                    "r_grid_size": {"type": "integer", "default": 35},
+                    "alpha_grid_size": {
+                        "type": "integer",
+                        "minimum": HIF_ALPHA_GRID_SIZE_MIN,
+                        "maximum": HIF_ALPHA_GRID_SIZE_MAX,
+                        "default": HIF_ALPHA_GRID_SIZE_MAX,
+                    },
+                    "r_grid_size": {
+                        "type": "integer",
+                        "minimum": HIF_R_GRID_SIZE_MIN,
+                        "maximum": HIF_R_GRID_SIZE_MAX,
+                        "default": HIF_R_GRID_SIZE_MAX,
+                    },
                     "r_hif_pu_min": {"type": "number", "default": 5.0},
                     "r_hif_pu_max": {"type": "number", "default": 1000.0},
                     "robust_loss": {

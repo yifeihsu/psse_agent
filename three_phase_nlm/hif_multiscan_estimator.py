@@ -8,6 +8,8 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from hif_search_limits import validate_hif_search_limits
+
 from .dss_hif_injector import _phase_number
 from .hif_parameter_estimator import (
     _candidate_payload,
@@ -559,6 +561,13 @@ def estimate_hif_location_magnitude_multiscan(
     condition_number_limit: float = 1e6,
     absolute_correlation_limit: float = 0.98,
 ) -> dict[str, Any]:
+    alpha_grid_size, r_grid_size, validated_max_scans = validate_hif_search_limits(
+        alpha_grid_size=alpha_grid_size,
+        r_grid_size=r_grid_size,
+        max_scans=max_scans,
+    )
+    assert validated_max_scans is not None
+    max_scans = validated_max_scans
     mode = str(resistance_mode).strip().lower()
     selection_mode = str(scan_selection).strip().lower()
     loss = str(robust_loss).strip().lower()
@@ -568,10 +577,6 @@ def estimate_hif_location_magnitude_multiscan(
         raise ValueError(f"scan_selection must be one of {sorted(_SELECTION_MODES)}")
     if loss not in _ROBUST_LOSSES:
         raise ValueError(f"robust_loss must be one of {sorted(_ROBUST_LOSSES)}")
-    if int(alpha_grid_size) < 2 or int(r_grid_size) < 2:
-        raise ValueError("alpha_grid_size and r_grid_size must both be at least 2")
-    if int(max_scans) < 1:
-        raise ValueError("max_scans must be positive")
     if float(r_hif_pu_min) <= 0.0 or float(r_hif_pu_max) <= float(r_hif_pu_min):
         raise ValueError("Require 0 < r_hif_pu_min < r_hif_pu_max")
     if float(smoothness_lambda) < 0.0:

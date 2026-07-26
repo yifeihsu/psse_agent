@@ -18,6 +18,7 @@ from psse_env.actions import (
     COMMIT_STATE,
     CORRECT_MEASUREMENTS,
     FINALIZE_DIAGNOSIS,
+    GET_HARMONIC_CONTEXT,
     INVALID_ACTION,
     ROLLBACK_STATE,
     RUN_HSE_FROM_PATH,
@@ -32,6 +33,7 @@ from psse_env.dagger.evaluator import (
     strip_offline_truth,
     write_evaluation_artifact,
 )
+from psse_env.dagger.evaluation_gate import _intervention_failures
 from psse_env.sft.release_hardware import normalize_accelerator_class
 
 
@@ -562,6 +564,269 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                 policy_factory=lambda: _ScriptPolicy([]),
                 require_release_environment=True,
             )
+
+    def test_repeated_nonadvancing_diagnostic_is_recorded_but_not_reexecuted(
+        self,
+    ) -> None:
+        executed_tools: list[str] = []
+
+        class CountingEnv(_ScriptEnv):
+            def step(
+                self, action: Mapping[str, Any]
+            ) -> tuple[dict[str, Any], dict[str, Any]]:
+                executed_tools.append(str(action.get("tool") or ""))
+                return super().step(action)
+
+        scenario = _resolved_scenario()
+        scenario["script"] = [
+            {"phase": "hse", "remaining": 1},
+            {"phase": "hse", "remaining": 1},
+            {"phase": "finalize", "remaining": 0, "terminal_outcome": "resolved"},
+        ]
+        result = evaluate_rollout_suites(
+            {"standard_success": [scenario]},
+            env_factory=CountingEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+            max_steps=8,
+        )
+
+        episode = result.suite_metrics["episodes"][0]
+        self.assertEqual(executed_tools, [RUN_HSE_FROM_PATH])
+        self.assertEqual(episode["policy_steps"], 2)
+        self.assertEqual(episode["specialized_tool_calls"], 2)
+        self.assertEqual(episode["invalid_action_count"], 1)
+        self.assertTrue(episode["loop_detected"])
+        self.assertFalse(episode["terminal"])
+        self.assertIsNone(episode["evaluator_error"])
+        self.assertEqual(
+            episode["trace"][1]["error_code"],
+            "evaluation_repeated_nonadvancing_diagnostic",
+        )
+        self.assertEqual(episode["trace"][1]["execution_status"], "failure")
+        self.assertFalse(episode["trace"][1]["advanced"])
+
+    def test_diagnostic_can_repeat_after_a_real_state_advance(self) -> None:
+        executed_tools: list[str] = []
+
+        class CountingEnv(_ScriptEnv):
+            def step(
+                self, action: Mapping[str, Any]
+            ) -> tuple[dict[str, Any], dict[str, Any]]:
+                executed_tools.append(str(action.get("tool") or ""))
+                return super().step(action)
+
+        scenario = _resolved_scenario()
+        scenario["script"] = [
+            {
+                "phase": "hse",
+                "remaining": 1,
+                "explanation": {
+                    "family": "harmonic",
+                    "detail": {"bus_1based": 4},
+                },
+            },
+            {"phase": "hse", "remaining": 1},
+        ]
+        result = evaluate_rollout_suites(
+            {"standard_success": [scenario]},
+            env_factory=CountingEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+            max_steps=2,
+        )
+
+        episode = result.suite_metrics["episodes"][0]
+        self.assertEqual(
+            executed_tools,
+            [RUN_HSE_FROM_PATH, RUN_HSE_FROM_PATH],
+        )
+        self.assertFalse(episode["loop_detected"])
+        self.assertEqual(
+            [row["execution_status"] for row in episode["trace"]],
+            ["success", "success"],
+        )
+
+    def test_efficiency_specialized_budget_blocks_first_excess_execution(
+        self,
+    ) -> None:
+        executed_tools: list[str] = []
+
+        class CountingEnv(_ScriptEnv):
+            def step(
+                self, action: Mapping[str, Any]
+            ) -> tuple[dict[str, Any], dict[str, Any]]:
+                executed_tools.append(str(action.get("tool") or ""))
+                return super().step(action)
+
+        class SequencePolicy:
+            def __init__(self) -> None:
+                self.actions = [
+                    {
+                        "tool": RUN_HSE_FROM_PATH,
+                        "arguments": {"state_id": "active"},
+                    },
+                    {
+                        "tool": GET_HARMONIC_CONTEXT,
+                        "arguments": {"state_id": "active"},
+                    },
+                ]
+                self.cursor = 0
+
+            def act(self, _observation: Mapping[str, Any]) -> dict[str, Any]:
+                action = self.actions[self.cursor]
+                self.cursor += 1
+                return copy.deepcopy(action)
+
+        scenario = _partitioned_resolved_scenario()
+        scenario["audit"]["evaluation_intervention"] = {
+            "intervention_schema_version": 1,
+            "kind": "efficiency_budget",
+            "limits": {
+                "maximum_policy_steps": 4,
+                "maximum_wls_calls": 4,
+                "maximum_specialized_tool_calls": 1,
+            },
+        }
+        scenario["execution"]["script"] = [
+            {"phase": "unused-first", "remaining": 1},
+            {"phase": "unused-second", "remaining": 1},
+        ]
+        result = evaluate_rollout_suites(
+            {"efficiency": [scenario]},
+            env_factory=CountingEnv,
+            policy_factory=SequencePolicy,
+            max_steps=4,
+        )
+
+        episode = result.suite_metrics["episodes"][0]
+        self.assertEqual(executed_tools, [RUN_HSE_FROM_PATH])
+        self.assertEqual(episode["policy_steps"], 2)
+        self.assertEqual(episode["specialized_tool_calls"], 2)
+        self.assertEqual(
+            episode["specialized_tool_counts"],
+            {GET_HARMONIC_CONTEXT: 1, RUN_HSE_FROM_PATH: 1},
+        )
+        self.assertEqual(
+            episode["trace"][1]["error_code"],
+            "evaluation_specialized_tool_budget_exhausted",
+        )
+        self.assertEqual(episode["trace"][1]["execution_status"], "failure")
+        self.assertFalse(episode["trace"][1]["advanced"])
+        self.assertFalse(episode["loop_detected"])
+        self.assertIsNone(episode["evaluator_error"])
+        evidence_failures, performance_failures = _intervention_failures(
+            episode,
+            scenario["audit"]["evaluation_intervention"],
+        )
+        self.assertEqual(evidence_failures, [])
+        self.assertEqual(
+            performance_failures,
+            [
+                "episode efficiency limit maximum_specialized_tool_calls "
+                "failed: observed 2 > allowed 1"
+            ],
+        )
+
+    def test_progress_callback_reports_policy_safe_step_timing(self) -> None:
+        events: list[dict[str, Any]] = []
+
+        class TelemetryPolicy(_ScriptPolicy):
+            @property
+            def last_action_metrics(self) -> dict[str, Any]:
+                return {
+                    "prompt_tokens": 120,
+                    "generated_tokens": 7,
+                    "generation_seconds": 0.25,
+                    "hit_max_new_tokens": False,
+                    "last_token_id": 50,
+                    "private_model_state": "must-not-leak",
+                }
+
+        scenario = _resolved_scenario()
+        scenario["script"] = [
+            {
+                "phase": "finalize",
+                "remaining": 0,
+                "terminal_outcome": "resolved",
+            }
+        ]
+        result = evaluate_rollout_suites(
+            {"standard_success": [scenario]},
+            env_factory=_ScriptEnv,
+            policy_factory=lambda: TelemetryPolicy([]),
+            progress_callback=lambda row: events.append(copy.deepcopy(dict(row))),
+        )
+
+        self.assertTrue(result.suite_metrics["episodes"][0]["terminal"])
+        self.assertEqual(
+            [row["event"] for row in events],
+            [
+                "episode_start",
+                "policy_action",
+                "step_complete",
+                "episode_complete",
+            ],
+        )
+        policy_event = events[1]
+        self.assertEqual(
+            policy_event["action"],
+            {"tool": FINALIZE_DIAGNOSIS, "arguments": {}},
+        )
+        self.assertGreaterEqual(policy_event["policy_seconds"], 0.0)
+        self.assertEqual(
+            policy_event["policy_metrics"],
+            {
+                "generated_tokens": 7,
+                "generation_seconds": 0.25,
+                "hit_max_new_tokens": False,
+                "last_token_id": 50,
+                "prompt_tokens": 120,
+            },
+        )
+        self.assertGreaterEqual(events[2]["tool_seconds"], 0.0)
+        self.assertNotIn("hidden_truth", json.dumps(events))
+        self.assertNotIn("private_model_state", json.dumps(events))
+
+    def test_hostile_policy_metrics_cannot_interrupt_evaluation_progress(self) -> None:
+        events: list[dict[str, Any]] = []
+
+        class NonCopyableMetric:
+            def __deepcopy__(self, _memo: dict[int, Any]) -> Any:
+                raise RuntimeError("must not be copied")
+
+        class TelemetryPolicy(_ScriptPolicy):
+            @property
+            def last_action_metrics(self) -> dict[str, Any]:
+                return {
+                    "prompt_tokens": NonCopyableMetric(),
+                    "private_model_state": NonCopyableMetric(),
+                }
+
+        scenario = _resolved_scenario()
+        scenario["script"] = [
+            {
+                "phase": "finalize",
+                "remaining": 0,
+                "terminal_outcome": "resolved",
+            }
+        ]
+        result = evaluate_rollout_suites(
+            {"standard_success": [scenario]},
+            env_factory=_ScriptEnv,
+            policy_factory=lambda: TelemetryPolicy([]),
+            progress_callback=lambda row: events.append(dict(row)),
+        )
+
+        self.assertTrue(result.suite_metrics["episodes"][0]["terminal"])
+        self.assertEqual(
+            [row["event"] for row in events],
+            [
+                "episode_start",
+                "policy_action",
+                "step_complete",
+                "episode_complete",
+            ],
+        )
+        self.assertEqual(events[1]["policy_metrics"], {})
 
     def test_executes_suites_and_reports_recovery_safety_and_groups(self) -> None:
         observed: list[dict[str, Any]] = []

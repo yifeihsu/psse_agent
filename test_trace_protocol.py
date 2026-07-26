@@ -842,6 +842,35 @@ class TraceProtocolTests(unittest.TestCase):
             multiscan_schema["function"]["parameters"]["properties"]["max_scans"]["default"],
             10,
         )
+        single_schema = next(
+            tool
+            for tool in schemas
+            if tool["function"]["name"]
+            == "estimate_hif_location_magnitude_from_path"
+        )
+        single_properties = single_schema["function"]["parameters"]["properties"]
+        self.assertEqual(
+            (
+                single_properties["alpha_grid_size"]["minimum"],
+                single_properties["alpha_grid_size"]["maximum"],
+            ),
+            (2, 31),
+        )
+        self.assertEqual(
+            (
+                single_properties["r_grid_size"]["minimum"],
+                single_properties["r_grid_size"]["maximum"],
+            ),
+            (2, 35),
+        )
+        multiscan_properties = multiscan_schema["function"]["parameters"]["properties"]
+        self.assertEqual(
+            (
+                multiscan_properties["max_scans"]["minimum"],
+                multiscan_properties["max_scans"]["maximum"],
+            ),
+            (1, 10),
+        )
 
         messages = [make_initial_user_message()]
         hidden_context = {

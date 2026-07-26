@@ -6,6 +6,14 @@ import re
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from hif_search_limits import (
+    HIF_ALPHA_GRID_SIZE_MAX,
+    HIF_ALPHA_GRID_SIZE_MIN,
+    HIF_MAX_SCANS_MAX,
+    HIF_MAX_SCANS_MIN,
+    HIF_R_GRID_SIZE_MAX,
+    HIF_R_GRID_SIZE_MIN,
+)
 from psse_env.actions import INVALID_ACTION, MACRO_ACTIONS, safe_normalize_action
 from psse_env.state_store import find_forbidden_policy_paths
 
@@ -338,8 +346,16 @@ TOOL_JSON_SCHEMAS: list[dict[str, Any]] = [
                 "candidate_branch_row0": {"type": "integer"},
                 "candidate_phase": {"type": ["string", "null"], "enum": ["A", "B", "C", None]},
                 "top_k": {"type": "integer"},
-                "alpha_grid_size": {"type": "integer"},
-                "r_grid_size": {"type": "integer"},
+                "alpha_grid_size": {
+                    "type": "integer",
+                    "minimum": HIF_ALPHA_GRID_SIZE_MIN,
+                    "maximum": HIF_ALPHA_GRID_SIZE_MAX,
+                },
+                "r_grid_size": {
+                    "type": "integer",
+                    "minimum": HIF_R_GRID_SIZE_MIN,
+                    "maximum": HIF_R_GRID_SIZE_MAX,
+                },
                 "r_hif_pu_min": {"type": "number"},
                 "r_hif_pu_max": {"type": "number"},
             },
@@ -355,14 +371,26 @@ TOOL_JSON_SCHEMAS: list[dict[str, Any]] = [
                 "candidate_branch_row0": {"type": "integer"},
                 "candidate_phase": {"type": ["string", "null"], "enum": ["A", "B", "C", None]},
                 "resistance_mode": {"type": "string", "enum": ["shared", "scan_specific_smooth"]},
-                "max_scans": {"type": "integer"},
+                "max_scans": {
+                    "type": "integer",
+                    "minimum": HIF_MAX_SCANS_MIN,
+                    "maximum": HIF_MAX_SCANS_MAX,
+                },
                 "scan_selection": {
                     "type": "string",
                     "enum": ["all", "diversity_greedy", "information_greedy"],
                 },
                 "top_k": {"type": "integer"},
-                "alpha_grid_size": {"type": "integer"},
-                "r_grid_size": {"type": "integer"},
+                "alpha_grid_size": {
+                    "type": "integer",
+                    "minimum": HIF_ALPHA_GRID_SIZE_MIN,
+                    "maximum": HIF_ALPHA_GRID_SIZE_MAX,
+                },
+                "r_grid_size": {
+                    "type": "integer",
+                    "minimum": HIF_R_GRID_SIZE_MIN,
+                    "maximum": HIF_R_GRID_SIZE_MAX,
+                },
                 "r_hif_pu_min": {"type": "number"},
                 "r_hif_pu_max": {"type": "number"},
                 "robust_loss": {"type": "string", "enum": ["linear", "soft_l1", "huber"]},

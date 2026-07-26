@@ -26,7 +26,9 @@ import platform
 import random
 import re
 import subprocess
+import sys
 import tempfile
+import time
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
@@ -223,6 +225,7 @@ EVALUATION_SUITES = (
 PhysicalAudit = Callable[[Mapping[str, Any]], Mapping[str, Any] | bool]
 ToolCostResolver = Callable[[Mapping[str, Any]], Mapping[str, Any] | None]
 CaseLoader = Callable[[Any], Any]
+ProgressCallback = Callable[[Mapping[str, Any]], None]
 
 
 _OFFLINE_EXECUTION_KEYS = frozenset(
@@ -401,6 +404,12 @@ _EFFICIENCY_LIMIT_FIELDS = frozenset(
         "maximum_wls_calls",
         "maximum_specialized_tool_calls",
     }
+)
+_REPEATED_DIAGNOSTIC_CIRCUIT_BREAKER = (
+    "evaluation_repeated_nonadvancing_diagnostic"
+)
+_SPECIALIZED_TOOL_BUDGET_CIRCUIT_BREAKER = (
+    "evaluation_specialized_tool_budget_exhausted"
 )
 
 
@@ -990,6 +999,7 @@ class ClosedLoopRolloutEvaluator:
         require_release_environment: bool = False,
         expected_policy_identity: Mapping[str, Any] | None = None,
         require_policy_identity: bool = False,
+        progress_callback: ProgressCallback | None = None,
     ) -> None:
         if not callable(env_factory) or not callable(policy_factory):
             raise TypeError("env_factory and policy_factory must be callable.")
@@ -1001,6 +1011,8 @@ class ClosedLoopRolloutEvaluator:
             raise TypeError("physical_audit_fn must be callable when supplied.")
         if tool_cost_resolver is not None and not callable(tool_cost_resolver):
             raise TypeError("tool_cost_resolver must be callable when supplied.")
+        if progress_callback is not None and not callable(progress_callback):
+            raise TypeError("progress_callback must be callable when supplied.")
         if (
             require_release_environment
             or require_policy_identity
@@ -1036,10 +1048,24 @@ class ClosedLoopRolloutEvaluator:
             else None
         )
         self.require_policy_identity = bool(require_policy_identity)
+        self.progress_callback = progress_callback
         if self.require_policy_identity and self.expected_policy_identity is None:
             raise ValueError(
                 "require_policy_identity needs an explicit expected policy identity"
             )
+
+    def _emit_progress(self, event: str, **payload: Any) -> None:
+        """Emit policy-safe runtime telemetry without affecting evaluation."""
+
+        if self.progress_callback is None:
+            return
+        try:
+            record = {"event": str(event), **copy.deepcopy(payload)}
+            self.progress_callback(record)
+        except Exception:
+            # Progress reporting is diagnostic only. A closed pipe or logging
+            # backend/serialization failure must not change the trajectory.
+            return
 
     def evaluate(
         self,
@@ -1071,6 +1097,7 @@ class ClosedLoopRolloutEvaluator:
             minimum_roots_per_suite=self.minimum_roots_per_suite,
         )
         episodes: list[EpisodeEvaluation] = []
+        total_episodes = sum(len(rows) for rows in suites.values())
         for suite_name in sorted(suites):
             ordered = sorted(
                 enumerate(suites[suite_name]),
@@ -1090,13 +1117,34 @@ class ClosedLoopRolloutEvaluator:
                     scenario_id,
                     occurrence,
                 )
-                episodes.append(
-                    self._run_episode(
-                        suite=suite_name,
-                        scenario=scenario,
-                        scenario_index=occurrence,
-                        episode_seed=episode_seed,
-                    )
+                episode_ordinal = len(episodes) + 1
+                episode_key = f"{suite_name}:{scenario_id}:{occurrence}"
+                self._emit_progress(
+                    "episode_start",
+                    episode_key=episode_key,
+                    episode_ordinal=episode_ordinal,
+                    total_episodes=total_episodes,
+                    suite=suite_name,
+                    scenario_id=scenario_id,
+                )
+                episode_started = time.perf_counter()
+                episode = self._run_episode(
+                    suite=suite_name,
+                    scenario=scenario,
+                    scenario_index=occurrence,
+                    episode_seed=episode_seed,
+                )
+                episodes.append(episode)
+                self._emit_progress(
+                    "episode_complete",
+                    episode_key=episode.episode_key,
+                    episode_ordinal=episode_ordinal,
+                    total_episodes=total_episodes,
+                    elapsed_seconds=time.perf_counter() - episode_started,
+                    policy_steps=episode.policy_steps,
+                    terminal=episode.terminal,
+                    terminal_outcome=episode.terminal_outcome,
+                    evaluator_error=episode.evaluator_error,
                 )
 
         overall = summarize_episode_evaluations(episodes)
@@ -1178,6 +1226,10 @@ class ClosedLoopRolloutEvaluator:
         # the full record is consulted after the trajectory has terminated.
         audit_scenario = copy.deepcopy(dict(scenario))
         execution_scenario = strip_offline_truth(audit_scenario)
+        progress_scenario_id = _scenario_id(audit_scenario, scenario_index)
+        progress_episode_key = (
+            f"{suite}:{progress_scenario_id}:{scenario_index}"
+        )
         env = _call_factory(self.env_factory, episode_seed)
         environment_attestation = _release_environment_attestation(env)
         if self.require_release_environment and not environment_attestation["passed"]:
@@ -1203,6 +1255,14 @@ class ClosedLoopRolloutEvaluator:
         intervention_contract = evaluation_intervention_contract(
             suite, audit_scenario, required=False
         )
+        efficiency_specialized_tool_limit: int | None = None
+        if (
+            intervention_contract is not None
+            and intervention_contract["kind"] == "efficiency_budget"
+        ):
+            efficiency_specialized_tool_limit = int(
+                intervention_contract["limits"]["maximum_specialized_tool_calls"]
+            )
         history: list[dict[str, Any]] = []
         trace: list[dict[str, Any]] = []
         tool_counts: Counter[str] = Counter()
@@ -1416,13 +1476,27 @@ class ClosedLoopRolloutEvaluator:
             # This check is repeated even for PolicyObservation implementations
             # so custom environments cannot accidentally expand the boundary.
             validate_policy_payload(observation)
+            policy_started = time.perf_counter()
+            policy_exception: str | None = None
             try:
                 raw_action = _policy_action(policy, observation)
             except Exception as exc:  # malformed learner behavior is measurable
+                policy_exception = type(exc).__name__
                 raw_action = invalid_action(
                     "policy_exception", f"{type(exc).__name__}: {exc}"
                 )
+            policy_seconds = time.perf_counter() - policy_started
             action = safe_normalize_action(raw_action)
+            self._emit_progress(
+                "policy_action",
+                episode_key=progress_episode_key,
+                policy_step=policy_step,
+                trace_step=step,
+                policy_seconds=policy_seconds,
+                policy_exception=policy_exception,
+                action=policy_safe_copy(action),
+                policy_metrics=_policy_action_metrics(policy),
+            )
 
             # Offline state is intentionally obtained only after the policy has
             # committed to its action.
@@ -1432,6 +1506,30 @@ class ClosedLoopRolloutEvaluator:
             state_before_action = _current_state(env)
             tool = action["tool"]
             signature = action_signature(action)
+            circuit_breaker_error: str | None = None
+            if tool in DIAGNOSTIC_TOOLS:
+                attempted_specialized_calls = (
+                    sum(specialized_counts.values()) + 1
+                )
+                if (
+                    efficiency_specialized_tool_limit is not None
+                    and attempted_specialized_calls
+                    > efficiency_specialized_tool_limit
+                ):
+                    circuit_breaker_error = (
+                        _SPECIALIZED_TOOL_BUDGET_CIRCUIT_BREAKER
+                    )
+                elif signature in nonadvancing_signatures:
+                    # The current state has not advanced since this exact
+                    # read-only diagnostic was last attempted.  Executing it
+                    # again cannot add state evidence, and specialized tools
+                    # can launch costly external physics solvers.  Record the
+                    # attempted action as a failed transition so loop and
+                    # efficiency scoring remain trace-derived, but do not call
+                    # the provider a second time.
+                    circuit_breaker_error = (
+                        _REPEATED_DIAGNOSTIC_CIRCUIT_BREAKER
+                    )
             tool_counts[tool] += 1
             if tool in DIAGNOSTIC_TOOLS:
                 specialized_counts[tool] += 1
@@ -1459,20 +1557,30 @@ class ClosedLoopRolloutEvaluator:
                         }
                     )
 
-            try:
-                next_state, tool_output = env.step(copy.deepcopy(action))
-                if not isinstance(tool_output, Mapping):
-                    raise TypeError("env.step() tool output must be a mapping")
-                output = copy.deepcopy(dict(tool_output))
-            except Exception as exc:
-                evaluator_error = f"env_step:{type(exc).__name__}"
+            tool_started = time.perf_counter()
+            if circuit_breaker_error is not None:
                 output = {
                     "execution_status": "failure",
-                    "error_code": "evaluator_env_step_exception",
-                    "error_detail": type(exc).__name__,
+                    "error_code": circuit_breaker_error,
                     "state_mutated": False,
                 }
-                next_state = _current_state(env)
+                next_state = copy.deepcopy(state_before_action)
+            else:
+                try:
+                    next_state, tool_output = env.step(copy.deepcopy(action))
+                    if not isinstance(tool_output, Mapping):
+                        raise TypeError("env.step() tool output must be a mapping")
+                    output = copy.deepcopy(dict(tool_output))
+                except Exception as exc:
+                    evaluator_error = f"env_step:{type(exc).__name__}"
+                    output = {
+                        "execution_status": "failure",
+                        "error_code": "evaluator_env_step_exception",
+                        "error_detail": type(exc).__name__,
+                        "state_mutated": False,
+                    }
+                    next_state = _current_state(env)
+            tool_seconds = time.perf_counter() - tool_started
 
             status = str(output.get("execution_status") or "failure")
             if (
@@ -1563,7 +1671,20 @@ class ClosedLoopRolloutEvaluator:
                     ),
                 }
             )
-            if evaluator_error or terminal_after:
+            self._emit_progress(
+                "step_complete",
+                episode_key=progress_episode_key,
+                policy_step=policy_step,
+                trace_step=step,
+                tool=tool,
+                tool_seconds=tool_seconds,
+                execution_status=status,
+                error_code=output.get("error_code"),
+                advanced=advanced,
+                terminal=terminal_after,
+                circuit_breaker=circuit_breaker_error,
+            )
+            if evaluator_error or circuit_breaker_error or terminal_after:
                 break
 
         final_state = _current_state(env)
@@ -1769,6 +1890,7 @@ def evaluate_rollout_suites(
     require_release_environment: bool = False,
     expected_policy_identity: Mapping[str, Any] | None = None,
     require_policy_identity: bool = False,
+    progress_callback: ProgressCallback | None = None,
 ) -> EvaluationResult:
     """Functional entry point for closed-loop suite evaluation."""
 
@@ -1788,6 +1910,7 @@ def evaluate_rollout_suites(
         require_release_environment=require_release_environment,
         expected_policy_identity=expected_policy_identity,
         require_policy_identity=require_policy_identity,
+        progress_callback=progress_callback,
     ).evaluate(scenario_suites)
 
 
@@ -2316,6 +2439,22 @@ def _load_scenario_suite_file(path: str | os.PathLike[str]) -> Any:
     return payload
 
 
+def _stderr_progress(record: Mapping[str, Any]) -> None:
+    """Write one immediately visible, machine-readable release progress row."""
+
+    print(
+        "BC0_EVAL_PROGRESS "
+        + json.dumps(
+            policy_safe_copy(dict(record)),
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ),
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run closed-loop suites from JSON and persist a release artifact."""
 
@@ -2447,6 +2586,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         require_release_environment=True,
         expected_policy_identity=expected_policy_identity,
         require_policy_identity=True,
+        progress_callback=_stderr_progress,
     )
     artifact = write_evaluation_artifact(
         result,
@@ -2982,6 +3122,40 @@ def _policy_action(policy: Any, observation: Mapping[str, Any]) -> Any:
     raise TypeError(
         "Policy must be callable or expose .act(observation) / .next_actions(observation)."
     )
+
+
+def _policy_action_metrics(policy: Any) -> dict[str, Any]:
+    """Read an optional policy-safe timing/token telemetry mapping."""
+
+    try:
+        metrics = getattr(policy, "last_action_metrics", None)
+        if callable(metrics):
+            metrics = metrics()
+        if not isinstance(metrics, Mapping):
+            return {}
+        allowed = {
+            "prompt_tokens",
+            "generated_tokens",
+            "generation_seconds",
+            "hit_max_new_tokens",
+            "last_token_id",
+        }
+        sanitized: dict[str, Any] = {}
+        for key in sorted(allowed & set(metrics)):
+            value = metrics[key]
+            if value is None or isinstance(value, bool):
+                sanitized[key] = value
+            elif isinstance(value, int):
+                sanitized[key] = int(value)
+            elif isinstance(value, float) and math.isfinite(value):
+                sanitized[key] = float(value)
+            else:
+                # Telemetry is deliberately scalar-only. In particular, never
+                # deep-copy arbitrary model objects while evaluating a policy.
+                return {}
+        return sanitized
+    except Exception:
+        return {}
 
 
 def _policy_observation(

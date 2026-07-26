@@ -33,13 +33,26 @@ from psse_env.sft.gates import GateError
 class ReleaseEnvironmentFactoryTests(unittest.TestCase):
     def test_factory_enforces_production_deployment_contract(self) -> None:
         class Providers:
-            def __init__(self, *, chi2_alpha: float) -> None:
+            def __init__(
+                self,
+                *,
+                chi2_alpha: float,
+                hif_alpha_grid_size: int,
+                hif_r_grid_size: int,
+                hif_max_scans: int,
+            ) -> None:
                 self.chi2_alpha = chi2_alpha
+                self.hif_alpha_grid_size = hif_alpha_grid_size
+                self.hif_r_grid_size = hif_r_grid_size
+                self.hif_max_scans = hif_max_scans
 
             def env_kwargs(self) -> dict[str, Any]:
                 return {
                     "provider_marker": "deployment",
                     "chi2_alpha": self.chi2_alpha,
+                    "hif_alpha_grid_size": self.hif_alpha_grid_size,
+                    "hif_r_grid_size": self.hif_r_grid_size,
+                    "hif_max_scans": self.hif_max_scans,
                 }
 
         class CandidateOracle:
@@ -65,14 +78,36 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
         self.assertEqual(env.candidate_quality_oracle.mode, "deployment")
         self.assertEqual(env.kwargs["provider_marker"], "deployment")
         self.assertEqual(env.kwargs["chi2_alpha"], factories.BC0_CHI2_ALPHA)
+        self.assertEqual(
+            env.kwargs["hif_alpha_grid_size"],
+            factories.BC0_HIF_ALPHA_GRID_SIZE,
+        )
+        self.assertEqual(
+            env.kwargs["hif_r_grid_size"],
+            factories.BC0_HIF_R_GRID_SIZE,
+        )
+        self.assertEqual(
+            env.kwargs["hif_max_scans"],
+            factories.BC0_HIF_MAX_SCANS,
+        )
         self.assertEqual(env.kwargs["max_steps"], 24)
         self.assertEqual(env.kwargs["history_window"], 4)
         self.assertEqual(env.validations, 1)
 
     def test_factory_rejects_non_deployment_candidate_oracle(self) -> None:
         class Providers:
-            def __init__(self, *, chi2_alpha: float) -> None:
+            def __init__(
+                self,
+                *,
+                chi2_alpha: float,
+                hif_alpha_grid_size: int,
+                hif_r_grid_size: int,
+                hif_max_scans: int,
+            ) -> None:
                 self.chi2_alpha = chi2_alpha
+                self.hif_alpha_grid_size = hif_alpha_grid_size
+                self.hif_r_grid_size = hif_r_grid_size
+                self.hif_max_scans = hif_max_scans
 
             def env_kwargs(self) -> dict[str, Any]:
                 return {}
@@ -884,6 +919,30 @@ class GeneratedToolCallValidationTests(unittest.TestCase):
                 "call:wls_from_path{}", self.schemas
             )
 
+    def test_hif_search_dimensions_are_bounded_before_execution(self) -> None:
+        single_prefix = "call:estimate_hif_location_magnitude_from_path"
+        with self.assertRaisesRegex(GateError, "alpha_grid_size must be <= 31"):
+            factories._validated_generated_action(
+                single_prefix
+                + '{"case_path":"active","candidate_branch_row0":2,'
+                '"alpha_grid_size":32}',
+                self.schemas,
+            )
+        with self.assertRaisesRegex(GateError, "r_grid_size must be >= 2"):
+            factories._validated_generated_action(
+                single_prefix
+                + '{"case_path":"active","candidate_branch_row0":2,'
+                '"r_grid_size":1}',
+                self.schemas,
+            )
+        with self.assertRaisesRegex(GateError, "max_scans must be <= 10"):
+            factories._validated_generated_action(
+                'call:estimate_hif_location_magnitude_multiscan_from_path'
+                '{"scan_window_path":"active","candidate_branch_row0":2,'
+                '"max_scans":11}',
+                self.schemas,
+            )
+
     def test_release_registry_rejects_nonexecutable_canonical_options(self) -> None:
         calls = (
             (
@@ -1033,11 +1092,22 @@ class CanonicalGemmaInferenceTests(unittest.TestCase):
         self.assertEqual(processor.assertions, (False, True))
         self.assertIs(processor.tokenize_kwargs["return_mm_token_type_ids"], True)
         self.assertIs(model.generated_kwargs["do_sample"], False)
-        self.assertEqual(model.generated_kwargs["max_new_tokens"], 256)
+        self.assertEqual(
+            model.generated_kwargs["max_new_tokens"],
+            factories.MAX_NEW_TOKENS,
+        )
+        self.assertEqual(factories.MAX_NEW_TOKENS, 64)
+        self.assertIs(model.generated_kwargs["use_cache"], True)
         self.assertIn("mm_token_type_ids", model.generated_kwargs)
         self.assertEqual(
             model.generated_kwargs["mm_token_type_ids"].tolist(), [[0, 0, 0]]
         )
+        metrics = policy.last_action_metrics
+        self.assertEqual(metrics["prompt_tokens"], 3)
+        self.assertEqual(metrics["generated_tokens"], 1)
+        self.assertFalse(metrics["hit_max_new_tokens"])
+        self.assertEqual(metrics["last_token_id"], 13)
+        self.assertGreaterEqual(metrics["generation_seconds"], 0.0)
 
 
 if __name__ == "__main__":

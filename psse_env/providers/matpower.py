@@ -36,6 +36,7 @@ import re
 import tempfile
 from typing import Any, Mapping, Sequence
 
+from hif_search_limits import validate_hif_search_limits
 from psse_env.actions import (
     ANOMALY_FAMILY_MARKERS,
     ASK_FOR_MORE_EVIDENCE,
@@ -288,9 +289,17 @@ class MatpowerDeploymentProviders:
         # HIF grid-search resolution.  The 31x35 default matches the
         # production estimator; round-0 collection may configure a coarser
         # grid so the real OpenDSS search stays tractable per episode.
-        self.hif_alpha_grid_size = int(hif_alpha_grid_size)
-        self.hif_r_grid_size = int(hif_r_grid_size)
-        self.hif_max_scans = int(hif_max_scans)
+        (
+            self.hif_alpha_grid_size,
+            self.hif_r_grid_size,
+            validated_hif_max_scans,
+        ) = validate_hif_search_limits(
+            alpha_grid_size=hif_alpha_grid_size,
+            r_grid_size=hif_r_grid_size,
+            max_scans=hif_max_scans,
+        )
+        assert validated_hif_max_scans is not None
+        self.hif_max_scans = validated_hif_max_scans
         self.harmonic_thd_threshold_percent = float(harmonic_thd_threshold_percent)
         self.unbalance_vuf_threshold = float(unbalance_vuf_threshold)
         self.hif_min_residual_reduction = float(hif_min_residual_reduction)
@@ -2535,6 +2544,17 @@ class MatpowerDeploymentProviders:
                 "hif_target_missing",
                 "estimate_hif_location_magnitude requires candidate_branch_row0",
             )
+        try:
+            alpha_grid_size, r_grid_size, _ = validate_hif_search_limits(
+                alpha_grid_size=arguments.get(
+                    "alpha_grid_size", self.hif_alpha_grid_size
+                ),
+                r_grid_size=arguments.get("r_grid_size", self.hif_r_grid_size),
+                alpha_grid_size_max=self.hif_alpha_grid_size,
+                r_grid_size_max=self.hif_r_grid_size,
+            )
+        except ValueError as exc:
+            return self._failure("hif_search_budget_invalid", exc)
         metadata = self._metadata(state)
         runtime = metadata.get("hif_runtime")
         runtime = dict(runtime) if isinstance(runtime, Mapping) else {}
@@ -2552,8 +2572,8 @@ class MatpowerDeploymentProviders:
             pristine_model_dir=runtime.get("pristine_model_dir"),
             load_scale=float(runtime.get("load_scale", 1.0)),
             top_k=int(arguments.get("top_k", self.top_k)),
-            alpha_grid_size=int(arguments.get("alpha_grid_size", self.hif_alpha_grid_size)),
-            r_grid_size=int(arguments.get("r_grid_size", self.hif_r_grid_size)),
+            alpha_grid_size=alpha_grid_size,
+            r_grid_size=r_grid_size,
             r_hif_pu_min=float(arguments.get("r_hif_pu_min", 5.0)),
             r_hif_pu_max=float(arguments.get("r_hif_pu_max", 1000.0)),
         )
@@ -2590,6 +2610,20 @@ class MatpowerDeploymentProviders:
                 "hif_target_missing",
                 "multiscan HIF estimation requires candidate_branch_row0",
             )
+        try:
+            alpha_grid_size, r_grid_size, max_scans = validate_hif_search_limits(
+                alpha_grid_size=arguments.get(
+                    "alpha_grid_size", self.hif_alpha_grid_size
+                ),
+                r_grid_size=arguments.get("r_grid_size", self.hif_r_grid_size),
+                max_scans=arguments.get("max_scans", self.hif_max_scans),
+                alpha_grid_size_max=self.hif_alpha_grid_size,
+                r_grid_size_max=self.hif_r_grid_size,
+                max_scans_max=self.hif_max_scans,
+            )
+        except ValueError as exc:
+            return self._failure("hif_search_budget_invalid", exc)
+        assert max_scans is not None
         window = self._metadata(state).get("hif_scan_window")
         window = dict(window) if isinstance(window, Mapping) else {}
         scans = window.get("scans")
@@ -2611,11 +2645,11 @@ class MatpowerDeploymentProviders:
             candidate_phase=arguments.get("candidate_phase"),
             pristine_model_dir=window.get("pristine_model_dir"),
             resistance_mode=str(arguments.get("resistance_mode", "shared")),
-            max_scans=int(arguments.get("max_scans", self.hif_max_scans)),
+            max_scans=max_scans,
             scan_selection=str(arguments.get("scan_selection", "information_greedy")),
             top_k=int(arguments.get("top_k", self.top_k)),
-            alpha_grid_size=int(arguments.get("alpha_grid_size", self.hif_alpha_grid_size)),
-            r_grid_size=int(arguments.get("r_grid_size", self.hif_r_grid_size)),
+            alpha_grid_size=alpha_grid_size,
+            r_grid_size=r_grid_size,
             r_hif_pu_min=float(arguments.get("r_hif_pu_min", 5.0)),
             r_hif_pu_max=float(arguments.get("r_hif_pu_max", 1000.0)),
             robust_loss=str(arguments.get("robust_loss", "soft_l1")),

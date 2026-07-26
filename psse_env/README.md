@@ -474,6 +474,52 @@ model revision, maximum length, and train/validation/test bytes and requires
 that it used `AutoProcessor`. The checkpoint evaluation is followed by
 `STAGE=checkpoint-gate`; it is not part of the baseline submission group.
 
+### Optional W&B monitoring
+
+Weights & Biases monitoring is disabled by default and activates only for
+`STAGE=round0`; the data gate and smoke stages remain local evidence checks.
+It is safe to include `ENABLE_WANDB=1` in the shared export used by the whole
+staged chain: earlier stages log that monitoring is inactive and do not import
+or initialize W&B.
+Install the separately pinned optional dependency once on a login node, then
+authenticate interactively there so no API key is placed in an `sbatch`
+command or job log:
+
+```bash
+INSTALL_WANDB=1 bash setup_unsloth_env.sh
+conda activate /scratch/yx3882/.conda/envs/unsloth_sft
+wandb login
+```
+
+Add W&B variables to the existing reviewed round-0 submission. Export tags in
+the shell rather than embedding their comma-separated value inside Slurm's
+comma-delimited `--export` argument:
+
+```bash
+export WANDB_PROJECT=psse-agent-bc0
+export WANDB_ENTITY=your-wandb-user-or-team
+export WANDB_RUN_GROUP=bc0-round0
+export WANDB_TAGS=bc0,round0,gemma4-31b
+export WANDB_JOB_TYPE=bc0-round0-sft
+
+sbatch \
+  --export="ALL,STAGE=round0,ENABLE_WANDB=1,REVIEWED_SOURCE_COMMIT=$FREEZE_COMMIT" \
+  submit_dagger_sft_round0.sh
+```
+
+The launcher defaults to a stable run ID and name from the reviewed commit plus
+the Slurm job ID, sets `WANDB_RESUME=allow` for a requeued job, and disables
+model uploads and parameter watching. Set the same `WANDB_RUN_ID` explicitly
+when a newly submitted replacement job should resume an earlier run; a custom
+`WANDB_NAME` is also preserved. W&B run, cache, data, configuration, and
+artifact directories default below `/scratch/$USER/wandb`; override
+`WANDB_SCRATCH_ROOT` if a different scratch allocation is required.
+
+For a compute node without outbound network access, set
+`WANDB_MODE=offline` before submitting with `--export=ALL`. The complete run
+will remain under the scratch W&B directory and can later be uploaded from a
+login or data-transfer node with `wandb sync /path/to/offline-run-*`.
+
 Run the dedicated gate with:
 
 ```bash
@@ -490,7 +536,9 @@ uv run --with 'pytest>=8,<9' pytest -q \
   psse_env/examples/test_generate_round0_aggregate.py \
   psse_env/test_production_mode.py \
   psse_env/sft/tests/test_gates.py \
-  psse_env/sft/tests/test_release_hardware.py
+  psse_env/sft/tests/test_release_hardware.py \
+  psse_env/sft/tests/test_wandb_launcher.py \
+  psse_env/sft/tests/test_wandb_training.py
 ```
 
 See `BASELINE.md`, `TEST_MANIFEST.md`, and `EXPERIMENT_PROTOCOL.md` for the

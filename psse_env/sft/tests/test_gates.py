@@ -16,6 +16,8 @@ from psse_env.sft.collator import AssistantOnlyCollator
 from psse_env.sft.gates import (
     GateError,
     ParsedToolCall,
+    _check_schema_node,
+    _validate_json_instance,
     audit_dataset,
     load_exact_processor,
     parse_tool_call,
@@ -155,6 +157,40 @@ class FakeGemma4Processor(FakeProcessor):
 
 
 class TestSchemaTemplateAndMasks(unittest.TestCase):
+    def test_json_schema_numeric_bounds_are_enforced(self) -> None:
+        schema = {"type": "integer", "minimum": 2, "maximum": 5}
+        _check_schema_node(schema, path="value")
+        _validate_json_instance(2, schema, path="value")
+        _validate_json_instance(5, schema, path="value")
+        with self.assertRaisesRegex(GateError, "value must be >= 2"):
+            _validate_json_instance(1, schema, path="value")
+        with self.assertRaisesRegex(GateError, "value must be <= 5"):
+            _validate_json_instance(6, schema, path="value")
+
+    def test_json_schema_rejects_malformed_numeric_bounds(self) -> None:
+        invalid = (
+            (
+                {"type": "integer", "minimum": "2"},
+                "minimum must be a finite JSON number",
+            ),
+            (
+                {"type": "number", "maximum": float("nan")},
+                "maximum must be a finite JSON number",
+            ),
+            (
+                {"type": "integer", "minimum": 6, "maximum": 5},
+                "minimum must not exceed value.maximum",
+            ),
+            (
+                {"type": "string", "minimum": 2},
+                "minimum requires an integer or number schema type",
+            ),
+        )
+        for schema, message in invalid:
+            with self.subTest(schema=schema):
+                with self.assertRaisesRegex(GateError, message):
+                    _check_schema_node(schema, path="value")
+
     def test_release_gate_rejects_stale_partial_tool_registry(self) -> None:
         stale = row()
         stale["metadata"]["protocol"] = "controller"

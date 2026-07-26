@@ -93,6 +93,19 @@ def parser() -> argparse.ArgumentParser:
     train.add_argument("--load-in-4bit", action="store_true")
     train.add_argument("--fp16", action="store_true")
     train.add_argument("--no-bf16", action="store_true")
+    train.add_argument(
+        "--report-to",
+        choices=("none", "wandb"),
+        default="none",
+        help=(
+            "Optional Trainer metrics integration. W&B is disabled by default; "
+            "select 'wandb' only when the batch environment is configured."
+        ),
+    )
+    train.add_argument(
+        "--run-name",
+        help="Optional run name forwarded to the Trainer integration.",
+    )
     train.add_argument("--lora-rank", type=int, default=16)
     train.add_argument("--lora-alpha", type=int, default=16)
     train.add_argument("--lora-dropout", type=float, default=0.0)
@@ -396,6 +409,8 @@ def main(argv: list[str] | None = None) -> int:
                 if args.command == "train" or args.require_auto_processor
                 else None
             ),
+            report_to=getattr(args, "report_to", "none"),
+            run_name=getattr(args, "run_name", None),
         )
         lora = LoraSettings(rank=args.lora_rank, alpha=args.lora_alpha, dropout=args.lora_dropout)
         if args.command == "smoke":

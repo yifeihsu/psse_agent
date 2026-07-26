@@ -198,6 +198,31 @@ def _check_schema_node(schema: Any, *, path: str) -> None:
     enum = schema.get("enum")
     if enum is not None and (not isinstance(enum, list) or not enum):
         raise GateError(f"{path}.enum must be a non-empty list.")
+    numeric_types = (
+        {declared_type}
+        if isinstance(declared_type, str)
+        else set(declared_type or [])
+    )
+    for keyword in ("minimum", "maximum"):
+        if keyword not in schema:
+            continue
+        bound = schema[keyword]
+        if (
+            isinstance(bound, bool)
+            or not isinstance(bound, (int, float))
+            or not math.isfinite(float(bound))
+        ):
+            raise GateError(f"{path}.{keyword} must be a finite JSON number.")
+        if declared_type is not None and not numeric_types & {"integer", "number"}:
+            raise GateError(
+                f"{path}.{keyword} requires an integer or number schema type."
+            )
+    if (
+        "minimum" in schema
+        and "maximum" in schema
+        and schema["minimum"] > schema["maximum"]
+    ):
+        raise GateError(f"{path}.minimum must not exceed {path}.maximum.")
     if declared_type == "object" or "properties" in schema or "required" in schema:
         properties = schema.get("properties", {})
         if not isinstance(properties, dict):
@@ -249,6 +274,15 @@ def _validate_json_instance(value: Any, schema: Mapping[str, Any], *, path: str)
         )
     if "enum" in schema and value not in schema["enum"]:
         raise GateError(f"{path} must be one of {schema['enum']!r}, got {value!r}.")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if "minimum" in schema and value < schema["minimum"]:
+            raise GateError(
+                f"{path} must be >= {schema['minimum']!r}, got {value!r}."
+            )
+        if "maximum" in schema and value > schema["maximum"]:
+            raise GateError(
+                f"{path} must be <= {schema['maximum']!r}, got {value!r}."
+            )
     if isinstance(value, dict):
         properties = schema.get("properties", {})
         required = schema.get("required", [])

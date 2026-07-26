@@ -1090,6 +1090,64 @@ class DiagnosticProviderTests(unittest.TestCase):
             accepted["anomaly_explanation"]["kind"], "hif_model_accepted_over_null"
         )
 
+    def test_hif_search_budget_rejects_oversized_model_grid_before_executor(self) -> None:
+        providers = MatpowerDeploymentProviders(
+            hif_alpha_grid_size=5,
+            hif_r_grid_size=7,
+            hif_max_scans=3,
+        )
+        state = {
+            "state_id": "episode:s0",
+            "state_hash": "hash0",
+            "case": self.data["case_path"],
+            "measurements": list(self.data["z_obs"]),
+            "metadata": {},
+        }
+        action = {
+            "tool": "estimate_hif_location_magnitude_from_path",
+            "arguments": {
+                "candidate_branch_row0": 2,
+                "alpha_grid_size": 6,
+            },
+        }
+        with patch(
+            "psse_env.providers.matpower._estimate_hif_location_magnitude_logic"
+        ) as executor:
+            result = providers.estimate_hif(state, action)
+
+        executor.assert_not_called()
+        self.assertEqual(result["execution_status"], "failure")
+        self.assertEqual(result["error_code"], "hif_search_budget_invalid")
+        self.assertIn("alpha_grid_size must be in [2, 5]", result["error_detail"])
+
+    def test_hif_multiscan_budget_rejects_oversized_scan_count_before_window_read(
+        self,
+    ) -> None:
+        providers = MatpowerDeploymentProviders(hif_max_scans=3)
+        state = {
+            "state_id": "episode:s0",
+            "state_hash": "hash0",
+            "case": self.data["case_path"],
+            "measurements": list(self.data["z_obs"]),
+            "metadata": {},
+        }
+        action = {
+            "tool": "estimate_hif_location_magnitude_multiscan_from_path",
+            "arguments": {
+                "candidate_branch_row0": 2,
+                "max_scans": 4,
+            },
+        }
+        with patch(
+            "psse_env.providers.matpower._estimate_hif_location_magnitude_multiscan_logic"
+        ) as executor:
+            result = providers.estimate_hif_multiscan(state, action)
+
+        executor.assert_not_called()
+        self.assertEqual(result["execution_status"], "failure")
+        self.assertEqual(result["error_code"], "hif_search_budget_invalid")
+        self.assertIn("max_scans must be in [1, 3]", result["error_detail"])
+
     def test_diagnostics_without_runtime_data_fail_closed_as_noop(self) -> None:
         env = self._env()
         active = env.current_state()["active_state_id"]

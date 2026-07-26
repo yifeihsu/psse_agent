@@ -68,6 +68,8 @@ class TrainerSettings:
     allow_prompt_truncation: bool = False
     allow_nonrelease_artifacts: bool = False
     required_processor_loader: str | None = None
+    report_to: str = "none"
+    run_name: str | None = None
 
     def validate(self) -> None:
         if "gemma-4" not in self.model_name.lower():
@@ -89,6 +91,15 @@ class TrainerSettings:
             raise GateError(
                 "required_processor_loader must be None or 'AutoProcessor'."
             )
+        if not isinstance(self.report_to, str) or self.report_to not in {
+            "none",
+            "wandb",
+        }:
+            raise GateError("report_to must be 'none' or 'wandb'.")
+        if self.run_name is not None and (
+            not isinstance(self.run_name, str) or not self.run_name.strip()
+        ):
+            raise GateError("run_name must be None or a non-empty string.")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -193,7 +204,8 @@ def trl_config_kwargs(settings: TrainerSettings, *, has_validation: bool) -> dic
         "remove_unused_columns": False,
         "dataset_kwargs": {"skip_prepare_dataset": True},
         "max_length": None,
-        "report_to": "none",
+        "report_to": settings.report_to,
+        "run_name": settings.run_name,
     }
 
 
