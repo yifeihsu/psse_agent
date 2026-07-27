@@ -919,6 +919,68 @@ class GeneratedToolCallValidationTests(unittest.TestCase):
                 "call:wls_from_path{}", self.schemas
             )
 
+    def test_topology_release_parser_uses_only_one_based_line_index(self) -> None:
+        valid = (
+            "call:correct_topology_from_path"
+            '{"case_path":"active","line_index1":4,"desired_status":false}'
+        )
+        self.assertEqual(
+            factories._validated_generated_action(valid, self.schemas),
+            {
+                "tool": "correct_topology_from_path",
+                "arguments": {
+                    "case_path": "active",
+                    "line_index1": 4,
+                    "desired_status": False,
+                },
+            },
+        )
+        with self.assertRaisesRegex(GateError, "unsupported arguments.*line_index"):
+            factories._validated_generated_action(
+                "call:correct_topology_from_path"
+                '{"case_path":"active","line_index":3,"desired_status":false}',
+                self.schemas,
+            )
+        with self.assertRaisesRegex(GateError, "missing required arguments.*line_index1"):
+            factories._validated_generated_action(
+                "call:correct_topology_from_path"
+                '{"case_path":"active","desired_status":false}',
+                self.schemas,
+            )
+        with self.assertRaisesRegex(GateError, "unsupported arguments.*cb_name"):
+            factories._validated_generated_action(
+                "call:correct_topology_from_path"
+                '{"case_path":"active","cb_name":"CB_4_5",'
+                '"desired_status":false}',
+                self.schemas,
+            )
+
+    def test_parameter_release_parser_requires_executable_numeric_target(
+        self,
+    ) -> None:
+        valid = (
+            "call:correct_parameters_from_path"
+            '{"case_path":"active","line_index":4}'
+        )
+        self.assertEqual(
+            factories._validated_generated_action(valid, self.schemas),
+            {
+                "tool": "correct_parameters_from_path",
+                "arguments": {"case_path": "active", "line_index": 4},
+            },
+        )
+        with self.assertRaisesRegex(GateError, "missing required arguments.*line_index"):
+            factories._validated_generated_action(
+                'call:correct_parameters_from_path{"case_path":"active"}',
+                self.schemas,
+            )
+        with self.assertRaisesRegex(GateError, "unsupported arguments.*branch_id"):
+            factories._validated_generated_action(
+                "call:correct_parameters_from_path"
+                '{"case_path":"active","branch_id":"L2"}',
+                self.schemas,
+            )
+
     def test_hif_search_dimensions_are_bounded_before_execution(self) -> None:
         single_prefix = "call:estimate_hif_location_magnitude_from_path"
         with self.assertRaisesRegex(GateError, "alpha_grid_size must be <= 31"):

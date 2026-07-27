@@ -208,16 +208,16 @@ _TRANSACTIONAL_TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
 ]
 
-# Branch-target properties accepted by the transactional environment.  They are
-# additive on top of the canonical schema so controller scenarios that identify
-# a branch by id/breaker/zero-based row can still be exported and replayed; the
-# environment enforces the exactly-one-target convention.
-_ADDITIVE_BRANCH_TARGET_PROPERTIES: dict[str, Any] = {
-    "branch_id": {"type": "string", "description": "Branch identifier."},
-    "cb_name": {"type": "string", "description": "Breaker name."},
-    "line_index1": {"type": "integer", "description": "1-based branch row index."},
-    "branch_row0": {"type": "integer", "description": "0-based branch row index."},
+# The deployment correction provider resolves branch rows numerically.  Keep
+# the model-visible targets narrower than the controller's internal aliases:
+# parameter correction retains its pinned 1-based ``line_index`` schema, while
+# topology correction uses the explicit 1-based ``line_index1`` spelling.
+_TOPOLOGY_LINE_INDEX1_PROPERTY: dict[str, Any] = {
+    "type": "integer",
+    "description": "1-based branch row index.",
 }
+_TOPOLOGY_NUMERIC_TARGET_KEYS = ("line_index", "line_index1", "branch_row0")
+_NONEXECUTABLE_NAMED_BRANCH_TARGET_KEYS = ("branch_id", "cb_name")
 
 
 def _require_registry() -> list[dict[str, Any]]:
@@ -242,9 +242,10 @@ def unified_tool_schemas() -> list[dict[str, Any]]:
     - ``correct_measurements_from_path`` exposes only the target group; solver
       switches and tolerances remain pinned provider configuration rather than
       model-controlled action arguments.
-    - ``correct_parameters_from_path`` and ``correct_topology_from_path`` gain
-      the additive branch-target conventions and require only ``case_path``;
-      the environment enforces exactly one branch target at execution time.
+    - ``correct_parameters_from_path`` exposes only the provider-executable
+      1-based ``line_index`` target.
+    - ``correct_topology_from_path`` exposes only the provider-executable
+      1-based ``line_index1`` target and requires the desired status.
 
     These restrictions are not cosmetic.  Every generated call is validated
     against this registry before canonical-to-controller bridging, so the
@@ -277,13 +278,34 @@ def unified_tool_schemas() -> list[dict[str, Any]]:
     }
     measurement["required"] = ["case_path", "suspect_group"]
 
-    for name in (CORRECT_PARAMETERS_FROM_PATH, CORRECT_TOPOLOGY_FROM_PATH):
-        parameters = by_name[name]["function"]["parameters"]
-        for key, prop in _ADDITIVE_BRANCH_TARGET_PROPERTIES.items():
-            parameters["properties"].setdefault(key, copy.deepcopy(prop))
-        parameters["required"] = ["case_path"]
+    parameters = by_name[CORRECT_PARAMETERS_FROM_PATH]["function"]["parameters"]
+    for key in (
+        "branch_id",
+        "cb_name",
+        "line_index1",
+        "branch_row0",
+    ):
+        parameters["properties"].pop(key, None)
+    parameters["required"] = ["case_path", "line_index"]
+
+    topology = by_name[CORRECT_TOPOLOGY_FROM_PATH]["function"]["parameters"]
+    for key in (
+        *_TOPOLOGY_NUMERIC_TARGET_KEYS,
+        *_NONEXECUTABLE_NAMED_BRANCH_TARGET_KEYS,
+    ):
+        topology["properties"].pop(key, None)
+    topology["properties"]["line_index1"] = copy.deepcopy(
+        _TOPOLOGY_LINE_INDEX1_PROPERTY
+    )
+    topology["required"] = ["case_path", "line_index1", "desired_status"]
 
     schemas.extend(copy.deepcopy(_TRANSACTIONAL_TOOL_SCHEMAS))
+    # Release generation rejects undeclared arguments for every tool.  Make
+    # that executable boundary explicit in the model-visible registry instead
+    # of relying on the stricter validator interpretation of an omitted
+    # ``additionalProperties`` keyword.
+    for schema in schemas:
+        schema["function"]["parameters"]["additionalProperties"] = False
     return schemas
 
 
@@ -295,6 +317,19 @@ def _executable_canonical_argument_names() -> dict[str, frozenset[str]]:
         str(schema["function"]["name"]): frozenset(
             str(name)
             for name in schema["function"]["parameters"].get("properties", {})
+        )
+        for schema in unified_tool_schemas()
+    }
+
+
+@lru_cache(maxsize=1)
+def _executable_canonical_required_argument_names() -> dict[str, frozenset[str]]:
+    """Cache required argument names for the executable bridge boundary."""
+
+    return {
+        str(schema["function"]["name"]): frozenset(
+            str(name)
+            for name in schema["function"]["parameters"].get("required", ())
         )
         for schema in unified_tool_schemas()
     }
@@ -316,6 +351,28 @@ def _move_key(arguments: dict[str, Any], source: str, destination: str) -> None:
         arguments[destination] = arguments.pop(source)
     else:
         arguments.pop(source, None)
+
+
+def _normalize_topology_numeric_target(arguments: dict[str, Any]) -> None:
+    """Collapse internal numeric branch aliases to canonical ``line_index1``."""
+
+    selected = [
+        key for key in _TOPOLOGY_NUMERIC_TARGET_KEYS if arguments.get(key) is not None
+    ]
+    if not selected:
+        return
+    if len(selected) != 1:  # Defensive: action normalization already rejects this.
+        raise ValueError("Topology correction must use one numeric branch target.")
+    source = selected[0]
+    raw_value = arguments[source]
+    if not isinstance(raw_value, int) or isinstance(raw_value, bool):
+        raise ValueError(f"Topology correction {source} must be an integer.")
+    line_index1 = raw_value + 1 if source == "branch_row0" else raw_value
+    if line_index1 < 1:
+        raise ValueError("Topology correction line index must be positive.")
+    for key in _TOPOLOGY_NUMERIC_TARGET_KEYS:
+        arguments.pop(key, None)
+    arguments["line_index1"] = line_index1
 
 
 def internal_to_canonical_action(action: Mapping[str, Any] | str) -> dict[str, Any]:
@@ -353,12 +410,36 @@ def internal_to_canonical_action(action: Mapping[str, Any] | str) -> dict[str, A
             arguments["line_index"] = int(arguments.pop("branch_row0")) + 1
         elif arguments.get("line_index1") is not None:
             arguments["line_index"] = int(arguments.pop("line_index1"))
+        if any(
+            arguments.get(key) is not None
+            for key in _NONEXECUTABLE_NAMED_BRANCH_TARGET_KEYS
+        ):
+            raise ValueError(
+                "correct_parameters requires a numeric branch-row target."
+            )
+        if arguments.get("line_index") is None:
+            raise ValueError(
+                "correct_parameters requires a numeric branch-row target."
+            )
         for key in _DROPPED_CORRECTION_VALUE_KEYS:
             arguments.pop(key, None)
     elif tool == CORRECT_TOPOLOGY:
+        if any(
+            arguments.get(key) is not None
+            for key in _NONEXECUTABLE_NAMED_BRANCH_TARGET_KEYS
+        ):
+            raise ValueError(
+                "correct_topology requires a numeric branch-row target."
+            )
+        _normalize_topology_numeric_target(arguments)
+        if arguments.get("line_index1") is None:
+            raise ValueError(
+                "correct_topology requires a numeric branch-row target."
+            )
         status = arguments.pop("status", arguments.pop("expected_status", None))
-        if status is not None:
-            arguments["desired_status"] = bool(int(status))
+        if status is None:
+            raise ValueError("correct_topology requires a desired status.")
+        arguments["desired_status"] = bool(int(status))
         arguments.pop("expected_status", None)
         for key in _DROPPED_CORRECTION_VALUE_KEYS:
             arguments.pop(key, None)
@@ -390,6 +471,14 @@ def canonical_to_internal_action(action: Mapping[str, Any] | str) -> dict[str, A
         raise ValueError(
             f"Canonical tool {tool!r} has arguments outside the executable "
             f"release registry: {unsupported}"
+        )
+    missing = sorted(
+        _executable_canonical_required_argument_names()[tool] - set(arguments)
+    )
+    if missing:
+        raise ValueError(
+            f"Canonical tool {tool!r} is missing required executable "
+            f"arguments: {missing}"
         )
 
     if internal in _CANDIDATE_REFERENCE_TOOLS:

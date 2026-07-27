@@ -33,7 +33,10 @@ from psse_env.dagger.evaluator import (
     strip_offline_truth,
     write_evaluation_artifact,
 )
-from psse_env.dagger.evaluation_gate import _intervention_failures
+from psse_env.dagger.evaluation_gate import (
+    _episode_safety_ordinal,
+    _intervention_failures,
+)
 from psse_env.sft.release_hardware import normalize_accelerator_class
 
 
@@ -604,6 +607,268 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         )
         self.assertEqual(episode["trace"][1]["execution_status"], "failure")
         self.assertFalse(episode["trace"][1]["advanced"])
+
+    def test_repeated_deterministic_failures_are_bounded_and_quarantined(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "escalate",
+                ASK_FOR_MORE_EVIDENCE,
+                "operator_escalation_precondition_not_met",
+                "rejected_operator_escalation",
+                None,
+            ),
+            (
+                "false_commit",
+                COMMIT_STATE,
+                "candidate_lifecycle_violation",
+                "rejected_commit",
+                None,
+            ),
+            (
+                "raise",
+                INVALID_ACTION,
+                "policy_exception",
+                "schema_invalid_action",
+                ValueError,
+            ),
+        )
+        for phase, expected_tool, error_code, failure_kind, raised in cases:
+            with self.subTest(failure_kind=failure_kind):
+                executed_tools: list[str] = []
+
+                class FixedFailureEnv(_ScriptEnv):
+                    def step(
+                        self, action: Mapping[str, Any]
+                    ) -> tuple[dict[str, Any], dict[str, Any]]:
+                        executed_tools.append(str(action.get("tool") or ""))
+                        return self.current_state(), {
+                            "execution_status": "failure",
+                            "error_code": error_code,
+                            "state_mutated": False,
+                            "tool_metrics": {},
+                        }
+
+                if raised is not None:
+                    class RaisingPolicy:
+                        def act(self, _observation: Mapping[str, Any]) -> Any:
+                            raise raised("same schema failure")
+
+                    policy_factory = RaisingPolicy
+                else:
+                    policy_factory = lambda: _ScriptPolicy([])
+
+                scenario = _resolved_scenario()
+                scenario["script"] = [
+                    {
+                        "phase": phase,
+                        "remaining": 1,
+                        "status": "failure",
+                        "error_code": error_code,
+                    }
+                ]
+                result = evaluate_rollout_suites(
+                    {"standard_success": [scenario]},
+                    env_factory=FixedFailureEnv,
+                    policy_factory=policy_factory,
+                    max_steps=8,
+                )
+
+                episode = result.suite_metrics["episodes"][0]
+                quarantine = episode["control_quarantine"]
+                self.assertEqual(executed_tools, [expected_tool])
+                self.assertEqual(episode["policy_steps"], 2)
+                self.assertEqual(episode["invalid_action_count"], 2)
+                self.assertTrue(episode["loop_detected"])
+                self.assertFalse(episode["terminal"])
+                self.assertIsNone(episode["evaluator_error"])
+                self.assertEqual(episode["trace"][0]["error_code"], error_code)
+                self.assertEqual(
+                    episode["trace"][1]["error_code"],
+                    "evaluation_repeated_nonadvancing_failure",
+                )
+                self.assertTrue(quarantine["quarantined"])
+                self.assertEqual(quarantine["failure_kind"], failure_kind)
+                self.assertEqual(quarantine["trigger_error_code"], error_code)
+                self.assertEqual(quarantine["action_tool"], expected_tool)
+                self.assertEqual(quarantine["executed_failure_count"], 1)
+                self.assertEqual(quarantine["attempted_failure_count"], 2)
+                self.assertRegex(
+                    quarantine["action_signature_sha256"], r"^[0-9a-f]{64}$"
+                )
+                self.assertEqual(
+                    episode["audit"]["control_quarantine"], quarantine
+                )
+                overall = result.suite_metrics["overall"]
+                self.assertEqual(overall["control_quarantined_episodes"], 1)
+                self.assertEqual(overall["control_quarantine_rate"], 1.0)
+                self.assertEqual(
+                    overall["control_quarantine_reason_counts"],
+                    {failure_kind: 1},
+                )
+                self.assertEqual(
+                    overall[
+                        "repeated_nonadvancing_failure_breaker_episodes"
+                    ],
+                    1,
+                )
+                # The breaker is a policy-performance quarantine, not an
+                # evaluator infrastructure error, and remains a promotion
+                # NO-GO under the paired safety ordinal.
+                self.assertEqual(_episode_safety_ordinal(episode), 0)
+
+    def test_real_state_advance_resets_deterministic_failure_bound(self) -> None:
+        executed_tools: list[str] = []
+        repeated_invalid = {
+            "tool": INVALID_ACTION,
+            "arguments": {
+                "error_code": "policy_exception",
+                "error_detail": "same schema failure",
+            },
+        }
+
+        class SequencePolicy:
+            def __init__(self) -> None:
+                self.actions = [
+                    repeated_invalid,
+                    {
+                        "tool": RUN_WLS,
+                        "arguments": {"state_id": "active"},
+                    },
+                    repeated_invalid,
+                ]
+                self.cursor = 0
+
+            def act(self, _observation: Mapping[str, Any]) -> dict[str, Any]:
+                action = self.actions[self.cursor]
+                self.cursor += 1
+                return copy.deepcopy(action)
+
+        class AdvancingEnv(_ScriptEnv):
+            def step(
+                self, action: Mapping[str, Any]
+            ) -> tuple[dict[str, Any], dict[str, Any]]:
+                executed_tools.append(str(action.get("tool") or ""))
+                if action.get("tool") == RUN_WLS:
+                    return self.current_state(), {
+                        "execution_status": "success",
+                        "error_code": None,
+                        "state_mutated": True,
+                        "tool_metrics": {},
+                    }
+                return self.current_state(), {
+                    "execution_status": "failure",
+                    "error_code": "policy_exception",
+                    "state_mutated": False,
+                    "tool_metrics": {},
+                }
+
+        scenario = _resolved_scenario()
+        scenario["script"] = [{"phase": "unused", "remaining": 1}]
+        result = evaluate_rollout_suites(
+            {"standard_success": [scenario]},
+            env_factory=AdvancingEnv,
+            policy_factory=SequencePolicy,
+            max_steps=3,
+        )
+
+        episode = result.suite_metrics["episodes"][0]
+        self.assertEqual(
+            executed_tools,
+            [INVALID_ACTION, RUN_WLS, INVALID_ACTION],
+        )
+        self.assertEqual(episode["policy_steps"], 3)
+        self.assertFalse(episode["loop_detected"])
+        self.assertFalse(episode["control_quarantine"]["quarantined"])
+        self.assertEqual(
+            result.suite_metrics["overall"]["control_quarantined_episodes"], 0
+        )
+
+    def test_nonadvancing_intervening_action_does_not_reset_failure_bound(
+        self,
+    ) -> None:
+        executed_tools: list[str] = []
+
+        class CountingEnv(_ScriptEnv):
+            def step(
+                self, action: Mapping[str, Any]
+            ) -> tuple[dict[str, Any], dict[str, Any]]:
+                executed_tools.append(str(action.get("tool") or ""))
+                return super().step(action)
+
+        scenario = _resolved_scenario()
+        scenario["script"] = [
+            {
+                "phase": "escalate",
+                "remaining": 1,
+                "status": "failure",
+                "error_code": "operator_escalation_precondition_not_met",
+            },
+            {
+                "phase": "wls",
+                "remaining": 1,
+                "status": "success",
+            },
+            {
+                "phase": "escalate",
+                "remaining": 1,
+                "status": "failure",
+                "error_code": "operator_escalation_precondition_not_met",
+            },
+        ]
+        result = evaluate_rollout_suites(
+            {"standard_success": [scenario]},
+            env_factory=CountingEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+            max_steps=8,
+        )
+
+        episode = result.suite_metrics["episodes"][0]
+        self.assertEqual(
+            executed_tools,
+            [ASK_FOR_MORE_EVIDENCE, RUN_WLS],
+        )
+        self.assertEqual(episode["policy_steps"], 3)
+        self.assertEqual(
+            episode["trace"][2]["error_code"],
+            "evaluation_repeated_nonadvancing_failure",
+        )
+        self.assertTrue(episode["control_quarantine"]["quarantined"])
+        self.assertEqual(
+            episode["control_quarantine"]["failure_kind"],
+            "rejected_operator_escalation",
+        )
+
+    def test_unclassified_failure_is_not_short_circuited(self) -> None:
+        executed_tools: list[str] = []
+
+        class TransientFailureEnv(_ScriptEnv):
+            def step(
+                self, action: Mapping[str, Any]
+            ) -> tuple[dict[str, Any], dict[str, Any]]:
+                executed_tools.append(str(action.get("tool") or ""))
+                return self.current_state(), {
+                    "execution_status": "failure",
+                    "error_code": "transient_provider_failure",
+                    "state_mutated": False,
+                    "tool_metrics": {},
+                }
+
+        scenario = _resolved_scenario()
+        scenario["script"] = [{"phase": "escalate", "remaining": 1}]
+        result = evaluate_rollout_suites(
+            {"standard_success": [scenario]},
+            env_factory=TransientFailureEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+            max_steps=3,
+        )
+
+        episode = result.suite_metrics["episodes"][0]
+        self.assertEqual(executed_tools, [ASK_FOR_MORE_EVIDENCE] * 3)
+        self.assertEqual(episode["policy_steps"], 3)
+        self.assertTrue(episode["loop_detected"])
+        self.assertFalse(episode["control_quarantine"]["quarantined"])
 
     def test_diagnostic_can_repeat_after_a_real_state_advance(self) -> None:
         executed_tools: list[str] = []

@@ -536,6 +536,358 @@ class BalancedTrainingViewTests(unittest.TestCase):
             {"operator_escalation": 1, "resolved": 1},
         )
 
+    def test_exact_action_root_gate_uses_unique_explicit_physical_roots(self) -> None:
+        missing_root = _row(
+            "parameter-missing-root",
+            tool="correct_parameters",
+        )
+        missing_root.pop("physical_root_fingerprint")
+        rows = [
+            _row(
+                "parameter-r1-a",
+                tool="correct_parameters",
+                physical_root="r1",
+            ),
+            _row(
+                "parameter-r1-b",
+                tool="correct_parameters",
+                physical_root="r1",
+            ),
+            _row(
+                "parameter-r2",
+                tool="correct_parameters",
+                physical_root="r2",
+            ),
+            missing_root,
+        ]
+
+        options = {
+            "seed": 3,
+            "tool_category_weights": {"corrections": 1.0},
+            "max_duplicate_count": 1,
+            "minimum_tool_category_natural_rows": 0,
+            "minimum_tool_category_distinct_roots": 0,
+        }
+        _, passing_report = build_balanced_training_view(
+            rows,
+            **options,
+            target_tool_minimum_distinct_roots={"correct_parameters": 2},
+        )
+        self.assertTrue(passing_report["target_tool_unique_root_support_passed"])
+        self.assertTrue(passing_report["release_ready"])
+
+        _, report = build_balanced_training_view(
+            rows,
+            **options,
+            target_tool_minimum_distinct_roots={"correct_parameters": 3},
+        )
+
+        natural = report["target_tool_unique_root_support"][
+            "eligible_natural_source"
+        ]["correct_parameters"]
+        self.assertEqual(natural["target_bearing_rows"], 4)
+        self.assertEqual(natural["distinct_physical_roots"], 2)
+        self.assertEqual(natural["rows_missing_physical_root"], 1)
+        self.assertEqual(natural["root_shortfall"], 1)
+        reservation = report["requirement_aware_reservation"]
+        self.assertTrue(
+            reservation["feasible_requirements_satisfied_by_reservation"]
+        )
+        self.assertEqual(
+            reservation["requirements"][0][
+                "natural_distinct_physical_roots"
+            ],
+            2,
+        )
+        self.assertFalse(
+            reservation["requirements"][0]["natural_support_feasible"]
+        )
+        self.assertEqual(
+            reservation["requirements"][0][
+                "selected_distinct_physical_roots"
+            ],
+            2,
+        )
+        self.assertEqual(
+            reservation["requirements"][0]["selected_root_shortfall"],
+            1,
+        )
+        self.assertFalse(report["target_tool_unique_root_support_passed"])
+        self.assertFalse(report["release_ready"])
+
+    def test_production_ineligible_rows_cannot_satisfy_action_root_gate(self) -> None:
+        auxiliary = {
+            **_row(
+                "parameter-auxiliary",
+                tool="correct_parameters",
+                physical_root="r3",
+            ),
+            "labels": {"production_label_eligible": False},
+        }
+        rows = [
+            {
+                **_row(
+                    "parameter-r1",
+                    tool="correct_parameters",
+                    physical_root="r1",
+                ),
+                "production_label_eligible": True,
+            },
+            {
+                **_row(
+                    "parameter-r2",
+                    tool="correct_parameters",
+                    physical_root="r2",
+                ),
+                "production_label_eligible": True,
+            },
+            auxiliary,
+        ]
+
+        view, report = build_balanced_training_view(
+            rows,
+            seed=4,
+            tool_category_weights={"corrections": 1.0},
+            max_duplicate_count=1,
+            minimum_tool_category_natural_rows=0,
+            minimum_tool_category_distinct_roots=0,
+            target_tool_minimum_distinct_roots={"correct_parameters": 3},
+            require_production_label_eligible=True,
+        )
+
+        self.assertEqual({row["example_id"] for row in view}, {
+            "parameter-r1",
+            "parameter-r2",
+        })
+        self.assertEqual(
+            report["explicitly_production_ineligible_input_rows"], 1
+        )
+        self.assertEqual(report["training_view_candidate_input_rows"], 2)
+        natural = report["target_tool_unique_root_support"][
+            "eligible_natural_source"
+        ]["correct_parameters"]
+        self.assertEqual(natural["distinct_physical_roots"], 2)
+        self.assertEqual(natural["root_shortfall"], 1)
+        self.assertFalse(report["release_ready"])
+
+    def test_reservation_does_not_fabricate_absent_required_action(self) -> None:
+        _, report = build_balanced_training_view(
+            [_row("baseline", tool="run_wls")],
+            seed=4,
+            tool_category_weights={"baseline_diagnostics": 1.0},
+            max_duplicate_count=1,
+            minimum_tool_category_natural_rows=0,
+            minimum_tool_category_distinct_roots=0,
+            target_tool_minimum_distinct_roots={"rollback_state": 1},
+        )
+
+        shortfall = report["target_tool_unique_root_shortfalls"][
+            "eligible_natural_source"
+        ]["rollback_state"]
+        self.assertEqual(shortfall["distinct_physical_roots"], 0)
+        self.assertEqual(shortfall["root_shortfall"], 1)
+        requirement = report["requirement_aware_reservation"][
+            "requirements"
+        ][0]
+        self.assertEqual(
+            requirement["reservation_target_distinct_physical_roots"],
+            0,
+        )
+        self.assertEqual(requirement["selected_distinct_physical_roots"], 0)
+        self.assertEqual(requirement["selected_root_shortfall"], 1)
+        self.assertFalse(report["release_ready"])
+
+    def test_critical_joint_root_gates_keep_state_and_family_cells_separate(
+        self,
+    ) -> None:
+        rows = [
+            _row(
+                "rollback",
+                tool="rollback_state",
+                state_class="rejected_candidate_recovery",
+                physical_root="rollback-root",
+            ),
+            _row(
+                "wrong-state-rollback",
+                tool="rollback_state",
+                state_class="clean_successful",
+                physical_root="wrong-state-root",
+            ),
+            _row(
+                "hif-handoff",
+                tool="ask_for_more_evidence",
+                state_class="terminal_operator_escalation",
+                scenario_family="hif",
+                physical_root="hif-root",
+            ),
+            _row(
+                "multi-handoff",
+                tool="ask_for_more_evidence",
+                state_class="terminal_operator_escalation",
+                scenario_family="multi_measurement",
+                physical_root="multi-root",
+            ),
+        ]
+
+        options = {
+            "seed": 8,
+            "tool_category_weights": {
+                "verification_lifecycle": 0.5,
+                "terminal_or_handoff": 0.5,
+            },
+            "max_duplicate_count": 1,
+            "minimum_tool_category_natural_rows": 0,
+            "minimum_tool_category_distinct_roots": 0,
+            "target_tool_scenario_family_minimum_distinct_roots": {
+                "ask_for_more_evidence": {
+                    "hif": 1,
+                    "multi_measurement": 1,
+                }
+            },
+        }
+        _, passing_report = build_balanced_training_view(
+            rows,
+            **options,
+            target_tool_state_class_minimum_distinct_roots={
+                "rollback_state": {"rejected_candidate_recovery": 1}
+            },
+        )
+        self.assertTrue(
+            passing_report["critical_joint_unique_root_support_passed"]
+        )
+        self.assertTrue(passing_report["release_ready"])
+
+        _, report = build_balanced_training_view(
+            rows,
+            **options,
+            target_tool_state_class_minimum_distinct_roots={
+                "rollback_state": {"rejected_candidate_recovery": 2}
+            },
+        )
+
+        state_support = report["critical_joint_unique_root_support"][
+            "target_tool_x_state_class"
+        ]["eligible_natural_source"]["rollback_state"]
+        self.assertEqual(
+            state_support["rejected_candidate_recovery"][
+                "distinct_physical_roots"
+            ],
+            1,
+        )
+        self.assertEqual(
+            state_support["clean_successful"]["distinct_physical_roots"],
+            1,
+        )
+        self.assertEqual(
+            report["critical_joint_unique_root_shortfalls"][
+                "target_tool_x_state_class"
+            ]["eligible_natural_source"]["rollback_state"][
+                "rejected_candidate_recovery"
+            ]["root_shortfall"],
+            1,
+        )
+        family_support = report["critical_joint_unique_root_support"][
+            "target_tool_x_scenario_family"
+        ]["eligible_natural_source"]["ask_for_more_evidence"]
+        self.assertEqual(family_support["hif"]["distinct_physical_roots"], 1)
+        self.assertEqual(
+            family_support["multi_measurement"]["distinct_physical_roots"],
+            1,
+        )
+        self.assertFalse(report["critical_joint_unique_root_support_passed"])
+        self.assertFalse(report["release_ready"])
+
+    def test_feasible_critical_cell_is_reserved_before_greedy_balancing(
+        self,
+    ) -> None:
+        rows = [
+            _row(
+                f"baseline-{index}",
+                tool="run_wls",
+                physical_root=f"baseline-root-{index}",
+                scenario_family="measurement",
+            )
+            for index in range(9)
+        ] + [
+            _row(
+                "hif-handoff",
+                tool="ask_for_more_evidence",
+                state_class="terminal_operator_escalation",
+                physical_root="hif-root",
+                scenario_family="hif",
+                terminal_outcome="operator_escalation",
+            ),
+            _row(
+                "multi-handoff",
+                tool="ask_for_more_evidence",
+                state_class="terminal_operator_escalation",
+                physical_root="multi-root",
+                scenario_family="multi_measurement",
+                terminal_outcome="operator_escalation",
+            ),
+        ]
+        options = {
+            "size": 10,
+            "seed": 0,
+            "tool_category_weights": {
+                "baseline_diagnostics": 0.9,
+                "terminal_or_handoff": 0.1,
+            },
+            "max_duplicate_count": 1,
+            "max_rows_per_root": 1,
+            "minimum_tool_category_natural_rows": 0,
+            "minimum_tool_category_distinct_roots": 0,
+            "target_tool_scenario_family_minimum_distinct_roots": {
+                "ask_for_more_evidence": {"hif": 1}
+            },
+        }
+
+        view, report = build_balanced_training_view(rows, **options)
+        reversed_view, reversed_report = build_balanced_training_view(
+            reversed(rows),
+            **options,
+        )
+
+        self.assertEqual(view, reversed_view)
+        self.assertEqual(report, reversed_report)
+        self.assertIn(
+            "hif-handoff",
+            {row["example_id"] for row in view},
+        )
+        self.assertEqual(
+            len(
+                {
+                    row["physical_root_fingerprint"]
+                    for row in view
+                }
+            ),
+            len(view),
+        )
+        reservation = report["requirement_aware_reservation"]
+        self.assertEqual(reservation["reserved_rows"], 1)
+        self.assertTrue(
+            reservation["feasible_requirements_satisfied_by_reservation"]
+        )
+        self.assertEqual(
+            reservation["requirements"],
+            [
+                {
+                    "axis": "scenario_family",
+                    "target_tool": "ask_for_more_evidence",
+                    "value": "hif",
+                    "minimum_distinct_physical_roots": 1,
+                    "natural_distinct_physical_roots": 1,
+                    "natural_support_feasible": True,
+                    "reservation_target_distinct_physical_roots": 1,
+                    "reserved_distinct_physical_roots": 1,
+                    "reservation_shortfall": 0,
+                    "selected_distinct_physical_roots": 1,
+                    "selected_root_shortfall": 0,
+                }
+            ],
+        )
+        self.assertTrue(report["release_ready"])
+
     def test_unknown_state_class_fails_closed(self) -> None:
         with self.assertRaisesRegex(
             ValueError, "Unknown training-view state class: unreviewed_terminal"

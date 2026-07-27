@@ -17,6 +17,7 @@ from psse_env.dagger.protocol_bridge import (
     internal_to_canonical_action,
     unified_tool_schemas,
 )
+from psse_env.sft.gates import GateError, validate_messages
 
 
 def _observation(episode: str = "case14_measurement_seed42_episode0") -> dict:
@@ -52,6 +53,26 @@ def _example(
         },
         "labels": {},
     }
+
+
+def _assert_call_matches_unified_schema(test: unittest.TestCase, action: dict) -> None:
+    schemas = {
+        schema["function"]["name"]: schema["function"]["parameters"]
+        for schema in unified_tool_schemas()
+    }
+    parameters = schemas[action["tool"]]
+    arguments = action["arguments"]
+    test.assertFalse(set(arguments) - set(parameters["properties"]))
+    test.assertFalse(set(parameters.get("required", [])) - set(arguments))
+
+
+def _assert_exported_row_validates(test: unittest.TestCase, row: dict) -> None:
+    validated = validate_messages(
+        row["messages"],
+        tools=row["tools"],
+        row_label=str(row["example_id"]),
+    )
+    test.assertEqual(validated, row["messages"])
 
 
 class UnifiedSchemaTests(unittest.TestCase):
@@ -103,6 +124,30 @@ class UnifiedSchemaTests(unittest.TestCase):
         self.assertEqual(
             sorted(schemas["correct_measurements_from_path"]["properties"]),
             ["case_path", "suspect_group"],
+        )
+        self.assertEqual(
+            sorted(schemas["correct_topology_from_path"]["properties"]),
+            [
+                "case_path",
+                "desired_status",
+                "line_index1",
+            ],
+        )
+        self.assertEqual(
+            schemas["correct_topology_from_path"]["required"],
+            ["case_path", "line_index1", "desired_status"],
+        )
+        self.assertEqual(
+            sorted(schemas["correct_parameters_from_path"]["properties"]),
+            ["case_path", "line_index"],
+        )
+        self.assertEqual(
+            schemas["correct_parameters_from_path"]["required"],
+            ["case_path", "line_index"],
+        )
+        self.assertIs(
+            schemas["correct_topology_from_path"]["additionalProperties"],
+            False,
         )
         self.assertNotIn(
             "stage",
@@ -179,31 +224,88 @@ class ActionMappingTests(unittest.TestCase):
         self.assertEqual(
             by_index1["arguments"], {"case_path": "active", "line_index": 11}
         )
-        by_branch_id = internal_to_canonical_action(
-            {
-                "tool": "correct_parameters",
-                "arguments": {"state_id": "active", "branch_id": "L2", "value": 0.2},
-            }
-        )
-        self.assertEqual(
-            by_branch_id["arguments"], {"case_path": "active", "branch_id": "L2"}
-        )
+        with self.assertRaisesRegex(ValueError, "numeric branch-row target"):
+            internal_to_canonical_action(
+                {
+                    "tool": "correct_parameters",
+                    "arguments": {
+                        "state_id": "active",
+                        "branch_id": "L2",
+                        "value": 0.2,
+                    },
+                }
+            )
 
-    def test_topology_correction_maps_status_to_boolean_and_back(self) -> None:
-        action = internal_to_canonical_action(
-            {
-                "tool": "correct_topology",
-                "arguments": {"state_id": "active", "cb_name": "CB_4_5", "status": 0},
-            }
+    def test_topology_correction_normalizes_numeric_targets_and_round_trips(
+        self,
+    ) -> None:
+        variants = (
+            {"line_index": 4},
+            {"line_index1": 4},
+            {"branch_row0": 3},
         )
-        self.assertEqual(
-            action["arguments"],
-            {"case_path": "active", "cb_name": "CB_4_5", "desired_status": False},
+        expected = {
+            "tool": "correct_topology_from_path",
+            "arguments": {
+                "case_path": "active",
+                "line_index1": 4,
+                "desired_status": False,
+            },
+        }
+        for target in variants:
+            with self.subTest(target=target):
+                action = internal_to_canonical_action(
+                    {
+                        "tool": "correct_topology",
+                        "arguments": {
+                            "state_id": "active",
+                            **target,
+                            "status": 0,
+                        },
+                    }
+                )
+                self.assertEqual(action, expected)
+                _assert_call_matches_unified_schema(self, action)
+                back = canonical_to_internal_action(action)
+                self.assertEqual(
+                    back,
+                    {
+                        "tool": "correct_topology",
+                        "arguments": {
+                            "state_id": "active",
+                            "line_index1": 4,
+                            "status": 0,
+                        },
+                    },
+                )
+                self.assertEqual(internal_to_canonical_action(back), expected)
+
+    def test_topology_correction_rejects_nonexecutable_or_incomplete_targets(
+        self,
+    ) -> None:
+        invalid_arguments = (
+            {"state_id": "active", "cb_name": "CB_4_5", "status": 0},
+            {"state_id": "active", "branch_id": "L2", "status": 0},
+            {"state_id": "active", "status": 0},
         )
-        back = canonical_to_internal_action(action)
-        self.assertEqual(
-            back["arguments"], {"state_id": "active", "cb_name": "CB_4_5", "status": 0}
-        )
+        for arguments in invalid_arguments:
+            with self.subTest(arguments=arguments):
+                with self.assertRaisesRegex(
+                    ValueError, "numeric branch-row target"
+                ):
+                    internal_to_canonical_action(
+                        {
+                            "tool": "correct_topology",
+                            "arguments": arguments,
+                        }
+                    )
+        with self.assertRaisesRegex(ValueError, "desired status"):
+            internal_to_canonical_action(
+                {
+                    "tool": "correct_topology",
+                    "arguments": {"state_id": "active", "line_index1": 4},
+                }
+            )
 
     def test_commit_and_rollback_reference_the_candidate_case(self) -> None:
         for tool in ("commit_state", "rollback_state"):
@@ -263,6 +365,37 @@ class ActionMappingTests(unittest.TestCase):
             {
                 "tool": "get_verification_snapshot",
                 "arguments": {"stage": "post_measurement_correction"},
+            },
+            {
+                "tool": "correct_topology_from_path",
+                "arguments": {
+                    "case_path": "active",
+                    "line_index": 4,
+                    "desired_status": False,
+                },
+            },
+            {
+                "tool": "correct_topology_from_path",
+                "arguments": {
+                    "case_path": "active",
+                    "branch_row0": 3,
+                    "desired_status": False,
+                },
+            },
+            {
+                "tool": "correct_topology_from_path",
+                "arguments": {
+                    "case_path": "active",
+                    "cb_name": "CB_4_5",
+                    "desired_status": False,
+                },
+            },
+            {
+                "tool": "correct_parameters_from_path",
+                "arguments": {
+                    "case_path": "active",
+                    "branch_id": "L2",
+                },
             },
         )
         for action in actions:
@@ -334,6 +467,86 @@ class CanonicalExportTests(unittest.TestCase):
         call = row["messages"][2]["tool_calls"][0]["function"]
         self.assertEqual(call["name"], "correct_measurements_from_path")
         self.assertEqual(call["arguments"], {"case_path": "active", "suspect_group": [5]})
+
+    def test_export_topology_numeric_targets_validate_and_round_trip(self) -> None:
+        variants = (
+            {"line_index": 4},
+            {"line_index1": 4},
+            {"branch_row0": 3},
+        )
+        for target in variants:
+            with self.subTest(target=target):
+                example = _example()
+                example["preferred_action"] = {
+                    "tool": "correct_topology",
+                    "arguments": {
+                        "state_id": example["policy_observation"]["active_state_id"],
+                        **target,
+                        "status": 0,
+                    },
+                }
+                row = examples_to_chat_sft([example], protocol="canonical")[0]
+                _assert_exported_row_validates(self, row)
+                function = row["messages"][2]["tool_calls"][0]["function"]
+                action = {"tool": function["name"], "arguments": function["arguments"]}
+                self.assertEqual(
+                    action,
+                    {
+                        "tool": "correct_topology_from_path",
+                        "arguments": {
+                            "case_path": "active",
+                            "line_index1": 4,
+                            "desired_status": False,
+                        },
+                    },
+                )
+                _assert_call_matches_unified_schema(self, action)
+                self.assertEqual(
+                    canonical_to_internal_action(action),
+                    {
+                        "tool": "correct_topology",
+                        "arguments": {
+                            "state_id": "active",
+                            "line_index1": 4,
+                            "status": 0,
+                        },
+                    },
+                )
+
+    def test_export_rejects_nonexecutable_named_topology_target(self) -> None:
+        example = _example()
+        example["preferred_action"] = {
+            "tool": "correct_topology",
+            "arguments": {
+                "state_id": example["policy_observation"]["active_state_id"],
+                "cb_name": "CB_4_5",
+                "status": 1,
+            },
+        }
+        with self.assertRaisesRegex(ValueError, "numeric branch-row target"):
+            examples_to_chat_sft([example], protocol="canonical")
+
+    def test_unified_schema_rejects_legacy_topology_line_index(self) -> None:
+        example = _example()
+        example["preferred_action"] = {
+            "tool": "correct_topology",
+            "arguments": {
+                "state_id": example["policy_observation"]["active_state_id"],
+                "line_index": 4,
+                "status": 0,
+            },
+        }
+        row = examples_to_chat_sft([example], protocol="canonical")[0]
+        arguments = row["messages"][2]["tool_calls"][0]["function"]["arguments"]
+        arguments["line_index"] = arguments.pop("line_index1")
+        with self.assertRaisesRegex(
+            GateError, "missing required arguments.*line_index1"
+        ):
+            validate_messages(
+                row["messages"],
+                tools=row["tools"],
+                row_label=str(row["example_id"]),
+            )
 
     def test_export_supports_specialized_diagnostic_targets(self) -> None:
         example = _example()

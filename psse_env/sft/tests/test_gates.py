@@ -157,6 +157,33 @@ class FakeGemma4Processor(FakeProcessor):
 
 
 class TestSchemaTemplateAndMasks(unittest.TestCase):
+    def test_omitted_additional_properties_rejects_extra_assistant_argument(
+        self,
+    ) -> None:
+        candidate = row()
+        parameters = candidate["tools"][0]["function"]["parameters"]
+        self.assertNotIn("additionalProperties", parameters)
+        candidate["messages"][-1]["tool_calls"][0]["function"]["arguments"][
+            "line_index"
+        ] = 3
+
+        with self.assertRaisesRegex(
+            GateError,
+            "contains unsupported argument 'line_index'",
+        ):
+            prepare_example(candidate, FakeProcessor(), max_length=10000)
+
+    def test_explicit_additional_properties_true_allows_open_arguments(
+        self,
+    ) -> None:
+        schema = copy.deepcopy(TOOLS[0]["function"]["parameters"])
+        schema["additionalProperties"] = True
+        _validate_json_instance(
+            {"state_id": "active", "extension": {"value": 1}},
+            schema,
+            path="arguments",
+        )
+
     def test_json_schema_numeric_bounds_are_enforced(self) -> None:
         schema = {"type": "integer", "minimum": 2, "maximum": 5}
         _check_schema_node(schema, path="value")

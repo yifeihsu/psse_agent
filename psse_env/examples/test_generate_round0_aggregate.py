@@ -15,6 +15,7 @@ from psse_env.dagger.rollout_collector import classify_state_example
 from psse_env.dagger.splits import PHYSICAL_FINGERPRINT_VERSION
 from psse_env.examples.generate_round0_aggregate import (
     BC0_AGGREGATE_SOURCE_PARTITION,
+    BC0_CRITICAL_TARGET_TOOL_SCENARIO_FAMILY_MINIMUM_DISTINCT_ROOTS,
     BC0_FAMILY_RELEASE_POLICY,
     DEFAULT_EVALUATION_POLICY_PATH,
     DEFAULT_EVALUATION_SUITE_PATH,
@@ -811,6 +812,17 @@ class AggregateReleaseContractTests(unittest.TestCase):
                     requirements["maximum_operator_escalation_rate"], 1.0
                 )
 
+    def test_critical_tool_family_root_floors_fit_default_family_plans(
+        self,
+    ) -> None:
+        for tool, family_floors in (
+            BC0_CRITICAL_TARGET_TOOL_SCENARIO_FAMILY_MINIMUM_DISTINCT_ROOTS.items()
+        ):
+            for family, floor in family_floors.items():
+                with self.subTest(tool=tool, family=family):
+                    self.assertIn(family, DEFAULT_PLAN)
+                    self.assertLessEqual(floor, DEFAULT_PLAN[family])
+
     def test_aggregate_family_policy_matches_evaluation_policy(self) -> None:
         evaluation_policy = json.loads(
             DEFAULT_EVALUATION_POLICY_PATH.read_text(encoding="utf-8")
@@ -907,7 +919,11 @@ class AggregateReleaseContractTests(unittest.TestCase):
                 "size_policy": (
                     "natural_target_bearing_train_row_count_with_bounded_replacement"
                 ),
-                "strict_target_axes": [],
+                "strict_target_axes": [
+                    "target_tool_distinct_physical_roots",
+                    "target_tool_x_state_class_distinct_physical_roots",
+                    "target_tool_x_scenario_family_distinct_physical_roots",
+                ],
                 "deviation_gated_target_axes": ["tool_category"],
                 "capacity_aware_target_axes": [
                     "tool_category",
@@ -919,6 +935,9 @@ class AggregateReleaseContractTests(unittest.TestCase):
                 ],
                 "capacity_aware_policy": (
                     "weighted_then_clip_and_redistribute_v1"
+                ),
+                "requirement_aware_reservation_policy": (
+                    "constrained_first_distinct_physical_root_preselection_v1"
                 ),
                 "configured_tool_category_weights": {
                     "baseline_diagnostics": 0.20,
@@ -932,6 +951,67 @@ class AggregateReleaseContractTests(unittest.TestCase):
                     "minimum_natural_target_bearing_rows": 16,
                     "minimum_distinct_roots": 10,
                 },
+                "target_tool_minimum_distinct_physical_roots": {
+                    "correct_measurements": 10,
+                    "correct_parameters": 10,
+                    "correct_topology": 10,
+                    "get_measurement_context": 10,
+                    "get_parameter_context": 10,
+                    "get_topology_context": 10,
+                    "rollback_state": 10,
+                },
+                "target_tool_state_class_minimum_distinct_physical_roots": {
+                    "commit_state": {
+                        "accepted_final_commit": 10,
+                        "accepted_partial_commit": 10,
+                    },
+                    "correct_measurements": {
+                        "accepted_partial_continuation": 5,
+                    },
+                    "correct_parameters": {
+                        "accepted_partial_continuation": 5,
+                    },
+                    "correct_topology": {
+                        "accepted_partial_continuation": 5,
+                    },
+                    "get_measurement_context": {
+                        "accepted_partial_continuation": 10,
+                    },
+                    "get_parameter_context": {
+                        "accepted_partial_continuation": 5,
+                    },
+                    "get_topology_context": {
+                        "accepted_partial_continuation": 5,
+                    },
+                    "rollback_state": {
+                        "rejected_candidate_recovery": 10,
+                    },
+                },
+                "target_tool_scenario_family_minimum_distinct_physical_roots": {
+                    "ask_for_more_evidence": {
+                        "hif": 5,
+                        "measurement+hif": 2,
+                        "multi_measurement": 10,
+                    },
+                    "correct_measurements": {
+                        "measurement": 5,
+                        "measurement+hif": 2,
+                        "measurement+parameter": 10,
+                        "measurement+topology": 10,
+                        "multi_measurement": 10,
+                    },
+                    "correct_parameters": {
+                        "measurement+parameter": 10,
+                        "parameter": 5,
+                    },
+                    "correct_topology": {
+                        "measurement+topology": 10,
+                        "topology": 5,
+                    },
+                },
+                "production_label_eligibility_policy": (
+                    "explicit_true_required"
+                ),
                 "max_duplicate_count": 2,
                 "low_cost_margin_threshold": 0.05,
                 "maximum_tool_category_target_deviation": 0.10,

@@ -1221,6 +1221,22 @@ def examples_to_chat_sft(
                 )
         if protocol == "canonical":
             exported_target = bridge.internal_to_canonical_action(aliased_target)
+            # Bind the export back through the executable registry immediately.
+            # Tool-name membership alone did not catch target/schema drift.
+            try:
+                rebound_target = bridge.canonical_to_internal_action(exported_target)
+            except ValueError as exc:
+                raise ValueError(
+                    "Canonical expert target does not satisfy the executable "
+                    f"unified schema for {example.get('example_id')}: "
+                    f"{exported_target}"
+                ) from exc
+            if rebound_target["tool"] == INVALID_ACTION:
+                raise ValueError(
+                    "Canonical expert target does not satisfy the executable "
+                    f"unified schema for {example.get('example_id')}: "
+                    f"{exported_target}"
+                )
             for key in bridge.CANONICAL_STATE_REFERENCE_KEYS:
                 target_reference = exported_target["arguments"].get(key)
                 if target_reference is not None and str(target_reference) not in alias_to_state_id:

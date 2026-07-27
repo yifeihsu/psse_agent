@@ -289,7 +289,13 @@ def _validate_json_instance(value: Any, schema: Mapping[str, Any], *, path: str)
         missing = [key for key in required if key not in value]
         if missing:
             raise GateError(f"{path} is missing required arguments: {missing}.")
-        additional = schema.get("additionalProperties", True)
+        # Tool-call supervision is fail-closed.  JSON Schema ordinarily treats
+        # an omitted ``additionalProperties`` keyword as ``true``, but that
+        # would silently admit misspelled or stale assistant arguments that
+        # have no declared tool semantics.  A schema may still opt in to a
+        # free-form object explicitly with ``additionalProperties: true`` or
+        # constrain dynamic keys with an additional-properties schema.
+        additional = schema.get("additionalProperties", False)
         for key, child in value.items():
             child_schema = properties.get(key)
             if child_schema is None:
@@ -392,7 +398,13 @@ def validate_current_tool_registry(
     return failures
 
 
-def _validate_messages(messages: Any, *, tools: Sequence[Mapping[str, Any]], row_label: str) -> list[dict[str, Any]]:
+def validate_messages(
+    messages: Any,
+    *,
+    tools: Sequence[Mapping[str, Any]],
+    row_label: str,
+) -> list[dict[str, Any]]:
+    """Validate model-visible messages and every assistant tool call strictly."""
     if not isinstance(messages, list) or not messages:
         raise GateError(f"{row_label}: messages must be a non-empty list.")
     normalized: list[dict[str, Any]] = []
@@ -682,7 +694,11 @@ def prepare_example(
     if max_length <= 0:
         raise ValueError("max_length must be positive.")
     tools = validate_tool_schemas(row.get("tools"), row_label=row_label)
-    messages = _validate_messages(row.get("messages"), tools=tools, row_label=row_label)
+    messages = validate_messages(
+        row.get("messages"),
+        tools=tools,
+        row_label=row_label,
+    )
     prompt_messages = messages[:-1]
     if not prompt_messages:
         raise GateError(f"{row_label}: assistant target has no prompt history.")

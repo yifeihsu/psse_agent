@@ -213,6 +213,73 @@ APPROXIMATE_REALIZABILITY_RELEASE_KWARGS: dict[str, Any] = {
 BC0_FAMILY_NEIGHBOR_GATE_MINIMUM_ROOTS = 20
 BC0_STATE_CLASS_NEIGHBOR_GATE_POLICY = "diagnostic_only"
 
+# These are deliberately narrower than the full controller registry.  BC0 does
+# not promise that every protocol tool is an SFT target, but it must supervise
+# context acquisition for all three correctable physical modes, the matching
+# correction actions, and transactional rollback on independent roots. Ten
+# roots matches the existing category-support diversity floor.
+BC0_CRITICAL_TARGET_TOOL_MINIMUM_DISTINCT_ROOTS: dict[str, int] = {
+    "get_measurement_context": 10,
+    "get_parameter_context": 10,
+    "get_topology_context": 10,
+    "correct_measurements": 10,
+    "correct_parameters": 10,
+    "correct_topology": 10,
+    "rollback_state": 10,
+}
+
+# An action is only useful recovery supervision in the right lifecycle state.
+# Context/correction targets after a partial acceptance keep the controller
+# progressing through compound errors; clean-success targets cannot substitute
+# for those cells. Likewise, rollback outside rejected-candidate recovery
+# cannot satisfy the transactional recovery contract.
+BC0_CRITICAL_TARGET_TOOL_STATE_CLASS_MINIMUM_DISTINCT_ROOTS: dict[
+    str, dict[str, int]
+] = {
+    "commit_state": {
+        "accepted_final_commit": 10,
+        "accepted_partial_commit": 10,
+    },
+    "correct_measurements": {"accepted_partial_continuation": 5},
+    "correct_parameters": {"accepted_partial_continuation": 5},
+    "correct_topology": {"accepted_partial_continuation": 5},
+    "get_measurement_context": {"accepted_partial_continuation": 10},
+    "get_parameter_context": {"accepted_partial_continuation": 5},
+    "get_topology_context": {"accepted_partial_continuation": 5},
+    "rollback_state": {"rejected_candidate_recovery": 10},
+}
+
+# Corrections must also cover the families in which each error mode occurs;
+# aggregate exact-action counts cannot substitute for these cells. Floors are
+# bounded by the default physical-family plans: five for eight-root pure
+# families, ten for 20/22-root multi/mixed families, and two for the two-root
+# measurement+HIF observability pilot. HIF and multi-measurement handoffs are
+# likewise kept as distinct observable regimes.
+BC0_CRITICAL_TARGET_TOOL_SCENARIO_FAMILY_MINIMUM_DISTINCT_ROOTS: dict[
+    str, dict[str, int]
+] = {
+    "ask_for_more_evidence": {
+        "hif": 5,
+        "measurement+hif": 2,
+        "multi_measurement": 10,
+    },
+    "correct_measurements": {
+        "measurement": 5,
+        "measurement+hif": 2,
+        "measurement+parameter": 10,
+        "measurement+topology": 10,
+        "multi_measurement": 10,
+    },
+    "correct_parameters": {
+        "measurement+parameter": 10,
+        "parameter": 5,
+    },
+    "correct_topology": {
+        "measurement+topology": 10,
+        "topology": 5,
+    },
+}
+
 
 class ObservableBaselinePolicy:
     """Scripted round-0 stand-in; its proposals are logged, never trained on."""
@@ -970,7 +1037,11 @@ def _generation_descriptor(
                 "size_policy": (
                     "natural_target_bearing_train_row_count_with_bounded_replacement"
                 ),
-                "strict_target_axes": [],
+                "strict_target_axes": [
+                    "target_tool_distinct_physical_roots",
+                    "target_tool_x_state_class_distinct_physical_roots",
+                    "target_tool_x_scenario_family_distinct_physical_roots",
+                ],
                 "deviation_gated_target_axes": ["tool_category"],
                 "capacity_aware_target_axes": [
                     "tool_category",
@@ -983,6 +1054,9 @@ def _generation_descriptor(
                 "capacity_aware_policy": (
                     "weighted_then_clip_and_redistribute_v1"
                 ),
+                "requirement_aware_reservation_policy": (
+                    "constrained_first_distinct_physical_root_preselection_v1"
+                ),
                 "configured_tool_category_weights": dict(
                     DEFAULT_TRAINING_TOOL_CATEGORY_WEIGHTS
                 ),
@@ -994,6 +1068,22 @@ def _generation_descriptor(
                         DEFAULT_MINIMUM_TOOL_CATEGORY_DISTINCT_ROOTS
                     ),
                 },
+                "target_tool_minimum_distinct_physical_roots": dict(
+                    BC0_CRITICAL_TARGET_TOOL_MINIMUM_DISTINCT_ROOTS
+                ),
+                "target_tool_state_class_minimum_distinct_physical_roots": (
+                    copy.deepcopy(
+                        BC0_CRITICAL_TARGET_TOOL_STATE_CLASS_MINIMUM_DISTINCT_ROOTS
+                    )
+                ),
+                "target_tool_scenario_family_minimum_distinct_physical_roots": (
+                    copy.deepcopy(
+                        BC0_CRITICAL_TARGET_TOOL_SCENARIO_FAMILY_MINIMUM_DISTINCT_ROOTS
+                    )
+                ),
+                "production_label_eligibility_policy": (
+                    "explicit_true_required"
+                ),
                 "max_duplicate_count": 2,
                 "low_cost_margin_threshold": 0.05,
                 "maximum_tool_category_target_deviation": 0.10,
@@ -1852,6 +1942,16 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         minimum_tool_category_distinct_roots=(
             DEFAULT_MINIMUM_TOOL_CATEGORY_DISTINCT_ROOTS
         ),
+        target_tool_minimum_distinct_roots=(
+            BC0_CRITICAL_TARGET_TOOL_MINIMUM_DISTINCT_ROOTS
+        ),
+        target_tool_state_class_minimum_distinct_roots=(
+            BC0_CRITICAL_TARGET_TOOL_STATE_CLASS_MINIMUM_DISTINCT_ROOTS
+        ),
+        target_tool_scenario_family_minimum_distinct_roots=(
+            BC0_CRITICAL_TARGET_TOOL_SCENARIO_FAMILY_MINIMUM_DISTINCT_ROOTS
+        ),
+        require_production_label_eligible=True,
     )
     exported_train_view = examples_to_chat_sft(
         train_view_rows, protocol=args.protocol
@@ -2060,6 +2160,10 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         release_failures.append(
             "balanced training-view target gate failed: category_support_shortfalls="
             f"{training_view_report.get('tool_category_natural_support_shortfalls')}, "
+            "exact_action_root_shortfalls="
+            f"{training_view_report.get('target_tool_unique_root_shortfalls')}, "
+            "critical_joint_root_shortfalls="
+            f"{training_view_report.get('critical_joint_unique_root_shortfalls')}, "
             "feasibility_shortfall="
             f"{training_view_report.get('necessary_feasibility_shortfall_total')}, "
             "tool-category deviation="

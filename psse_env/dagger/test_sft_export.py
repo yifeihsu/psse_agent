@@ -87,6 +87,34 @@ class NativeToolExportTests(unittest.TestCase):
         self.assertEqual(arguments, {"state_id": "active"})
         self.assertTrue(audit_chat_sft_rows([row])["passed"])
 
+    def test_chat_audit_rejects_extra_target_argument_when_schema_omits_policy(
+        self,
+    ) -> None:
+        row = examples_to_chat_sft([_example()])[0]
+        run_wls_schema = next(
+            schema
+            for schema in row["tools"]
+            if schema["function"]["name"] == "run_wls"
+        )
+        run_wls_schema["function"]["parameters"].pop(
+            "additionalProperties",
+            None,
+        )
+        row["messages"][2]["tool_calls"][0]["function"]["arguments"][
+            "line_index"
+        ] = 3
+
+        report = audit_chat_sft_rows([row])
+
+        self.assertFalse(report["passed"])
+        self.assertEqual(report["invalid_rows"], 1)
+        self.assertTrue(
+            any(
+                "contains unsupported argument 'line_index'" in message
+                for message in report["errors"][0]["errors"]
+            )
+        )
+
     def test_production_dataset_mode_tag_is_preserved_outside_messages(self) -> None:
         example = _example()
         example["dataset_mode"] = "production"

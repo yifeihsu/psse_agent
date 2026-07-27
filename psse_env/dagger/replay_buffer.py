@@ -50,6 +50,35 @@ def _root_key(row: Mapping[str, Any], index: int) -> str:
     return f"__unidentified_row_{index}"
 
 
+def _physical_root(row: Mapping[str, Any]) -> str | None:
+    """Return only an explicit physical root; never synthesize coverage."""
+    value = row.get("physical_root_fingerprint")
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
+def _production_label_eligibility(row: Mapping[str, Any]) -> bool | None:
+    """Resolve release eligibility conservatively across supported locations."""
+    values: list[Any] = []
+    for source in (row, row.get("labels"), row.get("metadata")):
+        if not isinstance(source, Mapping):
+            continue
+        if "production_label_eligible" in source:
+            values.append(source.get("production_label_eligible"))
+        nested_labels = source.get("labels")
+        if (
+            isinstance(nested_labels, Mapping)
+            and "production_label_eligible" in nested_labels
+        ):
+            values.append(nested_labels.get("production_label_eligible"))
+    if any(value is False for value in values):
+        return False
+    if any(value is True for value in values):
+        return True
+    return None
+
+
 def _iteration(row: Mapping[str, Any]) -> int | None:
     try:
         value = int(row.get("iteration"))
@@ -554,6 +583,162 @@ def _known_cost_margin(row: Mapping[str, Any]) -> float | None:
     return None
 
 
+def _target_tool_unique_root_support(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    minimum_distinct_roots: Mapping[str, int],
+) -> tuple[dict[str, dict[str, int | bool]], dict[str, dict[str, int]]]:
+    """Report exact-action support without letting duplicates inflate roots."""
+    materialized = list(rows)
+    row_counts: Counter[str] = Counter()
+    roots: dict[str, set[str]] = defaultdict(set)
+    rows_missing_physical_root: Counter[str] = Counter()
+    for row in materialized:
+        tool = _target_tool(row)
+        if tool is None:
+            continue
+        row_counts[tool] += 1
+        root = _physical_root(row)
+        if root is None:
+            rows_missing_physical_root[tool] += 1
+        else:
+            roots[tool].add(root)
+
+    support: dict[str, dict[str, int | bool]] = {}
+    shortfalls: dict[str, dict[str, int]] = {}
+    for tool in sorted(set(row_counts) | set(minimum_distinct_roots)):
+        observed_roots = len(roots[tool])
+        required_roots = int(minimum_distinct_roots.get(tool, 0))
+        root_shortfall = max(required_roots - observed_roots, 0)
+        support[tool] = {
+            "target_bearing_rows": int(row_counts[tool]),
+            "distinct_physical_roots": observed_roots,
+            "rows_missing_physical_root": int(
+                rows_missing_physical_root[tool]
+            ),
+            "minimum_distinct_physical_roots": required_roots,
+            "root_shortfall": root_shortfall,
+            "required_for_release": tool in minimum_distinct_roots,
+            "passed": root_shortfall == 0,
+        }
+        if root_shortfall:
+            shortfalls[tool] = {
+                "target_bearing_rows": int(row_counts[tool]),
+                "distinct_physical_roots": observed_roots,
+                "rows_missing_physical_root": int(
+                    rows_missing_physical_root[tool]
+                ),
+                "minimum_distinct_physical_roots": required_roots,
+                "root_shortfall": root_shortfall,
+            }
+    return support, shortfalls
+
+
+def _target_tool_joint_unique_root_support(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    dimension: str,
+    minimum_distinct_roots: Mapping[str, Mapping[str, int]],
+) -> tuple[
+    dict[str, dict[str, dict[str, int | bool]]],
+    dict[str, dict[str, dict[str, int]]],
+]:
+    """Report exact tool-by-context support using explicit physical roots."""
+    if dimension not in {"state_class", "scenario_family"}:
+        raise ValueError(f"unsupported target-tool joint dimension: {dimension}")
+    row_counts: Counter[tuple[str, str]] = Counter()
+    roots: dict[tuple[str, str], set[str]] = defaultdict(set)
+    rows_missing_physical_root: Counter[tuple[str, str]] = Counter()
+    for row in rows:
+        tool = _target_tool(row)
+        if tool is None:
+            continue
+        if dimension == "state_class":
+            value = _state_class(row)
+        else:
+            value = str(_nonmodel_value(row, dimension) or "unknown")
+        cell = (tool, value)
+        row_counts[cell] += 1
+        root = _physical_root(row)
+        if root is None:
+            rows_missing_physical_root[cell] += 1
+        else:
+            roots[cell].add(root)
+
+    required_cells = {
+        (tool, value)
+        for tool, values in minimum_distinct_roots.items()
+        for value in values
+    }
+    support: dict[str, dict[str, dict[str, int | bool]]] = {}
+    shortfalls: dict[str, dict[str, dict[str, int]]] = {}
+    for tool, value in sorted(set(row_counts) | required_cells):
+        observed_roots = len(roots[(tool, value)])
+        required_roots = int(
+            minimum_distinct_roots.get(tool, {}).get(value, 0)
+        )
+        root_shortfall = max(required_roots - observed_roots, 0)
+        details: dict[str, int | bool] = {
+            "target_bearing_rows": int(row_counts[(tool, value)]),
+            "distinct_physical_roots": observed_roots,
+            "rows_missing_physical_root": int(
+                rows_missing_physical_root[(tool, value)]
+            ),
+            "minimum_distinct_physical_roots": required_roots,
+            "root_shortfall": root_shortfall,
+            "required_for_release": (tool, value) in required_cells,
+            "passed": root_shortfall == 0,
+        }
+        support.setdefault(tool, {})[value] = details
+        if root_shortfall:
+            shortfalls.setdefault(tool, {})[value] = {
+                key: int(details[key])
+                for key in (
+                    "target_bearing_rows",
+                    "distinct_physical_roots",
+                    "rows_missing_physical_root",
+                    "minimum_distinct_physical_roots",
+                    "root_shortfall",
+                )
+            }
+    return support, shortfalls
+
+
+def _normalize_joint_root_floors(
+    value: Mapping[str, Mapping[str, int]] | None,
+    *,
+    name: str,
+) -> dict[str, dict[str, int]]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{name} must be a nested mapping")
+    normalized: dict[str, dict[str, int]] = {}
+    for raw_tool, raw_values in value.items():
+        tool = str(raw_tool).strip()
+        if not tool:
+            raise ValueError(f"{name} tool keys must be non-empty")
+        if not isinstance(raw_values, Mapping) or not raw_values:
+            raise ValueError(f"{name}[{tool!r}] must be a non-empty mapping")
+        for raw_dimension_value, raw_floor in raw_values.items():
+            dimension_value = str(raw_dimension_value).strip()
+            if not dimension_value:
+                raise ValueError(
+                    f"{name}[{tool!r}] dimension keys must be non-empty"
+                )
+            if (
+                isinstance(raw_floor, bool)
+                or int(raw_floor) != raw_floor
+                or int(raw_floor) <= 0
+            ):
+                raise ValueError(f"{name} values must be positive integers")
+            normalized.setdefault(tool, {})[dimension_value] = int(raw_floor)
+    return {
+        tool: dict(sorted(values.items()))
+        for tool, values in sorted(normalized.items())
+    }
+
+
 def _training_view_summary(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     materialized = list(rows)
     axes = {
@@ -565,6 +750,8 @@ def _training_view_summary(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         "terminal_outcome": Counter(),
         "physical_root": Counter(),
     }
+    target_tool_roots: dict[str, set[str]] = defaultdict(set)
+    target_tool_rows_missing_physical_root: Counter[str] = Counter()
     for index, row in enumerate(materialized):
         tool = _target_tool(row)
         if tool is None:
@@ -583,9 +770,21 @@ def _training_view_summary(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
             or "unknown"
         )] += 1
         axes["physical_root"][_root_key(row, index)] += 1
+        physical_root = _physical_root(row)
+        if physical_root is None:
+            target_tool_rows_missing_physical_root[tool] += 1
+        else:
+            target_tool_roots[tool].add(physical_root)
     return {
         "rows": len(materialized),
         **{axis: dict(sorted(counts.items())) for axis, counts in axes.items()},
+        "target_tool_distinct_physical_roots": {
+            tool: len(roots)
+            for tool, roots in sorted(target_tool_roots.items())
+        },
+        "target_tool_rows_missing_physical_root": dict(
+            sorted(target_tool_rows_missing_physical_root.items())
+        ),
     }
 
 
@@ -605,6 +804,14 @@ def build_balanced_training_view(
     minimum_tool_category_distinct_roots: int = (
         DEFAULT_MINIMUM_TOOL_CATEGORY_DISTINCT_ROOTS
     ),
+    target_tool_minimum_distinct_roots: Mapping[str, int] | None = None,
+    target_tool_state_class_minimum_distinct_roots: (
+        Mapping[str, Mapping[str, int]] | None
+    ) = None,
+    target_tool_scenario_family_minimum_distinct_roots: (
+        Mapping[str, Mapping[str, int]] | None
+    ) = None,
+    require_production_label_eligible: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Build a deterministic multi-axis balanced SFT training view.
 
@@ -615,7 +822,11 @@ def build_balanced_training_view(
     deterministic capacity-aware targets. Tool-category targets retain a
     strict achieved-deviation gate after capacity adjustment, and configured
     nonzero categories must independently satisfy natural target-bearing row
-    and distinct-root support floors.
+    and distinct-root support floors. Configured exact target tools and
+    tool-by-state/family cells must meet independent physical-root floors in
+    both the eligible natural source and the returned view; duplicated
+    placements never increase that support. Explicitly production-ineligible
+    rows are always excluded.
     """
     source = [dict(row) for row in rows]
     if not source:
@@ -638,9 +849,77 @@ def build_balanced_training_view(
     ):
         if isinstance(value, bool) or int(value) != value or int(value) < 0:
             raise ValueError(f"{name} must be a nonnegative integer")
-    targetless_rows = [row for row in source if _target_tool(row) is None]
+    if not isinstance(require_production_label_eligible, bool):
+        raise ValueError("require_production_label_eligible must be boolean")
+    if (
+        target_tool_minimum_distinct_roots is not None
+        and not isinstance(target_tool_minimum_distinct_roots, Mapping)
+    ):
+        raise ValueError(
+            "target_tool_minimum_distinct_roots must be a mapping"
+        )
+    configured_target_tool_root_floors: dict[str, int] = {}
+    for raw_tool, raw_floor in (
+        {} if target_tool_minimum_distinct_roots is None
+        else target_tool_minimum_distinct_roots
+    ).items():
+        tool = str(raw_tool).strip()
+        if not tool:
+            raise ValueError(
+                "target_tool_minimum_distinct_roots keys must be non-empty"
+            )
+        if (
+            isinstance(raw_floor, bool)
+            or int(raw_floor) != raw_floor
+            or int(raw_floor) <= 0
+        ):
+            raise ValueError(
+                "target_tool_minimum_distinct_roots values must be positive "
+                "integers"
+            )
+        configured_target_tool_root_floors[tool] = int(raw_floor)
+    configured_target_tool_state_class_root_floors = (
+        _normalize_joint_root_floors(
+            target_tool_state_class_minimum_distinct_roots,
+            name="target_tool_state_class_minimum_distinct_roots",
+        )
+    )
+    configured_target_tool_scenario_family_root_floors = (
+        _normalize_joint_root_floors(
+            target_tool_scenario_family_minimum_distinct_roots,
+            name="target_tool_scenario_family_minimum_distinct_roots",
+        )
+    )
+
+    explicitly_ineligible_rows = [
+        row for row in source if _production_label_eligibility(row) is False
+    ]
+    explicitly_eligible_rows = [
+        row for row in source if _production_label_eligibility(row) is True
+    ]
+    missing_eligibility_rows = [
+        row
+        for row in source
+        if _production_label_eligibility(row) is None
+    ]
+    production_source = [
+        row
+        for row in source
+        if _production_label_eligibility(row) is not False
+        and (
+            not require_production_label_eligible
+            or _production_label_eligibility(row) is True
+        )
+    ]
+    if not production_source:
+        raise ValueError(
+            "no production-label-eligible rows remain for the training view"
+        )
+    targetless_rows = [
+        row for row in production_source if _target_tool(row) is None
+    ]
     target_bearing_source = [
-        row for row in source if _target_tool(row) is not None
+        row for row in production_source if _target_tool(row) is not None
     ]
     excluded_low_margin = [
         row
@@ -657,6 +936,33 @@ def build_balanced_training_view(
         raise ValueError(
             "all target-bearing training rows were excluded by the cost-margin gate"
         )
+    (
+        natural_target_tool_unique_root_support,
+        natural_target_tool_unique_root_shortfalls,
+    ) = _target_tool_unique_root_support(
+        eligible,
+        minimum_distinct_roots=configured_target_tool_root_floors,
+    )
+    (
+        natural_target_tool_state_class_unique_root_support,
+        natural_target_tool_state_class_unique_root_shortfalls,
+    ) = _target_tool_joint_unique_root_support(
+        eligible,
+        dimension="state_class",
+        minimum_distinct_roots=(
+            configured_target_tool_state_class_root_floors
+        ),
+    )
+    (
+        natural_target_tool_scenario_family_unique_root_support,
+        natural_target_tool_scenario_family_unique_root_shortfalls,
+    ) = _target_tool_joint_unique_root_support(
+        eligible,
+        dimension="scenario_family",
+        minimum_distinct_roots=(
+            configured_target_tool_scenario_family_root_floors
+        ),
+    )
     requested_size = len(eligible) if size is None else int(size)
     if requested_size <= 0:
         raise ValueError("training-view size must be positive")
@@ -680,6 +986,7 @@ def build_balanced_training_view(
 
     axis_values: dict[int, dict[str, str]] = {}
     roots: dict[int, str] = {}
+    explicit_physical_roots: dict[int, str | None] = {}
     for index, row in enumerate(eligible):
         tool = _target_tool(row)
         state_class = _state_class(row)
@@ -698,6 +1005,7 @@ def build_balanced_training_view(
             ),
         }
         roots[index] = _root_key(row, index)
+        explicit_physical_roots[index] = _physical_root(row)
 
     available_categories = {
         values["tool_category"] for values in axis_values.values()
@@ -869,6 +1177,71 @@ def build_balanced_training_view(
         )
         for index in range(len(eligible))
     }
+    requirement_floors: dict[tuple[str, str, str], int] = {
+        ("target_tool", tool, ""): floor
+        for tool, floor in configured_target_tool_root_floors.items()
+    }
+    requirement_floors.update(
+        {
+            ("state_class", tool, state_class): floor
+            for tool, state_classes in (
+                configured_target_tool_state_class_root_floors.items()
+            )
+            for state_class, floor in state_classes.items()
+        }
+    )
+    requirement_floors.update(
+        {
+            ("scenario_family", tool, family): floor
+            for tool, families in (
+                configured_target_tool_scenario_family_root_floors.items()
+            )
+            for family, floor in families.items()
+        }
+    )
+
+    def matches_requirement(
+        index: int,
+        requirement: tuple[str, str, str],
+    ) -> bool:
+        axis, tool, value = requirement
+        values = axis_values[index]
+        return values["target_tool"] == tool and (
+            axis == "target_tool" or values[axis] == value
+        )
+
+    matching_requirements: dict[int, set[tuple[str, str, str]]] = {
+        index: {
+            requirement
+            for requirement in requirement_floors
+            if matches_requirement(index, requirement)
+        }
+        for index in range(len(eligible))
+    }
+    natural_requirement_roots: dict[
+        tuple[str, str, str], set[str]
+    ] = {
+        requirement: {
+            root
+            for index, root in explicit_physical_roots.items()
+            if root is not None
+            and requirement in matching_requirements[index]
+        }
+        for requirement in requirement_floors
+    }
+    reservation_targets = {
+        requirement: min(
+            int(floor),
+            len(natural_requirement_roots[requirement]),
+        )
+        for requirement, floor in requirement_floors.items()
+    }
+    reservation_requirement_roots: dict[
+        tuple[str, str, str], set[str]
+    ] = {
+        requirement: set() for requirement in requirement_floors
+    }
+    reserved_indices: list[int] = []
 
     def candidate_score(index: int) -> tuple[float, int]:
         values = axis_values[index]
@@ -898,6 +1271,125 @@ def build_balanced_training_view(
             )
             for root, available in capacity_by_root.items()
         )
+
+    def select_index(index: int, *, reserved: bool) -> None:
+        selected.append(index)
+        occurrences[index] += 1
+        root_counts[roots[index]] += 1
+        for axis, value in axis_values[index].items():
+            observed[axis][value] += 1
+        explicit_root = explicit_physical_roots[index]
+        if explicit_root is not None:
+            for requirement in matching_requirements[index]:
+                reservation_requirement_roots[requirement].add(
+                    explicit_root
+                )
+        if reserved:
+            reserved_indices.append(index)
+
+    def reservation_blocking_pressure(index: int) -> int:
+        """Count unmet requirements that would lose a necessary root slot."""
+        root = explicit_physical_roots[index]
+        if root is None or root_counts[roots[index]] + 1 < int(root_cap):
+            return 0
+        blocked = 0
+        for requirement, target in reservation_targets.items():
+            selected_roots = reservation_requirement_roots[requirement]
+            remaining_need = int(target) - len(selected_roots)
+            if remaining_need <= 0 or root in selected_roots:
+                continue
+            if requirement in matching_requirements[index]:
+                # Selecting this row consumes the slot but also satisfies this
+                # requirement on the root.
+                continue
+            available_roots = {
+                candidate_root
+                for candidate_root in natural_requirement_roots[requirement]
+                if candidate_root not in selected_roots
+                and root_counts[candidate_root] < int(root_cap)
+            }
+            if root in available_roots and len(available_roots) <= remaining_need:
+                blocked += 1
+        return blocked
+
+    requirement_order = sorted(
+        requirement_floors,
+        key=lambda requirement: (
+            len(natural_requirement_roots[requirement])
+            < int(requirement_floors[requirement]),
+            max(
+                len(natural_requirement_roots[requirement])
+                - int(reservation_targets[requirement]),
+                0,
+            ),
+            len(natural_requirement_roots[requirement]),
+            requirement,
+        ),
+    )
+    for requirement in requirement_order:
+        target = int(reservation_targets[requirement])
+        while (
+            len(reservation_requirement_roots[requirement]) < target
+            and len(selected) < requested_size
+        ):
+            candidates = [
+                index
+                for index in range(len(eligible))
+                if requirement in matching_requirements[index]
+                and explicit_physical_roots[index] is not None
+                and explicit_physical_roots[index]
+                not in reservation_requirement_roots[requirement]
+                and occurrences[index] < int(max_duplicate_count)
+                and root_counts[roots[index]] < int(root_cap)
+            ]
+            if not candidates:
+                break
+
+            def reservation_score(
+                index: int,
+            ) -> tuple[int, int, int, float, int]:
+                root = explicit_physical_roots[index]
+                newly_covered = [
+                    candidate_requirement
+                    for candidate_requirement in matching_requirements[index]
+                    if root
+                    not in reservation_requirement_roots[
+                        candidate_requirement
+                    ]
+                    and len(
+                        reservation_requirement_roots[
+                            candidate_requirement
+                        ]
+                    )
+                    < int(reservation_targets[candidate_requirement])
+                ]
+                feasible_coverage = sum(
+                    len(natural_requirement_roots[item])
+                    >= int(requirement_floors[item])
+                    for item in newly_covered
+                )
+                balance_score, deterministic_tie_break = candidate_score(
+                    index
+                )
+                return (
+                    -reservation_blocking_pressure(index),
+                    feasible_coverage,
+                    len(newly_covered),
+                    balance_score,
+                    deterministic_tie_break,
+                )
+
+            select_index(
+                max(candidates, key=reservation_score),
+                reserved=True,
+            )
+
+    reserved_requirement_roots = {
+        requirement: set(roots_for_requirement)
+        for requirement, roots_for_requirement in (
+            reservation_requirement_roots.items()
+        )
+    }
 
     while len(selected) < requested_size:
         category_options: list[tuple[str, int, int]] = []
@@ -941,11 +1433,7 @@ def build_balanced_training_view(
         if not candidates:
             raise ValueError("training-view constraints exhausted before reaching requested size")
         chosen = max(candidates, key=candidate_score)
-        selected.append(chosen)
-        occurrences[chosen] += 1
-        root_counts[roots[chosen]] += 1
-        for axis, value in axis_values[chosen].items():
-            observed[axis][value] += 1
+        select_index(chosen, reserved=False)
 
     # Stable hash ordering makes the persisted view byte-reproducible without
     # retaining curriculum-like blocks from greedy selection.
@@ -957,6 +1445,33 @@ def build_balanced_training_view(
         ).hexdigest()
     )
     view = [copy.deepcopy(eligible[index]) for index in selected]
+    (
+        training_view_target_tool_unique_root_support,
+        training_view_target_tool_unique_root_shortfalls,
+    ) = _target_tool_unique_root_support(
+        view,
+        minimum_distinct_roots=configured_target_tool_root_floors,
+    )
+    (
+        training_view_target_tool_state_class_unique_root_support,
+        training_view_target_tool_state_class_unique_root_shortfalls,
+    ) = _target_tool_joint_unique_root_support(
+        view,
+        dimension="state_class",
+        minimum_distinct_roots=(
+            configured_target_tool_state_class_root_floors
+        ),
+    )
+    (
+        training_view_target_tool_scenario_family_unique_root_support,
+        training_view_target_tool_scenario_family_unique_root_shortfalls,
+    ) = _target_tool_joint_unique_root_support(
+        view,
+        dimension="scenario_family",
+        minimum_distinct_roots=(
+            configured_target_tool_scenario_family_root_floors
+        ),
+    )
     achieved_counts = {
         axis: dict(sorted(counts.items())) for axis, counts in observed.items()
     }
@@ -1018,15 +1533,62 @@ def build_balanced_training_view(
     )
     passed = (
         not tool_category_natural_support_shortfalls
+        and not natural_target_tool_unique_root_shortfalls
+        and not training_view_target_tool_unique_root_shortfalls
+        and not natural_target_tool_state_class_unique_root_shortfalls
+        and not training_view_target_tool_state_class_unique_root_shortfalls
+        and not natural_target_tool_scenario_family_unique_root_shortfalls
+        and not training_view_target_tool_scenario_family_unique_root_shortfalls
         and feasibility_shortfall_total == 0
         and achieved_tool_category_target_deviation
         <= float(maximum_tool_category_target_deviation)
     )
+    reservation_requirement_report = []
+    for requirement in sorted(requirement_floors):
+        axis, tool, value = requirement
+        configured_floor = int(requirement_floors[requirement])
+        natural_roots = len(natural_requirement_roots[requirement])
+        reserved_roots = len(reserved_requirement_roots[requirement])
+        selected_roots = len(reservation_requirement_roots[requirement])
+        reservation_requirement_report.append(
+            {
+                "axis": axis,
+                "target_tool": tool,
+                **({"value": value} if value else {}),
+                "minimum_distinct_physical_roots": configured_floor,
+                "natural_distinct_physical_roots": natural_roots,
+                "natural_support_feasible": natural_roots >= configured_floor,
+                "reservation_target_distinct_physical_roots": int(
+                    reservation_targets[requirement]
+                ),
+                "reserved_distinct_physical_roots": reserved_roots,
+                "reservation_shortfall": max(
+                    int(reservation_targets[requirement]) - reserved_roots,
+                    0,
+                ),
+                "selected_distinct_physical_roots": selected_roots,
+                "selected_root_shortfall": max(
+                    configured_floor - selected_roots,
+                    0,
+                ),
+            }
+        )
     report = {
         "seed": int(seed),
         "requested_size": requested_size,
         "returned_size": len(view),
         "input_rows": len(source),
+        "training_view_candidate_input_rows": len(production_source),
+        "explicitly_production_eligible_input_rows": len(
+            explicitly_eligible_rows
+        ),
+        "explicitly_production_ineligible_input_rows": len(
+            explicitly_ineligible_rows
+        ),
+        "missing_production_label_eligibility_input_rows": len(
+            missing_eligibility_rows
+        ),
+        "require_production_label_eligible": require_production_label_eligible,
         "target_bearing_input_rows": len(target_bearing_source),
         "excluded_targetless_rows": len(targetless_rows),
         "low_cost_margin_threshold": float(low_cost_margin_threshold),
@@ -1036,10 +1598,30 @@ def build_balanced_training_view(
         "max_rows_per_root": int(root_cap),
         "target_contract": {
             "size_policy": "requested_full_size_with_bounded_replacement",
-            "strict_target_axes": [],
+            "strict_target_axes": [
+                axis
+                for axis, enabled in (
+                    (
+                        "target_tool_distinct_physical_roots",
+                        configured_target_tool_root_floors,
+                    ),
+                    (
+                        "target_tool_x_state_class_distinct_physical_roots",
+                        configured_target_tool_state_class_root_floors,
+                    ),
+                    (
+                        "target_tool_x_scenario_family_distinct_physical_roots",
+                        configured_target_tool_scenario_family_root_floors,
+                    ),
+                )
+                if enabled
+            ],
             "deviation_gated_target_axes": ["tool_category"],
             "capacity_aware_target_axes": ["tool_category", *secondary_axes],
             "capacity_aware_policy": "weighted_then_clip_and_redistribute_v1",
+            "requirement_aware_reservation_policy": (
+                "constrained_first_distinct_physical_root_preselection_v1"
+            ),
             "tool_category_natural_support_floor": {
                 "minimum_natural_target_bearing_rows": int(
                     minimum_tool_category_natural_rows
@@ -1048,6 +1630,32 @@ def build_balanced_training_view(
                     minimum_tool_category_distinct_roots
                 ),
             },
+            "target_tool_minimum_distinct_physical_roots": dict(
+                sorted(configured_target_tool_root_floors.items())
+            ),
+            "target_tool_state_class_minimum_distinct_physical_roots": (
+                configured_target_tool_state_class_root_floors
+            ),
+            "target_tool_scenario_family_minimum_distinct_physical_roots": (
+                configured_target_tool_scenario_family_root_floors
+            ),
+            "production_label_eligibility_policy": (
+                "explicit_true_required"
+                if require_production_label_eligible
+                else "explicit_false_excluded"
+            ),
+        },
+        "requirement_aware_reservation": {
+            "policy": (
+                "constrained_first_distinct_physical_root_preselection_v1"
+            ),
+            "reserved_rows": len(reserved_indices),
+            "feasible_requirements_satisfied_by_reservation": all(
+                item["reservation_shortfall"] == 0
+                for item in reservation_requirement_report
+                if item["natural_support_feasible"]
+            ),
+            "requirements": reservation_requirement_report,
         },
         "configured_tool_category_weights": configured_category_weights,
         "tool_category_natural_support": tool_category_natural_support,
@@ -1056,6 +1664,66 @@ def build_balanced_training_view(
         ),
         "tool_category_natural_support_passed": (
             not tool_category_natural_support_shortfalls
+        ),
+        "target_tool_unique_root_support": {
+            "eligible_natural_source": (
+                natural_target_tool_unique_root_support
+            ),
+            "training_view": training_view_target_tool_unique_root_support,
+        },
+        "target_tool_unique_root_shortfalls": {
+            "eligible_natural_source": (
+                natural_target_tool_unique_root_shortfalls
+            ),
+            "training_view": (
+                training_view_target_tool_unique_root_shortfalls
+            ),
+        },
+        "target_tool_unique_root_support_passed": (
+            not natural_target_tool_unique_root_shortfalls
+            and not training_view_target_tool_unique_root_shortfalls
+        ),
+        "critical_joint_unique_root_support": {
+            "target_tool_x_state_class": {
+                "eligible_natural_source": (
+                    natural_target_tool_state_class_unique_root_support
+                ),
+                "training_view": (
+                    training_view_target_tool_state_class_unique_root_support
+                ),
+            },
+            "target_tool_x_scenario_family": {
+                "eligible_natural_source": (
+                    natural_target_tool_scenario_family_unique_root_support
+                ),
+                "training_view": (
+                    training_view_target_tool_scenario_family_unique_root_support
+                ),
+            },
+        },
+        "critical_joint_unique_root_shortfalls": {
+            "target_tool_x_state_class": {
+                "eligible_natural_source": (
+                    natural_target_tool_state_class_unique_root_shortfalls
+                ),
+                "training_view": (
+                    training_view_target_tool_state_class_unique_root_shortfalls
+                ),
+            },
+            "target_tool_x_scenario_family": {
+                "eligible_natural_source": (
+                    natural_target_tool_scenario_family_unique_root_shortfalls
+                ),
+                "training_view": (
+                    training_view_target_tool_scenario_family_unique_root_shortfalls
+                ),
+            },
+        },
+        "critical_joint_unique_root_support_passed": (
+            not natural_target_tool_state_class_unique_root_shortfalls
+            and not training_view_target_tool_state_class_unique_root_shortfalls
+            and not natural_target_tool_scenario_family_unique_root_shortfalls
+            and not training_view_target_tool_scenario_family_unique_root_shortfalls
         ),
         "unconstrained_target_counts": {
             axis: dict(sorted(counts.items()))

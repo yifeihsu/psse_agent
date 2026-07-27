@@ -24,7 +24,11 @@ from psse_env.dagger.dataset_builder import (
     find_model_identifier_leaks,
     prepare_model_policy_observation,
     validate_policy_payload,
-    validate_tool_schemas,
+)
+from psse_env.sft.gates import (
+    GateError as SFTGateError,
+    validate_messages as validate_sft_messages,
+    validate_tool_schemas as validate_sft_tool_schemas,
 )
 
 
@@ -847,11 +851,13 @@ def audit_chat_sft_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         row_id = str(row.get("example_id", f"row_{index}"))
         row_errors: list[str] = []
         tools = row.get("tools")
+        validated_tools: list[dict[str, Any]] = []
         try:
-            if not isinstance(tools, list):
-                raise ValueError("row-level tools must be a list")
-            validate_tool_schemas(tools)
-        except ValueError as exc:
+            validated_tools = validate_sft_tool_schemas(
+                tools,
+                row_label=row_id,
+            )
+        except SFTGateError as exc:
             row_errors.append(str(exc))
 
         messages = row.get("messages")
@@ -871,6 +877,15 @@ def audit_chat_sft_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
                         row_errors.append("user message is not valid JSON")
                 if message.get("role") == "assistant":
                     assistant_calls = message.get("tool_calls")
+            if validated_tools:
+                try:
+                    validate_sft_messages(
+                        messages,
+                        tools=validated_tools,
+                        row_label=row_id,
+                    )
+                except SFTGateError as exc:
+                    row_errors.append(str(exc))
         if user_payload is None:
             row_errors.append("missing user policy payload")
         else:

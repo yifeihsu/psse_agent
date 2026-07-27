@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from psse_env.actions import (
+    ASK_FOR_MORE_EVIDENCE,
     COMMIT_STATE,
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
@@ -171,6 +172,7 @@ class EpisodeEvaluation:
     audit: dict[str, Any] = field(default_factory=dict)
     trace: list[dict[str, Any]] = field(default_factory=list)
     evaluator_error: str | None = None
+    control_quarantine: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -411,6 +413,52 @@ _REPEATED_DIAGNOSTIC_CIRCUIT_BREAKER = (
 _SPECIALIZED_TOOL_BUDGET_CIRCUIT_BREAKER = (
     "evaluation_specialized_tool_budget_exhausted"
 )
+_REPEATED_NONADVANCING_FAILURE_CIRCUIT_BREAKER = (
+    "evaluation_repeated_nonadvancing_failure"
+)
+# Once an exact action has produced one allowlisted deterministic failure
+# without advancing observable state, executing that same action again in the
+# same control epoch cannot help.  The repeated attempt is still represented
+# in the trace and policy metrics, but the environment/provider is called at
+# most once.
+_MAX_IDENTICAL_DETERMINISTIC_FAILURE_EXECUTIONS = 1
+_REJECTED_ESCALATION_ERROR_CODES = frozenset(
+    {
+        "candidate_lifecycle_violation",
+        "operator_escalation_precondition_not_met",
+        "operator_escalation_request_unsupported",
+        "recovery_evidence_inventory_incomplete",
+    }
+)
+_REJECTED_COMMIT_ERROR_CODES = frozenset(
+    {
+        "candidate_lifecycle_violation",
+        "state_reference_mismatch",
+    }
+)
+
+
+def _deterministic_nonadvancing_failure_kind(
+    *,
+    tool: str,
+    execution_status: str,
+    error_code: Any,
+) -> str | None:
+    """Classify only failures whose identical retry cannot change the result."""
+
+    if execution_status != "failure":
+        return None
+    normalized_error = str(error_code or "").strip()
+    if tool == INVALID_ACTION:
+        return "schema_invalid_action"
+    if (
+        tool == ASK_FOR_MORE_EVIDENCE
+        and normalized_error in _REJECTED_ESCALATION_ERROR_CODES
+    ):
+        return "rejected_operator_escalation"
+    if tool == COMMIT_STATE and normalized_error in _REJECTED_COMMIT_ERROR_CODES:
+        return "rejected_commit"
+    return None
 
 
 def _normalized_key(key: Any) -> str:
@@ -1268,6 +1316,7 @@ class ClosedLoopRolloutEvaluator:
         tool_counts: Counter[str] = Counter()
         specialized_counts: Counter[str] = Counter()
         nonadvancing_signatures: set[str] = set()
+        deterministic_nonadvancing_failures: dict[str, dict[str, Any]] = {}
         loop_detected = False
         invalid_indices: list[int] = []
         advancing_indices: list[int] = []
@@ -1291,6 +1340,16 @@ class ClosedLoopRolloutEvaluator:
             "recovered_failure_count": 0,
             "retention_opportunity_count": 0,
             "retained_opportunity_count": 0,
+        }
+        control_quarantine: dict[str, Any] = {
+            "quarantined": False,
+            "breaker_error_code": None,
+            "failure_kind": None,
+            "trigger_error_code": None,
+            "action_tool": None,
+            "action_signature_sha256": None,
+            "executed_failure_count": 0,
+            "attempted_failure_count": 0,
         }
 
         if intervention_contract is not None:
@@ -1530,6 +1589,31 @@ class ClosedLoopRolloutEvaluator:
                     circuit_breaker_error = (
                         _REPEATED_DIAGNOSTIC_CIRCUIT_BREAKER
                     )
+            prior_deterministic_failure = deterministic_nonadvancing_failures.get(
+                signature
+            )
+            if (
+                circuit_breaker_error is None
+                and prior_deterministic_failure is not None
+                and int(prior_deterministic_failure.get("failure_count", 0))
+                >= _MAX_IDENTICAL_DETERMINISTIC_FAILURE_EXECUTIONS
+            ):
+                circuit_breaker_error = (
+                    _REPEATED_NONADVANCING_FAILURE_CIRCUIT_BREAKER
+                )
+                prior_count = int(
+                    prior_deterministic_failure.get("failure_count", 0)
+                )
+                control_quarantine = {
+                    "quarantined": True,
+                    "breaker_error_code": circuit_breaker_error,
+                    "failure_kind": prior_deterministic_failure["failure_kind"],
+                    "trigger_error_code": prior_deterministic_failure["error_code"],
+                    "action_tool": tool,
+                    "action_signature_sha256": _stable_hash(signature),
+                    "executed_failure_count": prior_count,
+                    "attempted_failure_count": prior_count + 1,
+                }
             tool_counts[tool] += 1
             if tool in DIAGNOSTIC_TOOLS:
                 specialized_counts[tool] += 1
@@ -1622,10 +1706,39 @@ class ClosedLoopRolloutEvaluator:
                 # verifying a candidate and later re-running WLS after it is
                 # committed) is not a loop.
                 nonadvancing_signatures.clear()
+                deterministic_nonadvancing_failures.clear()
             else:
                 if signature in nonadvancing_signatures:
                     loop_detected = True
                 nonadvancing_signatures.add(signature)
+                deterministic_failure_kind = (
+                    _deterministic_nonadvancing_failure_kind(
+                        tool=tool,
+                        execution_status=status,
+                        error_code=output.get("error_code"),
+                    )
+                )
+                if (
+                    circuit_breaker_error is None
+                    and deterministic_failure_kind is not None
+                ):
+                    previous = deterministic_nonadvancing_failures.get(signature)
+                    previous_count = (
+                        int(previous.get("failure_count", 0))
+                        if previous is not None
+                        and previous.get("failure_kind")
+                        == deterministic_failure_kind
+                        and previous.get("error_code") == output.get("error_code")
+                        else 0
+                    )
+                    deterministic_nonadvancing_failures[signature] = {
+                        "failure_kind": deterministic_failure_kind,
+                        "error_code": output.get("error_code"),
+                        "failure_count": min(
+                            previous_count + 1,
+                            _MAX_IDENTICAL_DETERMINISTIC_FAILURE_EXECUTIONS,
+                        ),
+                    }
 
             label = _resolve_cost_label(
                 self.tool_cost_resolver,
@@ -1713,6 +1826,7 @@ class ClosedLoopRolloutEvaluator:
             case_loader=self.case_loader,
         )
         audit = dict(default_audit)
+        audit["control_quarantine"] = copy.deepcopy(control_quarantine)
         if self.physical_audit_fn is not None:
             supplied = self.physical_audit_fn(
                 {
@@ -1863,6 +1977,7 @@ class ClosedLoopRolloutEvaluator:
             tool_regret_total=regret_total,
             tool_regret_samples=regret_samples,
             evaluation_intervention=copy.deepcopy(intervention_evidence),
+            control_quarantine=copy.deepcopy(control_quarantine),
             release_environment_attestation=copy.deepcopy(environment_attestation),
             policy_identity_attestation=copy.deepcopy(policy_attestation),
             audit=copy.deepcopy(audit),
@@ -2641,6 +2756,13 @@ def summarize_episode_evaluations(
         int(row.evaluation_intervention.get("recovered_failure_count", 0))
         for row in rows
     )
+    control_quarantined = [
+        row for row in rows if row.control_quarantine.get("quarantined") is True
+    ]
+    control_quarantine_reasons: Counter[str] = Counter(
+        str(row.control_quarantine.get("failure_kind") or "unknown")
+        for row in control_quarantined
+    )
     regret_samples = sum(row.tool_regret_samples for row in rows)
     regret_total = sum(row.tool_regret_total for row in rows)
     tool_counts: Counter[str] = Counter()
@@ -2727,6 +2849,16 @@ def summarize_episode_evaluations(
         ),
         "loop_episodes": sum(row.loop_detected for row in rows),
         "loop_rate": _rate(sum(row.loop_detected for row in rows), total),
+        "control_quarantined_episodes": len(control_quarantined),
+        "control_quarantine_rate": _rate(len(control_quarantined), total),
+        "control_quarantine_reason_counts": dict(
+            sorted(control_quarantine_reasons.items())
+        ),
+        "repeated_nonadvancing_failure_breaker_episodes": sum(
+            row.control_quarantine.get("breaker_error_code")
+            == _REPEATED_NONADVANCING_FAILURE_CIRCUIT_BREAKER
+            for row in rows
+        ),
         "wls_calls": sum(row.wls_calls for row in rows),
         "mean_wls_calls": _rate(sum(row.wls_calls for row in rows), total),
         "specialized_tool_calls": sum(row.specialized_tool_calls for row in rows),
