@@ -94,6 +94,111 @@ _COUPLED_REFINEMENT_MIN_REMAINING_BUDGET = 8
 _ROUTE_ACTIONABLE = "actionable"
 _ROUTE_COMPLETE_NEGATIVE = "complete_negative"
 _ROUTE_UNAVAILABLE = "unavailable_or_inconclusive"
+PARAMETER_RANKING_CONTRACT = "distinct_line_abs_lambda_dominance_v1"
+PARAMETER_RANKING_DOMINANCE_THRESHOLD = 1.2
+
+
+def parameter_ranking_contract_is_dominant(metrics: Mapping[str, Any]) -> bool:
+    """Validate the policy-observable parameter-ranking dominance contract."""
+
+    if metrics.get("parameter_ranking_contract") != PARAMETER_RANKING_CONTRACT:
+        return False
+    raw_threshold = metrics.get("parameter_ranking_dominance_threshold")
+    if isinstance(raw_threshold, bool):
+        return False
+    try:
+        threshold = float(raw_threshold)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if (
+        not math.isfinite(threshold)
+        or not math.isclose(
+            threshold,
+            PARAMETER_RANKING_DOMINANCE_THRESHOLD,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        )
+    ):
+        return False
+
+    raw_lines = metrics.get("parameter_ranking_distinct_lines")
+    if not isinstance(raw_lines, (list, tuple)) or not raw_lines:
+        return False
+    ranked_lines: list[tuple[int, float]] = []
+    seen: set[int] = set()
+    for item in raw_lines:
+        if not isinstance(item, Mapping):
+            return False
+        line_index1 = item.get("line_index1")
+        score = item.get("abs_lambda_score")
+        if (
+            not isinstance(line_index1, int)
+            or isinstance(line_index1, bool)
+            or line_index1 <= 0
+            or line_index1 in seen
+            or isinstance(score, bool)
+        ):
+            return False
+        try:
+            numeric_score = float(score)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if not math.isfinite(numeric_score) or numeric_score <= 0.0:
+            return False
+        if ranked_lines and numeric_score > ranked_lines[-1][1]:
+            return False
+        seen.add(line_index1)
+        ranked_lines.append((line_index1, numeric_score))
+
+    raw_top = metrics.get("parameter_ranking_top_abs_lambda")
+    if isinstance(raw_top, bool):
+        return False
+    try:
+        top_score = float(raw_top)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if not math.isclose(
+        top_score, ranked_lines[0][1], rel_tol=1e-12, abs_tol=1e-12
+    ):
+        return False
+
+    singleton = len(ranked_lines) == 1
+    if metrics.get("parameter_ranking_singleton") is not singleton:
+        return False
+    if singleton:
+        if (
+            metrics.get("parameter_ranking_runner_up_abs_lambda") is not None
+            or metrics.get("parameter_ranking_dominance_ratio") is not None
+        ):
+            return False
+        expected_dominant = True
+    else:
+        raw_runner_up = metrics.get("parameter_ranking_runner_up_abs_lambda")
+        raw_ratio = metrics.get("parameter_ranking_dominance_ratio")
+        if isinstance(raw_runner_up, bool) or isinstance(raw_ratio, bool):
+            return False
+        try:
+            runner_up = float(raw_runner_up)
+            ratio = float(raw_ratio)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if (
+            not math.isfinite(runner_up)
+            or runner_up <= 0.0
+            or not math.isclose(
+                runner_up, ranked_lines[1][1], rel_tol=1e-12, abs_tol=1e-12
+            )
+            or not math.isfinite(ratio)
+            or not math.isclose(
+                ratio, top_score / runner_up, rel_tol=1e-12, abs_tol=1e-12
+            )
+        ):
+            return False
+        expected_dominant = ratio >= threshold
+    return (
+        expected_dominant
+        and metrics.get("parameter_ranking_dominant") is True
+    )
 
 
 def measurement_index_map(nb: int, nl: int) -> dict[str, slice]:
@@ -1760,11 +1865,62 @@ class MatpowerDeploymentProviders:
             return self._failure("parameter_context_failure", solved["payload"].get("error"))
         findings = self._lambda_findings(solved)
         state_id = str(state.get("state_id") or "")
-        seen_rows: list[int] = []
+        ranked_lines: list[dict[str, Any]] = []
+        seen_rows: set[int] = set()
         for item in findings:
             row0 = item.get("line_row0")
-            if row0 is not None and row0 not in seen_rows:
-                seen_rows.append(int(row0))
+            if row0 is None:
+                continue
+            try:
+                normalized_row0 = int(row0)
+                abs_lambda_score = abs(float(item["value"]))
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+            if (
+                normalized_row0 < 0
+                or normalized_row0 in seen_rows
+                or not math.isfinite(abs_lambda_score)
+            ):
+                continue
+            seen_rows.add(normalized_row0)
+            # ``build_lambda_evidence`` is already ordered by descending
+            # absolute multiplier.  Keeping the first endpoint encountered
+            # for each physical line therefore produces a deterministic,
+            # distinct-line ranking without discarding the remaining raw
+            # endpoint findings below.
+            ranked_lines.append(
+                {
+                    "line_index1": normalized_row0 + 1,
+                    "abs_lambda_score": abs_lambda_score,
+                }
+            )
+        top_score = (
+            float(ranked_lines[0]["abs_lambda_score"])
+            if ranked_lines
+            else None
+        )
+        runner_up_score = (
+            float(ranked_lines[1]["abs_lambda_score"])
+            if len(ranked_lines) > 1
+            else None
+        )
+        singleton = len(ranked_lines) == 1
+        dominance_ratio = (
+            top_score / runner_up_score
+            if (
+                top_score is not None
+                and runner_up_score is not None
+                and runner_up_score > 0.0
+            )
+            else None
+        )
+        ranking_dominant = bool(ranked_lines) and (
+            singleton
+            or (
+                dominance_ratio is not None
+                and dominance_ratio >= PARAMETER_RANKING_DOMINANCE_THRESHOLD
+            )
+        )
         metadata = state.get("metadata")
         metadata = metadata if isinstance(metadata, Mapping) else {}
         parameter_scans = metadata.get("parameter_scans")
@@ -1800,11 +1956,14 @@ class MatpowerDeploymentProviders:
             [
                 {
                     "tool": CORRECT_PARAMETERS,
-                    "arguments": {"state_id": state_id, "line_index": row0 + 1},
+                    "arguments": {
+                        "state_id": state_id,
+                        "line_index": int(item["line_index1"]),
+                    },
                 }
-                for row0 in seen_rows
+                for item in ranked_lines
             ]
-            if scans_usable
+            if scans_usable and ranking_dominant
             else []
         )
         route_status = (
@@ -1822,6 +1981,19 @@ class MatpowerDeploymentProviders:
             "parameter_findings": findings,
             "parameter_scans_available": scans_usable,
             "parameter_scan_count": scan_count,
+            "parameter_ranking_contract": PARAMETER_RANKING_CONTRACT,
+            "parameter_ranking_distinct_lines": ranked_lines,
+            "parameter_ranking_top_abs_lambda": top_score,
+            "parameter_ranking_runner_up_abs_lambda": runner_up_score,
+            # A singleton has no finite runner-up.  ``None`` is the
+            # JSON-safe representation of its mathematical infinite ratio;
+            # the explicit singleton/dominant flags preserve that meaning.
+            "parameter_ranking_dominance_ratio": dominance_ratio,
+            "parameter_ranking_dominance_threshold": (
+                PARAMETER_RANKING_DOMINANCE_THRESHOLD
+            ),
+            "parameter_ranking_singleton": singleton,
+            "parameter_ranking_dominant": ranking_dominant,
             "supported_corrections": supported,
             "route_status": route_status,
             "route_status_reason": (
@@ -1829,6 +2001,8 @@ class MatpowerDeploymentProviders:
                 if route_status == _ROUTE_ACTIONABLE
                 else "no_parameter_findings"
                 if route_status == _ROUTE_COMPLETE_NEGATIVE
+                else "parameter_target_not_observably_dominant"
+                if scans_usable and ranked_lines and not ranking_dominant
                 else "parameter_findings_require_repeated_scans"
             ),
         }

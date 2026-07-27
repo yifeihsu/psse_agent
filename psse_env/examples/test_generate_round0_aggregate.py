@@ -15,8 +15,14 @@ from psse_env.dagger.rollout_collector import classify_state_example
 from psse_env.dagger.splits import PHYSICAL_FINGERPRINT_VERSION
 from psse_env.examples.generate_round0_aggregate import (
     BC0_AGGREGATE_SOURCE_PARTITION,
+    BC0_CRITICAL_TARGET_TOOL_MINIMUM_DISTINCT_ROOTS,
     BC0_CRITICAL_TARGET_TOOL_SCENARIO_FAMILY_MINIMUM_DISTINCT_ROOTS,
+    BC0_CRITICAL_TARGET_TOOL_STATE_CLASS_MINIMUM_DISTINCT_ROOTS,
     BC0_FAMILY_RELEASE_POLICY,
+    DAGGER_ITERATION_1_RECOVERY_GATE_POLICY,
+    DAGGER_ITERATION_1_RECOVERY_MINIMUM_DISTINCT_ROOTS,
+    DAGGER_ITERATION_1_RECOVERY_TARGET_TOOL_MINIMUM_DISTINCT_ROOTS,
+    DAGGER_ITERATION_1_RECOVERY_TARGET_TOOL_STATE_CLASS_MINIMUM_DISTINCT_ROOTS,
     DEFAULT_EVALUATION_POLICY_PATH,
     DEFAULT_EVALUATION_SUITE_PATH,
     DEFAULT_PLAN,
@@ -777,6 +783,46 @@ class AggregateReleaseContractTests(unittest.TestCase):
         self.assertNotIn("production_label_eligible", row)
         self.assertNotIn("production_ineligibility_reason", row)
 
+    def test_deferred_actions_require_exact_bc0_sequential_contract(self) -> None:
+        row = self._ambiguous_row()
+        row["valid_next_actions"] = [row["preferred_action"]]
+        row["deferred_expert_actions"] = [
+            {
+                "tool": "get_measurement_context",
+                "arguments": {
+                    "state_id": row["policy_observation"]["active_state_id"]
+                },
+            }
+        ]
+        row["dataset_mode"] = "production"
+
+        self.assertEqual(_apply_single_label_eligibility(row), 1)
+
+        self.assertIs(row["production_label_eligible"], False)
+        self.assertEqual(
+            row["production_ineligibility_reason"],
+            "deferred_actions_without_bc0_sequential_contract",
+        )
+
+    def test_bc0_sequential_contract_keeps_rank_one_label_eligible(self) -> None:
+        row = self._ambiguous_row()
+        row["valid_next_actions"] = [row["preferred_action"]]
+        row["deferred_expert_actions"] = [
+            {
+                "tool": "get_measurement_context",
+                "arguments": {
+                    "state_id": row["policy_observation"]["active_state_id"]
+                },
+            }
+        ]
+        row["dataset_mode"] = "production"
+        row["supervision_policy"] = "bc0_observable_sequential_v1"
+
+        self.assertEqual(_apply_single_label_eligibility(row), 1)
+
+        self.assertNotIn("production_label_eligible", row)
+        self.assertNotIn("production_ineligibility_reason", row)
+
     def test_default_plan_can_meet_family_and_evaluation_split_minima(self) -> None:
         evaluation_floor = 5 + 5
         self.assertEqual(
@@ -822,6 +868,108 @@ class AggregateReleaseContractTests(unittest.TestCase):
                 with self.subTest(tool=tool, family=family):
                     self.assertIn(family, DEFAULT_PLAN)
                     self.assertLessEqual(floor, DEFAULT_PLAN[family])
+
+    def test_bc0_and_dagger_recovery_gates_are_phase_separated(self) -> None:
+        self.assertNotIn(
+            "rollback_state",
+            BC0_CRITICAL_TARGET_TOOL_MINIMUM_DISTINCT_ROOTS,
+        )
+        self.assertNotIn(
+            "rollback_state",
+            BC0_CRITICAL_TARGET_TOOL_STATE_CLASS_MINIMUM_DISTINCT_ROOTS,
+        )
+        self.assertEqual(
+            DAGGER_ITERATION_1_RECOVERY_MINIMUM_DISTINCT_ROOTS,
+            10,
+        )
+        self.assertEqual(
+            DAGGER_ITERATION_1_RECOVERY_GATE_POLICY["phase"],
+            "dagger_iteration_1",
+        )
+        self.assertEqual(
+            DAGGER_ITERATION_1_RECOVERY_GATE_POLICY["target_tool"],
+            "rollback_state",
+        )
+        self.assertEqual(
+            DAGGER_ITERATION_1_RECOVERY_GATE_POLICY["required_state_class"],
+            "rejected_candidate_recovery",
+        )
+        self.assertEqual(
+            DAGGER_ITERATION_1_RECOVERY_GATE_POLICY[
+                "minimum_distinct_physical_roots"
+            ],
+            10,
+        )
+        self.assertEqual(
+            DAGGER_ITERATION_1_RECOVERY_TARGET_TOOL_MINIMUM_DISTINCT_ROOTS,
+            {"rollback_state": 10},
+        )
+        self.assertEqual(
+            DAGGER_ITERATION_1_RECOVERY_TARGET_TOOL_STATE_CLASS_MINIMUM_DISTINCT_ROOTS,
+            {
+                "rollback_state": {
+                    "rejected_candidate_recovery": 10,
+                }
+            },
+        )
+        self.assertEqual(
+            DAGGER_ITERATION_1_RECOVERY_GATE_POLICY[
+                "target_tool_minimum_distinct_physical_roots"
+            ],
+            DAGGER_ITERATION_1_RECOVERY_TARGET_TOOL_MINIMUM_DISTINCT_ROOTS,
+        )
+        self.assertEqual(
+            DAGGER_ITERATION_1_RECOVERY_GATE_POLICY[
+                "target_tool_state_class_minimum_distinct_physical_roots"
+            ],
+            (
+                DAGGER_ITERATION_1_RECOVERY_TARGET_TOOL_STATE_CLASS_MINIMUM_DISTINCT_ROOTS
+            ),
+        )
+        self.assertIs(
+            DAGGER_ITERATION_1_RECOVERY_GATE_POLICY[
+                "require_production_label_eligible"
+            ],
+            True,
+        )
+        self.assertIn(
+            "synthetic_counterfactual",
+            DAGGER_ITERATION_1_RECOVERY_GATE_POLICY[
+                "prohibited_dataset_sources"
+            ],
+        )
+        self.assertNotIn(
+            "synthetic_counterfactual",
+            DAGGER_ITERATION_1_RECOVERY_GATE_POLICY[
+                "allowed_dataset_sources"
+            ],
+        )
+
+    def test_partial_continuation_floors_follow_reachable_protocol_direction(
+        self,
+    ) -> None:
+        floors = BC0_CRITICAL_TARGET_TOOL_STATE_CLASS_MINIMUM_DISTINCT_ROOTS
+        self.assertEqual(
+            floors["correct_measurements"]["accepted_partial_continuation"],
+            5,
+        )
+        self.assertEqual(
+            floors["correct_parameters"]["accepted_partial_continuation"],
+            5,
+        )
+        self.assertEqual(
+            floors["get_measurement_context"][
+                "accepted_partial_continuation"
+            ],
+            10,
+        )
+        for impossible_direction in (
+            "correct_topology",
+            "get_parameter_context",
+            "get_topology_context",
+        ):
+            with self.subTest(tool=impossible_direction):
+                self.assertNotIn(impossible_direction, floors)
 
     def test_aggregate_family_policy_matches_evaluation_policy(self) -> None:
         evaluation_policy = json.loads(
@@ -897,6 +1045,14 @@ class AggregateReleaseContractTests(unittest.TestCase):
             config["critical_split_minimums"], {"validation": 5, "test": 5}
         )
         self.assertEqual(
+            config["supervision_policy"],
+            "bc0_observable_sequential_v1",
+        )
+        self.assertEqual(
+            config["dagger_iteration_1_recovery_gate"],
+            DAGGER_ITERATION_1_RECOVERY_GATE_POLICY,
+        )
+        self.assertEqual(
             config["stratified_approximate_realizability"],
             {
                 "global_population_gate": "full_release_thresholds",
@@ -958,7 +1114,6 @@ class AggregateReleaseContractTests(unittest.TestCase):
                     "get_measurement_context": 10,
                     "get_parameter_context": 10,
                     "get_topology_context": 10,
-                    "rollback_state": 10,
                 },
                 "target_tool_state_class_minimum_distinct_physical_roots": {
                     "commit_state": {
@@ -971,20 +1126,8 @@ class AggregateReleaseContractTests(unittest.TestCase):
                     "correct_parameters": {
                         "accepted_partial_continuation": 5,
                     },
-                    "correct_topology": {
-                        "accepted_partial_continuation": 5,
-                    },
                     "get_measurement_context": {
                         "accepted_partial_continuation": 10,
-                    },
-                    "get_parameter_context": {
-                        "accepted_partial_continuation": 5,
-                    },
-                    "get_topology_context": {
-                        "accepted_partial_continuation": 5,
-                    },
-                    "rollback_state": {
-                        "rejected_candidate_recovery": 10,
                     },
                 },
                 "target_tool_scenario_family_minimum_distinct_physical_roots": {

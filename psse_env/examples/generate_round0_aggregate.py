@@ -63,6 +63,7 @@ from psse_env.dagger.evaluator import (
 )
 from psse_env.dagger.protocol_bridge import unified_tool_schemas
 from psse_env.dagger.rollout_collector import (
+    BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION,
     DaggerRolloutCollector,
     audit_target_aware_state_classes,
 )
@@ -215,8 +216,10 @@ BC0_STATE_CLASS_NEIGHBOR_GATE_POLICY = "diagnostic_only"
 
 # These are deliberately narrower than the full controller registry.  BC0 does
 # not promise that every protocol tool is an SFT target, but it must supervise
-# context acquisition for all three correctable physical modes, the matching
-# correction actions, and transactional rollback on independent roots. Ten
+# context acquisition for all three correctable physical modes and the matching
+# correction actions.  Transactional rollback is intentionally absent: round 0
+# is expert-controlled behavioral cloning at beta=1.0, so rejected learner
+# candidates do not belong to this phase's natural state distribution.  Ten
 # roots matches the existing category-support diversity floor.
 BC0_CRITICAL_TARGET_TOOL_MINIMUM_DISTINCT_ROOTS: dict[str, int] = {
     "get_measurement_context": 10,
@@ -225,14 +228,17 @@ BC0_CRITICAL_TARGET_TOOL_MINIMUM_DISTINCT_ROOTS: dict[str, int] = {
     "correct_measurements": 10,
     "correct_parameters": 10,
     "correct_topology": 10,
-    "rollback_state": 10,
 }
 
 # An action is only useful recovery supervision in the right lifecycle state.
 # Context/correction targets after a partial acceptance keep the controller
 # progressing through compound errors; clean-success targets cannot substitute
-# for those cells. Likewise, rollback outside rejected-candidate recovery
-# cannot satisfy the transactional recovery contract.
+# for those cells.  These floors follow the observable protocol direction,
+# rather than requiring every correction family on both sides of a partial
+# commit.  For example, measurement+topology roots repair topology first and
+# therefore expose measurement (not topology) as the continuation target.  The
+# separate tool-by-family floors below still require both physical correction
+# modes on independent mixed-family roots.
 BC0_CRITICAL_TARGET_TOOL_STATE_CLASS_MINIMUM_DISTINCT_ROOTS: dict[
     str, dict[str, int]
 ] = {
@@ -242,11 +248,57 @@ BC0_CRITICAL_TARGET_TOOL_STATE_CLASS_MINIMUM_DISTINCT_ROOTS: dict[
     },
     "correct_measurements": {"accepted_partial_continuation": 5},
     "correct_parameters": {"accepted_partial_continuation": 5},
-    "correct_topology": {"accepted_partial_continuation": 5},
     "get_measurement_context": {"accepted_partial_continuation": 10},
-    "get_parameter_context": {"accepted_partial_continuation": 5},
-    "get_topology_context": {"accepted_partial_continuation": 5},
-    "rollback_state": {"rejected_candidate_recovery": 10},
+}
+
+# Rollback becomes a binding support gate only after learner-controlled or
+# explicitly observable recovery-probe actions can create rejected candidates.
+# Synthetic counterfactual branches are useful auxiliary evidence, but they do
+# not satisfy this gate because their injected actions may be truth-derived.
+DAGGER_ITERATION_1_RECOVERY_MINIMUM_DISTINCT_ROOTS = 10
+DAGGER_ITERATION_1_RECOVERY_TARGET_TOOL_MINIMUM_DISTINCT_ROOTS: dict[
+    str, int
+] = {
+    "rollback_state": DAGGER_ITERATION_1_RECOVERY_MINIMUM_DISTINCT_ROOTS,
+}
+DAGGER_ITERATION_1_RECOVERY_TARGET_TOOL_STATE_CLASS_MINIMUM_DISTINCT_ROOTS: dict[
+    str, dict[str, int]
+] = {
+    "rollback_state": {
+        "rejected_candidate_recovery": (
+            DAGGER_ITERATION_1_RECOVERY_MINIMUM_DISTINCT_ROOTS
+        ),
+    },
+}
+DAGGER_ITERATION_1_RECOVERY_GATE_POLICY: dict[str, Any] = {
+    "phase": "dagger_iteration_1",
+    "minimum_iteration": 1,
+    "target_tool": "rollback_state",
+    "required_state_class": "rejected_candidate_recovery",
+    "root_identity_field": "physical_root_fingerprint",
+    "minimum_distinct_physical_roots": (
+        DAGGER_ITERATION_1_RECOVERY_MINIMUM_DISTINCT_ROOTS
+    ),
+    "target_tool_minimum_distinct_physical_roots": copy.deepcopy(
+        DAGGER_ITERATION_1_RECOVERY_TARGET_TOOL_MINIMUM_DISTINCT_ROOTS
+    ),
+    "target_tool_state_class_minimum_distinct_physical_roots": copy.deepcopy(
+        DAGGER_ITERATION_1_RECOVERY_TARGET_TOOL_STATE_CLASS_MINIMUM_DISTINCT_ROOTS
+    ),
+    "require_production_label_eligible": True,
+    "required_candidate_oracle_mode": "deployment",
+    "allowed_state_origins": [
+        "learner_policy",
+        "observable_recovery_probe",
+    ],
+    "allowed_dataset_sources": [
+        "dagger_rollout",
+        "observable_recovery_probe",
+    ],
+    "prohibited_dataset_sources": [
+        "synthetic_counterfactual",
+        "dagger_unranked_multi_action_auxiliary",
+    ],
 }
 
 # Corrections must also cover the families in which each error mode occurs;
@@ -419,6 +471,7 @@ def collect_round0(
             policy=ObservableBaselinePolicy(),
             expert_oracle=oracle,
             rng=collector_rng,
+            supervision_policy=BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION,
         )
         rows = collector.collect_iteration(
             scenarios=[execution_scenario],
@@ -804,6 +857,36 @@ def _apply_single_label_eligibility(row: dict[str, Any]) -> int:
     row["admissible_semantic_action_count"] = semantic_action_count
     if isinstance(labels, dict):
         labels["admissible_semantic_action_count"] = semantic_action_count
+    deferred = row.get("deferred_expert_actions")
+    deferred_actions = (
+        list(deferred)
+        if isinstance(deferred, (list, tuple))
+        else []
+    )
+    preferred = row.get("preferred_action")
+    supervised = row.get("valid_next_actions")
+    sequential_contract_valid = bool(
+        row.get("supervision_policy")
+        == BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION
+        and row.get("dataset_mode") == "production"
+        and isinstance(supervised, list)
+        and supervised == ([preferred] if preferred is not None else [])
+    )
+    if (
+        row.get("production_label_eligible") is not False
+        and deferred_actions
+        and not sequential_contract_valid
+    ):
+        row["production_label_eligible"] = False
+        row["dataset_source"] = "dagger_unranked_multi_action_auxiliary"
+        row["production_ineligibility_reason"] = (
+            "deferred_actions_without_bc0_sequential_contract"
+        )
+        if isinstance(labels, dict):
+            labels["production_label_eligible"] = False
+            labels["production_ineligibility_reason"] = (
+                "deferred_actions_without_bc0_sequential_contract"
+            )
     if (
         row.get("production_label_eligible") is not False
         and semantic_action_count > 1
@@ -1008,6 +1091,7 @@ def _generation_descriptor(
             "source_partition": BC0_AGGREGATE_SOURCE_PARTITION,
             "plan": dict(sorted(plan.items())),
             "max_steps": args.max_steps,
+            "supervision_policy": BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION,
             "counterfactuals_per_scenario": args.counterfactuals_per_scenario,
             "chi2_alpha": args.chi2_alpha,
             "hif_alpha_grid": args.hif_alpha_grid,
@@ -1015,6 +1099,11 @@ def _generation_descriptor(
             "hif_max_scans": args.hif_max_scans,
             "family_release_policy": BC0_FAMILY_RELEASE_POLICY,
             "critical_split_minimums": {"validation": 5, "test": 5},
+            # This is recorded for the next phase but is not applied to the
+            # beta=1.0 BC0 training view below.
+            "dagger_iteration_1_recovery_gate": copy.deepcopy(
+                DAGGER_ITERATION_1_RECOVERY_GATE_POLICY
+            ),
             "stratified_approximate_realizability": {
                 "global_population_gate": "full_release_thresholds",
                 "family_neighbor_gate_minimum_distinct_roots": (

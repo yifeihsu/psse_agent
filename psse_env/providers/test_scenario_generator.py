@@ -452,6 +452,36 @@ class PhysicalSourcePartitionTests(unittest.TestCase):
 
 
 class ValidationGateTests(unittest.TestCase):
+    @staticmethod
+    def _parameter_ranking(
+        *line_scores: tuple[int, float],
+    ) -> dict[str, object]:
+        ranked = [
+            {"line_index1": line_index1, "abs_lambda_score": score}
+            for line_index1, score in line_scores
+        ]
+        singleton = len(ranked) == 1
+        runner_up = None if singleton else float(ranked[1]["abs_lambda_score"])
+        ratio = (
+            None
+            if singleton
+            else float(ranked[0]["abs_lambda_score"]) / float(runner_up)
+        )
+        return {
+            "parameter_ranking_contract": (
+                "distinct_line_abs_lambda_dominance_v1"
+            ),
+            "parameter_ranking_distinct_lines": ranked,
+            "parameter_ranking_top_abs_lambda": (
+                float(ranked[0]["abs_lambda_score"])
+            ),
+            "parameter_ranking_runner_up_abs_lambda": runner_up,
+            "parameter_ranking_dominance_ratio": ratio,
+            "parameter_ranking_dominance_threshold": 1.2,
+            "parameter_ranking_singleton": singleton,
+            "parameter_ranking_dominant": singleton or bool(ratio >= 1.2),
+        }
+
     def test_mixed_parameter_probe_preserves_observable_scan_metadata(self) -> None:
         generator = Round0ScenarioGenerator(seed=5, validate=True)
         provider = Mock()
@@ -480,6 +510,7 @@ class ValidationGateTests(unittest.TestCase):
         def parameter_context(state):
             observed_parameter_states.append(state)
             return {
+                **self._parameter_ranking((2, 9.0), (1, 3.0)),
                 "supported_corrections": [
                     {
                         "tool": "correct_parameters",
@@ -664,6 +695,7 @@ class ValidationGateTests(unittest.TestCase):
         )
         generator._parameter_gate_provider.get_parameter_context = Mock(
             return_value={
+                **self._parameter_ranking((2, 9.0), (1, 3.0)),
                 "supported_corrections": [
                     {
                         "tool": "correct_parameters",
@@ -722,6 +754,7 @@ class ValidationGateTests(unittest.TestCase):
         )
         generator._parameter_gate_provider.get_parameter_context = Mock(
             return_value={
+                **self._parameter_ranking((1, 9.0), (2, 3.0)),
                 "supported_corrections": [
                     {
                         "tool": "correct_parameters",
@@ -755,7 +788,139 @@ class ValidationGateTests(unittest.TestCase):
         self.assertEqual(result["corrected_x"], 0.05)
         mocked.assert_called_once()
 
-    def test_known_ambiguous_parameter_root_is_rejected_by_context_rank(self) -> None:
+    @patch(
+        "psse_env.providers.scenario_generator._param_correction_json",
+        return_value={"success": True, "corrected_params": [0.01, 0.05]},
+    )
+    def test_parameter_context_requires_observable_dominance_even_when_top1_matches(
+        self, mocked
+    ) -> None:
+        generator = Round0ScenarioGenerator(seed=5)
+        scan = json.loads(FIXTURE.read_text())["z_obs"]
+        generator._parameter_gate_provider.run_wls = Mock(
+            return_value={
+                "target_fixed": True,
+                "post_action_resolved": True,
+                "globally_resolved": True,
+                "physical_constraints_ok": True,
+            }
+        )
+        ranking = self._parameter_ranking((1, 11.0), (2, 10.0))
+        self.assertIs(ranking["parameter_ranking_dominant"], False)
+        generator._parameter_gate_provider.get_parameter_context = Mock(
+            return_value={
+                **ranking,
+                # Keep a nominal top-one action in the mock to prove that
+                # admission checks the metrics contract independently rather
+                # than inferring dominance from inventory order.
+                "supported_corrections": [
+                    {
+                        "tool": "correct_parameters",
+                        "arguments": {
+                            "state_id": "offline_parameter_context:l1",
+                            "line_index": 1,
+                        },
+                    }
+                ],
+            }
+        )
+
+        with self.assertRaises(ScenarioRejected) as caught:
+            generator._require_parameter_correction_realizable(
+                line_row0=0,
+                clean_r=0.01,
+                clean_x=0.05,
+                z_scans=[scan],
+                measurements=scan,
+                final_case_abs_tolerance=0.02,
+            )
+
+        self.assertEqual(
+            caught.exception.reason, "parameter_context_target_not_dominant"
+        )
+        self.assertEqual(
+            caught.exception.metrics["parameter_context_ranking"], ranking
+        )
+        mocked.assert_called_once()
+
+    def test_mixed_parameter_context_requires_observable_dominance(self) -> None:
+        generator = Round0ScenarioGenerator(seed=5, validate=True)
+        provider = Mock()
+        provider.run_wls.side_effect = [
+            {
+                "unresolved_signatures": [
+                    "wls_residual_outlier_dominant index=1 channel=Vm"
+                ],
+                "remaining_anomaly_score": 10.0,
+            },
+            {
+                "target_fixed": True,
+                "post_action_resolved": False,
+                "physical_constraints_ok": True,
+                "remaining_anomaly_score": 5.0,
+            },
+        ]
+        provider.get_measurement_context.return_value = {
+            "supported_corrections": [
+                {
+                    "tool": "correct_measurements",
+                    "arguments": {
+                        "state_id": (
+                            "offline_mixed_parameter_gate:"
+                            "measurement_context_0"
+                        ),
+                        "suspect_group": [1],
+                    },
+                }
+            ]
+        }
+        provider.correct_measurements.return_value = {
+            "modification": {"measurement_updates": {"1": 0.5}}
+        }
+        ranking = self._parameter_ranking((2, 11.0), (1, 10.0))
+        provider.get_parameter_context.return_value = {
+            **ranking,
+            "supported_corrections": [
+                {
+                    "tool": "correct_parameters",
+                    "arguments": {
+                        "state_id": (
+                            "offline_mixed_parameter_gate:"
+                            "parameter_context_1"
+                        ),
+                        "line_index": 2,
+                    },
+                }
+            ],
+        }
+        generator._parameter_gate_provider = provider
+        generator._parameter_gate_results["base-root"] = {
+            "corrected_case_path": "corrected_case.py"
+        }
+        scenario = {
+            "case": "case14",
+            "measurements": [1.0, 1.5],
+            "metadata": {
+                "parameter_scans": {"z_scans": [[1.0, 2.0, 3.0]]}
+            },
+            "true_parameter_errors": [{"line_index1": 2}],
+            "true_measurement_errors": [{"index": 1, "clean": 0.5}],
+        }
+
+        with self.assertRaises(ScenarioRejected) as caught:
+            generator._require_mixed_parameter_recovery_realizable(
+                scenario, base_scenario_id="base-root"
+            )
+
+        self.assertEqual(
+            caught.exception.reason,
+            "mixed_parameter_recovery_context_not_dominant",
+        )
+        self.assertEqual(caught.exception.metrics["stages"][-1]["parameter_ranking"], ranking)
+
+    def test_known_ambiguous_parameter_root_is_rejected_by_dominance_gate(
+        self,
+    ) -> None:
         generator = Round0ScenarioGenerator(seed=20260719)
         row = next(
             item
@@ -767,14 +932,20 @@ class ValidationGateTests(unittest.TestCase):
             generator._parameter_scenario(row, 68)
 
         self.assertEqual(
-            caught.exception.reason, "parameter_context_target_ambiguous"
+            caught.exception.reason, "parameter_context_target_not_dominant"
         )
         self.assertEqual(caught.exception.metrics["line_index1"], 1)
-        self.assertEqual(
-            caught.exception.metrics["parameter_context_first_line_index1"], 2
+        ranking = caught.exception.metrics["parameter_context_ranking"]
+        self.assertIs(ranking["parameter_ranking_dominant"], False)
+        self.assertLess(
+            ranking["parameter_ranking_dominance_ratio"],
+            ranking["parameter_ranking_dominance_threshold"],
         )
         self.assertEqual(
-            caught.exception.metrics["parameter_context_supported_line_indices1"][:2],
+            [
+                item["line_index1"]
+                for item in ranking["parameter_ranking_distinct_lines"][:2]
+            ],
             [2, 1],
         )
 

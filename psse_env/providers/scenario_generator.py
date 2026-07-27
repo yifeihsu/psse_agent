@@ -52,9 +52,12 @@ from trace_protocol import chi2_threshold  # noqa: E402
 from psse_env.oracle.candidate_quality import CandidateQualityOracle
 from psse_env.providers.matpower import (
     MatpowerDeploymentProviders,
+    PARAMETER_RANKING_CONTRACT,
+    PARAMETER_RANKING_DOMINANCE_THRESHOLD,
     _render_matpower_case,
     measurement_index_map,
     observable_parameter_initial_states,
+    parameter_ranking_contract_is_dominant,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -109,6 +112,16 @@ DEFAULT_BALANCED_ARTIFACT_DIR = (
 NB, NL = 14, 20
 NZ = 3 * NB + 4 * NL
 _STATE_COUNT = 2 * NB - 1
+_PARAMETER_RANKING_METRIC_KEYS = (
+    "parameter_ranking_contract",
+    "parameter_ranking_distinct_lines",
+    "parameter_ranking_top_abs_lambda",
+    "parameter_ranking_runner_up_abs_lambda",
+    "parameter_ranking_dominance_ratio",
+    "parameter_ranking_dominance_threshold",
+    "parameter_ranking_singleton",
+    "parameter_ranking_dominant",
+)
 
 BASE_FAMILIES = (
     "no_error",
@@ -764,6 +777,22 @@ class Round0ScenarioGenerator:
             raise ScenarioRejected(
                 "parameter_context_target_unavailable",
                 f"line {line_index1}: deployed parameter context failed",
+                metrics=metrics,
+            )
+
+        parameter_ranking = {
+            key: copy.deepcopy(context_metrics.get(key))
+            for key in _PARAMETER_RANKING_METRIC_KEYS
+        }
+        metrics["parameter_context_ranking"] = parameter_ranking
+        if not parameter_ranking_contract_is_dominant(context_metrics):
+            raise ScenarioRejected(
+                "parameter_context_target_not_dominant",
+                (
+                    f"line {line_index1}: deployed parameter context did not "
+                    f"satisfy {PARAMETER_RANKING_CONTRACT} at dominance "
+                    f"threshold {PARAMETER_RANKING_DOMINANCE_THRESHOLD}"
+                ),
                 metrics=metrics,
             )
 
@@ -1551,6 +1580,20 @@ class Round0ScenarioGenerator:
                         "parameter context failed during offline route validation",
                         failed_stage="parameter_context",
                         error_code=context.get("error_code"),
+                    )
+                stage_metrics["parameter_ranking"] = {
+                    key: copy.deepcopy(context.get(key))
+                    for key in _PARAMETER_RANKING_METRIC_KEYS
+                }
+                if not parameter_ranking_contract_is_dominant(context):
+                    metrics["stages"].append(stage_metrics)
+                    reject(
+                        "mixed_parameter_recovery_context_not_dominant",
+                        (
+                            "parameter context did not satisfy the declared "
+                            "observable distinct-line dominance contract"
+                        ),
+                        failed_stage="parameter_context",
                     )
                 supported = context.get("supported_corrections") or []
                 if not supported:

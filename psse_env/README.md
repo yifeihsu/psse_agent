@@ -156,6 +156,30 @@ trajectory and is supplied only after termination to the strict offline audit
 in `dagger/release_audit.py`; audit truth and audit results are never merged
 into model observations or SFT targets.
 
+BC0 uses the machine-readable supervision policy
+`bc0_observable_sequential_v1`. At each expert-controlled state, the policy
+supervises only the current rank-one action in the deterministic observable
+protocol. Other process-valid proposals remain in the raw row as
+`deferred_expert_actions`; they become eligible only after the preceding
+action is exhausted or observably rejected. This is sequencing, not a claimed
+Q-cost estimate, and the collector refuses to use the contract outside
+production mode, iteration 0, and `beta=1.0`.
+
+BC0 therefore does not require `rollback_state` or
+`rollback_state × rejected_candidate_recovery` support. A rejected learner
+candidate cannot occur naturally when every action is selected and executed by
+the expert. Those two floors begin with DAgger iteration 1: at least ten
+independent `physical_root_fingerprint` values must contain a
+production-label-eligible `rollback_state` target in
+`rejected_candidate_recovery`. The candidate verdict must come from the
+deployment-mode oracle after a learner-controlled or explicitly observable
+recovery-probe action. Truth-derived `synthetic_counterfactual` rows and
+unranked multi-action auxiliary rows never satisfy that gate. The
+machine-readable next-phase contract is
+`DAGGER_ITERATION_1_RECOVERY_GATE_POLICY` in
+`examples/generate_round0_aggregate.py`; BC0 provenance records it without
+applying it to the round-0 training view.
+
 The release regeneration uses the tracked ten-family row-budget plan rather
 than `--scale 2`, which would incorrectly request 34 HIF roots from the
 17-root training inventory:

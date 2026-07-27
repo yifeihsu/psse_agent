@@ -712,8 +712,18 @@ class MeasurementContextTests(unittest.TestCase):
         self.assertIn("parameter_findings", parameter)
         self.assertIs(parameter["parameter_scans_available"], True)
         self.assertEqual(parameter["parameter_scan_count"], 1)
-        self.assertTrue(parameter["supported_corrections"])
-        self.assertEqual(parameter["route_status"], "actionable")
+        expected_actionable = parameter["parameter_ranking_dominant"]
+        self.assertEqual(
+            bool(parameter["supported_corrections"]), expected_actionable
+        )
+        self.assertEqual(
+            parameter["route_status"],
+            (
+                "actionable"
+                if expected_actionable
+                else "unavailable_or_inconclusive"
+            ),
+        )
         for proposal in parameter["supported_corrections"]:
             self.assertEqual(proposal["tool"], "correct_parameters")
             self.assertGreaterEqual(proposal["arguments"]["line_index"], 1)
@@ -736,6 +746,97 @@ class MeasurementContextTests(unittest.TestCase):
         for proposal in topology["supported_corrections"]:
             self.assertEqual(proposal["tool"], "correct_topology")
             self.assertIn(proposal["arguments"]["status"], (0, 1))
+
+    def test_parameter_context_requires_distinct_line_lambda_dominance(self) -> None:
+        findings = [
+            {"line_row0": 0, "terminal": "from", "value": -6.0},
+            {"line_row0": 0, "terminal": "to", "value": 5.5},
+            {"line_row0": 2, "terminal": "from", "value": 4.0},
+            {"line_row0": 1, "terminal": "from", "value": 3.0},
+        ]
+        state = copy.deepcopy(self.state)
+        state["metadata"] = {
+            "parameter_scans": {"z_scans": [list(self.state["measurements"])]}
+        }
+
+        with patch.object(
+            self.providers, "_lambda_findings", return_value=findings
+        ):
+            metrics = self.providers.get_parameter_context(state)
+
+        self.assertEqual(metrics["parameter_findings"], findings)
+        self.assertEqual(
+            metrics["parameter_ranking_contract"],
+            "distinct_line_abs_lambda_dominance_v1",
+        )
+        self.assertEqual(
+            metrics["parameter_ranking_distinct_lines"],
+            [
+                {"line_index1": 1, "abs_lambda_score": 6.0},
+                {"line_index1": 3, "abs_lambda_score": 4.0},
+                {"line_index1": 2, "abs_lambda_score": 3.0},
+            ],
+        )
+        self.assertEqual(metrics["parameter_ranking_top_abs_lambda"], 6.0)
+        self.assertEqual(metrics["parameter_ranking_runner_up_abs_lambda"], 4.0)
+        self.assertEqual(metrics["parameter_ranking_dominance_ratio"], 1.5)
+        self.assertEqual(metrics["parameter_ranking_dominance_threshold"], 1.2)
+        self.assertIs(metrics["parameter_ranking_singleton"], False)
+        self.assertIs(metrics["parameter_ranking_dominant"], True)
+        self.assertEqual(metrics["route_status"], "actionable")
+        self.assertEqual(
+            [
+                action["arguments"]["line_index"]
+                for action in metrics["supported_corrections"]
+            ],
+            [1, 3, 2],
+        )
+
+    def test_parameter_context_withholds_ambiguous_inventory_but_keeps_evidence(
+        self,
+    ) -> None:
+        findings = [
+            {"line_row0": 4, "terminal": "from", "value": 6.0},
+            {"line_row0": 5, "terminal": "to", "value": -5.5},
+        ]
+        state = copy.deepcopy(self.state)
+        state["metadata"] = {
+            "parameter_scans": {"z_scans": [list(self.state["measurements"])]}
+        }
+
+        with patch.object(
+            self.providers, "_lambda_findings", return_value=findings
+        ):
+            ambiguous = self.providers.get_parameter_context(state)
+        self.assertEqual(ambiguous["parameter_findings"], findings)
+        self.assertAlmostEqual(
+            ambiguous["parameter_ranking_dominance_ratio"], 6.0 / 5.5
+        )
+        self.assertIs(ambiguous["parameter_ranking_dominant"], False)
+        self.assertEqual(ambiguous["supported_corrections"], [])
+        self.assertEqual(
+            ambiguous["route_status"], "unavailable_or_inconclusive"
+        )
+        self.assertEqual(
+            ambiguous["route_status_reason"],
+            "parameter_target_not_observably_dominant",
+        )
+
+        with patch.object(
+            self.providers,
+            "_lambda_findings",
+            return_value=[findings[0]],
+        ):
+            singleton = self.providers.get_parameter_context(state)
+        self.assertIs(singleton["parameter_ranking_singleton"], True)
+        self.assertIsNone(singleton["parameter_ranking_runner_up_abs_lambda"])
+        self.assertIsNone(singleton["parameter_ranking_dominance_ratio"])
+        self.assertIs(singleton["parameter_ranking_dominant"], True)
+        self.assertEqual(singleton["route_status"], "actionable")
+        self.assertEqual(
+            singleton["supported_corrections"][0]["arguments"]["line_index"],
+            5,
+        )
 
     def test_topology_screen_preserves_mapping_case_transaction_parity(self) -> None:
         wrapped = copy.deepcopy(self.state)

@@ -19,6 +19,16 @@ from psse_env.dagger.replay_buffer import BalancedReplayBuffer
 from psse_env.state_store import OracleState, PolicyObservation, policy_safe_copy
 
 
+ALL_ADMISSIBLE_SUPERVISION = "all_admissible"
+BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION = "bc0_observable_sequential_v1"
+SUPPORTED_SUPERVISION_POLICIES = frozenset(
+    {
+        ALL_ADMISSIBLE_SUPERVISION,
+        BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION,
+    }
+)
+
+
 def classify_state_example(
     observation: Mapping[str, Any],
     transition_label: Mapping[str, Any] | None = None,
@@ -177,11 +187,34 @@ def audit_target_aware_state_classes(
 class DaggerRolloutCollector:
     """Collect expert labels at every state visited by the mixture policy."""
 
-    def __init__(self, *, env: Any, policy: Any, expert_oracle: Any, rng: random.Random | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        env: Any,
+        policy: Any,
+        expert_oracle: Any,
+        rng: random.Random | None = None,
+        supervision_policy: str = ALL_ADMISSIBLE_SUPERVISION,
+    ) -> None:
+        if supervision_policy not in SUPPORTED_SUPERVISION_POLICIES:
+            raise ValueError(
+                "supervision_policy must be one of "
+                f"{sorted(SUPPORTED_SUPERVISION_POLICIES)}, "
+                f"got {supervision_policy!r}"
+            )
+        if (
+            supervision_policy == BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION
+            and not bool(getattr(env, "production_dataset_mode", False))
+        ):
+            raise ValueError(
+                f"{BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION} requires "
+                "production_dataset_mode=True"
+            )
         self.env = env
         self.policy = policy
         self.expert_oracle = expert_oracle
         self.rng = rng or random.Random()
+        self.supervision_policy = supervision_policy
 
     def collect_iteration(
         self,
@@ -191,6 +224,13 @@ class DaggerRolloutCollector:
         beta: float,
         max_steps: int,
     ) -> list[dict[str, Any]]:
+        if self.supervision_policy == BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION and (
+            int(iteration) != 0 or float(beta) != 1.0
+        ):
+            raise ValueError(
+                f"{BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION} is the expert-only "
+                "round-0 contract and requires iteration=0, beta=1.0"
+            )
         examples: list[dict[str, Any]] = []
         scenario_list = list(scenarios)
         for scenario_index, scenario in enumerate(scenario_list):
@@ -223,6 +263,28 @@ class DaggerRolloutCollector:
                     action for action in expert_actions if action["tool"] != "__invalid_action__"
                 ]
                 preferred_action = expert_actions[0] if expert_actions else None
+                if (
+                    self.supervision_policy
+                    == BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION
+                ):
+                    # BC0 clones a deterministic, deployment-observable expert
+                    # protocol rather than a set-valued process-validity
+                    # relation.  Only the current rank-one protocol action is
+                    # executable now; the ordered remainder is deferred until
+                    # a later transition (for example, after a verified
+                    # rejection).  Keeping the deferred inventory outside
+                    # ``valid_next_actions`` prevents it from being mistaken
+                    # for simultaneous single-label supervision while retaining
+                    # a non-model audit trail.
+                    supervision_actions = (
+                        [copy.deepcopy(preferred_action)]
+                        if preferred_action is not None
+                        else []
+                    )
+                    deferred_expert_actions = copy.deepcopy(expert_actions[1:])
+                else:
+                    supervision_actions = copy.deepcopy(expert_actions)
+                    deferred_expert_actions = []
                 target_candidate_disposition = None
                 target_candidate_assessment: dict[str, Any] = {}
                 if isinstance(oracle_state, OracleState):
@@ -330,7 +392,11 @@ class DaggerRolloutCollector:
                     "parent_state_summary": observation_dict,
                     "state_summary": observation_dict,
                     "history_window": policy_safe_copy(observation_dict.get("history_window", [])),
-                    "valid_next_actions": expert_actions,
+                    "valid_next_actions": supervision_actions,
+                    "deferred_expert_actions": policy_safe_copy(
+                        deferred_expert_actions
+                    ),
+                    "supervision_policy": self.supervision_policy,
                     "preferred_action": preferred_action,
                     "model_action": policy_safe_copy(model_action),
                     "executed_action": policy_safe_copy(executed_action),
@@ -362,6 +428,10 @@ class DaggerRolloutCollector:
                         "error_cardinality": error_cardinality,
                         "network_case": network_case,
                         "source_tier": source_tier,
+                        "supervision_policy": self.supervision_policy,
+                        "deferred_expert_action_count": len(
+                            deferred_expert_actions
+                        ),
                     },
                 }
                 validate_policy_payload(

@@ -9,7 +9,11 @@ from psse_env.dagger.aggrevate import AggreVaTeLite, to_pairwise_examples
 from psse_env.dagger.counterfactual_generator import CounterfactualGenerator
 from psse_env.dagger.error_injectors import InjectedAction
 from psse_env.dagger.replay_buffer import BalancedReplayBuffer
-from psse_env.dagger.rollout_collector import DaggerRolloutCollector, run_dagger
+from psse_env.dagger.rollout_collector import (
+    BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION,
+    DaggerRolloutCollector,
+    run_dagger,
+)
 from psse_env.oracle.expert_policy import ExpertPolicyOracle
 from psse_env.transactional_env import TransactionalPSSEEnv
 
@@ -73,6 +77,63 @@ class DaggerExecutionRegressionTests(unittest.TestCase):
         self.assertEqual(rows[0]["executed_action"], rows[0]["preferred_action"])
         self.assertEqual(rows[0]["executed_action"]["tool"], RUN_WLS)
         self.assertEqual(rows[0]["physical_root_fingerprint"], "physical-root")
+
+    def test_bc0_observable_sequential_policy_exposes_only_current_action(self):
+        env = TransactionalPSSEEnv()
+        env.production_dataset_mode = True
+        rows = DaggerRolloutCollector(
+            env=env,
+            policy=_FinalizePolicy(),
+            expert_oracle=_TwoActionOracle(),
+            rng=_NoChoiceRng(),
+            supervision_policy=BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION,
+        ).collect_iteration(
+            scenarios=[_scenario(physical_root_fingerprint="physical-root")],
+            iteration=0,
+            beta=1.0,
+            max_steps=1,
+        )
+
+        self.assertEqual(
+            rows[0]["valid_next_actions"],
+            [rows[0]["preferred_action"]],
+        )
+        self.assertEqual(
+            [action["tool"] for action in rows[0]["deferred_expert_actions"]],
+            [FINALIZE_DIAGNOSIS],
+        )
+        self.assertEqual(
+            rows[0]["labels"]["supervision_policy"],
+            BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION,
+        )
+        self.assertEqual(rows[0]["labels"]["deferred_expert_action_count"], 1)
+
+    def test_bc0_observable_sequential_policy_fails_closed_outside_round0(self):
+        with self.assertRaisesRegex(ValueError, "production_dataset_mode"):
+            DaggerRolloutCollector(
+                env=TransactionalPSSEEnv(),
+                policy=_FinalizePolicy(),
+                expert_oracle=_TwoActionOracle(),
+                supervision_policy=BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION,
+            )
+
+        env = TransactionalPSSEEnv()
+        env.production_dataset_mode = True
+        collector = DaggerRolloutCollector(
+            env=env,
+            policy=_FinalizePolicy(),
+            expert_oracle=_TwoActionOracle(),
+            supervision_policy=BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION,
+        )
+        for iteration, beta in ((1, 1.0), (0, 0.5)):
+            with self.subTest(iteration=iteration, beta=beta):
+                with self.assertRaisesRegex(ValueError, "iteration=0, beta=1.0"):
+                    collector.collect_iteration(
+                        scenarios=[_scenario()],
+                        iteration=iteration,
+                        beta=beta,
+                        max_steps=1,
+                    )
 
     def test_default_multi_error_horizon_is_24(self):
         self.assertEqual(inspect.signature(run_dagger).parameters["max_steps"].default, 24)

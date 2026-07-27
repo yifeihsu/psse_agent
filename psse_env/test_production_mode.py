@@ -707,6 +707,72 @@ class ProductionEvidenceTests(unittest.TestCase):
                     route_status,
                 )
 
+    def test_parameter_ranking_contract_is_preserved_as_durable_evidence(self):
+        ranking = {
+            "parameter_ranking_contract": (
+                "distinct_line_abs_lambda_dominance_v1"
+            ),
+            "parameter_ranking_distinct_lines": [
+                {"line_index1": 1, "abs_lambda_score": 9.0},
+                {"line_index1": 2, "abs_lambda_score": 3.0},
+            ],
+            "parameter_ranking_top_abs_lambda": 9.0,
+            "parameter_ranking_runner_up_abs_lambda": 3.0,
+            "parameter_ranking_dominance_ratio": 3.0,
+            "parameter_ranking_dominance_threshold": 1.2,
+            "parameter_ranking_singleton": False,
+            "parameter_ranking_dominant": True,
+        }
+
+        @_deterministic_adapter
+        def parameter_context(state):
+            return {
+                **ranking,
+                "parameter_findings": [
+                    {"line_row0": 0, "value": 9.0},
+                    {"line_row0": 1, "value": 3.0},
+                ],
+                "supported_corrections": [
+                    {
+                        "tool": CORRECT_PARAMETERS,
+                        "arguments": {
+                            "state_id": state["state_id"],
+                            "line_index": 1,
+                        },
+                    },
+                    {
+                        "tool": CORRECT_PARAMETERS,
+                        "arguments": {
+                            "state_id": state["state_id"],
+                            "line_index": 2,
+                        },
+                    },
+                ],
+                "route_status": "actionable",
+            }
+
+        env = _production_env(
+            contexts={
+                GET_MEASUREMENT_CONTEXT: _context_adapter,
+                GET_PARAMETER_CONTEXT: parameter_context,
+                GET_TOPOLOGY_CONTEXT: _context_adapter,
+            }
+        )
+        active_id = env.reset(_measurement_scenario())["active_state_id"]
+        _, output = env.step(
+            {
+                "tool": GET_PARAMETER_CONTEXT,
+                "arguments": {"state_id": active_id},
+            }
+        )
+
+        self.assertEqual(output["execution_status"], "success")
+        durable = env.get_policy_observation().fresh_context_evidence[
+            "parameter"
+        ]
+        for key, expected in ranking.items():
+            self.assertEqual(durable[key], expected)
+
     def test_malformed_bundled_inventory_does_not_close_branch_route(self):
         @_deterministic_adapter
         def bundled_context(state):
