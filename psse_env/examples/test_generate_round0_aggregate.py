@@ -843,8 +843,9 @@ class AggregateReleaseContractTests(unittest.TestCase):
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
 
         self.assertEqual(set(plan), set(BC0_FAMILY_RELEASE_POLICY))
-        self.assertEqual(sum(plan.values()), 249)
+        self.assertEqual(sum(plan.values()), 263)
         self.assertEqual(plan["hif"], 17)
+        self.assertEqual(plan["measurement+parameter"], 36)
         for family, minimum in DEFAULT_PLAN.items():
             with self.subTest(family=family):
                 self.assertGreaterEqual(plan[family], minimum)
@@ -868,6 +869,22 @@ class AggregateReleaseContractTests(unittest.TestCase):
                 with self.subTest(tool=tool, family=family):
                     self.assertIn(family, DEFAULT_PLAN)
                     self.assertLessEqual(floor, DEFAULT_PLAN[family])
+
+    def test_measurement_hif_is_handoff_only_not_correction_supervision(
+        self,
+    ) -> None:
+        family_floors = (
+            BC0_CRITICAL_TARGET_TOOL_SCENARIO_FAMILY_MINIMUM_DISTINCT_ROOTS
+        )
+
+        self.assertEqual(
+            family_floors["ask_for_more_evidence"]["measurement+hif"],
+            2,
+        )
+        self.assertNotIn(
+            "measurement+hif",
+            family_floors["correct_measurements"],
+        )
 
     def test_bc0_and_dagger_recovery_gates_are_phase_separated(self) -> None:
         self.assertNotIn(
@@ -1138,7 +1155,6 @@ class AggregateReleaseContractTests(unittest.TestCase):
                     },
                     "correct_measurements": {
                         "measurement": 5,
-                        "measurement+hif": 2,
                         "measurement+parameter": 10,
                         "measurement+topology": 10,
                         "multi_measurement": 10,

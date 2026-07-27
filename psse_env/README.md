@@ -190,9 +190,11 @@ python -m psse_env.examples.generate_round0_aggregate \
   --output-dir data/round0_aggregate_release
 ```
 
-That plan has 249 roots and preserves every current family minimum while
-keeping the expected optimizer-visible train-plus-validation rows inside the
-launcher budget. The regenerated artifact, not this estimate, is authoritative.
+That plan has 263 roots.  It expands the mixed measurement-plus-parameter
+population to preserve five independent parameter-continuation training roots
+after the fixed validation/test family floors, while keeping the expected
+optimizer-visible train-plus-validation rows inside the launcher budget. The
+regenerated artifact, not this estimate, is authoritative.
 
 The strict audit quarantines an episode unless its claimed outcome is supported
 by the hidden physical truth. Every accepted correction must name an exact

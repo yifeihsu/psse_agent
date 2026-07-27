@@ -118,7 +118,12 @@ DEFAULT_PLAN: dict[str, int] = {
     # separately reported handoff allowance until additional localization
     # roots are checked in.
     "hif": 17,
-    "measurement+parameter": 22,
+    # The mixed-parameter route is observable in both directions.  Thirty-six
+    # roots leave enough independent training support for the minority
+    # measurement-first -> parameter-continuation lifecycle after the fixed
+    # validation/test family floors are assigned.  The five-root continuation
+    # gate remains binding; duplicates never satisfy it.
+    "measurement+parameter": 36,
     "measurement+topology": 22,
     "measurement+hif": 2,
 }
@@ -304,9 +309,11 @@ DAGGER_ITERATION_1_RECOVERY_GATE_POLICY: dict[str, Any] = {
 # Corrections must also cover the families in which each error mode occurs;
 # aggregate exact-action counts cannot substitute for these cells. Floors are
 # bounded by the default physical-family plans: five for eight-root pure
-# families, ten for 20/22-root multi/mixed families, and two for the two-root
-# measurement+HIF observability pilot. HIF and multi-measurement handoffs are
-# likewise kept as distinct observable regimes.
+# families and ten for the larger multi/mixed families.  The two-root
+# measurement+HIF observability pilot is handoff-only: its waveform signature
+# deliberately suppresses WLS bad-data attribution, so hidden meter truth
+# cannot justify a correction label.  HIF and multi-measurement handoffs remain
+# distinct observable regimes.
 BC0_CRITICAL_TARGET_TOOL_SCENARIO_FAMILY_MINIMUM_DISTINCT_ROOTS: dict[
     str, dict[str, int]
 ] = {
@@ -317,7 +324,6 @@ BC0_CRITICAL_TARGET_TOOL_SCENARIO_FAMILY_MINIMUM_DISTINCT_ROOTS: dict[
     },
     "correct_measurements": {
         "measurement": 5,
-        "measurement+hif": 2,
         "measurement+parameter": 10,
         "measurement+topology": 10,
         "multi_measurement": 10,
