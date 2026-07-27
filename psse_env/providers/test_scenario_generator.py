@@ -482,6 +482,128 @@ class ValidationGateTests(unittest.TestCase):
             "parameter_ranking_dominant": singleton or bool(ratio >= 1.2),
         }
 
+    @staticmethod
+    def _mixed_topology_scenario() -> dict[str, object]:
+        return {
+            "case": "root-case",
+            # The admission probe must execute the topology correction and use
+            # its returned case rather than substituting this truth-side path.
+            "clean_case": "truth-clean-case-not-for-execution",
+            "measurements": [1.0, 1.5],
+            "clean_measurements": [1.0, 0.5],
+            "metadata": {},
+            "true_topology_errors": [
+                {
+                    "branch_row0": 2,
+                    "line_index1": 3,
+                    "expected_status": 0,
+                }
+            ],
+            "true_measurement_errors": [
+                {"index": 1, "observed": 1.5, "clean": 0.5}
+            ],
+            "release_audit": {
+                "tolerances": {
+                    "measurement_abs": 0.1,
+                    "measurement_rel": 0.0,
+                }
+            },
+        }
+
+    @staticmethod
+    def _mixed_topology_provider(corrected_value: float) -> Mock:
+        provider = Mock()
+        provider.run_wls.side_effect = [
+            {"remaining_anomaly_score": 10.0},
+            {
+                "target_fixed": True,
+                "post_action_resolved": False,
+                "physical_constraints_ok": True,
+                "remaining_anomaly_score": 5.0,
+            },
+            {
+                "target_fixed": True,
+                "target_metric_value": 0.5,
+                "target_metric_threshold": 3.0,
+                "post_action_resolved": True,
+                "physical_constraints_ok": True,
+                "remaining_anomaly_score": 0.0,
+            },
+        ]
+        def topology_context(state):
+            return {
+                "context_tool": "get_topology_context",
+                "state_id": state["state_id"],
+                "state_hash": state["state_hash"],
+                "supported_corrections": [],
+                "route_status": "complete_negative",
+            }
+
+        provider.get_topology_context.side_effect = topology_context
+        provider.correct_topology.return_value = {
+            "modification": {
+                "case": "provider-repaired-case",
+                "metadata_updates": {
+                    "last_topology_correction": {
+                        "line_index": 3,
+                        "status": 0,
+                    }
+                },
+            }
+        }
+        def measurement_context(state):
+            binding = {
+                "state_id": state["state_id"],
+                "state_hash": state["state_hash"],
+            }
+            accepted = state["policy_observation"][
+                "accepted_corrections"
+            ]
+            if not accepted:
+                return {
+                    **binding,
+                    "context_tool": "get_measurement_context",
+                    "supported_corrections": [
+                        {
+                            "tool": "correct_measurements",
+                            "arguments": {
+                                "state_id": state["state_id"],
+                                "suspect_group": [1],
+                            },
+                        }
+                    ],
+                }
+            return {
+                **binding,
+                "context_tool": "get_measurement_context",
+                "supported_corrections": [],
+                "branch_route_screening": {
+                    "topology": {
+                        **binding,
+                        "context_tool": "get_topology_context",
+                        "route_status": "actionable",
+                        "supported_corrections": [
+                            {
+                                "tool": "correct_topology",
+                                "arguments": {
+                                    "state_id": state["state_id"],
+                                    "line_index": 3,
+                                    "status": 0,
+                                },
+                            }
+                        ],
+                    }
+                },
+            }
+
+        provider.get_measurement_context.side_effect = measurement_context
+        provider.correct_measurements.return_value = {
+            "modification": {
+                "measurement_updates": {"1": corrected_value}
+            }
+        }
+        return provider
+
     def test_parameter_dominance_is_training_admission_not_holdout_filter(
         self,
     ) -> None:
@@ -582,6 +704,235 @@ class ValidationGateTests(unittest.TestCase):
         ]
         self.assertEqual(len(accepted), 1)
         self.assertEqual(accepted[0]["source_action"]["tool"], "correct_measurements")
+
+    def test_mixed_topology_probe_rejects_final_meter_outside_tolerance(
+        self,
+    ) -> None:
+        generator = Round0ScenarioGenerator(seed=5, validate=True)
+        provider = self._mixed_topology_provider(corrected_value=0.61)
+        generator._parameter_gate_provider = provider
+
+        with self.assertRaises(ScenarioRejected) as caught:
+            generator._require_mixed_topology_recovery_realizable(
+                self._mixed_topology_scenario()
+            )
+
+        self.assertEqual(
+            caught.exception.reason,
+            "mixed_topology_recovery_outside_truth_tolerance",
+        )
+        truth_check = caught.exception.metrics["measurement_truth_check"]
+        self.assertAlmostEqual(truth_check["final_distance"], 0.11)
+        self.assertIs(truth_check["within_tolerance"], False)
+        self.assertEqual(provider.run_wls.call_count, 3)
+        provider.correct_topology.assert_called_once()
+        provider.correct_measurements.assert_called_once()
+
+    def test_mixed_topology_probe_executes_measurement_first_fallback(
+        self,
+    ) -> None:
+        generator = Round0ScenarioGenerator(seed=5, validate=True)
+        provider = self._mixed_topology_provider(corrected_value=0.59)
+        generator._parameter_gate_provider = provider
+
+        generator._require_mixed_topology_recovery_realizable(
+            self._mixed_topology_scenario()
+        )
+
+        measurement_state, measurement_action = (
+            provider.correct_measurements.call_args.args
+        )
+        self.assertEqual(measurement_state["case"], "root-case")
+        self.assertEqual(
+            measurement_state["policy_observation"][
+                "accepted_corrections"
+            ],
+            [],
+        )
+        self.assertEqual(
+            measurement_action["arguments"]["suspect_group"],
+            [1],
+        )
+
+        topology_state, topology_action = (
+            provider.correct_topology.call_args.args
+        )
+        self.assertEqual(topology_state["case"], "root-case")
+        self.assertAlmostEqual(topology_state["measurements"][1], 0.59)
+        self.assertEqual(
+            topology_action["arguments"],
+            {
+                "state_id": (
+                    "offline_mixed_topology_gate:"
+                    "post_measurement_route_context"
+                ),
+                "line_index": 3,
+                "status": 0,
+            },
+        )
+        accepted = topology_state["policy_observation"][
+            "accepted_corrections"
+        ]
+        self.assertEqual(
+            accepted[0]["source_action"]["tool"],
+            "correct_measurements",
+        )
+        provider.get_topology_context.assert_called_once()
+        self.assertEqual(provider.get_measurement_context.call_count, 2)
+        final_candidate = provider.run_wls.call_args_list[-1].args[0]
+        self.assertEqual(final_candidate["case"], "provider-repaired-case")
+        self.assertAlmostEqual(final_candidate["measurements"][1], 0.59)
+
+    def test_mixed_topology_probe_rejects_stale_context_hash(
+        self,
+    ) -> None:
+        generator = Round0ScenarioGenerator(seed=5, validate=True)
+        provider = self._mixed_topology_provider(corrected_value=0.59)
+        topology_context = provider.get_topology_context.side_effect
+
+        def stale_context(state):
+            context = topology_context(state)
+            context["state_hash"] = "stale-state-hash"
+            return context
+
+        provider.get_topology_context.side_effect = stale_context
+        generator._parameter_gate_provider = provider
+
+        with self.assertRaises(ScenarioRejected) as caught:
+            generator._require_mixed_topology_recovery_realizable(
+                self._mixed_topology_scenario()
+            )
+
+        self.assertEqual(
+            caught.exception.reason,
+            "mixed_topology_recovery_context_unbound",
+        )
+        self.assertEqual(
+            caught.exception.metrics["failed_stage"],
+            "root_topology_context",
+        )
+        provider.correct_measurements.assert_not_called()
+        provider.correct_topology.assert_not_called()
+
+    def test_mixed_topology_probe_rejects_stale_context_state_id(
+        self,
+    ) -> None:
+        generator = Round0ScenarioGenerator(seed=5, validate=True)
+        provider = self._mixed_topology_provider(corrected_value=0.59)
+        topology_context = provider.get_topology_context.side_effect
+
+        def stale_context(state):
+            context = topology_context(state)
+            context["state_id"] = "stale-parent"
+            return context
+
+        provider.get_topology_context.side_effect = stale_context
+        generator._parameter_gate_provider = provider
+
+        with self.assertRaises(ScenarioRejected) as caught:
+            generator._require_mixed_topology_recovery_realizable(
+                self._mixed_topology_scenario()
+            )
+
+        self.assertEqual(
+            caught.exception.reason,
+            "mixed_topology_recovery_context_unbound",
+        )
+        provider.correct_measurements.assert_not_called()
+        provider.correct_topology.assert_not_called()
+
+    def test_mixed_topology_probe_rejects_wrong_context_tool(
+        self,
+    ) -> None:
+        generator = Round0ScenarioGenerator(seed=5, validate=True)
+        provider = self._mixed_topology_provider(corrected_value=0.59)
+        topology_context = provider.get_topology_context.side_effect
+
+        def unbound_context(state):
+            context = topology_context(state)
+            context["context_tool"] = "get_measurement_context"
+            return context
+
+        provider.get_topology_context.side_effect = unbound_context
+        generator._parameter_gate_provider = provider
+
+        with self.assertRaises(ScenarioRejected) as caught:
+            generator._require_mixed_topology_recovery_realizable(
+                self._mixed_topology_scenario()
+            )
+
+        self.assertEqual(
+            caught.exception.reason,
+            "mixed_topology_recovery_context_unbound",
+        )
+        provider.correct_measurements.assert_not_called()
+        provider.correct_topology.assert_not_called()
+
+    def test_mixed_topology_probe_rejects_unbound_action_state(
+        self,
+    ) -> None:
+        generator = Round0ScenarioGenerator(seed=5, validate=True)
+        provider = self._mixed_topology_provider(corrected_value=0.59)
+        measurement_context = provider.get_measurement_context.side_effect
+
+        def unbound_action_context(state):
+            context = measurement_context(state)
+            context["supported_corrections"][0]["arguments"][
+                "state_id"
+            ] = "stale-parent"
+            return context
+
+        provider.get_measurement_context.side_effect = (
+            unbound_action_context
+        )
+        generator._parameter_gate_provider = provider
+
+        with self.assertRaises(ScenarioRejected) as caught:
+            generator._require_mixed_topology_recovery_realizable(
+                self._mixed_topology_scenario()
+            )
+
+        self.assertEqual(
+            caught.exception.reason,
+            "mixed_topology_recovery_action_unbound",
+        )
+        provider.correct_measurements.assert_not_called()
+        provider.correct_topology.assert_not_called()
+
+    def test_mixed_topology_probe_rejects_extra_action_argument(
+        self,
+    ) -> None:
+        generator = Round0ScenarioGenerator(seed=5, validate=True)
+        provider = self._mixed_topology_provider(corrected_value=0.59)
+        measurement_context = provider.get_measurement_context.side_effect
+
+        def extra_argument_context(state):
+            context = measurement_context(state)
+            context["supported_corrections"][0]["arguments"][
+                "case"
+            ] = "untrusted-case-override"
+            return context
+
+        provider.get_measurement_context.side_effect = (
+            extra_argument_context
+        )
+        generator._parameter_gate_provider = provider
+
+        with self.assertRaises(ScenarioRejected) as caught:
+            generator._require_mixed_topology_recovery_realizable(
+                self._mixed_topology_scenario()
+            )
+
+        self.assertEqual(
+            caught.exception.reason,
+            "mixed_topology_recovery_action_schema_invalid",
+        )
+        self.assertIn(
+            "case",
+            caught.exception.metrics["observed_argument_keys"],
+        )
+        provider.correct_measurements.assert_not_called()
+        provider.correct_topology.assert_not_called()
 
     def test_clean_vector_is_rejected_as_undetectable_anomaly(self) -> None:
         generator = Round0ScenarioGenerator(seed=5)
@@ -1276,6 +1627,10 @@ class EndToEndRound0EpisodeTests(unittest.TestCase):
         self._assert_scoped_candidate_physical_evidence(executed)
 
     def test_mixed_measurement_topology_commits_partial_then_final_without_truth(self) -> None:
+        from psse_env.examples.generate_round0_aggregate import (
+            audit_episode_against_truth,
+        )
+
         generator = Round0ScenarioGenerator(seed=20260719)
         source = generator.build({"measurement+topology": 1})[0]
         env, executed = self._run_episode(
@@ -1320,6 +1675,18 @@ class EndToEndRound0EpisodeTests(unittest.TestCase):
             verification["steady_state_physical_evidence"]["method"],
             "matpower_case_limits_with_observed_wls_telemetry",
         )
+        final_state = env.current_state()
+        active_physical_state = env.store.get_state(
+            str(final_state["active_state_id"])
+        )
+        audit = audit_episode_against_truth(
+            source,
+            final_state,
+            terminal=env.is_terminal(),
+            terminal_outcome=env.terminal_outcome,
+            active_physical_state=active_physical_state,
+        )
+        self.assertFalse(audit["quarantined"], audit)
 
     def test_rejected_mixed_hif_ladder_ends_in_explicit_operator_escalation(self) -> None:
         generator = Round0ScenarioGenerator(seed=20260719, hif_max_scans=3)

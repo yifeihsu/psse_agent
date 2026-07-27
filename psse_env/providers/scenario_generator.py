@@ -34,6 +34,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import os
 import tempfile
 from pathlib import Path
@@ -49,6 +50,13 @@ from mcp_server.matpower_server import (  # noqa: E402  (repo-root package)
 from tools.lagrangian_correct_port import make_ybus  # noqa: E402
 from trace_protocol import chi2_threshold  # noqa: E402
 
+from psse_env.actions import (
+    CORRECT_MEASUREMENTS,
+    CORRECT_TOPOLOGY,
+    GET_MEASUREMENT_CONTEXT,
+    GET_TOPOLOGY_CONTEXT,
+    normalize_action,
+)
 from psse_env.oracle.candidate_quality import CandidateQualityOracle
 from psse_env.providers.matpower import (
     MatpowerDeploymentProviders,
@@ -59,6 +67,7 @@ from psse_env.providers.matpower import (
     observable_parameter_initial_states,
     parameter_ranking_contract_is_dominant,
 )
+from psse_env.state_store import _state_content_hash, apply_modification
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CHI2_ALPHA = 0.01
@@ -1721,6 +1730,772 @@ class Round0ScenarioGenerator:
                 failed_stage="terminal_verification",
             )
 
+    def _require_mixed_topology_recovery_realizable(
+        self,
+        scenario: Mapping[str, Any],
+    ) -> None:
+        """Validate the observable two-stage route for a mixed-topology root.
+
+        The deployed route can be measurement-first or topology-first.  The
+        root topology inventory chooses the order: an actionable correction
+        runs first, while a complete-negative inventory permits the
+        measurement fallback.  After that partial measurement correction, a
+        refreshed measurement context must bundle an actionable topology
+        route.  Clean truth is consulted only to reject a wrong target or a
+        final meter estimate outside the already-declared strict-audit
+        tolerance; it is never an input to either correction.
+        """
+        if not self.validate:
+            return
+
+        metrics: dict[str, Any] = {"stages": []}
+
+        def reject(reason: str, detail: str, **extra: Any) -> None:
+            metrics.update(extra)
+            raise ScenarioRejected(reason, detail, metrics=metrics)
+
+        def require_bound_context(
+            context: Any,
+            parent_state: Mapping[str, Any],
+            *,
+            context_tool: str,
+            failed_stage: str,
+        ) -> Mapping[str, Any]:
+            if not isinstance(context, Mapping):
+                reject(
+                    "mixed_topology_recovery_context_failed",
+                    f"{failed_stage} returned malformed evidence",
+                    failed_stage=failed_stage,
+                )
+            if context.get("execution_status") == "failure":
+                reject(
+                    "mixed_topology_recovery_context_failed",
+                    f"{failed_stage} failed",
+                    failed_stage=failed_stage,
+                    error_code=context.get("error_code"),
+                )
+            parent_state_id = parent_state.get("state_id")
+            if (
+                context.get("context_tool") != context_tool
+                or context.get("state_id") != parent_state_id
+            ):
+                reject(
+                    "mixed_topology_recovery_context_unbound",
+                    (
+                        f"{failed_stage} is not bound to the requested "
+                        "state and context tool"
+                    ),
+                    failed_stage=failed_stage,
+                    expected_context_tool=context_tool,
+                    expected_state_id=parent_state_id,
+                    observed_context_tool=context.get("context_tool"),
+                    observed_state_id=context.get("state_id"),
+                )
+            parent_hash = parent_state.get("state_hash")
+            context_hash = context.get("state_hash")
+            if (
+                parent_hash is not None or context_hash is not None
+            ) and context_hash != parent_hash:
+                reject(
+                    "mixed_topology_recovery_context_unbound",
+                    f"{failed_stage} carries a stale state hash",
+                    failed_stage=failed_stage,
+                    expected_state_hash=parent_hash,
+                    observed_state_hash=context_hash,
+                )
+            return context
+
+        def require_bound_action(
+            action: Any,
+            parent_state: Mapping[str, Any],
+            *,
+            expected_tool: str,
+            failed_stage: str,
+        ) -> dict[str, Any]:
+            if not isinstance(action, Mapping) or set(action) != {
+                "tool",
+                "arguments",
+            }:
+                reject(
+                    "mixed_topology_recovery_action_schema_invalid",
+                    (
+                        f"{failed_stage} action must contain exactly tool "
+                        "and arguments"
+                    ),
+                    failed_stage=failed_stage,
+                )
+            raw_arguments = action.get("arguments")
+            if not isinstance(raw_arguments, Mapping):
+                reject(
+                    "mixed_topology_recovery_action_schema_invalid",
+                    f"{failed_stage} arguments must be a mapping",
+                    failed_stage=failed_stage,
+                )
+            expected_argument_keys = (
+                {"state_id", "suspect_group"}
+                if expected_tool == CORRECT_MEASUREMENTS
+                else {"state_id", "line_index", "status"}
+            )
+            observed_argument_keys = set(raw_arguments)
+            if observed_argument_keys != expected_argument_keys:
+                reject(
+                    "mixed_topology_recovery_action_schema_invalid",
+                    (
+                        f"{failed_stage} correction arguments do not match "
+                        "the production context-action schema"
+                    ),
+                    failed_stage=failed_stage,
+                    expected_argument_keys=sorted(expected_argument_keys),
+                    observed_argument_keys=sorted(
+                        str(key) for key in observed_argument_keys
+                    ),
+                )
+            try:
+                normalized = normalize_action(action)
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                reject(
+                    "mixed_topology_recovery_action_schema_invalid",
+                    f"{failed_stage} action normalization failed",
+                    failed_stage=failed_stage,
+                    evidence_error=f"{type(exc).__name__}: {exc}",
+                )
+            if normalized["tool"] != expected_tool:
+                reject(
+                    "mixed_topology_recovery_action_schema_invalid",
+                    f"{failed_stage} selected the wrong correction tool",
+                    failed_stage=failed_stage,
+                    expected_tool=expected_tool,
+                    observed_tool=normalized["tool"],
+                )
+            arguments = normalized["arguments"]
+            if arguments.get("state_id") != parent_state.get("state_id"):
+                reject(
+                    "mixed_topology_recovery_action_unbound",
+                    (
+                        f"{failed_stage} correction is not bound to the "
+                        "requested parent state"
+                    ),
+                    failed_stage=failed_stage,
+                    expected_state_id=parent_state.get("state_id"),
+                    observed_state_id=arguments.get("state_id"),
+                )
+            if expected_tool == CORRECT_MEASUREMENTS:
+                group = arguments.get("suspect_group")
+                if (
+                    not isinstance(group, (list, tuple))
+                    or not group
+                    or any(
+                        not isinstance(index, int)
+                        or isinstance(index, bool)
+                        or index < 0
+                        for index in group
+                    )
+                    or len(set(group)) != len(group)
+                ):
+                    reject(
+                        "mixed_topology_recovery_action_schema_invalid",
+                        (
+                            f"{failed_stage} suspect_group must contain "
+                            "unique non-negative integer indices"
+                        ),
+                        failed_stage=failed_stage,
+                    )
+            else:
+                line_index = arguments.get("line_index")
+                status = arguments.get("status")
+                if (
+                    not isinstance(line_index, int)
+                    or isinstance(line_index, bool)
+                    or line_index < 1
+                    or not isinstance(status, int)
+                    or isinstance(status, bool)
+                    or status not in {0, 1}
+                ):
+                    reject(
+                        "mixed_topology_recovery_action_schema_invalid",
+                        (
+                            f"{failed_stage} topology target or status "
+                            "is malformed"
+                        ),
+                        failed_stage=failed_stage,
+                    )
+            return normalized
+
+        try:
+            topology_faults = list(
+                scenario.get("true_topology_errors") or []
+            )
+            measurement_faults = list(
+                scenario.get("true_measurement_errors") or []
+            )
+            if len(topology_faults) != 1 or len(measurement_faults) != 1:
+                raise ValueError(
+                    "one topology target and one measurement target are required"
+                )
+            topology_fault = topology_faults[0]
+            measurement_fault = measurement_faults[0]
+            if not isinstance(topology_fault, Mapping) or not isinstance(
+                measurement_fault, Mapping
+            ):
+                raise TypeError("truth targets must be mappings")
+
+            if topology_fault.get("branch_row0") is not None:
+                expected_branch_row0 = int(topology_fault["branch_row0"])
+            else:
+                expected_branch_row0 = (
+                    int(topology_fault["line_index1"]) - 1
+                )
+            expected_status = int(
+                topology_fault.get("expected_status", 0)
+            )
+            if measurement_fault.get("index") is not None:
+                expected_measurement = int(measurement_fault["index"])
+            else:
+                expected_measurement = int(measurement_fault["index0"])
+            clean_value = float(measurement_fault["clean"])
+
+            current_case = scenario["case"]
+            current_measurements = [
+                float(value) for value in scenario["measurements"]
+            ]
+            clean_measurements = [
+                float(value) for value in scenario["clean_measurements"]
+            ]
+            metadata = scenario.get("metadata")
+            current_metadata = copy.deepcopy(
+                dict(metadata) if isinstance(metadata, Mapping) else {}
+            )
+            release_audit = scenario.get("release_audit")
+            release_audit = (
+                release_audit
+                if isinstance(release_audit, Mapping)
+                else {}
+            )
+            tolerances = release_audit.get("tolerances")
+            tolerances = (
+                tolerances if isinstance(tolerances, Mapping) else {}
+            )
+            measurement_abs = float(tolerances["measurement_abs"])
+            measurement_rel = float(
+                tolerances.get("measurement_rel", 1e-6)
+            )
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            reject(
+                "mixed_topology_recovery_gate_incomplete",
+                "mixed-topology recovery evidence is missing or malformed",
+                evidence_error=f"{type(exc).__name__}: {exc}",
+            )
+
+        if (
+            not 0 <= expected_branch_row0 < NL
+            or expected_status not in {0, 1}
+            or not 0 <= expected_measurement < len(current_measurements)
+            or len(clean_measurements) != len(current_measurements)
+            or not all(
+                math.isfinite(value)
+                for value in (
+                    clean_value,
+                    measurement_abs,
+                    measurement_rel,
+                )
+            )
+            or measurement_abs < 0.0
+            or measurement_rel < 0.0
+        ):
+            reject(
+                "mixed_topology_recovery_gate_incomplete",
+                "mixed-topology targets or tolerances are outside the state",
+            )
+        if not math.isclose(
+            clean_measurements[expected_measurement],
+            clean_value,
+            abs_tol=measurement_abs,
+            rel_tol=measurement_rel,
+        ):
+            reject(
+                "mixed_topology_recovery_gate_incomplete",
+                "declared meter truth conflicts with the clean vector",
+            )
+
+        accepted: list[dict[str, Any]] = []
+
+        def state(stage: str) -> dict[str, Any]:
+            state_payload = {
+                "state_id": f"offline_mixed_topology_gate:{stage}",
+                "case": current_case,
+                "measurements": list(current_measurements),
+                "metadata": copy.deepcopy(current_metadata),
+                "policy_observation": {
+                    "accepted_corrections": copy.deepcopy(accepted),
+                },
+            }
+            state_payload["state_hash"] = _state_content_hash(
+                state_payload["case"],
+                state_payload["measurements"],
+                state_payload["metadata"],
+            )
+            return state_payload
+
+        root_state = state("root")
+        parent_metrics = self._parameter_gate_provider.run_wls(root_state)
+        if not isinstance(parent_metrics, Mapping):
+            reject(
+                "mixed_topology_recovery_wls_failed",
+                "root WLS returned malformed evidence",
+                failed_stage="root_wls",
+            )
+        if parent_metrics.get("execution_status") == "failure":
+            reject(
+                "mixed_topology_recovery_wls_failed",
+                "root WLS failed during offline route validation",
+                failed_stage="root_wls",
+                error_code=parent_metrics.get("error_code"),
+            )
+
+        root_topology_context = require_bound_context(
+            self._parameter_gate_provider.get_topology_context(root_state),
+            root_state,
+            context_tool=GET_TOPOLOGY_CONTEXT,
+            failed_stage="root_topology_context",
+        )
+        root_topology_supported = [
+            copy.deepcopy(dict(action))
+            for action in root_topology_context.get(
+                "supported_corrections"
+            )
+            or []
+            if isinstance(action, Mapping)
+            and str(action.get("tool") or "") == CORRECT_TOPOLOGY
+        ]
+        root_topology_route = str(
+            root_topology_context.get("route_status") or ""
+        )
+        metrics["root_topology_route_status"] = root_topology_route
+        if (
+            root_topology_route == "actionable"
+            and root_topology_supported
+        ):
+            order = ("topology", "measurement")
+        elif (
+            root_topology_route == "complete_negative"
+            and not root_topology_supported
+        ):
+            order = ("measurement", "topology")
+        else:
+            reject(
+                "mixed_topology_recovery_context_inconclusive",
+                (
+                    "root topology route is neither actionable nor a "
+                    "complete-negative fallback"
+                ),
+                failed_stage="root_topology_context",
+            )
+        metrics["observable_stage_order"] = list(order)
+
+        for stage_index, family in enumerate(order):
+            parent_state = state(f"{family}_context_{stage_index}")
+            stage_metrics: dict[str, Any] = {
+                "stage": stage_index + 1,
+                "family": family,
+            }
+
+            if family == "measurement":
+                context = require_bound_context(
+                    self._parameter_gate_provider.get_measurement_context(
+                        parent_state
+                    ),
+                    parent_state,
+                    context_tool=GET_MEASUREMENT_CONTEXT,
+                    failed_stage="measurement_context",
+                )
+                supported = [
+                    copy.deepcopy(dict(action))
+                    for action in context.get("supported_corrections") or []
+                    if isinstance(action, Mapping)
+                    and str(action.get("tool") or "")
+                    == CORRECT_MEASUREMENTS
+                ]
+                if not supported:
+                    reject(
+                        "mixed_topology_recovery_context_empty",
+                        "measurement context produced no correction",
+                        failed_stage="measurement_context",
+                    )
+                action = require_bound_action(
+                    supported[0],
+                    parent_state,
+                    expected_tool=CORRECT_MEASUREMENTS,
+                    failed_stage="measurement_context",
+                )
+                arguments = action.get("arguments")
+                arguments = (
+                    arguments if isinstance(arguments, Mapping) else {}
+                )
+                group = arguments.get("suspect_group")
+                try:
+                    targets = sorted(int(value) for value in group)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    reject(
+                        "mixed_topology_recovery_target_mismatch",
+                        "measurement context returned a malformed target",
+                        failed_stage="measurement_context",
+                        evidence_error=f"{type(exc).__name__}: {exc}",
+                    )
+                stage_metrics["rank_one_target_indices0"] = targets
+                if targets != [expected_measurement]:
+                    reject(
+                        "mixed_topology_recovery_target_mismatch",
+                        "measurement correction does not match declared truth",
+                        failed_stage="measurement_context",
+                        expected_measurement_index0=expected_measurement,
+                    )
+                correction = (
+                    self._parameter_gate_provider.correct_measurements(
+                        parent_state, action
+                    )
+                )
+                partial_floor = float(
+                    self._parameter_gate_candidate_oracle
+                    .min_partial_global_progress
+                )
+            else:
+                if stage_index == 0:
+                    parent_state = root_state
+                    context = root_topology_context
+                    stage_metrics["route_source"] = (
+                        "root_topology_context"
+                    )
+                else:
+                    parent_state = state(
+                        "post_measurement_route_context"
+                    )
+                    refreshed_measurement_context = require_bound_context(
+                        self._parameter_gate_provider
+                        .get_measurement_context(parent_state),
+                        parent_state,
+                        context_tool=GET_MEASUREMENT_CONTEXT,
+                        failed_stage="post_measurement_route_context",
+                    )
+                    branch_routes = (
+                        refreshed_measurement_context.get(
+                            "branch_route_screening"
+                        )
+                    )
+                    if not isinstance(branch_routes, Mapping):
+                        reject(
+                            "mixed_topology_recovery_context_inconclusive",
+                            (
+                                "post-measurement context did not bundle "
+                                "branch route screening"
+                            ),
+                            failed_stage=(
+                                "post_measurement_route_context"
+                            ),
+                        )
+                    context = branch_routes.get("topology")
+                    if not isinstance(context, Mapping):
+                        reject(
+                            "mixed_topology_recovery_context_inconclusive",
+                            (
+                                "post-measurement context did not bundle "
+                                "a topology inventory"
+                            ),
+                            failed_stage=(
+                                "post_measurement_route_context"
+                            ),
+                        )
+                    context = require_bound_context(
+                        context,
+                        parent_state,
+                        context_tool=GET_TOPOLOGY_CONTEXT,
+                        failed_stage=(
+                            "post_measurement_topology_context"
+                        ),
+                    )
+                    if context.get("route_status") != "actionable":
+                        reject(
+                            "mixed_topology_recovery_context_inconclusive",
+                            (
+                                "post-measurement topology route is not "
+                                "actionable"
+                            ),
+                            failed_stage=(
+                                "post_measurement_route_context"
+                            ),
+                            topology_route_status=context.get(
+                                "route_status"
+                            ),
+                        )
+                    stage_metrics["route_source"] = (
+                        "measurement_context.branch_route_screening.topology"
+                    )
+                supported = [
+                    copy.deepcopy(dict(action))
+                    for action in context.get("supported_corrections") or []
+                    if isinstance(action, Mapping)
+                    and str(action.get("tool") or "")
+                    == CORRECT_TOPOLOGY
+                ]
+                if not supported:
+                    reject(
+                        "mixed_topology_recovery_context_empty",
+                        "topology context produced no correction",
+                        failed_stage="topology_context",
+                    )
+                action = require_bound_action(
+                    supported[0],
+                    parent_state,
+                    expected_tool=CORRECT_TOPOLOGY,
+                    failed_stage="topology_context",
+                )
+                arguments = action.get("arguments")
+                arguments = (
+                    arguments if isinstance(arguments, Mapping) else {}
+                )
+                try:
+                    if arguments.get("branch_row0") is not None:
+                        target_row0 = int(arguments["branch_row0"])
+                    elif arguments.get("line_index1") is not None:
+                        target_row0 = int(arguments["line_index1"]) - 1
+                    else:
+                        target_row0 = int(arguments["line_index"]) - 1
+                    target_status = arguments.get(
+                        "status", arguments.get("expected_status")
+                    )
+                    if (
+                        arguments.get("desired_status") is not None
+                        and target_status is None
+                    ):
+                        target_status = int(
+                            bool(arguments["desired_status"])
+                        )
+                    target_status = int(target_status)
+                except (
+                    KeyError,
+                    TypeError,
+                    ValueError,
+                    OverflowError,
+                ) as exc:
+                    reject(
+                        "mixed_topology_recovery_target_mismatch",
+                        "topology context returned a malformed target",
+                        failed_stage="topology_context",
+                        evidence_error=f"{type(exc).__name__}: {exc}",
+                    )
+                stage_metrics["rank_one_topology_target"] = {
+                    "branch_row0": target_row0,
+                    "status": target_status,
+                }
+                if (
+                    target_row0 != expected_branch_row0
+                    or target_status != expected_status
+                ):
+                    reject(
+                        "mixed_topology_recovery_target_mismatch",
+                        "topology correction does not match declared truth",
+                        failed_stage="topology_context",
+                        expected_branch_row0=expected_branch_row0,
+                        expected_status=expected_status,
+                    )
+                correction = (
+                    self._parameter_gate_provider.correct_topology(
+                        parent_state, action
+                    )
+                )
+                partial_floor = float(
+                    self._parameter_gate_candidate_oracle
+                    .min_branch_partial_global_progress
+                )
+
+            if correction.get("execution_status") == "failure":
+                reject(
+                    "mixed_topology_recovery_correction_failed",
+                    f"{family} correction failed",
+                    failed_stage=f"{family}_correction",
+                    error_code=correction.get("error_code"),
+                )
+            modification = correction.get("modification")
+            if not isinstance(modification, Mapping):
+                reject(
+                    "mixed_topology_recovery_correction_failed",
+                    f"{family} correction returned no modification",
+                    failed_stage=f"{family}_correction",
+                )
+            if family == "measurement":
+                updates = modification.get("measurement_updates")
+                try:
+                    normalized_updates = {
+                        int(index): float(value)
+                        for index, value in updates.items()
+                    }
+                except (
+                    AttributeError,
+                    TypeError,
+                    ValueError,
+                    OverflowError,
+                ) as exc:
+                    reject(
+                        "mixed_topology_recovery_correction_failed",
+                        "measurement correction returned malformed updates",
+                        failed_stage="measurement_correction",
+                        evidence_error=f"{type(exc).__name__}: {exc}",
+                    )
+                if (
+                    set(normalized_updates) != {expected_measurement}
+                    or not math.isfinite(
+                        normalized_updates.get(
+                            expected_measurement, math.nan
+                        )
+                    )
+                ):
+                    reject(
+                        "mixed_topology_recovery_target_mismatch",
+                        "measurement correction modified another target",
+                        failed_stage="measurement_correction",
+                    )
+            elif not modification.get("case"):
+                reject(
+                    "mixed_topology_recovery_correction_failed",
+                    "topology correction returned no candidate case",
+                    failed_stage="topology_correction",
+                )
+
+            try:
+                (
+                    candidate_case,
+                    candidate_measurements,
+                    candidate_metadata,
+                ) = apply_modification(
+                    case=current_case,
+                    measurements=current_measurements,
+                    metadata=current_metadata,
+                    modification=modification,
+                )
+            except Exception as exc:
+                reject(
+                    "mixed_topology_recovery_correction_failed",
+                    f"{family} modification could not be applied",
+                    failed_stage=f"{family}_correction",
+                    evidence_error=f"{type(exc).__name__}: {exc}",
+                )
+            candidate_state = {
+                "state_id": (
+                    "offline_mixed_topology_gate:"
+                    f"candidate_{stage_index}"
+                ),
+                "status": "candidate",
+                "source_action": copy.deepcopy(action),
+                "case": candidate_case,
+                "measurements": candidate_measurements,
+                "metadata": candidate_metadata,
+                "policy_observation": {
+                    "accepted_corrections": copy.deepcopy(accepted),
+                },
+            }
+            candidate_metrics = (
+                self._parameter_gate_provider.run_wls(candidate_state)
+            )
+            if candidate_metrics.get("execution_status") == "failure":
+                reject(
+                    "mixed_topology_recovery_wls_failed",
+                    f"{family} candidate WLS failed",
+                    failed_stage=f"{family}_candidate_wls",
+                    error_code=candidate_metrics.get("error_code"),
+                )
+            try:
+                parent_score = float(
+                    parent_metrics["remaining_anomaly_score"]
+                )
+                candidate_score = float(
+                    candidate_metrics["remaining_anomaly_score"]
+                )
+                global_progress = (
+                    parent_score - candidate_score
+                ) / max(abs(parent_score), 1e-12)
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
+                OverflowError,
+            ):
+                global_progress = None
+            stage_metrics.update(
+                {
+                    "target_fixed": candidate_metrics.get(
+                        "target_fixed"
+                    ),
+                    "post_action_resolved": candidate_metrics.get(
+                        "post_action_resolved"
+                    ),
+                    "physical_constraints_ok": candidate_metrics.get(
+                        "physical_constraints_ok"
+                    ),
+                    "global_progress": global_progress,
+                    "partial_progress_floor": partial_floor,
+                }
+            )
+            metrics["stages"].append(stage_metrics)
+            if not (
+                candidate_metrics.get("target_fixed") is True
+                and candidate_metrics.get("physical_constraints_ok") is True
+                and (
+                    candidate_metrics.get("post_action_resolved") is True
+                    or (
+                        global_progress is not None
+                        and global_progress >= partial_floor
+                    )
+                )
+            ):
+                reject(
+                    "mixed_topology_recovery_candidate_unrealizable",
+                    f"{family} candidate fails observable acceptance criteria",
+                    failed_stage=f"{family}_candidate_acceptance",
+                )
+
+            current_case = candidate_case
+            current_measurements = [
+                float(value) for value in candidate_measurements
+            ]
+            current_metadata = copy.deepcopy(candidate_metadata)
+            accepted.append({"source_action": copy.deepcopy(action)})
+            parent_metrics = candidate_metrics
+
+        if not (
+            parent_metrics.get("target_fixed") is True
+            and parent_metrics.get("post_action_resolved") is True
+            and parent_metrics.get("physical_constraints_ok") is True
+        ):
+            reject(
+                "mixed_topology_recovery_candidate_unrealizable",
+                "two-stage recovery did not reach a clean final candidate",
+                failed_stage="terminal_verification",
+            )
+
+        final_value = current_measurements[expected_measurement]
+        final_distance = abs(final_value - clean_value)
+        within_tolerance = math.isclose(
+            final_value,
+            clean_value,
+            abs_tol=measurement_abs,
+            rel_tol=measurement_rel,
+        )
+        metrics["measurement_truth_check"] = {
+            "index0": expected_measurement,
+            "final_distance": final_distance,
+            "measurement_abs": measurement_abs,
+            "measurement_rel": measurement_rel,
+            "within_tolerance": within_tolerance,
+        }
+        if not within_tolerance:
+            reject(
+                "mixed_topology_recovery_outside_truth_tolerance",
+                (
+                    "production measurement estimate remains outside the "
+                    "declared strict-audit tolerance"
+                ),
+                failed_stage="measurement_truth_check",
+            )
+
     def _compose_measurement(
         self,
         scenario: dict[str, Any],
@@ -1762,6 +2537,8 @@ class Round0ScenarioGenerator:
             # under that repaired model; otherwise exact sequential recovery is
             # order-dependent and a truth-free policy can finalize too early.
             self._require_anomalous(corrected_case, measurements, family)
+        if family == "measurement+topology":
+            self._require_mixed_topology_recovery_realizable(composed)
         if family == "measurement+parameter":
             self._require_mixed_parameter_recovery_realizable(
                 composed,
