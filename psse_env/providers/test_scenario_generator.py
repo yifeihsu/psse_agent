@@ -482,6 +482,29 @@ class ValidationGateTests(unittest.TestCase):
             "parameter_ranking_dominant": singleton or bool(ratio >= 1.2),
         }
 
+    def test_parameter_dominance_is_training_admission_not_holdout_filter(
+        self,
+    ) -> None:
+        training = Round0ScenarioGenerator(
+            seed=5,
+            source_partition="train",
+        )
+        evaluation = Round0ScenarioGenerator(
+            seed=5,
+            source_partition="evaluation",
+        )
+
+        self.assertIs(training._enforce_parameter_ranking_dominance, True)
+        self.assertEqual(
+            training._parameter_gate_provider.parameter_ranking_dominance_threshold,
+            1.2,
+        )
+        self.assertIs(evaluation._enforce_parameter_ranking_dominance, False)
+        self.assertEqual(
+            evaluation._parameter_gate_provider.parameter_ranking_dominance_threshold,
+            1.0,
+        )
+
     def test_mixed_parameter_probe_preserves_observable_scan_metadata(self) -> None:
         generator = Round0ScenarioGenerator(seed=5, validate=True)
         provider = Mock()

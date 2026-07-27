@@ -380,6 +380,9 @@ class MatpowerDeploymentProviders:
         hif_max_weighted_residual_norm: float = 3.0,
         vm_bound_tolerance_pu: float = 0.005,
         branch_rate_tolerance_mva: float = 1e-6,
+        parameter_ranking_dominance_threshold: float = (
+            PARAMETER_RANKING_DOMINANCE_THRESHOLD
+        ),
     ) -> None:
         self.top_k = int(top_k)
         self.residual_threshold = float(residual_threshold)
@@ -411,8 +414,18 @@ class MatpowerDeploymentProviders:
         self.hif_max_weighted_residual_norm = float(hif_max_weighted_residual_norm)
         self.vm_bound_tolerance_pu = float(vm_bound_tolerance_pu)
         self.branch_rate_tolerance_mva = float(branch_rate_tolerance_mva)
+        self.parameter_ranking_dominance_threshold = float(
+            parameter_ranking_dominance_threshold
+        )
         if self.vm_bound_tolerance_pu < 0.0 or self.branch_rate_tolerance_mva < 0.0:
             raise ValueError("Physical-bound tolerances must be non-negative.")
+        if (
+            not math.isfinite(self.parameter_ranking_dominance_threshold)
+            or self.parameter_ranking_dominance_threshold < 1.0
+        ):
+            raise ValueError(
+                "parameter_ranking_dominance_threshold must be finite and >= 1.0"
+            )
 
     # ------------------------------------------------------------------ wiring
 
@@ -1918,7 +1931,8 @@ class MatpowerDeploymentProviders:
             singleton
             or (
                 dominance_ratio is not None
-                and dominance_ratio >= PARAMETER_RANKING_DOMINANCE_THRESHOLD
+                and dominance_ratio
+                >= self.parameter_ranking_dominance_threshold
             )
         )
         metadata = state.get("metadata")
@@ -1990,7 +2004,7 @@ class MatpowerDeploymentProviders:
             # the explicit singleton/dominant flags preserve that meaning.
             "parameter_ranking_dominance_ratio": dominance_ratio,
             "parameter_ranking_dominance_threshold": (
-                PARAMETER_RANKING_DOMINANCE_THRESHOLD
+                self.parameter_ranking_dominance_threshold
             ),
             "parameter_ranking_singleton": singleton,
             "parameter_ranking_dominant": ranking_dominant,

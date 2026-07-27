@@ -309,6 +309,15 @@ class Round0ScenarioGenerator:
         self.hif_max_scans = int(hif_max_scans)
         self.noise_profile_rows = int(noise_profile_rows)
         self.source_partition = source_partition
+        # The frozen evaluation suite deliberately preserves its previously
+        # approved physical roots, including hard/ambiguous parameter cases.
+        # Dominance is a single-label *training admission* requirement, not a
+        # reason to rewrite a pinned holdout.  The evaluation builder therefore
+        # uses the legacy rank-one inventory threshold while train/unspecified
+        # generation enforces the release threshold below.
+        self._enforce_parameter_ranking_dominance = (
+            source_partition != "evaluation"
+        )
         self._source_partition_metadata: dict[str, Any] = {
             "selected": source_partition,
             "enabled": source_partition is not None,
@@ -337,6 +346,11 @@ class Round0ScenarioGenerator:
         self._parameter_gate_provider = MatpowerDeploymentProviders(
             chi2_alpha=self.chi2_alpha,
             derived_case_dir=str(self.derived_case_dir),
+            parameter_ranking_dominance_threshold=(
+                PARAMETER_RANKING_DOMINANCE_THRESHOLD
+                if self._enforce_parameter_ranking_dominance
+                else 1.0
+            ),
         )
         self._parameter_gate_candidate_oracle = CandidateQualityOracle(
             mode="deployment"
@@ -785,7 +799,10 @@ class Round0ScenarioGenerator:
             for key in _PARAMETER_RANKING_METRIC_KEYS
         }
         metrics["parameter_context_ranking"] = parameter_ranking
-        if not parameter_ranking_contract_is_dominant(context_metrics):
+        if (
+            self._enforce_parameter_ranking_dominance
+            and not parameter_ranking_contract_is_dominant(context_metrics)
+        ):
             raise ScenarioRejected(
                 "parameter_context_target_not_dominant",
                 (
@@ -1585,7 +1602,10 @@ class Round0ScenarioGenerator:
                     key: copy.deepcopy(context.get(key))
                     for key in _PARAMETER_RANKING_METRIC_KEYS
                 }
-                if not parameter_ranking_contract_is_dominant(context):
+                if (
+                    self._enforce_parameter_ranking_dominance
+                    and not parameter_ranking_contract_is_dominant(context)
+                ):
                     metrics["stages"].append(stage_metrics)
                     reject(
                         "mixed_parameter_recovery_context_not_dominant",
