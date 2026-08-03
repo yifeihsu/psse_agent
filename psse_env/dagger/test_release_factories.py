@@ -15,6 +15,7 @@ from psse_env.actions import (
     ASK_FOR_MORE_EVIDENCE,
     COMMIT_STATE,
     CORRECT_MEASUREMENTS,
+    CORRECT_PARAMETERS,
     FINALIZE_DIAGNOSIS,
     RECOVERY_BUDGET_EXHAUSTED_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
@@ -37,11 +38,15 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
                 self,
                 *,
                 chi2_alpha: float,
+                parameter_ranking_dominance_threshold: float,
                 hif_alpha_grid_size: int,
                 hif_r_grid_size: int,
                 hif_max_scans: int,
             ) -> None:
                 self.chi2_alpha = chi2_alpha
+                self.parameter_ranking_dominance_threshold = (
+                    parameter_ranking_dominance_threshold
+                )
                 self.hif_alpha_grid_size = hif_alpha_grid_size
                 self.hif_r_grid_size = hif_r_grid_size
                 self.hif_max_scans = hif_max_scans
@@ -50,6 +55,9 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
                 return {
                     "provider_marker": "deployment",
                     "chi2_alpha": self.chi2_alpha,
+                    "parameter_ranking_dominance_threshold": (
+                        self.parameter_ranking_dominance_threshold
+                    ),
                     "hif_alpha_grid_size": self.hif_alpha_grid_size,
                     "hif_r_grid_size": self.hif_r_grid_size,
                     "hif_max_scans": self.hif_max_scans,
@@ -79,6 +87,14 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
         self.assertEqual(env.kwargs["provider_marker"], "deployment")
         self.assertEqual(env.kwargs["chi2_alpha"], factories.BC0_CHI2_ALPHA)
         self.assertEqual(
+            env.kwargs["parameter_ranking_dominance_threshold"],
+            factories.BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD,
+        )
+        self.assertEqual(
+            factories.BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD,
+            1.0,
+        )
+        self.assertEqual(
             env.kwargs["hif_alpha_grid_size"],
             factories.BC0_HIF_ALPHA_GRID_SIZE,
         )
@@ -100,11 +116,15 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
                 self,
                 *,
                 chi2_alpha: float,
+                parameter_ranking_dominance_threshold: float,
                 hif_alpha_grid_size: int,
                 hif_r_grid_size: int,
                 hif_max_scans: int,
             ) -> None:
                 self.chi2_alpha = chi2_alpha
+                self.parameter_ranking_dominance_threshold = (
+                    parameter_ranking_dominance_threshold
+                )
                 self.hif_alpha_grid_size = hif_alpha_grid_size
                 self.hif_r_grid_size = hif_r_grid_size
                 self.hif_max_scans = hif_max_scans
@@ -373,6 +393,65 @@ class RealProductionExpertRecoveryTests(unittest.TestCase):
                     [row["action"]["tool"] for row in episode["trace"]],
                     [RUN_WLS, FINALIZE_DIAGNOSIS],
                 )
+
+    def test_every_frozen_parameter_route_resolves_with_release_expert(self) -> None:
+        suite_path = (
+            Path(factories.__file__).with_name("suites") / "bc0_eval_suite_v1.json"
+        )
+        suites = json.loads(suite_path.read_text(encoding="utf-8"))
+        target_families = {"parameter", "measurement+parameter"}
+        selected = {
+            suite_name: [
+                row
+                for row in rows
+                if row["grouping"]["scenario_family"] in target_families
+            ]
+            for suite_name, rows in suites.items()
+        }
+        selected = {
+            suite_name: rows for suite_name, rows in selected.items() if rows
+        }
+        self.assertEqual(sum(len(rows) for rows in selected.values()), 30)
+
+        observed_regressions: set[str] = set()
+        prior_failures = {
+            "r0_a80744a6c25e",
+            "r0_b8173b30f6a6",
+            "r0_8e0647a30ae4",
+            "r0_b91e784871bd",
+            "r0_026579c5ac67",
+            "r0_33817d90f478",
+            "r0_14bf9b268327",
+        }
+        for suite_name, scenarios in selected.items():
+            result = self._evaluator(required_suite=suite_name).evaluate(
+                {suite_name: scenarios}
+            )
+            self.assertEqual(
+                len(result.suite_metrics["episodes"]), len(scenarios)
+            )
+            for episode in result.suite_metrics["episodes"]:
+                scenario_id = episode["scenario_id"]
+                family = episode["family"]
+                observed_regressions.add(scenario_id)
+                tools = [row["action"]["tool"] for row in episode["trace"]]
+                with self.subTest(
+                    suite=suite_name,
+                    scenario_id=scenario_id,
+                    family=family,
+                ):
+                    self.assertIs(episode["terminal"], True)
+                    self.assertEqual(episode["terminal_outcome"], "resolved")
+                    self.assertIs(episode["final_physical_success"], True)
+                    self.assertIn(CORRECT_PARAMETERS, tools)
+                    if family == "measurement+parameter":
+                        self.assertIn(CORRECT_MEASUREMENTS, tools)
+                    self.assertEqual(episode["false_commit_count"], 0)
+                    self.assertEqual(episode["false_finalization_count"], 0)
+                    self.assertEqual(episode["false_rollback_count"], 0)
+                    self.assertIs(episode["loop_detected"], False)
+
+        self.assertTrue(prior_failures <= observed_regressions)
 
     def test_partial_multi_measurement_root_hands_off_without_invalid_actions(self) -> None:
         suite_path = (

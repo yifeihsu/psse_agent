@@ -103,6 +103,14 @@ BASE_SNAPSHOT_OPTIONAL_FILE_MANIFEST: dict[str, tuple[int, str, str]] = {
 }
 MODEL_TREE_DIGEST_VERSION = "bc0-peft-tree-sha256-v1"
 BC0_CHI2_ALPHA = DEFAULT_CHI2_ALPHA
+# Training admission requires a 1.2 top-to-runner-up parameter ranking so one
+# supervised target is unambiguous.  Closed-loop release evaluation instead
+# preserves the frozen holdout's legacy rank-one inventory at 1.0: the expert
+# may try ranked alternatives, but every proposed correction still has to pass
+# the deployment candidate-quality gate before it can be committed.  Pin this
+# explicitly so the release factory cannot silently inherit the provider's
+# stricter single-label default and strand observably recoverable holdout roots.
+BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD = 1.0
 # Release evaluation uses the same bounded HIF search resolution as the
 # reviewed round-0 aggregate builder.  The general provider defaults remain
 # available outside this frozen release path, but a learner cannot turn one
@@ -133,6 +141,9 @@ def production_environment_factory(
     # made healthy release roots anomalous only at evaluation time.
     providers = MatpowerDeploymentProviders(
         chi2_alpha=BC0_CHI2_ALPHA,
+        parameter_ranking_dominance_threshold=(
+            BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD
+        ),
         hif_alpha_grid_size=BC0_HIF_ALPHA_GRID_SIZE,
         hif_r_grid_size=BC0_HIF_R_GRID_SIZE,
         hif_max_scans=BC0_HIF_MAX_SCANS,
