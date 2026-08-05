@@ -15,6 +15,9 @@ from hif_search_limits import (
     HIF_R_GRID_SIZE_MIN,
 )
 from psse_env.actions import INVALID_ACTION, MACRO_ACTIONS, safe_normalize_action
+from psse_env.dagger.offline_teacher_target_audit import (
+    validate_offline_teacher_target_audit_metadata,
+)
 from psse_env.state_store import find_forbidden_policy_paths
 
 
@@ -1163,6 +1166,28 @@ def examples_to_chat_sft(
                 "Example is explicitly ineligible for production SFT; export it only "
                 "to a separate auxiliary artifact with allow_ineligible_auxiliary=True."
             )
+        offline_target_audit = example.get("offline_teacher_target_audit")
+        production_dagger1 = (
+            example.get("production_label_eligible") is True
+            and example.get("recovery_label_contract")
+            == "observable_rank_one_learner_state_v1"
+        )
+        if production_dagger1:
+            try:
+                offline_target_audit = (
+                    validate_offline_teacher_target_audit_metadata(
+                        offline_target_audit, require_passed=True
+                    )
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "Production DAgger-1 SFT row lacks a passed offline "
+                    "teacher-target audit."
+                ) from exc
+        elif offline_target_audit is not None:
+            offline_target_audit = validate_offline_teacher_target_audit_metadata(
+                offline_target_audit
+            )
         target = example.get("preferred_action")
         if target is None:
             valid = example.get("valid_next_actions") or []
@@ -1366,6 +1391,14 @@ def examples_to_chat_sft(
                 },
             },
         }
+        if offline_target_audit is not None:
+            # Privileged collection result retained only as non-model row
+            # metadata.  It is never interpolated into system/user/assistant
+            # messages or the executable tool schema.  Omit the field for D0
+            # and other contracts that do not run this DAgger-1 audit.
+            row["metadata"]["offline_teacher_target_audit"] = copy.deepcopy(
+                offline_target_audit
+            )
         validate_tool_schemas(row["tools"])
         validate_policy_payload(
             json.loads(row["messages"][1]["content"]),

@@ -16,6 +16,10 @@ from psse_env.actions import (
     safe_normalize_action,
 )
 from psse_env.dagger.dataset_builder import validate_policy_payload
+from psse_env.dagger.offline_teacher_target_audit import (
+    offline_teacher_target_audit,
+    validate_offline_teacher_target_audit_metadata,
+)
 from psse_env.dagger.replay_buffer import BalancedReplayBuffer
 from psse_env.state_store import OracleState, PolicyObservation, policy_safe_copy
 
@@ -23,6 +27,9 @@ from psse_env.state_store import OracleState, PolicyObservation, policy_safe_cop
 ALL_ADMISSIBLE_SUPERVISION = "all_admissible"
 BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION = "bc0_observable_sequential_v1"
 DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION = "dagger1_observable_recovery_v1"
+OFFLINE_TEACHER_TARGET_QUARANTINE_SUMMARY_CONTRACT = (
+    "dagger1_offline_teacher_target_quarantine_summary_v1"
+)
 SUPPORTED_SUPERVISION_POLICIES = frozenset(
     {
         ALL_ADMISSIBLE_SUPERVISION,
@@ -595,6 +602,13 @@ def audit_dagger1_recovery_labels(
             reasons.append("expert_target_not_observably_rank_one")
         if labels.get("training_decision_evidence_verified") is not True:
             reasons.append("training_decision_evidence_not_verified")
+        offline_audit = row.get("offline_teacher_target_audit")
+        try:
+            validate_offline_teacher_target_audit_metadata(
+                offline_audit, require_passed=True
+            )
+        except ValueError:
+            reasons.append("offline_teacher_target_audit_not_passed")
         if reasons:
             eligibility_violations.append(
                 {
@@ -609,6 +623,102 @@ def audit_dagger1_recovery_labels(
         "mismatches": mismatches,
         "eligibility_violations": eligibility_violations,
         "passed": not mismatches and not eligibility_violations,
+    }
+
+
+def summarize_dagger1_offline_teacher_target_quarantine(
+    rows: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Count failed private audits only for otherwise-admissible D1 rows.
+
+    Candidate membership deliberately reproduces every production condition
+    that precedes the offline audit in ``collect_iteration``.  Thus a failed
+    audit cannot hide by flipping ``production_label_eligible`` to false, while
+    diagnostic, initial/expert, and non-recovery rows do not create false
+    quarantine counts.
+    """
+
+    materialized = list(rows)
+    passed_rows = 0
+    quarantined_rows = 0
+    invalid_or_missing = 0
+    action_classes: Counter[str] = Counter()
+    reason_codes: Counter[str] = Counter()
+    quarantined_example_ids: list[str] = []
+
+    def is_candidate(row: Mapping[str, Any]) -> bool:
+        labels = row.get("labels")
+        labels = labels if isinstance(labels, Mapping) else {}
+        proof = row.get(
+            "observable_rank_one_target_proof",
+            labels.get("observable_rank_one_target_proof"),
+        )
+        stratum = row.get("recovery_stratum", labels.get("recovery_stratum"))
+        return bool(
+            row.get("supervision_policy", labels.get("supervision_policy"))
+            == DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION
+            and row.get("collection_role", labels.get("collection_role"))
+            == "training"
+            and row.get("state_origin", labels.get("state_origin"))
+            == "learner_policy"
+            and stratum in _DAGGER1_PRODUCTION_RECOVERY_STRATA
+            and row.get("preferred_action") is not None
+            and labels.get("training_decision_evidence_verified") is True
+            and isinstance(proof, Mapping)
+            and proof.get("passed") is True
+        )
+
+    candidate_rows = [row for row in materialized if is_candidate(row)]
+    for index, row in enumerate(candidate_rows):
+        raw_audit = row.get("offline_teacher_target_audit")
+        try:
+            audit = validate_offline_teacher_target_audit_metadata(raw_audit)
+        except ValueError:
+            quarantined_rows += 1
+            invalid_or_missing += 1
+            reason_codes["invalid_or_missing_audit_metadata"] += 1
+            quarantined_example_ids.append(
+                str(row.get("example_id") or f"candidate_{index}")
+            )
+            continue
+        if audit["passed"] is True:
+            passed_rows += 1
+            continue
+        quarantined_rows += 1
+        action_classes[str(audit["action_class"])] += 1
+        for reason in audit["reason_codes"]:
+            reason_codes[str(reason)] += 1
+        quarantined_example_ids.append(
+            str(row.get("example_id") or f"candidate_{index}")
+        )
+
+    zero_quarantine = quarantined_rows == 0
+    return {
+        "contract": OFFLINE_TEACHER_TARGET_QUARANTINE_SUMMARY_CONTRACT,
+        "candidate_definition": {
+            "collector_contract": DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
+            "collection_role": "training",
+            "state_origin": "learner_policy",
+            "production_recovery_strata": sorted(
+                _DAGGER1_PRODUCTION_RECOVERY_STRATA
+            ),
+            "pre_audit_requirements": [
+                "preferred_action_present",
+                "training_decision_evidence_verified",
+                "observable_rank_one_target_proof_passed",
+            ],
+        },
+        "total_rows": len(materialized),
+        "candidate_rows": len(candidate_rows),
+        "non_candidate_rows": len(materialized) - len(candidate_rows),
+        "passed_rows": passed_rows,
+        "quarantined_rows": quarantined_rows,
+        "invalid_or_missing_audit_rows": invalid_or_missing,
+        "quarantined_by_action_class": dict(sorted(action_classes.items())),
+        "quarantined_by_reason_code": dict(sorted(reason_codes.items())),
+        "quarantined_example_ids": quarantined_example_ids,
+        "zero_truth_audit_quarantine": zero_quarantine,
+        "passed": zero_quarantine,
     }
 
 
@@ -703,6 +813,7 @@ class DaggerRolloutCollector:
         for scenario_index, scenario in enumerate(scenario_list):
             runtime_scenario: Mapping[str, Any] = scenario
             grouping: Mapping[str, Any] = scenario
+            offline_audit_scenario: dict[str, Any] = copy.deepcopy(dict(scenario))
             if (
                 self.supervision_policy
                 == DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION
@@ -749,6 +860,25 @@ class DaggerRolloutCollector:
                         continue
                     runtime_scenario[str(key)] = copy.deepcopy(value)
                 grouping = raw_grouping
+                offline_audit_scenario = copy.deepcopy(dict(runtime_scenario))
+                offline_audit_scenario["truth_complete"] = (
+                    normalized_private_truth.get("truth_complete") is True
+                )
+                release_audit = raw_audit.get("release_audit")
+                if isinstance(release_audit, Mapping):
+                    offline_audit_scenario["release_audit"] = copy.deepcopy(
+                        dict(release_audit)
+                    )
+                for key in (
+                    "root_scenario_id",
+                    "physical_root_fingerprint",
+                    "scenario_family",
+                    "error_cardinality",
+                ):
+                    if raw_grouping.get(key) is not None:
+                        offline_audit_scenario[key] = copy.deepcopy(
+                            raw_grouping[key]
+                        )
             if self.supervision_policy == DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION:
                 split = str(
                     grouping.get("dataset_split") or grouping.get("split") or ""
@@ -794,20 +924,36 @@ class DaggerRolloutCollector:
                 policy_observation = self._policy_observation(history)
                 observation_dict = policy_observation.as_dict()
                 validate_policy_payload(observation_dict)
-                oracle_state = self._oracle_state(history, policy_observation)
-                expert_actions = [
-                    safe_normalize_action(action)
-                    for action in self.expert_oracle.next_actions(oracle_state, history)
-                ]
-                expert_actions = [
-                    action for action in expert_actions if action["tool"] != "__invalid_action__"
-                ]
+                oracle_state: OracleState | Mapping[str, Any] | None = None
+                if (
+                    self.supervision_policy
+                    != DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION
+                ):
+                    oracle_state = self._oracle_state(
+                        history, policy_observation
+                    )
+                expert_actions = self._select_expert_actions(
+                    policy_observation=policy_observation,
+                    oracle_state=oracle_state,
+                    history=history,
+                )
                 preferred_action = expert_actions[0] if expert_actions else None
                 rank_one_target_proof = observable_rank_one_target_proof(
                     observation_dict,
                     preferred_action=preferred_action,
                     expert_actions=expert_actions,
                 )
+                if (
+                    self.supervision_policy
+                    == DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION
+                ):
+                    # The D1 teacher target and its observable proof are fixed
+                    # before private state is constructed.  OracleState is
+                    # available only to the post-target audit and transition
+                    # truth label below.
+                    oracle_state = self._oracle_state(
+                        history, policy_observation
+                    )
                 if self.supervision_policy in {
                     BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION,
                     DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
@@ -832,7 +978,11 @@ class DaggerRolloutCollector:
                     deferred_expert_actions = []
                 target_candidate_disposition = None
                 target_candidate_assessment: dict[str, Any] = {}
-                if isinstance(oracle_state, OracleState):
+                if (
+                    self.supervision_policy
+                    != DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION
+                    and isinstance(oracle_state, OracleState)
+                ):
                     target_candidate_disposition = oracle_state.candidate_disposition
                     target_candidate_assessment = copy.deepcopy(
                         dict(oracle_state.candidate_assessment or {})
@@ -850,6 +1000,26 @@ class DaggerRolloutCollector:
                             f"preferred_tool={preferred_action.get('tool')}: {exc}"
                         ) from exc
                     training_decision_evidence_verified = True
+                offline_target_audit: dict[str, Any] | None = None
+                if (
+                    self.supervision_policy
+                    == DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION
+                ):
+                    # The target is already fixed from PolicyObservation.  Only
+                    # now may the collector inspect private physical truth, and
+                    # the lossy result is used solely to admit or quarantine the
+                    # row; it cannot feed back into target selection or policy
+                    # input.
+                    offline_target_audit = offline_teacher_target_audit(
+                        preferred_action=preferred_action,
+                        oracle_state=oracle_state,
+                        policy_observation=policy_observation,
+                        scenario=offline_audit_scenario,
+                        env=self.env,
+                        observable_evidence_passed=(
+                            training_decision_evidence_verified
+                        ),
+                    )
                 model_action = self._policy_action(observation_dict)
 
                 if preferred_action is not None and self.rng.random() < float(beta):
@@ -891,16 +1061,21 @@ class DaggerRolloutCollector:
                 }
                 next_history = history + [transition_record]
                 final_next_policy_observation = self._policy_observation(next_history)
-                next_oracle_state = self._oracle_state(next_history, final_next_policy_observation)
+                final_next_oracle_state: OracleState | Mapping[str, Any] | None = None
+                if (
+                    self.supervision_policy
+                    != DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION
+                ):
+                    final_next_oracle_state = self._oracle_state(
+                        next_history, final_next_policy_observation
+                    )
                 next_valid_actions = []
                 if not self.env.is_terminal(next_state):
-                    next_valid_actions = [
-                        safe_normalize_action(action)
-                        for action in self.expert_oracle.next_actions(next_oracle_state, next_history)
-                    ]
-                    next_valid_actions = [
-                        action for action in next_valid_actions if action["tool"] != "__invalid_action__"
-                    ]
+                    next_valid_actions = self._select_expert_actions(
+                        policy_observation=final_next_policy_observation,
+                        oracle_state=final_next_oracle_state,
+                        history=next_history,
+                    )
                 if not transition_label.get("valid_next_actions"):
                     transition_label["valid_next_actions"] = next_valid_actions
 
@@ -964,6 +1139,12 @@ class DaggerRolloutCollector:
                     elif rank_one_target_proof.get("passed") is not True:
                         dagger1_ineligibility_reason = (
                             "expert_target_not_observably_rank_one"
+                        )
+                    elif not isinstance(offline_target_audit, Mapping) or (
+                        offline_target_audit.get("passed") is not True
+                    ):
+                        dagger1_ineligibility_reason = (
+                            "offline_teacher_target_audit_failed"
                         )
                     else:
                         dagger1_production_eligible = True
@@ -1051,6 +1232,12 @@ class DaggerRolloutCollector:
                         ),
                     },
                 }
+                if offline_target_audit is not None:
+                    # Root-level collection metadata is deliberately not part
+                    # of ``labels`` or any model-visible observation/message.
+                    example["offline_teacher_target_audit"] = copy.deepcopy(
+                        offline_target_audit
+                    )
                 if dagger1_production_eligible is not None:
                     example["production_label_eligible"] = (
                         dagger1_production_eligible
@@ -1108,6 +1295,60 @@ class DaggerRolloutCollector:
         if hasattr(self.env, "get_oracle_state"):
             return self.env.get_oracle_state(history)
         return policy_observation.as_dict()
+
+    def _select_expert_actions(
+        self,
+        *,
+        policy_observation: PolicyObservation,
+        oracle_state: OracleState | Mapping[str, Any] | None,
+        history: list[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if self.supervision_policy == DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION:
+            # D1 labels must be a function of exactly what the learner sees.
+            # In particular, never pass the collector's longer private
+            # transition history into either teacher path: transition labels
+            # are produced after an OracleState exists and may contain fields
+            # outside the bounded PolicyObservation history window.
+            observation_payload = policy_observation.as_dict()
+            raw_history_window = observation_payload.get("history_window")
+            if not isinstance(raw_history_window, list) or any(
+                not isinstance(item, Mapping) for item in raw_history_window
+            ):
+                raise ValueError(
+                    "DAgger-1 PolicyObservation history_window must be a list "
+                    "of mappings"
+                )
+            observable_history = [
+                copy.deepcopy(dict(item)) for item in raw_history_window
+            ]
+            # Reuse the reviewed deployment reconstruction for verified
+            # candidate commit/rollback/handoff decisions, then fall back to
+            # the rule expert with PolicyObservation itself.  The lazy import
+            # avoids changing the frozen release-factory source.
+            from psse_env.dagger.release_factories import (
+                _observable_candidate_disposition_action,
+            )
+
+            observable_action = _observable_candidate_disposition_action(
+                copy.deepcopy(observation_payload),
+                copy.deepcopy(observable_history),
+            )
+            raw_actions = (
+                [observable_action]
+                if observable_action is not None
+                else self.expert_oracle.next_actions(
+                    policy_observation,
+                    copy.deepcopy(observable_history),
+                )
+            )
+        else:
+            if oracle_state is None:
+                raise RuntimeError("non-D1 expert selection requires oracle state")
+            raw_actions = self.expert_oracle.next_actions(oracle_state, history)
+        normalized = [safe_normalize_action(action) for action in raw_actions]
+        return [
+            action for action in normalized if action["tool"] != "__invalid_action__"
+        ]
 
     def _policy_action(self, observation: Mapping[str, Any]) -> dict[str, Any]:
         try:

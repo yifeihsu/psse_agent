@@ -95,20 +95,24 @@ class _LearnerRecoveryPolicy:
 class _LearnerRecoveryOracle:
     def __init__(self):
         self.seen_truth = []
+        self.teacher_state_types = []
 
     def next_actions(self, state, history=None):
         del history
-        self.seen_truth.append(copy.deepcopy(state.truth_dict()))
-        disposition = getattr(state, "candidate_disposition", None)
-        if disposition == "REJECT":
-            candidate = state.policy_observation.candidate_state_id
+        self.teacher_state_types.append(type(state))
+        observation = (
+            state.policy_observation
+            if isinstance(state, OracleState)
+            else state
+        )
+        if observation.candidate_lifecycle == "VERIFIED_REJECT":
+            candidate = observation.candidate_state_id
             return [
                 {
                     "tool": "rollback_state",
                     "arguments": {"candidate_state_id": candidate},
                 }
             ]
-        observation = state.policy_observation
         return [
             {
                 "tool": RUN_WLS,
@@ -117,11 +121,113 @@ class _LearnerRecoveryOracle:
         ]
 
     def label_transition(self, **kwargs):
+        state = kwargs["state"]
+        if isinstance(state, OracleState):
+            self.seen_truth.append(copy.deepcopy(state.truth_dict()))
         return {
             "process_valid": True,
             "execution_status": kwargs["tool_output"]["execution_status"],
             "valid_next_actions": [],
         }
+
+
+class _TruthSensitiveRecoveryOracle(_LearnerRecoveryOracle):
+    """Adversarial fixture: private input would change the selected target."""
+
+    def __init__(self):
+        super().__init__()
+        self.private_teacher_selection_calls = 0
+
+    def next_actions(self, state, history=None):
+        if isinstance(state, OracleState):
+            self.private_teacher_selection_calls += 1
+            if state.true_parameter_errors:
+                return [
+                    {
+                        "tool": "get_parameter_context",
+                        "arguments": {"state_id": state.policy_observation.active_state_id},
+                    }
+                ]
+        return super().next_actions(state, history)
+
+
+class _HistorySensitiveRecoveryOracle(_LearnerRecoveryOracle):
+    """Adversarial fixture for post-target private-history leakage."""
+
+    def __init__(self):
+        super().__init__()
+        self.teacher_histories = []
+
+    def next_actions(self, state, history=None):
+        visible_history = copy.deepcopy(list(history or []))
+        self.teacher_histories.append(visible_history)
+        if any(
+            item.get("transition_label", {}).get("opaque_private_route")
+            == "parameter"
+            for item in visible_history
+        ):
+            observation = (
+                state.policy_observation
+                if isinstance(state, OracleState)
+                else state
+            )
+            return [
+                {
+                    "tool": "get_parameter_context",
+                    "arguments": {"state_id": observation.active_state_id},
+                }
+            ]
+        return super().next_actions(state, history)
+
+    def label_transition(self, **kwargs):
+        result = super().label_transition(**kwargs)
+        state = kwargs["state"]
+        result["opaque_private_route"] = (
+            "parameter"
+            if isinstance(state, OracleState) and state.true_parameter_errors
+            else "measurement"
+        )
+        return result
+
+
+class _LearnerRecoveryStore:
+    def __init__(self, scenario):
+        self.active_state_id = "active"
+        self.states = {
+            "active": {
+                "state_id": "active",
+                "state_hash": "active-hash",
+                "case": copy.deepcopy(scenario.get("case", {})),
+                "measurements": copy.deepcopy(scenario.get("measurements", [])),
+            }
+        }
+
+    def exists(self, state_id):
+        return str(state_id) in self.states
+
+    def get_state(self, state_id):
+        return copy.deepcopy(self.states[str(state_id)])
+
+    def create_rejected_candidate(self, action):
+        candidate = copy.deepcopy(self.states[self.active_state_id])
+        candidate.update(
+            {
+                "state_id": "candidate",
+                "state_hash": "candidate-hash",
+                "parent_state_id": self.active_state_id,
+                "source_action": copy.deepcopy(action),
+                "verification_output": {
+                    "execution_status": "success",
+                    "state_id": "candidate",
+                    "state_hash": "candidate-hash",
+                },
+                "candidate_disposition": "REJECT",
+            }
+        )
+        updates = action.get("arguments", {}).get("measurement_updates", {})
+        for raw_index, value in updates.items():
+            candidate["measurements"][int(raw_index)] = value
+        self.states["candidate"] = candidate
 
 
 class _LearnerRecoveryEnv:
@@ -134,6 +240,8 @@ class _LearnerRecoveryEnv:
 
     def reset(self, scenario):
         self.last_reset_scenario = copy.deepcopy(scenario)
+        self.store = _LearnerRecoveryStore(scenario)
+        self.current_candidate_id = None
         self.stage = 0
         self.terminal = False
         return self.current_state()
@@ -146,12 +254,23 @@ class _LearnerRecoveryEnv:
         }
 
     def get_policy_observation(self, history):
+        verification = (
+            {
+                "execution_status": "success",
+                "state_id": "candidate",
+                "evidence_source": "observable:test_verifier",
+                "physical_constraints_ok": False,
+            }
+            if self.stage == 1
+            else {}
+        )
         return PolicyObservation(
             active_state_id="active",
             candidate_state_id="candidate" if self.stage == 1 else None,
             candidate_lifecycle=("VERIFIED_REJECT" if self.stage == 1 else "NO_CANDIDATE"),
             has_open_candidate=self.stage == 1,
             has_verified_candidate=self.stage == 1,
+            last_verification=verification,
             history_window=list(history),
             remaining_budget=4 - self.stage,
         )
@@ -159,8 +278,23 @@ class _LearnerRecoveryEnv:
     def get_oracle_state(self, history):
         observation = self.get_policy_observation(history)
         reset = self.last_reset_scenario or {}
+        hidden_truth = {
+            "truth_complete": reset.get("truth_complete") is True,
+            "clean_case": copy.deepcopy(reset.get("clean_case")),
+            "clean_measurements": copy.deepcopy(reset.get("clean_measurements")),
+            "true_measurement_errors": copy.deepcopy(
+                list(reset.get("true_measurement_errors") or [])
+            ),
+            "true_parameter_errors": copy.deepcopy(
+                list(reset.get("true_parameter_errors") or [])
+            ),
+            "true_topology_errors": copy.deepcopy(
+                list(reset.get("true_topology_errors") or [])
+            ),
+        }
         return OracleState(
             policy_observation=observation,
+            clean_case=copy.deepcopy(reset.get("clean_case")),
             clean_measurements=copy.deepcopy(reset.get("clean_measurements")),
             true_measurement_errors=copy.deepcopy(
                 list(reset.get("true_measurement_errors") or [])
@@ -172,6 +306,7 @@ class _LearnerRecoveryEnv:
                 if self.stage == 1
                 else {}
             ),
+            hidden_truth=hidden_truth,
         )
 
     def assert_training_decision_evidence(self, action):
@@ -179,10 +314,12 @@ class _LearnerRecoveryEnv:
             raise ValueError("rejected learner candidate must roll back")
 
     def step(self, action):
-        del action
         if self.stage == 0:
+            self.store.create_rejected_candidate(action)
+            self.current_candidate_id = "candidate"
             self.stage = 1
         else:
+            self.current_candidate_id = None
             self.stage = 2
             self.terminal = True
         return self.current_state(), {
@@ -195,6 +332,48 @@ class _LearnerRecoveryEnv:
     def is_terminal(self, state=None):
         del state
         return self.terminal
+
+
+class _HistoryBoundaryEnv(_LearnerRecoveryEnv):
+    """Expose a bounded observation history while retaining private labels."""
+
+    def current_state(self):
+        return {
+            "active_state_id": "active",
+            "candidate_state_id": None,
+            "remaining_budget": 2 - self.stage,
+        }
+
+    def get_policy_observation(self, history):
+        del history
+        return PolicyObservation(
+            active_state_id="active",
+            history_window=[],
+            remaining_budget=2 - self.stage,
+        )
+
+    def assert_training_decision_evidence(self, action):
+        del action
+
+    def step(self, action):
+        del action
+        self.stage += 1
+        self.terminal = self.stage >= 2
+        return self.current_state(), {
+            "execution_status": "success",
+            "error_code": None,
+            "state_mutated": False,
+            "tool_metrics": {},
+        }
+
+
+class _RunWlsPolicy:
+    @staticmethod
+    def act(observation):
+        return {
+            "tool": RUN_WLS,
+            "arguments": {"state_id": observation["active_state_id"]},
+        }
 
 
 class DaggerExecutionRegressionTests(unittest.TestCase):
@@ -273,6 +452,13 @@ class DaggerExecutionRegressionTests(unittest.TestCase):
                     )
 
     def test_dagger1_marks_only_rank_one_learner_recovery_state_eligible(self):
+        private_truth = {
+            "clean_case": {},
+            "clean_measurements": [1.0, 2.0],
+            "measurements": [1.0, 9.0],
+            "true_measurement_errors": [{"index": 1, "clean": 2.0}],
+            "truth_complete": True,
+        }
         rows = DaggerRolloutCollector(
             env=_LearnerRecoveryEnv(),
             policy=_LearnerRecoveryPolicy(),
@@ -285,6 +471,7 @@ class DaggerExecutionRegressionTests(unittest.TestCase):
                 _scenario(
                     physical_root_fingerprint="dagger-train-root",
                     dataset_split="dagger_train",
+                    **private_truth,
                 )
             ],
             iteration=1,
@@ -326,6 +513,7 @@ class DaggerExecutionRegressionTests(unittest.TestCase):
                 _scenario(
                     physical_root_fingerprint="dagger-diagnostic-root",
                     dataset_split="dagger_train",
+                    **private_truth,
                 )
             ],
             iteration=1,
@@ -418,6 +606,141 @@ class DaggerExecutionRegressionTests(unittest.TestCase):
         for private_key in ("true_measurement_errors", "clean_measurements"):
             self.assertNotIn(private_key, policy_payload)
             self.assertNotIn(private_key, exported_payload)
+
+    def test_dagger1_teacher_targets_are_invariant_to_hidden_truth(self):
+        def collect(private_truth):
+            oracle = _TruthSensitiveRecoveryOracle()
+            scenario = _scenario(
+                scenario_id="truth-boundary",
+                case={},
+                measurements=[1.0, 9.0],
+                root_scenario_id="truth-boundary",
+                physical_root_fingerprint="truth-boundary-root",
+                scenario_family="measurement",
+                error_cardinality=1,
+                case_id="case14",
+                dataset_split="dagger_train",
+                source_tier="generated",
+                **copy.deepcopy(private_truth),
+            )
+            rows = DaggerRolloutCollector(
+                env=_LearnerRecoveryEnv(),
+                policy=_LearnerRecoveryPolicy(),
+                expert_oracle=oracle,
+                rng=random.Random(0),
+                supervision_policy=DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
+                forbidden_physical_roots={"held-out-root"},
+            ).collect_iteration(
+                scenarios=[scenario],
+                iteration=1,
+                beta=0.25,
+                max_steps=2,
+                collection_role="training",
+            )
+            return oracle, rows
+
+        shared_truth = {
+            "truth_complete": True,
+            "clean_measurements": [1.0, 2.0],
+            "true_measurement_errors": [{"index": 1, "clean": 2.0}],
+        }
+        plain_oracle, plain_rows = collect(shared_truth)
+        changed_oracle, changed_rows = collect(
+            {
+                **shared_truth,
+                # This private fault would deliberately change the adversarial
+                # fixture's target if the collector passed OracleState into
+                # teacher selection.
+                "true_parameter_errors": [
+                    {"line_index": 1, "field": "r", "clean": 0.1}
+                ],
+            }
+        )
+
+        self.assertEqual(
+            [row["policy_observation"] for row in plain_rows],
+            [row["policy_observation"] for row in changed_rows],
+        )
+        self.assertEqual(
+            [row["preferred_action"] for row in plain_rows],
+            [row["preferred_action"] for row in changed_rows],
+        )
+        self.assertEqual(
+            [row["next_valid_actions"] for row in plain_rows],
+            [row["next_valid_actions"] for row in changed_rows],
+        )
+        for oracle in (plain_oracle, changed_oracle):
+            self.assertEqual(oracle.private_teacher_selection_calls, 0)
+            self.assertTrue(oracle.teacher_state_types)
+            self.assertEqual(set(oracle.teacher_state_types), {PolicyObservation})
+        self.assertEqual(
+            [row["preferred_action"]["tool"] for row in plain_rows],
+            [RUN_WLS, "rollback_state"],
+        )
+        self.assertTrue(plain_rows[1]["production_label_eligible"])
+        self.assertTrue(changed_rows[1]["production_label_eligible"])
+
+    def test_dagger1_teacher_cannot_read_private_transition_history(self):
+        def collect(true_parameter_errors):
+            oracle = _HistorySensitiveRecoveryOracle()
+            rows = DaggerRolloutCollector(
+                env=_HistoryBoundaryEnv(),
+                policy=_RunWlsPolicy(),
+                expert_oracle=oracle,
+                rng=random.Random(0),
+                supervision_policy=DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
+                forbidden_physical_roots={"held-out-root"},
+            ).collect_iteration(
+                scenarios=[
+                    _scenario(
+                        scenario_id="history-boundary",
+                        case={},
+                        measurements=[1.0],
+                        root_scenario_id="history-boundary",
+                        physical_root_fingerprint="history-boundary-root",
+                        scenario_family="parameter",
+                        error_cardinality=1,
+                        case_id="case14",
+                        dataset_split="dagger_train",
+                        source_tier="generated",
+                        truth_complete=True,
+                        clean_measurements=[1.0],
+                        true_parameter_errors=copy.deepcopy(
+                            true_parameter_errors
+                        ),
+                    )
+                ],
+                iteration=1,
+                beta=0.25,
+                max_steps=2,
+                collection_role="training",
+            )
+            return oracle, rows
+
+        plain_oracle, plain_rows = collect([])
+        changed_oracle, changed_rows = collect(
+            [{"line_index": 1, "field": "r", "clean": 0.1}]
+        )
+
+        self.assertEqual(
+            [row["policy_observation"] for row in plain_rows],
+            [row["policy_observation"] for row in changed_rows],
+        )
+        self.assertEqual(
+            [row["preferred_action"] for row in plain_rows],
+            [row["preferred_action"] for row in changed_rows],
+        )
+        self.assertEqual(
+            [row["next_valid_actions"] for row in plain_rows],
+            [row["next_valid_actions"] for row in changed_rows],
+        )
+        self.assertEqual(
+            [row["preferred_action"]["tool"] for row in plain_rows],
+            [RUN_WLS, RUN_WLS],
+        )
+        for oracle in (plain_oracle, changed_oracle):
+            self.assertTrue(oracle.teacher_histories)
+            self.assertTrue(all(history == [] for history in oracle.teacher_histories))
 
     def test_dagger1_recovery_strata_use_only_observable_state(self):
         target = {"tool": RUN_WLS, "arguments": {"state_id": "active"}}

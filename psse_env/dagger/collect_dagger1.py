@@ -5,7 +5,6 @@ import hashlib
 import importlib
 import inspect
 import json
-import math
 import random
 import re
 from collections import Counter
@@ -13,9 +12,23 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from psse_env.dagger.build_dagger1_development_holdout import (
+    APPROVED_DAGGER1_DEVELOPMENT_ROOT_COUNT,
+    DAGGER1_DEVELOPMENT_HOLDOUT_CONTRACT,
+    DAGGER1_DEVELOPMENT_SPLIT,
+    DAGGER1_DEVELOPMENT_SUITE_NAME,
+    DEFAULT_DAGGER1_DEVELOPMENT_ROOT_PLAN,
+)
 from psse_env.dagger.dataset_builder import write_jsonl
 from psse_env.dagger.release_factories import (
     BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD,
+    inspect_release_checkpoint,
+)
+from psse_env.dagger.replay_buffer import (
+    DAGGER1_TARGETED_STATE_CELL_MINIMUM_DISTINCT_ROOTS,
+    audit_dagger1_independent_root_support,
+    dagger1_replay_capacity_report,
+    dagger1_targeted_state_cells,
 )
 from psse_env.dagger.rollout_collector import (
     DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
@@ -23,10 +36,15 @@ from psse_env.dagger.rollout_collector import (
     DaggerRolloutCollector,
     audit_dagger1_recovery_labels,
     audit_target_aware_state_classes,
+    summarize_dagger1_offline_teacher_target_quarantine,
 )
 from psse_env.oracle.expert_policy import ExpertPolicyOracle
 from psse_env.providers.matpower import PARAMETER_RANKING_CONTRACT
-from psse_env.sft.provenance import file_sha256, git_source_state
+from psse_env.sft.provenance import (
+    file_sha256,
+    git_source_state,
+    stable_json_sha256,
+)
 
 
 DEFAULT_FORBIDDEN_SUITE = (
@@ -42,6 +60,7 @@ DEFAULT_POLICY_FACTORY_SPEC = (
     "psse_env.dagger.release_factories:gemma_release_policy_factory"
 )
 _IMMUTABLE_REVISION = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})")
+_ADAPTER_TREE_REVISION = re.compile(r"[0-9a-fA-F]{64}")
 DEFAULT_TARGET_MIN_ROWS = 300
 DEFAULT_TARGET_MAX_ROWS = 600
 DAGGER1_SCENARIO_BUILDER_CONTRACT = (
@@ -129,6 +148,215 @@ def frozen_physical_roots(path: Path) -> frozenset[str]:
             roots.add(root)
     if not roots:
         raise ValueError("forbidden evaluation suite has no physical roots")
+    return frozenset(roots)
+
+
+def validate_d0_provenance_binding(
+    provenance: Mapping[str, Any],
+    *,
+    raw_path: Path,
+    source_state: Mapping[str, Any],
+) -> None:
+    """Require a clean, content-addressed D0 prerequisite for collection."""
+
+    descriptor = provenance.get("generation_descriptor")
+    descriptor = descriptor if isinstance(descriptor, Mapping) else None
+    d0_source = descriptor.get("source_state") if descriptor is not None else None
+    dataset_hashes = provenance.get("dataset_hashes")
+    checks = {
+        "release_eligible": provenance.get("release_eligible") is True,
+        "generation_descriptor": descriptor is not None,
+        "generation_provenance_id": descriptor is not None
+        and provenance.get("generation_provenance_id")
+        == stable_json_sha256(descriptor),
+        "release_eligible_source": isinstance(d0_source, Mapping)
+        and d0_source.get("release_eligible_source") is True,
+        "source_commit": isinstance(d0_source, Mapping)
+        and d0_source.get("source_commit") == source_state.get("source_commit"),
+        "raw_sha256": isinstance(dataset_hashes, Mapping)
+        and dataset_hashes.get(raw_path.name) == _file_sha256(raw_path),
+    }
+    failed = sorted(name for name, passed in checks.items() if not passed)
+    if failed:
+        raise RuntimeError(
+            "D0 aggregate is not clean/content-addressed for current source: "
+            + ", ".join(failed)
+        )
+
+
+def validate_development_holdout_binding(
+    holdout_path: Path,
+    manifest_path: Path,
+    *,
+    source_state: Mapping[str, Any],
+    scenario_input_path: Path,
+    scenario_manifest_path: Path,
+    d0_raw_path: Path,
+    d0_provenance_path: Path,
+    forbidden_suite_path: Path,
+    evaluation_policy_path: Path,
+    require_model_selection_eligible: bool,
+) -> frozenset[str]:
+    """Validate and return the independently reserved development roots."""
+
+    if not holdout_path.is_file() or not manifest_path.is_file():
+        raise FileNotFoundError(
+            "DAgger-1 development holdout and manifest must both exist"
+        )
+    payload = json.loads(holdout_path.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping) or not isinstance(manifest, Mapping):
+        raise ValueError("development holdout and manifest must be JSON objects")
+    if set(payload) != {DAGGER1_DEVELOPMENT_SUITE_NAME}:
+        raise ValueError("development holdout has an unexpected suite mapping")
+    rows = payload.get(DAGGER1_DEVELOPMENT_SUITE_NAME)
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("development holdout suite must be a non-empty list")
+
+    roots: set[str] = set()
+    family_counts: Counter[str] = Counter()
+    for index, row in enumerate(rows):
+        if not isinstance(row, Mapping) or row.get("scenario_schema_version") != 1:
+            raise ValueError(f"development holdout row {index} is not schema-v1")
+        execution = row.get("execution")
+        audit = row.get("audit")
+        grouping = row.get("grouping")
+        if not all(
+            isinstance(value, Mapping)
+            for value in (execution, audit, grouping)
+        ):
+            raise ValueError(
+                f"development holdout row {index} has a malformed envelope"
+            )
+        if grouping.get("split") != DAGGER1_DEVELOPMENT_SPLIT:
+            raise ValueError(
+                f"development holdout row {index} has the wrong split"
+            )
+        root = str(grouping.get("physical_root_fingerprint") or "").strip()
+        family = str(grouping.get("scenario_family") or "").strip()
+        if not root or not family:
+            raise ValueError(
+                f"development holdout row {index} lacks root/family metadata"
+            )
+        if root in roots:
+            raise ValueError("development holdout physical roots are not unique")
+        roots.add(root)
+        family_counts[family] += 1
+
+    manifest_source = manifest.get("source_state")
+    source_bindings = manifest.get("source_bindings")
+    repo_root = Path(__file__).resolve().parents[2]
+    source_bindings_current = isinstance(source_bindings, Mapping) and bool(
+        source_bindings
+    )
+    if source_bindings_current:
+        for relative_value, expected_sha256 in source_bindings.items():
+            relative = Path(str(relative_value))
+            candidate = (repo_root / relative).resolve()
+            try:
+                candidate.relative_to(repo_root.resolve())
+            except ValueError:
+                source_bindings_current = False
+                break
+            if (
+                relative.is_absolute()
+                or not candidate.is_file()
+                or expected_sha256 != _file_sha256(candidate)
+            ):
+                source_bindings_current = False
+                break
+        required_builder = "psse_env/dagger/build_dagger1_development_holdout.py"
+        source_bindings_current = bool(
+            source_bindings_current and required_builder in source_bindings
+        )
+    plan = manifest.get("plan")
+    selected_counts = manifest.get("selected_count_by_family")
+    root_set_hashes = manifest.get("root_set_sha256")
+    overlaps = manifest.get("development_protected_overlap")
+    normalized_plan = (
+        {str(key): value for key, value in plan.items()}
+        if isinstance(plan, Mapping)
+        else {}
+    )
+    approved_plan = (
+        normalized_plan
+        == dict(sorted(DEFAULT_DAGGER1_DEVELOPMENT_ROOT_PLAN.items()))
+        and len(roots) == APPROVED_DAGGER1_DEVELOPMENT_ROOT_COUNT
+    )
+    declared_model_selection_eligible = manifest.get(
+        "diagnostic_closed_loop_model_selection_eligible"
+    )
+    checks = {
+        "schema_version": manifest.get("schema_version") == 1,
+        "builder_contract": manifest.get("builder_contract")
+        == DAGGER1_DEVELOPMENT_HOLDOUT_CONTRACT,
+        "suite_name": manifest.get("suite_name")
+        == DAGGER1_DEVELOPMENT_SUITE_NAME,
+        "split": manifest.get("split") == DAGGER1_DEVELOPMENT_SPLIT,
+        "source_commit": isinstance(manifest_source, Mapping)
+        and manifest_source.get("release_eligible_source") is True
+        and manifest_source.get("source_commit")
+        == source_state.get("source_commit"),
+        "source_bindings": source_bindings_current,
+        "output_sha256": manifest.get("output_sha256")
+        == _file_sha256(holdout_path),
+        "scenario_count": manifest.get("scenario_count") == len(rows),
+        "physical_root_count": manifest.get("physical_root_count") == len(roots),
+        "family_counts": isinstance(selected_counts, Mapping)
+        and dict(selected_counts) == dict(sorted(family_counts.items()))
+        and normalized_plan == dict(sorted(family_counts.items())),
+        "root_set_sha256": isinstance(root_set_hashes, Mapping)
+        and root_set_hashes.get("development")
+        == stable_json_sha256(sorted(roots)),
+        "training_eligible": manifest.get("training_eligible") is False,
+        "training_collection_eligible": manifest.get(
+            "training_collection_eligible"
+        )
+        is False,
+        "release_evidence_eligible": manifest.get("release_evidence_eligible")
+        is False,
+        "promotion_evidence_eligible": manifest.get(
+            "promotion_evidence_eligible"
+        )
+        is False,
+        "model_selection_eligibility_consistent": (
+            declared_model_selection_eligible is approved_plan
+        ),
+        "model_selection_eligible": (
+            not require_model_selection_eligible
+            or declared_model_selection_eligible is True
+        ),
+        "recovery_model_selection_eligible": manifest.get(
+            "recovery_stratum_qualified_model_selection_eligible"
+        )
+        is False,
+        "protected_overlap": isinstance(overlaps, Mapping)
+        and set(overlaps) == {"d0", "frozen", "d1_training"}
+        and all(value == [] for value in overlaps.values()),
+        "d1_training_scenarios_sha256": manifest.get(
+            "d1_training_scenarios_sha256"
+        )
+        == _file_sha256(scenario_input_path),
+        "d1_training_manifest_sha256": manifest.get(
+            "d1_training_manifest_sha256"
+        )
+        == _file_sha256(scenario_manifest_path),
+        "d0_raw_sha256": manifest.get("d0_raw_sha256")
+        == _file_sha256(d0_raw_path),
+        "d0_provenance_sha256": manifest.get(
+            "d0_generation_provenance_sha256"
+        )
+        == _file_sha256(d0_provenance_path),
+        "frozen_suite_sha256": manifest.get("frozen_suite_sha256")
+        == _file_sha256(forbidden_suite_path),
+        "evaluation_policy_sha256": manifest.get("evaluation_policy_sha256")
+        == _file_sha256(evaluation_policy_path),
+    }
+    failed = sorted(name for name, passed in checks.items() if not passed)
+    if failed:
+        raise ValueError(
+            "development holdout binding failed: " + ", ".join(failed)
+        )
     return frozenset(roots)
 
 
@@ -473,6 +701,65 @@ def _callable_source_binding(value: Callable[..., Any], spec: str) -> dict[str, 
     return {"import_spec": spec, "source_sha256": file_sha256(path)}
 
 
+def validate_training_learner_seed(
+    *, model_id: str, model_revision: str
+) -> dict[str, Any]:
+    """Validate and name the exact local adapter used to collect training D1.
+
+    Production DAgger-1 collection is a continuation from a concrete learner,
+    not generic inference from a compatible model identifier.  Resolve the
+    local adapter before any rollout and bind its canonical tree digest into
+    the collection manifest.
+    """
+
+    revision = str(model_revision).strip().lower()
+    if _ADAPTER_TREE_REVISION.fullmatch(revision) is None:
+        raise ValueError(
+            "DAgger-1 training collection requires --model-revision to be "
+            "an exact 64-hex adapter tree SHA-256"
+        )
+
+    requested = Path(str(model_id).strip()).expanduser()
+    if not requested.is_absolute():
+        raise ValueError(
+            "DAgger-1 training collection requires --model-id to be an "
+            "absolute local adapter directory"
+        )
+    try:
+        adapter_path = requested.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise ValueError(
+            f"DAgger-1 learner adapter directory does not exist: {requested}"
+        ) from exc
+    if not adapter_path.is_dir():
+        raise ValueError(
+            f"DAgger-1 learner adapter is not a directory: {adapter_path}"
+        )
+
+    inspection = inspect_release_checkpoint(adapter_path)
+    actual_revision = str(inspection.get("tree_sha256") or "").lower()
+    if actual_revision != revision:
+        raise ValueError(
+            "DAgger-1 learner adapter tree digest mismatch: "
+            f"expected {revision}, computed {actual_revision or '<missing>'}"
+        )
+    inspected_path = Path(str(inspection.get("path") or ""))
+    if not inspected_path.is_absolute() or inspected_path != adapter_path:
+        raise ValueError(
+            "DAgger-1 learner adapter inspection did not preserve its "
+            "resolved absolute path"
+        )
+
+    return {
+        "role": "learner_seed_only",
+        "collection_model_id": str(adapter_path),
+        "collection_model_revision": revision,
+        "adapter_tree_sha256": actual_revision,
+        "adapter_file_count": int(inspection.get("file_count") or 0),
+        "adapter_total_bytes": int(inspection.get("total_bytes") or 0),
+    }
+
+
 def validate_collection_pass(*, collection_pass: str, beta: float) -> dict[str, Any]:
     """Validate the review-prescribed diagnostic or mixed-policy beta."""
     pass_name = str(collection_pass).strip()
@@ -535,80 +822,41 @@ def recommended_collection_gate(
 def targeted_state_coverage(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Audit independent-root support for the review's first D1 state cells."""
     cells: dict[str, set[str]] = {
-        **{f"multi_measurement_cardinality_{value}": set() for value in (2, 4, 5)},
-        "parameter_route_actionable": set(),
-        "parameter_route_complete_negative": set(),
-        "parameter_route_unavailable": set(),
-        "parameter_near_1_2_strict_rank": set(),
-        "sequential_measurement_first": set(),
-        "sequential_parameter_first": set(),
-        "partial_success_retention": set(),
+        name: set()
+        for name in DAGGER1_TARGETED_STATE_CELL_MINIMUM_DISTINCT_ROOTS
     }
+    rows_missing_physical_root: Counter[str] = Counter()
     for row in rows:
         root = str(row.get("physical_root_fingerprint") or "").strip()
-        if not root:
-            continue
-        family = str(row.get("scenario_family") or "")
-        try:
-            cardinality = int(row.get("error_cardinality") or 0)
-        except (TypeError, ValueError, OverflowError):
-            cardinality = 0
-        if (
-            family == "multi_measurement"
-            and cardinality in {2, 4, 5}
-            and row.get("parameter_scans_available") is False
-        ):
-            cells[f"multi_measurement_cardinality_{cardinality}"].add(root)
-        observation = row.get("policy_observation")
-        observation = observation if isinstance(observation, Mapping) else {}
-        evidence_by_family = observation.get("fresh_context_evidence")
-        parameter = (
-            evidence_by_family.get("parameter")
-            if isinstance(evidence_by_family, Mapping)
-            else None
-        )
-        if isinstance(parameter, Mapping):
-            route = str(parameter.get("route_status") or "")
-            if route == "actionable":
-                cells["parameter_route_actionable"].add(root)
-            elif route == "complete_negative":
-                cells["parameter_route_complete_negative"].add(root)
-            elif route.startswith("unavailable"):
-                cells["parameter_route_unavailable"].add(root)
-            try:
-                ratio = float(parameter.get("parameter_ranking_dominance_ratio"))
-            except (TypeError, ValueError, OverflowError):
-                ratio = float("nan")
-            if math.isfinite(ratio) and 1.0 < ratio < 1.2:
-                cells["parameter_near_1_2_strict_rank"].add(root)
-        history = observation.get("history_window")
-        prior_families: set[str] = set()
-        if isinstance(history, list):
-            for event in history:
-                action = event.get("action") if isinstance(event, Mapping) else None
-                tool = str(action.get("tool") or "") if isinstance(action, Mapping) else ""
-                if "measurement" in tool:
-                    prior_families.add("measurement")
-                elif "parameter" in tool:
-                    prior_families.add("parameter")
-        target = row.get("preferred_action")
-        target_tool = str(target.get("tool") or "") if isinstance(target, Mapping) else ""
-        if family == "measurement+parameter":
-            if "measurement" in prior_families and "parameter" in target_tool:
-                cells["sequential_measurement_first"].add(root)
-            if "parameter" in prior_families and "measurement" in target_tool:
-                cells["sequential_parameter_first"].add(root)
-        if observation.get("accepted_corrections") and not observation.get(
-            "no_material_anomaly_remaining"
-        ):
-            cells["partial_success_retention"].add(root)
+        for cell in dagger1_targeted_state_cells(row):
+            if root:
+                cells.setdefault(cell, set()).add(root)
+            else:
+                rows_missing_physical_root[cell] += 1
     counts = {name: len(roots) for name, roots in sorted(cells.items())}
-    missing = sorted(name for name, count in counts.items() if count < 1)
+    shortfalls = {
+        name: {
+            "distinct_physical_roots": counts.get(name, 0),
+            "minimum_distinct_physical_roots": minimum,
+            "rows_missing_physical_root": rows_missing_physical_root[name],
+        }
+        for name, minimum in sorted(
+            DAGGER1_TARGETED_STATE_CELL_MINIMUM_DISTINCT_ROOTS.items()
+        )
+        if counts.get(name, 0) < minimum or rows_missing_physical_root[name]
+    }
     return {
-        "minimum_distinct_physical_roots_per_cell": 1,
+        "contract": "dagger1_targeted_state_independent_root_support_v2",
+        "minimum_distinct_physical_roots_by_cell": dict(
+            sorted(DAGGER1_TARGETED_STATE_CELL_MINIMUM_DISTINCT_ROOTS.items())
+        ),
         "distinct_physical_roots_by_cell": counts,
-        "missing_cells": missing,
-        "passed": not missing,
+        "rows_missing_physical_root_by_cell": dict(
+            sorted(rows_missing_physical_root.items())
+        ),
+        "shortfalls": shortfalls,
+        "missing_cells": sorted(shortfalls),
+        "passed": not shortfalls,
     }
 
 
@@ -641,6 +889,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Fresh-root builder manifest binding input and generator report",
     )
     parser.add_argument(
+        "--development-holdout",
+        type=Path,
+        help=(
+            "Independent DAgger-1 development suite; required for the "
+            "training pass and optional for diagnostics"
+        ),
+    )
+    parser.add_argument(
+        "--development-holdout-manifest",
+        type=Path,
+        help=(
+            "Manifest byte-binding --development-holdout to this training "
+            "scenario manifest"
+        ),
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         required=True,
@@ -652,7 +916,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--all-output",
         type=Path,
-        help="Optional audit JSONL containing eligible and ineligible visited states",
+        help=(
+            "Audit JSONL containing eligible and ineligible visited states; "
+            "required for the training pass and optional for diagnostics"
+        ),
     )
     parser.add_argument(
         "--forbidden-suite",
@@ -689,7 +956,35 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=20260719)
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    if _IMMUTABLE_REVISION.fullmatch(args.model_revision) is None:
+    if args.collection_pass == "training" and args.all_output is None:
+        parser.error(
+            "training collection requires --all-output so truth-audit "
+            "quarantines remain independently recomputable"
+        )
+    if (args.development_holdout is None) != (
+        args.development_holdout_manifest is None
+    ):
+        parser.error(
+            "--development-holdout and --development-holdout-manifest must "
+            "be provided together"
+        )
+    if args.collection_pass == "training" and args.development_holdout is None:
+        parser.error(
+            "training collection requires --development-holdout and "
+            "--development-holdout-manifest"
+        )
+    learner_seed: dict[str, Any] | None = None
+    if args.collection_pass == "training":
+        try:
+            learner_seed = validate_training_learner_seed(
+                model_id=args.model_id,
+                model_revision=args.model_revision,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            parser.error(str(exc))
+        args.model_id = learner_seed["collection_model_id"]
+        args.model_revision = learner_seed["collection_model_revision"]
+    elif _IMMUTABLE_REVISION.fullmatch(args.model_revision) is None:
         parser.error("--model-revision must be a 40- or 64-character hex digest")
     if args.iteration < 1 or not 0.0 <= args.beta < 1.0:
         parser.error("DAgger-1 requires --iteration >= 1 and 0 <= --beta < 1")
@@ -745,18 +1040,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     d0_provenance_path = (
         args.d0_aggregate_dir / "aggregate.generation_provenance.json"
     )
+    protected_paths = [
+        args.input,
+        args.scenario_generator_report,
+        args.scenario_manifest,
+        args.forbidden_suite,
+        DEFAULT_EVALUATION_POLICY,
+        d0_raw_path,
+        d0_provenance_path,
+    ]
+    if args.development_holdout is not None:
+        protected_paths.extend(
+            [
+                args.development_holdout,
+                args.development_holdout_manifest,
+            ]
+        )
     output_manifest_path = validate_collection_output_paths(
         output=args.output,
         all_output=args.all_output,
-        protected_paths=(
-            args.input,
-            args.scenario_generator_report,
-            args.scenario_manifest,
-            args.forbidden_suite,
-            DEFAULT_EVALUATION_POLICY,
-            d0_raw_path,
-            d0_provenance_path,
-        ),
+        protected_paths=protected_paths,
     )
     if not d0_raw_path.is_file() or not d0_provenance_path.is_file():
         raise FileNotFoundError(
@@ -772,27 +1075,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not d0_roots:
         raise RuntimeError("D0 aggregate has no physical roots")
     d0_provenance = json.loads(d0_provenance_path.read_text(encoding="utf-8"))
-    d0_descriptor = (
-        d0_provenance.get("generation_descriptor")
-        if isinstance(d0_provenance, Mapping)
-        else None
+    if not isinstance(d0_provenance, Mapping):
+        raise RuntimeError("D0 aggregate provenance must be a JSON object")
+    validate_d0_provenance_binding(
+        d0_provenance,
+        raw_path=d0_raw_path,
+        source_state=source_state,
     )
-    d0_source = (
-        d0_descriptor.get("source_state")
-        if isinstance(d0_descriptor, Mapping)
-        else None
-    )
-    if not (
-        isinstance(d0_provenance, Mapping)
-        and d0_provenance.get("release_eligible") is True
-        and isinstance(d0_source, Mapping)
-        and d0_source.get("source_commit") == source_state.get("source_commit")
-    ):
-        raise RuntimeError("D0 aggregate is not release eligible for current source")
-    d0_hashes = d0_provenance.get("dataset_hashes")
-    d0_hashes = d0_hashes if isinstance(d0_hashes, Mapping) else {}
-    if d0_hashes.get(d0_raw_path.name) != _file_sha256(d0_raw_path):
-        raise RuntimeError("D0 aggregate raw bytes do not match provenance")
     validate_scenario_builder_manifest(
         scenario_manifest,
         scenarios=scenarios,
@@ -804,7 +1093,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         forbidden_suite_path=args.forbidden_suite,
         evaluation_policy_path=DEFAULT_EVALUATION_POLICY,
     )
-    forbidden_roots = frozen_roots | d0_roots
+    development_roots: frozenset[str] = frozenset()
+    if args.development_holdout is not None:
+        development_roots = validate_development_holdout_binding(
+            args.development_holdout,
+            args.development_holdout_manifest,
+            source_state=source_state,
+            scenario_input_path=args.input,
+            scenario_manifest_path=args.scenario_manifest,
+            d0_raw_path=d0_raw_path,
+            d0_provenance_path=d0_provenance_path,
+            forbidden_suite_path=args.forbidden_suite,
+            evaluation_policy_path=DEFAULT_EVALUATION_POLICY,
+            require_model_selection_eligible=(
+                args.collection_pass == "training"
+            ),
+        )
+    if development_roots & (frozen_roots | d0_roots):
+        raise RuntimeError(
+            "DAgger-1 development roots overlap D0/frozen evaluation roots"
+        )
+    forbidden_roots = frozen_roots | d0_roots | development_roots
     validate_training_scenarios(scenarios, forbidden_roots=forbidden_roots)
 
     env_factory = _load_callable(args.env_factory, field="env_factory")
@@ -852,10 +1161,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise RuntimeError(
             f"DAgger-1 recovery-label audit failed: {recovery_audit}"
         )
+    truth_audit_quarantine = (
+        summarize_dagger1_offline_teacher_target_quarantine(rows)
+    )
     training_eligible = [
         row for row in rows if row.get("production_label_eligible") is True
     ]
     targeted_coverage = targeted_state_coverage(training_eligible)
+    independent_root_support = audit_dagger1_independent_root_support(
+        training_eligible
+    )
     if args.collection_pass == "training":
         output_rows = training_eligible
         if not output_rows:
@@ -863,17 +1178,32 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "DAgger-1 reached no rank-one learner recovery states; "
                 "refusing to write an empty production dataset"
             )
+        d0_training_rows = [
+            row
+            for row in d0_rows
+            if row.get("dataset_split") == "train"
+            and row.get("production_label_eligible") is True
+        ]
+        replay_capacity = dagger1_replay_capacity_report(
+            d0_training_rows,
+            training_eligible,
+        )
         collection_gate: dict[str, Any] = recommended_collection_gate(
             output_rows,
             target_min_rows=args.target_min_rows,
             target_max_rows=args.target_max_rows,
         )
         if args.require_recommended_target and not (
-            collection_gate["passed"] and targeted_coverage["passed"]
+            collection_gate["passed"]
+            and targeted_coverage["passed"]
+            and independent_root_support["passed"]
+            and truth_audit_quarantine["passed"]
         ):
             raise RuntimeError(
                 "DAgger-1 recommended collection target failed: "
-                f"collection={collection_gate}, coverage={targeted_coverage}"
+                f"collection={collection_gate}, coverage={targeted_coverage}, "
+                f"independent_root_support={independent_root_support}, "
+                f"truth_audit_quarantine={truth_audit_quarantine}"
             )
     else:
         if training_eligible:
@@ -896,14 +1226,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             "reason": "diagnostic_beta_zero_output_is_training_ineligible",
             "passed": False,
         }
+        replay_capacity = {
+            "applicable": False,
+            "reason": "diagnostic_beta_zero_output_is_training_ineligible",
+            "passed": False,
+        }
 
     artifact_training_eligible = bool(
         args.collection_pass == "training"
         and beta_contract["passed"]
         and class_audit["passed"]
         and recovery_audit["passed"]
+        and truth_audit_quarantine["passed"]
         and collection_gate["passed"]
         and targeted_coverage["passed"]
+        and independent_root_support["passed"]
     )
     for row in output_rows:
         row["collection_training_eligible"] = artifact_training_eligible
@@ -913,14 +1250,23 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     write_jsonl(args.output, output_rows)
+    all_output_path: str | None = None
+    all_output_sha256: str | None = None
+    all_output_row_count: int | None = None
     if args.all_output is not None:
         args.all_output.parent.mkdir(parents=True, exist_ok=True)
         write_jsonl(args.all_output, rows)
+        all_output_path = str(args.all_output.resolve())
+        all_output_sha256 = _file_sha256(args.all_output)
+        all_output_row_count = len(rows)
     manifest = {
         "schema_version": 1,
         "release_evidence_eligible": False,
         "training_eligible": artifact_training_eligible,
         "output_sha256": _file_sha256(args.output),
+        "all_output": all_output_path,
+        "all_output_sha256": all_output_sha256,
+        "all_output_row_count": all_output_row_count,
         "collector_contract": DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
         "recovery_label_contract": "observable_rank_one_learner_state_v1",
         "input": str(args.input),
@@ -931,6 +1277,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         "scenario_manifest": str(args.scenario_manifest),
         "scenario_manifest_sha256": _file_sha256(args.scenario_manifest),
+        "development_holdout": (
+            str(args.development_holdout.resolve())
+            if args.development_holdout is not None
+            else None
+        ),
+        "development_holdout_sha256": (
+            _file_sha256(args.development_holdout)
+            if args.development_holdout is not None
+            else None
+        ),
+        "development_holdout_manifest": (
+            str(args.development_holdout_manifest.resolve())
+            if args.development_holdout_manifest is not None
+            else None
+        ),
+        "development_holdout_manifest_sha256": (
+            _file_sha256(args.development_holdout_manifest)
+            if args.development_holdout_manifest is not None
+            else None
+        ),
+        "development_holdout_root_count": len(development_roots),
+        "development_holdout_root_set_sha256": (
+            stable_json_sha256(sorted(development_roots))
+            if development_roots
+            else None
+        ),
         "scenario_builder_contract": DAGGER1_SCENARIO_BUILDER_CONTRACT,
         "source_partition": "train",
         "source_state": source_state,
@@ -956,11 +1328,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "forbidden_physical_root_count": len(forbidden_roots),
         "frozen_evaluation_root_count": len(frozen_roots),
         "d0_physical_root_count": len(d0_roots),
+        "development_physical_root_count": len(development_roots),
         "d0_aggregate_dir": str(args.d0_aggregate_dir),
         "d0_raw_sha256": _file_sha256(d0_raw_path),
         "d0_generation_provenance_sha256": _file_sha256(d0_provenance_path),
         "model_id": args.model_id,
         "model_revision": args.model_revision.lower(),
+        "learner_seed": learner_seed,
         "iteration": args.iteration,
         "beta": args.beta,
         "beta_contract": beta_contract,
@@ -990,8 +1364,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         "recommended_collection_gate": collection_gate,
         "targeted_state_coverage": targeted_coverage,
+        "independent_root_support": independent_root_support,
+        "round1_replay_capacity": replay_capacity,
         "class_audit": class_audit,
         "recovery_label_audit": recovery_audit,
+        "offline_teacher_target_quarantine_summary": truth_audit_quarantine,
     }
     output_manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",

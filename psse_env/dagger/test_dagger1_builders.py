@@ -10,6 +10,12 @@ from unittest.mock import patch
 
 import psse_env.dagger.build_dagger1_aggregate as aggregate_module
 import psse_env.dagger.build_dagger1_scenarios as scenario_module
+from psse_env.dagger.build_dagger1_development_holdout import (
+    DAGGER1_DEVELOPMENT_HOLDOUT_CONTRACT,
+    DAGGER1_DEVELOPMENT_SPLIT,
+    DAGGER1_DEVELOPMENT_SUITE_NAME,
+    DEFAULT_DAGGER1_DEVELOPMENT_ROOT_PLAN,
+)
 from psse_env.dagger.collect_dagger1 import (
     DAGGER1_SCENARIO_BUILDER_CONTRACT,
     DEFAULT_ENV_FACTORY_SPEC,
@@ -21,14 +27,57 @@ from psse_env.dagger.collect_dagger1 import (
 from psse_env.dagger.release_factories import (
     BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD,
 )
+from psse_env.dagger.offline_teacher_target_audit import (
+    OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT,
+)
+from psse_env.dagger.rollout_collector import (
+    DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
+    summarize_dagger1_offline_teacher_target_quarantine,
+)
 from psse_env.oracle.expert_policy import ExpertPolicyOracle
-from psse_env.sft.provenance import file_sha256
+from psse_env.sft.provenance import file_sha256, stable_json_sha256
 
 
 SOURCE_STATE = {
     "source_commit": "a" * 40,
     "release_eligible_source": True,
 }
+LEARNER_REVISION = "b" * 64
+LEARNER_MODEL_ID = "/scratch/reviewed-bc0/lora"
+
+
+def _passed_offline_teacher_target_audit() -> dict:
+    return {
+        "contract": OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT,
+        "passed": True,
+        "action_class": "read_only",
+        "checks": {"observable_evidence_gate_passed": True},
+        "reason_codes": [],
+    }
+
+
+def _d1_training_row(**updates) -> dict:
+    row = {
+        "physical_root_fingerprint": "d1-root",
+        "production_label_eligible": True,
+        "example_id": "d1-example",
+        "supervision_policy": DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
+        "collection_role": "training",
+        "state_origin": "learner_policy",
+        "recovery_stratum": "post_failure_no_candidate",
+        "preferred_action": {
+            "tool": "run_wls",
+            "arguments": {"state_id": "active"},
+        },
+        "observable_rank_one_target_proof": {"passed": True},
+        "labels": {"training_decision_evidence_verified": True},
+        "offline_teacher_target_audit": (
+            _passed_offline_teacher_target_audit()
+        ),
+        "collection_training_eligible": True,
+    }
+    row.update(copy.deepcopy(updates))
+    return row
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -57,10 +106,11 @@ def _write_d0_inputs(root: Path) -> Path:
     )
     _write_jsonl(validation_path, [{"example_id": "validation-example"}])
     _write_jsonl(test_path, [{"example_id": "test-example"}])
+    generation_descriptor = {"source_state": SOURCE_STATE}
     provenance = {
         "release_eligible": True,
-        "generation_descriptor": {"source_state": SOURCE_STATE},
-        "generation_provenance_id": "d0-provenance",
+        "generation_descriptor": generation_descriptor,
+        "generation_provenance_id": stable_json_sha256(generation_descriptor),
         "dataset_hashes": {
             path.name: file_sha256(path)
             for path in (raw_path, validation_path, test_path)
@@ -170,6 +220,16 @@ def _fake_partition(row: dict, *, split: str) -> dict:
 
 
 class Dagger1ScenarioBuilderTests(unittest.TestCase):
+    def test_default_plan_reserves_thirty_development_roots(self) -> None:
+        self.assertEqual(
+            scenario_module.DEFAULT_DAGGER1_ROOT_PLAN,
+            {
+                "measurement+parameter": 48,
+                "multi_measurement": 48,
+                "parameter": 24,
+            },
+        )
+
     def test_public_builder_is_deterministic_bound_and_no_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -250,22 +310,193 @@ class Dagger1ScenarioBuilderTests(unittest.TestCase):
                 {"multi-fresh", "parameter-fresh", "mixed-fresh"},
             )
 
+    def test_builder_rejects_d0_with_non_release_eligible_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            d0_dir = _write_d0_inputs(root)
+            provenance_path = (
+                d0_dir / "aggregate.generation_provenance.json"
+            )
+            provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+            provenance["generation_descriptor"]["source_state"][
+                "release_eligible_source"
+            ] = False
+            provenance["generation_provenance_id"] = stable_json_sha256(
+                provenance["generation_descriptor"]
+            )
+            provenance_path.write_text(
+                json.dumps(provenance, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(
+                    scenario_module,
+                    "git_source_state",
+                    return_value=SOURCE_STATE,
+                ),
+                self.assertRaisesRegex(
+                    RuntimeError, "source state is not release eligible"
+                ),
+            ):
+                scenario_module.build_dagger1_scenarios(
+                    d0_aggregate_dir=d0_dir,
+                    output=root / "scenarios.json",
+                    generator_report_path=root / "generator.json",
+                    seed=20260720,
+                    plan={"parameter": 1},
+                )
+
+    def test_builder_rejects_d0_with_mismatched_provenance_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            d0_dir = _write_d0_inputs(root)
+            provenance_path = (
+                d0_dir / "aggregate.generation_provenance.json"
+            )
+            provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+            provenance["generation_provenance_id"] = "f" * 64
+            provenance_path.write_text(
+                json.dumps(provenance, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(
+                    scenario_module,
+                    "git_source_state",
+                    return_value=SOURCE_STATE,
+                ),
+                self.assertRaisesRegex(RuntimeError, "provenance ID"),
+            ):
+                scenario_module.build_dagger1_scenarios(
+                    d0_aggregate_dir=d0_dir,
+                    output=root / "scenarios.json",
+                    generator_report_path=root / "generator.json",
+                    seed=20260720,
+                    plan={"parameter": 1},
+                )
+
 
 class Dagger1AggregateBuilderTests(unittest.TestCase):
     def _write_d1_inputs(self, root: Path) -> tuple[Path, Path]:
         d1_path = root / "d1.jsonl"
         _write_jsonl(
             d1_path,
-            [
-                {
-                    "physical_root_fingerprint": "d1-root",
-                    "production_label_eligible": True,
-                    "example_id": "d1-example",
-                }
-            ],
+            [_d1_training_row()],
+        )
+        all_output = (root / "d1.all.jsonl").resolve()
+        all_rows = [_d1_training_row()]
+        _write_jsonl(all_output, all_rows)
+        scenario_input = root / "scenarios.json"
+        scenario_input.write_text(
+            json.dumps(
+                [
+                    {
+                        "scenario_id": "d1-training-scenario",
+                        "split": "dagger_train",
+                        "physical_root_fingerprint": "d1-root",
+                        "case": "case14",
+                        "measurements": [],
+                    }
+                ],
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
         )
         scenario_manifest = root / "scenarios.json.manifest.json"
         scenario_manifest.write_text("{}\n", encoding="utf-8")
+        d0_dir = root / "d0"
+        if not (d0_dir / "aggregate.generation_provenance.json").is_file():
+            d0_dir = _write_d0_inputs(root)
+        d0_raw_path = d0_dir / "aggregate.raw.jsonl"
+        d0_provenance_path = (
+            d0_dir / "aggregate.generation_provenance.json"
+        )
+        development_rows = []
+        for family, count in DEFAULT_DAGGER1_DEVELOPMENT_ROOT_PLAN.items():
+            for index in range(count):
+                development_rows.append(
+                    {
+                        "scenario_schema_version": 1,
+                        "execution": {"scenario_id": f"{family}-{index}"},
+                        "audit": {"truth": {"truth_complete": True}},
+                        "grouping": {
+                            "split": DAGGER1_DEVELOPMENT_SPLIT,
+                            "scenario_family": family,
+                            "physical_root_fingerprint": (
+                                f"development-{family}-{index}"
+                            ),
+                        },
+                    }
+                )
+        development_path = (root / "development.json").resolve()
+        development_path.write_text(
+            json.dumps(
+                {DAGGER1_DEVELOPMENT_SUITE_NAME: development_rows},
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        development_roots = sorted(
+            row["grouping"]["physical_root_fingerprint"]
+            for row in development_rows
+        )
+        development_manifest = {
+            "schema_version": 1,
+            "builder_contract": DAGGER1_DEVELOPMENT_HOLDOUT_CONTRACT,
+            "suite_name": DAGGER1_DEVELOPMENT_SUITE_NAME,
+            "split": DAGGER1_DEVELOPMENT_SPLIT,
+            "source_state": SOURCE_STATE,
+            "source_bindings": {
+                "psse_env/dagger/build_dagger1_development_holdout.py": (
+                    file_sha256(
+                        Path(__file__).resolve().parents[2]
+                        / "psse_env"
+                        / "dagger"
+                        / "build_dagger1_development_holdout.py"
+                    )
+                )
+            },
+            "plan": DEFAULT_DAGGER1_DEVELOPMENT_ROOT_PLAN,
+            "selected_count_by_family": DEFAULT_DAGGER1_DEVELOPMENT_ROOT_PLAN,
+            "scenario_count": 30,
+            "physical_root_count": 30,
+            "root_set_sha256": {
+                "development": stable_json_sha256(development_roots)
+            },
+            "training_eligible": False,
+            "training_collection_eligible": False,
+            "release_evidence_eligible": False,
+            "promotion_evidence_eligible": False,
+            "diagnostic_closed_loop_model_selection_eligible": True,
+            "recovery_stratum_qualified_model_selection_eligible": False,
+            "development_protected_overlap": {
+                "d0": [],
+                "frozen": [],
+                "d1_training": [],
+            },
+            "output_sha256": file_sha256(development_path),
+            "d1_training_scenarios_sha256": file_sha256(scenario_input),
+            "d1_training_manifest_sha256": file_sha256(scenario_manifest),
+            "d0_raw_sha256": file_sha256(d0_raw_path),
+            "d0_generation_provenance_sha256": file_sha256(
+                d0_provenance_path
+            ),
+            "frozen_suite_sha256": file_sha256(DEFAULT_FORBIDDEN_SUITE),
+            "evaluation_policy_sha256": file_sha256(
+                DEFAULT_EVALUATION_POLICY
+            ),
+        }
+        development_manifest_path = (
+            root / "development.json.manifest.json"
+        ).resolve()
+        development_manifest_path.write_text(
+            json.dumps(development_manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         expert_source = inspect.getsourcefile(ExpertPolicyOracle)
         if expert_source is None:
             raise AssertionError("ExpertPolicyOracle must be inspectable")
@@ -273,9 +504,42 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
             "release_evidence_eligible": False,
             "training_eligible": True,
             "output_sha256": file_sha256(d1_path),
+            "all_output": str(all_output),
+            "all_output_sha256": file_sha256(all_output),
+            "all_output_row_count": len(all_rows),
+            "collection_pass": "training",
+            "visited_rows": len(all_rows),
+            "output_rows": 1,
+            "production_eligible_recovery_rows": 1,
+            "offline_teacher_target_quarantine_summary": (
+                summarize_dagger1_offline_teacher_target_quarantine(all_rows)
+            ),
+            "model_id": LEARNER_MODEL_ID,
+            "model_revision": LEARNER_REVISION,
+            "learner_seed": {
+                "role": "learner_seed_only",
+                "collection_model_id": LEARNER_MODEL_ID,
+                "collection_model_revision": LEARNER_REVISION,
+                "adapter_tree_sha256": LEARNER_REVISION,
+                "adapter_file_count": 7,
+                "adapter_total_bytes": 1234,
+            },
             "scenario_builder_contract": DAGGER1_SCENARIO_BUILDER_CONTRACT,
+            "input": str(scenario_input),
+            "input_sha256": file_sha256(scenario_input),
             "scenario_manifest": str(scenario_manifest),
             "scenario_manifest_sha256": file_sha256(scenario_manifest),
+            "development_holdout": str(development_path),
+            "development_holdout_sha256": file_sha256(development_path),
+            "development_holdout_manifest": str(development_manifest_path),
+            "development_holdout_manifest_sha256": file_sha256(
+                development_manifest_path
+            ),
+            "development_holdout_root_count": len(development_roots),
+            "development_physical_root_count": len(development_roots),
+            "development_holdout_root_set_sha256": stable_json_sha256(
+                development_roots
+            ),
             "source_state": SOURCE_STATE,
             "factory_identities": {
                 "environment": {
@@ -314,11 +578,116 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
     @staticmethod
     def _rebind_d1_manifest(d1_path: Path, manifest_path: Path) -> None:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        rows = [
+            json.loads(line)
+            for line in d1_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        all_output = Path(manifest["all_output"])
+        _write_jsonl(all_output, rows)
         manifest["output_sha256"] = file_sha256(d1_path)
+        manifest["all_output_sha256"] = file_sha256(all_output)
+        manifest["all_output_row_count"] = len(rows)
+        manifest["visited_rows"] = len(rows)
+        manifest["output_rows"] = len(rows)
+        manifest["production_eligible_recovery_rows"] = len(
+            [row for row in rows if row.get("production_label_eligible") is True]
+        )
+        manifest["offline_teacher_target_quarantine_summary"] = (
+            summarize_dagger1_offline_teacher_target_quarantine(rows)
+        )
         manifest_path.write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+
+    def test_round1_learner_seed_must_match_collection_aggregate_and_warm_start(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _, manifest_path = self._write_d1_inputs(root)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_hash = file_sha256(manifest_path)
+            binding = aggregate_module.validate_round1_learner_seed(
+                manifest,
+                collection_manifest_sha256=manifest_hash,
+                initial_adapter_revision=LEARNER_REVISION.upper(),
+            )
+            aggregate_module.validate_round1_learner_seed(
+                manifest,
+                collection_manifest_sha256=manifest_hash,
+                aggregate_learner_seed=binding,
+                initial_adapter_revision=LEARNER_REVISION,
+            )
+
+            with self.assertRaisesRegex(
+                ValueError, "INITIAL_ADAPTER_REVISION differs"
+            ):
+                aggregate_module.validate_round1_learner_seed(
+                    manifest,
+                    collection_manifest_sha256=manifest_hash,
+                    aggregate_learner_seed=binding,
+                    initial_adapter_revision="c" * 64,
+                )
+            with self.assertRaisesRegex(
+                ValueError, "aggregate learner_seed differs"
+            ):
+                aggregate_module.validate_round1_learner_seed(
+                    manifest,
+                    collection_manifest_sha256=manifest_hash,
+                    aggregate_learner_seed={
+                        **binding,
+                        "adapter_tree_sha256": "c" * 64,
+                    },
+                    initial_adapter_revision=LEARNER_REVISION,
+                )
+
+            forged = copy.deepcopy(manifest)
+            forged["learner_seed"]["collection_model_revision"] = "c" * 64
+            with self.assertRaisesRegex(ValueError, "one exact 64-hex"):
+                aggregate_module.validate_round1_learner_seed(
+                    forged,
+                    collection_manifest_sha256=manifest_hash,
+                )
+
+    def test_quarantine_summary_requires_zero_and_consistent_counts(self) -> None:
+        summary = summarize_dagger1_offline_teacher_target_quarantine(
+            [_d1_training_row()]
+        )
+        self.assertEqual(
+            aggregate_module.validate_offline_teacher_target_quarantine_summary(
+                summary,
+                expected_total_rows=1,
+                expected_candidate_rows=1,
+            ),
+            summary,
+        )
+        mutations = {
+            "wrong_contract": {"contract": "unreviewed"},
+            "inconsistent_total": {"total_rows": 2},
+            "quarantine_not_zero": {
+                "passed": False,
+                "zero_truth_audit_quarantine": False,
+                "passed_rows": 0,
+                "quarantined_rows": 1,
+                "quarantined_by_action_class": {"rollback": 1},
+                "quarantined_by_reason_code": {
+                    "candidate_source_correction_missing": 1
+                },
+                "quarantined_example_ids": ["d1-example"],
+            },
+        }
+        for name, updates in mutations.items():
+            with self.subTest(name=name):
+                forged = copy.deepcopy(summary)
+                forged.update(updates)
+                with self.assertRaises(ValueError):
+                    aggregate_module.validate_offline_teacher_target_quarantine_summary(
+                        forged,
+                        expected_total_rows=1,
+                        expected_candidate_rows=1,
+                    )
 
     def test_public_builder_binds_inputs_rejects_tamper_and_no_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -375,6 +744,26 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                     "tool_schema_hashes",
                     return_value=["schema-hash"],
                 ),
+                patch.object(
+                    aggregate_module,
+                    "audit_dagger1_recovery_labels",
+                    return_value={"passed": True},
+                ),
+                patch.object(
+                    aggregate_module,
+                    "audit_target_aware_state_classes",
+                    return_value={"passed": True},
+                ),
+                patch.object(
+                    aggregate_module,
+                    "audit_dagger1_independent_root_support",
+                    return_value={"passed": True},
+                ),
+                patch.object(
+                    aggregate_module,
+                    "audit_dagger1_union_realizability",
+                    return_value={"passed": True, "failures": []},
+                ),
             ):
                 report = aggregate_module.build_round1_aggregate(
                     d0_aggregate_dir=d0_dir,
@@ -397,10 +786,206 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                         )
                     )["release_eligible"]
                 )
+                provenance = json.loads(
+                    (output_dir / "aggregate.generation_provenance.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertEqual(
+                    provenance["generation_descriptor"]["learner_seed"],
+                    {
+                        "role": "learner_seed_only",
+                        "collection_model_id": LEARNER_MODEL_ID,
+                        "adapter_tree_sha256": LEARNER_REVISION,
+                        "collection_model_revision": LEARNER_REVISION,
+                        "collection_manifest_sha256": file_sha256(
+                            d1_manifest_path
+                        ),
+                    },
+                )
+                holdout_binding = provenance["generation_descriptor"][
+                    "input_artifacts"
+                ]["d1_development_holdout"]
+                collection_manifest = json.loads(
+                    d1_manifest_path.read_text(encoding="utf-8")
+                )
+                self.assertEqual(
+                    holdout_binding,
+                    {
+                        "holdout_sha256": collection_manifest[
+                            "development_holdout_sha256"
+                        ],
+                        "manifest_sha256": collection_manifest[
+                            "development_holdout_manifest_sha256"
+                        ],
+                        "physical_root_count": 30,
+                        "root_set_sha256": collection_manifest[
+                            "development_holdout_root_set_sha256"
+                        ],
+                    },
+                )
                 self.assertTrue((output_dir / "SHA256SUMS").is_file())
+                for immutable_name in (
+                    "aggregate.raw.jsonl",
+                    "aggregate.d0.raw.jsonl",
+                    "aggregate.d1.raw.jsonl",
+                ):
+                    self.assertTrue((output_dir / immutable_name).is_file())
+
+                empty_output_dir = root / "round1-existing-empty"
+                empty_output_dir.mkdir()
+                empty_report = aggregate_module.build_round1_aggregate(
+                    d0_aggregate_dir=d0_dir,
+                    d1_path=d1_path,
+                    d1_manifest_path=d1_manifest_path,
+                    output_dir=empty_output_dir,
+                    seed=20260719,
+                    size=None,
+                    d1_share=0.25,
+                    minimum_d1_share=0.20,
+                    maximum_d1_share=0.30,
+                    max_duplicate_count=2,
+                    max_rows_per_root=8,
+                )
+                self.assertTrue(empty_report["release_eligible"])
+                self.assertEqual(
+                    {path.name for path in empty_output_dir.iterdir()},
+                    set(aggregate_module._ROUND1_OUTPUT_FILENAMES),
+                )
+
+                d0_provenance_path = (
+                    d0_dir / "aggregate.generation_provenance.json"
+                )
+                original_d0_provenance = d0_provenance_path.read_bytes()
+                d0_not_clean = json.loads(original_d0_provenance)
+                d0_not_clean["generation_descriptor"]["source_state"][
+                    "release_eligible_source"
+                ] = False
+                d0_not_clean["generation_provenance_id"] = stable_json_sha256(
+                    d0_not_clean["generation_descriptor"]
+                )
+                d0_provenance_path.write_text(
+                    json.dumps(d0_not_clean, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(
+                    ValueError, "source state is not release eligible"
+                ):
+                    aggregate_module.build_round1_aggregate(
+                        d0_aggregate_dir=d0_dir,
+                        d1_path=d1_path,
+                        d1_manifest_path=d1_manifest_path,
+                        output_dir=root / "d0-not-clean",
+                        seed=20260719,
+                        size=None,
+                        d1_share=0.25,
+                        minimum_d1_share=0.20,
+                        maximum_d1_share=0.30,
+                        max_duplicate_count=2,
+                        max_rows_per_root=8,
+                    )
+
+                d0_provenance_path.write_bytes(original_d0_provenance)
+                d0_bad_id = json.loads(original_d0_provenance)
+                d0_bad_id["generation_provenance_id"] = "f" * 64
+                d0_provenance_path.write_text(
+                    json.dumps(d0_bad_id, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ValueError, "provenance ID"):
+                    aggregate_module.build_round1_aggregate(
+                        d0_aggregate_dir=d0_dir,
+                        d1_path=d1_path,
+                        d1_manifest_path=d1_manifest_path,
+                        output_dir=root / "d0-bad-provenance-id",
+                        seed=20260719,
+                        size=None,
+                        d1_share=0.25,
+                        minimum_d1_share=0.20,
+                        maximum_d1_share=0.30,
+                        max_duplicate_count=2,
+                        max_rows_per_root=8,
+                    )
+                d0_provenance_path.write_bytes(original_d0_provenance)
 
                 original_d1 = d1_path.read_bytes()
                 original_manifest = d1_manifest_path.read_bytes()
+                original_all_output_path = Path(
+                    json.loads(original_manifest)["all_output"]
+                )
+                original_all_output = original_all_output_path.read_bytes()
+                original_development_path = Path(
+                    json.loads(original_manifest)["development_holdout"]
+                )
+                original_development = original_development_path.read_bytes()
+                with original_development_path.open("ab") as handle:
+                    handle.write(b"\n")
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "development holdout bytes",
+                ):
+                    aggregate_module.build_round1_aggregate(
+                        d0_aggregate_dir=d0_dir,
+                        d1_path=d1_path,
+                        d1_manifest_path=d1_manifest_path,
+                        output_dir=root / "tampered-development",
+                        seed=20260719,
+                        size=None,
+                        d1_share=0.25,
+                        minimum_d1_share=0.20,
+                        maximum_d1_share=0.30,
+                        max_duplicate_count=2,
+                        max_rows_per_root=8,
+                    )
+                original_development_path.write_bytes(original_development)
+
+                with original_all_output_path.open("ab") as handle:
+                    handle.write(b"{}\n")
+                with self.assertRaisesRegex(ValueError, "all-output ledger hash"):
+                    aggregate_module.build_round1_aggregate(
+                        d0_aggregate_dir=d0_dir,
+                        d1_path=d1_path,
+                        d1_manifest_path=d1_manifest_path,
+                        output_dir=root / "tampered-all-output",
+                        seed=20260719,
+                        size=None,
+                        d1_share=0.25,
+                        minimum_d1_share=0.20,
+                        maximum_d1_share=0.30,
+                        max_duplicate_count=2,
+                        max_rows_per_root=8,
+                    )
+                original_all_output_path.write_bytes(original_all_output)
+
+                summary_tampered_manifest = json.loads(original_manifest)
+                summary_tampered_manifest[
+                    "offline_teacher_target_quarantine_summary"
+                ]["candidate_definition"]["unreviewed_extra"] = True
+                d1_manifest_path.write_text(
+                    json.dumps(
+                        summary_tampered_manifest, indent=2, sort_keys=True
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(
+                    ValueError, "summary differs from the all-output ledger"
+                ):
+                    aggregate_module.build_round1_aggregate(
+                        d0_aggregate_dir=d0_dir,
+                        d1_path=d1_path,
+                        d1_manifest_path=d1_manifest_path,
+                        output_dir=root / "tampered-summary",
+                        seed=20260719,
+                        size=None,
+                        d1_share=0.25,
+                        minimum_d1_share=0.20,
+                        maximum_d1_share=0.30,
+                        max_duplicate_count=2,
+                        max_rows_per_root=8,
+                    )
+                d1_manifest_path.write_bytes(original_manifest)
+
                 with d1_path.open("ab") as handle:
                     handle.write(b"{}\n")
                 with self.assertRaisesRegex(ValueError, "manifest hash"):
@@ -419,17 +1004,50 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                     )
                 d1_path.write_bytes(original_d1)
 
+                development_payload = json.loads(
+                    original_development.decode("utf-8")
+                )
+                development_root = development_payload[
+                    DAGGER1_DEVELOPMENT_SUITE_NAME
+                ][0]["grouping"]["physical_root_fingerprint"]
+                _write_jsonl(
+                    d1_path,
+                    [
+                        _d1_training_row(
+                            physical_root_fingerprint=development_root,
+                            example_id="forged-development-root",
+                        )
+                    ],
+                )
+                self._rebind_d1_manifest(d1_path, d1_manifest_path)
+                with self.assertRaisesRegex(ValueError, "development holdout"):
+                    aggregate_module.build_round1_aggregate(
+                        d0_aggregate_dir=d0_dir,
+                        d1_path=d1_path,
+                        d1_manifest_path=d1_manifest_path,
+                        output_dir=root / "forged-development",
+                        seed=20260719,
+                        size=None,
+                        d1_share=0.25,
+                        minimum_d1_share=0.20,
+                        maximum_d1_share=0.30,
+                        max_duplicate_count=2,
+                        max_rows_per_root=8,
+                    )
+                d1_path.write_bytes(original_d1)
+                d1_manifest_path.write_bytes(original_manifest)
+                original_all_output_path.write_bytes(original_all_output)
+
                 frozen_root = sorted(
                     frozen_physical_roots(DEFAULT_FORBIDDEN_SUITE)
                 )[0]
                 _write_jsonl(
                     d1_path,
                     [
-                        {
-                            "physical_root_fingerprint": frozen_root,
-                            "production_label_eligible": True,
-                            "example_id": "forged-frozen-root",
-                        }
+                        _d1_training_row(
+                            physical_root_fingerprint=frozen_root,
+                            example_id="forged-frozen-root",
+                        )
                     ],
                 )
                 self._rebind_d1_manifest(d1_path, d1_manifest_path)
@@ -451,18 +1069,16 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                 _write_jsonl(
                     d1_path,
                     [
-                        {
-                            "physical_root_fingerprint": "d1-root",
-                            "production_label_eligible": True,
-                            "example_id": "forged-private-truth",
-                            "labels": {
+                        _d1_training_row(
+                            example_id="forged-private-truth",
+                            labels={
                                 "nested": {
                                     "true_parameter_errors": [
                                         {"line_index1": 1}
                                     ]
                                 }
                             },
-                        }
+                        )
                     ],
                 )
                 self._rebind_d1_manifest(d1_path, d1_manifest_path)
@@ -481,20 +1097,26 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                         max_rows_per_root=8,
                     )
 
-                d1_path.write_bytes(original_d1)
-                d1_manifest_path.write_bytes(original_manifest)
-
-                occupied_dir = root / "occupied"
-                occupied_dir.mkdir()
-                (occupied_dir / "aggregate.train_view.jsonl").write_text(
-                    "do-not-overwrite\n", encoding="utf-8"
+                smuggled_audit = _passed_offline_teacher_target_audit()
+                smuggled_audit["unexpected_extra_field"] = "covert-metadata"
+                _write_jsonl(
+                    d1_path,
+                    [
+                        _d1_training_row(
+                            example_id="forged-audit-metadata",
+                            offline_teacher_target_audit=smuggled_audit,
+                        )
+                    ],
                 )
-                with self.assertRaisesRegex(FileExistsError, "already exist"):
+                self._rebind_d1_manifest(d1_path, d1_manifest_path)
+                with self.assertRaisesRegex(
+                    ValueError, "invalid offline teacher-target audit"
+                ):
                     aggregate_module.build_round1_aggregate(
                         d0_aggregate_dir=d0_dir,
                         d1_path=d1_path,
                         d1_manifest_path=d1_manifest_path,
-                        output_dir=occupied_dir,
+                        output_dir=root / "forged-audit-metadata",
                         seed=20260719,
                         size=None,
                         d1_share=0.25,
@@ -503,11 +1125,80 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                         max_duplicate_count=2,
                         max_rows_per_root=8,
                     )
-                self.assertEqual(
-                    (occupied_dir / "aggregate.train_view.jsonl").read_text(
-                        encoding="utf-8"
+
+                d1_path.write_bytes(original_d1)
+                d1_manifest_path.write_bytes(original_manifest)
+                original_all_output_path.write_bytes(original_all_output)
+
+                for occupied_name in (
+                    "aggregate.train_view.jsonl",
+                    "aggregate.generation_provenance.json",
+                    "aggregate.preflight.json",
+                    "SHA256SUMS",
+                ):
+                    with self.subTest(occupied_name=occupied_name):
+                        occupied_dir = root / (
+                            "occupied-" + occupied_name.replace(".", "-")
+                        )
+                        occupied_dir.mkdir()
+                        occupied_path = occupied_dir / occupied_name
+                        occupied_path.write_text(
+                            "do-not-overwrite\n", encoding="utf-8"
+                        )
+                        with self.assertRaisesRegex(
+                            FileExistsError, "already exist"
+                        ):
+                            aggregate_module.build_round1_aggregate(
+                                d0_aggregate_dir=d0_dir,
+                                d1_path=d1_path,
+                                d1_manifest_path=d1_manifest_path,
+                                output_dir=occupied_dir,
+                                seed=20260719,
+                                size=None,
+                                d1_share=0.25,
+                                minimum_d1_share=0.20,
+                                maximum_d1_share=0.30,
+                                max_duplicate_count=2,
+                                max_rows_per_root=8,
+                            )
+                        self.assertEqual(
+                            occupied_path.read_text(encoding="utf-8"),
+                            "do-not-overwrite\n",
+                        )
+
+                late_failure_dir = root / "late-failure"
+                late_failure_dir.mkdir()
+                real_text_writer = aggregate_module._write_text_artifact
+
+                def fail_on_checksum(path, content):
+                    if path.name == "SHA256SUMS":
+                        raise OSError("simulated late write failure")
+                    return real_text_writer(path, content)
+
+                with (
+                    patch.object(
+                        aggregate_module,
+                        "_write_text_artifact",
+                        side_effect=fail_on_checksum,
                     ),
-                    "do-not-overwrite\n",
+                    self.assertRaisesRegex(OSError, "simulated late write failure"),
+                ):
+                    aggregate_module.build_round1_aggregate(
+                        d0_aggregate_dir=d0_dir,
+                        d1_path=d1_path,
+                        d1_manifest_path=d1_manifest_path,
+                        output_dir=late_failure_dir,
+                        seed=20260719,
+                        size=None,
+                        d1_share=0.25,
+                        minimum_d1_share=0.20,
+                        maximum_d1_share=0.30,
+                        max_duplicate_count=2,
+                        max_rows_per_root=8,
+                    )
+                self.assertEqual(list(late_failure_dir.iterdir()), [])
+                self.assertEqual(
+                    list(root.glob(f".{late_failure_dir.name}.staging-*")), []
                 )
 
 

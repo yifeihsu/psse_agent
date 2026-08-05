@@ -128,6 +128,16 @@ if [[ ( "$STAGE" == "gate" || "$STAGE" == "round0" || "$STAGE" == "checkpoint-ga
     echo "ERROR: initial adapter identity is valid only for warm-start smoke stages or STAGE=round1." >&2
     exit 2
 fi
+ROUND1_SEED_COUPLING_REQUIRED=0
+if [[ "$STAGE" == "round1" ]]; then
+    ROUND1_SEED_COUPLING_REQUIRED=1
+elif [[ -n "$INITIAL_ADAPTER_PATH" ]]; then
+    case "$STAGE" in
+        one-batch|targeted-tiny-overfit|tiny-overfit)
+            ROUND1_SEED_COUPLING_REQUIRED=1
+            ;;
+    esac
+fi
 
 if [[ ! "$MODEL_REVISION" =~ ^[0-9a-fA-F]{40}$ ]]; then
     echo "ERROR: MODEL_REVISION must be a pinned 40-character Hugging Face commit." >&2
@@ -286,77 +296,27 @@ if [[ "$STAGE" != "checkpoint-gate" ]]; then
         echo "ERROR: release generation provenance is missing from $AGGREGATE_DIR; regenerate round 0 from the clean commit before submitting SFT." >&2
         exit 2
     fi
-    if [[ -f "$AGGREGATE_DIR/SHA256SUMS" ]]; then
-        (cd "$AGGREGATE_DIR" && sha256sum --check --quiet SHA256SUMS) || {
-            echo "ERROR: aggregate split checksums do not match SHA256SUMS; re-ship the aggregate." >&2
-            exit 2
-        }
+    if [[ ! -f "$AGGREGATE_DIR/SHA256SUMS" ]]; then
+        echo "ERROR: release aggregate checksum manifest is missing: $AGGREGATE_DIR/SHA256SUMS" >&2
+        exit 2
     fi
+    (cd "$AGGREGATE_DIR" && sha256sum --check --quiet SHA256SUMS) || {
+        echo "ERROR: aggregate split checksums do not match SHA256SUMS; re-ship the aggregate." >&2
+        exit 2
+    }
 fi
-if [[ "$STAGE" == "round1" ]]; then
+if [[ "$ROUND1_SEED_COUPLING_REQUIRED" == "1" ]]; then
     ROUND1_PROVENANCE="$AGGREGATE_DIR/aggregate.generation_provenance.json"
     ROUND1_PREFLIGHT="$AGGREGATE_DIR/aggregate.preflight.json"
     if [[ ! -f "$ROUND1_PREFLIGHT" ]]; then
-        echo "ERROR: STAGE=round1 requires aggregate.preflight.json." >&2
+        echo "ERROR: Round-1 warm-start stages require aggregate.preflight.json." >&2
         exit 2
     fi
-    "$PYTHON" - "$ROUND1_PROVENANCE" "$ROUND1_PREFLIGHT" "$REVIEWED_SOURCE_COMMIT" <<'PY'
-import json
-import sys
-
-from psse_env.sft.provenance import stable_json_sha256
-from psse_env.dagger.collect_dagger1 import DAGGER1_SCENARIO_BUILDER_CONTRACT
-
-provenance_path, preflight_path, reviewed_commit = sys.argv[1:]
-provenance = json.load(open(provenance_path, encoding="utf-8"))
-preflight = json.load(open(preflight_path, encoding="utf-8"))
-descriptor = provenance.get("generation_descriptor") or {}
-training_view = preflight.get("training_view") or {}
-allocation = training_view.get("source_allocation") or {}
-d1_manifest = preflight.get("d1_collection_manifest") or {}
-failures = []
-if provenance.get("release_eligible") is not True:
-    failures.append("round-1 generation provenance is not release eligible")
-if descriptor.get("builder_contract") != "deterministic_d0_d1_balanced_union_v1":
-    failures.append("aggregate is not a D0 union D1 build")
-source = descriptor.get("source_state") or {}
-if source.get("source_commit") != reviewed_commit:
-    failures.append("round-1 aggregate source commit differs from reviewed source")
-if training_view.get("builder_contract") != "deterministic_d0_d1_balanced_union_v1":
-    failures.append("preflight lacks the D0 union D1 training-view contract")
-if descriptor.get("training_view_report_sha256") != stable_json_sha256(training_view):
-    failures.append("preflight source-mix report is not bound by provenance")
-share = allocation.get("observed_d1_share")
-if (
-    allocation.get("passed") is not True
-    or not isinstance(share, (int, float))
-    or not 0.20 <= float(share) <= 0.30
-    or int(allocation.get("d1_recovery_rows") or 0) <= 0
-):
-    failures.append("D1 source allocation is absent or outside the 20-30% band")
-if (
-    d1_manifest.get("training_eligible") is not True
-    or d1_manifest.get("release_evidence_eligible") is not False
-    or (d1_manifest.get("source_state") or {}).get("source_commit")
-    != reviewed_commit
-):
-    failures.append("D1 collection manifest is not approved for current-source training")
-if (
-    d1_manifest.get("scenario_builder_contract")
-    != DAGGER1_SCENARIO_BUILDER_CONTRACT
-    or not d1_manifest.get("scenario_manifest_sha256")
-):
-    failures.append("D1 collection lacks the reviewed fresh-root scenario binding")
-inputs = descriptor.get("input_artifacts") or {}
-if not inputs.get("d1_rows_sha256") or not inputs.get("d1_manifest_sha256"):
-    failures.append("round-1 provenance does not bind D1 rows and manifest")
-if failures:
-    raise SystemExit("Round-1 source-mix gate is NO-GO:\n- " + "\n- ".join(failures))
-print(
-    "Round-1 D0/D1 source-mix gate passed: "
-    f"D1 rows={allocation['d1_recovery_rows']}, share={float(share):.3f}"
-)
-PY
+    "$PYTHON" -m psse_env.sft.round1_source_gate \
+        --provenance "$ROUND1_PROVENANCE" \
+        --preflight "$ROUND1_PREFLIGHT" \
+        --reviewed-source-commit "$REVIEWED_SOURCE_COMMIT" \
+        --initial-adapter-revision "$INITIAL_ADAPTER_REVISION"
 fi
 if [[ "$STAGE" == "round0" || "$STAGE" == "round1" || "$STAGE" == "checkpoint-gate" ]]; then
     for path in "$EVALUATION_SUITE" "$EVALUATION_POLICY"; do

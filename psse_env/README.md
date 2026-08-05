@@ -504,7 +504,9 @@ BC0 learner-seed LoRA tree into a fresh, non-overlapping output directory. The
 seed remains release-ineligible; its role here is only initialization. The launcher independently
 validates the adapter contents and its 64-hex tree identity, loads it through
 PEFT with `is_trainable=True`, restores its exact pre-smoke trainable weights
-before TRL starts, and writes `initial_adapter_attestation.json`. Round 1
+before TRL starts, and writes `initial_adapter_attestation.json`.
+`STAGE=round1` also refuses any revision that differs from both the D1
+collection manifest and the aggregate's learner-seed provenance. Round 1
 defaults to one epoch at `3e-5`; override those values only as an explicit
 experiment change:
 
@@ -537,11 +539,34 @@ python scripts/build_dagger1_scenarios.py \
   --output "$D1_DIR/scenarios.json" \
   --generator-report "$D1_DIR/scenario_generator_report.json" \
   --seed 20260720
+
+python scripts/build_dagger1_development_holdout.py \
+  --d0-aggregate-dir "$D0_DIR" \
+  --d1-training-scenarios "$D1_DIR/scenarios.json" \
+  --d1-training-manifest "$D1_DIR/scenarios.json.manifest.json" \
+  --output "$D1_DIR/development_holdout.json" \
+  --generator-report "$D1_DIR/development_holdout.generator.json" \
+  --seed 20260721
 ```
+
+The second command freezes 30 additional diagnostic development roots in a
+12/12/6 family split; the first command reserves the complementary 120
+training roots in a 48/48/24 split. They are byte-bound and disjoint from D0,
+D1 training, and the frozen 115-root promotion suite, but are explicitly
+ineligible for SFT and promotion evidence.
 
 Use the failed-promotion adapter only as the learner. The diagnostic pass is
 learner-only and always training-ineligible; the mixed pass must produce
-300--600 eligible learner-recovery rows and pass every targeted state cell:
+300--600 eligible learner-recovery rows, pass the offline physical-truth target
+audit, provide at least five distinct roots in every targeted state cell, and
+meet the 10-root central / 5-root remaining recovery-stratum floors:
+
+For D1, both the current teacher target and the stored next-action inventory
+are functions of `PolicyObservation` only. `OracleState` is constructed after
+the target and rank-one proof are fixed, solely for quarantine and transition
+auditing. Teacher calls receive only the exact bounded `history_window` carried
+by that observation; the collector's fuller post-transition audit history is
+never an auxiliary teacher input.
 
 ```bash
 export LEARNER_ADAPTER=/absolute/path/to/bc0-v1/lora
@@ -553,6 +578,8 @@ python scripts/collect_dagger1_recovery.py \
   --input "$D1_DIR/scenarios.json" \
   --scenario-manifest "$D1_DIR/scenarios.json.manifest.json" \
   --scenario-generator-report "$D1_DIR/scenario_generator_report.json" \
+  --development-holdout "$D1_DIR/development_holdout.json" \
+  --development-holdout-manifest "$D1_DIR/development_holdout.json.manifest.json" \
   --d0-aggregate-dir "$D0_DIR" \
   --output "$D1_DIR/diagnostic_beta0.jsonl" \
   --all-output "$D1_DIR/diagnostic_beta0.all.jsonl" \
@@ -564,6 +591,8 @@ python scripts/collect_dagger1_recovery.py \
   --input "$D1_DIR/scenarios.json" \
   --scenario-manifest "$D1_DIR/scenarios.json.manifest.json" \
   --scenario-generator-report "$D1_DIR/scenario_generator_report.json" \
+  --development-holdout "$D1_DIR/development_holdout.json" \
+  --development-holdout-manifest "$D1_DIR/development_holdout.json.manifest.json" \
   --d0-aggregate-dir "$D0_DIR" \
   --output "$D1_DIR/training_beta025.jsonl" \
   --all-output "$D1_DIR/training_beta025.all.jsonl" \
@@ -580,6 +609,16 @@ python scripts/build_dagger1_training_aggregate.py \
   --d1-share 0.25
 ```
 
+The collection manifest reports the default Round-1 replay capacity and the
+largest feasible total view under the duplicate and per-root caps. If the
+default natural-union size is infeasible, collect more D1 rows or pass an
+explicit smaller `--size`; never relax the 20--30% source-share band silently.
+The final builder independently reruns the D1 row audits and exact/approximate
+teacher-realizability gates, preserves `aggregate.raw.jsonl`,
+`aggregate.d0.raw.jsonl`, `aggregate.d1.raw.jsonl`, and
+`aggregate.train_view.raw.jsonl`, and hashes every semantic report into
+generation provenance.
+
 Regenerate the expert and base artifacts at `FREEZE_COMMIT`, then run the
 Round-1 chain against `data/round1_aggregate_release` in this order:
 `gate -> one-batch -> targeted-tiny-overfit -> round1 -> checkpoint evaluation
@@ -590,6 +629,35 @@ stage selects five distinct recovery cases,
 sweeps diagnostic learning rates `1e-4`, `3e-4`, and `1e-3`, and requires exact
 generated tools and arguments. These sweep rates do not alter the Round-1
 training default of `3e-5` for one epoch.
+
+After each candidate training configuration, evaluate its adapter on
+`$D1_DIR/development_holdout.json` with the diagnostic-only evaluator before
+using the frozen suite. This artifact is for model selection only:
+
+```bash
+python scripts/evaluate_checkpoint_diagnostic.py \
+  --input "$D1_DIR/development_holdout.json" \
+  --output "$D1_DIR/development_${CANDIDATE_REVISION}.evaluation.json" \
+  --env-factory psse_env.dagger.release_factories:production_environment_factory \
+  --policy-factory psse_env.dagger.release_factories:gemma_release_policy_factory \
+  --case-loader psse_env.dagger.release_factories:deterministic_case_loader \
+  --model-id "$CANDIDATE_ADAPTER" \
+  --model-revision "$CANDIDATE_REVISION" \
+  --minimum-roots-per-suite 30 --max-steps 24 --seed 20260721
+```
+
+The relaxed accelerator policy remains unchanged: each artifact may use any
+approved H200, H100, or high-memory RTX 6000. Same-class reruns are useful for
+the cleanest causal comparison when capacity permits, but are not a hard gate.
+
+The current diagnostic evaluator binds the exact holdout roots and reports
+closed-loop outcomes, but its persisted trace retains only an observation hash
+and the learner action. It therefore cannot yet certify coverage of the
+expert-defined recovery strata, which require the policy-safe observation and
+the expert's fixed rank-one target. The holdout manifest marks stratum-qualified
+model selection false until a diagnostic-only teacher-opportunity trace and
+post-evaluation coverage audit are implemented; do not claim recovery-stratum
+generalization from family counts alone.
 
 To cheaply replay the reviewed 13 failures after the runtime patch, first
 build a separate suite, then use the diagnostic-only evaluator and audit it:
@@ -682,7 +750,10 @@ uv run --with 'pytest>=8,<9' pytest -q \
   psse_env/dagger/test_evaluation_gate.py \
   psse_env/dagger/test_collect_dagger1.py \
   psse_env/dagger/test_dagger1_builders.py \
+  psse_env/dagger/test_dagger1_development_holdout.py \
+  psse_env/dagger/test_dagger1_semantic_audit.py \
   psse_env/dagger/test_diagnostic_suite.py \
+  psse_env/dagger/test_offline_teacher_target_audit.py \
   psse_env/dagger/test_review_regressions.py \
   psse_env/dagger/test_training_view.py \
   psse_env/dagger/test_suite_builder.py \

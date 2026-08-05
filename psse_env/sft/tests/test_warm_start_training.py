@@ -331,6 +331,25 @@ class TestWarmStartCliAndLauncher(unittest.TestCase):
             '--learning-rate "$ROUND1_LR"',
             '--epochs "$ROUND1_EPOCHS"',
             "OUTPUT_DIR and INITIAL_ADAPTER_PATH must not overlap",
+            "psse_env.sft.round1_source_gate",
+            '--reviewed-source-commit "$REVIEWED_SOURCE_COMMIT"',
+            '--initial-adapter-revision "$INITIAL_ADAPTER_REVISION"',
+            "ROUND1_SEED_COUPLING_REQUIRED=0",
+            'if [[ "$ROUND1_SEED_COUPLING_REQUIRED" == "1" ]]',
+            "one-batch|targeted-tiny-overfit|tiny-overfit",
+        ):
+            self.assertIn(contract, launcher)
+
+    def test_launcher_delegates_round1_provenance_gate(self) -> None:
+        launcher = LAUNCHER.read_text(encoding="utf-8")
+        for contract in (
+            "release aggregate checksum manifest is missing",
+            "sha256sum --check --quiet SHA256SUMS",
+            '"$PYTHON" -m psse_env.sft.round1_source_gate',
+            '--provenance "$ROUND1_PROVENANCE"',
+            '--preflight "$ROUND1_PREFLIGHT"',
+            '--reviewed-source-commit "$REVIEWED_SOURCE_COMMIT"',
+            '--initial-adapter-revision "$INITIAL_ADAPTER_REVISION"',
         ):
             self.assertIn(contract, launcher)
 

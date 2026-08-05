@@ -4,8 +4,13 @@ import copy
 import unittest
 
 from psse_env.dagger.replay_buffer import (
+    DAGGER1_RECOVERY_STRATUM_MINIMUM_DISTINCT_ROOTS,
+    DAGGER1_TARGETED_STATE_CELL_MINIMUM_DISTINCT_ROOTS,
+    audit_dagger1_independent_root_support,
     build_balanced_training_view,
     build_dagger1_training_view,
+    dagger1_replay_capacity_report,
+    dagger1_targeted_state_cells,
 )
 
 
@@ -33,6 +38,177 @@ def _row(
 
 
 class BalancedTrainingViewTests(unittest.TestCase):
+    def test_dagger1_release_root_floors_match_reviewed_first_run(self) -> None:
+        self.assertEqual(
+            set(DAGGER1_TARGETED_STATE_CELL_MINIMUM_DISTINCT_ROOTS.values()),
+            {5},
+        )
+        self.assertEqual(
+            {
+                stratum: DAGGER1_RECOVERY_STRATUM_MINIMUM_DISTINCT_ROOTS[stratum]
+                for stratum in (
+                    "unsupported_correction_recovery",
+                    "post_failure_no_candidate",
+                    "sequential_measurement_parameter_recovery",
+                    "multi_measurement_safe_handoff",
+                )
+            },
+            {
+                "unsupported_correction_recovery": 10,
+                "post_failure_no_candidate": 10,
+                "sequential_measurement_parameter_recovery": 10,
+                "multi_measurement_safe_handoff": 10,
+            },
+        )
+
+    def test_dagger1_independent_root_audit_rejects_repeated_rows(self) -> None:
+        actionable = {
+            "scenario_family": "parameter",
+            "preferred_action": {
+                "tool": "correct_parameters",
+                "arguments": {"state_id": "active", "line_index1": 1},
+            },
+            "policy_observation": {
+                "fresh_context_evidence": {
+                    "parameter": {
+                        "route_status": "actionable",
+                        "parameter_ranking_dominance_ratio": 1.3,
+                    }
+                }
+            },
+            "recovery_stratum": "unsupported_correction_recovery",
+        }
+        repeated = [
+            {
+                **copy.deepcopy(actionable),
+                "example_id": f"duplicate-{index}",
+                "physical_root_fingerprint": "one-physical-root",
+            }
+            for index in range(100)
+        ]
+        report = audit_dagger1_independent_root_support(
+            repeated,
+            targeted_state_cell_minimum_distinct_roots={
+                "parameter_route_actionable": 5
+            },
+            recovery_stratum_minimum_distinct_roots={
+                "unsupported_correction_recovery": 10
+            },
+        )
+        self.assertFalse(report["passed"])
+        self.assertEqual(
+            report["targeted_state_cells"]["parameter_route_actionable"]
+            ["target_bearing_rows"],
+            100,
+        )
+        self.assertEqual(
+            report["targeted_state_cells"]["parameter_route_actionable"]
+            ["distinct_physical_roots"],
+            1,
+        )
+        self.assertEqual(
+            report["recovery_strata"]["unsupported_correction_recovery"]
+            ["root_shortfall"],
+            9,
+        )
+
+    def test_dagger1_independent_root_audit_passes_distinct_support(self) -> None:
+        rows: list[dict[str, object]] = []
+        for index in range(10):
+            rows.append(
+                {
+                    "example_id": f"root-{index}",
+                    "physical_root_fingerprint": f"physical-root-{index}",
+                    "scenario_family": "parameter",
+                    "preferred_action": {
+                        "tool": "correct_parameters",
+                        "arguments": {
+                            "state_id": "active",
+                            "line_index1": 1,
+                        },
+                    },
+                    "policy_observation": {
+                        "fresh_context_evidence": {
+                            "parameter": {
+                                "route_status": "actionable",
+                                "parameter_ranking_dominance_ratio": 1.1,
+                            }
+                        }
+                    },
+                    "recovery_stratum": "unsupported_correction_recovery",
+                }
+            )
+        report = audit_dagger1_independent_root_support(
+            rows,
+            targeted_state_cell_minimum_distinct_roots={
+                "parameter_route_actionable": 5,
+                "parameter_near_1_2_strict_rank": 5,
+            },
+            recovery_stratum_minimum_distinct_roots={
+                "unsupported_correction_recovery": 10
+            },
+        )
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(report["targeted_state_cell_shortfalls"], {})
+        self.assertEqual(report["recovery_stratum_shortfalls"], {})
+
+        missing_root = copy.deepcopy(rows)
+        missing_root[0].pop("physical_root_fingerprint")
+        missing_report = audit_dagger1_independent_root_support(
+            missing_root,
+            targeted_state_cell_minimum_distinct_roots={
+                "parameter_route_actionable": 5
+            },
+            recovery_stratum_minimum_distinct_roots={
+                "unsupported_correction_recovery": 5
+            },
+        )
+        self.assertFalse(missing_report["passed"])
+        self.assertEqual(
+            missing_report["targeted_state_cells"]["parameter_route_actionable"]
+            ["rows_missing_physical_root"],
+            1,
+        )
+
+    def test_dagger1_target_cell_classifier_covers_reviewed_cells(self) -> None:
+        multi = {
+            "scenario_family": "multi_measurement",
+            "error_cardinality": 4,
+            "parameter_scans_available": False,
+            "preferred_action": {
+                "tool": "ask_for_more_evidence",
+                "arguments": {"state_id": "active"},
+            },
+            "policy_observation": {},
+        }
+        self.assertIn(
+            "multi_measurement_cardinality_4",
+            dagger1_targeted_state_cells(multi),
+        )
+
+        sequential = {
+            "scenario_family": "measurement+parameter",
+            "preferred_action": {
+                "tool": "get_parameter_context",
+                "arguments": {"state_id": "active"},
+            },
+            "policy_observation": {
+                "history_window": [
+                    {
+                        "action": {
+                            "tool": "correct_measurements",
+                            "arguments": {"state_id": "active"},
+                        }
+                    }
+                ],
+                "accepted_corrections": [{"family": "measurement"}],
+                "no_material_anomaly_remaining": False,
+            },
+        }
+        cells = dagger1_targeted_state_cells(sequential)
+        self.assertIn("sequential_measurement_first", cells)
+        self.assertIn("partial_success_retention", cells)
+
     def test_d0_d1_builder_enforces_deterministic_recovery_share_and_caps(
         self,
     ) -> None:
@@ -57,6 +233,14 @@ class BalancedTrainingViewTests(unittest.TestCase):
                 "collection_beta": 0.25,
                 "state_origin": "learner_policy",
                 "recovery_stratum": "post_failure_no_candidate",
+                "policy_observation": {
+                    "fresh_context_evidence": {
+                        "parameter": {
+                            "route_status": "actionable",
+                            "parameter_ranking_dominance_ratio": 1.3,
+                        }
+                    }
+                },
                 "recovery_label_contract": (
                     "observable_rank_one_learner_state_v1"
                 ),
@@ -64,6 +248,14 @@ class BalancedTrainingViewTests(unittest.TestCase):
             }
             for index in range(2)
         ]
+        root_floor_kwargs = {
+            "d1_targeted_state_cell_minimum_distinct_roots": {
+                "parameter_route_actionable": 2
+            },
+            "d1_recovery_stratum_minimum_distinct_roots": {
+                "post_failure_no_candidate": 2
+            },
+        }
         first, first_report = build_dagger1_training_view(
             d0,
             d1,
@@ -71,6 +263,7 @@ class BalancedTrainingViewTests(unittest.TestCase):
             seed=73,
             max_duplicate_count=1,
             max_rows_per_root=1,
+            **root_floor_kwargs,
         )
         second, second_report = build_dagger1_training_view(
             d0,
@@ -79,6 +272,7 @@ class BalancedTrainingViewTests(unittest.TestCase):
             seed=73,
             max_duplicate_count=1,
             max_rows_per_root=1,
+            **root_floor_kwargs,
         )
         self.assertEqual(
             [row["example_id"] for row in first],
@@ -94,6 +288,8 @@ class BalancedTrainingViewTests(unittest.TestCase):
         )
         self.assertTrue(first_report["physical_root_contract"]["passed"])
         self.assertTrue(first_report["duplicate_contract"]["passed"])
+        self.assertTrue(first_report["d1_independent_root_support"]["passed"])
+        self.assertTrue(first_report["replay_capacity"]["passed"])
 
         diagnostic = copy.deepcopy(d1)
         diagnostic[0]["collection_role"] = "diagnostic"
@@ -104,6 +300,193 @@ class BalancedTrainingViewTests(unittest.TestCase):
         overlap[0]["physical_root_fingerprint"] = "d0-root-0"
         with self.assertRaisesRegex(ValueError, "physical roots must be disjoint"):
             build_dagger1_training_view(d0, overlap, size=8)
+
+        repeated_root = copy.deepcopy(d1)
+        repeated_root[1]["physical_root_fingerprint"] = repeated_root[0][
+            "physical_root_fingerprint"
+        ]
+        with self.assertRaisesRegex(
+            ValueError, "independent physical-root support failed"
+        ):
+            build_dagger1_training_view(
+                d0,
+                repeated_root,
+                size=8,
+                **root_floor_kwargs,
+            )
+
+    def test_dagger1_capacity_reports_largest_feasible_view(self) -> None:
+        d0 = [
+            _row(f"capacity-d0-{index}", physical_root=f"d0-cap-{index}")
+            for index in range(7)
+        ]
+        d1 = [_row("capacity-d1", physical_root="d1-cap")]
+        report = dagger1_replay_capacity_report(
+            d0,
+            d1,
+            size=12,
+            max_duplicate_count=2,
+            max_rows_per_root=8,
+        )
+        self.assertFalse(report["passed"])
+        self.assertEqual(report["requested"]["d1_capacity_shortfall"], 1)
+        self.assertEqual(report["largest_feasible"]["total_rows"], 9)
+        self.assertEqual(report["largest_feasible"]["d1_recovery_rows"], 2)
+
+    def test_dagger1_sampling_reserves_targeted_root_groups(self) -> None:
+        d0 = [
+            {
+                **_row(
+                    f"d0-reserve-{index}",
+                    physical_root=f"d0-reserve-root-{index}",
+                ),
+                "production_label_eligible": True,
+                "iteration": 0,
+            }
+            for index in range(12)
+        ]
+        d1: list[dict[str, object]] = []
+        for index in range(8):
+            row = {
+                **_row(
+                    f"d1-reserve-{index}",
+                    physical_root=f"d1-reserve-root-{index}",
+                    state_class="invalid_precondition_recovery",
+                ),
+                "production_label_eligible": True,
+                "iteration": 1,
+                "collection_role": "training",
+                "collection_beta": 0.25,
+                "state_origin": "learner_policy",
+                "recovery_stratum": "common_recovery",
+                "policy_observation": {},
+                "recovery_label_contract": (
+                    "observable_rank_one_learner_state_v1"
+                ),
+                "collection_training_eligible": True,
+            }
+            if index < 3:
+                row["policy_observation"] = {
+                    "fresh_context_evidence": {
+                        "parameter": {
+                            "route_status": "actionable",
+                            "parameter_ranking_dominance_ratio": 1.3,
+                        }
+                    }
+                }
+            d1.append(row)
+
+        generic_view, _ = build_balanced_training_view(
+            d1,
+            size=3,
+            seed=1,
+            max_duplicate_count=1,
+            max_rows_per_root=1,
+            minimum_tool_category_natural_rows=0,
+            minimum_tool_category_distinct_roots=0,
+            require_production_label_eligible=True,
+        )
+        generic_support = audit_dagger1_independent_root_support(
+            generic_view,
+            targeted_state_cell_minimum_distinct_roots={
+                "parameter_route_actionable": 3
+            },
+            recovery_stratum_minimum_distinct_roots={"common_recovery": 1},
+        )
+        self.assertFalse(generic_support["passed"])
+
+        view, report = build_dagger1_training_view(
+            d0,
+            d1,
+            size=12,
+            seed=0,
+            max_duplicate_count=1,
+            max_rows_per_root=1,
+            d1_targeted_state_cell_minimum_distinct_roots={
+                "parameter_route_actionable": 3
+            },
+            d1_recovery_stratum_minimum_distinct_roots={
+                "common_recovery": 1
+            },
+        )
+        sampled_d1 = [
+            row for row in view if row["replay_source"] == "d1_recovery"
+        ]
+        self.assertEqual(
+            {row["example_id"] for row in sampled_d1},
+            {"d1-reserve-0", "d1-reserve-1", "d1-reserve-2"},
+        )
+        support = report["d1_independent_root_support"]
+        self.assertTrue(support["eligible_natural_source"]["passed"])
+        self.assertTrue(support["sampled_training_view"]["passed"])
+        self.assertTrue(support["passed"])
+        self.assertTrue(
+            report["d1_training_view"][
+                "root_group_unique_root_support_passed"
+            ]
+        )
+        self.assertTrue(report["release_ready"])
+        for row in view:
+            self.assertNotIn("_dagger1_root_groups", row)
+            self.assertNotIn("root_group_memberships", row)
+
+    def test_dagger1_allocation_too_small_for_root_floor_fails(self) -> None:
+        d0 = [
+            {
+                **_row(
+                    f"d0-small-{index}",
+                    physical_root=f"d0-small-root-{index}",
+                ),
+                "production_label_eligible": True,
+                "iteration": 0,
+            }
+            for index in range(6)
+        ]
+        d1 = [
+            {
+                **_row(
+                    f"d1-small-{index}",
+                    physical_root=f"d1-small-root-{index}",
+                    state_class="invalid_precondition_recovery",
+                ),
+                "production_label_eligible": True,
+                "iteration": 1,
+                "collection_role": "training",
+                "collection_beta": 0.25,
+                "state_origin": "learner_policy",
+                "recovery_stratum": "common_recovery",
+                "policy_observation": {
+                    "fresh_context_evidence": {
+                        "parameter": {
+                            "route_status": "actionable",
+                            "parameter_ranking_dominance_ratio": 1.3,
+                        }
+                    }
+                },
+                "recovery_label_contract": (
+                    "observable_rank_one_learner_state_v1"
+                ),
+                "collection_training_eligible": True,
+            }
+            for index in range(3)
+        ]
+        with self.assertRaisesRegex(
+            ValueError,
+            "D1 allocation cannot preserve configured independent-root floors",
+        ):
+            build_dagger1_training_view(
+                d0,
+                d1,
+                size=8,
+                max_duplicate_count=1,
+                max_rows_per_root=1,
+                d1_targeted_state_cell_minimum_distinct_roots={
+                    "parameter_route_actionable": 3
+                },
+                d1_recovery_stratum_minimum_distinct_roots={
+                    "common_recovery": 1
+                },
+            )
 
     def test_targetless_rows_are_excluded_before_balancing(self) -> None:
         targetless = {

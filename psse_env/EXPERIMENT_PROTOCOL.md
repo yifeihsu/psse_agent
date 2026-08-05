@@ -55,18 +55,56 @@ the parameter-routing threshold of `1.0`):
 Every input must declare `train` or `dagger_train`, carry an explicit physical
 root, and be disjoint from all frozen evaluation roots. Production-eligible
 DAgger-1 labels must be rank-one observable-expert targets at learner-created
-recovery states; ordinary expert states, hidden-truth labels, and copied
-evaluation roots fail closed. Target roughly 300--600 independent recovery
-rows, governed by coverage rather than duplication, including unsupported
-corrections, post-failure/no-candidate recovery, premature commit and
-escalation recovery, multi-measurement safe handoff, and sequential
-measurement-plus-parameter recovery.
+recovery states and must pass a post-target, privileged physical-truth audit;
+ordinary expert states, hidden-truth labels, copied evaluation roots, and a
+truth-inconsistent correction/commit/rollback/finalize/handoff target fail
+closed. The teacher target and rank-one proof are computed from the exact
+`PolicyObservation` before `OracleState` is materialized; private truth can only
+quarantine or score that already-fixed target. The teacher receives only that
+observation's bounded `history_window`, never the collector's fuller private
+transition history. The audit record is a fixed
+low-bandwidth boolean/reason-code object in
+non-model metadata and can quarantine a target only after the observable
+teacher has fixed it. Training collection must load one absolute local adapter
+directory whose inspected tree digest is the supplied 64-hex model revision.
+The collection manifest, final aggregate, and `STAGE=round1`
+`INITIAL_ADAPTER_REVISION` must all bind that exact learner-seed digest.
+
+Target roughly 300--600 independent recovery rows, governed by coverage rather
+than duplication, including unsupported corrections, post-failure/no-candidate
+recovery, premature commit and escalation recovery, multi-measurement safe
+handoff, and sequential measurement-plus-parameter recovery. Each of the ten
+predeclared targeted state cells requires at least five distinct physical
+roots. Unsupported-correction, post-failure/no-candidate,
+measurement-parameter sequencing, and multi-measurement handoff each require
+at least ten; premature commit and premature escalation each require five.
+Repeated rows from one root never count as independent support.
 
 Build the next view as `D0 union D1`, initially allocating 70--80% to the
 eligible BC0 source and 20--30% to learner-recovery rows while retaining the
-physical-root and duplicate caps. Run a deterministic targeted tiny-overfit
-before the full job. The primary Round-1 run warm-starts from the exact BC0
-learner-seed adapter for approximately one epoch at `2e-5` through `5e-5`.
+physical-root and duplicate caps. Before sampling, report the requested and
+largest feasible view under both caps. Preserve immutable natural D0, D1, and
+combined source views. Final ingestion must recompute the D1 recovery/class/root
+audits, exact realizability on the natural union and balanced view, and
+approximate realizability overall and by family, state class, and explicit D1
+recovery stratum with nonzero comparison coverage. Persist the complete reports
+in preflight and bind their hashes in generation provenance. Run a
+deterministic targeted tiny-overfit before the full job. The primary Round-1
+run warm-starts from the exact BC0 learner-seed adapter for approximately one
+epoch at `2e-5` through `5e-5`.
+
+Split the original 150-root allocation into 120 D1 training roots (48
+measurement-plus-parameter, 48 multi-measurement, and 24 parameter) and a
+deterministic 30-root development suite (12, 12, and 6 respectively) from the
+same train source partition. Development must remain disjoint from D0, D1
+training, and all 115 frozen roots. It is diagnostic model-selection evidence
+only: it never enters SFT and never counts as promotion evidence. Use it for
+closed-loop learning-rate and replay-share checks before the one-time
+frozen-suite promotion evaluation. The present evaluator can compare outcomes
+on these roots but cannot certify expert-defined recovery-stratum opportunity
+coverage because it persists only observation hashes and learner actions. The
+holdout is therefore not stratum-qualified until diagnostic-only teacher-target
+instrumentation and a binding post-evaluation coverage audit are added.
 
 The 13-root failure replay is diagnostic only. It must be written separately
 from the frozen suite, marked ineligible for release and training, and may not

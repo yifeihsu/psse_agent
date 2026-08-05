@@ -32,6 +32,35 @@ DEFAULT_TRAINING_TOOL_CATEGORY_WEIGHTS: dict[str, float] = {
 DEFAULT_MINIMUM_TOOL_CATEGORY_NATURAL_ROWS = 16
 DEFAULT_MINIMUM_TOOL_CATEGORY_DISTINCT_ROOTS = 10
 
+# These are release-support floors, not replay weights.  Rows repeated from one
+# physical scenario must never make a critical DAgger-1 recovery behavior look
+# independently supported.  The first-run floors are intentionally explicit so
+# collection and final aggregate ingestion can recompute the same contract.
+DAGGER1_TARGETED_STATE_CELL_MINIMUM_DISTINCT_ROOTS: dict[str, int] = {
+    "multi_measurement_cardinality_2": 5,
+    "multi_measurement_cardinality_4": 5,
+    "multi_measurement_cardinality_5": 5,
+    "parameter_route_actionable": 5,
+    "parameter_route_complete_negative": 5,
+    "parameter_route_unavailable": 5,
+    "parameter_near_1_2_strict_rank": 5,
+    "sequential_measurement_first": 5,
+    "sequential_parameter_first": 5,
+    "partial_success_retention": 5,
+}
+
+DAGGER1_RECOVERY_STRATUM_MINIMUM_DISTINCT_ROOTS: dict[str, int] = {
+    # Central known-failure strata receive the stronger ten-root floor.
+    "multi_measurement_safe_handoff": 10,
+    "post_failure_no_candidate": 10,
+    "sequential_measurement_parameter_recovery": 10,
+    "unsupported_correction_recovery": 10,
+    # The remaining predeclared D1 recovery strata still require independent
+    # support rather than a single repeated physical trajectory.
+    "premature_commit_recovery": 5,
+    "premature_escalation_recovery": 5,
+}
+
 
 def _state_class(row: Mapping[str, Any]) -> str:
     labels = row.get("labels")
@@ -559,6 +588,385 @@ def _target_tool(row: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _normalize_dagger1_root_floors(
+    value: Mapping[str, int], *, name: str
+) -> dict[str, int]:
+    if not isinstance(value, Mapping) or not value:
+        raise ValueError(f"{name} must be a non-empty mapping")
+    normalized: dict[str, int] = {}
+    for raw_key, raw_floor in value.items():
+        key = str(raw_key).strip()
+        if not key:
+            raise ValueError(f"{name} keys must be non-empty")
+        if (
+            isinstance(raw_floor, bool)
+            or not isinstance(raw_floor, int)
+            or raw_floor <= 0
+        ):
+            raise ValueError(f"{name} values must be positive integers")
+        normalized[key] = int(raw_floor)
+    return dict(sorted(normalized.items()))
+
+
+def dagger1_targeted_state_cells(row: Mapping[str, Any]) -> frozenset[str]:
+    """Classify the first-run D1 root-support cells from non-secret fields.
+
+    The classifier intentionally consumes only public grouping metadata, the
+    policy observation, and the already-fixed teacher target.  Physical-root
+    identity is used only by the outer audit to count independent support and
+    is never added to the model observation.
+    """
+
+    cells: set[str] = set()
+    family = str(_nonmodel_value(row, "scenario_family") or "")
+    try:
+        cardinality = int(_nonmodel_value(row, "error_cardinality") or 0)
+    except (TypeError, ValueError, OverflowError):
+        cardinality = 0
+    if (
+        family == "multi_measurement"
+        and cardinality in {2, 4, 5}
+        and _nonmodel_value(row, "parameter_scans_available") is False
+    ):
+        cells.add(f"multi_measurement_cardinality_{cardinality}")
+
+    observation = row.get("policy_observation") or row.get("state_summary") or {}
+    observation = observation if isinstance(observation, Mapping) else {}
+    evidence_by_family = observation.get("fresh_context_evidence")
+    parameter = (
+        evidence_by_family.get("parameter")
+        if isinstance(evidence_by_family, Mapping)
+        else None
+    )
+    if isinstance(parameter, Mapping):
+        route = str(parameter.get("route_status") or "")
+        if route == "actionable":
+            cells.add("parameter_route_actionable")
+        elif route == "complete_negative":
+            cells.add("parameter_route_complete_negative")
+        elif route.startswith("unavailable"):
+            cells.add("parameter_route_unavailable")
+        try:
+            ratio = float(parameter.get("parameter_ranking_dominance_ratio"))
+        except (TypeError, ValueError, OverflowError):
+            ratio = float("nan")
+        if math.isfinite(ratio) and 1.0 < ratio < 1.2:
+            cells.add("parameter_near_1_2_strict_rank")
+
+    prior_families: set[str] = set()
+    history = observation.get("history_window")
+    if isinstance(history, (list, tuple)):
+        for event in history:
+            action = event.get("action") if isinstance(event, Mapping) else None
+            tool = (
+                str(action.get("tool") or "")
+                if isinstance(action, Mapping)
+                else ""
+            )
+            if "measurement" in tool:
+                prior_families.add("measurement")
+            elif "parameter" in tool:
+                prior_families.add("parameter")
+    target_tool = _target_tool(row) or ""
+    if family == "measurement+parameter":
+        if "measurement" in prior_families and "parameter" in target_tool:
+            cells.add("sequential_measurement_first")
+        if "parameter" in prior_families and "measurement" in target_tool:
+            cells.add("sequential_parameter_first")
+    if observation.get("accepted_corrections") and observation.get(
+        "no_material_anomaly_remaining"
+    ) is not True:
+        cells.add("partial_success_retention")
+    return frozenset(cells)
+
+
+def _dagger1_recovery_stratum(row: Mapping[str, Any]) -> str | None:
+    value = _nonmodel_value(row, "recovery_stratum")
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
+def audit_dagger1_independent_root_support(
+    examples: Iterable[Mapping[str, Any]],
+    *,
+    targeted_state_cell_minimum_distinct_roots: Mapping[str, int] = (
+        DAGGER1_TARGETED_STATE_CELL_MINIMUM_DISTINCT_ROOTS
+    ),
+    recovery_stratum_minimum_distinct_roots: Mapping[str, int] = (
+        DAGGER1_RECOVERY_STRATUM_MINIMUM_DISTINCT_ROOTS
+    ),
+) -> dict[str, Any]:
+    """Require independent physical support for D1 cells and strata.
+
+    This audit is suitable both immediately after collection and at final
+    aggregate ingestion.  It never trusts row counts as a proxy for physical
+    diversity: only explicit ``physical_root_fingerprint`` values count.
+    """
+
+    cell_floors = _normalize_dagger1_root_floors(
+        targeted_state_cell_minimum_distinct_roots,
+        name="targeted_state_cell_minimum_distinct_roots",
+    )
+    stratum_floors = _normalize_dagger1_root_floors(
+        recovery_stratum_minimum_distinct_roots,
+        name="recovery_stratum_minimum_distinct_roots",
+    )
+    rows = list(examples)
+    cell_rows: Counter[str] = Counter()
+    stratum_rows: Counter[str] = Counter()
+    cell_roots: dict[str, set[str]] = defaultdict(set)
+    stratum_roots: dict[str, set[str]] = defaultdict(set)
+    cell_missing_roots: Counter[str] = Counter()
+    stratum_missing_roots: Counter[str] = Counter()
+
+    for row in rows:
+        root_value = _physical_root(row)
+        root = str(root_value).strip() if root_value is not None else None
+        if not root:
+            root = None
+        for cell in dagger1_targeted_state_cells(row):
+            cell_rows[cell] += 1
+            if root is None:
+                cell_missing_roots[cell] += 1
+            else:
+                cell_roots[cell].add(root)
+        stratum = _dagger1_recovery_stratum(row)
+        if stratum is None:
+            continue
+        stratum_rows[stratum] += 1
+        if root is None:
+            stratum_missing_roots[stratum] += 1
+        else:
+            stratum_roots[stratum].add(root)
+
+    def support_report(
+        *,
+        floors: Mapping[str, int],
+        row_counts: Mapping[str, int],
+        roots: Mapping[str, set[str]],
+        missing_roots: Mapping[str, int],
+    ) -> dict[str, dict[str, int | bool]]:
+        result: dict[str, dict[str, int | bool]] = {}
+        for name in sorted(set(row_counts) | set(floors)):
+            observed_roots = len(roots.get(name, set()))
+            minimum_roots = int(floors.get(name, 0))
+            missing_count = int(missing_roots.get(name, 0))
+            shortfall = max(minimum_roots - observed_roots, 0)
+            required = name in floors
+            result[name] = {
+                "target_bearing_rows": int(row_counts.get(name, 0)),
+                "distinct_physical_roots": observed_roots,
+                "rows_missing_physical_root": missing_count,
+                "minimum_distinct_physical_roots": minimum_roots,
+                "root_shortfall": shortfall,
+                "required_for_release": required,
+                "passed": (not required) or (
+                    shortfall == 0 and missing_count == 0
+                ),
+            }
+        return result
+
+    cell_support = support_report(
+        floors=cell_floors,
+        row_counts=cell_rows,
+        roots=cell_roots,
+        missing_roots=cell_missing_roots,
+    )
+    stratum_support = support_report(
+        floors=stratum_floors,
+        row_counts=stratum_rows,
+        roots=stratum_roots,
+        missing_roots=stratum_missing_roots,
+    )
+    cell_shortfalls = {
+        name: details
+        for name, details in cell_support.items()
+        if details["required_for_release"] and not details["passed"]
+    }
+    stratum_shortfalls = {
+        name: details
+        for name, details in stratum_support.items()
+        if details["required_for_release"] and not details["passed"]
+    }
+    return {
+        "contract": "dagger1_independent_physical_root_support_v1",
+        "total_rows": len(rows),
+        "targeted_state_cell_minimum_distinct_roots": cell_floors,
+        "recovery_stratum_minimum_distinct_roots": stratum_floors,
+        "targeted_state_cells": cell_support,
+        "recovery_strata": stratum_support,
+        "targeted_state_cell_shortfalls": cell_shortfalls,
+        "recovery_stratum_shortfalls": stratum_shortfalls,
+        "targeted_state_cells_passed": not cell_shortfalls,
+        "recovery_strata_passed": not stratum_shortfalls,
+        "passed": not cell_shortfalls and not stratum_shortfalls,
+    }
+
+
+def dagger1_replay_capacity_report(
+    d0_rows: Iterable[Mapping[str, Any]],
+    d1_rows: Iterable[Mapping[str, Any]],
+    *,
+    size: int | None = None,
+    d1_share: float = 0.25,
+    minimum_d1_share: float = 0.20,
+    maximum_d1_share: float = 0.30,
+    max_duplicate_count: int = 2,
+    max_rows_per_root: int = 8,
+) -> dict[str, Any]:
+    """Report duplicate/root-limited D0+D1 replay capacity before sampling.
+
+    This is a marginal capacity bound: semantic balancing may impose stricter
+    limits later, but the sampler can never exceed this report.  Reporting the
+    largest feasible total makes an undersized D1 collection actionable before
+    an expensive Round-1 launch.
+    """
+
+    d0 = list(d0_rows)
+    d1 = list(d1_rows)
+    if not d0 or not d1:
+        raise ValueError("D0 and D1 capacity inputs must both be non-empty")
+    if not 0.0 < float(minimum_d1_share) <= float(maximum_d1_share) < 1.0:
+        raise ValueError("D1 share band must satisfy 0 < minimum <= maximum < 1")
+    if not float(minimum_d1_share) <= float(d1_share) <= float(maximum_d1_share):
+        raise ValueError("configured D1 share is outside the allowed share band")
+    if (
+        isinstance(max_duplicate_count, bool)
+        or int(max_duplicate_count) != max_duplicate_count
+        or int(max_duplicate_count) < 1
+    ):
+        raise ValueError("max_duplicate_count must be a positive integer")
+    if (
+        isinstance(max_rows_per_root, bool)
+        or int(max_rows_per_root) != max_rows_per_root
+        or int(max_rows_per_root) < 1
+    ):
+        raise ValueError("max_rows_per_root must be a positive integer")
+
+    duplicate_cap = int(max_duplicate_count)
+    root_cap = int(max_rows_per_root)
+
+    def source_capacity(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
+        examples_by_root: dict[str, set[str]] = defaultdict(set)
+        roots_by_example: dict[str, set[str]] = defaultdict(set)
+        missing_root_rows = 0
+        missing_example_id_rows = 0
+        for row in rows:
+            root = _physical_root(row)
+            example_id = str(row.get("example_id") or "").strip()
+            if root is None or not str(root).strip():
+                missing_root_rows += 1
+                continue
+            if not example_id:
+                missing_example_id_rows += 1
+                continue
+            normalized_root = str(root).strip()
+            examples_by_root[normalized_root].add(example_id)
+            roots_by_example[example_id].add(normalized_root)
+        cross_root_example_ids = sorted(
+            example_id
+            for example_id, roots in roots_by_example.items()
+            if len(roots) > 1
+        )
+        capacity_by_root = {
+            root: min(root_cap, len(example_ids) * duplicate_cap)
+            for root, example_ids in sorted(examples_by_root.items())
+        }
+        return {
+            "natural_rows": len(rows),
+            "distinct_examples": len(roots_by_example),
+            "distinct_physical_roots": len(examples_by_root),
+            "missing_physical_root_rows": missing_root_rows,
+            "missing_example_id_rows": missing_example_id_rows,
+            "example_ids_spanning_multiple_roots": cross_root_example_ids,
+            "capacity_by_physical_root": capacity_by_root,
+            "maximum_replay_rows": sum(capacity_by_root.values()),
+            "passed": not (
+                missing_root_rows
+                or missing_example_id_rows
+                or cross_root_example_ids
+            ),
+        }
+
+    d0_capacity = source_capacity(d0)
+    d1_capacity = source_capacity(d1)
+    requested_size = len(d0) + len(d1) if size is None else size
+    if (
+        isinstance(requested_size, bool)
+        or not isinstance(requested_size, int)
+        or requested_size < 2
+    ):
+        raise ValueError("size must be an integer of at least two")
+
+    def allocation(total: int) -> tuple[int, int, float]:
+        d1_count = int(math.floor(total * float(d1_share) + 0.5))
+        d0_count = total - d1_count
+        return d0_count, d1_count, d1_count / total
+
+    maximum_total_bound = int(d0_capacity["maximum_replay_rows"]) + int(
+        d1_capacity["maximum_replay_rows"]
+    )
+    largest_total = 0
+    largest_allocation = (0, 0, 0.0)
+    for candidate in range(2, maximum_total_bound + 1):
+        d0_count, d1_count, observed_share = allocation(candidate)
+        if (
+            d0_count >= 1
+            and d1_count >= 1
+            and float(minimum_d1_share)
+            <= observed_share
+            <= float(maximum_d1_share)
+            and d0_count <= int(d0_capacity["maximum_replay_rows"])
+            and d1_count <= int(d1_capacity["maximum_replay_rows"])
+        ):
+            largest_total = candidate
+            largest_allocation = (d0_count, d1_count, observed_share)
+
+    requested_d0, requested_d1, requested_share = allocation(requested_size)
+    requested_passed = bool(
+        d0_capacity["passed"]
+        and d1_capacity["passed"]
+        and requested_d0 >= 1
+        and requested_d1 >= 1
+        and float(minimum_d1_share)
+        <= requested_share
+        <= float(maximum_d1_share)
+        and requested_d0 <= int(d0_capacity["maximum_replay_rows"])
+        and requested_d1 <= int(d1_capacity["maximum_replay_rows"])
+    )
+    return {
+        "schema_version": 1,
+        "contract": "dagger1_duplicate_and_root_limited_capacity_v1",
+        "configured_d1_share": float(d1_share),
+        "minimum_d1_share": float(minimum_d1_share),
+        "maximum_d1_share": float(maximum_d1_share),
+        "max_duplicate_count": duplicate_cap,
+        "max_rows_per_root": root_cap,
+        "sources": {"d0_bc0": d0_capacity, "d1_recovery": d1_capacity},
+        "requested": {
+            "total_rows": requested_size,
+            "d0_bc0_rows": requested_d0,
+            "d1_recovery_rows": requested_d1,
+            "observed_d1_share": requested_share,
+            "d0_capacity_shortfall": max(
+                requested_d0 - int(d0_capacity["maximum_replay_rows"]), 0
+            ),
+            "d1_capacity_shortfall": max(
+                requested_d1 - int(d1_capacity["maximum_replay_rows"]), 0
+            ),
+            "passed": requested_passed,
+        },
+        "largest_feasible": {
+            "total_rows": largest_total,
+            "d0_bc0_rows": largest_allocation[0],
+            "d1_recovery_rows": largest_allocation[1],
+            "observed_d1_share": largest_allocation[2],
+        },
+        "passed": requested_passed,
+    }
+
+
 def _tool_category(tool: str) -> str:
     if tool in {"run_wls", "wls_from_path"}:
         return "baseline_diagnostics"
@@ -1030,6 +1438,10 @@ def build_balanced_training_view(
     target_tool_scenario_family_minimum_distinct_roots: (
         Mapping[str, Mapping[str, int]] | None
     ) = None,
+    root_group_minimum_distinct_roots: Mapping[str, int] | None = None,
+    example_root_group_memberships: (
+        Mapping[str, Iterable[str]] | None
+    ) = None,
     same_root_prerequisite_rules: Mapping[str, Mapping[str, Any]] | None = None,
     require_production_label_eligible: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -1043,9 +1455,10 @@ def build_balanced_training_view(
     strict achieved-deviation gate after capacity adjustment, and configured
     nonzero categories must independently satisfy natural target-bearing row
     and distinct-root support floors. Configured exact target tools and
-    tool-by-state/family cells must meet independent physical-root floors in
-    both the eligible natural source and the returned view; duplicated
-    placements never increase that support. Configured correction
+    tool-by-state/family cells and caller-defined per-example root groups must
+    meet independent physical-root floors in both the eligible natural source
+    and the returned view; duplicated placements never increase that support.
+    Configured correction
     prerequisites must be retained on the same physical root in both the
     natural source and returned view. Explicitly production-ineligible rows are
     always excluded.
@@ -1112,6 +1525,51 @@ def build_balanced_training_view(
             name="target_tool_scenario_family_minimum_distinct_roots",
         )
     )
+    if root_group_minimum_distinct_roots is None:
+        configured_root_group_floors: dict[str, int] = {}
+    else:
+        configured_root_group_floors = _normalize_dagger1_root_floors(
+            root_group_minimum_distinct_roots,
+            name="root_group_minimum_distinct_roots",
+        )
+    if (
+        example_root_group_memberships is not None
+        and not isinstance(example_root_group_memberships, Mapping)
+    ):
+        raise ValueError("example_root_group_memberships must be a mapping")
+    configured_example_root_groups: dict[str, frozenset[str]] = {}
+    for raw_example_id, raw_groups in (
+        {}
+        if example_root_group_memberships is None
+        else example_root_group_memberships
+    ).items():
+        example_id = str(raw_example_id).strip()
+        if not example_id:
+            raise ValueError(
+                "example_root_group_memberships keys must be non-empty"
+            )
+        if isinstance(raw_groups, (str, bytes)) or not isinstance(
+            raw_groups, Iterable
+        ):
+            raise ValueError(
+                "example_root_group_memberships values must be iterables of "
+                "group names"
+            )
+        groups = frozenset(str(group).strip() for group in raw_groups)
+        if any(not group for group in groups):
+            raise ValueError("root-group names must be non-empty")
+        unknown_groups = sorted(groups - set(configured_root_group_floors))
+        if unknown_groups:
+            raise ValueError(
+                "example_root_group_memberships references groups without "
+                "configured floors: " + ", ".join(unknown_groups)
+            )
+        configured_example_root_groups[example_id] = groups
+    if configured_root_group_floors and example_root_group_memberships is None:
+        raise ValueError(
+            "root_group_minimum_distinct_roots requires "
+            "example_root_group_memberships"
+        )
     configured_same_root_prerequisite_rules = (
         _normalize_same_root_prerequisite_rules(same_root_prerequisite_rules)
     )
@@ -1161,6 +1619,29 @@ def build_balanced_training_view(
         raise ValueError(
             "all target-bearing training rows were excluded by the cost-margin gate"
         )
+    root_group_memberships_by_index: dict[int, frozenset[str]] = {}
+    if configured_root_group_floors:
+        eligible_example_ids: set[str] = set()
+        for index, row in enumerate(eligible):
+            example_id = str(row.get("example_id") or "").strip()
+            if not example_id:
+                raise ValueError(
+                    "root-group reservation requires every eligible row to "
+                    "have an example_id"
+                )
+            if example_id in eligible_example_ids:
+                raise ValueError(
+                    "root-group reservation requires unique eligible example_id "
+                    f"values; duplicate {example_id!r}"
+                )
+            eligible_example_ids.add(example_id)
+            root_group_memberships_by_index[index] = (
+                configured_example_root_groups.get(example_id, frozenset())
+            )
+    else:
+        root_group_memberships_by_index = {
+            index: frozenset() for index in range(len(eligible))
+        }
     (
         natural_target_tool_unique_root_support,
         natural_target_tool_unique_root_shortfalls,
@@ -1238,6 +1719,53 @@ def build_balanced_training_view(
         }
         roots[index] = _root_key(row, index)
         explicit_physical_roots[index] = _physical_root(row)
+
+    def root_group_support(
+        selected_indices: Iterable[int],
+    ) -> tuple[
+        dict[str, dict[str, int | bool]],
+        dict[str, dict[str, int]],
+    ]:
+        row_counts: Counter[str] = Counter()
+        group_roots: dict[str, set[str]] = defaultdict(set)
+        missing_root_rows: Counter[str] = Counter()
+        for selected_index in selected_indices:
+            for group in root_group_memberships_by_index[selected_index]:
+                row_counts[group] += 1
+                root = explicit_physical_roots[selected_index]
+                if root is None:
+                    missing_root_rows[group] += 1
+                else:
+                    group_roots[group].add(root)
+        support: dict[str, dict[str, int | bool]] = {}
+        shortfalls: dict[str, dict[str, int]] = {}
+        for group, floor in configured_root_group_floors.items():
+            observed_roots = len(group_roots[group])
+            missing_rows = int(missing_root_rows[group])
+            root_shortfall = max(int(floor) - observed_roots, 0)
+            passed = root_shortfall == 0 and missing_rows == 0
+            support[group] = {
+                "target_bearing_rows": int(row_counts[group]),
+                "distinct_physical_roots": observed_roots,
+                "rows_missing_physical_root": missing_rows,
+                "minimum_distinct_physical_roots": int(floor),
+                "root_shortfall": root_shortfall,
+                "passed": passed,
+            }
+            if not passed:
+                shortfalls[group] = {
+                    "target_bearing_rows": int(row_counts[group]),
+                    "distinct_physical_roots": observed_roots,
+                    "rows_missing_physical_root": missing_rows,
+                    "minimum_distinct_physical_roots": int(floor),
+                    "root_shortfall": root_shortfall,
+                }
+        return support, shortfalls
+
+    (
+        natural_root_group_unique_root_support,
+        natural_root_group_unique_root_shortfalls,
+    ) = root_group_support(range(len(eligible)))
 
     prerequisite_key_by_target_index: dict[int, tuple[str, str, str] | None] = {}
     prerequisite_keys_by_index: dict[int, set[tuple[str, str, str]]] = {
@@ -1456,12 +1984,20 @@ def build_balanced_training_view(
             for family, floor in families.items()
         }
     )
+    requirement_floors.update(
+        {
+            ("root_group", group, ""): floor
+            for group, floor in configured_root_group_floors.items()
+        }
+    )
 
     def matches_requirement(
         index: int,
         requirement: tuple[str, str, str],
     ) -> bool:
         axis, tool, value = requirement
+        if axis == "root_group":
+            return tool in root_group_memberships_by_index[index]
         values = axis_values[index]
         return values["target_tool"] == tool and (
             axis == "target_tool" or values[axis] == value
@@ -1764,6 +2300,10 @@ def build_balanced_training_view(
     )
     view = [copy.deepcopy(eligible[index]) for index in selected]
     (
+        training_view_root_group_unique_root_support,
+        training_view_root_group_unique_root_shortfalls,
+    ) = root_group_support(selected)
+    (
         training_view_target_tool_unique_root_support,
         training_view_target_tool_unique_root_shortfalls,
     ) = _target_tool_unique_root_support(
@@ -1864,6 +2404,8 @@ def build_balanced_training_view(
         and not training_view_target_tool_state_class_unique_root_shortfalls
         and not natural_target_tool_scenario_family_unique_root_shortfalls
         and not training_view_target_tool_scenario_family_unique_root_shortfalls
+        and not natural_root_group_unique_root_shortfalls
+        and not training_view_root_group_unique_root_shortfalls
         and not natural_same_root_prerequisite_shortfalls
         and not training_view_same_root_prerequisite_shortfalls
         and feasibility_shortfall_total == 0
@@ -1880,8 +2422,14 @@ def build_balanced_training_view(
         reservation_requirement_report.append(
             {
                 "axis": axis,
-                "target_tool": tool,
-                **({"value": value} if value else {}),
+                **(
+                    {"root_group": tool}
+                    if axis == "root_group"
+                    else {
+                        "target_tool": tool,
+                        **({"value": value} if value else {}),
+                    }
+                ),
                 "minimum_distinct_physical_roots": configured_floor,
                 "natural_distinct_physical_roots": natural_roots,
                 "natural_support_feasible": natural_roots >= configured_floor,
@@ -1899,6 +2447,18 @@ def build_balanced_training_view(
                     0,
                 ),
             }
+        )
+    if configured_same_root_prerequisite_rules and configured_root_group_floors:
+        reservation_policy = (
+            "constrained_first_with_same_root_prerequisites_and_root_groups_v3"
+        )
+    elif configured_same_root_prerequisite_rules:
+        reservation_policy = "constrained_first_with_same_root_prerequisites_v2"
+    elif configured_root_group_floors:
+        reservation_policy = "constrained_first_generic_root_group_preselection_v2"
+    else:
+        reservation_policy = (
+            "constrained_first_distinct_physical_root_preselection_v1"
         )
     report = {
         "seed": int(seed),
@@ -1944,17 +2504,17 @@ def build_balanced_training_view(
                         "same_root_target_prerequisites",
                         configured_same_root_prerequisite_rules,
                     ),
+                    (
+                        "root_group_distinct_physical_roots",
+                        configured_root_group_floors,
+                    ),
                 )
                 if enabled
             ],
             "deviation_gated_target_axes": ["tool_category"],
             "capacity_aware_target_axes": ["tool_category", *secondary_axes],
             "capacity_aware_policy": "weighted_then_clip_and_redistribute_v1",
-            "requirement_aware_reservation_policy": (
-                "constrained_first_with_same_root_prerequisites_v2"
-                if configured_same_root_prerequisite_rules
-                else "constrained_first_distinct_physical_root_preselection_v1"
-            ),
+            "requirement_aware_reservation_policy": reservation_policy,
             "tool_category_natural_support_floor": {
                 "minimum_natural_target_bearing_rows": int(
                     minimum_tool_category_natural_rows
@@ -1975,6 +2535,9 @@ def build_balanced_training_view(
             "same_root_prerequisite_rules": copy.deepcopy(
                 configured_same_root_prerequisite_rules
             ),
+            "root_group_minimum_distinct_physical_roots": dict(
+                configured_root_group_floors
+            ),
             "production_label_eligibility_policy": (
                 "explicit_true_required"
                 if require_production_label_eligible
@@ -1982,11 +2545,7 @@ def build_balanced_training_view(
             ),
         },
         "requirement_aware_reservation": {
-            "policy": (
-                "constrained_first_with_same_root_prerequisites_v2"
-                if configured_same_root_prerequisite_rules
-                else "constrained_first_distinct_physical_root_preselection_v1"
-            ),
+            "policy": reservation_policy,
             "reserved_rows": len(reserved_indices),
             "feasible_requirements_satisfied_by_reservation": all(
                 item["reservation_shortfall"] == 0
@@ -2020,6 +2579,18 @@ def build_balanced_training_view(
         "target_tool_unique_root_support_passed": (
             not natural_target_tool_unique_root_shortfalls
             and not training_view_target_tool_unique_root_shortfalls
+        ),
+        "root_group_unique_root_support": {
+            "eligible_natural_source": natural_root_group_unique_root_support,
+            "training_view": training_view_root_group_unique_root_support,
+        },
+        "root_group_unique_root_shortfalls": {
+            "eligible_natural_source": natural_root_group_unique_root_shortfalls,
+            "training_view": training_view_root_group_unique_root_shortfalls,
+        },
+        "root_group_unique_root_support_passed": (
+            not natural_root_group_unique_root_shortfalls
+            and not training_view_root_group_unique_root_shortfalls
         ),
         "same_root_prerequisite_support": {
             "eligible_natural_source": natural_same_root_prerequisite_support,
@@ -2115,13 +2686,22 @@ def build_dagger1_training_view(
     max_rows_per_root: int = 8,
     d0_training_view_kwargs: Mapping[str, Any] | None = None,
     d1_training_view_kwargs: Mapping[str, Any] | None = None,
+    d1_targeted_state_cell_minimum_distinct_roots: Mapping[str, int] = (
+        DAGGER1_TARGETED_STATE_CELL_MINIMUM_DISTINCT_ROOTS
+    ),
+    d1_recovery_stratum_minimum_distinct_roots: Mapping[str, int] = (
+        DAGGER1_RECOVERY_STRATUM_MINIMUM_DISTINCT_ROOTS
+    ),
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Build and gate a deterministic production D0 union D1 view.
 
     The two sources are sampled independently to make the learner-recovery
     allocation exact, then deterministically interleaved.  Physical roots must
     be disjoint across sources, so enforcing the same per-root and per-example
-    caps within each source also enforces them globally.
+    caps within each source also enforces them globally.  Before sampling, D1
+    must independently satisfy the reviewed physical-root floors for every
+    targeted recovery cell and required recovery stratum; replay duplication
+    can therefore never manufacture that support.
     """
     d0 = [dict(row) for row in d0_rows]
     d1 = [dict(row) for row in d1_rows]
@@ -2184,6 +2764,53 @@ def build_dagger1_training_view(
                 f"D1 row {index} is not covered by a passing collection gate"
             )
 
+    normalized_d1_cell_floors = _normalize_dagger1_root_floors(
+        d1_targeted_state_cell_minimum_distinct_roots,
+        name="d1_targeted_state_cell_minimum_distinct_roots",
+    )
+    normalized_d1_stratum_floors = _normalize_dagger1_root_floors(
+        d1_recovery_stratum_minimum_distinct_roots,
+        name="d1_recovery_stratum_minimum_distinct_roots",
+    )
+    d1_independent_root_support = audit_dagger1_independent_root_support(
+        d1,
+        targeted_state_cell_minimum_distinct_roots=(
+            normalized_d1_cell_floors
+        ),
+        recovery_stratum_minimum_distinct_roots=(
+            normalized_d1_stratum_floors
+        ),
+    )
+    if d1_independent_root_support.get("passed") is not True:
+        raise ValueError(
+            "D1 independent physical-root support failed: "
+            "targeted_cells="
+            f"{d1_independent_root_support.get('targeted_state_cell_shortfalls')}, "
+            "recovery_strata="
+            f"{d1_independent_root_support.get('recovery_stratum_shortfalls')}"
+        )
+    d1_root_group_floors = {
+        **{
+            f"targeted_state_cell:{cell}": floor
+            for cell, floor in normalized_d1_cell_floors.items()
+        },
+        **{
+            f"recovery_stratum:{stratum}": floor
+            for stratum, floor in normalized_d1_stratum_floors.items()
+        },
+    }
+    d1_example_root_groups: dict[str, list[str]] = {}
+    for row in d1:
+        groups = {
+            f"targeted_state_cell:{cell}"
+            for cell in dagger1_targeted_state_cells(row)
+            if cell in normalized_d1_cell_floors
+        }
+        stratum = _dagger1_recovery_stratum(row)
+        if stratum in normalized_d1_stratum_floors:
+            groups.add(f"recovery_stratum:{stratum}")
+        d1_example_root_groups[str(row["example_id"])] = sorted(groups)
+
     total_size = len(d0) + len(d1) if size is None else int(size)
     if isinstance(size, bool) or total_size < 2 or (size is not None and total_size != size):
         raise ValueError("size must be an integer of at least two")
@@ -2191,11 +2818,36 @@ def build_dagger1_training_view(
     d0_size = total_size - d1_size
     if d0_size < 1 or d1_size < 1:
         raise ValueError("D0/D1 allocation must retain both sources")
+    minimum_single_group_rows = max(d1_root_group_floors.values())
+    if d1_size < minimum_single_group_rows:
+        raise ValueError(
+            "D1 allocation cannot preserve configured independent-root floors: "
+            f"allocated_rows={d1_size}, minimum_single_group_floor="
+            f"{minimum_single_group_rows}"
+        )
     allocated_share = d1_size / total_size
     if not float(minimum_d1_share) <= allocated_share <= float(maximum_d1_share):
         raise ValueError(
             "integer D1 allocation falls outside the allowed share band; "
             "increase the requested size"
+        )
+    replay_capacity = dagger1_replay_capacity_report(
+        d0,
+        d1,
+        size=total_size,
+        d1_share=d1_share,
+        minimum_d1_share=minimum_d1_share,
+        maximum_d1_share=maximum_d1_share,
+        max_duplicate_count=max_duplicate_count,
+        max_rows_per_root=max_rows_per_root,
+    )
+    if replay_capacity.get("passed") is not True:
+        largest = replay_capacity.get("largest_feasible") or {}
+        requested = replay_capacity.get("requested") or {}
+        raise ValueError(
+            "requested D0/D1 training view exceeds duplicate/root-limited "
+            "capacity: "
+            f"requested={requested}, largest_feasible={largest}"
         )
 
     blocked_kwargs = {
@@ -2204,6 +2856,8 @@ def build_dagger1_training_view(
         "max_duplicate_count",
         "max_rows_per_root",
         "require_production_label_eligible",
+        "root_group_minimum_distinct_roots",
+        "example_root_group_memberships",
     }
 
     def source_view(
@@ -2213,6 +2867,8 @@ def build_dagger1_training_view(
         requested_size: int,
         kwargs: Mapping[str, Any] | None,
         source_seed: int,
+        root_group_floors: Mapping[str, int] | None = None,
+        example_root_groups: Mapping[str, Iterable[str]] | None = None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         configured = dict(kwargs or {})
         forbidden = sorted(blocked_kwargs & set(configured))
@@ -2226,6 +2882,13 @@ def build_dagger1_training_view(
             "minimum_tool_category_distinct_roots": 0,
             **configured,
         }
+        if root_group_floors is not None:
+            builder_kwargs["root_group_minimum_distinct_roots"] = (
+                root_group_floors
+            )
+            builder_kwargs["example_root_group_memberships"] = (
+                example_root_groups or {}
+            )
         view, report = build_balanced_training_view(
             rows,
             size=requested_size,
@@ -2252,7 +2915,23 @@ def build_dagger1_training_view(
         requested_size=d1_size,
         kwargs=d1_training_view_kwargs,
         source_seed=int(seed) + 1,
+        root_group_floors=d1_root_group_floors,
+        example_root_groups=d1_example_root_groups,
     )
+    sampled_d1_independent_root_support = audit_dagger1_independent_root_support(
+        d1_view,
+        targeted_state_cell_minimum_distinct_roots=normalized_d1_cell_floors,
+        recovery_stratum_minimum_distinct_roots=normalized_d1_stratum_floors,
+    )
+    if sampled_d1_independent_root_support.get("passed") is not True:
+        raise ValueError(
+            "sampled D1 training view cannot preserve independent physical-root "
+            "support within its allocated size: "
+            f"allocated_rows={d1_size}, targeted_cells="
+            f"{sampled_d1_independent_root_support.get('targeted_state_cell_shortfalls')}, "
+            "recovery_strata="
+            f"{sampled_d1_independent_root_support.get('recovery_stratum_shortfalls')}"
+        )
     view = d0_view + d1_view
     random.Random(int(seed)).shuffle(view)
 
@@ -2280,6 +2959,7 @@ def build_dagger1_training_view(
         and share_passed
         and not root_violations
         and not duplicate_violations
+        and sampled_d1_independent_root_support.get("passed") is True
         and all(row.get("production_label_eligible") is True for row in view)
     )
     report = {
@@ -2311,6 +2991,15 @@ def build_dagger1_training_view(
         "production_label_eligibility_passed": all(
             row.get("production_label_eligible") is True for row in view
         ),
+        "replay_capacity": replay_capacity,
+        "d1_independent_root_support": {
+            "eligible_natural_source": d1_independent_root_support,
+            "sampled_training_view": sampled_d1_independent_root_support,
+            "passed": bool(
+                d1_independent_root_support.get("passed") is True
+                and sampled_d1_independent_root_support.get("passed") is True
+            ),
+        },
         "d0_training_view": d0_report,
         "d1_training_view": d1_report,
         "passed": passed,

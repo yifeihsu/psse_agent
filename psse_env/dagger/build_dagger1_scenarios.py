@@ -18,13 +18,21 @@ from psse_env.dagger.release_factories import (
 )
 from psse_env.dagger.suite_builder import partition_release_scenario_v1
 from psse_env.providers.scenario_generator import Round0ScenarioGenerator
-from psse_env.sft.provenance import file_sha256, git_source_state
+from psse_env.sft.provenance import (
+    file_sha256,
+    git_source_state,
+    stable_json_sha256,
+)
 
 
 DEFAULT_DAGGER1_ROOT_PLAN = {
-    "measurement+parameter": 60,
-    "multi_measurement": 60,
-    "parameter": 30,
+    # Reserve the complementary 12/12/6 roots for the independent
+    # development holdout.  Together the two deterministic builders retain
+    # the original 60/60/30 root allocation without allowing development
+    # roots into collection or SFT.
+    "measurement+parameter": 48,
+    "multi_measurement": 48,
+    "parameter": 24,
 }
 
 
@@ -86,10 +94,21 @@ def build_dagger1_scenarios(
         if isinstance(descriptor, Mapping)
         else None
     )
+    if not isinstance(descriptor, Mapping):
+        raise RuntimeError("D0 aggregate generation descriptor is missing")
+    expected_provenance_id = stable_json_sha256(descriptor)
+    if d0_provenance.get("generation_provenance_id") != expected_provenance_id:
+        raise RuntimeError(
+            "D0 aggregate generation provenance ID does not match descriptor"
+        )
+    if not (
+        isinstance(d0_source, Mapping)
+        and d0_source.get("release_eligible_source") is True
+    ):
+        raise RuntimeError("D0 aggregate source state is not release eligible")
     if not (
         isinstance(d0_provenance, Mapping)
         and d0_provenance.get("release_eligible") is True
-        and isinstance(d0_source, Mapping)
         and d0_source.get("source_commit") == source_state.get("source_commit")
     ):
         raise RuntimeError("D0 aggregate is not release eligible for current source")
