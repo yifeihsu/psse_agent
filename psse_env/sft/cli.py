@@ -23,7 +23,13 @@ from .provenance import (
     git_source_state,
     validate_generation_provenance,
 )
-from .training import LoraSettings, TrainerSettings, run_lora_smoke, run_lora_training
+from .training import (
+    LoraSettings,
+    TrainerSettings,
+    run_lora_smoke,
+    run_lora_training,
+    run_targeted_lora_smoke_sweep,
+)
 
 
 def _common(parser: argparse.ArgumentParser) -> None:
@@ -69,6 +75,24 @@ def _common(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _initial_adapter_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--initial-adapter-path",
+        type=Path,
+        help=(
+            "Optional absolute local LoRA adapter path used as the trainable "
+            "warm start. Requires --initial-adapter-revision."
+        ),
+    )
+    parser.add_argument(
+        "--initial-adapter-revision",
+        help=(
+            "Expected immutable 64-hex checkpoint tree SHA-256 for the initial "
+            "adapter. Requires --initial-adapter-path."
+        ),
+    )
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="Pinned Gemma 4 tool-SFT go/no-go gates")
     commands = result.add_subparsers(dest="command", required=True)
@@ -76,6 +100,7 @@ def parser() -> argparse.ArgumentParser:
     _common(gate)
     train = commands.add_parser("train", help="Gate, smoke, then run pilot LoRA/TRL SFT.")
     _common(train)
+    _initial_adapter_options(train)
     train.add_argument("--output-dir", default="outputs/dagger_gemma4_pilot")
     train.add_argument("--batch-size", type=int, default=1)
     train.add_argument("--gradient-accumulation-steps", type=int, default=4)
@@ -141,8 +166,23 @@ def parser() -> argparse.ArgumentParser:
     )
     smoke = commands.add_parser("smoke", help="Gate and run LoRA optimizer smoke only; never starts TRL training.")
     _common(smoke)
+    _initial_adapter_options(smoke)
     smoke.add_argument("--mode", choices=("one-batch", "tiny-overfit"), required=True)
     smoke.add_argument("--tiny-overfit-steps", type=int, default=20)
+    smoke.add_argument(
+        "--targeted-recovery-sweep",
+        action="store_true",
+        help=(
+            "Run the deterministic five-case recovery tiny-overfit at the fixed "
+            "diagnostic LR sweep 1e-4, 3e-4, and 1e-3."
+        ),
+    )
+    smoke.add_argument(
+        "--targeted-min-relative-loss-reduction",
+        type=float,
+        default=0.20,
+        help="Minimum mean loss reduction required on the complete five-case slice.",
+    )
     smoke.add_argument("--output-dir", default="outputs/dagger_gemma4_smoke")
     smoke.add_argument("--batch-size", type=int, default=1)
     smoke.add_argument("--gradient-accumulation-steps", type=int, default=1)
@@ -411,21 +451,63 @@ def main(argv: list[str] | None = None) -> int:
             ),
             report_to=getattr(args, "report_to", "none"),
             run_name=getattr(args, "run_name", None),
+            initial_adapter_path=(
+                str(args.initial_adapter_path)
+                if getattr(args, "initial_adapter_path", None) is not None
+                else None
+            ),
+            initial_adapter_revision=getattr(
+                args,
+                "initial_adapter_revision",
+                None,
+            ),
         )
         lora = LoraSettings(rank=args.lora_rank, alpha=args.lora_alpha, dropout=args.lora_dropout)
         if args.command == "smoke":
-            result = run_lora_smoke(
-                train_file=args.train,
-                validation_file=args.validation,
-                settings=settings,
-                lora=lora,
-                mode=args.mode,
-                pilot_minimum_rows=args.pilot_min_rows,
-                pilot_maximum_rows=args.pilot_max_rows,
-                tiny_overfit_steps=args.tiny_overfit_steps,
-            )
-            print(json.dumps({"passed": True, "mode": args.mode, "smoke": result.to_dict()}, indent=2))
-            return 0
+            if args.targeted_recovery_sweep:
+                if args.mode != "tiny-overfit":
+                    raise ValueError(
+                        "--targeted-recovery-sweep requires --mode tiny-overfit."
+                    )
+                result = run_targeted_lora_smoke_sweep(
+                    train_file=args.train,
+                    validation_file=args.validation,
+                    settings=settings,
+                    lora=lora,
+                    pilot_minimum_rows=args.pilot_min_rows,
+                    pilot_maximum_rows=args.pilot_max_rows,
+                    tiny_overfit_steps=args.tiny_overfit_steps,
+                    minimum_relative_loss_reduction=(
+                        args.targeted_min_relative_loss_reduction
+                    ),
+                )
+                payload = {
+                    "passed": result.passed,
+                    "mode": "targeted-tiny-overfit-sweep",
+                    "smoke": result.to_dict(),
+                }
+            else:
+                result = run_lora_smoke(
+                    train_file=args.train,
+                    validation_file=args.validation,
+                    settings=settings,
+                    lora=lora,
+                    mode=args.mode,
+                    pilot_minimum_rows=args.pilot_min_rows,
+                    pilot_maximum_rows=args.pilot_max_rows,
+                    tiny_overfit_steps=args.tiny_overfit_steps,
+                )
+                payload = {
+                    "passed": True,
+                    "mode": args.mode,
+                    "smoke": result.to_dict(),
+                }
+            rendered = json.dumps(payload, indent=2) + "\n"
+            if args.report_output is not None:
+                args.report_output.parent.mkdir(parents=True, exist_ok=True)
+                args.report_output.write_text(rendered, encoding="utf-8")
+            print(rendered, end="")
+            return 0 if payload["passed"] else 2
         result = run_lora_training(
             train_file=args.train,
             validation_file=args.validation,

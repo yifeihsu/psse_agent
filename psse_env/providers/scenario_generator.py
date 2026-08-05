@@ -274,6 +274,7 @@ class Round0ScenarioGenerator:
         hif_max_scans: int = 8,
         noise_profile_rows: int = 200,
         source_partition: str | None = None,
+        parameter_ranking_dominance_threshold: float | None = None,
     ) -> None:
         if source_partition not in (None, "train", "evaluation"):
             raise ValueError(
@@ -327,6 +328,23 @@ class Round0ScenarioGenerator:
         self._enforce_parameter_ranking_dominance = (
             source_partition != "evaluation"
         )
+        default_parameter_threshold = (
+            1.0
+            if source_partition == "evaluation"
+            else PARAMETER_RANKING_DOMINANCE_THRESHOLD
+        )
+        self.parameter_ranking_dominance_threshold = float(
+            default_parameter_threshold
+            if parameter_ranking_dominance_threshold is None
+            else parameter_ranking_dominance_threshold
+        )
+        if (
+            not math.isfinite(self.parameter_ranking_dominance_threshold)
+            or self.parameter_ranking_dominance_threshold < 1.0
+        ):
+            raise ValueError(
+                "parameter_ranking_dominance_threshold must be finite and >= 1.0"
+            )
         self._source_partition_metadata: dict[str, Any] = {
             "selected": source_partition,
             "enabled": source_partition is not None,
@@ -356,9 +374,7 @@ class Round0ScenarioGenerator:
             chi2_alpha=self.chi2_alpha,
             derived_case_dir=str(self.derived_case_dir),
             parameter_ranking_dominance_threshold=(
-                PARAMETER_RANKING_DOMINANCE_THRESHOLD
-                if self._enforce_parameter_ranking_dominance
-                else 1.0
+                self.parameter_ranking_dominance_threshold
             ),
         )
         self._parameter_gate_candidate_oracle = CandidateQualityOracle(
@@ -810,14 +826,17 @@ class Round0ScenarioGenerator:
         metrics["parameter_context_ranking"] = parameter_ranking
         if (
             self._enforce_parameter_ranking_dominance
-            and not parameter_ranking_contract_is_dominant(context_metrics)
+            and not parameter_ranking_contract_is_dominant(
+                context_metrics,
+                expected_threshold=self.parameter_ranking_dominance_threshold,
+            )
         ):
             raise ScenarioRejected(
                 "parameter_context_target_not_dominant",
                 (
                     f"line {line_index1}: deployed parameter context did not "
                     f"satisfy {PARAMETER_RANKING_CONTRACT} at dominance "
-                    f"threshold {PARAMETER_RANKING_DOMINANCE_THRESHOLD}"
+                    f"threshold {self.parameter_ranking_dominance_threshold}"
                 ),
                 metrics=metrics,
             )
@@ -1613,7 +1632,12 @@ class Round0ScenarioGenerator:
                 }
                 if (
                     self._enforce_parameter_ranking_dominance
-                    and not parameter_ranking_contract_is_dominant(context)
+                    and not parameter_ranking_contract_is_dominant(
+                        context,
+                        expected_threshold=(
+                            self.parameter_ranking_dominance_threshold
+                        ),
+                    )
                 ):
                     metrics["stages"].append(stage_metrics)
                     reject(
@@ -2740,6 +2764,11 @@ class Round0ScenarioGenerator:
             "chi2_alpha": self.chi2_alpha,
             "chi2_limit": self.chi2_limit,
             "source_partition": copy.deepcopy(self._source_partition_metadata),
+            "parameter_ranking_admission": {
+                "contract": PARAMETER_RANKING_CONTRACT,
+                "enforced": self._enforce_parameter_ranking_dominance,
+                "threshold": self.parameter_ranking_dominance_threshold,
+            },
             "built_by_family": dict(sorted(family_counts.items())),
             "skipped_by_reason": dict(sorted(skip_reasons.items())),
             "skipped": list(self.skipped),

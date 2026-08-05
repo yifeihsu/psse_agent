@@ -425,18 +425,17 @@ chat export and records the strict truth audit, native/chat schema checks,
 exact and approximate realizability reports, target-aware state-class audit,
 terminal family matrix, and generation provenance in its preflight artifacts.
 
-Current release decision: **BC0 training, exact 31B training, and full
-learner-in-the-loop DAgger are all NO-GO until every gate above passes on a
-new aggregate generated from a clean tracked source.** Historical pilot and
-round-0 artifacts are evidence inputs only; they are not release-eligible by
-inheritance. BC0 additionally requires passing fixed-suite closed-loop
-artifacts for both the observable expert and exact base Gemma revision. The
-exact 31B checkpoint must then pass its processor/template/mask,
-forward/backward, and tiny-overfit gates on that release aggregate plus its own
-checkpoint-promotion closed-loop artifact. Full DAgger may start only after a BC0
-checkpoint is selected through those gates and new learner-controlled roots
-can be collected without truth leakage. No expert-only `β=1.0` corpus or
-checkpoint should be labeled as DAgger.
+Current release decision: the evaluated BC0-v1 adapter is **NO-GO for
+promotion and NO-GO for additional epochs on D0 alone**, but it is retained as
+a learner seed for the bounded DAgger-1 collection below. The exact
+same-state correction guard, deterministic-failure breaker, private-oracle
+truth separation, fresh-root builder, and recovery-label gates must all come
+from one clean reviewed commit. Historical pilot and round-0 artifacts are
+evidence inputs only; they are not release-eligible by inheritance. A repaired
+checkpoint must still pass fixed-suite expert/base prerequisites, exact
+processor/template/mask and optimizer gates, and its own paired closed-loop
+promotion gate. No expert-only `β=1.0` corpus, failed-promotion learner seed,
+or diagnostic replay should be labeled as promoted DAgger evidence.
 
 HPC release prerequisites are H200, H100, or a high-memory RTX 6000, Python
 3.12, the exact `requirements-sft.txt` versions, a passing `pip check` and
@@ -500,10 +499,134 @@ model revision, maximum length, and train/validation/test bytes and requires
 that it used `AutoProcessor`. The checkpoint evaluation is followed by
 `STAGE=checkpoint-gate`; it is not part of the baseline submission group.
 
+For a reviewed Round-1 aggregate, warm-start from the exact content-addressed
+BC0 learner-seed LoRA tree into a fresh, non-overlapping output directory. The
+seed remains release-ineligible; its role here is only initialization. The launcher independently
+validates the adapter contents and its 64-hex tree identity, loads it through
+PEFT with `is_trainable=True`, restores its exact pre-smoke trainable weights
+before TRL starts, and writes `initial_adapter_attestation.json`. Round 1
+defaults to one epoch at `3e-5`; override those values only as an explicit
+experiment change:
+
+```bash
+export INITIAL_ADAPTER_PATH=/absolute/round0/output/lora
+export INITIAL_ADAPTER_REVISION=<64-hex-checkpoint-tree-sha256>
+export OUTPUT_DIR=/absolute/fresh/round1/output
+
+sbatch \
+  --export="ALL,STAGE=round1,REVIEWED_SOURCE_COMMIT=$FREEZE_COMMIT" \
+  submit_dagger_sft_round0.sh
+```
+
+### Targeted DAgger-1 recovery flow
+
+Run this flow only after committing the runtime/data changes and regenerating
+the current-source D0 aggregate. The scenario builder uses the train source
+partition at the release parameter-routing threshold `1.0`, over-generates
+before filtering, and rejects every physical root already present in D0 or the
+frozen 115-root evaluation suite:
+
+```bash
+export FREEZE_COMMIT=$(git rev-parse HEAD)
+export D0_DIR=data/round0_aggregate_release
+export D1_DIR=data/dagger1_${FREEZE_COMMIT:0:12}
+mkdir -p "$D1_DIR"
+
+python scripts/build_dagger1_scenarios.py \
+  --d0-aggregate-dir "$D0_DIR" \
+  --output "$D1_DIR/scenarios.json" \
+  --generator-report "$D1_DIR/scenario_generator_report.json" \
+  --seed 20260720
+```
+
+Use the failed-promotion adapter only as the learner. The diagnostic pass is
+learner-only and always training-ineligible; the mixed pass must produce
+300--600 eligible learner-recovery rows and pass every targeted state cell:
+
+```bash
+export LEARNER_ADAPTER=/absolute/path/to/bc0-v1/lora
+export LEARNER_REVISION=$(python -c \
+  'import sys; from psse_env.dagger.release_factories import inspect_release_checkpoint; print(inspect_release_checkpoint(sys.argv[1])["tree_sha256"])' \
+  "$LEARNER_ADAPTER")
+
+python scripts/collect_dagger1_recovery.py \
+  --input "$D1_DIR/scenarios.json" \
+  --scenario-manifest "$D1_DIR/scenarios.json.manifest.json" \
+  --scenario-generator-report "$D1_DIR/scenario_generator_report.json" \
+  --d0-aggregate-dir "$D0_DIR" \
+  --output "$D1_DIR/diagnostic_beta0.jsonl" \
+  --all-output "$D1_DIR/diagnostic_beta0.all.jsonl" \
+  --model-id "$LEARNER_ADAPTER" \
+  --model-revision "$LEARNER_REVISION" \
+  --collection-pass diagnostic --beta 0.0
+
+python scripts/collect_dagger1_recovery.py \
+  --input "$D1_DIR/scenarios.json" \
+  --scenario-manifest "$D1_DIR/scenarios.json.manifest.json" \
+  --scenario-generator-report "$D1_DIR/scenario_generator_report.json" \
+  --d0-aggregate-dir "$D0_DIR" \
+  --output "$D1_DIR/training_beta025.jsonl" \
+  --all-output "$D1_DIR/training_beta025.all.jsonl" \
+  --model-id "$LEARNER_ADAPTER" \
+  --model-revision "$LEARNER_REVISION" \
+  --collection-pass training --beta 0.25 \
+  --require-recommended-target
+
+python scripts/build_dagger1_training_aggregate.py \
+  --d0-aggregate-dir "$D0_DIR" \
+  --d1 "$D1_DIR/training_beta025.jsonl" \
+  --d1-manifest "$D1_DIR/training_beta025.jsonl.manifest.json" \
+  --output-dir data/round1_aggregate_release \
+  --d1-share 0.25
+```
+
+Regenerate the expert and base artifacts at `FREEZE_COMMIT`, then run the
+Round-1 chain against `data/round1_aggregate_release` in this order:
+`gate -> one-batch -> targeted-tiny-overfit -> round1 -> checkpoint evaluation
+-> checkpoint-gate`. Submit the data-only `gate` without
+`INITIAL_ADAPTER_PATH`/`INITIAL_ADAPTER_REVISION`; export the learner-seed
+identity for `one-batch`, `targeted-tiny-overfit`, and `round1`. The targeted
+stage selects five distinct recovery cases,
+sweeps diagnostic learning rates `1e-4`, `3e-4`, and `1e-3`, and requires exact
+generated tools and arguments. These sweep rates do not alter the Round-1
+training default of `3e-5` for one epoch.
+
+To cheaply replay the reviewed 13 failures after the runtime patch, first
+build a separate suite, then use the diagnostic-only evaluator and audit it:
+
+```bash
+python scripts/build_checkpoint_diagnostic_suite.py \
+  --artifact /path/to/failed_checkpoint_evaluation.json \
+  --frozen-suite psse_env/dagger/suites/bc0_eval_suite_v1.json \
+  --output "$D1_DIR/checkpoint_failure_suite.json" \
+  --expected-scenarios 13
+
+python scripts/evaluate_checkpoint_diagnostic.py \
+  --input "$D1_DIR/checkpoint_failure_suite.json" \
+  --output "$D1_DIR/checkpoint_failure_evaluation.json" \
+  --env-factory psse_env.dagger.release_factories:production_environment_factory \
+  --policy-factory psse_env.dagger.release_factories:gemma_release_policy_factory \
+  --case-loader psse_env.dagger.release_factories:deterministic_case_loader \
+  --model-id "$LEARNER_ADAPTER" \
+  --model-revision "$LEARNER_REVISION" \
+  --max-steps 24 --seed 20260719
+
+python scripts/validate_checkpoint_diagnostic.py \
+  --artifact "$D1_DIR/checkpoint_failure_evaluation.json" \
+  --diagnostic-suite "$D1_DIR/checkpoint_failure_suite.json" \
+  --output "$D1_DIR/checkpoint_failure_evaluation.audit.json"
+```
+
+Diagnostic artifacts use a distinct artifact type and are irreversibly marked
+release- and training-ineligible. Approved H200, H100, and high-memory RTX 6000
+evaluations remain independently hardware-attested; base and checkpoint jobs
+do not need to land on the same approved accelerator class.
+
 ### Optional W&B monitoring
 
 Weights & Biases monitoring is disabled by default and activates only for
-`STAGE=round0`; the data gate and smoke stages remain local evidence checks.
+`STAGE=round0` or `STAGE=round1`; the data gate and smoke stages remain local
+evidence checks.
 It is safe to include `ENABLE_WANDB=1` in the shared export used by the whole
 staged chain: earlier stages log that monitoring is inactive and do not import
 or initialize W&B.
@@ -533,6 +656,9 @@ sbatch \
   submit_dagger_sft_round0.sh
 ```
 
+The same opt-in works for Round 1; stage-specific default group, tags, job type,
+run ID, and name use `round1`/`r1` unless explicitly overridden.
+
 The launcher defaults to a stable run ID and name from the reviewed commit plus
 the Slurm job ID, sets `WANDB_RESUME=allow` for a requeued job, and disables
 model uploads and parameter watching. Set the same `WANDB_RUN_ID` explicitly
@@ -554,6 +680,11 @@ uv run --with 'pytest>=8,<9' pytest -q \
   psse_env/verifier/test_hardening.py \
   psse_env/dagger/test_evaluator.py \
   psse_env/dagger/test_evaluation_gate.py \
+  psse_env/dagger/test_collect_dagger1.py \
+  psse_env/dagger/test_dagger1_builders.py \
+  psse_env/dagger/test_diagnostic_suite.py \
+  psse_env/dagger/test_review_regressions.py \
+  psse_env/dagger/test_training_view.py \
   psse_env/dagger/test_suite_builder.py \
   psse_env/dagger/test_release_factories.py \
   psse_env/dagger/test_release_eval_launcher.py \
@@ -564,7 +695,9 @@ uv run --with 'pytest>=8,<9' pytest -q \
   psse_env/sft/tests/test_gates.py \
   psse_env/sft/tests/test_release_hardware.py \
   psse_env/sft/tests/test_wandb_launcher.py \
-  psse_env/sft/tests/test_wandb_training.py
+  psse_env/sft/tests/test_wandb_training.py \
+  psse_env/sft/tests/test_targeted_tiny_overfit.py \
+  psse_env/sft/tests/test_warm_start_training.py
 ```
 
 See `BASELINE.md`, `TEST_MANIFEST.md`, and `EXPERIMENT_PROTOCOL.md` for the

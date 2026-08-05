@@ -98,8 +98,29 @@ PARAMETER_RANKING_CONTRACT = "distinct_line_abs_lambda_dominance_v1"
 PARAMETER_RANKING_DOMINANCE_THRESHOLD = 1.2
 
 
-def parameter_ranking_contract_is_dominant(metrics: Mapping[str, Any]) -> bool:
-    """Validate the policy-observable parameter-ranking dominance contract."""
+def parameter_ranking_contract_is_dominant(
+    metrics: Mapping[str, Any],
+    *,
+    expected_threshold: float = PARAMETER_RANKING_DOMINANCE_THRESHOLD,
+) -> bool:
+    """Validate the policy-observable parameter-ranking dominance contract.
+
+    ``expected_threshold`` is explicit so a collector can validate the same
+    observable ranking contract at its reviewed release threshold without
+    weakening the 1.2 default used for round-0 training admission.
+    """
+
+    if isinstance(expected_threshold, bool):
+        return False
+    try:
+        normalized_expected_threshold = float(expected_threshold)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if (
+        not math.isfinite(normalized_expected_threshold)
+        or normalized_expected_threshold < 1.0
+    ):
+        return False
 
     if metrics.get("parameter_ranking_contract") != PARAMETER_RANKING_CONTRACT:
         return False
@@ -114,7 +135,7 @@ def parameter_ranking_contract_is_dominant(metrics: Mapping[str, Any]) -> bool:
         not math.isfinite(threshold)
         or not math.isclose(
             threshold,
-            PARAMETER_RANKING_DOMINANCE_THRESHOLD,
+            normalized_expected_threshold,
             rel_tol=0.0,
             abs_tol=1e-12,
         )

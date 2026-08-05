@@ -1096,6 +1096,7 @@ class AggregateReleaseContractTests(unittest.TestCase):
                     "target_tool_distinct_physical_roots",
                     "target_tool_x_state_class_distinct_physical_roots",
                     "target_tool_x_scenario_family_distinct_physical_roots",
+                    "same_root_target_prerequisites",
                 ],
                 "deviation_gated_target_axes": ["tool_category"],
                 "capacity_aware_target_axes": [
@@ -1110,7 +1111,7 @@ class AggregateReleaseContractTests(unittest.TestCase):
                     "weighted_then_clip_and_redistribute_v1"
                 ),
                 "requirement_aware_reservation_policy": (
-                    "constrained_first_distinct_physical_root_preselection_v1"
+                    "constrained_first_with_same_root_prerequisites_v2"
                 ),
                 "configured_tool_category_weights": {
                     "baseline_diagnostics": 0.20,
@@ -1167,6 +1168,28 @@ class AggregateReleaseContractTests(unittest.TestCase):
                         "measurement+topology": 10,
                         "topology": 5,
                     },
+                },
+                "same_root_prerequisite_rules": {
+                    "correct_parameters": {
+                        "prerequisite_options_by_family": {
+                            "measurement+parameter": [
+                                {"tool": "get_parameter_context"},
+                                {
+                                    "tool": "get_measurement_context",
+                                    "evidence_path": (
+                                        "tool_output.tool_metrics."
+                                        "branch_route_screening.parameter"
+                                    ),
+                                    "evidence_contract": (
+                                        "bound_supported_parameter_inventory_v1"
+                                    ),
+                                },
+                            ],
+                            "parameter": [
+                                {"tool": "get_parameter_context"}
+                            ],
+                        },
+                    }
                 },
                 "production_label_eligibility_policy": (
                     "explicit_true_required"

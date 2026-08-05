@@ -41,6 +41,7 @@ from psse_env.actions import (
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,
+    CORRECTION_TOOLS,
     DIAGNOSTIC_TOOLS,
     FINALIZE_DIAGNOSIS,
     GET_MEASUREMENT_CONTEXT,
@@ -416,12 +417,12 @@ _SPECIALIZED_TOOL_BUDGET_CIRCUIT_BREAKER = (
 _REPEATED_NONADVANCING_FAILURE_CIRCUIT_BREAKER = (
     "evaluation_repeated_nonadvancing_failure"
 )
-# Once an exact action has produced one allowlisted deterministic failure
-# without advancing observable state, executing that same action again in the
-# same control epoch cannot help.  The repeated attempt is still represented
+# Once an exact target failure or a family-wide state-contract failure has
+# occurred without an observable state advance, another action in that same
+# deterministic scope cannot help.  The repeated attempt remains represented
 # in the trace and policy metrics, but the environment/provider is called at
-# most once.
-_MAX_IDENTICAL_DETERMINISTIC_FAILURE_EXECUTIONS = 1
+# most once per scope.
+_MAX_DETERMINISTIC_FAILURE_EXECUTIONS_PER_SCOPE = 1
 _REJECTED_ESCALATION_ERROR_CODES = frozenset(
     {
         "candidate_lifecycle_violation",
@@ -434,6 +435,19 @@ _REJECTED_COMMIT_ERROR_CODES = frozenset(
     {
         "candidate_lifecycle_violation",
         "state_reference_mismatch",
+    }
+)
+_DETERMINISTIC_CORRECTION_FAILURE_KINDS = {
+    "correction_not_supported_by_current_context": "unsupported_correction",
+    "correction_route_not_actionable": "correction_route_not_actionable",
+    "parameter_scans_missing": "parameter_scans_missing",
+    "topology_correction_unsupported": "unsupported_correction",
+}
+_FAMILY_WIDE_CORRECTION_FAILURE_CODES = frozenset(
+    {
+        "correction_route_not_actionable",
+        "parameter_scans_missing",
+        "topology_correction_unsupported",
     }
 )
 
@@ -458,7 +472,38 @@ def _deterministic_nonadvancing_failure_kind(
         return "rejected_operator_escalation"
     if tool == COMMIT_STATE and normalized_error in _REJECTED_COMMIT_ERROR_CODES:
         return "rejected_commit"
+    if tool in CORRECTION_TOOLS:
+        return _DETERMINISTIC_CORRECTION_FAILURE_KINDS.get(normalized_error)
     return None
+
+
+def _deterministic_failure_storage_key(
+    *,
+    tool: str,
+    signature: str,
+    error_code: Any,
+) -> str:
+    """Scope state-contract failures to a family and target failures exactly."""
+
+    normalized_error = str(error_code or "").strip()
+    if (
+        tool in CORRECTION_TOOLS
+        and normalized_error in _FAMILY_WIDE_CORRECTION_FAILURE_CODES
+    ):
+        return f"{tool}:family_wide_nonadvancing_failure"
+    return signature
+
+
+def _deterministic_failure_lookup_keys(
+    *,
+    tool: str,
+    signature: str,
+) -> tuple[str, ...]:
+    if tool in CORRECTION_TOOLS:
+        # A family-wide executor/route failure dominates any older
+        # target-specific record for the same correction family.
+        return (f"{tool}:family_wide_nonadvancing_failure", signature)
+    return (signature,)
 
 
 def _normalized_key(key: Any) -> str:
@@ -1446,7 +1491,24 @@ class ClosedLoopRolloutEvaluator:
                                 "partial setup commit has no current candidate"
                             )
                     try:
-                        next_state, raw_output = env.step(copy.deepcopy(setup_action))
+                        audited_setup = getattr(
+                            env,
+                            "apply_audited_evaluation_setup_correction",
+                            None,
+                        )
+                        if (
+                            setup_action["tool"] == CORRECT_MEASUREMENTS
+                            and "measurement_updates"
+                            in setup_action["arguments"]
+                            and callable(audited_setup)
+                        ):
+                            next_state, raw_output = audited_setup(
+                                copy.deepcopy(setup_action)
+                            )
+                        else:
+                            next_state, raw_output = env.step(
+                                copy.deepcopy(setup_action)
+                            )
                     except Exception as exc:
                         raise ValueError(
                             "partial setup action raised "
@@ -1589,14 +1651,21 @@ class ClosedLoopRolloutEvaluator:
                     circuit_breaker_error = (
                         _REPEATED_DIAGNOSTIC_CIRCUIT_BREAKER
                     )
-            prior_deterministic_failure = deterministic_nonadvancing_failures.get(
-                signature
+            prior_deterministic_failure = next(
+                (
+                    deterministic_nonadvancing_failures[key]
+                    for key in _deterministic_failure_lookup_keys(
+                        tool=tool, signature=signature
+                    )
+                    if key in deterministic_nonadvancing_failures
+                ),
+                None,
             )
             if (
                 circuit_breaker_error is None
                 and prior_deterministic_failure is not None
                 and int(prior_deterministic_failure.get("failure_count", 0))
-                >= _MAX_IDENTICAL_DETERMINISTIC_FAILURE_EXECUTIONS
+                >= _MAX_DETERMINISTIC_FAILURE_EXECUTIONS_PER_SCOPE
             ):
                 circuit_breaker_error = (
                     _REPEATED_NONADVANCING_FAILURE_CIRCUIT_BREAKER
@@ -1614,6 +1683,10 @@ class ClosedLoopRolloutEvaluator:
                     "executed_failure_count": prior_count,
                     "attempted_failure_count": prior_count + 1,
                 }
+                # Family-wide deterministic failures can be followed by a
+                # different target signature.  They are still a control loop
+                # because the active state and failed family did not advance.
+                loop_detected = True
             tool_counts[tool] += 1
             if tool in DIAGNOSTIC_TOOLS:
                 specialized_counts[tool] += 1
@@ -1722,7 +1795,16 @@ class ClosedLoopRolloutEvaluator:
                     circuit_breaker_error is None
                     and deterministic_failure_kind is not None
                 ):
-                    previous = deterministic_nonadvancing_failures.get(signature)
+                    deterministic_failure_key = (
+                        _deterministic_failure_storage_key(
+                            tool=tool,
+                            signature=signature,
+                            error_code=output.get("error_code"),
+                        )
+                    )
+                    previous = deterministic_nonadvancing_failures.get(
+                        deterministic_failure_key
+                    )
                     previous_count = (
                         int(previous.get("failure_count", 0))
                         if previous is not None
@@ -1731,12 +1813,14 @@ class ClosedLoopRolloutEvaluator:
                         and previous.get("error_code") == output.get("error_code")
                         else 0
                     )
-                    deterministic_nonadvancing_failures[signature] = {
+                    deterministic_nonadvancing_failures[
+                        deterministic_failure_key
+                    ] = {
                         "failure_kind": deterministic_failure_kind,
                         "error_code": output.get("error_code"),
                         "failure_count": min(
                             previous_count + 1,
-                            _MAX_IDENTICAL_DETERMINISTIC_FAILURE_EXECUTIONS,
+                            _MAX_DETERMINISTIC_FAILURE_EXECUTIONS_PER_SCOPE,
                         ),
                     }
 
@@ -2441,12 +2525,16 @@ def write_evaluation_artifact(
     output_path: str | os.PathLike[str],
     *,
     provenance: Mapping[str, Any] | None = None,
+    diagnostic_only: bool = False,
 ) -> dict[str, Any]:
-    """Atomically persist a deterministic closed-loop release report.
+    """Atomically persist a deterministic closed-loop evaluation report.
 
     The original two-argument library call remains valid.  Such an artifact is
     explicitly non-release because a bare :class:`EvaluationResult` cannot
     identify the executed policy, factories, source tree, or input suite.
+    ``diagnostic_only=True`` is irreversible for the emitted artifact: it uses
+    a distinct artifact type and is explicitly ineligible for release and
+    training even when every runtime/provenance check otherwise passes.
     """
 
     if not isinstance(result, EvaluationResult):
@@ -2505,17 +2593,36 @@ def write_evaluation_artifact(
         "tool_cost_callback": False,
     }:
         release_failures.append(_RELEASE_CALLBACK_FAILURE)
+    if diagnostic_only:
+        release_failures.append(
+            "diagnostic-only evaluation artifacts are not release evidence"
+        )
+    # Keep failure ordering deterministic when a caller supplied provenance
+    # that already carried one of the structural failures above.
+    release_failures = list(dict.fromkeys(release_failures))
     if recorded_provenance is not None:
         recorded_provenance["release_eligible"] = not release_failures
         recorded_provenance["release_failures"] = release_failures
     payload: dict[str, Any] = {
         "artifact_schema_version": 2,
-        "artifact_type": "closed_loop_release_evaluation",
+        "artifact_type": (
+            "closed_loop_diagnostic_evaluation"
+            if diagnostic_only
+            else "closed_loop_release_evaluation"
+        ),
         "release_eligible": not release_failures,
         "release_failures": release_failures,
         "provenance": recorded_provenance,
         "evaluation": result.as_dict(),
     }
+    if diagnostic_only:
+        payload.update(
+            {
+                "diagnostic_only": True,
+                "release_evidence_eligible": False,
+                "training_eligible": False,
+            }
+        )
     payload["content_sha256"] = _stable_hash(payload)
     serialized = json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
     descriptor, temporary_name = tempfile.mkstemp(
@@ -2616,6 +2723,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             "marking the persisted artifact release-ineligible."
         ),
     )
+    parser.add_argument(
+        "--diagnostic-only",
+        action="store_true",
+        help=(
+            "Persist a non-release diagnostic evaluation artifact. This can "
+            "exercise a temporary failure-replay suite but can never satisfy "
+            "a release or training-evidence gate."
+        ),
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-steps", type=int, default=24)
     parser.add_argument("--required-suite", action="append", default=None)
@@ -2707,6 +2823,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         result,
         args.output,
         provenance=provenance,
+        diagnostic_only=args.diagnostic_only,
     )
     print(
         json.dumps(

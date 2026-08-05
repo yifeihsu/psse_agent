@@ -1,21 +1,32 @@
 from __future__ import annotations
 
+import copy
 import inspect
+import json
 import random
 import unittest
 
-from psse_env.actions import FINALIZE_DIAGNOSIS, RUN_WLS
+from psse_env.actions import (
+    FINALIZE_DIAGNOSIS,
+    RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+    RUN_WLS,
+)
 from psse_env.dagger.aggrevate import AggreVaTeLite, to_pairwise_examples
 from psse_env.dagger.counterfactual_generator import CounterfactualGenerator
 from psse_env.dagger.error_injectors import InjectedAction
 from psse_env.dagger.replay_buffer import BalancedReplayBuffer
 from psse_env.dagger.rollout_collector import (
     BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION,
+    DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
     DaggerRolloutCollector,
+    audit_dagger1_recovery_labels,
+    classify_dagger1_recovery_stratum,
+    observable_rank_one_target_proof,
     run_dagger,
 )
 from psse_env.oracle.expert_policy import ExpertPolicyOracle
 from psse_env.transactional_env import TransactionalPSSEEnv
+from psse_env.state_store import OracleState, PolicyObservation
 
 
 def _scenario(**updates):
@@ -58,6 +69,132 @@ class _NoChoiceRng:
     def choice(items):
         del items
         raise AssertionError("ordinary expert-controlled DAgger must not sample proposals")
+
+
+class _LearnerRecoveryPolicy:
+    def __init__(self):
+        self.seen_observations = []
+
+    def act(self, observation):
+        self.seen_observations.append(copy.deepcopy(observation))
+        candidate = observation.get("candidate_state_id")
+        if candidate:
+            return {
+                "tool": "rollback_state",
+                "arguments": {"candidate_state_id": candidate},
+            }
+        return {
+            "tool": "correct_measurements",
+            "arguments": {
+                "state_id": observation["active_state_id"],
+                "measurement_updates": {"0": 9.0},
+            },
+        }
+
+
+class _LearnerRecoveryOracle:
+    def __init__(self):
+        self.seen_truth = []
+
+    def next_actions(self, state, history=None):
+        del history
+        self.seen_truth.append(copy.deepcopy(state.truth_dict()))
+        disposition = getattr(state, "candidate_disposition", None)
+        if disposition == "REJECT":
+            candidate = state.policy_observation.candidate_state_id
+            return [
+                {
+                    "tool": "rollback_state",
+                    "arguments": {"candidate_state_id": candidate},
+                }
+            ]
+        observation = state.policy_observation
+        return [
+            {
+                "tool": RUN_WLS,
+                "arguments": {"state_id": observation.active_state_id},
+            }
+        ]
+
+    def label_transition(self, **kwargs):
+        return {
+            "process_valid": True,
+            "execution_status": kwargs["tool_output"]["execution_status"],
+            "valid_next_actions": [],
+        }
+
+
+class _LearnerRecoveryEnv:
+    production_dataset_mode = True
+
+    def __init__(self):
+        self.stage = 0
+        self.terminal = False
+        self.last_reset_scenario = None
+
+    def reset(self, scenario):
+        self.last_reset_scenario = copy.deepcopy(scenario)
+        self.stage = 0
+        self.terminal = False
+        return self.current_state()
+
+    def current_state(self):
+        return {
+            "active_state_id": "active",
+            "candidate_state_id": "candidate" if self.stage == 1 else None,
+            "remaining_budget": 4 - self.stage,
+        }
+
+    def get_policy_observation(self, history):
+        return PolicyObservation(
+            active_state_id="active",
+            candidate_state_id="candidate" if self.stage == 1 else None,
+            candidate_lifecycle=("VERIFIED_REJECT" if self.stage == 1 else "NO_CANDIDATE"),
+            has_open_candidate=self.stage == 1,
+            has_verified_candidate=self.stage == 1,
+            history_window=list(history),
+            remaining_budget=4 - self.stage,
+        )
+
+    def get_oracle_state(self, history):
+        observation = self.get_policy_observation(history)
+        reset = self.last_reset_scenario or {}
+        return OracleState(
+            policy_observation=observation,
+            clean_measurements=copy.deepcopy(reset.get("clean_measurements")),
+            true_measurement_errors=copy.deepcopy(
+                list(reset.get("true_measurement_errors") or [])
+            ),
+            candidate_disposition="REJECT" if self.stage == 1 else None,
+            candidate_lifecycle=observation.candidate_lifecycle,
+            candidate_assessment=(
+                {"disposition": "REJECT", "rationale_codes": ["wrong_target"]}
+                if self.stage == 1
+                else {}
+            ),
+        )
+
+    def assert_training_decision_evidence(self, action):
+        if self.stage == 1 and action.get("tool") != "rollback_state":
+            raise ValueError("rejected learner candidate must roll back")
+
+    def step(self, action):
+        del action
+        if self.stage == 0:
+            self.stage = 1
+        else:
+            self.stage = 2
+            self.terminal = True
+        return self.current_state(), {
+            "execution_status": "success",
+            "error_code": None,
+            "state_mutated": True,
+            "tool_metrics": {},
+        }
+
+    def is_terminal(self, state=None):
+        del state
+        return self.terminal
 
 
 class DaggerExecutionRegressionTests(unittest.TestCase):
@@ -134,6 +271,408 @@ class DaggerExecutionRegressionTests(unittest.TestCase):
                         beta=beta,
                         max_steps=1,
                     )
+
+    def test_dagger1_marks_only_rank_one_learner_recovery_state_eligible(self):
+        rows = DaggerRolloutCollector(
+            env=_LearnerRecoveryEnv(),
+            policy=_LearnerRecoveryPolicy(),
+            expert_oracle=_LearnerRecoveryOracle(),
+            rng=random.Random(0),
+            supervision_policy=DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
+            forbidden_physical_roots={"held-out-root"},
+        ).collect_iteration(
+            scenarios=[
+                _scenario(
+                    physical_root_fingerprint="dagger-train-root",
+                    dataset_split="dagger_train",
+                )
+            ],
+            iteration=1,
+            beta=0.25,
+            max_steps=2,
+            collection_role="training",
+        )
+
+        self.assertEqual(len(rows), 2)
+        self.assertFalse(rows[0]["production_label_eligible"])
+        self.assertEqual(
+            rows[0]["production_label_ineligibility_reason"],
+            "not_learner_visited_state",
+        )
+        recovery = rows[1]
+        self.assertEqual(recovery["state_origin"], "learner_policy")
+        self.assertEqual(recovery["state_class"], "rejected_candidate_recovery")
+        self.assertEqual(recovery["preferred_action"]["tool"], "rollback_state")
+        self.assertTrue(recovery["production_label_eligible"])
+        self.assertEqual(recovery["dataset_source"], "dagger_rollout")
+        self.assertEqual(
+            recovery["recovery_label_contract"],
+            "observable_rank_one_learner_state_v1",
+        )
+        self.assertEqual(
+            recovery["recovery_stratum"], "rejected_candidate_rollback"
+        )
+        self.assertTrue(audit_dagger1_recovery_labels(rows)["passed"])
+
+        diagnostic_rows = DaggerRolloutCollector(
+            env=_LearnerRecoveryEnv(),
+            policy=_LearnerRecoveryPolicy(),
+            expert_oracle=_LearnerRecoveryOracle(),
+            rng=random.Random(0),
+            supervision_policy=DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
+            forbidden_physical_roots={"held-out-root"},
+        ).collect_iteration(
+            scenarios=[
+                _scenario(
+                    physical_root_fingerprint="dagger-diagnostic-root",
+                    dataset_split="dagger_train",
+                )
+            ],
+            iteration=1,
+            beta=0.0,
+            max_steps=2,
+            collection_role="diagnostic",
+        )
+        self.assertFalse(
+            any(row["production_label_eligible"] for row in diagnostic_rows)
+        )
+        self.assertEqual(
+            {
+                row["production_label_ineligibility_reason"]
+                for row in diagnostic_rows
+            },
+            {"diagnostic_beta_zero_not_training_eligible"},
+        )
+        mutated = copy.deepcopy(diagnostic_rows)
+        mutated[-1]["production_label_eligible"] = True
+        mutated_audit = audit_dagger1_recovery_labels(mutated)
+        self.assertFalse(mutated_audit["passed"])
+        self.assertIn(
+            "collection_role_not_training",
+            mutated_audit["eligibility_violations"][0]["reasons"],
+        )
+        self.assertIn(
+            "training_beta_contract_not_verified",
+            mutated_audit["eligibility_violations"][0]["reasons"],
+        )
+
+    def test_dagger1_envelope_truth_is_oracle_private_not_policy_visible(self):
+        env = _LearnerRecoveryEnv()
+        policy = _LearnerRecoveryPolicy()
+        oracle = _LearnerRecoveryOracle()
+        envelope = {
+            "scenario_schema_version": 1,
+            "execution": {
+                "scenario_id": "private-truth-envelope",
+                "case": {},
+                "measurements": [1.0],
+            },
+            "audit": {
+                "truth": {
+                    "truth_complete": True,
+                    "clean_measurements": [1.0],
+                    "true_measurement_errors": [{"index": 0}],
+                },
+                "release_audit": {"offline_only": True},
+            },
+            "grouping": {
+                "root_scenario_id": "private-truth-envelope",
+                "physical_root_fingerprint": "new-envelope-root",
+                "scenario_family": "measurement",
+                "error_cardinality": 1,
+                "case_id": "case14",
+                "split": "dagger_train",
+                "source_tier": "generated",
+            },
+        }
+        rows = DaggerRolloutCollector(
+            env=env,
+            policy=policy,
+            expert_oracle=oracle,
+            rng=random.Random(0),
+            supervision_policy=DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
+            forbidden_physical_roots={"held-out-root", "d0-root"},
+        ).collect_iteration(
+            scenarios=[envelope],
+            iteration=1,
+            beta=0.25,
+            max_steps=2,
+            collection_role="training",
+        )
+        self.assertEqual(
+            env.last_reset_scenario,
+            {
+                **envelope["execution"],
+                "clean_measurements": [1.0],
+                "true_measurement_errors": [{"index": 0}],
+            },
+        )
+        self.assertNotIn("audit", env.last_reset_scenario)
+        self.assertEqual(
+            oracle.seen_truth[0]["true_measurement_errors"], [{"index": 0}]
+        )
+        policy_payload = json.dumps(policy.seen_observations, sort_keys=True)
+        exported_payload = json.dumps(
+            [row["policy_observation"] for row in rows], sort_keys=True
+        )
+        for private_key in ("true_measurement_errors", "clean_measurements"):
+            self.assertNotIn(private_key, policy_payload)
+            self.assertNotIn(private_key, exported_payload)
+
+    def test_dagger1_recovery_strata_use_only_observable_state(self):
+        target = {"tool": RUN_WLS, "arguments": {"state_id": "active"}}
+        cases = [
+            (
+                {
+                    "last_tool": "correct_parameters",
+                    "last_tool_status": "failure",
+                    "last_tool_output": {
+                        "execution_status": "failure",
+                        "error_code": "correction_route_not_actionable",
+                    },
+                },
+                target,
+                "parameter",
+                1,
+                "clean_successful",
+                "unsupported_correction_recovery",
+            ),
+            (
+                {
+                    "last_tool": "run_hse_from_path",
+                    "last_tool_status": "failure",
+                    "last_tool_output": {
+                        "execution_status": "failure",
+                        "error_code": "solver_failure",
+                    },
+                    "has_open_candidate": False,
+                },
+                target,
+                "multi_measurement",
+                2,
+                "invalid_precondition_recovery",
+                "post_failure_no_candidate",
+            ),
+            (
+                {
+                    "last_tool": "commit_state",
+                    "last_tool_status": "failure",
+                    "last_tool_output": {
+                        "execution_status": "failure",
+                        "error_code": "candidate_lifecycle_violation",
+                    },
+                },
+                target,
+                "measurement+parameter",
+                2,
+                "invalid_precondition_recovery",
+                "premature_commit_recovery",
+            ),
+            (
+                {
+                    "last_tool": "ask_for_more_evidence",
+                    "last_tool_status": "failure",
+                    "last_tool_output": {
+                        "execution_status": "failure",
+                        "error_code": "operator_escalation_precondition_not_met",
+                    },
+                },
+                target,
+                "multi_measurement",
+                4,
+                "invalid_precondition_recovery",
+                "premature_escalation_recovery",
+            ),
+            (
+                {},
+                {
+                    "tool": "ask_for_more_evidence",
+                    "arguments": {
+                        "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                    },
+                },
+                "multi_measurement",
+                5,
+                "terminal_operator_escalation",
+                "multi_measurement_safe_handoff",
+            ),
+            (
+                {
+                    "history_window": [
+                        {
+                            "action": {
+                                "tool": "get_measurement_context",
+                                "arguments": {"state_id": "active"},
+                            }
+                        }
+                    ]
+                },
+                {
+                    "tool": "get_parameter_context",
+                    "arguments": {"state_id": "active"},
+                },
+                "measurement+parameter",
+                2,
+                "clean_successful",
+                "sequential_measurement_parameter_recovery",
+            ),
+        ]
+        for observation, preferred, family, cardinality, state_class, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(
+                    classify_dagger1_recovery_stratum(
+                        observation,
+                        preferred_action=preferred,
+                        state_class=state_class,
+                        scenario_family=family,
+                        error_cardinality=cardinality,
+                    ),
+                    expected,
+                )
+        for transition_derived_class in (
+            "invalid_precondition_recovery",
+            "rejected_candidate_recovery",
+            "loop_repetition",
+        ):
+            with self.subTest(transition_derived_class=transition_derived_class):
+                self.assertIsNone(
+                    classify_dagger1_recovery_stratum(
+                        {},
+                        preferred_action=target,
+                        state_class=transition_derived_class,
+                        scenario_family="measurement",
+                        error_cardinality=1,
+                    )
+                )
+
+    def test_dagger1_parameter_rank_one_proof_accepts_strict_rank_not_ties(self):
+        actions = [
+            {
+                "tool": "correct_parameters",
+                "arguments": {"state_id": "active", "line_index": 11},
+            },
+            {
+                "tool": "correct_parameters",
+                "arguments": {"state_id": "active", "line_index": 18},
+            },
+        ]
+
+        def observation(
+            top: float, runner: float, *, bundled: bool = False
+        ) -> dict:
+            evidence = {
+                "context_tool": "get_parameter_context",
+                "context_binding": (
+                    "branch_route_screening.parameter"
+                    if bundled
+                    else "direct_context"
+                ),
+                "evidence_source": "deployment_context:wls_lagrange",
+                "route_status": "actionable",
+                "state_id": "active",
+                "state_hash": "state-hash",
+                "parameter_ranking_contract": (
+                    "distinct_line_abs_lambda_dominance_v1"
+                ),
+                "parameter_ranking_distinct_lines": [
+                    {"line_index1": 11, "abs_lambda_score": top},
+                    {"line_index1": 18, "abs_lambda_score": runner},
+                ],
+                "parameter_ranking_top_abs_lambda": top,
+                "parameter_ranking_runner_up_abs_lambda": runner,
+                "parameter_ranking_dominance_ratio": top / runner,
+                "parameter_ranking_dominance_threshold": 1.0,
+                "parameter_ranking_dominant": top > runner,
+                "supported_corrections": copy.deepcopy(actions),
+            }
+            if bundled:
+                evidence["bundled_by_context_tool"] = "get_measurement_context"
+            return {
+                "active_state_id": "active",
+                "has_fresh_parameter_context": True,
+                "parameter_context_state_id": "active",
+                "fresh_context_evidence": {
+                    "parameter": evidence
+                },
+            }
+
+        for top, bundled in (
+            (2.0, False),
+            (1.000001, False),
+            (1.000001, True),
+        ):
+            with self.subTest(top=top, bundled=bundled):
+                proof = observable_rank_one_target_proof(
+                    observation(top, 1.0, bundled=bundled),
+                    preferred_action=actions[0],
+                    expert_actions=actions,
+                )
+                self.assertTrue(proof["passed"])
+                self.assertEqual(
+                    proof["basis"], "strict_observable_parameter_ranking"
+                )
+
+        tied = observable_rank_one_target_proof(
+            observation(1.0, 1.0),
+            preferred_action=actions[0],
+            expert_actions=actions,
+        )
+        self.assertFalse(tied["passed"])
+        mismatched = observable_rank_one_target_proof(
+            observation(2.0, 1.0),
+            preferred_action=actions[1],
+            expert_actions=[actions[1], actions[0]],
+        )
+        self.assertFalse(mismatched["passed"])
+    def test_dagger1_rejects_nontraining_splits_and_round0_parameters(self):
+        with self.assertRaisesRegex(ValueError, "forbidden_physical_roots"):
+            DaggerRolloutCollector(
+                env=_LearnerRecoveryEnv(),
+                policy=_LearnerRecoveryPolicy(),
+                expert_oracle=_LearnerRecoveryOracle(),
+                supervision_policy=DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
+            )
+        collector = DaggerRolloutCollector(
+            env=_LearnerRecoveryEnv(),
+            policy=_LearnerRecoveryPolicy(),
+            expert_oracle=_LearnerRecoveryOracle(),
+            supervision_policy=DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
+            forbidden_physical_roots={"frozen-root"},
+        )
+        with self.assertRaisesRegex(ValueError, "iteration>=1"):
+            collector.collect_iteration(
+                scenarios=[], iteration=0, beta=1.0, max_steps=1
+            )
+        with self.assertRaisesRegex(ValueError, "explicit collection_role"):
+            collector.collect_iteration(
+                scenarios=[], iteration=1, beta=0.25, max_steps=1
+            )
+        with self.assertRaisesRegex(ValueError, "train/dagger_train"):
+            collector.collect_iteration(
+                scenarios=[
+                    _scenario(
+                        physical_root_fingerprint="frozen-root",
+                        dataset_split="release_eval",
+                    )
+                ],
+                iteration=1,
+                beta=0.0,
+                max_steps=1,
+                collection_role="diagnostic",
+            )
+        with self.assertRaisesRegex(ValueError, "protected D0/evaluation holdout"):
+            collector.collect_iteration(
+                scenarios=[
+                    _scenario(
+                        physical_root_fingerprint="frozen-root",
+                        dataset_split="train",
+                    )
+                ],
+                iteration=1,
+                beta=0.0,
+                max_steps=1,
+                collection_role="diagnostic",
+            )
 
     def test_default_multi_error_horizon_is_24(self):
         self.assertEqual(inspect.signature(run_dagger).parameters["max_steps"].default, 24)

@@ -20,7 +20,8 @@
 # data/round0_aggregate_20260719 directory is intentionally not the default:
 # it predates physical-root fingerprints, explicit eligibility, and current
 # registry/source provenance and must fail the release gate.
-# Submit STAGE=gate, one-batch, tiny-overfit, and round0 in that order on a
+# Submit STAGE=gate, one-batch, targeted-tiny-overfit, tiny-overfit, and round0
+# in that order on a
 # pinned high-memory H200/H100/RTX 6000 constraint above. RTX 6000 is accepted
 # only when runtime attestation reports at least 90,000 MiB. STAGE=round0
 # refuses to train until the observable
@@ -30,7 +31,9 @@
 # training or mislabel the weak base as release-qualified. After training,
 # STAGE=checkpoint-gate validates one exact checkpoint artifact and its paired
 # per-root non-regression against the persisted base artifact before promotion;
-# full production SFT remains refused here.
+# full production SFT remains refused here. STAGE=round1 is the bounded
+# warm-start continuation: it requires one immutable round-0 LoRA tree identity
+# and defaults to one epoch at 3e-5 without changing the cold round-0 defaults.
 #
 # MAX_LENGTH=6144 is a conservative starting envelope.  The exact pinned
 # processor gate for the newly generated release aggregate remains decisive.
@@ -57,9 +60,15 @@ ROWS_MIN=${ROWS_MIN:-1024}
 ROWS_MAX=${ROWS_MAX:-4096}
 TINY_OVERFIT_STEPS=${TINY_OVERFIT_STEPS:-20}
 TINY_OVERFIT_LR=${TINY_OVERFIT_LR:-0.0001}
+TARGETED_TINY_OVERFIT_MIN_RELATIVE_LOSS_REDUCTION=${TARGETED_TINY_OVERFIT_MIN_RELATIVE_LOSS_REDUCTION:-0.20}
+TARGETED_TINY_OVERFIT_REPORT=${TARGETED_TINY_OVERFIT_REPORT:-$OUTPUT_DIR/targeted_tiny_overfit_sweep.json}
 TRAIN_LR=${TRAIN_LR:-0.0001}
 TRAIN_EPOCHS=${TRAIN_EPOCHS:-2}
+ROUND1_LR=${ROUND1_LR:-0.00003}
+ROUND1_EPOCHS=${ROUND1_EPOCHS:-1}
 GRADIENT_ACCUMULATION_STEPS=${GRADIENT_ACCUMULATION_STEPS:-4}
+INITIAL_ADAPTER_PATH=${INITIAL_ADAPTER_PATH:-}
+INITIAL_ADAPTER_REVISION=${INITIAL_ADAPTER_REVISION:-}
 EVALUATION_SUITE=${EVALUATION_SUITE:-psse_env/dagger/suites/bc0_eval_suite_v1.json}
 EVALUATION_POLICY=${EVALUATION_POLICY:-psse_env/dagger/bc0_evaluation_policy.json}
 EXPERT_BASELINE_EVALUATION=${EXPERT_BASELINE_EVALUATION:-artifacts/evaluations/expert_baseline_evaluation.json}
@@ -73,14 +82,14 @@ CHECKPOINT_MODEL_REVISION=${CHECKPOINT_MODEL_REVISION:-}
 CHECKPOINT_GATE_REPORT=${CHECKPOINT_GATE_REPORT:-$OUTPUT_DIR/checkpoint_promotion_gate.json}
 
 case "$STAGE" in
-    gate|one-batch|tiny-overfit|round0|checkpoint-gate)
+    gate|one-batch|targeted-tiny-overfit|tiny-overfit|round0|round1|checkpoint-gate)
         ;;
     full|production)
         echo "ERROR: full production SFT is blocked pending the held-out recovery evaluation of the round-0 checkpoint." >&2
         exit 2
         ;;
     *)
-        echo "ERROR: STAGE must be gate, one-batch, tiny-overfit, round0, or checkpoint-gate; got '$STAGE'." >&2
+        echo "ERROR: STAGE must be gate, one-batch, targeted-tiny-overfit, tiny-overfit, round0, round1, or checkpoint-gate; got '$STAGE'." >&2
         exit 2
         ;;
 esac
@@ -93,8 +102,31 @@ case "$ENABLE_WANDB" in
         ;;
 esac
 WANDB_ACTIVE=0
-if [[ "$ENABLE_WANDB" == "1" && "$STAGE" == "round0" ]]; then
+if [[ "$ENABLE_WANDB" == "1" && ( "$STAGE" == "round0" || "$STAGE" == "round1" ) ]]; then
     WANDB_ACTIVE=1
+fi
+
+if [[ -n "$INITIAL_ADAPTER_PATH" || -n "$INITIAL_ADAPTER_REVISION" ]]; then
+    if [[ -z "$INITIAL_ADAPTER_PATH" || -z "$INITIAL_ADAPTER_REVISION" ]]; then
+        echo "ERROR: INITIAL_ADAPTER_PATH and INITIAL_ADAPTER_REVISION must be supplied together." >&2
+        exit 2
+    fi
+    if [[ "$INITIAL_ADAPTER_PATH" != /* ]]; then
+        echo "ERROR: INITIAL_ADAPTER_PATH must be absolute." >&2
+        exit 2
+    fi
+    if [[ ! "$INITIAL_ADAPTER_REVISION" =~ ^[0-9a-fA-F]{64}$ ]]; then
+        echo "ERROR: INITIAL_ADAPTER_REVISION must be a 64-hex checkpoint tree SHA-256." >&2
+        exit 2
+    fi
+fi
+if [[ "$STAGE" == "round1" && -z "$INITIAL_ADAPTER_PATH" ]]; then
+    echo "ERROR: STAGE=round1 requires INITIAL_ADAPTER_PATH and INITIAL_ADAPTER_REVISION." >&2
+    exit 2
+fi
+if [[ ( "$STAGE" == "gate" || "$STAGE" == "round0" || "$STAGE" == "checkpoint-gate" ) && -n "$INITIAL_ADAPTER_PATH" ]]; then
+    echo "ERROR: initial adapter identity is valid only for warm-start smoke stages or STAGE=round1." >&2
+    exit 2
 fi
 
 if [[ ! "$MODEL_REVISION" =~ ^[0-9a-fA-F]{40}$ ]]; then
@@ -117,6 +149,18 @@ CURRENT_SOURCE_COMMIT=$(git rev-parse HEAD 2>/dev/null || true)
 if [[ "$CURRENT_SOURCE_COMMIT" != "$REVIEWED_SOURCE_COMMIT" ]]; then
     echo "ERROR: checkout $CURRENT_SOURCE_COMMIT is not reviewed freeze commit $REVIEWED_SOURCE_COMMIT." >&2
     exit 2
+fi
+if [[ -n "$INITIAL_ADAPTER_PATH" ]]; then
+    if [[ ! -d "$INITIAL_ADAPTER_PATH" ]]; then
+        echo "ERROR: initial adapter directory does not exist: $INITIAL_ADAPTER_PATH" >&2
+        exit 2
+    fi
+    INITIAL_ADAPTER_RESOLVED=$(realpath -e -- "$INITIAL_ADAPTER_PATH")
+    OUTPUT_DIR_RESOLVED=$(realpath -m -- "$OUTPUT_DIR")
+    if [[ "$OUTPUT_DIR_RESOLVED" == "$INITIAL_ADAPTER_RESOLVED" || "$OUTPUT_DIR_RESOLVED" == "$INITIAL_ADAPTER_RESOLVED"/* || "$INITIAL_ADAPTER_RESOLVED" == "$OUTPUT_DIR_RESOLVED"/* ]]; then
+        echo "ERROR: OUTPUT_DIR and INITIAL_ADAPTER_PATH must not overlap." >&2
+        exit 2
+    fi
 fi
 mkdir -p artifacts/logs "$OUTPUT_DIR"
 mkdir -p /scratch/yx3882/.cache/huggingface /scratch/yx3882/.cache/torch
@@ -160,10 +204,17 @@ if [[ "$WANDB_ACTIVE" == "1" ]]; then
     else
         unset WANDB_ENTITY
     fi
-    export WANDB_RUN_GROUP=${WANDB_RUN_GROUP:-bc0-round0-$WANDB_SOURCE_SHORT}
-    export WANDB_TAGS=${WANDB_TAGS:-bc0,round0,gemma4-31b,source-$WANDB_SOURCE_SHORT}
-    export WANDB_JOB_TYPE=${WANDB_JOB_TYPE:-bc0-round0-sft}
-    WANDB_RUN_ID_DEFAULT=bc0-r0-$WANDB_SOURCE_SHORT-$WANDB_SLURM_JOB_ID
+    if [[ "$STAGE" == "round1" ]]; then
+        WANDB_ROUND_NAME=round1
+        WANDB_ROUND_SHORT=r1
+    else
+        WANDB_ROUND_NAME=round0
+        WANDB_ROUND_SHORT=r0
+    fi
+    export WANDB_RUN_GROUP=${WANDB_RUN_GROUP:-bc0-$WANDB_ROUND_NAME-$WANDB_SOURCE_SHORT}
+    export WANDB_TAGS=${WANDB_TAGS:-bc0,$WANDB_ROUND_NAME,gemma4-31b,source-$WANDB_SOURCE_SHORT}
+    export WANDB_JOB_TYPE=${WANDB_JOB_TYPE:-bc0-$WANDB_ROUND_NAME-sft}
+    WANDB_RUN_ID_DEFAULT=bc0-$WANDB_ROUND_SHORT-$WANDB_SOURCE_SHORT-$WANDB_SLURM_JOB_ID
     export WANDB_RUN_ID=${WANDB_RUN_ID:-$WANDB_RUN_ID_DEFAULT}
     export WANDB_NAME=${WANDB_NAME:-$WANDB_RUN_ID}
     export WANDB_RESUME=allow
@@ -178,7 +229,7 @@ if [[ ! -x "$PYTHON" ]]; then
     echo "ERROR: Python environment not found at $PYTHON; create it from psse_env/requirements-sft.txt first." >&2
     exit 2
 fi
-if [[ "$STAGE" == "round0" ]]; then
+if [[ "$STAGE" == "round0" || "$STAGE" == "round1" ]]; then
     # Validate cheap, immutable prerequisite evidence before importing the
     # GPU stack or running native-runtime checks on an expensive allocation.
     "$PYTHON" - \
@@ -218,10 +269,10 @@ result = validate_release_gate_report(
 )
 if not result["passed"]:
     raise SystemExit(
-        "Round0 prerequisite processor/data gate is NO-GO:\n- "
+        "Training prerequisite processor/data gate is NO-GO:\n- "
         + "\n- ".join(result["failures"])
     )
-print("Round0 prerequisite processor/data gate passed with AutoProcessor")
+print("Training prerequisite processor/data gate passed with AutoProcessor")
 PY
 fi
 if [[ "$STAGE" != "checkpoint-gate" ]]; then
@@ -242,7 +293,72 @@ if [[ "$STAGE" != "checkpoint-gate" ]]; then
         }
     fi
 fi
-if [[ "$STAGE" == "round0" || "$STAGE" == "checkpoint-gate" ]]; then
+if [[ "$STAGE" == "round1" ]]; then
+    ROUND1_PROVENANCE="$AGGREGATE_DIR/aggregate.generation_provenance.json"
+    ROUND1_PREFLIGHT="$AGGREGATE_DIR/aggregate.preflight.json"
+    if [[ ! -f "$ROUND1_PREFLIGHT" ]]; then
+        echo "ERROR: STAGE=round1 requires aggregate.preflight.json." >&2
+        exit 2
+    fi
+    "$PYTHON" - "$ROUND1_PROVENANCE" "$ROUND1_PREFLIGHT" "$REVIEWED_SOURCE_COMMIT" <<'PY'
+import json
+import sys
+
+from psse_env.sft.provenance import stable_json_sha256
+from psse_env.dagger.collect_dagger1 import DAGGER1_SCENARIO_BUILDER_CONTRACT
+
+provenance_path, preflight_path, reviewed_commit = sys.argv[1:]
+provenance = json.load(open(provenance_path, encoding="utf-8"))
+preflight = json.load(open(preflight_path, encoding="utf-8"))
+descriptor = provenance.get("generation_descriptor") or {}
+training_view = preflight.get("training_view") or {}
+allocation = training_view.get("source_allocation") or {}
+d1_manifest = preflight.get("d1_collection_manifest") or {}
+failures = []
+if provenance.get("release_eligible") is not True:
+    failures.append("round-1 generation provenance is not release eligible")
+if descriptor.get("builder_contract") != "deterministic_d0_d1_balanced_union_v1":
+    failures.append("aggregate is not a D0 union D1 build")
+source = descriptor.get("source_state") or {}
+if source.get("source_commit") != reviewed_commit:
+    failures.append("round-1 aggregate source commit differs from reviewed source")
+if training_view.get("builder_contract") != "deterministic_d0_d1_balanced_union_v1":
+    failures.append("preflight lacks the D0 union D1 training-view contract")
+if descriptor.get("training_view_report_sha256") != stable_json_sha256(training_view):
+    failures.append("preflight source-mix report is not bound by provenance")
+share = allocation.get("observed_d1_share")
+if (
+    allocation.get("passed") is not True
+    or not isinstance(share, (int, float))
+    or not 0.20 <= float(share) <= 0.30
+    or int(allocation.get("d1_recovery_rows") or 0) <= 0
+):
+    failures.append("D1 source allocation is absent or outside the 20-30% band")
+if (
+    d1_manifest.get("training_eligible") is not True
+    or d1_manifest.get("release_evidence_eligible") is not False
+    or (d1_manifest.get("source_state") or {}).get("source_commit")
+    != reviewed_commit
+):
+    failures.append("D1 collection manifest is not approved for current-source training")
+if (
+    d1_manifest.get("scenario_builder_contract")
+    != DAGGER1_SCENARIO_BUILDER_CONTRACT
+    or not d1_manifest.get("scenario_manifest_sha256")
+):
+    failures.append("D1 collection lacks the reviewed fresh-root scenario binding")
+inputs = descriptor.get("input_artifacts") or {}
+if not inputs.get("d1_rows_sha256") or not inputs.get("d1_manifest_sha256"):
+    failures.append("round-1 provenance does not bind D1 rows and manifest")
+if failures:
+    raise SystemExit("Round-1 source-mix gate is NO-GO:\n- " + "\n- ".join(failures))
+print(
+    "Round-1 D0/D1 source-mix gate passed: "
+    f"D1 rows={allocation['d1_recovery_rows']}, share={float(share):.3f}"
+)
+PY
+fi
+if [[ "$STAGE" == "round0" || "$STAGE" == "round1" || "$STAGE" == "checkpoint-gate" ]]; then
     for path in "$EVALUATION_SUITE" "$EVALUATION_POLICY"; do
         if [[ ! -f "$path" ]]; then
             echo "ERROR: required closed-loop evaluation input not found: $path" >&2
@@ -250,15 +366,15 @@ if [[ "$STAGE" == "round0" || "$STAGE" == "checkpoint-gate" ]]; then
         fi
     done
 fi
-if [[ "$STAGE" == "round0" ]]; then
+if [[ "$STAGE" == "round0" || "$STAGE" == "round1" ]]; then
     for path in "$EXPERT_BASELINE_EVALUATION" "$BASE_GEMMA_EVALUATION" "$PROCESSOR_GATE_REPORT"; do
         if [[ ! -f "$path" ]]; then
-            echo "ERROR: STAGE=round0 requires prerequisite evidence: $path" >&2
+            echo "ERROR: STAGE=$STAGE requires prerequisite evidence: $path" >&2
             exit 2
         fi
     done
     if [[ -z "$EXPERT_POLICY_IDENTITY" ]]; then
-        echo "ERROR: STAGE=round0 requires EXPERT_POLICY_IDENTITY." >&2
+        echo "ERROR: STAGE=$STAGE requires EXPERT_POLICY_IDENTITY." >&2
         exit 2
     fi
 fi
@@ -277,7 +393,7 @@ if [[ "$STAGE" == "checkpoint-gate" ]]; then
     fi
 fi
 
-echo "===== BC0 Gemma 4 round-0 stage ====="
+echo "===== BC0 Gemma 4 staged SFT ====="
 echo "job:       ${SLURM_JOB_ID:-interactive}"
 echo "host:      $(hostname)"
 echo "stage:     $STAGE"
@@ -291,16 +407,22 @@ echo "downloads: $ALLOW_DOWNLOAD"
 if [[ "$WANDB_ACTIVE" == "1" ]]; then
     echo "wandb:     enabled ($WANDB_MODE; project=$WANDB_PROJECT; run=$WANDB_RUN_ID)"
 elif [[ "$ENABLE_WANDB" == "1" ]]; then
-    echo "wandb:     inactive for STAGE=$STAGE (monitoring starts only at round0)"
+    echo "wandb:     inactive for STAGE=$STAGE (monitoring starts at round0 or round1)"
 else
     echo "wandb:     disabled"
 fi
-if [[ "$STAGE" == "gate" || "$STAGE" == "round0" ]]; then
+if [[ "$STAGE" == "gate" || "$STAGE" == "round0" || "$STAGE" == "round1" ]]; then
     echo "processor gate: $PROCESSOR_GATE_REPORT"
 fi
-if [[ "$STAGE" == "round0" || "$STAGE" == "checkpoint-gate" ]]; then
+if [[ "$STAGE" == "targeted-tiny-overfit" ]]; then
+    echo "targeted smoke report: $TARGETED_TINY_OVERFIT_REPORT"
+fi
+if [[ "$STAGE" == "round0" || "$STAGE" == "round1" || "$STAGE" == "checkpoint-gate" ]]; then
     echo "eval suite: $EVALUATION_SUITE"
     echo "eval policy: $EVALUATION_POLICY"
+fi
+if [[ -n "$INITIAL_ADAPTER_PATH" ]]; then
+    echo "initial adapter: $INITIAL_ADAPTER_PATH@$INITIAL_ADAPTER_REVISION"
 fi
 GPU_INVENTORY=$(nvidia-smi \
     --query-gpu=name,memory.total,driver_version \
@@ -437,9 +559,16 @@ COMMON_ARGS=(
 if [[ "$WANDB_ACTIVE" == "1" ]]; then
     COMMON_ARGS+=(--report-to wandb --run-name "$WANDB_NAME")
 fi
+INITIAL_ADAPTER_ARGS=()
+if [[ -n "$INITIAL_ADAPTER_PATH" ]]; then
+    INITIAL_ADAPTER_ARGS+=(
+        --initial-adapter-path "$INITIAL_ADAPTER_PATH"
+        --initial-adapter-revision "$INITIAL_ADAPTER_REVISION"
+    )
+fi
 if [[ "$ALLOW_DOWNLOAD" == "1" ]]; then
     case "$STAGE" in
-        one-batch|tiny-overfit|round0|checkpoint-gate)
+        one-batch|targeted-tiny-overfit|tiny-overfit|round0|round1|checkpoint-gate)
             echo "ERROR: ALLOW_DOWNLOAD=1 is forbidden for STAGE=$STAGE; the reviewed model must come from the verified local snapshot." >&2
             exit 2
             ;;
@@ -462,13 +591,19 @@ case "$STAGE" in
         COMMAND=("$PYTHON" -m psse_env.sft gate "${COMMON_ARGS[@]}" --test "$TEST_FILE" --pilot-min-rows "$GATE_ROWS_MIN" --pilot-max-rows "$GATE_ROWS_MAX" --report-output "$PROCESSOR_GATE_REPORT")
         ;;
     one-batch)
-        COMMAND=("$PYTHON" -m psse_env.sft smoke "${COMMON_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --mode one-batch --load-in-4bit)
+        COMMAND=("$PYTHON" -m psse_env.sft smoke "${COMMON_ARGS[@]}" "${INITIAL_ADAPTER_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --mode one-batch --load-in-4bit)
+        ;;
+    targeted-tiny-overfit)
+        COMMAND=("$PYTHON" -m psse_env.sft smoke "${COMMON_ARGS[@]}" "${INITIAL_ADAPTER_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --mode tiny-overfit --tiny-overfit-steps "$TINY_OVERFIT_STEPS" --targeted-recovery-sweep --targeted-min-relative-loss-reduction "$TARGETED_TINY_OVERFIT_MIN_RELATIVE_LOSS_REDUCTION" --report-output "$TARGETED_TINY_OVERFIT_REPORT" --load-in-4bit)
         ;;
     tiny-overfit)
-        COMMAND=("$PYTHON" -m psse_env.sft smoke "${COMMON_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --mode tiny-overfit --tiny-overfit-steps "$TINY_OVERFIT_STEPS" --learning-rate "$TINY_OVERFIT_LR" --load-in-4bit)
+        COMMAND=("$PYTHON" -m psse_env.sft smoke "${COMMON_ARGS[@]}" "${INITIAL_ADAPTER_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --mode tiny-overfit --tiny-overfit-steps "$TINY_OVERFIT_STEPS" --learning-rate "$TINY_OVERFIT_LR" --load-in-4bit)
         ;;
     round0)
         COMMAND=("$PYTHON" -m psse_env.sft train "${COMMON_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --output-dir "$OUTPUT_DIR" --batch-size 1 --gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS" --learning-rate "$TRAIN_LR" --epochs "$TRAIN_EPOCHS" --smoke-steps 1 --load-in-4bit --evaluation-suite "$EVALUATION_SUITE" --evaluation-policy "$EVALUATION_POLICY" --expert-baseline-evaluation "$EXPERT_BASELINE_EVALUATION" --base-baseline-evaluation "$BASE_GEMMA_EVALUATION" --expert-policy-identity "$EXPERT_POLICY_IDENTITY" --baseline-evaluation-report-output "$BASELINE_EVALUATION_REPORT")
+        ;;
+    round1)
+        COMMAND=("$PYTHON" -m psse_env.sft train "${COMMON_ARGS[@]}" "${INITIAL_ADAPTER_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --output-dir "$OUTPUT_DIR" --batch-size 1 --gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS" --learning-rate "$ROUND1_LR" --epochs "$ROUND1_EPOCHS" --smoke-steps 1 --load-in-4bit --evaluation-suite "$EVALUATION_SUITE" --evaluation-policy "$EVALUATION_POLICY" --expert-baseline-evaluation "$EXPERT_BASELINE_EVALUATION" --base-baseline-evaluation "$BASE_GEMMA_EVALUATION" --expert-policy-identity "$EXPERT_POLICY_IDENTITY" --baseline-evaluation-report-output "$BASELINE_EVALUATION_REPORT")
         ;;
     checkpoint-gate)
         COMMAND=("$PYTHON" -m psse_env.dagger.validate_evaluation --role checkpoint-promotion --artifact "$CHECKPOINT_EVALUATION" --policy "$EVALUATION_POLICY" --expected-source-commit "$REVIEWED_SOURCE_COMMIT" --expected-suite "$EVALUATION_SUITE" --expected-protocol canonical --expected-model-id "$CHECKPOINT_MODEL_ID" --expected-model-revision "$CHECKPOINT_MODEL_REVISION" --reference-artifact "$BASE_GEMMA_EVALUATION" --reference-model-id "$MODEL_NAME" --reference-model-revision "$MODEL_REVISION" --report-output "$CHECKPOINT_GATE_REPORT")

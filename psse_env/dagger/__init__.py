@@ -33,10 +33,15 @@ from .evaluator import (
     write_evaluation_artifact,
 )
 from .policy_adapter import LocalAliasPolicyAdapter
-from .replay_buffer import BalancedReplayBuffer
+from .replay_buffer import BalancedReplayBuffer, build_dagger1_training_view
 from .rollout_collector import (
+    DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
+    RECOMMENDED_DAGGER1_RECOVERY_STRATA,
     DaggerRolloutCollector,
+    audit_dagger1_recovery_labels,
     audit_target_aware_state_classes,
+    classify_dagger1_recovery_stratum,
+    observable_rank_one_target_proof,
     run_dagger,
 )
 from .splits import grouped_scenario_split
@@ -58,6 +63,8 @@ __all__ = [
     "ClosedLoopEvaluator",
     "ClosedLoopRolloutEvaluator",
     "DaggerRolloutCollector",
+    "DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION",
+    "RECOMMENDED_DAGGER1_RECOVERY_STRATA",
     "DaggerTrainer",
     "EpisodeEvaluation",
     "EvaluationResult",
@@ -67,9 +74,13 @@ __all__ = [
     "TOOL_JSON_SCHEMAS",
     "audit_chat_sft_rows",
     "audit_approximate_teacher_realizability",
+    "audit_dagger1_recovery_labels",
     "audit_target_aware_state_classes",
     "audit_teacher_realizability",
     "bind_controller_action",
+    "build_dagger1_training_view",
+    "classify_dagger1_recovery_stratum",
+    "observable_rank_one_target_proof",
     "evaluate_top_l_actions",
     "evaluate_closed_loop",
     "evaluate_closed_loop_rollouts",

@@ -2270,6 +2270,8 @@ def validate_evaluation_artifact(
             dict(reference_configuration)
         )
         reference_configuration_contract.pop("policy_identity_validation", None)
+        # Hardware remains fail-closed on each artifact, but any two approved
+        # release classes are valid for the paired non-regression comparison.
         exact_reference_contract = {
             "environment_factory": (
                 _mapping(factories.get("environment")),
@@ -2290,10 +2292,6 @@ def validate_evaluation_artifact(
             "protocol_registry": (
                 protocol,
                 _mapping(reference_provenance.get("protocol_registry")),
-            ),
-            "accelerator_class": (
-                candidate_accelerator_classes,
-                reference_accelerator_classes,
             ),
             "evaluator_configuration": (
                 candidate_configuration_contract,
@@ -2371,6 +2369,17 @@ def validate_evaluation_artifact(
             "reference_accelerator_classes": list(
                 reference_accelerator_classes
             ),
+            "accelerator_compatibility": {
+                "policy": "individually_approved_release_classes",
+                "compatible": bool(
+                    candidate_accelerator_classes
+                    and reference_accelerator_classes
+                ),
+                "same_class": (
+                    candidate_accelerator_classes
+                    == reference_accelerator_classes
+                ),
+            },
             "failures": list(comparison_failures),
             "regressions": regressions,
             **paired_summary,

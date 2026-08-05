@@ -3,7 +3,10 @@ from __future__ import annotations
 import copy
 import unittest
 
-from psse_env.dagger.replay_buffer import build_balanced_training_view
+from psse_env.dagger.replay_buffer import (
+    build_balanced_training_view,
+    build_dagger1_training_view,
+)
 
 
 def _row(
@@ -30,6 +33,78 @@ def _row(
 
 
 class BalancedTrainingViewTests(unittest.TestCase):
+    def test_d0_d1_builder_enforces_deterministic_recovery_share_and_caps(
+        self,
+    ) -> None:
+        d0 = [
+            {
+                **_row(f"d0-{index}", physical_root=f"d0-root-{index}"),
+                "production_label_eligible": True,
+                "iteration": 0,
+            }
+            for index in range(6)
+        ]
+        d1 = [
+            {
+                **_row(
+                    f"d1-{index}",
+                    physical_root=f"d1-root-{index}",
+                    state_class="invalid_precondition_recovery",
+                ),
+                "production_label_eligible": True,
+                "iteration": 1,
+                "collection_role": "training",
+                "collection_beta": 0.25,
+                "state_origin": "learner_policy",
+                "recovery_stratum": "post_failure_no_candidate",
+                "recovery_label_contract": (
+                    "observable_rank_one_learner_state_v1"
+                ),
+                "collection_training_eligible": True,
+            }
+            for index in range(2)
+        ]
+        first, first_report = build_dagger1_training_view(
+            d0,
+            d1,
+            size=8,
+            seed=73,
+            max_duplicate_count=1,
+            max_rows_per_root=1,
+        )
+        second, second_report = build_dagger1_training_view(
+            d0,
+            d1,
+            size=8,
+            seed=73,
+            max_duplicate_count=1,
+            max_rows_per_root=1,
+        )
+        self.assertEqual(
+            [row["example_id"] for row in first],
+            [row["example_id"] for row in second],
+        )
+        self.assertEqual(first_report, second_report)
+        self.assertTrue(first_report["release_ready"])
+        self.assertEqual(
+            first_report["source_allocation"]["observed_d1_share"], 0.25
+        )
+        self.assertEqual(
+            sum(row["replay_source"] == "d1_recovery" for row in first), 2
+        )
+        self.assertTrue(first_report["physical_root_contract"]["passed"])
+        self.assertTrue(first_report["duplicate_contract"]["passed"])
+
+        diagnostic = copy.deepcopy(d1)
+        diagnostic[0]["collection_role"] = "diagnostic"
+        diagnostic[0]["collection_beta"] = 0.0
+        with self.assertRaisesRegex(ValueError, "mixed-policy training"):
+            build_dagger1_training_view(d0, diagnostic, size=8)
+        overlap = copy.deepcopy(d1)
+        overlap[0]["physical_root_fingerprint"] = "d0-root-0"
+        with self.assertRaisesRegex(ValueError, "physical roots must be disjoint"):
+            build_dagger1_training_view(d0, overlap, size=8)
+
     def test_targetless_rows_are_excluded_before_balancing(self) -> None:
         targetless = {
             **_row("targetless", tool="run_wls"),
@@ -614,6 +689,261 @@ class BalancedTrainingViewTests(unittest.TestCase):
         )
         self.assertFalse(report["target_tool_unique_root_support_passed"])
         self.assertFalse(report["release_ready"])
+
+    def test_parameter_corrections_retain_same_root_context_before_duplication(
+        self,
+    ) -> None:
+        rows = []
+        for root, family in (
+            ("parameter-root", "parameter"),
+            ("mixed-root", "measurement+parameter"),
+        ):
+            rows.extend(
+                [
+                    _row(
+                        f"{root}-context",
+                        tool="get_parameter_context",
+                        physical_root=root,
+                        scenario_family=family,
+                    ),
+                    _row(
+                        f"{root}-correction",
+                        tool="correct_parameters",
+                        physical_root=root,
+                        scenario_family=family,
+                    ),
+                ]
+            )
+
+        view, report = build_balanced_training_view(
+            rows,
+            size=6,
+            seed=19,
+            tool_category_weights={
+                "context_acquisition": 0.25,
+                "corrections": 0.75,
+            },
+            max_duplicate_count=2,
+            max_rows_per_root=3,
+            minimum_tool_category_natural_rows=0,
+            minimum_tool_category_distinct_roots=0,
+            target_tool_minimum_distinct_roots={"correct_parameters": 2},
+            same_root_prerequisite_rules={
+                "correct_parameters": {
+                    "prerequisite_tool": "get_parameter_context",
+                    "scenario_families": [
+                        "parameter",
+                        "measurement+parameter",
+                    ],
+                }
+            },
+        )
+
+        selected_tools_by_root: dict[str, list[str]] = {}
+        for row in view:
+            selected_tools_by_root.setdefault(
+                str(row["physical_root_fingerprint"]), []
+            ).append(str(row["preferred_action"]["tool"]))
+        for tools in selected_tools_by_root.values():
+            if "correct_parameters" in tools:
+                self.assertIn("get_parameter_context", tools)
+        self.assertEqual(
+            sum(
+                tool == "correct_parameters"
+                for tools in selected_tools_by_root.values()
+                for tool in tools
+            ),
+            4,
+        )
+        self.assertTrue(report["same_root_prerequisite_support_passed"])
+        self.assertTrue(report["release_ready"])
+        self.assertIn(
+            "same_root_target_prerequisites",
+            report["target_contract"]["strict_target_axes"],
+        )
+        self.assertEqual(
+            report["requirement_aware_reservation"]["policy"],
+            "constrained_first_with_same_root_prerequisites_v2",
+        )
+
+    def test_unpaired_parameter_correction_fails_closed_and_is_not_selected(
+        self,
+    ) -> None:
+        rows = [
+            _row(
+                "unpaired-correction",
+                tool="correct_parameters",
+                physical_root="parameter-root",
+                scenario_family="parameter",
+            ),
+            _row(
+                "safe-baseline",
+                tool="run_wls",
+                physical_root="baseline-root",
+                scenario_family="measurement",
+            ),
+        ]
+
+        view, report = build_balanced_training_view(
+            rows,
+            size=2,
+            seed=7,
+            tool_category_weights={
+                "baseline_diagnostics": 0.5,
+                "corrections": 0.5,
+            },
+            max_duplicate_count=2,
+            max_rows_per_root=2,
+            minimum_tool_category_natural_rows=0,
+            minimum_tool_category_distinct_roots=0,
+            same_root_prerequisite_rules={
+                "correct_parameters": {
+                    "prerequisite_tool": "get_parameter_context",
+                    "scenario_families": ["parameter"],
+                }
+            },
+        )
+
+        self.assertEqual(
+            {row["example_id"] for row in view}, {"safe-baseline"}
+        )
+        shortfall = report["same_root_prerequisite_shortfalls"][
+            "eligible_natural_source"
+        ]["correct_parameters"]["parameter"]
+        self.assertEqual(shortfall["unpaired_target_distinct_physical_roots"], 1)
+        self.assertEqual(
+            shortfall["unpaired_target_physical_roots"], ["parameter-root"]
+        )
+        self.assertFalse(report["same_root_prerequisite_support_passed"])
+        self.assertFalse(report["release_ready"])
+
+    def test_mixed_parameter_correction_accepts_only_bound_bundled_context(
+        self,
+    ) -> None:
+        bundle = {
+            **_row(
+                "mixed-bundled-context",
+                tool="get_measurement_context",
+                physical_root="mixed-root",
+                scenario_family="measurement+parameter",
+            ),
+            "tool_output": {
+                "tool_metrics": {
+                    "branch_route_screening": {
+                        "parameter": {
+                            "context_tool": "get_parameter_context",
+                            "route_status": "actionable",
+                            "state_id": "active",
+                            "state_hash": "abc123",
+                            "supported_corrections": [
+                                {
+                                    "tool": "correct_parameters",
+                                    "arguments": {
+                                        "state_id": "active",
+                                        "line_index": 3,
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                }
+            },
+        }
+        rules = {
+            "correct_parameters": {
+                "prerequisite_options_by_family": {
+                    "measurement+parameter": [
+                        {"tool": "get_parameter_context"},
+                        {
+                            "tool": "get_measurement_context",
+                            "evidence_path": (
+                                "tool_output.tool_metrics."
+                                "branch_route_screening.parameter"
+                            ),
+                            "evidence_contract": (
+                                "bound_supported_parameter_inventory_v1"
+                            ),
+                        },
+                    ],
+                    "parameter": [{"tool": "get_parameter_context"}],
+                }
+            }
+        }
+        rows = [
+            bundle,
+            _row(
+                "mixed-correction",
+                tool="correct_parameters",
+                physical_root="mixed-root",
+                scenario_family="measurement+parameter",
+            ),
+            _row(
+                "pure-context",
+                tool="get_parameter_context",
+                physical_root="pure-root",
+                scenario_family="parameter",
+            ),
+            _row(
+                "pure-correction",
+                tool="correct_parameters",
+                physical_root="pure-root",
+                scenario_family="parameter",
+            ),
+        ]
+        view, report = build_balanced_training_view(
+            rows,
+            size=4,
+            seed=11,
+            tool_category_weights={
+                "context_acquisition": 0.5,
+                "corrections": 0.5,
+            },
+            max_duplicate_count=1,
+            max_rows_per_root=2,
+            minimum_tool_category_natural_rows=0,
+            minimum_tool_category_distinct_roots=0,
+            same_root_prerequisite_rules=rules,
+        )
+        self.assertEqual(len(view), 4)
+        self.assertTrue(report["same_root_prerequisite_support_passed"])
+        mixed = report["same_root_prerequisite_support"]["training_view"][
+            "correct_parameters"
+        ]["measurement+parameter"]
+        self.assertEqual(mixed["paired_distinct_physical_roots"], 1)
+        self.assertEqual(
+            mixed["prerequisite_option_distinct_physical_roots"][
+                "get_measurement_context:bound_supported_parameter_inventory_v1"
+            ],
+            1,
+        )
+
+        invalid_bundle = copy.deepcopy(bundle)
+        invalid_bundle["example_id"] = "empty-bundle"
+        invalid_bundle["physical_root_fingerprint"] = "unbound-root"
+        invalid_bundle["tool_output"]["tool_metrics"]["branch_route_screening"] = {}
+        invalid_correction = _row(
+            "unbound-correction",
+            tool="correct_parameters",
+            physical_root="unbound-root",
+            scenario_family="measurement+parameter",
+        )
+        _, invalid_report = build_balanced_training_view(
+            [invalid_bundle, invalid_correction],
+            size=1,
+            seed=11,
+            tool_category_weights={
+                "context_acquisition": 0.5,
+                "corrections": 0.5,
+            },
+            max_duplicate_count=1,
+            max_rows_per_root=2,
+            minimum_tool_category_natural_rows=0,
+            minimum_tool_category_distinct_roots=0,
+            same_root_prerequisite_rules=rules,
+        )
+        self.assertFalse(
+            invalid_report["same_root_prerequisite_support_passed"]
+        )
 
     def test_production_ineligible_rows_cannot_satisfy_action_root_gate(self) -> None:
         auxiliary = {

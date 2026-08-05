@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import gc
 import inspect
+import json
+import random
+import re
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -18,8 +22,18 @@ from .gates import (
     processor_token_type_input_names,
     validate_grouped_pilot,
 )
-from .provenance import validate_generation_provenance
-from .smoke import run_generation_tool_call_smoke, run_training_smoke
+from .provenance import git_source_state, validate_generation_provenance
+from .smoke import (
+    TARGETED_MIN_RELATIVE_LOSS_REDUCTION,
+    TARGETED_RECOVERY_CASES,
+    TARGETED_TINY_OVERFIT_LEARNING_RATES,
+    TargetedSweepResult,
+    run_generation_tool_call_smoke,
+    run_targeted_recovery_smoke,
+    run_training_smoke,
+    select_targeted_recovery_slice,
+    targeted_recovery_row_selection,
+)
 
 
 LORA_TARGET_MODULES = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
@@ -70,11 +84,12 @@ class TrainerSettings:
     required_processor_loader: str | None = None
     report_to: str = "none"
     run_name: str | None = None
+    initial_adapter_path: str | None = None
+    initial_adapter_revision: str | None = None
 
     def validate(self) -> None:
         if "gemma-4" not in self.model_name.lower():
             raise GateError(f"TrainerSettings requires a Gemma 4 model id, got {self.model_name!r}.")
-        import re
         if re.fullmatch(r"[0-9a-fA-F]{40}", self.revision) is None:
             raise GateError("TrainerSettings.revision must be a pinned 40-character commit hash.")
         if self.max_length <= 0 or self.batch_size <= 0:
@@ -100,6 +115,29 @@ class TrainerSettings:
             not isinstance(self.run_name, str) or not self.run_name.strip()
         ):
             raise GateError("run_name must be None or a non-empty string.")
+        initial_path = str(self.initial_adapter_path or "").strip()
+        initial_revision = str(self.initial_adapter_revision or "").strip()
+        if bool(initial_path) != bool(initial_revision):
+            raise GateError(
+                "initial_adapter_path and initial_adapter_revision must be supplied together."
+            )
+        if initial_path:
+            if not Path(initial_path).expanduser().is_absolute():
+                raise GateError("initial_adapter_path must be an absolute path.")
+            if re.fullmatch(r"[0-9a-fA-F]{64}", initial_revision) is None:
+                raise GateError(
+                    "initial_adapter_revision must be a 64-hex checkpoint tree SHA-256."
+                )
+            initial = Path(initial_path).expanduser().resolve(strict=False)
+            output = Path(self.output_dir).expanduser().resolve(strict=False)
+            if (
+                initial == output
+                or initial in output.parents
+                or output in initial.parents
+            ):
+                raise GateError(
+                    "output_dir and initial_adapter_path must not overlap."
+                )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -389,6 +427,207 @@ def _attach_lora(model: Any, settings: TrainerSettings, lora: LoraSettings) -> A
     return get_peft_model(model, build_lora_config(scoped))
 
 
+def _inspect_initial_adapter(
+    settings: TrainerSettings,
+) -> dict[str, Any] | None:
+    """Fail before base-model load unless the warm-start tree has exact bytes."""
+
+    initial_path = str(settings.initial_adapter_path or "").strip()
+    expected_revision = str(settings.initial_adapter_revision or "").strip().lower()
+    if not initial_path and not expected_revision:
+        return None
+    if not initial_path or not expected_revision:
+        raise GateError("Warm-start adapter identity is incomplete.")
+    from psse_env.dagger.release_factories import inspect_release_checkpoint
+
+    try:
+        inspection = inspect_release_checkpoint(initial_path)
+    except (OSError, ValueError, GateError) as exc:
+        raise GateError(f"Initial LoRA adapter inspection failed: {exc}") from exc
+    actual_revision = str(inspection.get("tree_sha256") or "").lower()
+    if actual_revision != expected_revision:
+        raise GateError(
+            "Initial LoRA adapter tree digest mismatch: "
+            f"expected {expected_revision}, computed {actual_revision}."
+        )
+    return inspection
+
+
+def _load_trainable_initial_adapter(
+    model: Any,
+    settings: TrainerSettings,
+    inspection: Mapping[str, Any],
+) -> tuple[Any, dict[str, Any]]:
+    """Load one immutable, byte-verified LoRA checkpoint for warm-start SFT."""
+
+    from psse_env.dagger.release_factories import (
+        _copy_verified_checkpoint_tree,
+        checkpoint_tree_sha256,
+    )
+
+    initial_path = str(settings.initial_adapter_path or "").strip()
+    expected_revision = str(settings.initial_adapter_revision or "").strip().lower()
+    actual_revision = str(inspection.get("tree_sha256") or "").lower()
+
+    snapshot_owner = None
+    try:
+        snapshot, snapshot_owner = _copy_verified_checkpoint_tree(
+            initial_path,
+            expected_revision,
+        )
+        try:
+            from peft import PeftModel, prepare_model_for_kbit_training
+        except Exception as exc:  # pragma: no cover - optional live dependency.
+            raise GateError(f"PEFT warm-start dependencies are unavailable: {exc}") from exc
+        if settings.load_in_4bit:
+            model = prepare_model_for_kbit_training(model)
+        config = getattr(model, "config", None)
+        if config is not None and hasattr(config, "use_cache"):
+            config.use_cache = False
+        try:
+            model = PeftModel.from_pretrained(
+                model,
+                str(snapshot),
+                is_trainable=True,
+                local_files_only=True,
+            )
+        except Exception as exc:  # pragma: no cover - live checkpoint state.
+            raise GateError(
+                "Exact initial LoRA adapter load failed; training was not started: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+        if checkpoint_tree_sha256(snapshot) != expected_revision:
+            raise GateError(
+                "Private initial adapter snapshot changed while PEFT loaded it."
+            )
+        trainable = [
+            name for name, parameter in model.named_parameters()
+            if parameter.requires_grad
+        ]
+        if not trainable:
+            raise GateError(
+                "Initial LoRA adapter loaded with no trainable parameters."
+            )
+    finally:
+        if snapshot_owner is not None:
+            snapshot_owner.cleanup()
+
+    return model, {
+        "attestation_schema_version": 1,
+        "initial_adapter_path": str(inspection["path"]),
+        "initial_adapter_revision": expected_revision,
+        "tree_sha256": actual_revision,
+        "file_count": int(inspection["file_count"]),
+        "total_bytes": int(inspection["total_bytes"]),
+        "private_copy_verified": True,
+        "peft_load": {
+            "is_trainable": True,
+            "local_files_only": True,
+        },
+        "trainable_parameter_names": sorted(trainable),
+    }
+
+
+def _attach_trainable_adapter(
+    model: Any,
+    settings: TrainerSettings,
+    lora: LoraSettings,
+    initial_adapter_inspection: Mapping[str, Any] | None = None,
+) -> tuple[Any, dict[str, Any] | None]:
+    if settings.initial_adapter_path is None:
+        return _attach_lora(model, settings, lora), None
+    if initial_adapter_inspection is None:
+        raise GateError("Warm-start adapter preflight inspection is missing.")
+    return _load_trainable_initial_adapter(
+        model,
+        settings,
+        initial_adapter_inspection,
+    )
+
+
+def _snapshot_trainable_parameters(model: Any) -> dict[str, Any]:
+    return {
+        name: parameter.detach().cpu().clone()
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad
+    }
+
+
+def _restore_trainable_parameters(
+    model: Any,
+    snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    current = {
+        name: parameter
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad
+    }
+    if set(current) != set(snapshot):
+        missing = sorted(set(snapshot) - set(current))
+        added = sorted(set(current) - set(snapshot))
+        raise GateError(
+            "Trainable parameter set changed during smoke: "
+            f"missing={missing}, added={added}."
+        )
+    for name, parameter in current.items():
+        parameter.data.copy_(
+            snapshot[name].to(parameter.device, dtype=parameter.dtype)
+        )
+    model.zero_grad(set_to_none=True)
+    return {
+        "performed": True,
+        "restored_parameter_tensors": len(current),
+        "restored_parameter_elements": sum(
+            int(parameter.numel()) for parameter in current.values()
+        ),
+    }
+
+
+def _write_initial_adapter_attestation(
+    *,
+    settings: TrainerSettings,
+    adapter_attestation: Mapping[str, Any],
+    smoke_restore: Mapping[str, Any],
+    base_snapshot_attestation: Mapping[str, Any],
+) -> Path:
+    repo_root = Path(__file__).resolve().parents[2]
+    source = git_source_state(repo_root)
+    payload = {
+        **dict(adapter_attestation),
+        "training_source": {
+            "source_commit": source.get("source_commit"),
+            "release_eligible_source": source.get("release_eligible_source"),
+        },
+        "base_model": {
+            "model_id": base_snapshot_attestation.get("model_id"),
+            "model_revision": base_snapshot_attestation.get("model_revision"),
+        },
+        "output_dir": str(
+            Path(settings.output_dir).expanduser().resolve(strict=False)
+        ),
+        "output_input_overlap": False,
+        "training_configuration": {
+            "learning_rate": settings.learning_rate,
+            "epochs": settings.epochs,
+            "max_steps": settings.max_steps,
+            "batch_size": settings.batch_size,
+            "gradient_accumulation_steps": settings.gradient_accumulation_steps,
+            "seed": settings.seed,
+            "report_to": settings.report_to,
+            "run_name": settings.run_name,
+        },
+        "smoke_restore": dict(smoke_restore),
+    }
+    output = Path(settings.output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    path = output / "initial_adapter_attestation.json"
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def run_lora_smoke(
     *,
     train_file: str | Path,
@@ -399,10 +638,18 @@ def run_lora_smoke(
     pilot_minimum_rows: int = 32,
     pilot_maximum_rows: int = 128,
     tiny_overfit_steps: int = 20,
+    targeted_recovery: bool = False,
+    minimum_relative_loss_reduction: float = (
+        TARGETED_MIN_RELATIVE_LOSS_REDUCTION
+    ),
 ) -> Any:
     """Gate and run LoRA forward/backward, stopping before TRL training."""
     if mode not in {"one-batch", "tiny-overfit"}:
         raise ValueError("mode must be 'one-batch' or 'tiny-overfit'.")
+    if targeted_recovery and mode != "tiny-overfit":
+        raise ValueError(
+            "The targeted recovery slice is valid only for tiny-overfit mode."
+        )
     processor, train_examples, _ = _prepare_pilot(
         train_file=train_file,
         validation_file=validation_file,
@@ -410,10 +657,34 @@ def run_lora_smoke(
         pilot_minimum_rows=pilot_minimum_rows,
         pilot_maximum_rows=pilot_maximum_rows,
     )
+    train_rows = load_jsonl(train_file)
+    if targeted_recovery:
+        # Fail before allocating the 31B model when any reviewed case is absent.
+        targeted_recovery_row_selection(train_rows)
+    initial_adapter_inspection = _inspect_initial_adapter(settings)
     model, _snapshot_attestation = _load_model(settings)
     required_side_inputs = infer_required_side_input_names(model, processor, settings.model_name)
     train_examples = ensure_required_side_inputs(train_examples, required_side_inputs)
-    model = _attach_lora(model, settings, lora)
+    selected_recovery = (
+        select_targeted_recovery_slice(train_rows, train_examples)
+        if targeted_recovery
+        else None
+    )
+    model, _initial_adapter_attestation = _attach_trainable_adapter(
+        model,
+        settings,
+        lora,
+        initial_adapter_inspection,
+    )
+    if selected_recovery is not None:
+        return run_targeted_recovery_smoke(
+            model,
+            processor,
+            selected_recovery,
+            steps=tiny_overfit_steps,
+            learning_rate=settings.learning_rate,
+            minimum_relative_loss_reduction=minimum_relative_loss_reduction,
+        )
     steps = 1 if mode == "one-batch" else tiny_overfit_steps
     result = run_training_smoke(
         model,
@@ -438,6 +709,118 @@ def run_lora_smoke(
             generated_tool_name=parsed.name,
         )
     return result
+
+
+def _reset_targeted_smoke_rng(seed: int) -> None:
+    """Reset every available RNG so each LR sees the same LoRA initialization."""
+
+    random.seed(int(seed))
+    try:
+        import numpy as np
+
+        np.random.seed(int(seed))
+    except ImportError:  # pragma: no cover - numpy is present in release env.
+        pass
+    try:
+        import torch
+
+        torch.manual_seed(int(seed))
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(int(seed))
+    except ImportError:  # pragma: no cover - live smoke requires torch anyway.
+        pass
+
+
+def _release_targeted_smoke_memory() -> None:
+    """Release one diagnostic model before loading the next LR candidate."""
+
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:  # pragma: no cover - live smoke requires torch anyway.
+        pass
+
+
+def run_targeted_lora_smoke_sweep(
+    *,
+    train_file: str | Path,
+    validation_file: str | Path,
+    settings: TrainerSettings,
+    lora: LoraSettings = LoraSettings(),
+    pilot_minimum_rows: int = 32,
+    pilot_maximum_rows: int = 128,
+    tiny_overfit_steps: int = 20,
+    minimum_relative_loss_reduction: float = (
+        TARGETED_MIN_RELATIVE_LOSS_REDUCTION
+    ),
+    learning_rates: Sequence[float] = TARGETED_TINY_OVERFIT_LEARNING_RATES,
+) -> TargetedSweepResult:
+    """Run the reviewed three-rate diagnostic sweep from identical starts."""
+
+    normalized_rates = tuple(float(value) for value in learning_rates)
+    if normalized_rates != TARGETED_TINY_OVERFIT_LEARNING_RATES:
+        raise ValueError(
+            "Targeted recovery LR sweep must be exactly 1e-4, 3e-4, 1e-3."
+        )
+    # This cheap semantic check prevents three expensive model allocations when
+    # the aggregate does not yet contain the exact reviewed recovery slice.
+    targeted_recovery_row_selection(load_jsonl(train_file))
+    runs: list[dict[str, Any]] = []
+    successful: list[float] = []
+    for learning_rate in normalized_rates:
+        _reset_targeted_smoke_rng(settings.seed)
+        diagnostic_settings = replace(settings, learning_rate=learning_rate)
+        try:
+            result = run_lora_smoke(
+                train_file=train_file,
+                validation_file=validation_file,
+                settings=diagnostic_settings,
+                lora=lora,
+                mode="tiny-overfit",
+                pilot_minimum_rows=pilot_minimum_rows,
+                pilot_maximum_rows=pilot_maximum_rows,
+                tiny_overfit_steps=tiny_overfit_steps,
+                targeted_recovery=True,
+                minimum_relative_loss_reduction=(
+                    minimum_relative_loss_reduction
+                ),
+            )
+        except (GateError, ValueError) as exc:
+            runs.append(
+                {
+                    "passed": False,
+                    "learning_rate": learning_rate,
+                    "error": str(exc),
+                }
+            )
+            _release_targeted_smoke_memory()
+            continue
+        run = result.to_dict()
+        run["passed"] = True
+        runs.append(run)
+        successful.append(learning_rate)
+        _release_targeted_smoke_memory()
+
+    best_rate: float | None = None
+    successful_runs = [run for run in runs if run.get("passed") is True]
+    if successful_runs:
+        best = max(
+            successful_runs,
+            key=lambda run: float(run.get("relative_loss_reduction") or 0.0),
+        )
+        best_rate = float(best["learning_rate"])
+    return TargetedSweepResult(
+        passed=bool(successful),
+        learning_rates=normalized_rates,
+        minimum_relative_loss_reduction=float(minimum_relative_loss_reduction),
+        required_cases=TARGETED_RECOVERY_CASES,
+        successful_learning_rates=tuple(successful),
+        best_diagnostic_learning_rate=best_rate,
+        runs=tuple(runs),
+    )
 
 
 def _records_dataset(examples: Sequence[PreparedExample]) -> Any:
@@ -471,6 +854,7 @@ def run_lora_training(
         pilot_minimum_rows=pilot_minimum_rows,
         pilot_maximum_rows=pilot_maximum_rows,
     )
+    initial_adapter_inspection = _inspect_initial_adapter(settings)
     model, snapshot_attestation = _load_model(settings)
     required_side_inputs = infer_required_side_input_names(model, processor, settings.model_name)
     train_examples = ensure_required_side_inputs(train_examples, required_side_inputs)
@@ -479,12 +863,13 @@ def run_lora_training(
         from trl import SFTTrainer
     except Exception as exc:  # pragma: no cover
         raise GateError(f"TRL training dependencies are unavailable: {exc}") from exc
-    model = _attach_lora(model, settings, lora)
-    trainable_snapshot = {
-        name: parameter.detach().cpu().clone()
-        for name, parameter in model.named_parameters()
-        if parameter.requires_grad
-    }
+    model, initial_adapter_attestation = _attach_trainable_adapter(
+        model,
+        settings,
+        lora,
+        initial_adapter_inspection,
+    )
+    trainable_snapshot = _snapshot_trainable_parameters(model)
     run_training_smoke(
         model,
         processor,
@@ -496,10 +881,14 @@ def run_lora_training(
     )
     # The smoke gate proves the stack but is not an undocumented training step.
     # Restore pristine LoRA initialization before constructing TRL's optimizer.
-    for name, parameter in model.named_parameters():
-        if name in trainable_snapshot:
-            parameter.data.copy_(trainable_snapshot[name].to(parameter.device, dtype=parameter.dtype))
-    model.zero_grad(set_to_none=True)
+    smoke_restore = _restore_trainable_parameters(model, trainable_snapshot)
+    if initial_adapter_attestation is not None:
+        _write_initial_adapter_attestation(
+            settings=settings,
+            adapter_attestation=initial_adapter_attestation,
+            smoke_restore=smoke_restore,
+            base_snapshot_attestation=snapshot_attestation,
+        )
     config = build_trl_config(settings, has_validation=True)
     trainer_kwargs = {
         "model": model,

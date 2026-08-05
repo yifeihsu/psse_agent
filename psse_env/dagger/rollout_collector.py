@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import random
 from collections import Counter
 from collections.abc import Callable, Iterable
@@ -21,12 +22,345 @@ from psse_env.state_store import OracleState, PolicyObservation, policy_safe_cop
 
 ALL_ADMISSIBLE_SUPERVISION = "all_admissible"
 BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION = "bc0_observable_sequential_v1"
+DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION = "dagger1_observable_recovery_v1"
 SUPPORTED_SUPERVISION_POLICIES = frozenset(
     {
         ALL_ADMISSIBLE_SUPERVISION,
         BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION,
+        DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
     }
 )
+RECOMMENDED_DAGGER1_RECOVERY_STRATA = frozenset(
+    {
+        "multi_measurement_safe_handoff",
+        "post_failure_no_candidate",
+        "premature_commit_recovery",
+        "premature_escalation_recovery",
+        "sequential_measurement_parameter_recovery",
+        "unsupported_correction_recovery",
+    }
+)
+_DAGGER1_PRODUCTION_RECOVERY_STRATA = frozenset(
+    {
+        *RECOMMENDED_DAGGER1_RECOVERY_STRATA,
+        "invalid_precondition_repair",
+        "loop_escape",
+        "rejected_candidate_rollback",
+    }
+)
+
+
+def _observable_last_action_tool(observation: Mapping[str, Any]) -> str | None:
+    last_tool = str(observation.get("last_tool") or "").strip()
+    if last_tool:
+        return last_tool
+    history = observation.get("history_window")
+    if not isinstance(history, (list, tuple)) or not history:
+        return None
+    event = history[-1]
+    if not isinstance(event, Mapping):
+        return None
+    action = event.get("action")
+    if not isinstance(action, Mapping):
+        return None
+    tool = str(action.get("tool") or "").strip()
+    return tool or None
+
+
+def _observable_last_failure(observation: Mapping[str, Any]) -> tuple[bool, str | None]:
+    output = observation.get("last_tool_output")
+    output = output if isinstance(output, Mapping) else {}
+    failed = observation.get("last_tool_status") == "failure" or (
+        output.get("execution_status") == "failure"
+        or output.get("error_code") is not None
+    )
+    error_code = str(output.get("error_code") or "").strip()
+    return bool(failed), error_code or None
+
+
+def _action_family(action: Mapping[str, Any] | str | None) -> str | None:
+    normalized = safe_normalize_action(action) if action is not None else None
+    tool = normalized["tool"] if normalized is not None else None
+    if tool in {"get_measurement_context", "correct_measurements", "correct_measurements_from_path"}:
+        return "measurement"
+    if tool in {"get_parameter_context", "correct_parameters", "correct_parameters_from_path"}:
+        return "parameter"
+    return None
+
+
+def _observable_prior_action_families(observation: Mapping[str, Any]) -> set[str]:
+    families: set[str] = set()
+    history = observation.get("history_window")
+    if isinstance(history, (list, tuple)):
+        for event in history:
+            if not isinstance(event, Mapping):
+                continue
+            family = _action_family(
+                event.get("action") if isinstance(event.get("action"), Mapping) else None
+            )
+            if family is not None:
+                families.add(family)
+    accepted = observation.get("accepted_corrections")
+    if isinstance(accepted, (list, tuple)):
+        for record in accepted:
+            if not isinstance(record, Mapping):
+                continue
+            action = record.get("source_action") or record.get("action")
+            family = _action_family(action if isinstance(action, Mapping) else None)
+            if family is not None:
+                families.add(family)
+    evidence = observation.get("fresh_context_evidence")
+    if isinstance(evidence, Mapping):
+        for family in ("measurement", "parameter"):
+            if isinstance(evidence.get(family), Mapping):
+                families.add(family)
+    return families
+
+
+def classify_dagger1_recovery_stratum(
+    observation: Mapping[str, Any],
+    *,
+    preferred_action: Mapping[str, Any] | str | None,
+    state_class: str,
+    scenario_family: str,
+    error_cardinality: int,
+) -> str | None:
+    """Classify an observable learner-recovery state into an audit stratum.
+
+    This classifier deliberately uses only the policy observation, public
+    scenario grouping, and the expert's current rank-one target.  It must not
+    inspect hidden truth or the action that the expert will execute next.
+    """
+    del state_class  # Current-transition outcomes must not admit the input row.
+    preferred = (
+        safe_normalize_action(preferred_action)
+        if preferred_action is not None
+        else None
+    )
+    preferred_tool = preferred["tool"] if preferred is not None else None
+    previous_tool = _observable_last_action_tool(observation)
+    previous_failed, error_code = _observable_last_failure(observation)
+    has_candidate = bool(
+        observation.get("has_open_candidate")
+        or observation.get("candidate_state_id")
+    )
+
+    unsupported_codes = {
+        "correction_not_supported_by_current_context",
+        "correction_route_not_actionable",
+        "parameter_scans_missing",
+    }
+    if (
+        previous_failed
+        and previous_tool
+        in {
+            "correct_measurements",
+            "correct_measurements_from_path",
+            "correct_parameters",
+            "correct_parameters_from_path",
+            "correct_topology",
+            "correct_topology_from_path",
+        }
+        and error_code in unsupported_codes
+    ):
+        return "unsupported_correction_recovery"
+    if (
+        previous_failed
+        and previous_tool == "commit_state"
+        and (error_code == "candidate_lifecycle_violation" or not has_candidate)
+    ):
+        return "premature_commit_recovery"
+    if (
+        previous_failed
+        and previous_tool == ASK_FOR_MORE_EVIDENCE
+        and error_code == "operator_escalation_precondition_not_met"
+    ):
+        return "premature_escalation_recovery"
+    if preferred_tool == "rollback_state" and has_candidate:
+        return "rejected_candidate_rollback"
+
+    if (
+        str(scenario_family) == "multi_measurement"
+        and int(error_cardinality) >= 2
+        and preferred_tool == ASK_FOR_MORE_EVIDENCE
+        and preferred is not None
+        and preferred["arguments"].get("request")
+        in {
+            HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
+            RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+            RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+        }
+    ):
+        return "multi_measurement_safe_handoff"
+
+    preferred_family = _action_family(preferred)
+    if (
+        str(scenario_family) == "measurement+parameter"
+        and preferred_family in {"measurement", "parameter"}
+        and ({"measurement", "parameter"} - {preferred_family})
+        & _observable_prior_action_families(observation)
+    ):
+        return "sequential_measurement_parameter_recovery"
+
+    if previous_failed and not has_candidate:
+        return "post_failure_no_candidate"
+    signatures = observation.get("tried_action_signatures")
+    if (
+        isinstance(signatures, (list, tuple))
+        and len(signatures) != len(set(str(item) for item in signatures))
+    ):
+        return "loop_escape"
+    if previous_failed:
+        return "invalid_precondition_repair"
+    return None
+
+
+def observable_rank_one_target_proof(
+    observation: Mapping[str, Any],
+    *,
+    preferred_action: Mapping[str, Any] | str | None,
+    expert_actions: Iterable[Mapping[str, Any] | str],
+) -> dict[str, Any]:
+    """Prove one deterministic target from policy-visible ranked evidence."""
+    actions = [safe_normalize_action(action) for action in expert_actions]
+    preferred = (
+        safe_normalize_action(preferred_action)
+        if preferred_action is not None
+        else None
+    )
+    if preferred is None or not actions or actions[0] != preferred:
+        return {"contract": "observable_rank_one_target_v1", "passed": False, "reason": "preferred_target_missing_or_not_first"}
+    if len(actions) == 1:
+        return {
+            "contract": "observable_rank_one_target_v1",
+            "passed": True,
+            "basis": "singleton_expert_target",
+            "expert_action_count": 1,
+        }
+
+    parameter_tools = {"correct_parameters", "correct_parameters_from_path"}
+    if preferred["tool"] not in parameter_tools or any(
+        action["tool"] not in parameter_tools for action in actions
+    ):
+        return {
+            "contract": "observable_rank_one_target_v1",
+            "passed": False,
+            "reason": "multiple_targets_without_supported_parameter_ranking",
+            "expert_action_count": len(actions),
+        }
+    evidence_by_family = observation.get("fresh_context_evidence")
+    evidence = (
+        evidence_by_family.get("parameter")
+        if isinstance(evidence_by_family, Mapping)
+        else None
+    )
+    if not isinstance(evidence, Mapping):
+        return {"contract": "observable_rank_one_target_v1", "passed": False, "reason": "parameter_evidence_missing", "expert_action_count": len(actions)}
+    active_state_id = str(observation.get("active_state_id") or "")
+    binding = str(evidence.get("context_binding") or "")
+    binding_valid = binding == "direct_context" or (
+        binding == "branch_route_screening.parameter"
+        and evidence.get("bundled_by_context_tool") == "get_measurement_context"
+    )
+    evidence_source = str(evidence.get("evidence_source") or "").lower()
+    source_valid = bool(
+        evidence_source
+        and not any(
+            token in evidence_source
+            for token in ("hidden", "oracle", "truth", "synthetic", "fallback")
+        )
+        and evidence_source.startswith(
+            ("deployment", "observable", "sensor", "wls", "configured_provider")
+        )
+    )
+    if not (
+        observation.get("has_fresh_parameter_context") is True
+        and str(observation.get("parameter_context_state_id") or "")
+        == active_state_id
+        and evidence.get("context_tool") == "get_parameter_context"
+        and binding_valid
+        and source_valid
+        and evidence.get("route_status") == "actionable"
+        and str(evidence.get("state_id") or "") == active_state_id
+        and str(evidence.get("state_hash") or "").strip()
+        and evidence.get("parameter_ranking_contract")
+        == "distinct_line_abs_lambda_dominance_v1"
+    ):
+        return {"contract": "observable_rank_one_target_v1", "passed": False, "reason": "parameter_evidence_not_actionable_or_state_bound", "expert_action_count": len(actions)}
+    ranking = evidence.get("parameter_ranking_distinct_lines")
+    if not isinstance(ranking, (list, tuple)) or len(ranking) < 2:
+        return {"contract": "observable_rank_one_target_v1", "passed": False, "reason": "multi_target_parameter_ranking_incomplete", "expert_action_count": len(actions)}
+    raw_supported = evidence.get("supported_corrections")
+    if not isinstance(raw_supported, (list, tuple)):
+        return {"contract": "observable_rank_one_target_v1", "passed": False, "reason": "supported_parameter_inventory_missing", "expert_action_count": len(actions)}
+    supported = [safe_normalize_action(action) for action in raw_supported]
+    if supported != actions:
+        return {"contract": "observable_rank_one_target_v1", "passed": False, "reason": "expert_targets_do_not_match_supported_inventory", "expert_action_count": len(actions)}
+
+    def finite(value: Any) -> float | None:
+        try:
+            result = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return result if math.isfinite(result) else None
+
+    top = ranking[0] if isinstance(ranking[0], Mapping) else {}
+    runner = ranking[1] if isinstance(ranking[1], Mapping) else {}
+    top_score = finite(top.get("abs_lambda_score"))
+    runner_score = finite(runner.get("abs_lambda_score"))
+    recorded_top = finite(evidence.get("parameter_ranking_top_abs_lambda"))
+    recorded_runner = finite(
+        evidence.get("parameter_ranking_runner_up_abs_lambda")
+    )
+    ratio = finite(evidence.get("parameter_ranking_dominance_ratio"))
+    threshold = finite(evidence.get("parameter_ranking_dominance_threshold"))
+    try:
+        top_line = int(top.get("line_index1"))
+        preferred_line = int(preferred["arguments"].get("line_index"))
+    except (TypeError, ValueError, OverflowError):
+        top_line = preferred_line = -1
+    scores_consistent = bool(
+        top_score is not None
+        and runner_score is not None
+        and recorded_top is not None
+        and recorded_runner is not None
+        and ratio is not None
+        and threshold is not None
+        and math.isclose(top_score, recorded_top, rel_tol=1e-12, abs_tol=1e-12)
+        and math.isclose(
+            runner_score, recorded_runner, rel_tol=1e-12, abs_tol=1e-12
+        )
+        and runner_score > 0.0
+        and math.isclose(
+            ratio, top_score / runner_score, rel_tol=1e-12, abs_tol=1e-12
+        )
+    )
+    action_state_ids = {
+        str(action["arguments"].get("state_id") or "") for action in actions
+    }
+    passed = bool(
+        scores_consistent
+        and top_score > runner_score
+        and ratio > 1.0
+        and threshold == 1.0
+        and evidence.get("parameter_ranking_dominant") is True
+        and preferred_line == top_line > 0
+        and action_state_ids == {active_state_id}
+    )
+    return {
+        "contract": "observable_rank_one_target_v1",
+        "passed": passed,
+        "basis": "strict_observable_parameter_ranking" if passed else None,
+        "reason": None if passed else "parameter_ranking_not_strict_or_target_mismatch",
+        "expert_action_count": len(actions),
+        "active_state_id": active_state_id,
+        "top_line_index1": top_line if top_line > 0 else None,
+        "preferred_line_index1": preferred_line if preferred_line > 0 else None,
+        "top_abs_lambda": top_score,
+        "runner_up_abs_lambda": runner_score,
+        "dominance_ratio": ratio,
+        "dominance_threshold": threshold,
+    }
 
 
 def classify_state_example(
@@ -184,6 +518,100 @@ def audit_target_aware_state_classes(
     }
 
 
+def audit_dagger1_recovery_labels(
+    examples: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Recompute observable recovery strata and eligibility invariants."""
+    rows = list(examples)
+    counts: Counter[str] = Counter()
+    mismatches: list[dict[str, Any]] = []
+    eligibility_violations: list[dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        observation = row.get("policy_observation") or row.get("state_summary") or {}
+        observation = observation if isinstance(observation, Mapping) else {}
+        try:
+            error_cardinality = int(row.get("error_cardinality") or 0)
+        except (TypeError, ValueError, OverflowError):
+            error_cardinality = 0
+        expected = classify_dagger1_recovery_stratum(
+            observation,
+            preferred_action=row.get("preferred_action"),
+            state_class=str(row.get("state_class") or ""),
+            scenario_family=str(row.get("scenario_family") or "unknown"),
+            error_cardinality=error_cardinality,
+        )
+        labels = row.get("labels") if isinstance(row.get("labels"), Mapping) else {}
+        actual_value = row.get("recovery_stratum", labels.get("recovery_stratum"))
+        actual = str(actual_value) if actual_value is not None else None
+        counts[actual or "unclassified"] += 1
+        if actual != expected:
+            mismatches.append(
+                {
+                    "index": index,
+                    "example_id": row.get("example_id"),
+                    "actual": actual,
+                    "expected": expected,
+                }
+            )
+
+        if row.get("production_label_eligible") is not True:
+            continue
+        reasons: list[str] = []
+        if row.get("state_origin") != "learner_policy":
+            reasons.append("not_learner_visited_state")
+        if row.get("collection_role") != "training":
+            reasons.append("collection_role_not_training")
+        try:
+            row_beta = float(row.get("collection_beta"))
+        except (TypeError, ValueError, OverflowError):
+            row_beta = -1.0
+        if not 0.25 <= row_beta <= 0.5:
+            reasons.append("training_beta_contract_not_verified")
+        if expected not in _DAGGER1_PRODUCTION_RECOVERY_STRATA:
+            reasons.append("not_production_recovery_stratum")
+        if row.get("preferred_action") is None:
+            reasons.append("missing_expert_target")
+        full_expert_actions: list[Any] = []
+        if row.get("preferred_action") is not None:
+            full_expert_actions.append(row.get("preferred_action"))
+        deferred = row.get("deferred_expert_actions")
+        if isinstance(deferred, list):
+            full_expert_actions.extend(deferred)
+        recomputed_rank_one = observable_rank_one_target_proof(
+            observation,
+            preferred_action=row.get("preferred_action"),
+            expert_actions=full_expert_actions,
+        )
+        recorded_rank_one = row.get(
+            "observable_rank_one_target_proof",
+            labels.get("observable_rank_one_target_proof"),
+        )
+        if recomputed_rank_one.get("passed") is not True:
+            reasons.append("expert_target_not_observably_rank_one")
+        if recorded_rank_one != recomputed_rank_one:
+            reasons.append("observable_rank_one_proof_mismatch")
+        actions = row.get("valid_next_actions")
+        if not isinstance(actions, list) or len(actions) != 1:
+            reasons.append("expert_target_not_observably_rank_one")
+        if labels.get("training_decision_evidence_verified") is not True:
+            reasons.append("training_decision_evidence_not_verified")
+        if reasons:
+            eligibility_violations.append(
+                {
+                    "index": index,
+                    "example_id": row.get("example_id"),
+                    "reasons": reasons,
+                }
+            )
+    return {
+        "total_rows": len(rows),
+        "recovery_stratum_counts": dict(sorted(counts.items())),
+        "mismatches": mismatches,
+        "eligibility_violations": eligibility_violations,
+        "passed": not mismatches and not eligibility_violations,
+    }
+
+
 class DaggerRolloutCollector:
     """Collect expert labels at every state visited by the mixture policy."""
 
@@ -195,6 +623,7 @@ class DaggerRolloutCollector:
         expert_oracle: Any,
         rng: random.Random | None = None,
         supervision_policy: str = ALL_ADMISSIBLE_SUPERVISION,
+        forbidden_physical_roots: Iterable[str] | None = None,
     ) -> None:
         if supervision_policy not in SUPPORTED_SUPERVISION_POLICIES:
             raise ValueError(
@@ -203,11 +632,15 @@ class DaggerRolloutCollector:
                 f"got {supervision_policy!r}"
             )
         if (
-            supervision_policy == BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION
+            supervision_policy
+            in {
+                BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION,
+                DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
+            }
             and not bool(getattr(env, "production_dataset_mode", False))
         ):
             raise ValueError(
-                f"{BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION} requires "
+                f"{supervision_policy} requires "
                 "production_dataset_mode=True"
             )
         self.env = env
@@ -215,6 +648,19 @@ class DaggerRolloutCollector:
         self.expert_oracle = expert_oracle
         self.rng = rng or random.Random()
         self.supervision_policy = supervision_policy
+        self.forbidden_physical_roots = frozenset(
+            str(root).strip()
+            for root in (forbidden_physical_roots or [])
+            if str(root).strip()
+        )
+        if (
+            supervision_policy == DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION
+            and not self.forbidden_physical_roots
+        ):
+            raise ValueError(
+                f"{DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION} requires a "
+                "non-empty forbidden_physical_roots holdout set"
+            )
 
     def collect_iteration(
         self,
@@ -223,6 +669,7 @@ class DaggerRolloutCollector:
         iteration: int,
         beta: float,
         max_steps: int,
+        collection_role: str | None = None,
     ) -> list[dict[str, Any]]:
         if self.supervision_policy == BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION and (
             int(iteration) != 0 or float(beta) != 1.0
@@ -231,21 +678,114 @@ class DaggerRolloutCollector:
                 f"{BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION} is the expert-only "
                 "round-0 contract and requires iteration=0, beta=1.0"
             )
+        if self.supervision_policy == DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION:
+            if int(iteration) < 1:
+                raise ValueError(
+                    f"{DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION} requires "
+                    "iteration>=1"
+                )
+            if collection_role == "diagnostic":
+                valid_beta = float(beta) == 0.0
+            elif collection_role == "training":
+                valid_beta = 0.25 <= float(beta) <= 0.5
+            else:
+                raise ValueError(
+                    f"{DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION} requires an "
+                    "explicit collection_role of diagnostic or training"
+                )
+            if not valid_beta:
+                raise ValueError(
+                    f"{collection_role} DAgger-1 collection has an invalid "
+                    f"beta={float(beta)}"
+                )
         examples: list[dict[str, Any]] = []
         scenario_list = list(scenarios)
         for scenario_index, scenario in enumerate(scenario_list):
-            self.env.reset(scenario)
+            runtime_scenario: Mapping[str, Any] = scenario
+            grouping: Mapping[str, Any] = scenario
+            if (
+                self.supervision_policy
+                == DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION
+                and all(key in scenario for key in ("execution", "audit", "grouping"))
+            ):
+                raw_execution = scenario.get("execution")
+                raw_audit = scenario.get("audit")
+                raw_grouping = scenario.get("grouping")
+                if not all(
+                    isinstance(value, Mapping)
+                    for value in (raw_execution, raw_audit, raw_grouping)
+                ):
+                    raise ValueError("DAgger-1 scenario envelope is malformed")
+                runtime_scenario = dict(raw_execution)
+                private_truth = raw_audit.get("truth")
+                if not isinstance(private_truth, Mapping):
+                    raise ValueError(
+                        "DAgger-1 scenario envelope lacks private audit truth"
+                    )
+                # The environment stores these fields exclusively in its
+                # OracleState payload.  They are required for expert labels,
+                # but get_policy_observation/validate_policy_payload keep them
+                # out of both learner input and exported SFT rows.
+                normalized_private_truth = dict(private_truth)
+                clean_state = normalized_private_truth.get("clean_state")
+                if isinstance(clean_state, Mapping):
+                    for nested_key, flat_key in (
+                        ("case", "clean_case"),
+                        ("measurements", "clean_measurements"),
+                    ):
+                        if nested_key not in clean_state:
+                            continue
+                        nested_value = clean_state[nested_key]
+                        if (
+                            flat_key in normalized_private_truth
+                            and normalized_private_truth[flat_key] != nested_value
+                        ):
+                            raise ValueError(
+                                f"DAgger-1 private truth conflicts on {flat_key}"
+                            )
+                        normalized_private_truth[flat_key] = nested_value
+                for key, value in normalized_private_truth.items():
+                    if key in {"truth_complete", "clean_state"}:
+                        continue
+                    runtime_scenario[str(key)] = copy.deepcopy(value)
+                grouping = raw_grouping
+            if self.supervision_policy == DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION:
+                split = str(
+                    grouping.get("dataset_split") or grouping.get("split") or ""
+                ).strip()
+                if split not in {"train", "dagger_train"}:
+                    raise ValueError(
+                        f"{DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION} accepts only "
+                        "explicit train/dagger_train scenarios; got "
+                        f"{split or 'missing'}"
+                    )
+                if not str(
+                    grouping.get("physical_root_fingerprint") or ""
+                ).strip():
+                    raise ValueError(
+                        f"{DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION} requires an "
+                        "explicit physical_root_fingerprint"
+                    )
+                physical_root = str(
+                    grouping["physical_root_fingerprint"]
+                ).strip()
+                if physical_root in self.forbidden_physical_roots:
+                    raise ValueError(
+                        "DAgger-1 training scenario overlaps a protected "
+                        f"D0/evaluation holdout: {physical_root}"
+                    )
+            self.env.reset(runtime_scenario)
             history: list[dict[str, Any]] = []
-            scenario_id = str(scenario.get("scenario_id", scenario.get("id", f"scenario_{scenario_index}")))
-            root_scenario_id = str(scenario.get("root_scenario_id", scenario_id))
-            physical_root_fingerprint = scenario.get("physical_root_fingerprint")
-            scenario_family = str(scenario.get("scenario_family") or "unknown")
+            scenario_id = str(runtime_scenario.get("scenario_id", runtime_scenario.get("id", f"scenario_{scenario_index}")))
+            root_scenario_id = str(grouping.get("root_scenario_id", scenario_id))
+            physical_root_fingerprint = grouping.get("physical_root_fingerprint")
+            scenario_family = str(grouping.get("scenario_family") or "unknown")
             network_case = str(
-                scenario.get("network_case") or scenario.get("case_id") or scenario.get("case") or "unknown"
+                grouping.get("network_case") or grouping.get("case_id") or runtime_scenario.get("case") or "unknown"
             )
-            source_tier = str(scenario.get("source_tier") or "unknown")
+            source_tier = str(grouping.get("source_tier") or "unknown")
             try:
-                error_cardinality = int(scenario.get("error_cardinality", 0))
+                error_cardinality = int(grouping.get("error_cardinality", 0))
             except (TypeError, ValueError, OverflowError):
                 error_cardinality = 0
             state_visited_by = "initial"
@@ -263,10 +803,15 @@ class DaggerRolloutCollector:
                     action for action in expert_actions if action["tool"] != "__invalid_action__"
                 ]
                 preferred_action = expert_actions[0] if expert_actions else None
-                if (
-                    self.supervision_policy
-                    == BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION
-                ):
+                rank_one_target_proof = observable_rank_one_target_proof(
+                    observation_dict,
+                    preferred_action=preferred_action,
+                    expert_actions=expert_actions,
+                )
+                if self.supervision_policy in {
+                    BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION,
+                    DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
+                }:
                     # BC0 clones a deterministic, deployment-observable expert
                     # protocol rather than a set-valued process-validity
                     # relation.  Only the current rank-one protocol action is
@@ -292,6 +837,7 @@ class DaggerRolloutCollector:
                     target_candidate_assessment = copy.deepcopy(
                         dict(oracle_state.candidate_assessment or {})
                     )
+                training_decision_evidence_verified = False
                 if preferred_action is not None and hasattr(
                     self.env, "assert_training_decision_evidence"
                 ):
@@ -303,6 +849,7 @@ class DaggerRolloutCollector:
                             f"scenario={scenario_id}, step={step}, "
                             f"preferred_tool={preferred_action.get('tool')}: {exc}"
                         ) from exc
+                    training_decision_evidence_verified = True
                 model_action = self._policy_action(observation_dict)
 
                 if preferred_action is not None and self.rng.random() < float(beta):
@@ -375,6 +922,53 @@ class DaggerRolloutCollector:
                     if bool(getattr(self.env, "production_dataset_mode", False))
                     else "synthetic_pilot"
                 )
+                state_origin = (
+                    "learner_policy"
+                    if state_visited_by == "model"
+                    else "expert_policy"
+                    if state_visited_by == "expert"
+                    else "initial"
+                )
+                dataset_source = "dagger_rollout"
+                dagger1_production_eligible: bool | None = None
+                dagger1_ineligibility_reason: str | None = None
+                recovery_stratum: str | None = None
+                if (
+                    self.supervision_policy
+                    == DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION
+                ):
+                    recovery_stratum = classify_dagger1_recovery_stratum(
+                        observation_dict,
+                        preferred_action=preferred_action,
+                        state_class=state_class,
+                        scenario_family=scenario_family,
+                        error_cardinality=error_cardinality,
+                    )
+                    if collection_role == "diagnostic":
+                        dagger1_ineligibility_reason = (
+                            "diagnostic_beta_zero_not_training_eligible"
+                        )
+                    elif state_origin != "learner_policy":
+                        dagger1_ineligibility_reason = "not_learner_visited_state"
+                    elif (
+                        recovery_stratum
+                        not in _DAGGER1_PRODUCTION_RECOVERY_STRATA
+                    ):
+                        dagger1_ineligibility_reason = "not_recovery_state"
+                    elif preferred_action is None:
+                        dagger1_ineligibility_reason = "missing_expert_target"
+                    elif not training_decision_evidence_verified:
+                        dagger1_ineligibility_reason = (
+                            "training_decision_evidence_not_verified"
+                        )
+                    elif rank_one_target_proof.get("passed") is not True:
+                        dagger1_ineligibility_reason = (
+                            "expert_target_not_observably_rank_one"
+                        )
+                    else:
+                        dagger1_production_eligible = True
+                    if dagger1_production_eligible is not True:
+                        dagger1_production_eligible = False
                 example = {
                     "example_id": f"dagger_iter{iteration}_{scenario_id}_step{step}",
                     "scenario_id": scenario_id,
@@ -382,10 +976,17 @@ class DaggerRolloutCollector:
                     "physical_root_fingerprint": physical_root_fingerprint,
                     "scenario_family": scenario_family,
                     "error_cardinality": error_cardinality,
+                    "parameter_scans_available": grouping.get(
+                        "parameter_scans_available"
+                    ),
                     "network_case": network_case,
                     "source_tier": source_tier,
+                    "dataset_split": (
+                        grouping.get("dataset_split") or grouping.get("split")
+                    ),
                     "episode_id": observation_dict.get("episode_id"),
                     "iteration": iteration,
+                    "collection_beta": float(beta),
                     "step": step,
                     "dataset_mode": dataset_mode,
                     "policy_observation": observation_dict,
@@ -398,10 +999,16 @@ class DaggerRolloutCollector:
                     ),
                     "supervision_policy": self.supervision_policy,
                     "preferred_action": preferred_action,
+                    "observable_rank_one_target_proof": policy_safe_copy(
+                        rank_one_target_proof
+                    ),
                     "model_action": policy_safe_copy(model_action),
                     "executed_action": policy_safe_copy(executed_action),
                     "executed_by": executed_by,
                     "state_visited_by": state_visited_by,
+                    "state_origin": state_origin,
+                    "dataset_source": dataset_source,
+                    "collection_role": collection_role,
                     "tool_output": policy_safe_copy(tool_output),
                     "next_state_summary": final_next_policy_observation.as_dict(),
                     "candidate_state_summary": (
@@ -428,12 +1035,44 @@ class DaggerRolloutCollector:
                         "error_cardinality": error_cardinality,
                         "network_case": network_case,
                         "source_tier": source_tier,
+                        "state_origin": state_origin,
+                        "dataset_source": dataset_source,
+                        "collection_role": collection_role,
+                        "collection_beta": float(beta),
                         "supervision_policy": self.supervision_policy,
+                        "training_decision_evidence_verified": (
+                            training_decision_evidence_verified
+                        ),
+                        "observable_rank_one_target_proof": policy_safe_copy(
+                            rank_one_target_proof
+                        ),
                         "deferred_expert_action_count": len(
                             deferred_expert_actions
                         ),
                     },
                 }
+                if dagger1_production_eligible is not None:
+                    example["production_label_eligible"] = (
+                        dagger1_production_eligible
+                    )
+                    example["recovery_label_contract"] = (
+                        "observable_rank_one_learner_state_v1"
+                    )
+                    example["labels"]["production_label_eligible"] = (
+                        dagger1_production_eligible
+                    )
+                    example["labels"]["recovery_label_contract"] = (
+                        "observable_rank_one_learner_state_v1"
+                    )
+                    example["recovery_stratum"] = recovery_stratum
+                    example["labels"]["recovery_stratum"] = recovery_stratum
+                    if dagger1_ineligibility_reason is not None:
+                        example["production_label_ineligibility_reason"] = (
+                            dagger1_ineligibility_reason
+                        )
+                        example["labels"][
+                            "production_label_ineligibility_reason"
+                        ] = dagger1_ineligibility_reason
                 validate_policy_payload(
                     {
                         "policy_observation": example["policy_observation"],

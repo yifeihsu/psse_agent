@@ -21,9 +21,31 @@ from psse_env.actions import (
     RUN_ALTERNATIVE_TEST,
     RUN_WLS,
     VERIFY_CANDIDATE,
+    action_signature,
     safe_normalize_action,
     unexplained_signatures,
 )
+
+
+_CORRECTION_CONTEXT_FAMILY = {
+    CORRECT_MEASUREMENTS: "measurement",
+    CORRECT_PARAMETERS: "parameter",
+    CORRECT_TOPOLOGY: "topology",
+}
+_CONTEXT_TOOL_FOR_FAMILY = {
+    "measurement": GET_MEASUREMENT_CONTEXT,
+    "parameter": GET_PARAMETER_CONTEXT,
+    "topology": GET_TOPOLOGY_CONTEXT,
+}
+_CORRECTION_TOOL_FOR_FAMILY = {
+    family: tool for tool, family in _CORRECTION_CONTEXT_FAMILY.items()
+}
+_RECOVERY_FAMILY_ORDER = {
+    "measurement": ("parameter", "topology"),
+    "parameter": ("topology", "measurement"),
+    "topology": ("parameter", "measurement"),
+}
+_MAX_CORRECTION_RECOVERY_ACTIONS = 2
 
 
 class ProcessValidityOracle:
@@ -84,12 +106,37 @@ class ProcessValidityOracle:
                 error_code, error_detail = "missing_precondition", "topology_context_missing"
             elif (
                 tool == CORRECT_MEASUREMENTS
-                and state.get("requires_measurement_context")
+                and (
+                    state.get("requires_measurement_context")
+                    or self.executor_hydrated_corrections
+                    or state.get("require_context_supported_corrections")
+                )
                 and not self._context_is_fresh(state, "measurement")
             ):
                 error_code, error_detail = "missing_precondition", "measurement_context_missing"
             elif not self._has_correction_payload(tool, args):
                 error_code, error_detail = "schema_error", "empty_correction_payload"
+            elif (
+                self.executor_hydrated_corrections
+                or state.get("require_context_supported_corrections")
+            ) and not state.get("audited_evaluation_setup_correction"):
+                # Deployment executors hydrate physical values from a bounded
+                # target.  The model-visible action is therefore legal only
+                # when the exact target was emitted by a fresh context bound
+                # to this active state.  This closes the former gap where an
+                # arbitrary branch target could reach the expensive executor
+                # merely because some context action had run earlier.
+                #
+                # The one exception is a private evaluator setup transition
+                # used to construct the frozen partial-success starting state.
+                # TransactionalPSSEEnv creates that flag internally for one
+                # measurement update; it is not an action argument or policy
+                # observation and therefore cannot weaken model execution.
+                contract_failure = self._context_supported_correction_failure(
+                    state, normalized
+                )
+                if contract_failure is not None:
+                    error_code, error_detail = contract_failure
         elif tool in CONTEXT_TOOLS:
             requested = args.get("state_id") or active_id
             if has_open_candidate:
@@ -233,6 +280,170 @@ class ProcessValidityOracle:
             signatures, state.get("explained_anomalies")
         )
 
+    def _context_supported_correction_failure(
+        self,
+        state: Any,
+        action: Mapping[str, Any],
+    ) -> tuple[str, str] | None:
+        """Validate the exact same-state correction inventory contract."""
+
+        normalized = safe_normalize_action(action)
+        tool = normalized["tool"]
+        family = _CORRECTION_CONTEXT_FAMILY[tool]
+        active_id = state.get("active_state_id")
+        if not self._context_is_fresh(state, family):
+            return "missing_precondition", f"{family}_context_missing"
+
+        fresh = state.get("fresh_context_evidence")
+        evidence = fresh.get(family) if isinstance(fresh, Mapping) else None
+        if (
+            not isinstance(evidence, Mapping)
+            or active_id is None
+            or str(evidence.get("state_id") or "") != str(active_id)
+        ):
+            return "missing_precondition", f"{family}_context_missing"
+
+        if family in {"parameter", "topology"}:
+            # Both a complete negative screen and unavailable/inconclusive
+            # evidence prohibit a branch correction in the current control
+            # epoch.  Re-running arbitrary targets cannot change that fact.
+            if evidence.get("route_status") != "actionable":
+                route_status = str(
+                    evidence.get("route_status") or "missing_route_status"
+                )
+                route_reason = str(
+                    evidence.get("route_status_reason")
+                    or "missing_route_status_reason"
+                )
+                return (
+                    "correction_route_not_actionable",
+                    (
+                        f"{family}_route_not_actionable:"
+                        f"{route_status}:{route_reason}"
+                    ),
+                )
+
+        supported = evidence.get("supported_corrections")
+        if not isinstance(supported, (list, tuple)):
+            return "missing_precondition", f"{family}_context_missing"
+
+        requested_arguments = dict(normalized["arguments"])
+        requested_arguments.setdefault("state_id", active_id)
+        requested_signature = action_signature(
+            {"tool": tool, "arguments": requested_arguments}
+        )
+        supported_signatures: set[str] = set()
+        for raw_action in supported:
+            if not isinstance(raw_action, Mapping):
+                return "missing_precondition", f"{family}_context_missing"
+            supported_action = safe_normalize_action(raw_action)
+            if supported_action["tool"] != tool:
+                return "missing_precondition", f"{family}_context_missing"
+            supported_state_id = supported_action["arguments"].get("state_id")
+            if (
+                supported_state_id is None
+                or str(supported_state_id) != str(active_id)
+            ):
+                return "missing_precondition", f"{family}_context_missing"
+            supported_signatures.add(action_signature(supported_action))
+
+        if requested_signature not in supported_signatures:
+            return (
+                "correction_not_supported_by_current_context",
+                f"{family}_correction_not_supported_by_context",
+            )
+        return None
+
+    def _supported_corrections_for_family(
+        self,
+        state: Any,
+        family: str,
+    ) -> list[dict[str, Any]]:
+        """Return only well-formed same-state actionable corrections."""
+
+        if not self._context_is_fresh(state, family):
+            return []
+        active_id = state.get("active_state_id")
+        fresh = state.get("fresh_context_evidence")
+        evidence = fresh.get(family) if isinstance(fresh, Mapping) else None
+        if (
+            not isinstance(evidence, Mapping)
+            or active_id is None
+            or str(evidence.get("state_id") or "") != str(active_id)
+        ):
+            return []
+        if (
+            family in {"parameter", "topology"}
+            and evidence.get("route_status") != "actionable"
+        ):
+            return []
+        raw_supported = evidence.get("supported_corrections")
+        if not isinstance(raw_supported, (list, tuple)):
+            return []
+
+        expected_tool = _CORRECTION_TOOL_FOR_FAMILY[family]
+        supported: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for raw_action in raw_supported:
+            if not isinstance(raw_action, Mapping):
+                return []
+            normalized = safe_normalize_action(raw_action)
+            if normalized["tool"] != expected_tool:
+                return []
+            requested = normalized["arguments"].get("state_id")
+            if requested is None or str(requested) != str(active_id):
+                return []
+            if not self._has_correction_payload(
+                expected_tool, normalized["arguments"]
+            ):
+                return []
+            signature = action_signature(normalized)
+            if signature not in seen:
+                supported.append(normalized)
+                seen.add(signature)
+        return supported
+
+    def _bounded_correction_recovery_actions(
+        self,
+        state: Any,
+        *,
+        failed_family: str,
+        allow_same_family: bool,
+    ) -> list[dict[str, Any]]:
+        """Offer at most two observable, non-escalating recovery actions."""
+
+        if state.get("has_open_candidate") or state.get(
+            "has_unverified_candidate"
+        ) or state.get("has_verified_candidate"):
+            return self._safe_actions_for_state(state)
+        active_id = state.get("active_state_id")
+        if active_id is None:
+            return []
+
+        actions: list[dict[str, Any]] = []
+        if allow_same_family:
+            actions.extend(
+                self._supported_corrections_for_family(state, failed_family)
+            )
+
+        for family in _RECOVERY_FAMILY_ORDER[failed_family]:
+            if len(actions) >= _MAX_CORRECTION_RECOVERY_ACTIONS:
+                break
+            alternatives = self._supported_corrections_for_family(state, family)
+            if alternatives:
+                actions.append(alternatives[0])
+            elif not self._context_is_fresh(state, family):
+                actions.append(
+                    {
+                        "tool": _CONTEXT_TOOL_FOR_FAMILY[family],
+                        "arguments": {"state_id": active_id},
+                    }
+                )
+
+        if not actions:
+            actions = [{"tool": RUN_WLS, "arguments": {"state_id": active_id}}]
+        return actions[:_MAX_CORRECTION_RECOVERY_ACTIONS]
+
     def repair_actions(
         self,
         state: Any,
@@ -250,6 +461,32 @@ class ProcessValidityOracle:
                 "measurement_context_missing": GET_MEASUREMENT_CONTEXT,
             }.get(error_detail, GET_PARAMETER_CONTEXT)
             return [{"tool": tool, "arguments": {"state_id": active_id}}]
+        if error_code in {
+            "correction_not_supported_by_current_context",
+            "correction_route_not_actionable",
+            "parameter_scans_missing",
+            "topology_correction_unsupported",
+        }:
+            if error_code == "parameter_scans_missing":
+                failed_family = "parameter"
+            elif error_code == "topology_correction_unsupported":
+                failed_family = "topology"
+            else:
+                failed_family = next(
+                    (
+                        family
+                        for family in _CONTEXT_TOOL_FOR_FAMILY
+                        if str(error_detail or "").startswith(f"{family}_")
+                    ),
+                    "parameter",
+                )
+            return self._bounded_correction_recovery_actions(
+                state,
+                failed_family=failed_family,
+                allow_same_family=(
+                    error_code == "correction_not_supported_by_current_context"
+                ),
+            )
         if error_code in {"state_reference_mismatch", "unknown_state_id"}:
             return self._safe_actions_for_state(state)
         if error_code == "candidate_lifecycle_violation":

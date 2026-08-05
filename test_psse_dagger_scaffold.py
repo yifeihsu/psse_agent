@@ -202,6 +202,31 @@ class ObservationBoundaryTests(unittest.TestCase):
 
 
 class ProcessValidityTests(unittest.TestCase):
+    @staticmethod
+    def _context_bound_state(
+        family, supported, *, route_status=None, route_status_reason=None
+    ):
+        state = {
+            "active_state_id": "e:s0",
+            f"has_fresh_{family}_context": True,
+            f"{family}_context_state_id": "e:s0",
+            "fresh_context_evidence": {
+                family: {
+                    "state_id": "e:s0",
+                    "supported_corrections": supported,
+                }
+            },
+        }
+        if route_status is not None:
+            state["fresh_context_evidence"][family]["route_status"] = (
+                route_status
+            )
+        if route_status_reason is not None:
+            state["fresh_context_evidence"][family]["route_status_reason"] = (
+                route_status_reason
+            )
+        return state
+
     def test_missing_parameter_context_routes_to_parameter_context(self):
         state = {"active_state_id": "e:s0", "has_fresh_parameter_context": False}
         result = ProcessValidityOracle().check(
@@ -212,6 +237,123 @@ class ProcessValidityTests(unittest.TestCase):
         self.assertEqual(result["error_code"], "missing_precondition")
         self.assertEqual(result["error_detail"], "parameter_context_missing")
         self.assertEqual(result["valid_next_actions"][0]["tool"], "get_parameter_context")
+
+    def test_hydrated_corrections_require_exact_same_state_context_support(self):
+        cases = (
+            (
+                "measurement",
+                {
+                    "tool": "correct_measurements",
+                    "arguments": {"state_id": "e:s0", "suspect_group": [3]},
+                },
+                {
+                    "tool": "correct_measurements",
+                    "arguments": {"state_id": "e:s0", "suspect_group": [4]},
+                },
+                None,
+            ),
+            (
+                "parameter",
+                {
+                    "tool": "correct_parameters",
+                    "arguments": {"state_id": "e:s0", "line_index1": 2},
+                },
+                {
+                    "tool": "correct_parameters",
+                    "arguments": {"state_id": "e:s0", "line_index1": 3},
+                },
+                "actionable",
+            ),
+            (
+                "topology",
+                {
+                    "tool": "correct_topology",
+                    "arguments": {
+                        "state_id": "e:s0",
+                        "line_index1": 2,
+                        "status": 1,
+                    },
+                },
+                {
+                    "tool": "correct_topology",
+                    "arguments": {
+                        "state_id": "e:s0",
+                        "line_index1": 3,
+                        "status": 1,
+                    },
+                },
+                "actionable",
+            ),
+        )
+        oracle = ProcessValidityOracle(executor_hydrated_corrections=True)
+        for family, supported, unsupported, route_status in cases:
+            with self.subTest(family=family):
+                state = self._context_bound_state(
+                    family, [supported], route_status=route_status
+                )
+                allowed = oracle.check(state, supported)
+                rejected = oracle.check(state, unsupported)
+
+                self.assertTrue(allowed["process_valid"])
+                self.assertFalse(rejected["process_valid"])
+                self.assertEqual(
+                    rejected["error_code"],
+                    "correction_not_supported_by_current_context",
+                )
+                self.assertLessEqual(len(rejected["valid_next_actions"]), 2)
+                self.assertEqual(rejected["valid_next_actions"][0], supported)
+
+    def test_nonactionable_branch_route_blocks_every_target(self):
+        state = self._context_bound_state(
+            "parameter",
+            [],
+            route_status="unavailable_or_inconclusive",
+            route_status_reason="parameter_findings_require_repeated_scans",
+        )
+        result = ProcessValidityOracle(
+            executor_hydrated_corrections=True
+        ).check(
+            state,
+            {
+                "tool": "correct_parameters",
+                "arguments": {"state_id": "e:s0", "line_index1": 2},
+            },
+        )
+
+        self.assertFalse(result["process_valid"])
+        self.assertEqual(result["error_code"], "correction_route_not_actionable")
+        self.assertEqual(
+            result["error_detail"],
+            (
+                "parameter_route_not_actionable:unavailable_or_inconclusive:"
+                "parameter_findings_require_repeated_scans"
+            ),
+        )
+        self.assertEqual(
+            [action["tool"] for action in result["valid_next_actions"]],
+            ["get_topology_context", "get_measurement_context"],
+        )
+
+    def test_context_inventory_must_be_bound_to_active_state(self):
+        supported = {
+            "tool": "correct_measurements",
+            "arguments": {"state_id": "old:s0", "suspect_group": [3]},
+        }
+        state = self._context_bound_state("measurement", [supported])
+        state["fresh_context_evidence"]["measurement"]["state_id"] = "old:s0"
+        result = ProcessValidityOracle(
+            executor_hydrated_corrections=True
+        ).check(
+            state,
+            {
+                "tool": "correct_measurements",
+                "arguments": {"state_id": "e:s0", "suspect_group": [3]},
+            },
+        )
+
+        self.assertFalse(result["process_valid"])
+        self.assertEqual(result["error_code"], "missing_precondition")
+        self.assertEqual(result["valid_next_actions"][0]["tool"], "get_measurement_context")
 
     def test_rejected_candidate_cannot_commit(self):
         state = {
@@ -267,6 +409,120 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual(before, after)
         self.assertFalse(output["state_mutated"])
         self.assertFalse(env.is_terminal())
+
+    def test_parameter_scan_executor_failure_offers_bounded_cross_family_recovery(self):
+        def parameter_context(state):
+            return {
+                "route_status": "actionable",
+                "supported_corrections": [
+                    {
+                        "tool": "correct_parameters",
+                        "arguments": {
+                            "state_id": state["state_id"],
+                            "line_index1": 1,
+                        },
+                    }
+                ],
+            }
+
+        def missing_scans(_state, _action):
+            return {
+                "execution_status": "failure",
+                "error_code": "parameter_scans_missing",
+                "error_detail": "observed scan bundle is absent",
+            }
+
+        env = TransactionalPSSEEnv(
+            process_oracle=ProcessValidityOracle(
+                executor_hydrated_corrections=True
+            ),
+            context_providers={"get_parameter_context": parameter_context},
+            correction_executors={"correct_parameters": missing_scans},
+        )
+        state = env.reset(synthetic_scenario())
+        state, _ = env.step(
+            {
+                "tool": "get_parameter_context",
+                "arguments": {"state_id": state["active_state_id"]},
+            }
+        )
+        _, output = env.step(
+            {
+                "tool": "correct_parameters",
+                "arguments": {
+                    "state_id": state["active_state_id"],
+                    "line_index1": 1,
+                },
+            }
+        )
+
+        self.assertEqual(output["execution_status"], "failure")
+        self.assertEqual(output["error_code"], "parameter_scans_missing")
+        self.assertFalse(output["state_mutated"])
+        self.assertLessEqual(len(output["valid_next_actions"]), 2)
+        self.assertEqual(
+            [action["tool"] for action in output["valid_next_actions"]],
+            ["get_topology_context", "get_measurement_context"],
+        )
+        self.assertNotIn(
+            "correct_parameters",
+            [action["tool"] for action in output["valid_next_actions"]],
+        )
+
+    def test_unsupported_context_target_is_rejected_before_executor(self):
+        executor_calls = []
+
+        def parameter_context(state):
+            return {
+                "route_status": "actionable",
+                "supported_corrections": [
+                    {
+                        "tool": "correct_parameters",
+                        "arguments": {
+                            "state_id": state["state_id"],
+                            "line_index1": 1,
+                        },
+                    }
+                ],
+            }
+
+        def correction_executor(_state, action):
+            executor_calls.append(action)
+            return {"modification": {"line_index1": 2, "value": 1.0}}
+
+        env = TransactionalPSSEEnv(
+            process_oracle=ProcessValidityOracle(
+                executor_hydrated_corrections=True
+            ),
+            context_providers={"get_parameter_context": parameter_context},
+            correction_executors={"correct_parameters": correction_executor},
+        )
+        state = env.reset(synthetic_scenario())
+        state, _ = env.step(
+            {
+                "tool": "get_parameter_context",
+                "arguments": {"state_id": state["active_state_id"]},
+            }
+        )
+        active_id = state["active_state_id"]
+        before_hash = env.store.episode_hash()
+        next_state, output = env.step(
+            {
+                "tool": "correct_parameters",
+                "arguments": {"state_id": active_id, "line_index1": 2},
+            }
+        )
+
+        self.assertEqual(executor_calls, [])
+        self.assertEqual(
+            output["error_code"],
+            "correction_not_supported_by_current_context",
+        )
+        self.assertFalse(output["state_mutated"])
+        self.assertEqual(next_state["active_state_id"], active_id)
+        self.assertIsNone(next_state["candidate_state_id"])
+        self.assertEqual(env.store.episode_hash(), before_hash)
+        self.assertLessEqual(len(output["valid_next_actions"]), 2)
 
     def test_unverified_candidate_cannot_rollback(self):
         env = TransactionalPSSEEnv()

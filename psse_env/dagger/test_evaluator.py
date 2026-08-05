@@ -17,6 +17,7 @@ from psse_env.actions import (
     ASK_FOR_MORE_EVIDENCE,
     COMMIT_STATE,
     CORRECT_MEASUREMENTS,
+    CORRECT_PARAMETERS,
     FINALIZE_DIAGNOSIS,
     GET_HARMONIC_CONTEXT,
     INVALID_ACTION,
@@ -84,6 +85,10 @@ class _ScriptPolicy:
             "false_rollback": {
                 "tool": ROLLBACK_STATE,
                 "arguments": {"candidate_state_id": "good-candidate"},
+            },
+            "parameter": {
+                "tool": CORRECT_PARAMETERS,
+                "arguments": {"state_id": "active", "line_index1": 2},
             },
         }
         return actions[phase]
@@ -633,6 +638,27 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                 "schema_invalid_action",
                 ValueError,
             ),
+            (
+                "parameter",
+                CORRECT_PARAMETERS,
+                "correction_not_supported_by_current_context",
+                "unsupported_correction",
+                None,
+            ),
+            (
+                "parameter",
+                CORRECT_PARAMETERS,
+                "correction_route_not_actionable",
+                "correction_route_not_actionable",
+                None,
+            ),
+            (
+                "parameter",
+                CORRECT_PARAMETERS,
+                "parameter_scans_missing",
+                "parameter_scans_missing",
+                None,
+            ),
         )
         for phase, expected_tool, error_code, failure_kind, raised in cases:
             with self.subTest(failure_kind=failure_kind):
@@ -717,6 +743,62 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                 # evaluator infrastructure error, and remains a promotion
                 # NO-GO under the paired safety ordinal.
                 self.assertEqual(_episode_safety_ordinal(episode), 0)
+
+    def test_family_wide_parameter_failure_blocks_a_different_target(self) -> None:
+        executed_actions: list[dict[str, Any]] = []
+
+        class AlternatingParameterPolicy:
+            def __init__(self) -> None:
+                self.targets = [2, 3]
+                self.cursor = 0
+
+            def act(self, _observation: Mapping[str, Any]) -> dict[str, Any]:
+                target = self.targets[min(self.cursor, len(self.targets) - 1)]
+                self.cursor += 1
+                return {
+                    "tool": CORRECT_PARAMETERS,
+                    "arguments": {
+                        "state_id": "active",
+                        "line_index1": target,
+                    },
+                }
+
+        class MissingScansEnv(_ScriptEnv):
+            def step(
+                self, action: Mapping[str, Any]
+            ) -> tuple[dict[str, Any], dict[str, Any]]:
+                executed_actions.append(copy.deepcopy(dict(action)))
+                return self.current_state(), {
+                    "execution_status": "failure",
+                    "error_code": "parameter_scans_missing",
+                    "state_mutated": False,
+                    "tool_metrics": {},
+                }
+
+        scenario = _resolved_scenario()
+        scenario["script"] = [{"phase": "unused", "remaining": 1}]
+        result = evaluate_rollout_suites(
+            {"standard_success": [scenario]},
+            env_factory=MissingScansEnv,
+            policy_factory=AlternatingParameterPolicy,
+            max_steps=4,
+        )
+
+        episode = result.suite_metrics["episodes"][0]
+        self.assertEqual(
+            [action["arguments"]["line_index1"] for action in executed_actions],
+            [2],
+        )
+        self.assertEqual(episode["policy_steps"], 2)
+        self.assertEqual(
+            episode["trace"][1]["error_code"],
+            "evaluation_repeated_nonadvancing_failure",
+        )
+        self.assertTrue(episode["loop_detected"])
+        self.assertEqual(
+            episode["control_quarantine"]["failure_kind"],
+            "parameter_scans_missing",
+        )
 
     def test_real_state_advance_resets_deterministic_failure_bound(self) -> None:
         executed_tools: list[str] = []
@@ -2527,6 +2609,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                     "failures": [],
                 },
             )
+
             self.assertIn("standard_success", configuration["suite_content_hashes"])
             provenance = artifact["provenance"]
             self.assertEqual(provenance["source_state"], clean_source)
@@ -2584,6 +2667,72 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                 with redirect_stdout(io.StringIO()):
                     self.assertEqual(evaluator_main(arguments), 0)
             self.assertEqual(first_bytes, output_path.read_bytes())
+
+    def test_cli_diagnostic_artifact_can_never_be_release_or_training_evidence(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            input_path = root / "diagnostic-suite.json"
+            output_path = root / "diagnostic-evaluation.json"
+            input_path.write_text(
+                json.dumps(
+                    {
+                        "standard_success": [
+                            _release_partitioned_resolved_scenario()
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            arguments = [
+                "--input",
+                str(input_path),
+                "--output",
+                str(output_path),
+                "--env-factory",
+                "psse_env.dagger.test_evaluator:_ReleaseScriptEnv",
+                "--policy-factory",
+                "psse_env.dagger.test_evaluator:_cli_policy_factory",
+                "--case-loader",
+                "psse_env.dagger.test_evaluator:_cli_case_loader",
+                "--model-id",
+                "test/script-policy",
+                "--model-revision",
+                "a" * 40,
+                "--required-suite",
+                "standard_success",
+                "--max-steps",
+                "8",
+                "--diagnostic-only",
+            ]
+            clean_source = {
+                "source_commit": "b" * 40,
+                "source_worktree_dirty": False,
+                "tracked_diff_hash": hashlib.sha256(b"").hexdigest(),
+                "untracked_source_files": [],
+                "release_eligible_source": True,
+            }
+            with mock.patch(
+                "psse_env.dagger.evaluator.git_source_state",
+                return_value=clean_source,
+            ):
+                with redirect_stdout(io.StringIO()):
+                    self.assertEqual(evaluator_main(arguments), 0)
+
+            artifact = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                artifact["artifact_type"],
+                "closed_loop_diagnostic_evaluation",
+            )
+            self.assertTrue(artifact["diagnostic_only"])
+            self.assertFalse(artifact["release_evidence_eligible"])
+            self.assertFalse(artifact["training_eligible"])
+            self.assertFalse(artifact["release_eligible"])
+            self.assertIn(
+                "diagnostic-only evaluation artifacts are not release evidence",
+                artifact["release_failures"],
+            )
 
     def test_cli_requires_policy_or_immutable_model_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

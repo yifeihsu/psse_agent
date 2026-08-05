@@ -739,6 +739,225 @@ def _normalize_joint_root_floors(
     }
 
 
+def _normalize_same_root_prerequisite_rules(
+    value: Mapping[str, Mapping[str, Any]] | None,
+) -> dict[str, dict[str, Any]]:
+    """Normalize target-tool prerequisites used by the training-view gate.
+
+    A correction target is useful only when the same physical root also keeps
+    the observable context decision that made the correction admissible.  The
+    rule is deliberately expressed over non-model metadata (physical root and
+    scenario family); it never adds a feature to the learner observation.
+    """
+
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError("same_root_prerequisite_rules must be a mapping")
+    normalized: dict[str, dict[str, Any]] = {}
+    for raw_target, raw_rule in value.items():
+        target = str(raw_target).strip()
+        if not target:
+            raise ValueError(
+                "same_root_prerequisite_rules target tools must be non-empty"
+            )
+        if not isinstance(raw_rule, Mapping):
+            raise ValueError(
+                f"same_root_prerequisite_rules[{target!r}] must be a mapping"
+            )
+        raw_options_by_family = raw_rule.get("prerequisite_options_by_family")
+        if raw_options_by_family is None:
+            prerequisite = str(raw_rule.get("prerequisite_tool") or "").strip()
+            if not prerequisite or prerequisite == target:
+                raise ValueError(
+                    f"same_root_prerequisite_rules[{target!r}] requires a "
+                    "distinct non-empty prerequisite_tool"
+                )
+            raw_families = raw_rule.get("scenario_families")
+            if (
+                not isinstance(raw_families, (list, tuple, set, frozenset))
+                or not raw_families
+            ):
+                raise ValueError(
+                    f"same_root_prerequisite_rules[{target!r}] requires "
+                    "non-empty scenario_families"
+                )
+            raw_options_by_family = {
+                str(family).strip(): [{"tool": prerequisite}]
+                for family in raw_families
+                if str(family).strip()
+            }
+        if not isinstance(raw_options_by_family, Mapping) or not raw_options_by_family:
+            raise ValueError(
+                f"same_root_prerequisite_rules[{target!r}] requires non-empty "
+                "prerequisite_options_by_family"
+            )
+        options_by_family: dict[str, list[dict[str, Any]]] = {}
+        for raw_family, raw_options in raw_options_by_family.items():
+            family = str(raw_family).strip()
+            if not family or not isinstance(raw_options, (list, tuple)) or not raw_options:
+                raise ValueError(
+                    f"same_root_prerequisite_rules[{target!r}] has invalid "
+                    f"options for family {raw_family!r}"
+                )
+            options: list[dict[str, Any]] = []
+            for raw_option in raw_options:
+                if not isinstance(raw_option, Mapping):
+                    raise ValueError(
+                        f"same_root_prerequisite_rules[{target!r}] prerequisite "
+                        "options must be mappings"
+                    )
+                tool = str(raw_option.get("tool") or "").strip()
+                if not tool or tool == target:
+                    raise ValueError(
+                        f"same_root_prerequisite_rules[{target!r}] option tool "
+                        "must be non-empty and distinct from the target"
+                    )
+                evidence_path = str(raw_option.get("evidence_path") or "").strip()
+                evidence_contract = str(
+                    raw_option.get("evidence_contract") or ""
+                ).strip()
+                if evidence_contract and not evidence_path:
+                    raise ValueError(
+                        f"same_root_prerequisite_rules[{target!r}] evidence "
+                        "contracts require an evidence_path"
+                    )
+                if evidence_contract not in {
+                    "",
+                    "bound_supported_parameter_inventory_v1",
+                }:
+                    raise ValueError(
+                        f"same_root_prerequisite_rules[{target!r}] has unknown "
+                        f"evidence contract {evidence_contract!r}"
+                    )
+                option: dict[str, Any] = {"tool": tool}
+                if evidence_path:
+                    option["evidence_path"] = evidence_path
+                if evidence_contract:
+                    option["evidence_contract"] = evidence_contract
+                options.append(option)
+            options_by_family[family] = options
+        normalized[target] = {
+            "prerequisite_options_by_family": dict(
+                sorted(options_by_family.items())
+            )
+        }
+    return dict(sorted(normalized.items()))
+
+
+def _nested_mapping_value(row: Mapping[str, Any], path: str) -> Any:
+    value: Any = row
+    for part in path.split("."):
+        if not isinstance(value, Mapping) or part not in value:
+            return None
+        value = value[part]
+    return value
+
+
+def _row_satisfies_prerequisite_option(
+    row: Mapping[str, Any], option: Mapping[str, Any]
+) -> bool:
+    if _target_tool(row) != str(option["tool"]):
+        return False
+    evidence_path = str(option.get("evidence_path") or "")
+    if not evidence_path:
+        return True
+    evidence = _nested_mapping_value(row, evidence_path)
+    contract = str(option.get("evidence_contract") or "")
+    if not contract:
+        return evidence is not None
+    if contract == "bound_supported_parameter_inventory_v1":
+        if not isinstance(evidence, Mapping):
+            return False
+        supported = evidence.get("supported_corrections")
+        return bool(
+            evidence.get("context_tool") == "get_parameter_context"
+            and evidence.get("route_status") == "actionable"
+            and str(evidence.get("state_id") or "").strip()
+            and str(evidence.get("state_hash") or "").strip()
+            and isinstance(supported, (list, tuple))
+            and supported
+            and all(
+                isinstance(action, Mapping)
+                and str(action.get("tool") or "") == "correct_parameters"
+                for action in supported
+            )
+        )
+    return False
+
+
+def _same_root_prerequisite_support(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    rules: Mapping[str, Mapping[str, Any]],
+) -> tuple[dict[str, dict[str, dict[str, Any]]], dict[str, dict[str, dict[str, Any]]]]:
+    """Audit paired target/prerequisite support without counting duplicates."""
+
+    materialized = list(rows)
+    support: dict[str, dict[str, dict[str, Any]]] = {}
+    shortfalls: dict[str, dict[str, dict[str, Any]]] = {}
+    for target_tool, rule in sorted(rules.items()):
+        for family, options in rule["prerequisite_options_by_family"].items():
+            target_roots: set[str] = set()
+            prerequisite_roots: set[str] = set()
+            target_rows = 0
+            prerequisite_rows = 0
+            option_rows: Counter[str] = Counter()
+            option_roots: dict[str, set[str]] = defaultdict(set)
+            target_rows_missing_root = 0
+            for row in materialized:
+                if str(_nonmodel_value(row, "scenario_family") or "unknown") != family:
+                    continue
+                tool = _target_tool(row)
+                root = _physical_root(row)
+                if tool == target_tool:
+                    target_rows += 1
+                    if root is None:
+                        target_rows_missing_root += 1
+                    else:
+                        target_roots.add(root)
+                for option in options:
+                    if not _row_satisfies_prerequisite_option(row, option):
+                        continue
+                    option_id = str(option["tool"])
+                    if option.get("evidence_contract"):
+                        option_id += ":" + str(option["evidence_contract"])
+                    prerequisite_rows += 1
+                    option_rows[option_id] += 1
+                    if root is not None:
+                        prerequisite_roots.add(root)
+                        option_roots[option_id].add(root)
+                    break
+            paired_roots = target_roots & prerequisite_roots
+            missing_roots = sorted(target_roots - prerequisite_roots)
+            details: dict[str, Any] = {
+                "prerequisite_options": copy.deepcopy(options),
+                "prerequisite_tools": sorted(
+                    {str(option["tool"]) for option in options}
+                ),
+                "target_bearing_rows": target_rows,
+                "target_distinct_physical_roots": len(target_roots),
+                "target_rows_missing_physical_root": target_rows_missing_root,
+                "prerequisite_bearing_rows": prerequisite_rows,
+                "prerequisite_distinct_physical_roots": len(prerequisite_roots),
+                "prerequisite_option_bearing_rows": dict(sorted(option_rows.items())),
+                "prerequisite_option_distinct_physical_roots": {
+                    option_id: len(roots)
+                    for option_id, roots in sorted(option_roots.items())
+                },
+                "paired_distinct_physical_roots": len(paired_roots),
+                "unpaired_target_distinct_physical_roots": len(missing_roots),
+                "unpaired_target_physical_roots": missing_roots,
+                "passed": not missing_roots and target_rows_missing_root == 0,
+            }
+            support.setdefault(target_tool, {})[family] = details
+            if not details["passed"]:
+                shortfalls.setdefault(target_tool, {})[family] = copy.deepcopy(
+                    details
+                )
+    return support, shortfalls
+
+
 def _training_view_summary(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     materialized = list(rows)
     axes = {
@@ -811,6 +1030,7 @@ def build_balanced_training_view(
     target_tool_scenario_family_minimum_distinct_roots: (
         Mapping[str, Mapping[str, int]] | None
     ) = None,
+    same_root_prerequisite_rules: Mapping[str, Mapping[str, Any]] | None = None,
     require_production_label_eligible: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Build a deterministic multi-axis balanced SFT training view.
@@ -825,8 +1045,10 @@ def build_balanced_training_view(
     and distinct-root support floors. Configured exact target tools and
     tool-by-state/family cells must meet independent physical-root floors in
     both the eligible natural source and the returned view; duplicated
-    placements never increase that support. Explicitly production-ineligible
-    rows are always excluded.
+    placements never increase that support. Configured correction
+    prerequisites must be retained on the same physical root in both the
+    natural source and returned view. Explicitly production-ineligible rows are
+    always excluded.
     """
     source = [dict(row) for row in rows]
     if not source:
@@ -889,6 +1111,9 @@ def build_balanced_training_view(
             target_tool_scenario_family_minimum_distinct_roots,
             name="target_tool_scenario_family_minimum_distinct_roots",
         )
+    )
+    configured_same_root_prerequisite_rules = (
+        _normalize_same_root_prerequisite_rules(same_root_prerequisite_rules)
     )
 
     explicitly_ineligible_rows = [
@@ -963,6 +1188,13 @@ def build_balanced_training_view(
             configured_target_tool_scenario_family_root_floors
         ),
     )
+    (
+        natural_same_root_prerequisite_support,
+        natural_same_root_prerequisite_shortfalls,
+    ) = _same_root_prerequisite_support(
+        eligible,
+        rules=configured_same_root_prerequisite_rules,
+    )
     requested_size = len(eligible) if size is None else int(size)
     if requested_size <= 0:
         raise ValueError("training-view size must be positive")
@@ -1006,6 +1238,31 @@ def build_balanced_training_view(
         }
         roots[index] = _root_key(row, index)
         explicit_physical_roots[index] = _physical_root(row)
+
+    prerequisite_key_by_target_index: dict[int, tuple[str, str, str] | None] = {}
+    prerequisite_keys_by_index: dict[int, set[tuple[str, str, str]]] = {
+        index: set() for index in range(len(eligible))
+    }
+    prerequisite_indices_by_key: dict[tuple[str, str, str], list[int]] = (
+        defaultdict(list)
+    )
+    for target_tool, rule in configured_same_root_prerequisite_rules.items():
+        for family, options in rule["prerequisite_options_by_family"].items():
+            for index, values in axis_values.items():
+                if values["scenario_family"] != family:
+                    continue
+                root = explicit_physical_roots[index]
+                if values["target_tool"] == target_tool:
+                    prerequisite_key_by_target_index[index] = (
+                        (target_tool, family, root) if root is not None else None
+                    )
+                if root is not None and any(
+                    _row_satisfies_prerequisite_option(eligible[index], option)
+                    for option in options
+                ):
+                    key = (target_tool, family, root)
+                    prerequisite_keys_by_index[index].add(key)
+                    prerequisite_indices_by_key[key].append(index)
 
     available_categories = {
         values["tool_category"] for values in axis_values.values()
@@ -1242,6 +1499,7 @@ def build_balanced_training_view(
         requirement: set() for requirement in requirement_floors
     }
     reserved_indices: list[int] = []
+    selected_prerequisite_keys: set[tuple[str, str, str]] = set()
 
     def candidate_score(index: int) -> tuple[float, int]:
         values = axis_values[index]
@@ -1256,10 +1514,53 @@ def build_balanced_training_view(
         secondary_score -= root_counts[roots[index]] / max(int(root_cap), 1)
         return secondary_score, -tie_break[index]
 
+    def selection_bundle(index: int) -> tuple[int, ...] | None:
+        """Return prerequisite-first indices for one selectable target.
+
+        The first selected correction on a governed root consumes a context
+        row in the same atomic choice.  Once that prerequisite is present,
+        correction duplicates may be selected normally.  This makes it
+        impossible for oversampling to amplify a correction before the model
+        has any same-root context target.
+        """
+
+        if occurrences[index] >= int(max_duplicate_count):
+            return None
+        if root_counts[roots[index]] >= int(root_cap):
+            return None
+        if index not in prerequisite_key_by_target_index:
+            return (index,)
+        key = prerequisite_key_by_target_index[index]
+        if key is None:
+            return None
+        if key in selected_prerequisite_keys:
+            return (index,)
+        prerequisite_candidates = [
+            prerequisite_index
+            for prerequisite_index in prerequisite_indices_by_key.get(key, [])
+            if occurrences[prerequisite_index] < int(max_duplicate_count)
+            and root_counts[roots[prerequisite_index]] < int(root_cap)
+        ]
+        if not prerequisite_candidates:
+            return None
+        prerequisite_index = max(prerequisite_candidates, key=candidate_score)
+        bundle = (prerequisite_index, index)
+        added_by_root = Counter(roots[item] for item in bundle)
+        if any(
+            root_counts[root] + additional > int(root_cap)
+            for root, additional in added_by_root.items()
+        ):
+            return None
+        if len(selected) + len(bundle) > requested_size:
+            return None
+        return bundle
+
     def remaining_category_capacity(category: str) -> int:
         capacity_by_root: Counter[str] = Counter()
         for index, values in axis_values.items():
             if values["tool_category"] != category:
+                continue
+            if selection_bundle(index) is None:
                 continue
             remaining_occurrences = int(max_duplicate_count) - occurrences[index]
             if remaining_occurrences > 0:
@@ -1284,8 +1585,17 @@ def build_balanced_training_view(
                 reservation_requirement_roots[requirement].add(
                     explicit_root
                 )
+        selected_prerequisite_keys.update(prerequisite_keys_by_index[index])
         if reserved:
             reserved_indices.append(index)
+
+    def select_bundle(index: int, *, reserved: bool) -> bool:
+        bundle = selection_bundle(index)
+        if bundle is None:
+            return False
+        for bundled_index in bundle:
+            select_index(bundled_index, reserved=reserved)
+        return True
 
     def reservation_blocking_pressure(index: int) -> int:
         """Count unmet requirements that would lose a necessary root slot."""
@@ -1341,6 +1651,7 @@ def build_balanced_training_view(
                 not in reservation_requirement_roots[requirement]
                 and occurrences[index] < int(max_duplicate_count)
                 and root_counts[roots[index]] < int(root_cap)
+                and selection_bundle(index) is not None
             ]
             if not candidates:
                 break
@@ -1379,10 +1690,12 @@ def build_balanced_training_view(
                     deterministic_tie_break,
                 )
 
-            select_index(
-                max(candidates, key=reservation_score),
-                reserved=True,
-            )
+            chosen = max(candidates, key=reservation_score)
+            if not select_bundle(chosen, reserved=True):
+                raise ValueError(
+                    "same-root prerequisite bundle became infeasible during "
+                    "requirement reservation"
+                )
 
     reserved_requirement_roots = {
         requirement: set(roots_for_requirement)
@@ -1418,6 +1731,7 @@ def build_balanced_training_view(
                 if values["tool_category"] == chosen_category
                 and occurrences[index] < int(max_duplicate_count)
                 and root_counts[roots[index]] < int(root_cap)
+                and selection_bundle(index) is not None
             ]
         else:
             # A marginally capacity-aware target can still become jointly
@@ -1429,11 +1743,15 @@ def build_balanced_training_view(
                 for index in range(len(eligible))
                 if occurrences[index] < int(max_duplicate_count)
                 and root_counts[roots[index]] < int(root_cap)
+                and selection_bundle(index) is not None
             ]
         if not candidates:
             raise ValueError("training-view constraints exhausted before reaching requested size")
         chosen = max(candidates, key=candidate_score)
-        select_index(chosen, reserved=False)
+        if not select_bundle(chosen, reserved=False):
+            raise ValueError(
+                "same-root prerequisite bundle became infeasible during balancing"
+            )
 
     # Stable hash ordering makes the persisted view byte-reproducible without
     # retaining curriculum-like blocks from greedy selection.
@@ -1471,6 +1789,13 @@ def build_balanced_training_view(
         minimum_distinct_roots=(
             configured_target_tool_scenario_family_root_floors
         ),
+    )
+    (
+        training_view_same_root_prerequisite_support,
+        training_view_same_root_prerequisite_shortfalls,
+    ) = _same_root_prerequisite_support(
+        view,
+        rules=configured_same_root_prerequisite_rules,
     )
     achieved_counts = {
         axis: dict(sorted(counts.items())) for axis, counts in observed.items()
@@ -1539,6 +1864,8 @@ def build_balanced_training_view(
         and not training_view_target_tool_state_class_unique_root_shortfalls
         and not natural_target_tool_scenario_family_unique_root_shortfalls
         and not training_view_target_tool_scenario_family_unique_root_shortfalls
+        and not natural_same_root_prerequisite_shortfalls
+        and not training_view_same_root_prerequisite_shortfalls
         and feasibility_shortfall_total == 0
         and achieved_tool_category_target_deviation
         <= float(maximum_tool_category_target_deviation)
@@ -1613,6 +1940,10 @@ def build_balanced_training_view(
                         "target_tool_x_scenario_family_distinct_physical_roots",
                         configured_target_tool_scenario_family_root_floors,
                     ),
+                    (
+                        "same_root_target_prerequisites",
+                        configured_same_root_prerequisite_rules,
+                    ),
                 )
                 if enabled
             ],
@@ -1620,7 +1951,9 @@ def build_balanced_training_view(
             "capacity_aware_target_axes": ["tool_category", *secondary_axes],
             "capacity_aware_policy": "weighted_then_clip_and_redistribute_v1",
             "requirement_aware_reservation_policy": (
-                "constrained_first_distinct_physical_root_preselection_v1"
+                "constrained_first_with_same_root_prerequisites_v2"
+                if configured_same_root_prerequisite_rules
+                else "constrained_first_distinct_physical_root_preselection_v1"
             ),
             "tool_category_natural_support_floor": {
                 "minimum_natural_target_bearing_rows": int(
@@ -1639,6 +1972,9 @@ def build_balanced_training_view(
             "target_tool_scenario_family_minimum_distinct_physical_roots": (
                 configured_target_tool_scenario_family_root_floors
             ),
+            "same_root_prerequisite_rules": copy.deepcopy(
+                configured_same_root_prerequisite_rules
+            ),
             "production_label_eligibility_policy": (
                 "explicit_true_required"
                 if require_production_label_eligible
@@ -1647,7 +1983,9 @@ def build_balanced_training_view(
         },
         "requirement_aware_reservation": {
             "policy": (
-                "constrained_first_distinct_physical_root_preselection_v1"
+                "constrained_first_with_same_root_prerequisites_v2"
+                if configured_same_root_prerequisite_rules
+                else "constrained_first_distinct_physical_root_preselection_v1"
             ),
             "reserved_rows": len(reserved_indices),
             "feasible_requirements_satisfied_by_reservation": all(
@@ -1682,6 +2020,18 @@ def build_balanced_training_view(
         "target_tool_unique_root_support_passed": (
             not natural_target_tool_unique_root_shortfalls
             and not training_view_target_tool_unique_root_shortfalls
+        ),
+        "same_root_prerequisite_support": {
+            "eligible_natural_source": natural_same_root_prerequisite_support,
+            "training_view": training_view_same_root_prerequisite_support,
+        },
+        "same_root_prerequisite_shortfalls": {
+            "eligible_natural_source": natural_same_root_prerequisite_shortfalls,
+            "training_view": training_view_same_root_prerequisite_shortfalls,
+        },
+        "same_root_prerequisite_support_passed": (
+            not natural_same_root_prerequisite_shortfalls
+            and not training_view_same_root_prerequisite_shortfalls
         ),
         "critical_joint_unique_root_support": {
             "target_tool_x_state_class": {
@@ -1748,5 +2098,222 @@ def build_balanced_training_view(
         "release_ready": passed,
         "before": _training_view_summary(target_bearing_source),
         "after": _training_view_summary(view),
+    }
+    return view, report
+
+
+def build_dagger1_training_view(
+    d0_rows: Iterable[Mapping[str, Any]],
+    d1_rows: Iterable[Mapping[str, Any]],
+    *,
+    size: int | None = None,
+    seed: int = 0,
+    d1_share: float = 0.25,
+    minimum_d1_share: float = 0.20,
+    maximum_d1_share: float = 0.30,
+    max_duplicate_count: int = 2,
+    max_rows_per_root: int = 8,
+    d0_training_view_kwargs: Mapping[str, Any] | None = None,
+    d1_training_view_kwargs: Mapping[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Build and gate a deterministic production D0 union D1 view.
+
+    The two sources are sampled independently to make the learner-recovery
+    allocation exact, then deterministically interleaved.  Physical roots must
+    be disjoint across sources, so enforcing the same per-root and per-example
+    caps within each source also enforces them globally.
+    """
+    d0 = [dict(row) for row in d0_rows]
+    d1 = [dict(row) for row in d1_rows]
+    if not d0 or not d1:
+        raise ValueError("D0 and D1 must both contain at least one row")
+    if not 0.0 < float(minimum_d1_share) <= float(maximum_d1_share) < 1.0:
+        raise ValueError("D1 share band must satisfy 0 < minimum <= maximum < 1")
+    if not float(minimum_d1_share) <= float(d1_share) <= float(maximum_d1_share):
+        raise ValueError("configured D1 share is outside the allowed share band")
+    if int(max_duplicate_count) != max_duplicate_count or int(max_duplicate_count) < 1:
+        raise ValueError("max_duplicate_count must be a positive integer")
+    if int(max_rows_per_root) != max_rows_per_root or int(max_rows_per_root) < 1:
+        raise ValueError("max_rows_per_root must be a positive integer")
+
+    source_roots: dict[str, set[str]] = {"d0": set(), "d1": set()}
+    for source_name, rows in (("d0", d0), ("d1", d1)):
+        for index, row in enumerate(rows):
+            if row.get("production_label_eligible") is not True:
+                raise ValueError(
+                    f"{source_name.upper()} row {index} is not explicitly "
+                    "production-label eligible"
+                )
+            root = _physical_root(row)
+            if root is None:
+                raise ValueError(
+                    f"{source_name.upper()} row {index} lacks a physical root"
+                )
+            source_roots[source_name].add(root)
+            if not str(row.get("example_id") or "").strip():
+                raise ValueError(
+                    f"{source_name.upper()} row {index} lacks an example_id"
+                )
+    overlap = sorted(source_roots["d0"] & source_roots["d1"])
+    if overlap:
+        raise ValueError(
+            "D0 and D1 physical roots must be disjoint: " + ", ".join(overlap)
+        )
+
+    for index, row in enumerate(d1):
+        labels = row.get("labels") if isinstance(row.get("labels"), Mapping) else {}
+        try:
+            beta = float(row.get("collection_beta", labels.get("collection_beta")))
+            iteration = int(row.get("iteration"))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                f"D1 row {index} lacks a valid iteration/beta contract"
+            ) from exc
+        role = row.get("collection_role", labels.get("collection_role"))
+        if role != "training" or not 0.25 <= beta <= 0.5 or iteration < 1:
+            raise ValueError(
+                f"D1 row {index} is not from an approved mixed-policy "
+                "training collection"
+            )
+        if row.get("state_origin") != "learner_policy":
+            raise ValueError(f"D1 row {index} is not learner-visited")
+        if row.get("recovery_label_contract") != "observable_rank_one_learner_state_v1":
+            raise ValueError(f"D1 row {index} lacks the recovery label contract")
+        if row.get("collection_training_eligible") is not True:
+            raise ValueError(
+                f"D1 row {index} is not covered by a passing collection gate"
+            )
+
+    total_size = len(d0) + len(d1) if size is None else int(size)
+    if isinstance(size, bool) or total_size < 2 or (size is not None and total_size != size):
+        raise ValueError("size must be an integer of at least two")
+    d1_size = int(math.floor(total_size * float(d1_share) + 0.5))
+    d0_size = total_size - d1_size
+    if d0_size < 1 or d1_size < 1:
+        raise ValueError("D0/D1 allocation must retain both sources")
+    allocated_share = d1_size / total_size
+    if not float(minimum_d1_share) <= allocated_share <= float(maximum_d1_share):
+        raise ValueError(
+            "integer D1 allocation falls outside the allowed share band; "
+            "increase the requested size"
+        )
+
+    blocked_kwargs = {
+        "size",
+        "seed",
+        "max_duplicate_count",
+        "max_rows_per_root",
+        "require_production_label_eligible",
+    }
+
+    def source_view(
+        rows: list[dict[str, Any]],
+        *,
+        source_name: str,
+        requested_size: int,
+        kwargs: Mapping[str, Any] | None,
+        source_seed: int,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        configured = dict(kwargs or {})
+        forbidden = sorted(blocked_kwargs & set(configured))
+        if forbidden:
+            raise ValueError(
+                f"{source_name}_training_view_kwargs cannot override: "
+                + ", ".join(forbidden)
+            )
+        builder_kwargs = {
+            "minimum_tool_category_natural_rows": 0,
+            "minimum_tool_category_distinct_roots": 0,
+            **configured,
+        }
+        view, report = build_balanced_training_view(
+            rows,
+            size=requested_size,
+            seed=source_seed,
+            max_duplicate_count=int(max_duplicate_count),
+            max_rows_per_root=int(max_rows_per_root),
+            require_production_label_eligible=True,
+            **builder_kwargs,
+        )
+        for row in view:
+            row["replay_source"] = source_name
+        return view, report
+
+    d0_view, d0_report = source_view(
+        d0,
+        source_name="d0_bc0",
+        requested_size=d0_size,
+        kwargs=d0_training_view_kwargs,
+        source_seed=int(seed),
+    )
+    d1_view, d1_report = source_view(
+        d1,
+        source_name="d1_recovery",
+        requested_size=d1_size,
+        kwargs=d1_training_view_kwargs,
+        source_seed=int(seed) + 1,
+    )
+    view = d0_view + d1_view
+    random.Random(int(seed)).shuffle(view)
+
+    root_counts = Counter(_physical_root(row) for row in view)
+    example_counts = Counter(str(row["example_id"]) for row in view)
+    root_violations = {
+        str(root): count
+        for root, count in sorted(root_counts.items(), key=lambda item: str(item[0]))
+        if count > int(max_rows_per_root)
+    }
+    duplicate_violations = {
+        example_id: count
+        for example_id, count in sorted(example_counts.items())
+        if count > int(max_duplicate_count)
+    }
+    observed_d1 = sum(row.get("replay_source") == "d1_recovery" for row in view)
+    observed_share = observed_d1 / len(view)
+    share_passed = (
+        observed_d1 == d1_size
+        and float(minimum_d1_share) <= observed_share <= float(maximum_d1_share)
+    )
+    passed = bool(
+        d0_report.get("release_ready")
+        and d1_report.get("release_ready")
+        and share_passed
+        and not root_violations
+        and not duplicate_violations
+        and all(row.get("production_label_eligible") is True for row in view)
+    )
+    report = {
+        "schema_version": 1,
+        "builder_contract": "deterministic_d0_d1_balanced_union_v1",
+        "seed": int(seed),
+        "requested_size": total_size,
+        "returned_size": len(view),
+        "source_allocation": {
+            "d0_bc0_rows": len(view) - observed_d1,
+            "d1_recovery_rows": observed_d1,
+            "configured_d1_share": float(d1_share),
+            "observed_d1_share": observed_share,
+            "minimum_d1_share": float(minimum_d1_share),
+            "maximum_d1_share": float(maximum_d1_share),
+            "passed": share_passed,
+        },
+        "physical_root_contract": {
+            "sources_disjoint": True,
+            "max_rows_per_root": int(max_rows_per_root),
+            "violations": root_violations,
+            "passed": not root_violations,
+        },
+        "duplicate_contract": {
+            "max_duplicate_count": int(max_duplicate_count),
+            "violations": duplicate_violations,
+            "passed": not duplicate_violations,
+        },
+        "production_label_eligibility_passed": all(
+            row.get("production_label_eligible") is True for row in view
+        ),
+        "d0_training_view": d0_report,
+        "d1_training_view": d1_report,
+        "passed": passed,
+        "release_ready": passed,
     }
     return view, report

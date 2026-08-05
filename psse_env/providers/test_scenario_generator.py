@@ -615,6 +615,11 @@ class ValidationGateTests(unittest.TestCase):
             seed=5,
             source_partition="evaluation",
         )
+        dagger1 = Round0ScenarioGenerator(
+            seed=5,
+            source_partition="train",
+            parameter_ranking_dominance_threshold=1.0,
+        )
 
         self.assertIs(training._enforce_parameter_ranking_dominance, True)
         self.assertEqual(
@@ -625,6 +630,19 @@ class ValidationGateTests(unittest.TestCase):
         self.assertEqual(
             evaluation._parameter_gate_provider.parameter_ranking_dominance_threshold,
             1.0,
+        )
+        self.assertIs(dagger1._enforce_parameter_ranking_dominance, True)
+        self.assertEqual(
+            dagger1._parameter_gate_provider.parameter_ranking_dominance_threshold,
+            1.0,
+        )
+        self.assertEqual(
+            dagger1.report()["parameter_ranking_admission"],
+            {
+                "contract": "distinct_line_abs_lambda_dominance_v1",
+                "enforced": True,
+                "threshold": 1.0,
+            },
         )
 
     def test_mixed_parameter_probe_preserves_observable_scan_metadata(self) -> None:

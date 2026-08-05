@@ -519,6 +519,38 @@ class ExpertPolicyOracle:
                 # scenario hints are used only when no observable provider
                 # contract exists.
                 hints = observable_corrections
+                # Legacy compact observations may retain only freshness flags
+                # while the exact provider inventory lives in their visible
+                # history.  Rehydrate that same-state inventory on this
+                # private copy so the authoritative process gate applies the
+                # same exact-support contract as it does to modern durable
+                # ``fresh_context_evidence`` observations.
+                active_id = policy.get("active_state_id")
+                evidence = policy_safe_copy(
+                    dict(policy.get("fresh_context_evidence") or {})
+                )
+                correction_families = {
+                    CORRECT_MEASUREMENTS: "measurement",
+                    CORRECT_PARAMETERS: "parameter",
+                    CORRECT_TOPOLOGY: "topology",
+                }
+                grouped: dict[str, list[dict[str, Any]]] = {}
+                for action in observable_corrections:
+                    normalized = safe_normalize_action(action)
+                    family = correction_families.get(normalized["tool"])
+                    if family is not None:
+                        grouped.setdefault(family, []).append(normalized)
+                for family, supported in grouped.items():
+                    family_evidence = evidence.get(family)
+                    if not isinstance(family_evidence, Mapping):
+                        family_evidence = {}
+                    hydrated = policy_safe_copy(dict(family_evidence))
+                    hydrated["state_id"] = active_id
+                    hydrated["supported_corrections"] = supported
+                    if family in {"parameter", "topology"}:
+                        hydrated.setdefault("route_status", "actionable")
+                    evidence[family] = hydrated
+                policy["fresh_context_evidence"] = evidence
         return _ExpertContext(
             policy_state=policy,
             history=history_items,
@@ -1069,8 +1101,14 @@ class ExpertPolicyOracle:
         if active_id is None:
             return set()
         family_wide_failures = {
-            CORRECT_PARAMETERS: {"parameter_scans_missing"},
-            CORRECT_TOPOLOGY: {"topology_correction_unsupported"},
+            CORRECT_PARAMETERS: {
+                "parameter_scans_missing",
+                "correction_route_not_actionable",
+            },
+            CORRECT_TOPOLOGY: {
+                "topology_correction_unsupported",
+                "correction_route_not_actionable",
+            },
         }
         events = list(history)
         last_tool = cls._get(policy, "last_tool")

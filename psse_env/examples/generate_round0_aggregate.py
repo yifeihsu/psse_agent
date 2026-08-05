@@ -338,6 +338,34 @@ BC0_CRITICAL_TARGET_TOOL_SCENARIO_FAMILY_MINIMUM_DISTINCT_ROOTS: dict[
     },
 }
 
+# A parameter correction without its same-root observable context teaches a
+# direct correction shortcut.  Pure parameter roots require the literal
+# parameter-context decision.  In measurement+parameter roots, a later
+# measurement-context call may atomically expose the same state-bound parameter
+# inventory under ``branch_route_screening.parameter``; that auditable bundled
+# route is an equivalent prerequisite.  Duplicated correction placements are
+# permitted only after one valid same-root prerequisite is retained.
+BC0_SAME_ROOT_PREREQUISITE_RULES: dict[str, dict[str, Any]] = {
+    "correct_parameters": {
+        "prerequisite_options_by_family": {
+            "measurement+parameter": [
+                {"tool": "get_parameter_context"},
+                {
+                    "tool": "get_measurement_context",
+                    "evidence_path": (
+                        "tool_output.tool_metrics."
+                        "branch_route_screening.parameter"
+                    ),
+                    "evidence_contract": (
+                        "bound_supported_parameter_inventory_v1"
+                    ),
+                },
+            ],
+            "parameter": [{"tool": "get_parameter_context"}],
+        },
+    }
+}
+
 
 class ObservableBaselinePolicy:
     """Scripted round-0 stand-in; its proposals are logged, never trained on."""
@@ -1136,6 +1164,7 @@ def _generation_descriptor(
                     "target_tool_distinct_physical_roots",
                     "target_tool_x_state_class_distinct_physical_roots",
                     "target_tool_x_scenario_family_distinct_physical_roots",
+                    "same_root_target_prerequisites",
                 ],
                 "deviation_gated_target_axes": ["tool_category"],
                 "capacity_aware_target_axes": [
@@ -1150,7 +1179,7 @@ def _generation_descriptor(
                     "weighted_then_clip_and_redistribute_v1"
                 ),
                 "requirement_aware_reservation_policy": (
-                    "constrained_first_distinct_physical_root_preselection_v1"
+                    "constrained_first_with_same_root_prerequisites_v2"
                 ),
                 "configured_tool_category_weights": dict(
                     DEFAULT_TRAINING_TOOL_CATEGORY_WEIGHTS
@@ -1175,6 +1204,9 @@ def _generation_descriptor(
                     copy.deepcopy(
                         BC0_CRITICAL_TARGET_TOOL_SCENARIO_FAMILY_MINIMUM_DISTINCT_ROOTS
                     )
+                ),
+                "same_root_prerequisite_rules": copy.deepcopy(
+                    BC0_SAME_ROOT_PREREQUISITE_RULES
                 ),
                 "production_label_eligibility_policy": (
                     "explicit_true_required"
@@ -2046,6 +2078,7 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         target_tool_scenario_family_minimum_distinct_roots=(
             BC0_CRITICAL_TARGET_TOOL_SCENARIO_FAMILY_MINIMUM_DISTINCT_ROOTS
         ),
+        same_root_prerequisite_rules=BC0_SAME_ROOT_PREREQUISITE_RULES,
         require_production_label_eligible=True,
     )
     exported_train_view = examples_to_chat_sft(
@@ -2259,6 +2292,8 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
             f"{training_view_report.get('target_tool_unique_root_shortfalls')}, "
             "critical_joint_root_shortfalls="
             f"{training_view_report.get('critical_joint_unique_root_shortfalls')}, "
+            "same_root_prerequisite_shortfalls="
+            f"{training_view_report.get('same_root_prerequisite_shortfalls')}, "
             "feasibility_shortfall="
             f"{training_view_report.get('necessary_feasibility_shortfall_total')}, "
             "tool-category deviation="

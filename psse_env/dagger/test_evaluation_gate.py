@@ -2038,6 +2038,36 @@ class EvaluationGateV2Tests(unittest.TestCase):
             result.evidence_failures,
         )
 
+    def test_model_role_rejects_unapproved_accelerator_class(self) -> None:
+        base_artifact = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="base/gemma",
+            model_revision=MODEL_REVISION,
+            accelerator_name="NVIDIA A100-SXM4-80GB",
+        )
+
+        result = _validate(
+            base_artifact,
+            role="base-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
+            explicit_identity=None,
+            model_id="base/gemma",
+            model_revision=MODEL_REVISION,
+        )
+
+        self.assertFalse(result.evidence_passed)
+        self.assertTrue(
+            any(
+                "not an approved release accelerator" in failure
+                for failure in result.evidence_failures
+            ),
+            result.evidence_failures,
+        )
+        self.assertEqual(result.observed["accelerator_classes"], [])
+
     def test_model_role_requires_bf16_and_exactly_one_device(self) -> None:
         def disable_bf16(artifact: dict) -> None:
             artifact["provenance"]["runtime_environment"]["accelerator"][
@@ -2094,58 +2124,80 @@ class EvaluationGateV2Tests(unittest.TestCase):
                     result.evidence_failures,
                 )
 
-    def test_checkpoint_and_base_must_use_same_accelerator_class(self) -> None:
-        checkpoint_artifact = _artifact(
-            self.suite_path,
-            self.contract,
-            explicit_identity=None,
-            model_id="checkpoint/bc0",
-            model_revision=MODEL_REVISION,
-            accelerator_name="NVIDIA H200",
-        )
-        reference_artifact = _artifact(
-            self.suite_path,
-            self.contract,
-            explicit_identity=None,
-            model_id="base/gemma",
-            model_revision=MODEL_REVISION,
-            accelerator_name="NVIDIA H100 80GB HBM3",
-        )
-
-        result = _validate(
-            checkpoint_artifact,
-            role="checkpoint-promotion",
-            policy=self.policy,
-            suite_path=self.suite_path,
-            explicit_identity=None,
-            model_id="checkpoint/bc0",
-            model_revision=MODEL_REVISION,
-            reference_artifact=reference_artifact,
-            reference_model_id="base/gemma",
-            reference_model_revision=MODEL_REVISION,
-        )
-
-        self.assertFalse(result.evidence_passed)
-        self.assertFalse(result.comparison_passed)
-        self.assertTrue(
-            any(
-                "accelerator_class" in failure
-                for failure in result.evidence_failures
+    def test_checkpoint_and_base_allow_different_approved_accelerator_classes(
+        self,
+    ) -> None:
+        cases = (
+            ("NVIDIA H200", "NVIDIA H100 80GB HBM3", "h200", "h100"),
+            (
+                "NVIDIA H100 80GB HBM3",
+                "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+                "h100",
+                "rtx6000",
             ),
-            result.evidence_failures,
+            (
+                "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+                "NVIDIA H200",
+                "rtx6000",
+                "h200",
+            ),
         )
-        self.assertEqual(
-            result.observed["paired_nonregression"][
-                "candidate_accelerator_classes"
-            ],
-            ["h200"],
-        )
-        self.assertEqual(
-            result.observed["paired_nonregression"][
-                "reference_accelerator_classes"
-            ],
-            ["h100"],
-        )
+        for candidate_name, reference_name, candidate_class, reference_class in cases:
+            with self.subTest(
+                candidate_class=candidate_class,
+                reference_class=reference_class,
+            ):
+                checkpoint_artifact = _artifact(
+                    self.suite_path,
+                    self.contract,
+                    explicit_identity=None,
+                    model_id="checkpoint/bc0",
+                    model_revision=MODEL_REVISION,
+                    accelerator_name=candidate_name,
+                )
+                reference_artifact = _artifact(
+                    self.suite_path,
+                    self.contract,
+                    explicit_identity=None,
+                    model_id="base/gemma",
+                    model_revision=MODEL_REVISION,
+                    accelerator_name=reference_name,
+                )
+
+                result = _validate(
+                    checkpoint_artifact,
+                    role="checkpoint-promotion",
+                    policy=self.policy,
+                    suite_path=self.suite_path,
+                    explicit_identity=None,
+                    model_id="checkpoint/bc0",
+                    model_revision=MODEL_REVISION,
+                    reference_artifact=reference_artifact,
+                    reference_model_id="base/gemma",
+                    reference_model_revision=MODEL_REVISION,
+                )
+
+                self.assertTrue(result.passed, result.failures)
+                self.assertTrue(result.evidence_passed)
+                self.assertTrue(result.performance_passed)
+                self.assertTrue(result.comparison_passed)
+                paired = result.observed["paired_nonregression"]
+                self.assertEqual(
+                    paired["candidate_accelerator_classes"],
+                    [candidate_class],
+                )
+                self.assertEqual(
+                    paired["reference_accelerator_classes"],
+                    [reference_class],
+                )
+                self.assertEqual(
+                    paired["accelerator_compatibility"],
+                    {
+                        "policy": "individually_approved_release_classes",
+                        "compatible": True,
+                        "same_class": False,
+                    },
+                )
 
     def test_expert_cpu_artifact_does_not_require_cuda_attestation(self) -> None:
         expert_artifact = _artifact(self.suite_path, self.contract)

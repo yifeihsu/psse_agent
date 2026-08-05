@@ -38,16 +38,16 @@ def test_setup_installs_wandb_only_when_explicitly_requested() -> None:
     assert "verified optional W&B monitoring dependency" in setup
 
 
-def test_launcher_activates_wandb_only_for_round0() -> None:
+def test_launcher_activates_wandb_only_for_training_rounds() -> None:
     launcher = LAUNCHER.read_text(encoding="utf-8")
     assert "ENABLE_WANDB=${ENABLE_WANDB:-0}" in launcher
     assert "WANDB_ACTIVE=0" in launcher
     assert (
-        'if [[ "$ENABLE_WANDB" == "1" && "$STAGE" == "round0" ]]; then'
+        'if [[ "$ENABLE_WANDB" == "1" && ( "$STAGE" == "round0" || "$STAGE" == "round1" ) ]]; then'
         in launcher
     )
     assert (
-        "inactive for STAGE=$STAGE (monitoring starts only at round0)"
+        "inactive for STAGE=$STAGE (monitoring starts at round0 or round1)"
         in launcher
     )
     assert re.search(
@@ -76,8 +76,13 @@ def test_launcher_sets_bounded_nonsecret_wandb_contract() -> None:
         "WANDB_ARTIFACT_DIR",
     ):
         assert contract in launcher
+    assert 'if [[ "$STAGE" == "round1" ]]; then' in launcher
+    assert "WANDB_ROUND_NAME=round1" in launcher
+    assert "WANDB_ROUND_SHORT=r1" in launcher
+    assert "WANDB_ROUND_NAME=round0" in launcher
+    assert "WANDB_ROUND_SHORT=r0" in launcher
     assert (
-        "WANDB_RUN_ID_DEFAULT=bc0-r0-$WANDB_SOURCE_SHORT-$WANDB_SLURM_JOB_ID"
+        "WANDB_RUN_ID_DEFAULT=bc0-$WANDB_ROUND_SHORT-$WANDB_SOURCE_SHORT-$WANDB_SLURM_JOB_ID"
         in launcher
     )
     assert "WANDB_RUN_ID=${WANDB_RUN_ID:-$WANDB_RUN_ID_DEFAULT}" in launcher

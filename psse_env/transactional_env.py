@@ -413,6 +413,7 @@ class TransactionalPSSEEnv:
         self.terminal_outcome: str | None = None
         self._episode_counter = 0
         self._oracle_payload: dict[str, Any] = {}
+        self._audited_evaluation_setup_correction = False
         if self.production_dataset_mode:
             self.validate_production_configuration()
 
@@ -763,6 +764,41 @@ class TransactionalPSSEEnv:
         observation = self.get_policy_observation(history, history_window=history_window).as_dict()
         return {"state_summary": observation, "history_window": observation["history_window"]}
 
+    def apply_audited_evaluation_setup_correction(
+        self,
+        action: Mapping[str, Any] | str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Apply one private frozen-suite partial-state setup correction.
+
+        Historical partial-success interventions contain the exact physical
+        measurement update needed to construct a committed partial repair.
+        That audit-only update intentionally is not a model-visible supported
+        target.  Keep the exception narrower than normal execution: only a
+        full measurement update is accepted, nesting is forbidden, and all
+        ordinary lifecycle, state-reference, context-freshness, executor, and
+        mutation checks still run through :meth:`step`.
+        """
+
+        normalized = safe_normalize_action(action)
+        arguments = normalized["arguments"]
+        updates = arguments.get("measurement_updates")
+        if (
+            normalized["tool"] != CORRECT_MEASUREMENTS
+            or not isinstance(updates, Mapping)
+            or not updates
+            or arguments.get("suspect_group") is not None
+        ):
+            raise ValueError(
+                "audited evaluation setup accepts only a full measurement update"
+            )
+        if self._audited_evaluation_setup_correction:
+            raise RuntimeError("nested audited evaluation setup is forbidden")
+        self._audited_evaluation_setup_correction = True
+        try:
+            return self.step(normalized)
+        finally:
+            self._audited_evaluation_setup_correction = False
+
     def step(self, action: Any) -> tuple[dict[str, Any], dict[str, Any]]:
         normalized = safe_normalize_action(action)
         before_hash = self.store.episode_hash()
@@ -785,6 +821,15 @@ class TransactionalPSSEEnv:
             return self.current_state(), output
 
         validity_state = self.current_state()
+        # Production corrections must be chosen from the exact same-state
+        # provider inventory even when a caller supplies a custom process
+        # oracle rather than the release factory's hydrated configuration.
+        validity_state["require_context_supported_corrections"] = bool(
+            self.production_dataset_mode
+        )
+        validity_state["audited_evaluation_setup_correction"] = bool(
+            self._audited_evaluation_setup_correction
+        )
         # Synthetic terminal eligibility remains an oracle-side process fact;
         # it is deliberately absent from PolicyObservation.
         validity_state["oracle_terminal_eligible"] = bool(
@@ -1808,8 +1853,14 @@ class TransactionalPSSEEnv:
                     exhausted_recovery_targets.add(signature)
 
             family_wide_failures = {
-                CORRECT_PARAMETERS: {"parameter_scans_missing"},
-                CORRECT_TOPOLOGY: {"topology_correction_unsupported"},
+                CORRECT_PARAMETERS: {
+                    "parameter_scans_missing",
+                    "correction_route_not_actionable",
+                },
+                CORRECT_TOPOLOGY: {
+                    "topology_correction_unsupported",
+                    "correction_route_not_actionable",
+                },
             }
             process_failure_codes = {
                 "schema_error",
@@ -2475,12 +2526,19 @@ class TransactionalPSSEEnv:
             result = dict(copy.deepcopy(raw_result))
             status = str(result.pop("execution_status", "success"))
             if status != "success":
+                error_code = str(
+                    result.pop("error_code", "correction_execution_failure")
+                )
+                error_detail = result.pop("error_detail", None)
                 return self._standard_output(
                     execution_status="failure",
-                    error_code=str(result.pop("error_code", "correction_execution_failure")),
-                    error_detail=result.pop("error_detail", None),
+                    error_code=error_code,
+                    error_detail=error_detail,
                     state_mutated=False,
                     tool_metrics=policy_safe_copy(result),
+                    valid_next_actions=self.process_oracle.repair_actions(
+                        self.current_state(), error_code, error_detail
+                    ),
                 )
             result.pop("error_code", None)
             result.pop("error_detail", None)
@@ -2966,6 +3024,8 @@ class TransactionalPSSEEnv:
         self.context_flags[f"{family}_context_state_id"] = context_state_id
         context_evidence = dict(self.context_flags.get("fresh_context_evidence") or {})
         durable_metrics = {
+            "context_tool": tool,
+            "context_binding": "direct_context",
             "state_id": context_state_id,
             "state_hash": active_payload["state_hash"],
             "evidence_source": metrics.get("evidence_source"),
@@ -3051,6 +3111,11 @@ class TransactionalPSSEEnv:
                     context_state_id
                 )
                 bundled_durable = {
+                    "context_tool": bundled_tool,
+                    "context_binding": (
+                        f"branch_route_screening.{bundled_family}"
+                    ),
+                    "bundled_by_context_tool": tool,
                     "state_id": context_state_id,
                     "state_hash": active_payload["state_hash"],
                     "evidence_source": raw_evidence.get("evidence_source"),
