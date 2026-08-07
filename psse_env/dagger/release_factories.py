@@ -327,7 +327,7 @@ def _observable_candidate_disposition(
         target_metric is not None
         and target_threshold is not None
         and target_threshold >= 0.0
-        and target_metric <= target_threshold
+        and target_metric < target_threshold
     )
 
     global_resolved_value = verification.get(
@@ -392,6 +392,22 @@ def _observable_candidate_disposition(
     if branch_material_progress and global_resolved is False:
         return "commit"
 
+    # Deployment verification exposes an explicit target metric and threshold.
+    # When that target is still at or above its threshold, the deployment
+    # CandidateQualityOracle rejects the candidate unless a parameter/topology
+    # branch satisfies the narrowly bounded material-progress exception above.
+    # Falling through to the generic positive-progress rule used to turn any
+    # small improvement into a commit, even though the environment would
+    # (correctly) reject that same candidate.  Keep the observable
+    # reconstruction aligned with the deployment gate and fail closed.
+    if (
+        target_metric is not None
+        and target_threshold is not None
+        and target_threshold >= 0.0
+        and target_metric >= target_threshold
+    ):
+        return "rollback"
+
     if target_progress is not None and target_progress < -0.05:
         return "rollback"
     target_improved = target_progress is not None and target_progress >= 0.05
@@ -407,10 +423,34 @@ def _observable_candidate_disposition(
 def _observable_candidate_disposition_action(
     observation: Mapping[str, Any], history: list[Mapping[str, Any]]
 ) -> dict[str, Any] | None:
+    candidate_id = str(observation.get("candidate_state_id") or "").strip()
+    # A structured process failure is newer and more authoritative than the
+    # verification metrics that preceded it.  In particular, after a rejected
+    # commit the candidate remains open and verified, so recomputing only from
+    # stale verification evidence previously repeated commit_state until the
+    # step budget expired.  Consume the policy-visible repair action emitted
+    # by the environment before reconstructing a disposition.
+    last_output = observation.get("last_tool_output")
+    if (
+        candidate_id
+        and observation.get("last_tool") == COMMIT_STATE
+        and isinstance(last_output, Mapping)
+        and last_output.get("execution_status") == "failure"
+    ):
+        for raw_action in last_output.get("valid_next_actions") or []:
+            if not isinstance(raw_action, Mapping):
+                continue
+            repair = safe_normalize_action(raw_action)
+            if (
+                repair["tool"] == ROLLBACK_STATE
+                and str(repair["arguments"].get("candidate_state_id") or "")
+                == candidate_id
+            ):
+                return repair
+
     disposition = _observable_candidate_disposition(observation, history)
     if disposition is None:
         return None
-    candidate_id = str(observation.get("candidate_state_id") or "").strip()
     if not candidate_id:
         return invalid_action("verified_candidate_id_missing")
     if disposition == "commit":

@@ -599,6 +599,7 @@ python scripts/collect_dagger1_recovery.py \
   --model-id "$LEARNER_ADAPTER" \
   --model-revision "$LEARNER_REVISION" \
   --collection-pass training --beta 0.25 \
+  --failed-collection-dir "$D1_DIR/training_beta025.failed-collection" \
   --require-recommended-target
 
 python scripts/build_dagger1_training_aggregate.py \
@@ -608,6 +609,15 @@ python scripts/build_dagger1_training_aggregate.py \
   --output-dir data/round1_aggregate_release \
   --d1-share 0.25
 ```
+
+If the strict mixed-policy gate fails, the command exits nonzero and leaves
+`training_beta025.jsonl`, its all-row ledger, and its production manifest
+absent. Instead it atomically publishes the explicitly named
+`training_beta025.failed-collection/` directory with checksummed,
+training-ineligible candidate rows, all visited rows, and structured gate
+reports. Use that bundle to diagnose the failure; never pass it to the Round-1
+aggregate builder. Both successful production outputs and failed diagnostic
+bundles are write-once, so choose a new attempt path for each rerun.
 
 The collection manifest reports the default Round-1 replay capacity and the
 largest feasible total view under the duplicate and per-root caps. If the

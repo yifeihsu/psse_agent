@@ -13,6 +13,12 @@ from unittest.mock import patch
 from psse_env.dagger.collect_dagger1 import (
     DAGGER1_SCENARIO_BUILDER_CONTRACT,
     DEFAULT_FORBIDDEN_SUITE,
+    FAILED_COLLECTION_ALL_ROWS,
+    FAILED_COLLECTION_ARTIFACT_TYPE,
+    FAILED_COLLECTION_CANDIDATE_ROWS,
+    FAILED_COLLECTION_CHECKSUMS,
+    FAILED_COLLECTION_EVIDENCE,
+    failed_strict_collection_gate_names,
     frozen_physical_roots,
     main as collect_dagger1_main,
     recommended_collection_gate,
@@ -26,6 +32,7 @@ from psse_env.dagger.collect_dagger1 import (
     validate_training_learner_seed,
     validate_training_source_report,
     validate_training_scenarios,
+    write_failed_collection_evidence_bundle,
 )
 from psse_env.dagger.build_dagger1_development_holdout import (
     DAGGER1_DEVELOPMENT_HOLDOUT_CONTRACT,
@@ -259,6 +266,41 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
             )
         self.assertEqual(raised.exception.code, 2)
         self.assertIn("requires --development-holdout", stderr.getvalue())
+
+    def test_strict_training_cli_requires_failed_collection_directory(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+            collect_dagger1_main(
+                [
+                    "--input",
+                    "scenarios.json",
+                    "--d0-aggregate-dir",
+                    "d0",
+                    "--scenario-generator-report",
+                    "generator.json",
+                    "--scenario-manifest",
+                    "scenarios.manifest.json",
+                    "--development-holdout",
+                    "development.json",
+                    "--development-holdout-manifest",
+                    "development.manifest.json",
+                    "--output",
+                    "eligible.jsonl",
+                    "--all-output",
+                    "all.jsonl",
+                    "--model-id",
+                    "/scratch/adapter",
+                    "--model-revision",
+                    "a" * 64,
+                    "--collection-pass",
+                    "training",
+                    "--beta",
+                    "0.25",
+                    "--require-recommended-target",
+                ]
+            )
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("requires --failed-collection-dir", stderr.getvalue())
 
     def test_d0_provenance_must_be_clean_and_content_addressed(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -673,6 +715,195 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                     all_output=None,
                     protected_paths=(input_path,),
                 )
+
+    def test_failed_collection_directory_is_separate_and_write_once(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            protected = root / "input" / "scenarios.json"
+            protected.parent.mkdir()
+            protected.write_text("[]\n", encoding="utf-8")
+            output = root / "output" / "rows.jsonl"
+            with self.assertRaisesRegex(ValueError, "must be separate"):
+                validate_collection_output_paths(
+                    output=output,
+                    all_output=root / "output" / "all.jsonl",
+                    failed_collection_dir=protected.parent,
+                    protected_paths=(protected,),
+                )
+
+            failed_dir = root / "failed-attempt-1"
+            failed_dir.mkdir()
+            with self.assertRaisesRegex(FileExistsError, "overwrite"):
+                validate_collection_output_paths(
+                    output=output,
+                    all_output=root / "output" / "all.jsonl",
+                    failed_collection_dir=failed_dir,
+                    protected_paths=(protected,),
+                )
+
+    def test_failed_strict_collection_bundle_is_atomic_and_ineligible(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            production_output = root / "training.jsonl"
+            production_all = root / "training.all.jsonl"
+            production_manifest = root / "training.jsonl.manifest.json"
+            failed_dir = root / "attempt-1.failed-collection"
+            candidate = {
+                "example_id": "candidate-1",
+                "production_label_eligible": True,
+                "labels": {"production_label_eligible": True},
+            }
+            quarantined = {
+                "example_id": "quarantined-1",
+                "production_label_eligible": False,
+                "labels": {"production_label_eligible": False},
+            }
+            evidence = {
+                "failed_gate_names": [
+                    "offline_teacher_target_quarantine_summary",
+                    "recommended_collection_gate",
+                ],
+                "intended_production_outputs": {
+                    "output": str(production_output),
+                    "all_output": str(production_all),
+                    "manifest": str(production_manifest),
+                },
+                "source_state": {"source_commit": "a" * 40},
+                "model_revision": "b" * 64,
+            }
+
+            manifest = write_failed_collection_evidence_bundle(
+                failed_dir,
+                candidate_rows=[candidate],
+                all_rows=[candidate, quarantined],
+                evidence=evidence,
+            )
+
+            self.assertTrue(failed_dir.is_dir())
+            self.assertEqual(
+                {path.name for path in failed_dir.iterdir()},
+                {
+                    FAILED_COLLECTION_CANDIDATE_ROWS,
+                    FAILED_COLLECTION_ALL_ROWS,
+                    FAILED_COLLECTION_EVIDENCE,
+                    FAILED_COLLECTION_CHECKSUMS,
+                },
+            )
+            self.assertFalse(production_output.exists())
+            self.assertFalse(production_all.exists())
+            self.assertFalse(production_manifest.exists())
+            self.assertEqual(
+                manifest["artifact_type"], FAILED_COLLECTION_ARTIFACT_TYPE
+            )
+            for field in (
+                "training_eligible",
+                "release_evidence_eligible",
+                "round1_aggregate_eligible",
+                "production_outputs_published",
+                "strict_gate_passed",
+            ):
+                self.assertIs(manifest[field], False)
+            self.assertNotIn("output_sha256", manifest)
+            self.assertNotIn("all_output", manifest)
+
+            disk_manifest = json.loads(
+                (failed_dir / FAILED_COLLECTION_EVIDENCE).read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(disk_manifest, manifest)
+            for key, filename in (
+                ("candidate_recovery_rows", FAILED_COLLECTION_CANDIDATE_ROWS),
+                ("all_visited_rows", FAILED_COLLECTION_ALL_ROWS),
+            ):
+                descriptor = manifest["diagnostic_artifacts"][key]
+                path = failed_dir / filename
+                self.assertEqual(descriptor["relative_path"], filename)
+                self.assertEqual(
+                    descriptor["sha256"], hashlib.sha256(path.read_bytes()).hexdigest()
+                )
+
+            for filename in (
+                FAILED_COLLECTION_CANDIDATE_ROWS,
+                FAILED_COLLECTION_ALL_ROWS,
+            ):
+                rows = [
+                    json.loads(line)
+                    for line in (failed_dir / filename).read_text(
+                        encoding="utf-8"
+                    ).splitlines()
+                ]
+                self.assertTrue(rows)
+                for row in rows:
+                    self.assertIs(row["collection_training_eligible"], False)
+                    self.assertEqual(
+                        row["collection_disposition"],
+                        "failed_strict_gate_diagnostic_only",
+                    )
+                    self.assertIs(
+                        row["labels"]["collection_training_eligible"], False
+                    )
+
+            checksum_lines = (
+                failed_dir / FAILED_COLLECTION_CHECKSUMS
+            ).read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(checksum_lines), 3)
+            for line in checksum_lines:
+                expected, filename = line.split("  ", 1)
+                self.assertEqual(
+                    expected,
+                    hashlib.sha256((failed_dir / filename).read_bytes()).hexdigest(),
+                )
+            self.assertNotIn("collection_training_eligible", candidate)
+
+    def test_failed_collection_bundle_cleans_partial_staging(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            destination = root / "failed-collection"
+            evidence = {"failed_gate_names": ["recommended_collection_gate"]}
+            with patch(
+                "psse_env.dagger.collect_dagger1._write_fsynced_text",
+                side_effect=OSError("simulated late write failure"),
+            ), self.assertRaisesRegex(OSError, "simulated late write failure"):
+                write_failed_collection_evidence_bundle(
+                    destination,
+                    candidate_rows=[{"example_id": "candidate"}],
+                    all_rows=[{"example_id": "candidate"}],
+                    evidence=evidence,
+                )
+            self.assertFalse(destination.exists())
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_truth_leak_never_publishes_failed_collection_bundle(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir) / "failed-collection"
+            with self.assertRaisesRegex(RuntimeError, "private oracle truth"):
+                write_failed_collection_evidence_bundle(
+                    destination,
+                    candidate_rows=[
+                        {
+                            "example_id": "leaked",
+                            "labels": {"true_parameter_errors": []},
+                        }
+                    ],
+                    all_rows=[],
+                    evidence={
+                        "failed_gate_names": ["recommended_collection_gate"]
+                    },
+                )
+            self.assertFalse(destination.exists())
+
+    def test_failed_strict_collection_gate_names_are_structured(self):
+        report = failed_strict_collection_gate_names(
+            collection_gate={"passed": False},
+            targeted_coverage={"passed": True},
+            independent_root_support={"passed": False},
+            truth_audit_quarantine={"passed": True},
+        )
+        self.assertEqual(
+            report,
+            ["independent_root_support", "recommended_collection_gate"],
+        )
 
     def test_dynamic_export_truth_leak_fails_closed(self):
         validate_export_rows_truth_free(

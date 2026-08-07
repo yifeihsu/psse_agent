@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import importlib
 import inspect
 import json
+import os
 import random
 import re
+import shutil
+import sys
+import tempfile
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -66,6 +71,15 @@ DEFAULT_TARGET_MAX_ROWS = 600
 DAGGER1_SCENARIO_BUILDER_CONTRACT = (
     "fresh_train_partition_dagger1_scenarios_v2"
 )
+FAILED_COLLECTION_ARTIFACT_TYPE = (
+    "dagger1_failed_strict_collection_diagnostic_bundle"
+)
+FAILED_COLLECTION_CANDIDATE_ROWS = (
+    "diagnostic.candidate_recovery_rows.jsonl"
+)
+FAILED_COLLECTION_ALL_ROWS = "diagnostic.all_visited_rows.jsonl"
+FAILED_COLLECTION_EVIDENCE = "failure_evidence.json"
+FAILED_COLLECTION_CHECKSUMS = "SHA256SUMS"
 _TRUTH_KEYS = frozenset(
     {
         "clean_case",
@@ -109,6 +123,196 @@ def _file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _write_fsynced_text(path: Path, content: str) -> None:
+    with path.open("x", encoding="utf-8") as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _write_fsynced_jsonl(
+    path: Path,
+    rows: Sequence[Mapping[str, Any]],
+) -> None:
+    with path.open("x", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(
+                json.dumps(
+                    dict(row),
+                    sort_keys=True,
+                    default=str,
+                    allow_nan=False,
+                )
+                + "\n"
+            )
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _failed_collection_rows(
+    rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    result = copy.deepcopy([dict(row) for row in rows])
+    for row in result:
+        row["collection_training_eligible"] = False
+        row["collection_disposition"] = (
+            "failed_strict_gate_diagnostic_only"
+        )
+        labels = row.get("labels")
+        if isinstance(labels, dict):
+            labels["collection_training_eligible"] = False
+            labels["collection_disposition"] = (
+                "failed_strict_gate_diagnostic_only"
+            )
+    return result
+
+
+def failed_strict_collection_gate_names(
+    *,
+    collection_gate: Mapping[str, Any],
+    targeted_coverage: Mapping[str, Any],
+    independent_root_support: Mapping[str, Any],
+    truth_audit_quarantine: Mapping[str, Any],
+) -> list[str]:
+    reports = {
+        "independent_root_support": independent_root_support,
+        "offline_teacher_target_quarantine_summary": (
+            truth_audit_quarantine
+        ),
+        "recommended_collection_gate": collection_gate,
+        "targeted_state_coverage": targeted_coverage,
+    }
+    return sorted(
+        name for name, report in reports.items() if report.get("passed") is not True
+    )
+
+
+def write_failed_collection_evidence_bundle(
+    failure_dir: Path,
+    *,
+    candidate_rows: Sequence[Mapping[str, Any]],
+    all_rows: Sequence[Mapping[str, Any]],
+    evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Atomically publish an immutable, diagnostic-only strict-gate failure.
+
+    The bundle deliberately does not implement the production D1 manifest
+    interface.  In particular, its evidence file is not named ``*.manifest``
+    and it never exposes top-level ``output_sha256``/``all_output`` fields.
+    """
+
+    destination = Path(failure_dir)
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(
+            "DAgger-1 refuses to overwrite failed-collection evidence: "
+            f"{destination}"
+        )
+    failed_gate_names = evidence.get("failed_gate_names")
+    if (
+        not isinstance(failed_gate_names, list)
+        or not failed_gate_names
+        or not all(isinstance(name, str) and name for name in failed_gate_names)
+    ):
+        raise ValueError(
+            "failed-collection evidence must name at least one failed gate"
+        )
+
+    diagnostic_candidates = _failed_collection_rows(candidate_rows)
+    diagnostic_all_rows = _failed_collection_rows(all_rows)
+    validate_export_rows_truth_free(diagnostic_candidates)
+    validate_export_rows_truth_free(diagnostic_all_rows)
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            dir=str(destination.parent),
+        )
+    )
+    try:
+        candidate_path = staging / FAILED_COLLECTION_CANDIDATE_ROWS
+        all_rows_path = staging / FAILED_COLLECTION_ALL_ROWS
+        evidence_path = staging / FAILED_COLLECTION_EVIDENCE
+        checksums_path = staging / FAILED_COLLECTION_CHECKSUMS
+        _write_fsynced_jsonl(candidate_path, diagnostic_candidates)
+        _write_fsynced_jsonl(all_rows_path, diagnostic_all_rows)
+
+        manifest = copy.deepcopy(dict(evidence))
+        manifest.update(
+            {
+                "artifact_schema_version": 1,
+                "artifact_type": FAILED_COLLECTION_ARTIFACT_TYPE,
+                "collection_outcome": "strict_gate_failed",
+                "diagnostic_only": True,
+                "training_eligible": False,
+                "release_evidence_eligible": False,
+                "round1_aggregate_eligible": False,
+                "production_outputs_published": False,
+                "strict_gate_requested": True,
+                "strict_gate_passed": False,
+                "expected_exit_code": 1,
+                "diagnostic_artifacts": {
+                    "candidate_recovery_rows": {
+                        "relative_path": candidate_path.name,
+                        "row_count": len(diagnostic_candidates),
+                        "sha256": _file_sha256(candidate_path),
+                    },
+                    "all_visited_rows": {
+                        "relative_path": all_rows_path.name,
+                        "row_count": len(diagnostic_all_rows),
+                        "sha256": _file_sha256(all_rows_path),
+                    },
+                },
+            }
+        )
+        forbidden_manifest_fields = {"output_sha256", "all_output"}
+        overlap = sorted(forbidden_manifest_fields & set(manifest))
+        if overlap:
+            raise ValueError(
+                "failed-collection evidence may not expose production manifest "
+                "fields: " + ", ".join(overlap)
+            )
+        _write_fsynced_text(
+            evidence_path,
+            json.dumps(
+                manifest,
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            + "\n",
+        )
+        checksum_paths = (candidate_path, all_rows_path, evidence_path)
+        _write_fsynced_text(
+            checksums_path,
+            "".join(
+                f"{_file_sha256(path)}  {path.name}\n"
+                for path in sorted(checksum_paths, key=lambda item: item.name)
+            ),
+        )
+        _fsync_directory(staging)
+        if destination.exists() or destination.is_symlink():
+            raise FileExistsError(
+                "DAgger-1 refuses to overwrite failed-collection evidence: "
+                f"{destination}"
+            )
+        os.replace(staging, destination)
+        _fsync_directory(destination.parent)
+        return copy.deepcopy(manifest)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
 
 
 def _load_json_or_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -603,6 +807,7 @@ def validate_collection_output_paths(
     *,
     output: Path,
     all_output: Path | None,
+    failed_collection_dir: Path | None = None,
     protected_paths: Sequence[Path],
 ) -> Path:
     """Fail before collection if an output can overwrite evidence or inputs."""
@@ -625,7 +830,27 @@ def validate_collection_output_paths(
             "DAgger-1 outputs alias protected input/evidence paths: "
             + ", ".join(collisions)
         )
-    existing = sorted(str(path) for path in outputs if path.exists())
+    if failed_collection_dir is not None:
+        failure_path = Path(failed_collection_dir)
+        resolved_failure = failure_path.resolve()
+        related_paths = [*resolved_outputs, *protected]
+        if any(
+            resolved_failure == path
+            or resolved_failure in path.parents
+            or path in resolved_failure.parents
+            for path in related_paths
+        ):
+            raise ValueError(
+                "DAgger-1 failed-collection directory must be separate from "
+                "production outputs and protected evidence"
+            )
+    else:
+        failure_path = None
+    existing = sorted(
+        str(path)
+        for path in [*outputs, *([failure_path] if failure_path is not None else [])]
+        if path.exists() or path.is_symlink()
+    )
     if existing:
         raise FileExistsError(
             "DAgger-1 refuses to overwrite existing outputs: "
@@ -952,10 +1177,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Fail unless eligible rows meet the recommended row and stratum target",
     )
+    parser.add_argument(
+        "--failed-collection-dir",
+        type=Path,
+        help=(
+            "Atomic diagnostic-only evidence directory; required with "
+            "--require-recommended-target and forbidden otherwise"
+        ),
+    )
     parser.add_argument("--max-steps", type=int, default=24)
     parser.add_argument("--seed", type=int, default=20260719)
     args = parser.parse_args(list(argv) if argv is not None else None)
 
+    if args.collection_pass == "diagnostic" and args.require_recommended_target:
+        parser.error(
+            "--require-recommended-target is valid only for the training pass"
+        )
+    if args.require_recommended_target and args.failed_collection_dir is None:
+        parser.error(
+            "--require-recommended-target requires --failed-collection-dir"
+        )
+    if args.failed_collection_dir is not None and not args.require_recommended_target:
+        parser.error(
+            "--failed-collection-dir is valid only with "
+            "--require-recommended-target"
+        )
     if args.collection_pass == "training" and args.all_output is None:
         parser.error(
             "training collection requires --all-output so truth-audit "
@@ -997,10 +1243,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     except ValueError as exc:
         parser.error(str(exc))
-    if args.collection_pass == "diagnostic" and args.require_recommended_target:
-        parser.error(
-            "--require-recommended-target is valid only for the training pass"
-        )
     if args.env_factory != DEFAULT_ENV_FACTORY_SPEC:
         parser.error("DAgger-1 requires the reviewed production environment factory")
     if args.policy_factory != DEFAULT_POLICY_FACTORY_SPEC:
@@ -1059,6 +1301,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     output_manifest_path = validate_collection_output_paths(
         output=args.output,
         all_output=args.all_output,
+        failed_collection_dir=args.failed_collection_dir,
         protected_paths=protected_paths,
     )
     if not d0_raw_path.is_file() or not d0_provenance_path.is_file():
@@ -1199,12 +1442,153 @@ def main(argv: Sequence[str] | None = None) -> int:
             and independent_root_support["passed"]
             and truth_audit_quarantine["passed"]
         ):
-            raise RuntimeError(
-                "DAgger-1 recommended collection target failed: "
-                f"collection={collection_gate}, coverage={targeted_coverage}, "
-                f"independent_root_support={independent_root_support}, "
-                f"truth_audit_quarantine={truth_audit_quarantine}"
+            failed_gate_names = failed_strict_collection_gate_names(
+                collection_gate=collection_gate,
+                targeted_coverage=targeted_coverage,
+                independent_root_support=independent_root_support,
+                truth_audit_quarantine=truth_audit_quarantine,
             )
+            failure_evidence = {
+                "failed_gate_names": failed_gate_names,
+                "intended_production_outputs": {
+                    "output": str(args.output.resolve()),
+                    "all_output": (
+                        str(args.all_output.resolve())
+                        if args.all_output is not None
+                        else None
+                    ),
+                    "manifest": str(output_manifest_path.resolve()),
+                },
+                "collector_contract": DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
+                "recovery_label_contract": (
+                    "observable_rank_one_learner_state_v1"
+                ),
+                "input": str(args.input.resolve()),
+                "input_sha256": _file_sha256(args.input),
+                "scenario_generator_report": str(
+                    args.scenario_generator_report.resolve()
+                ),
+                "scenario_generator_report_sha256": _file_sha256(
+                    args.scenario_generator_report
+                ),
+                "scenario_manifest": str(args.scenario_manifest.resolve()),
+                "scenario_manifest_sha256": _file_sha256(
+                    args.scenario_manifest
+                ),
+                "development_holdout": str(
+                    args.development_holdout.resolve()
+                ),
+                "development_holdout_sha256": _file_sha256(
+                    args.development_holdout
+                ),
+                "development_holdout_manifest": str(
+                    args.development_holdout_manifest.resolve()
+                ),
+                "development_holdout_manifest_sha256": _file_sha256(
+                    args.development_holdout_manifest
+                ),
+                "development_holdout_root_count": len(development_roots),
+                "development_holdout_root_set_sha256": stable_json_sha256(
+                    sorted(development_roots)
+                ),
+                "scenario_builder_contract": DAGGER1_SCENARIO_BUILDER_CONTRACT,
+                "source_partition": "train",
+                "source_state": source_state,
+                "factory_identities": {
+                    "environment": env_factory_binding,
+                    "learner_policy": policy_factory_binding,
+                    "expert_oracle": {
+                        "class": (
+                            "psse_env.oracle.expert_policy:ExpertPolicyOracle"
+                        ),
+                        "source_sha256": file_sha256(expert_source),
+                    },
+                },
+                "release_environment_contract": {
+                    "parameter_ranking_dominance_threshold": (
+                        BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD
+                    ),
+                    "production_dataset_mode": True,
+                    "max_steps": args.max_steps,
+                },
+                "forbidden_suite": str(args.forbidden_suite.resolve()),
+                "forbidden_suite_sha256": _file_sha256(
+                    args.forbidden_suite
+                ),
+                "evaluation_policy": str(
+                    DEFAULT_EVALUATION_POLICY.resolve()
+                ),
+                "evaluation_policy_sha256": _file_sha256(
+                    DEFAULT_EVALUATION_POLICY
+                ),
+                "forbidden_physical_root_count": len(forbidden_roots),
+                "frozen_evaluation_root_count": len(frozen_roots),
+                "d0_physical_root_count": len(d0_roots),
+                "development_physical_root_count": len(development_roots),
+                "d0_aggregate_dir": str(args.d0_aggregate_dir.resolve()),
+                "d0_raw_sha256": _file_sha256(d0_raw_path),
+                "d0_generation_provenance_sha256": _file_sha256(
+                    d0_provenance_path
+                ),
+                "model_id": args.model_id,
+                "model_revision": args.model_revision.lower(),
+                "learner_seed": learner_seed,
+                "iteration": args.iteration,
+                "beta": args.beta,
+                "beta_contract": beta_contract,
+                "collection_pass": args.collection_pass,
+                "seed": args.seed,
+                "max_steps": args.max_steps,
+                "visited_rows": len(rows),
+                "candidate_recovery_row_count": len(output_rows),
+                "production_eligible_recovery_rows": len(training_eligible),
+                "eligible_recovery_strata": dict(
+                    sorted(
+                        Counter(
+                            str(row.get("recovery_stratum"))
+                            for row in training_eligible
+                        ).items()
+                    )
+                ),
+                "eligible_physical_root_count": len(
+                    {
+                        str(row.get("physical_root_fingerprint"))
+                        for row in training_eligible
+                        if row.get("physical_root_fingerprint")
+                    }
+                ),
+                "recommended_collection_gate": collection_gate,
+                "targeted_state_coverage": targeted_coverage,
+                "independent_root_support": independent_root_support,
+                "round1_replay_capacity": replay_capacity,
+                "class_audit": class_audit,
+                "recovery_label_audit": recovery_audit,
+                "offline_teacher_target_quarantine_summary": (
+                    truth_audit_quarantine
+                ),
+            }
+            assert args.failed_collection_dir is not None
+            write_failed_collection_evidence_bundle(
+                args.failed_collection_dir,
+                candidate_rows=output_rows,
+                all_rows=rows,
+                evidence=failure_evidence,
+            )
+            print(
+                json.dumps(
+                    {
+                        "artifact_type": FAILED_COLLECTION_ARTIFACT_TYPE,
+                        "failed_collection_dir": str(
+                            args.failed_collection_dir.resolve()
+                        ),
+                        "failed_gate_names": failed_gate_names,
+                        "production_outputs_published": False,
+                    },
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+            )
+            return 1
     else:
         if training_eligible:
             raise RuntimeError(

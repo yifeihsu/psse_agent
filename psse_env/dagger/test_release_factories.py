@@ -348,6 +348,218 @@ class ObservableExpertFactoryTests(unittest.TestCase):
             ROLLBACK_STATE,
         )
 
+    def test_branch_candidates_above_target_threshold_are_rolled_back(self) -> None:
+        # Metrics are the five unique candidate states from the captured
+        # beta=0.25 quarantine.  They all made weak positive progress, but the
+        # branch-local target remained above the deployment threshold.
+        candidates = (
+            (0.558, 0.100, 3.452),
+            (0.594, 0.171, 5.022),
+            (0.100, 0.028, 7.000),
+            (0.133, 0.093, 9.890),
+            (0.076, 0.017, 7.803),
+        )
+        for index, (target_progress, global_progress, target_metric) in enumerate(
+            candidates
+        ):
+            with self.subTest(index=index):
+                candidate = f"episode:candidate-parameter-{index}"
+                history = [
+                    {
+                        "action": {
+                            "tool": CORRECT_PARAMETERS,
+                            "arguments": {
+                                "state_id": "episode:active-1",
+                                "line_index": index,
+                            },
+                        },
+                        "tool_output": {
+                            "execution_status": "success",
+                            "candidate_state_id": candidate,
+                        },
+                    }
+                ]
+                observation = {
+                    "candidate_state_id": candidate,
+                    "has_verified_candidate": True,
+                    "last_tool": RUN_WLS,
+                    "last_verification": {
+                        "execution_status": "success",
+                        "state_id": candidate,
+                        "evidence_source": "deployment_wls:lagrangian_port",
+                        "physical_constraints_ok": True,
+                        "physical_bound_violations": [],
+                        "target_progress": target_progress,
+                        "global_progress": global_progress,
+                        "target_metric_value": target_metric,
+                        "target_metric_threshold": 3.0,
+                        "globally_resolved": False,
+                    },
+                }
+
+                self.assertEqual(
+                    factories._observable_candidate_disposition_action(
+                        observation, history
+                    ),
+                    {
+                        "tool": ROLLBACK_STATE,
+                        "arguments": {"candidate_state_id": candidate},
+                    },
+                )
+
+    def test_rejected_commit_uses_explicit_observable_rollback_repair(self) -> None:
+        candidate = "episode:candidate-parameter"
+        observation = {
+            "candidate_state_id": candidate,
+            "has_verified_candidate": True,
+            "last_tool": COMMIT_STATE,
+            "last_tool_output": {
+                "execution_status": "failure",
+                "error_code": "candidate_lifecycle_violation",
+                "error_detail": "commit_rejected_or_inconclusive_candidate",
+                "valid_next_actions": [
+                    {
+                        "tool": ROLLBACK_STATE,
+                        "arguments": {"candidate_state_id": candidate},
+                    }
+                ],
+            },
+            # Deliberately stale evidence that would otherwise reconstruct a
+            # commit.  The newer structured repair must win.
+            "last_verification": {
+                "execution_status": "success",
+                "state_id": candidate,
+                "evidence_source": "deployment_wls:lagrangian_port",
+                "physical_constraints_ok": True,
+                "target_metric_value": 0.2,
+                "target_metric_threshold": 3.0,
+                "global_progress": 0.5,
+                "globally_resolved": False,
+            },
+        }
+        history = [
+            {
+                "action": {
+                    "tool": CORRECT_PARAMETERS,
+                    "arguments": {
+                        "state_id": "episode:active-1",
+                        "line_index": 4,
+                    },
+                },
+                "tool_output": {
+                    "execution_status": "success",
+                    "candidate_state_id": candidate,
+                },
+            }
+        ]
+
+        self.assertEqual(
+            factories._observable_candidate_disposition_action(observation, history),
+            {
+                "tool": ROLLBACK_STATE,
+                "arguments": {"candidate_state_id": candidate},
+            },
+        )
+
+    def test_measurement_candidate_above_target_threshold_is_rolled_back(self) -> None:
+        candidate = "episode:candidate-measurement"
+        history = [
+            {
+                "action": {
+                    "tool": CORRECT_MEASUREMENTS,
+                    "arguments": {
+                        "state_id": "episode:active-1",
+                        "measurement_updates": {"3": 1.0},
+                    },
+                },
+                "tool_output": {
+                    "execution_status": "success",
+                    "candidate_state_id": candidate,
+                },
+            }
+        ]
+        observation = {
+            "candidate_state_id": candidate,
+            "has_verified_candidate": True,
+            "last_tool": RUN_WLS,
+            "last_verification": {
+                "execution_status": "success",
+                "state_id": candidate,
+                "evidence_source": "deployment_wls:lagrangian_port",
+                "physical_constraints_ok": True,
+                "physical_bound_violations": [],
+                "target_progress": 0.20,
+                "global_progress": 0.10,
+                "target_metric_value": 3.0,
+                "target_metric_threshold": 3.0,
+                "globally_resolved": False,
+            },
+        }
+
+        self.assertEqual(
+            factories._observable_candidate_disposition_action(observation, history),
+            {
+                "tool": ROLLBACK_STATE,
+                "arguments": {"candidate_state_id": candidate},
+            },
+        )
+
+    def test_branch_partial_commit_boundaries_remain_narrow_and_explicit(self) -> None:
+        candidate = "episode:candidate-parameter"
+        history = [
+            {
+                "action": {
+                    "tool": CORRECT_PARAMETERS,
+                    "arguments": {
+                        "state_id": "episode:active-1",
+                        "line_index": 4,
+                    },
+                },
+                "tool_output": {
+                    "execution_status": "success",
+                    "candidate_state_id": candidate,
+                },
+            }
+        ]
+        verification = {
+            "execution_status": "success",
+            "state_id": candidate,
+            "evidence_source": "deployment_wls:lagrangian_port",
+            "physical_constraints_ok": True,
+            "physical_bound_violations": [],
+            "target_progress": 0.9,
+            "global_progress": 0.30,
+            "target_metric_value": 2.9,
+            "target_metric_threshold": 3.0,
+            "globally_resolved": False,
+        }
+
+        def action_for(metrics: Mapping[str, Any]) -> str:
+            observation = {
+                "candidate_state_id": candidate,
+                "has_verified_candidate": True,
+                "last_tool": RUN_WLS,
+                "last_verification": dict(metrics),
+            }
+            return factories._observable_candidate_disposition_action(
+                observation, history
+            )["tool"]
+
+        self.assertEqual(action_for(verification), COMMIT_STATE)
+
+        below_partial_floor = {**verification, "global_progress": 0.29}
+        self.assertEqual(action_for(below_partial_floor), ROLLBACK_STATE)
+
+        exact_threshold = {**verification, "target_metric_value": 3.0}
+        self.assertEqual(action_for(exact_threshold), ROLLBACK_STATE)
+
+        strong_marginal = {
+            **verification,
+            "global_progress": 0.50,
+            "target_metric_value": 3.5,
+        }
+        self.assertEqual(action_for(strong_marginal), COMMIT_STATE)
+
 
 class RealProductionExpertRecoveryTests(unittest.TestCase):
     @staticmethod

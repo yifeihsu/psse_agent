@@ -80,6 +80,14 @@ measurement-parameter sequencing, and multi-measurement handoff each require
 at least ten; premature commit and premature escalation each require five.
 Repeated rows from one root never count as independent support.
 
+A strict mixed-policy collection must name a separate, write-once failed-run
+directory before launch. If any row, targeted-cell, independent-root, or
+teacher-truth quarantine gate fails, publish only an atomic checksummed
+diagnostic bundle there and exit nonzero. Do not create the requested D1
+production JSONL, all-row ledger, or manifest on that path; the diagnostic
+bundle is explicitly training- and aggregate-ineligible and exists only to
+make the next correction evidence-based.
+
 Build the next view as `D0 union D1`, initially allocating 70--80% to the
 eligible BC0 source and 20--30% to learner-recovery rows while retaining the
 physical-root and duplicate caps. Before sampling, report the requested and
