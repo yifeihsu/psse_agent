@@ -65,6 +65,9 @@ from psse_env.oracle.expert_policy import ExpertPolicyOracle
 
 
 _ADAPTER_TREE_REVISION = re.compile(r"[0-9a-f]{64}")
+DAGGER1_AGGREGATE_SELECTION_BINDING_CONTRACT = (
+    "dagger1_aggregate_full_ledger_selection_binding_v1"
+)
 
 _ROUND1_OUTPUT_FILENAMES = (
     "aggregate.raw.jsonl",
@@ -186,6 +189,155 @@ def validate_offline_teacher_target_quarantine_summary(
     ):
         raise ValueError("D1 manifest does not prove zero truth-audit quarantine")
     return summary
+
+
+def validate_dagger1_collection_selection_binding(
+    selected_rows: Sequence[Mapping[str, Any]],
+    all_rows: Sequence[Mapping[str, Any]],
+    collection_manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Recompute and bind the published D1 subset to the complete ledger."""
+
+    production_target = collection_manifest.get(
+        "production_row_target_contract"
+    )
+    if not isinstance(production_target, Mapping):
+        raise ValueError("D1 manifest lacks the production row-target contract")
+    expected_target = collect_dagger1_module.dagger1_production_row_target_contract(
+        target_min_rows=collect_dagger1_module.DEFAULT_TARGET_MIN_ROWS,
+        target_max_rows=collect_dagger1_module.DEFAULT_TARGET_MAX_ROWS,
+    )
+    if dict(production_target) != expected_target:
+        raise ValueError(
+            "D1 collection does not bind the reviewed production row bounds "
+            f"{collect_dagger1_module.DEFAULT_TARGET_MIN_ROWS}.."
+            f"{collect_dagger1_module.DEFAULT_TARGET_MAX_ROWS}"
+        )
+
+    recorded_selection = collection_manifest.get(
+        "deterministic_collection_selection"
+    )
+    if not isinstance(recorded_selection, Mapping):
+        raise ValueError("D1 manifest lacks deterministic selection evidence")
+    recorded_selection = dict(recorded_selection)
+    if (
+        recorded_selection.get("target_min_rows")
+        != collect_dagger1_module.DEFAULT_TARGET_MIN_ROWS
+        or recorded_selection.get("target_max_rows")
+        != collect_dagger1_module.DEFAULT_TARGET_MAX_ROWS
+    ):
+        raise ValueError(
+            "D1 deterministic selection does not use the reviewed production "
+            "row bounds"
+        )
+
+    safe_candidates = [
+        dict(row)
+        for row in all_rows
+        if row.get("production_label_eligible") is True
+    ]
+    recomputed_selected, recomputed_selection = (
+        collect_dagger1_module.select_dagger1_collection_rows(
+            safe_candidates,
+            target_min_rows=collect_dagger1_module.DEFAULT_TARGET_MIN_ROWS,
+            target_max_rows=collect_dagger1_module.DEFAULT_TARGET_MAX_ROWS,
+        )
+    )
+    if recomputed_selection != recorded_selection:
+        raise ValueError(
+            "D1 deterministic selection report differs from the complete ledger"
+        )
+    if recomputed_selection.get("passed") is not True:
+        raise ValueError("D1 deterministic production selection did not pass")
+    materialized_selected = [dict(row) for row in selected_rows]
+    if recomputed_selected != materialized_selected:
+        raise ValueError(
+            "D1 rows are not the exact deterministic selected subset of "
+            "all-output"
+        )
+
+    candidate_count = len(safe_candidates)
+    selected_count = len(materialized_selected)
+    candidate_count_fields = (
+        "candidate_recovery_rows",
+        "candidate_recovery_row_count",
+        "production_eligible_recovery_rows",
+    )
+    selected_count_fields = (
+        "output_rows",
+        "selected_recovery_row_count",
+    )
+    if any(
+        collection_manifest.get(name) != candidate_count
+        for name in candidate_count_fields
+    ):
+        raise ValueError(
+            "D1 safe-candidate row counts do not match the collection manifest"
+        )
+    if any(
+        collection_manifest.get(name) != selected_count
+        for name in selected_count_fields
+    ):
+        raise ValueError(
+            "D1 selected row counts do not match the collection manifest"
+        )
+
+    selected_ids = {
+        str(row.get("example_id") or "") for row in materialized_selected
+    }
+    annotation_mismatches: list[str] = []
+    for row in all_rows:
+        example_id = str(row.get("example_id") or "")
+        is_safe = row.get("production_label_eligible") is True
+        is_selected = is_safe and example_id in selected_ids
+        expected_disposition = (
+            "selected_for_round1_training"
+            if is_selected
+            else (
+                "safe_candidate_not_selected"
+                if is_safe
+                else "not_safe_candidate"
+            )
+        )
+        raw_labels = row.get("labels")
+        label_annotation_mismatch = bool(
+            isinstance(raw_labels, Mapping)
+            and (
+                raw_labels.get("collection_training_eligible")
+                is not is_selected
+                or raw_labels.get("collection_disposition")
+                != expected_disposition
+            )
+        )
+        if (
+            row.get("collection_training_eligible") is not is_selected
+            or row.get("collection_disposition") != expected_disposition
+            or label_annotation_mismatch
+        ):
+            annotation_mismatches.append(example_id)
+    if annotation_mismatches:
+        raise ValueError(
+            "D1 all-output selection annotations are inconsistent: "
+            + ", ".join(annotation_mismatches[:10])
+        )
+
+    return {
+        "contract": DAGGER1_AGGREGATE_SELECTION_BINDING_CONTRACT,
+        "production_row_target_contract": expected_target,
+        "candidate_rows": candidate_count,
+        "selected_rows": selected_count,
+        "unselected_safe_candidate_rows": candidate_count - selected_count,
+        "candidate_example_id_set_sha256": recomputed_selection[
+            "candidate_example_id_set_sha256"
+        ],
+        "selected_example_id_sequence_sha256": recomputed_selection[
+            "selected_example_id_sequence_sha256"
+        ],
+        "selection_report_sha256": stable_json_sha256(recomputed_selection),
+        "exact_selected_row_content_match": True,
+        "complete_ledger_annotation_match": True,
+        "passed": True,
+    }
 
 
 def _bind_generation_id(row: Mapping[str, Any], provenance_id: str) -> dict[str, Any]:
@@ -575,11 +727,16 @@ def build_round1_aggregate(
                 "D1 all-output row has invalid offline teacher-target "
                 f"audit: {identifier}"
             ) from exc
+    safe_candidates_from_all_output = [
+        row
+        for row in all_d1_rows
+        if row.get("production_label_eligible") is True
+    ]
     recorded_quarantine_summary = (
         validate_offline_teacher_target_quarantine_summary(
             d1_manifest.get("offline_teacher_target_quarantine_summary"),
             expected_total_rows=len(all_d1_rows),
-            expected_candidate_rows=len(d1),
+            expected_candidate_rows=len(safe_candidates_from_all_output),
         )
     )
     recomputed_quarantine_summary = (
@@ -589,20 +746,11 @@ def build_round1_aggregate(
         raise ValueError(
             "D1 offline truth-audit summary differs from the all-output ledger"
         )
-    eligible_from_all_output = [
-        row
-        for row in all_d1_rows
-        if row.get("production_label_eligible") is True
-    ]
-    if eligible_from_all_output != d1:
-        raise ValueError(
-            "D1 eligible rows are not the exact production subset of all-output"
-        )
-    if (
-        d1_manifest.get("output_rows") != len(d1)
-        or d1_manifest.get("production_eligible_recovery_rows") != len(d1)
-    ):
-        raise ValueError("D1 eligible row counts do not match collection manifest")
+    d1_selection_binding = validate_dagger1_collection_selection_binding(
+        d1,
+        all_d1_rows,
+        d1_manifest,
+    )
     all_d0_roots = {
         str(row.get("physical_root_fingerprint"))
         for row in raw_d0
@@ -668,6 +816,7 @@ def build_round1_aggregate(
         "recovery_label_audit": d1_recovery_audit,
         "target_aware_state_class_audit": d1_class_audit,
         "independent_root_support": d1_root_support,
+        "deterministic_collection_selection_binding": d1_selection_binding,
     }
     failed_d1_audits = [
         name
@@ -732,6 +881,9 @@ def build_round1_aggregate(
         "d1_recovery_label_audit": d1_recovery_audit,
         "d1_target_aware_state_class_audit": d1_class_audit,
         "d1_independent_root_support": d1_root_support,
+        "d1_deterministic_collection_selection_binding": (
+            d1_selection_binding
+        ),
         "union_realizability": semantic_realizability,
     }
     for key in (
@@ -790,6 +942,16 @@ def build_round1_aggregate(
             "d1_rows_sha256": file_sha256(d1_path),
             "d1_all_output_sha256": file_sha256(all_output_path),
             "d1_all_output_row_count": len(all_d1_rows),
+            "d1_safe_candidate_row_count": d1_selection_binding[
+                "candidate_rows"
+            ],
+            "d1_selected_row_count": d1_selection_binding["selected_rows"],
+            "d1_unselected_safe_candidate_row_count": d1_selection_binding[
+                "unselected_safe_candidate_rows"
+            ],
+            "d1_selection_binding_sha256": stable_json_sha256(
+                d1_selection_binding
+            ),
             "d1_manifest_sha256": d1_manifest_sha256,
             "d1_development_holdout": development_holdout_binding,
         },
@@ -833,6 +995,9 @@ def build_round1_aggregate(
         "d1_zero_truth_audit_quarantine": (
             recomputed_quarantine_summary.get("passed") is True
         ),
+        "d1_deterministic_selection_recomputed": (
+            d1_selection_binding.get("passed") is True
+        ),
         "training_view_release_ready": training_view_report.get("release_ready")
         is True,
         "source_mix_passed": training_view_report.get("source_allocation", {}).get(
@@ -854,6 +1019,7 @@ def build_round1_aggregate(
         "generation_provenance_id": provenance_id,
         "training_view": training_view_report,
         "recomputed_d1_audits": recomputed_d1_audits,
+        "d1_collection_selection_binding": d1_selection_binding,
         "semantic_realizability": semantic_realizability,
         "audit_report_sha256": audit_report_sha256,
         "split_rows": {
@@ -897,6 +1063,7 @@ def build_round1_aggregate(
             "generation_descriptor": generation_descriptor,
             "generation_provenance_id": provenance_id,
             "dataset_hashes": dataset_hashes,
+            "d1_collection_selection_binding": d1_selection_binding,
             "release_checks": release_checks,
             "release_eligible": release_eligible,
             "release_failures": [],

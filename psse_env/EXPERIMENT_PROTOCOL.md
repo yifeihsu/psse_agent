@@ -48,8 +48,8 @@ same exact context-supported guard.
 Run two collection passes with the production release environment (including
 the parameter-routing threshold of `1.0`):
 
-1. `beta=0.0` is a diagnostic learner-only pass and is not automatically a
-   training corpus.
+1. `beta=0.0` is a diagnostic learner-only pass over the primary roots only
+   and is always training-ineligible.
 2. `beta=0.25` through `0.5` is the mixed-policy training pass.
 
 Every input must declare `train` or `dagger_train`, carry an explicit physical
@@ -70,29 +70,69 @@ directory whose inspected tree digest is the supplied 64-hex model revision.
 The collection manifest, final aggregate, and `STAGE=round1`
 `INITIAL_ADAPTER_REVISION` must all bind that exact learner-seed digest.
 
-Target roughly 300--600 independent recovery rows, governed by coverage rather
-than duplication, including unsupported corrections, post-failure/no-candidate
-recovery, premature commit and escalation recovery, multi-measurement safe
-handoff, and sequential measurement-plus-parameter recovery. Each of the ten
-predeclared targeted state cells requires at least five distinct physical
-roots. Unsupported-correction, post-failure/no-candidate,
-measurement-parameter sequencing, and multi-measurement handoff each require
-at least ten; premature commit and premature escalation each require five.
-Repeated rows from one root never count as independent support.
+Build one finite, deterministic candidate inventory by requesting 96
+measurement-plus-parameter, 176 multi-measurement, and 48 parameter candidates.
+From the eligible fresh roots, select the 48/48/24 primary training allocation,
+the exact 12/12/6 development allocation, and a finite reserve of 48 additional
+measurement-plus-parameter plus 31 additional multi-measurement roots. There is
+no parameter reserve. The development multi-measurement allocation must hold
+back exactly three roots for each measurement-error cardinality 2, 3, 4, and 5.
+All allocations remain disjoint from D0 and the frozen evaluation suite.
+
+The mixed-policy collector uses a root-local deterministic beta seed, so an
+episode's expert/learner choices do not change when earlier roots terminate or
+when a reserve is unused. It executes whole episodes in the declared primary,
+reserve, and repeat schedule, with at most two replicas of a
+measurement-plus-parameter root, three replicas of a multi-measurement root,
+and one replica of a parameter root. This is pure DAgger collection: reserve
+and repeat episodes follow the same learner/expert mixture and do not inject a
+scripted failure or teacher action.
+
+Every executed episode must end with one explicit disposition:
+`resolved`, `operator_escalation`, or `horizon_truncated`. Horizon truncation is
+a terminal collection disposition, not proof that the physical task was
+resolved. Its learner-created hard states can still provide valid DAgger
+supervision when their individual labels pass the observable rank-one and
+offline truth audits; horizon truncation alone is not a collection-gate
+failure.
+
+The deterministic selector must publish 300--600 independent recovery rows,
+governed by coverage rather than duplication, including unsupported
+corrections, post-failure/no-candidate recovery, premature commit and
+escalation recovery, multi-measurement safe handoff, and sequential
+measurement-plus-parameter recovery. Each of the ten predeclared targeted
+state cells requires at least five distinct physical roots.
+Unsupported-correction, post-failure/no-candidate, measurement-parameter
+sequencing, and multi-measurement handoff each require at least ten; premature
+commit and premature escalation each require five. Repeated rows from one root
+never count as independent support. The selector preserves these rare-root
+floors, enforces the 600-row maximum, and treats Round-1 replay capacity under
+the duplicate and per-root caps as a strict GO condition.
+
+After every declared whole-episode batch, stop at the first deterministic
+strict GO. The complete visited ledger retains every visited row, including
+all safe candidates that the bounded selector did not choose. The published D1
+training JSONL is the selector's deterministic at-most-600-row subset, not an
+alias for the visited ledger. Aggregate ingestion must recompute and verify the
+same selection from the bound ledger and manifest; it must not relabel or
+promote a discarded candidate.
 
 A strict mixed-policy collection must name a separate, write-once failed-run
-directory before launch. If any row, targeted-cell, independent-root, or
-teacher-truth quarantine gate fails, publish only an atomic checksummed
-diagnostic bundle there and exit nonzero. Do not create the requested D1
-production JSONL, all-row ledger, or manifest on that path; the diagnostic
-bundle is explicitly training- and aggregate-ineligible and exists only to
-make the next correction evidence-based.
+directory before launch. If the finite primary/reserve/repeat schedule is
+exhausted before strict GO, publish only an atomic checksummed,
+reserve-exhausted NO-GO bundle there and exit nonzero. Do not create the
+requested D1 production JSONL, all-row ledger, or manifest on that path; the
+diagnostic bundle retains the complete visited evidence but is explicitly
+training- and aggregate-ineligible and exists only to make the next correction
+evidence-based.
 
 Build the next view as `D0 union D1`, initially allocating 70--80% to the
 eligible BC0 source and 20--30% to learner-recovery rows while retaining the
 physical-root and duplicate caps. Before sampling, report the requested and
-largest feasible view under both caps. Preserve immutable natural D0, D1, and
-combined source views. Final ingestion must recompute the D1 recovery/class/root
+largest feasible view under both caps; insufficient replay capacity fails
+closed. Preserve immutable natural D0, the complete D1 visited ledger, the
+selected D1 training view, and the combined source views. Final ingestion must
+recompute the deterministic D1 selector, recovery/class/root and replay-capacity
 audits, exact realizability on the natural union and balanced view, and
 approximate realizability overall and by family, state class, and explicit D1
 recovery stratum with nonzero comparison coverage. Persist the complete reports
@@ -101,11 +141,12 @@ deterministic targeted tiny-overfit before the full job. The primary Round-1
 run warm-starts from the exact BC0 learner-seed adapter for approximately one
 epoch at `2e-5` through `5e-5`.
 
-Split the original 150-root allocation into 120 D1 training roots (48
-measurement-plus-parameter, 48 multi-measurement, and 24 parameter) and a
-deterministic 30-root development suite (12, 12, and 6 respectively) from the
-same train source partition. Development must remain disjoint from D0, D1
-training, and all 115 frozen roots. It is diagnostic model-selection evidence
+The 120 primary D1 training roots contain 48 measurement-plus-parameter, 48
+multi-measurement, and 24 parameter roots. The deterministic 30-root
+development suite contains 12, 12, and 6 respectively from the same train
+source partition, with the multi-measurement roots stratified three per
+cardinality 2--5. Development must remain disjoint from primary and reserve D1
+roots, D0, and all 115 frozen roots. It is diagnostic model-selection evidence
 only: it never enters SFT and never counts as promotion evidence. Use it for
 closed-loop learning-rate and replay-share checks before the one-time
 frozen-suite promotion evaluation. The present evaluator can compare outcomes

@@ -11,6 +11,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from psse_env.dagger.collect_dagger1 import (
+    DAGGER1_COLLECTION_SCHEDULE_CONTRACT,
+    DAGGER1_MAXIMUM_ROLLOUT_REPLICAS_BY_FAMILY,
+    DAGGER1_RESERVE_FAMILY_PRIORITY,
     DAGGER1_SCENARIO_BUILDER_CONTRACT,
     DEFAULT_FORBIDDEN_SUITE,
     FAILED_COLLECTION_ALL_ROWS,
@@ -18,10 +21,16 @@ from psse_env.dagger.collect_dagger1 import (
     FAILED_COLLECTION_CANDIDATE_ROWS,
     FAILED_COLLECTION_CHECKSUMS,
     FAILED_COLLECTION_EVIDENCE,
+    collect_dagger1_rollout_schedule,
+    dagger1_production_row_target_contract,
+    dagger1_rollout_batches,
+    dagger1_rollout_seed,
+    evaluate_dagger1_collection_checkpoint,
     failed_strict_collection_gate_names,
     frozen_physical_roots,
     main as collect_dagger1_main,
     recommended_collection_gate,
+    select_dagger1_collection_rows,
     targeted_state_coverage,
     validate_collection_pass,
     validate_collection_output_paths,
@@ -62,6 +71,170 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 "threshold": 1.0,
             },
         }
+
+    def test_reviewed_production_row_bounds_are_fail_closed(self):
+        reviewed = dagger1_production_row_target_contract(
+            target_min_rows=300,
+            target_max_rows=600,
+        )
+        exploratory = dagger1_production_row_target_contract(
+            target_min_rows=90,
+            target_max_rows=100,
+        )
+        self.assertTrue(reviewed["passed"])
+        self.assertFalse(reviewed["exploratory_override"])
+        self.assertFalse(exploratory["passed"])
+        self.assertTrue(exploratory["exploratory_override"])
+        self.assertEqual(exploratory["required_target_min_rows"], 300)
+        self.assertEqual(exploratory["required_target_max_rows"], 600)
+
+    @staticmethod
+    def _scheduled_scenarios():
+        specifications = (
+            ("multi-primary", "multi_measurement", "primary", 0),
+            ("mixed-primary", "measurement+parameter", "primary", 0),
+            ("multi-reserve", "multi_measurement", "reserve", 1),
+            ("mixed-reserve", "measurement+parameter", "reserve", 2),
+            ("parameter-reserve", "parameter", "reserve", 3),
+        )
+        return [
+            {
+                "execution": {"scenario_id": name},
+                "audit": {"truth": {"truth_complete": True}},
+                "grouping": {
+                    "physical_root_fingerprint": name,
+                    "scenario_family": family,
+                    "collection_cohort": cohort,
+                    "collection_priority": priority,
+                    "collection_order": order,
+                    "split": "dagger_train",
+                },
+            }
+            for order, (name, family, cohort, priority) in enumerate(
+                specifications
+            )
+        ]
+
+    @staticmethod
+    def _strict_coverage_rows(extra_rows: int = 0):
+        rows = []
+
+        def add(
+            prefix,
+            count,
+            *,
+            stratum,
+            family="measurement+parameter",
+            cardinality=2,
+            observation=None,
+            preferred_action=None,
+            parameter_scans_available=None,
+        ):
+            for index in range(count):
+                rows.append(
+                    {
+                        "example_id": f"{prefix}-{index}",
+                        "physical_root_fingerprint": f"{prefix}-root-{index}",
+                        "production_label_eligible": True,
+                        "recovery_stratum": stratum,
+                        "scenario_family": family,
+                        "error_cardinality": cardinality,
+                        "parameter_scans_available": parameter_scans_available,
+                        "policy_observation": copy.deepcopy(observation or {}),
+                        "preferred_action": copy.deepcopy(preferred_action),
+                    }
+                )
+
+        for cardinality in (2, 4, 5):
+            add(
+                f"multi-{cardinality}",
+                5,
+                stratum="multi_measurement_safe_handoff",
+                family="multi_measurement",
+                cardinality=cardinality,
+                parameter_scans_available=False,
+            )
+        add(
+            "route-actionable",
+            5,
+            stratum="premature_commit_recovery",
+            observation={
+                "fresh_context_evidence": {
+                    "parameter": {
+                        "route_status": "actionable",
+                        "parameter_ranking_dominance_ratio": 1.1,
+                    }
+                }
+            },
+        )
+        add(
+            "route-negative",
+            5,
+            stratum="premature_escalation_recovery",
+            observation={
+                "fresh_context_evidence": {
+                    "parameter": {"route_status": "complete_negative"}
+                }
+            },
+        )
+        add(
+            "route-unavailable",
+            5,
+            stratum="unsupported_correction_recovery",
+            observation={
+                "fresh_context_evidence": {
+                    "parameter": {
+                        "route_status": "unavailable_or_inconclusive"
+                    }
+                }
+            },
+        )
+        for first, second in (
+            ("measurement", "parameter"),
+            ("parameter", "measurement"),
+        ):
+            add(
+                f"sequence-{first}",
+                5,
+                stratum="sequential_measurement_parameter_recovery",
+                observation={
+                    "history_window": [
+                        {"action": {"tool": f"correct_{first}"}}
+                    ]
+                },
+                preferred_action={
+                    "tool": f"correct_{second}",
+                    "arguments": {},
+                },
+            )
+        add(
+            "partial",
+            5,
+            stratum="post_failure_no_candidate",
+            observation={
+                "accepted_corrections": [{"target": "measurement:1"}],
+                "no_material_anomaly_remaining": False,
+            },
+        )
+        add(
+            "unsupported-extra",
+            5,
+            stratum="unsupported_correction_recovery",
+        )
+        add("post-extra", 5, stratum="post_failure_no_candidate")
+        for index in range(extra_rows):
+            rows.append(
+                {
+                    "example_id": f"extra-{index}",
+                    "physical_root_fingerprint": f"extra-root-{index}",
+                    "production_label_eligible": True,
+                    "recovery_stratum": "multi_measurement_safe_handoff",
+                    "scenario_family": "measurement+parameter",
+                    "error_cardinality": 2,
+                    "policy_observation": {},
+                }
+            )
+        return rows
 
     def test_frozen_suite_provides_explicit_nonempty_physical_holdout(self) -> None:
         roots = frozen_physical_roots(DEFAULT_FORBIDDEN_SUITE)
@@ -652,8 +825,21 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 "source_state": source_state,
                 "source_partition": "train",
                 "parameter_ranking_dominance_threshold": 1.0,
-                "plan": {"multi_measurement": 1},
+                "primary_count_by_family": {"multi_measurement": 1},
+                "reserve_count_by_family": {"multi_measurement": 0},
                 "selected_count_by_family": {"multi_measurement": 1},
+                "collection_schedule": {
+                    "contract": DAGGER1_COLLECTION_SCHEDULE_CONTRACT,
+                    "cohort_order": ["primary", "reserve"],
+                    "reserve_family_priority": list(
+                        DAGGER1_RESERVE_FAMILY_PRIORITY
+                    ),
+                    "priority_field": "grouping.collection_priority",
+                    "order_field": "grouping.collection_order",
+                    "maximum_rollout_replicas_by_family": (
+                        DAGGER1_MAXIMUM_ROLLOUT_REPLICAS_BY_FAMILY
+                    ),
+                },
                 "scenario_count": 1,
                 "physical_root_count": 1,
                 "protected_root_overlap": [],
@@ -672,6 +858,9 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                         "grouping": {
                             "scenario_family": "multi_measurement",
                             "physical_root_fingerprint": "fresh-root",
+                            "collection_cohort": "primary",
+                            "collection_priority": 0,
+                            "collection_order": 0,
                         }
                     }
                 ],
@@ -937,6 +1126,263 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
         incomplete = recommended_collection_gate(rows[:299])
         self.assertFalse(incomplete["passed"])
         self.assertFalse(incomplete["recommended_row_target"]["passed"])
+
+    def test_rollout_schedule_is_finite_and_diagnostic_uses_primary_once(self):
+        scenarios = self._scheduled_scenarios()
+        diagnostic = dagger1_rollout_batches(
+            scenarios, collection_pass="diagnostic"
+        )
+        self.assertEqual([batch["batch_id"] for batch in diagnostic], ["primary-r0"])
+        self.assertEqual(len(diagnostic[0]["scenarios"]), 2)
+
+        training = dagger1_rollout_batches(
+            list(reversed(scenarios)), collection_pass="training"
+        )
+        self.assertEqual(
+            [batch["batch_id"] for batch in training],
+            [
+                "primary-r0",
+                "reserve-1-multi_measurement-r0",
+                "reserve-2-measurement+parameter-r0",
+                "reserve-3-parameter-r0",
+                "repeat-multi_measurement-r1",
+                "repeat-measurement+parameter-r1",
+                "repeat-multi_measurement-r2",
+            ],
+        )
+        self.assertEqual(
+            sum(len(batch["scenarios"]) for batch in training), 11
+        )
+
+    def test_rollout_seed_and_repeat_ids_are_batch_invariant_and_unique(self):
+        scenarios = self._scheduled_scenarios()
+        root = scenarios[0]["grouping"]["physical_root_fingerprint"]
+        self.assertEqual(
+            dagger1_rollout_seed(
+                seed=17,
+                physical_root_fingerprint=root,
+                replica=1,
+            ),
+            dagger1_rollout_seed(
+                seed=17,
+                physical_root_fingerprint=root,
+                replica=1,
+            ),
+        )
+        self.assertNotEqual(
+            dagger1_rollout_seed(
+                seed=17,
+                physical_root_fingerprint=root,
+                replica=0,
+            ),
+            dagger1_rollout_seed(
+                seed=17,
+                physical_root_fingerprint=root,
+                replica=1,
+            ),
+        )
+
+        def collect_episode(scenario, replica, rollout_seed, batch_id, order):
+            del replica, rollout_seed, batch_id, order
+            grouping = scenario["grouping"]
+            scenario_id = scenario["execution"]["scenario_id"]
+            return [
+                {
+                    "example_id": f"dagger_iter1_{scenario_id}_step0",
+                    "scenario_id": scenario_id,
+                    "physical_root_fingerprint": grouping[
+                        "physical_root_fingerprint"
+                    ],
+                    "scenario_family": grouping["scenario_family"],
+                    "state_origin": "learner_policy",
+                    "step": 0,
+                    "terminal_outcome": "resolved",
+                }
+            ]
+
+        rows, matrix, report, _ = collect_dagger1_rollout_schedule(
+            scenarios,
+            collection_pass="training",
+            seed=17,
+            max_steps=24,
+            collect_episode=collect_episode,
+            checkpoint=lambda rows, matrix: {
+                "candidate_rows": len(rows),
+                "selected_rows": [],
+                "failed_gate_names": ["not_yet"],
+                "passed": False,
+            },
+        )
+        example_ids = [row["example_id"] for row in rows]
+        self.assertEqual(len(example_ids), len(set(example_ids)))
+        self.assertTrue(
+            all(row["state_origin"] == "learner_policy" for row in rows)
+        )
+        self.assertEqual(report["stopping_reason"], "reserve_exhausted")
+        self.assertEqual(report["executed_episode_count"], 11)
+        self.assertTrue(matrix["passed"])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir) / "reserve-exhausted"
+            manifest = write_failed_collection_evidence_bundle(
+                destination,
+                candidate_rows=rows,
+                all_rows=rows,
+                evidence={
+                    "failed_gate_names": ["recommended_collection_gate"],
+                    "collection_stopping_report": report,
+                    "rollout_disposition_matrix": matrix,
+                },
+            )
+            self.assertEqual(
+                manifest["collection_stopping_report"]["stopping_reason"],
+                "reserve_exhausted",
+            )
+            self.assertEqual(
+                manifest["diagnostic_artifacts"]["all_visited_rows"][
+                    "row_count"
+                ],
+                11,
+            )
+            self.assertFalse(manifest["training_eligible"])
+
+    def test_schedule_stops_only_after_first_passing_whole_batch(self):
+        scenarios = self._scheduled_scenarios()
+
+        def collect_episode(scenario, replica, rollout_seed, batch_id, order):
+            del replica, rollout_seed, batch_id, order
+            grouping = scenario["grouping"]
+            scenario_id = scenario["execution"]["scenario_id"]
+            return [
+                {
+                    "example_id": f"{scenario_id}-step0",
+                    "scenario_id": scenario_id,
+                    "physical_root_fingerprint": grouping[
+                        "physical_root_fingerprint"
+                    ],
+                    "scenario_family": grouping["scenario_family"],
+                    "step": 0,
+                    "terminal_outcome": "resolved",
+                }
+            ]
+
+        rows, _, report, checkpoint = collect_dagger1_rollout_schedule(
+            scenarios,
+            collection_pass="training",
+            seed=19,
+            max_steps=24,
+            collect_episode=collect_episode,
+            checkpoint=lambda rows, matrix: {
+                "candidate_rows": len(rows),
+                "selected_rows": list(rows),
+                "failed_gate_names": [] if len(rows) >= 3 else ["row_floor"],
+                "passed": len(rows) >= 3,
+            },
+        )
+        self.assertEqual(len(rows), 3)
+        self.assertTrue(checkpoint["passed"])
+        self.assertEqual(
+            report["stopped_after_batch"],
+            "reserve-1-multi_measurement-r0",
+        )
+        self.assertEqual(
+            report["stopping_reason"], "strict_collection_gate_passed"
+        )
+        self.assertTrue(report["unexecuted_batch_ids"])
+
+    def test_horizon_truncation_is_an_explicit_valid_rollout_disposition(self):
+        scenarios = self._scheduled_scenarios()
+
+        def collect_episode(scenario, replica, rollout_seed, batch_id, order):
+            del replica, rollout_seed, batch_id, order
+            grouping = scenario["grouping"]
+            scenario_id = scenario["execution"]["scenario_id"]
+            return [
+                {
+                    "example_id": f"{scenario_id}-step{step}",
+                    "scenario_id": scenario_id,
+                    "physical_root_fingerprint": grouping[
+                        "physical_root_fingerprint"
+                    ],
+                    "scenario_family": grouping["scenario_family"],
+                    "step": step,
+                    "terminal_outcome": None,
+                }
+                for step in range(24)
+            ]
+
+        _, matrix, report, _ = collect_dagger1_rollout_schedule(
+            scenarios,
+            collection_pass="diagnostic",
+            seed=23,
+            max_steps=24,
+            collect_episode=collect_episode,
+        )
+        self.assertTrue(matrix["passed"])
+        self.assertEqual(matrix["environment_terminal_episodes"], 0)
+        self.assertEqual(matrix["horizon_truncated_episodes"], 2)
+        self.assertEqual(
+            report["stopping_reason"], "diagnostic_primary_complete"
+        )
+
+    def test_deterministic_selection_caps_rows_and_preserves_root_floors(self):
+        rows = self._strict_coverage_rows(extra_rows=70)
+        selected, report = select_dagger1_collection_rows(
+            rows,
+            target_min_rows=90,
+            target_max_rows=100,
+        )
+        selected_reversed, reversed_report = select_dagger1_collection_rows(
+            list(reversed(rows)),
+            target_min_rows=90,
+            target_max_rows=100,
+        )
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(len(selected), 100)
+        self.assertEqual(
+            [row["example_id"] for row in selected],
+            [row["example_id"] for row in selected_reversed],
+        )
+        self.assertEqual(report, reversed_report)
+        self.assertTrue(
+            report["selected_independent_root_support"]["passed"]
+        )
+
+    def test_strict_checkpoint_includes_round1_replay_capacity(self):
+        rows = self._strict_coverage_rows(extra_rows=70)
+
+        def d0_rows(count):
+            return [
+                {
+                    "example_id": f"d0-{index}",
+                    "physical_root_fingerprint": f"d0-root-{index}",
+                    "production_label_eligible": True,
+                }
+                for index in range(count)
+            ]
+
+        passing = evaluate_dagger1_collection_checkpoint(
+            rows,
+            d0_training_rows=d0_rows(100),
+            target_min_rows=90,
+            target_max_rows=100,
+            rollout_matrix={"passed": True},
+        )
+        self.assertTrue(passing["passed"], passing["failed_gate_names"])
+        self.assertTrue(passing["round1_replay_capacity"]["passed"])
+
+        capacity_failure = evaluate_dagger1_collection_checkpoint(
+            rows,
+            d0_training_rows=d0_rows(5000),
+            target_min_rows=90,
+            target_max_rows=100,
+            rollout_matrix={"passed": True},
+        )
+        self.assertFalse(capacity_failure["passed"])
+        self.assertIn(
+            "round1_replay_capacity",
+            capacity_failure["failed_gate_names"],
+        )
 
     def test_truth_audit_quarantine_counts_only_pre_audit_training_candidates(self):
         passed_audit = {

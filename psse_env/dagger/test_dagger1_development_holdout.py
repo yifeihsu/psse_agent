@@ -35,6 +35,7 @@ def _envelope(
     *,
     split: str = "dagger_train",
     scans: bool = False,
+    error_cardinality: int | None = None,
 ) -> dict:
     return {
         "scenario_schema_version": 1,
@@ -57,7 +58,11 @@ def _envelope(
             "root_scenario_id": f"root-{root}",
             "physical_root_fingerprint": root,
             "scenario_family": family,
-            "error_cardinality": 2 if family == "measurement+parameter" else 1,
+            "error_cardinality": (
+                error_cardinality
+                if error_cardinality is not None
+                else 2 if family == "measurement+parameter" else 1
+            ),
             "case_id": "case14",
             "split": split,
             "source_tier": "test",
@@ -65,7 +70,12 @@ def _envelope(
     }
 
 
-def _write_boundaries(root: Path, *, training_root: str = "training-root") -> tuple[Path, Path, Path]:
+def _write_boundaries(
+    root: Path,
+    *,
+    training_root: str = "training-root",
+    reserved_multi_roots: list[str] | None = None,
+) -> tuple[Path, Path, Path]:
     d0_dir = root / "d0"
     d0_raw = d0_dir / "aggregate.raw.jsonl"
     _write_jsonl(
@@ -101,10 +111,14 @@ def _write_boundaries(root: Path, *, training_root: str = "training-root") -> tu
         encoding="utf-8",
     )
     training_manifest = root / "d1-training.json.manifest.json"
+    reserved_multi_roots = sorted(reserved_multi_roots or ["multi-fresh"])
     training_manifest.write_text(
         json.dumps(
             {
                 "schema_version": 1,
+                "builder_contract": (
+                    holdout_module.DAGGER1_TRAINING_SCENARIO_BUILDER_CONTRACT
+                ),
                 "release_evidence_eligible": False,
                 "source_partition": "train",
                 "parameter_ranking_dominance_threshold": 1.0,
@@ -118,6 +132,17 @@ def _write_boundaries(root: Path, *, training_root: str = "training-root") -> tu
                 "frozen_suite_sha256": file_sha256(
                     holdout_module.DEFAULT_FORBIDDEN_SUITE
                 ),
+                "development_reserved_roots_by_family": {
+                    "multi_measurement": reserved_multi_roots,
+                },
+                "development_reserved_root_set_sha256_by_family": {
+                    "multi_measurement": stable_json_sha256(
+                        reserved_multi_roots
+                    ),
+                },
+                "withheld_for_development_count_by_family": {
+                    "multi_measurement": len(reserved_multi_roots),
+                },
             },
             indent=2,
             sort_keys=True,
@@ -189,12 +214,56 @@ class _FakeGenerator:
         }
 
 
+class _FakeDefaultDevelopmentGenerator(_FakeGenerator):
+    def build(self, plan: dict[str, int]) -> list[dict]:
+        if plan != {
+            "measurement+parameter": 48,
+            "multi_measurement": 176,
+            "parameter": 24,
+        }:
+            raise AssertionError(plan)
+        rows: list[dict] = []
+        for index in range(12):
+            rows.append(
+                {
+                    "scenario_id": f"candidate-mixed-{index}",
+                    "scenario_family": "measurement+parameter",
+                    "error_cardinality": 2,
+                    "root": f"mixed-dev-{index:03d}",
+                    "scans": False,
+                }
+            )
+        for cardinality in (2, 3, 4, 5):
+            for index in range(3):
+                rows.append(
+                    {
+                        "scenario_id": f"candidate-multi-{cardinality}-{index}",
+                        "scenario_family": "multi_measurement",
+                        "error_cardinality": cardinality,
+                        "root": f"multi-{cardinality}-{index:03d}",
+                        "scans": False,
+                    }
+                )
+        for index in range(6):
+            rows.append(
+                {
+                    "scenario_id": f"candidate-parameter-{index}",
+                    "scenario_family": "parameter",
+                    "error_cardinality": 1,
+                    "root": f"parameter-dev-{index:03d}",
+                    "scans": False,
+                }
+            )
+        return rows
+
+
 def _fake_partition(row: dict, *, split: str) -> dict:
     return _envelope(
         row["root"],
         row["scenario_family"],
         split=split,
         scans=row["scans"],
+        error_cardinality=row["error_cardinality"],
     )
 
 
@@ -334,6 +403,60 @@ class Dagger1DevelopmentHoldoutTests(unittest.TestCase):
                 first_manifest["d1_training_manifest_sha256"],
                 file_sha256(training_manifest),
             )
+
+    def test_default_build_reconstructs_exact_reserved_multi_roots(self) -> None:
+        reserved_multi_roots = [
+            f"multi-{cardinality}-{index:03d}"
+            for cardinality in (2, 3, 4, 5)
+            for index in range(3)
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            d0_dir, training_path, training_manifest = _write_boundaries(
+                root,
+                reserved_multi_roots=reserved_multi_roots,
+            )
+            output = root / "development.json"
+            report = root / "generator.json"
+            with self._patch_builder(), patch.object(
+                holdout_module,
+                "Round0ScenarioGenerator",
+                _FakeDefaultDevelopmentGenerator,
+            ):
+                manifest = holdout_module.build_dagger1_development_holdout(
+                    d0_aggregate_dir=d0_dir,
+                    d1_training_scenarios=training_path,
+                    d1_training_manifest=training_manifest,
+                    output=output,
+                    generator_report_path=report,
+                    seed=20260721,
+                    plan=holdout_module.DEFAULT_DAGGER1_DEVELOPMENT_ROOT_PLAN,
+                )
+
+            self.assertEqual(
+                manifest["candidate_request_plan"],
+                {
+                    "measurement+parameter": 48,
+                    "multi_measurement": 176,
+                    "parameter": 24,
+                },
+            )
+            self.assertEqual(
+                manifest["selected_multi_measurement_cardinality_inventory"],
+                {"2": 3, "3": 3, "4": 3, "5": 3},
+            )
+            self.assertTrue(
+                manifest[
+                    "selected_multi_measurement_matches_training_reservation"
+                ]
+            )
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            selected_multi_roots = sorted(
+                row["grouping"]["physical_root_fingerprint"]
+                for row in payload[holdout_module.DAGGER1_DEVELOPMENT_SUITE_NAME]
+                if row["grouping"]["scenario_family"] == "multi_measurement"
+            )
+            self.assertEqual(selected_multi_roots, sorted(reserved_multi_roots))
 
     def test_only_approved_plan_is_model_selection_eligible(self) -> None:
         normalized_default = holdout_module._load_plan(None)

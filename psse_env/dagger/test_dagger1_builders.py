@@ -17,11 +17,13 @@ from psse_env.dagger.build_dagger1_development_holdout import (
     DEFAULT_DAGGER1_DEVELOPMENT_ROOT_PLAN,
 )
 from psse_env.dagger.collect_dagger1 import (
+    DAGGER1_COLLECTION_SELECTION_CONTRACT,
     DAGGER1_SCENARIO_BUILDER_CONTRACT,
     DEFAULT_ENV_FACTORY_SPEC,
     DEFAULT_EVALUATION_POLICY,
     DEFAULT_FORBIDDEN_SUITE,
     DEFAULT_POLICY_FACTORY_SPEC,
+    dagger1_production_row_target_contract,
     frozen_physical_roots,
 )
 from psse_env.dagger.release_factories import (
@@ -70,11 +72,16 @@ def _d1_training_row(**updates) -> dict:
             "arguments": {"state_id": "active"},
         },
         "observable_rank_one_target_proof": {"passed": True},
-        "labels": {"training_decision_evidence_verified": True},
+        "labels": {
+            "training_decision_evidence_verified": True,
+            "collection_training_eligible": True,
+            "collection_disposition": "selected_for_round1_training",
+        },
         "offline_teacher_target_audit": (
             _passed_offline_teacher_target_audit()
         ),
         "collection_training_eligible": True,
+        "collection_disposition": "selected_for_round1_training",
     }
     row.update(copy.deepcopy(updates))
     return row
@@ -86,6 +93,22 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
         encoding="utf-8",
     )
+
+
+def _mock_production_selection_report(rows: list[dict]) -> dict:
+    example_ids = [str(row.get("example_id") or "") for row in rows]
+    return {
+        "contract": DAGGER1_COLLECTION_SELECTION_CONTRACT,
+        "candidate_rows": len(rows),
+        "candidate_example_id_set_sha256": stable_json_sha256(
+            sorted(example_ids)
+        ),
+        "target_min_rows": 300,
+        "target_max_rows": 600,
+        "selected_rows": len(rows),
+        "selected_example_id_sequence_sha256": stable_json_sha256(example_ids),
+        "passed": True,
+    }
 
 
 def _write_d0_inputs(root: Path) -> Path:
@@ -188,6 +211,45 @@ class _FakeTrainGenerator:
         }
 
 
+class _FakeDefaultPoolGenerator(_FakeTrainGenerator):
+    def build(self, plan: dict[str, int]) -> list[dict]:
+        if plan != scenario_module.DEFAULT_DAGGER1_CANDIDATE_REQUEST_PLAN:
+            raise AssertionError(plan)
+        rows: list[dict] = []
+        for index in range(96):
+            rows.append(
+                {
+                    "root": f"mixed-{index:03d}",
+                    "parameter_scans": {},
+                    "scenario_id": f"mixed-{index:03d}",
+                    "scenario_family": "measurement+parameter",
+                    "error_cardinality": 2,
+                }
+            )
+        for cardinality, count in {2: 19, 3: 21, 4: 18, 5: 33}.items():
+            for index in range(count):
+                rows.append(
+                    {
+                        "root": f"multi-{cardinality}-{index:03d}",
+                        "parameter_scans": {},
+                        "scenario_id": f"multi-{cardinality}-{index:03d}",
+                        "scenario_family": "multi_measurement",
+                        "error_cardinality": cardinality,
+                    }
+                )
+        for index in range(35):
+            rows.append(
+                {
+                    "root": f"parameter-{index:03d}",
+                    "parameter_scans": {},
+                    "scenario_id": f"parameter-{index:03d}",
+                    "scenario_family": "parameter",
+                    "error_cardinality": 1,
+                }
+            )
+        return rows
+
+
 def _fake_partition(row: dict, *, split: str) -> dict:
     return {
         "scenario_schema_version": 1,
@@ -220,7 +282,7 @@ def _fake_partition(row: dict, *, split: str) -> dict:
 
 
 class Dagger1ScenarioBuilderTests(unittest.TestCase):
-    def test_default_plan_reserves_thirty_development_roots(self) -> None:
+    def test_default_primary_plan_is_reviewed_120_root_cohort(self) -> None:
         self.assertEqual(
             scenario_module.DEFAULT_DAGGER1_ROOT_PLAN,
             {
@@ -308,6 +370,123 @@ class Dagger1ScenarioBuilderTests(unittest.TestCase):
             self.assertEqual(
                 selected_roots,
                 {"multi-fresh", "parameter-fresh", "mixed-fresh"},
+            )
+
+    def test_default_pool_has_quota_bound_primary_reserve_and_holdback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            d0_dir = _write_d0_inputs(root)
+            output = root / "scenarios.json"
+            report = root / "generator.json"
+            with (
+                patch.object(
+                    scenario_module,
+                    "git_source_state",
+                    return_value=SOURCE_STATE,
+                ),
+                patch.object(
+                    scenario_module,
+                    "Round0ScenarioGenerator",
+                    _FakeDefaultPoolGenerator,
+                ),
+                patch.object(
+                    scenario_module,
+                    "partition_release_scenario_v1",
+                    side_effect=_fake_partition,
+                ),
+                patch.object(
+                    scenario_module,
+                    "frozen_physical_roots",
+                    return_value=frozenset(),
+                ),
+            ):
+                manifest = scenario_module.build_dagger1_scenarios(
+                    d0_aggregate_dir=d0_dir,
+                    output=output,
+                    generator_report_path=report,
+                    seed=20260720,
+                    plan=scenario_module.DEFAULT_DAGGER1_ROOT_PLAN,
+                )
+                with self.assertRaisesRegex(ValueError, "must remain 2"):
+                    scenario_module.build_dagger1_scenarios(
+                        d0_aggregate_dir=d0_dir,
+                        output=root / "scaled.json",
+                        generator_report_path=root / "scaled-report.json",
+                        seed=20260720,
+                        plan=scenario_module.DEFAULT_DAGGER1_ROOT_PLAN,
+                        candidate_multiplier=3,
+                    )
+
+            scenarios = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(len(scenarios), 199)
+            self.assertEqual(
+                manifest["candidate_request_plan"],
+                {
+                    "measurement+parameter": 96,
+                    "multi_measurement": 176,
+                    "parameter": 48,
+                },
+            )
+            self.assertEqual(
+                manifest["fresh_candidate_inventory"]["multi_measurement"]
+                ["error_cardinality"],
+                {"2": 19, "3": 21, "4": 18, "5": 33},
+            )
+            self.assertEqual(
+                manifest["primary_count_by_family"],
+                {
+                    "measurement+parameter": 48,
+                    "multi_measurement": 48,
+                    "parameter": 24,
+                },
+            )
+            self.assertEqual(
+                manifest["reserve_count_by_family"],
+                {
+                    "measurement+parameter": 48,
+                    "multi_measurement": 31,
+                    "parameter": 0,
+                },
+            )
+            self.assertEqual(
+                manifest["reserve_multi_measurement_cardinality_inventory"],
+                {"3": 12, "4": 5, "5": 14},
+            )
+            self.assertEqual(
+                manifest[
+                    "withheld_for_development_multi_measurement_cardinality_inventory"
+                ],
+                {"2": 3, "3": 3, "4": 3, "5": 3},
+            )
+            held_out = manifest["development_reserved_roots_by_family"][
+                "multi_measurement"
+            ]
+            self.assertEqual(len(held_out), 12)
+            self.assertTrue(set(held_out).isdisjoint({
+                row["grouping"]["physical_root_fingerprint"]
+                for row in scenarios
+            }))
+            self.assertEqual(
+                [row["grouping"]["collection_order"] for row in scenarios],
+                list(range(199)),
+            )
+            self.assertEqual(
+                {
+                    row["grouping"]["collection_priority"]
+                    for row in scenarios
+                    if row["grouping"]["collection_cohort"] == "primary"
+                },
+                {0},
+            )
+            reserve_priorities = {
+                row["grouping"]["scenario_family"]: row["grouping"]
+                ["collection_priority"]
+                for row in scenarios
+                if row["grouping"]["collection_cohort"] == "reserve"
+            }
+            self.assertEqual(
+                reserve_priorities,
+                {"multi_measurement": 1, "measurement+parameter": 2},
             )
 
     def test_builder_rejects_d0_with_non_release_eligible_source(self) -> None:
@@ -510,7 +689,19 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
             "collection_pass": "training",
             "visited_rows": len(all_rows),
             "output_rows": 1,
+            "selected_recovery_row_count": 1,
+            "candidate_recovery_rows": 1,
+            "candidate_recovery_row_count": 1,
             "production_eligible_recovery_rows": 1,
+            "production_row_target_contract": (
+                dagger1_production_row_target_contract(
+                    target_min_rows=300,
+                    target_max_rows=600,
+                )
+            ),
+            "deterministic_collection_selection": (
+                _mock_production_selection_report(all_rows)
+            ),
             "offline_teacher_target_quarantine_summary": (
                 summarize_dagger1_offline_teacher_target_quarantine(all_rows)
             ),
@@ -590,8 +781,15 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
         manifest["all_output_row_count"] = len(rows)
         manifest["visited_rows"] = len(rows)
         manifest["output_rows"] = len(rows)
-        manifest["production_eligible_recovery_rows"] = len(
+        manifest["selected_recovery_row_count"] = len(rows)
+        candidate_count = len(
             [row for row in rows if row.get("production_label_eligible") is True]
+        )
+        manifest["candidate_recovery_rows"] = candidate_count
+        manifest["candidate_recovery_row_count"] = candidate_count
+        manifest["production_eligible_recovery_rows"] = candidate_count
+        manifest["deterministic_collection_selection"] = (
+            _mock_production_selection_report(rows)
         )
         manifest["offline_teacher_target_quarantine_summary"] = (
             summarize_dagger1_offline_teacher_target_quarantine(rows)
@@ -689,6 +887,119 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                         expected_candidate_rows=1,
                     )
 
+    def test_aggregate_recomputes_bounded_selection_from_complete_ledger(self):
+        selected = _d1_training_row(
+            example_id="selected",
+            physical_root_fingerprint="r1",
+        )
+        unselected_labels = copy.deepcopy(selected["labels"])
+        unselected_labels.update(
+            {
+                "collection_training_eligible": False,
+                "collection_disposition": "safe_candidate_not_selected",
+            }
+        )
+        unselected = _d1_training_row(
+            example_id="unselected",
+            physical_root_fingerprint="r2",
+            collection_training_eligible=False,
+            collection_disposition="safe_candidate_not_selected",
+            labels=unselected_labels,
+        )
+        ineligible_labels = copy.deepcopy(selected["labels"])
+        ineligible_labels.update(
+            {
+                "collection_training_eligible": False,
+                "collection_disposition": "not_safe_candidate",
+            }
+        )
+        ineligible = _d1_training_row(
+            example_id="ineligible",
+            physical_root_fingerprint="r3",
+            production_label_eligible=False,
+            collection_training_eligible=False,
+            collection_disposition="not_safe_candidate",
+            labels=ineligible_labels,
+        )
+        report = _mock_production_selection_report([selected, unselected])
+        report["selected_rows"] = 1
+        report["selected_example_id_sequence_sha256"] = stable_json_sha256(
+            ["selected"]
+        )
+        manifest = {
+            "production_row_target_contract": (
+                dagger1_production_row_target_contract(
+                    target_min_rows=300,
+                    target_max_rows=600,
+                )
+            ),
+            "deterministic_collection_selection": report,
+            "candidate_recovery_rows": 2,
+            "candidate_recovery_row_count": 2,
+            "production_eligible_recovery_rows": 2,
+            "output_rows": 1,
+            "selected_recovery_row_count": 1,
+        }
+        ledger = [selected, unselected, ineligible]
+        with patch.object(
+            aggregate_module.collect_dagger1_module,
+            "select_dagger1_collection_rows",
+            return_value=([copy.deepcopy(selected)], copy.deepcopy(report)),
+        ) as selector:
+            binding = (
+                aggregate_module.validate_dagger1_collection_selection_binding(
+                    [selected], ledger, manifest
+                )
+            )
+            self.assertTrue(binding["passed"])
+            self.assertEqual(binding["candidate_rows"], 2)
+            self.assertEqual(binding["selected_rows"], 1)
+            self.assertEqual(binding["unselected_safe_candidate_rows"], 1)
+            self.assertTrue(unselected["production_label_eligible"])
+            self.assertEqual(
+                [
+                    row["example_id"]
+                    for row in selector.call_args.args[0]
+                ],
+                ["selected", "unselected"],
+            )
+
+            forged_selected = copy.deepcopy(selected)
+            forged_selected["preferred_action"] = {
+                "tool": "forged",
+                "arguments": {},
+            }
+            with self.assertRaisesRegex(ValueError, "exact deterministic"):
+                aggregate_module.validate_dagger1_collection_selection_binding(
+                    [forged_selected], ledger, manifest
+                )
+
+            forged_counts = {**manifest, "candidate_recovery_row_count": 1}
+            with self.assertRaisesRegex(ValueError, "safe-candidate row counts"):
+                aggregate_module.validate_dagger1_collection_selection_binding(
+                    [selected], ledger, forged_counts
+                )
+
+    def test_aggregate_rejects_exploratory_collection_bounds(self):
+        row = _d1_training_row()
+        manifest = {
+            "production_row_target_contract": (
+                dagger1_production_row_target_contract(
+                    target_min_rows=1,
+                    target_max_rows=10,
+                )
+            ),
+            "deterministic_collection_selection": {
+                **_mock_production_selection_report([row]),
+                "target_min_rows": 1,
+                "target_max_rows": 10,
+            },
+        }
+        with self.assertRaisesRegex(ValueError, "reviewed production row bounds"):
+            aggregate_module.validate_dagger1_collection_selection_binding(
+                [row], [row], manifest
+            )
+
     def test_public_builder_binds_inputs_rejects_tamper_and_no_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -763,6 +1074,14 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                     aggregate_module,
                     "audit_dagger1_union_realizability",
                     return_value={"passed": True, "failures": []},
+                ),
+                patch.object(
+                    aggregate_module.collect_dagger1_module,
+                    "select_dagger1_collection_rows",
+                    side_effect=lambda rows, **kwargs: (
+                        copy.deepcopy(list(rows)),
+                        _mock_production_selection_report(list(rows)),
+                    ),
                 ),
             ):
                 report = aggregate_module.build_round1_aggregate(

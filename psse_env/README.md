@@ -550,16 +550,40 @@ python scripts/build_dagger1_development_holdout.py \
 ```
 
 The second command freezes 30 additional diagnostic development roots in a
-12/12/6 family split; the first command reserves the complementary 120
-training roots in a 48/48/24 split. They are byte-bound and disjoint from D0,
-D1 training, and the frozen 115-root promotion suite, but are explicitly
-ineligible for SFT and promotion evidence.
+12/12/6 family split, with exactly three multi-measurement roots held back for
+each measurement-error cardinality 2, 3, 4, and 5. The first command requests a
+finite candidate inventory of 96 measurement-plus-parameter, 176
+multi-measurement, and 48 parameter candidates. From fresh eligible roots it
+binds a 48/48/24 primary training allocation plus finite reserves of 48
+measurement-plus-parameter and 31 multi-measurement roots; there is no
+parameter reserve. Primary, reserve, and development allocations are
+byte-bound and mutually disjoint from D0 and the frozen 115-root promotion
+suite. Development roots are explicitly ineligible for SFT and promotion
+evidence.
 
-Use the failed-promotion adapter only as the learner. The diagnostic pass is
-learner-only and always training-ineligible; the mixed pass must produce
-300--600 eligible learner-recovery rows, pass the offline physical-truth target
-audit, provide at least five distinct roots in every targeted state cell, and
-meet the 10-root central / 5-root remaining recovery-stratum floors:
+Use the failed-promotion adapter only as the learner. The `beta=0` diagnostic
+pass runs the primary allocation only, is learner-only, and is always
+training-ineligible. The mixed pass uses root-local deterministic beta seeds
+and executes whole episodes through the declared primary, reserve, and repeat
+schedule. A measurement-plus-parameter root may have at most two replicas, a
+multi-measurement root at most three, and a parameter root one. Reserve and
+repeat episodes use the same mixed learner/expert policy as the primary pass;
+they do not inject scripted failures or teacher actions.
+
+Every executed episode records exactly one terminal collection disposition:
+`resolved`, `operator_escalation`, or `horizon_truncated`. A horizon-truncated
+episode is terminal for collection accounting but is not claimed physically
+resolved. Its learner-created hard states remain valid DAgger candidates when
+their individual observable rank-one and offline physical-truth audits pass,
+so horizon truncation alone does not fail the collection.
+
+After each declared whole-episode batch, a deterministic selector tests for
+the first strict GO: 300--600 selected learner-recovery rows, a clean offline
+physical-truth target audit, at least five distinct roots in every targeted
+state cell, the 10-root central / 5-root remaining recovery-stratum floors,
+and sufficient Round-1 replay capacity under the duplicate and per-root caps.
+The selector preserves the rare-root floors and never uses row duplication as
+independent support:
 
 For D1, both the current teacher target and the stored next-action inventory
 are functions of `PolicyObservation` only. `OracleState` is constructed after
@@ -610,20 +634,31 @@ python scripts/build_dagger1_training_aggregate.py \
   --d1-share 0.25
 ```
 
-If the strict mixed-policy gate fails, the command exits nonzero and leaves
-`training_beta025.jsonl`, its all-row ledger, and its production manifest
-absent. Instead it atomically publishes the explicitly named
-`training_beta025.failed-collection/` directory with checksummed,
-training-ineligible candidate rows, all visited rows, and structured gate
-reports. Use that bundle to diagnose the failure; never pass it to the Round-1
-aggregate builder. Both successful production outputs and failed diagnostic
-bundles are write-once, so choose a new attempt path for each rerun.
+On strict GO, the complete visited ledger retains every visited row, including
+all safe candidates not chosen by the bounded selector, while
+`training_beta025.jsonl` contains only the deterministic at-most-600-row subset
+that preserves every rare-root floor. Aggregate ingestion recomputes and
+verifies that selection from the bound ledger and manifest; it never relabels
+or promotes discarded candidates.
+
+If the finite primary/reserve/repeat schedule is exhausted before strict GO,
+the command exits nonzero and leaves `training_beta025.jsonl`, its all-row
+ledger, and its production manifest absent. Instead it atomically publishes
+the explicitly named `training_beta025.failed-collection/` directory as a
+write-once, reserve-exhausted NO-GO bundle with checksummed,
+training-ineligible candidate rows, the complete visited ledger, episode
+dispositions, and structured gate reports. Use that bundle to diagnose the
+failure; never pass it to the Round-1 aggregate builder. Both successful
+production outputs and failed diagnostic bundles are write-once, so choose a
+new attempt path for each rerun.
 
 The collection manifest reports the default Round-1 replay capacity and the
-largest feasible total view under the duplicate and per-root caps. If the
-default natural-union size is infeasible, collect more D1 rows or pass an
-explicit smaller `--size`; never relax the 20--30% source-share band silently.
-The final builder independently reruns the D1 row audits and exact/approximate
+largest feasible total view under the duplicate and per-root caps. Replay
+capacity is strict: if the requested view is infeasible, collect more D1 roots
+or choose an explicitly reviewed smaller `--size`; never relax the 20--30%
+source-share band or the replay caps silently. The final builder independently
+recomputes the deterministic bounded D1 selection from the complete ledger,
+reruns the D1 row/root/replay audits and exact/approximate
 teacher-realizability gates, preserves `aggregate.raw.jsonl`,
 `aggregate.d0.raw.jsonl`, `aggregate.d1.raw.jsonl`, and
 `aggregate.train_view.raw.jsonl`, and hashes every semantic report into

@@ -30,6 +30,7 @@ from psse_env.dagger.release_factories import (
     inspect_release_checkpoint,
 )
 from psse_env.dagger.replay_buffer import (
+    DAGGER1_RECOVERY_STRATUM_MINIMUM_DISTINCT_ROOTS,
     DAGGER1_TARGETED_STATE_CELL_MINIMUM_DISTINCT_ROOTS,
     audit_dagger1_independent_root_support,
     dagger1_replay_capacity_report,
@@ -69,7 +70,27 @@ _ADAPTER_TREE_REVISION = re.compile(r"[0-9a-fA-F]{64}")
 DEFAULT_TARGET_MIN_ROWS = 300
 DEFAULT_TARGET_MAX_ROWS = 600
 DAGGER1_SCENARIO_BUILDER_CONTRACT = (
-    "fresh_train_partition_dagger1_scenarios_v2"
+    "fresh_train_partition_dagger1_scenarios_v3"
+)
+DAGGER1_COLLECTION_SCHEDULE_CONTRACT = (
+    "dagger1_predeclared_collection_schedule_v1"
+)
+DAGGER1_COLLECTION_SELECTION_CONTRACT = (
+    "dagger1_floor_preserving_natural_row_selection_v1"
+)
+DAGGER1_PRODUCTION_ROW_TARGET_CONTRACT = (
+    "dagger1_reviewed_production_row_target_v1"
+)
+DAGGER1_ROLLOUT_MATRIX_CONTRACT = "dagger1_rollout_disposition_matrix_v1"
+DAGGER1_MAXIMUM_ROLLOUT_REPLICAS_BY_FAMILY = {
+    "measurement+parameter": 2,
+    "multi_measurement": 3,
+    "parameter": 1,
+}
+DAGGER1_RESERVE_FAMILY_PRIORITY = (
+    "multi_measurement",
+    "measurement+parameter",
+    "parameter",
 )
 FAILED_COLLECTION_ARTIFACT_TYPE = (
     "dagger1_failed_strict_collection_diagnostic_bundle"
@@ -183,6 +204,9 @@ def failed_strict_collection_gate_names(
     targeted_coverage: Mapping[str, Any],
     independent_root_support: Mapping[str, Any],
     truth_audit_quarantine: Mapping[str, Any],
+    selection_report: Mapping[str, Any] | None = None,
+    round1_replay_capacity: Mapping[str, Any] | None = None,
+    rollout_matrix: Mapping[str, Any] | None = None,
 ) -> list[str]:
     reports = {
         "independent_root_support": independent_root_support,
@@ -192,6 +216,12 @@ def failed_strict_collection_gate_names(
         "recommended_collection_gate": collection_gate,
         "targeted_state_coverage": targeted_coverage,
     }
+    if selection_report is not None:
+        reports["deterministic_collection_selection"] = selection_report
+    if round1_replay_capacity is not None:
+        reports["round1_replay_capacity"] = round1_replay_capacity
+    if rollout_matrix is not None:
+        reports["rollout_disposition_matrix"] = rollout_matrix
     return sorted(
         name for name, report in reports.items() if report.get("passed") is not True
     )
@@ -722,33 +752,74 @@ def validate_scenario_builder_manifest(
     manifest_source = (
         manifest_source if isinstance(manifest_source, Mapping) else {}
     )
-    plan = manifest.get("plan")
+    primary_counts = manifest.get("primary_count_by_family")
+    reserve_counts = manifest.get("reserve_count_by_family")
     selected_counts = manifest.get("selected_count_by_family")
-    if not isinstance(plan, Mapping) or not isinstance(selected_counts, Mapping):
-        raise ValueError("scenario-builder manifest lacks exact family counts")
+    schedule = manifest.get("collection_schedule")
+    if not all(
+        isinstance(value, Mapping)
+        for value in (
+            primary_counts,
+            reserve_counts,
+            selected_counts,
+            schedule,
+        )
+    ):
+        raise ValueError(
+            "scenario-builder manifest lacks the exact v3 collection schedule"
+        )
     if any(
-        isinstance(value, bool) or not isinstance(value, int) or value <= 0
-        for value in (*plan.values(), *selected_counts.values())
+        isinstance(value, bool) or not isinstance(value, int) or value < 0
+        for value in (
+            *primary_counts.values(),
+            *reserve_counts.values(),
+            *selected_counts.values(),
+        )
     ):
         raise ValueError("scenario-builder family counts are invalid")
     try:
-        normalized_plan = {str(key): int(value) for key, value in plan.items()}
+        normalized_primary = {
+            str(key): int(value) for key, value in primary_counts.items()
+        }
+        normalized_reserve = {
+            str(key): int(value) for key, value in reserve_counts.items()
+        }
         normalized_selected = {
             str(key): int(value) for key, value in selected_counts.items()
         }
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError("scenario-builder family counts are invalid") from exc
+    expected_selected = {
+        family: normalized_primary.get(family, 0)
+        + normalized_reserve.get(family, 0)
+        for family in sorted(
+            set(normalized_primary) | set(normalized_reserve)
+        )
+    }
     actual_counts: Counter[str] = Counter()
+    actual_primary_counts: Counter[str] = Counter()
+    actual_reserve_counts: Counter[str] = Counter()
     actual_roots: set[str] = set()
     for scenario in scenarios:
-        grouping = scenario.get("grouping")
-        grouping = grouping if isinstance(grouping, Mapping) else {}
+        grouping = _scenario_grouping(scenario)
         family = str(grouping.get("scenario_family") or "").strip()
         root = str(grouping.get("physical_root_fingerprint") or "").strip()
+        cohort = str(grouping.get("collection_cohort") or "").strip()
         if family:
             actual_counts[family] += 1
+            if cohort == "primary":
+                actual_primary_counts[family] += 1
+            elif cohort == "reserve":
+                actual_reserve_counts[family] += 1
         if root:
             actual_roots.add(root)
+    # Recompute all per-scenario ordering/priority invariants, not only the
+    # manifest summary.  Diagnostic uses the primary prefix; training consumes
+    # the same immutable schedule plus its finite reserve/repeat suffix.
+    dagger1_rollout_batches(scenarios, collection_pass="training")
+    normalized_schedule_replicas = schedule.get(
+        "maximum_rollout_replicas_by_family"
+    )
     checks = {
         "schema_version": manifest.get("schema_version") == 1,
         "builder_contract": (
@@ -773,13 +844,37 @@ def validate_scenario_builder_manifest(
             manifest.get("parameter_ranking_dominance_threshold")
             == BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD
         ),
-        "exact_family_counts": normalized_selected == normalized_plan,
-        "scenario_count": manifest.get("scenario_count") == sum(normalized_plan.values()),
-        "physical_root_count": (
-            manifest.get("physical_root_count") == sum(normalized_plan.values())
+        "exact_family_counts": normalized_selected == expected_selected,
+        "primary_family_counts": dict(actual_primary_counts)
+        == {key: value for key, value in normalized_primary.items() if value},
+        "reserve_family_counts": dict(actual_reserve_counts)
+        == {key: value for key, value in normalized_reserve.items() if value},
+        "collection_schedule_contract": (
+            schedule.get("contract") == DAGGER1_COLLECTION_SCHEDULE_CONTRACT
         ),
-        "actual_family_counts": dict(actual_counts) == normalized_plan,
-        "actual_scenario_count": len(scenarios) == sum(normalized_plan.values()),
+        "collection_schedule_cohorts": schedule.get("cohort_order")
+        == ["primary", "reserve"],
+        "collection_schedule_family_priority": schedule.get(
+            "reserve_family_priority"
+        )
+        == list(DAGGER1_RESERVE_FAMILY_PRIORITY),
+        "collection_schedule_fields": (
+            schedule.get("priority_field") == "grouping.collection_priority"
+            and schedule.get("order_field") == "grouping.collection_order"
+        ),
+        "collection_schedule_replicas": isinstance(
+            normalized_schedule_replicas, Mapping
+        )
+        and dict(normalized_schedule_replicas)
+        == DAGGER1_MAXIMUM_ROLLOUT_REPLICAS_BY_FAMILY,
+        "scenario_count": manifest.get("scenario_count")
+        == sum(expected_selected.values()),
+        "physical_root_count": (
+            manifest.get("physical_root_count") == sum(expected_selected.values())
+        ),
+        "actual_family_counts": dict(actual_counts) == expected_selected,
+        "actual_scenario_count": len(scenarios)
+        == sum(expected_selected.values()),
         "actual_unique_roots": len(actual_roots) == len(scenarios),
         "protected_root_overlap": manifest.get("protected_root_overlap") == [],
         "d0_raw_sha256": manifest.get("d0_raw_sha256") == _file_sha256(d0_raw_path),
@@ -1011,6 +1106,548 @@ def validate_collection_pass(*, collection_pass: str, beta: float) -> dict[str, 
     return report
 
 
+def _scenario_grouping(scenario: Mapping[str, Any]) -> Mapping[str, Any]:
+    grouping = scenario.get("grouping")
+    return grouping if isinstance(grouping, Mapping) else scenario
+
+
+def dagger1_rollout_seed(
+    *, seed: int, physical_root_fingerprint: str, replica: int
+) -> int:
+    """Return a root-local mixture seed that is invariant to batch boundaries."""
+
+    digest = stable_json_sha256(
+        {
+            "contract": "dagger1_root_replica_beta_rng_v1",
+            "seed": int(seed),
+            "physical_root_fingerprint": str(physical_root_fingerprint),
+            "replica": int(replica),
+        }
+    )
+    return int(digest[:16], 16)
+
+
+def dagger1_rollout_batches(
+    scenarios: Sequence[Mapping[str, Any]],
+    *,
+    collection_pass: str,
+) -> list[dict[str, Any]]:
+    """Build the finite reviewed primary/reserve/repeat episode schedule."""
+
+    if collection_pass not in {"diagnostic", "training"}:
+        raise ValueError("collection_pass must be diagnostic or training")
+    materialized = [dict(scenario) for scenario in scenarios]
+    decorated: list[tuple[int, str, int, str, dict[str, Any]]] = []
+    observed_orders: set[int] = set()
+    for index, scenario in enumerate(materialized):
+        grouping = _scenario_grouping(scenario)
+        cohort = str(grouping.get("collection_cohort") or "").strip()
+        family = str(grouping.get("scenario_family") or "").strip()
+        raw_priority = grouping.get("collection_priority")
+        raw_order = grouping.get("collection_order")
+        if cohort not in {"primary", "reserve"}:
+            raise ValueError(
+                f"DAgger-1 scenario {index} has invalid collection_cohort"
+            )
+        if family not in DAGGER1_MAXIMUM_ROLLOUT_REPLICAS_BY_FAMILY:
+            raise ValueError(
+                f"DAgger-1 scenario {index} has unsupported schedule family"
+            )
+        if (
+            isinstance(raw_priority, bool)
+            or not isinstance(raw_priority, int)
+            or raw_priority < 0
+        ):
+            raise ValueError(
+                f"DAgger-1 scenario {index} has invalid collection_priority"
+            )
+        if (
+            isinstance(raw_order, bool)
+            or not isinstance(raw_order, int)
+            or raw_order < 0
+            or raw_order in observed_orders
+        ):
+            raise ValueError(
+                f"DAgger-1 scenario {index} has invalid/duplicate collection_order"
+            )
+        expected_priority = (
+            0
+            if cohort == "primary"
+            else DAGGER1_RESERVE_FAMILY_PRIORITY.index(family) + 1
+        )
+        if raw_priority != expected_priority:
+            raise ValueError(
+                f"DAgger-1 scenario {index} collection priority is inconsistent"
+            )
+        observed_orders.add(raw_order)
+        decorated.append((raw_order, cohort, raw_priority, family, scenario))
+    if observed_orders != set(range(len(materialized))):
+        raise ValueError("DAgger-1 collection_order must be contiguous from zero")
+    decorated.sort(key=lambda item: item[0])
+
+    def batch(
+        batch_id: str,
+        *,
+        phase: str,
+        replica: int,
+        selected: Sequence[tuple[int, str, int, str, dict[str, Any]]],
+    ) -> dict[str, Any] | None:
+        if not selected:
+            return None
+        return {
+            "batch_id": batch_id,
+            "phase": phase,
+            "replica": int(replica),
+            "scenario_orders": [item[0] for item in selected],
+            "scenarios": [item[4] for item in selected],
+        }
+
+    primary = [item for item in decorated if item[1] == "primary"]
+    if not primary:
+        raise ValueError("DAgger-1 schedule has no primary scenarios")
+    batches: list[dict[str, Any]] = []
+    primary_batch = batch(
+        "primary-r0", phase="primary", replica=0, selected=primary
+    )
+    assert primary_batch is not None
+    batches.append(primary_batch)
+    if collection_pass == "diagnostic":
+        return batches
+
+    for priority, family in enumerate(DAGGER1_RESERVE_FAMILY_PRIORITY, start=1):
+        reserve = [
+            item
+            for item in decorated
+            if item[1] == "reserve"
+            and item[2] == priority
+            and item[3] == family
+        ]
+        reserve_batch = batch(
+            f"reserve-{priority}-{family}-r0",
+            phase="reserve",
+            replica=0,
+            selected=reserve,
+        )
+        if reserve_batch is not None:
+            batches.append(reserve_batch)
+
+    maximum_replica = max(DAGGER1_MAXIMUM_ROLLOUT_REPLICAS_BY_FAMILY.values())
+    for replica in range(1, maximum_replica):
+        for family in DAGGER1_RESERVE_FAMILY_PRIORITY:
+            if DAGGER1_MAXIMUM_ROLLOUT_REPLICAS_BY_FAMILY[family] <= replica:
+                continue
+            repeated = [item for item in decorated if item[3] == family]
+            repeat_batch = batch(
+                f"repeat-{family}-r{replica}",
+                phase="repeat",
+                replica=replica,
+                selected=repeated,
+            )
+            if repeat_batch is not None:
+                batches.append(repeat_batch)
+    return batches
+
+
+def _decorate_rollout_rows(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    batch_id: str,
+    collection_order: int,
+    replica: int,
+    rollout_seed: int,
+) -> list[dict[str, Any]]:
+    decorated: list[dict[str, Any]] = []
+    for row in rows:
+        item = copy.deepcopy(dict(row))
+        original_id = str(item.get("example_id") or "").strip()
+        if not original_id:
+            raise ValueError("DAgger-1 rollout row lacks an example_id")
+        item["base_example_id"] = original_id
+        item["example_id"] = (
+            f"{original_id}__order{int(collection_order)}"
+            f"__replica{int(replica)}"
+        )
+        item["collection_batch_id"] = str(batch_id)
+        item["collection_order"] = int(collection_order)
+        item["collection_rollout_replica"] = int(replica)
+        item["collection_rollout_seed"] = int(rollout_seed)
+        decorated.append(item)
+    return decorated
+
+
+def _rollout_episode_disposition(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    batch_id: str,
+    collection_order: int,
+    replica: int,
+    max_steps: int,
+) -> dict[str, Any]:
+    if not rows:
+        return {
+            "batch_id": batch_id,
+            "collection_order": int(collection_order),
+            "replica": int(replica),
+            "disposition": "missing_episode_rows",
+            "environment_terminal": False,
+            "passed": False,
+        }
+    steps = [int(row.get("step", -1)) for row in rows]
+    contiguous = steps == list(range(len(rows)))
+    final = rows[-1]
+    terminal_outcome = final.get("terminal_outcome")
+    if terminal_outcome in {"resolved", "operator_escalation"}:
+        disposition = str(terminal_outcome)
+        environment_terminal = True
+    elif contiguous and len(rows) == int(max_steps):
+        disposition = "horizon_truncated"
+        environment_terminal = False
+    else:
+        disposition = "unknown_incomplete"
+        environment_terminal = False
+    root = str(final.get("physical_root_fingerprint") or "").strip()
+    return {
+        "batch_id": str(batch_id),
+        "collection_order": int(collection_order),
+        "replica": int(replica),
+        "scenario_id": str(final.get("scenario_id") or ""),
+        "physical_root_fingerprint": root,
+        "scenario_family": str(final.get("scenario_family") or "unknown"),
+        "row_count": len(rows),
+        "steps": steps,
+        "steps_contiguous_from_zero": contiguous,
+        "terminal_outcome": terminal_outcome,
+        "disposition": disposition,
+        "environment_terminal": environment_terminal,
+        "passed": bool(
+            root
+            and contiguous
+            and disposition
+            in {"resolved", "operator_escalation", "horizon_truncated"}
+        ),
+    }
+
+
+def dagger1_rollout_disposition_matrix(
+    episode_reports: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    by_family: dict[str, dict[str, Any]] = {}
+    seen_episode_keys: set[tuple[str, int]] = set()
+    duplicate_episode_keys: list[str] = []
+    for report in episode_reports:
+        root = str(report.get("physical_root_fingerprint") or "")
+        replica = int(report.get("replica") or 0)
+        episode_key = (root, replica)
+        if episode_key in seen_episode_keys:
+            duplicate_episode_keys.append(f"{root}:replica{replica}")
+        seen_episode_keys.add(episode_key)
+        family = str(report.get("scenario_family") or "unknown")
+        entry = by_family.setdefault(
+            family,
+            {
+                "episodes": 0,
+                "distinct_physical_roots": set(),
+                "disposition_counts": Counter(),
+                "physical_roots_by_disposition": {},
+            },
+        )
+        disposition = str(report.get("disposition") or "unknown")
+        entry["episodes"] += 1
+        if root:
+            entry["distinct_physical_roots"].add(root)
+            entry["physical_roots_by_disposition"].setdefault(
+                disposition, set()
+            ).add(root)
+        entry["disposition_counts"][disposition] += 1
+    normalized: dict[str, dict[str, Any]] = {}
+    for family, entry in sorted(by_family.items()):
+        normalized[family] = {
+            "episodes": int(entry["episodes"]),
+            "distinct_physical_roots": len(entry["distinct_physical_roots"]),
+            "physical_root_fingerprints": sorted(
+                entry["distinct_physical_roots"]
+            ),
+            "disposition_counts": dict(
+                sorted(entry["disposition_counts"].items())
+            ),
+            "physical_roots_by_disposition": {
+                disposition: sorted(roots)
+                for disposition, roots in sorted(
+                    entry["physical_roots_by_disposition"].items()
+                )
+            },
+        }
+    malformed = [
+        dict(report)
+        for report in episode_reports
+        if report.get("passed") is not True
+    ]
+    disposition_counts = Counter(
+        str(report.get("disposition") or "unknown")
+        for report in episode_reports
+    )
+    environment_terminal_episodes = sum(
+        report.get("environment_terminal") is True
+        for report in episode_reports
+    )
+    return {
+        "contract": DAGGER1_ROLLOUT_MATRIX_CONTRACT,
+        "episodes": len(episode_reports),
+        "environment_terminal_episodes": environment_terminal_episodes,
+        "all_environment_terminal": (
+            environment_terminal_episodes == len(episode_reports)
+        ),
+        "horizon_truncated_episodes": sum(
+            report.get("disposition") == "horizon_truncated"
+            for report in episode_reports
+        ),
+        "duplicate_episode_keys": sorted(duplicate_episode_keys),
+        "malformed_or_unknown_episodes": malformed,
+        "disposition_counts": dict(sorted(disposition_counts.items())),
+        "by_family": normalized,
+        # Training may legitimately retain horizon-truncated learner states.
+        # Passing means every executed episode has one explicit disposition;
+        # it deliberately does not claim that every environment terminated.
+        "workflow_disposition_complete": (
+            not duplicate_episode_keys and not malformed
+        ),
+        "passed": not duplicate_episode_keys and not malformed,
+    }
+
+
+def _selection_row_key(row: Mapping[str, Any]) -> tuple[str, str]:
+    example_id = str(row.get("example_id") or "").strip()
+    return (
+        stable_json_sha256(
+            {
+                "contract": DAGGER1_COLLECTION_SELECTION_CONTRACT,
+                "example_id": example_id,
+                "physical_root_fingerprint": row.get(
+                    "physical_root_fingerprint"
+                ),
+                "recovery_stratum": row.get("recovery_stratum"),
+                "targeted_state_cells": sorted(dagger1_targeted_state_cells(row)),
+            }
+        ),
+        example_id,
+    )
+
+
+def _selection_groups(row: Mapping[str, Any]) -> frozenset[str]:
+    groups = {
+        f"targeted_state_cell:{cell}"
+        for cell in dagger1_targeted_state_cells(row)
+        if cell in DAGGER1_TARGETED_STATE_CELL_MINIMUM_DISTINCT_ROOTS
+    }
+    stratum = str(row.get("recovery_stratum") or "").strip()
+    if stratum in DAGGER1_RECOVERY_STRATUM_MINIMUM_DISTINCT_ROOTS:
+        groups.add(f"recovery_stratum:{stratum}")
+    return frozenset(groups)
+
+
+def select_dagger1_collection_rows(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    target_min_rows: int = DEFAULT_TARGET_MIN_ROWS,
+    target_max_rows: int = DEFAULT_TARGET_MAX_ROWS,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Select a stable, no-replacement natural subset while retaining floors."""
+
+    minimum = int(target_min_rows)
+    maximum = int(target_max_rows)
+    if minimum < 1 or maximum < minimum:
+        raise ValueError("target row range must satisfy 1 <= minimum <= maximum")
+    # Selection is read-only.  Keep the potentially large policy observations
+    # shared while scoring, then deep-copy only the bounded published subset.
+    materialized = [dict(row) for row in rows]
+    example_ids = [str(row.get("example_id") or "").strip() for row in materialized]
+    missing_example_ids = sum(not value for value in example_ids)
+    duplicate_example_ids = sorted(
+        example_id
+        for example_id, count in Counter(example_ids).items()
+        if example_id and count > 1
+    )
+    roots = [
+        str(row.get("physical_root_fingerprint") or "").strip()
+        for row in materialized
+    ]
+    missing_physical_roots = sum(not value for value in roots)
+    order = sorted(
+        range(len(materialized)),
+        key=lambda index: _selection_row_key(materialized[index]),
+    )
+    groups_by_index = {index: _selection_groups(materialized[index]) for index in order}
+    root_by_index = {index: roots[index] for index in order}
+    required_floors = {
+        **{
+            f"targeted_state_cell:{name}": int(floor)
+            for name, floor in sorted(
+                DAGGER1_TARGETED_STATE_CELL_MINIMUM_DISTINCT_ROOTS.items()
+            )
+        },
+        **{
+            f"recovery_stratum:{name}": int(floor)
+            for name, floor in sorted(
+                DAGGER1_RECOVERY_STRATUM_MINIMUM_DISTINCT_ROOTS.items()
+            )
+        },
+    }
+    candidate_roots_by_group = {
+        group: {
+            root_by_index[index]
+            for index in order
+            if root_by_index[index] and group in groups_by_index[index]
+        }
+        for group in required_floors
+    }
+    selected: set[int] = set()
+    selected_roots_by_group: dict[str, set[str]] = {
+        group: set() for group in required_floors
+    }
+    selected_rows_by_root: Counter[str] = Counter()
+
+    while True:
+        unmet = [
+            group
+            for group, floor in required_floors.items()
+            if len(selected_roots_by_group[group]) < floor
+        ]
+        if not unmet:
+            break
+        focus = min(
+            unmet,
+            key=lambda group: (
+                len(candidate_roots_by_group[group]) - required_floors[group],
+                group,
+            ),
+        )
+        choices = [
+            index
+            for index in order
+            if index not in selected
+            and focus in groups_by_index[index]
+            and root_by_index[index]
+            and root_by_index[index] not in selected_roots_by_group[focus]
+        ]
+        if not choices:
+            break
+
+        def choice_key(index: int) -> tuple[Any, ...]:
+            newly_supported = sum(
+                group in groups_by_index[index]
+                and root_by_index[index] not in selected_roots_by_group[group]
+                for group in unmet
+            )
+            return (
+                -newly_supported,
+                selected_rows_by_root[root_by_index[index]],
+                _selection_row_key(materialized[index]),
+            )
+
+        chosen = min(choices, key=choice_key)
+        selected.add(chosen)
+        selected_rows_by_root[root_by_index[chosen]] += 1
+        for group in groups_by_index[chosen]:
+            if group in selected_roots_by_group:
+                selected_roots_by_group[group].add(root_by_index[chosen])
+
+    target_size = min(maximum, len(materialized))
+    while len(selected) < target_size:
+        choices = [index for index in order if index not in selected]
+        if not choices:
+            break
+        chosen = min(
+            choices,
+            key=lambda index: (
+                selected_rows_by_root[root_by_index[index]],
+                _selection_row_key(materialized[index]),
+            ),
+        )
+        selected.add(chosen)
+        selected_rows_by_root[root_by_index[chosen]] += 1
+    selected_rows = [
+        copy.deepcopy(materialized[index])
+        for index in sorted(
+            selected,
+            key=lambda index: _selection_row_key(materialized[index]),
+        )
+    ]
+    selected_support = audit_dagger1_independent_root_support(selected_rows)
+    selected_targeted_coverage = targeted_state_coverage(selected_rows)
+    candidate_shortfalls = {
+        group: {
+            "distinct_physical_roots": len(candidate_roots_by_group[group]),
+            "minimum_distinct_physical_roots": floor,
+            "root_shortfall": max(
+                floor - len(candidate_roots_by_group[group]), 0
+            ),
+        }
+        for group, floor in sorted(required_floors.items())
+        if len(candidate_roots_by_group[group]) < floor
+    }
+    row_target_passed = minimum <= len(selected_rows) <= maximum
+    passed = bool(
+        row_target_passed
+        and not missing_example_ids
+        and not duplicate_example_ids
+        and not missing_physical_roots
+        and not candidate_shortfalls
+        and selected_support.get("passed") is True
+        and selected_targeted_coverage.get("passed") is True
+    )
+    report = {
+        "contract": DAGGER1_COLLECTION_SELECTION_CONTRACT,
+        "candidate_rows": len(materialized),
+        "candidate_example_id_set_sha256": stable_json_sha256(
+            sorted(example_ids)
+        ),
+        "candidate_distinct_physical_roots": len(set(root for root in roots if root)),
+        "target_min_rows": minimum,
+        "target_max_rows": maximum,
+        "selected_rows": len(selected_rows),
+        "selected_example_id_sequence_sha256": stable_json_sha256(
+            [str(row.get("example_id") or "") for row in selected_rows]
+        ),
+        "selected_distinct_physical_roots": len(
+            {root for root in selected_rows_by_root if root}
+        ),
+        "discarded_eligible_rows": len(materialized) - len(selected_rows),
+        "selection_applied": len(materialized) > maximum,
+        "missing_example_id_rows": missing_example_ids,
+        "duplicate_example_ids": duplicate_example_ids,
+        "missing_physical_root_rows": missing_physical_roots,
+        "required_root_group_floors": required_floors,
+        "candidate_root_group_shortfalls": candidate_shortfalls,
+        "selected_independent_root_support": selected_support,
+        "selected_targeted_state_coverage": selected_targeted_coverage,
+        "row_target_passed": row_target_passed,
+        "passed": passed,
+    }
+    return selected_rows, report
+
+
+def dagger1_production_row_target_contract(
+    *, target_min_rows: int, target_max_rows: int
+) -> dict[str, Any]:
+    """Bind exploratory CLI bounds to the reviewed production bounds."""
+
+    configured_minimum = int(target_min_rows)
+    configured_maximum = int(target_max_rows)
+    passed = bool(
+        configured_minimum == DEFAULT_TARGET_MIN_ROWS
+        and configured_maximum == DEFAULT_TARGET_MAX_ROWS
+    )
+    return {
+        "contract": DAGGER1_PRODUCTION_ROW_TARGET_CONTRACT,
+        "required_target_min_rows": DEFAULT_TARGET_MIN_ROWS,
+        "required_target_max_rows": DEFAULT_TARGET_MAX_ROWS,
+        "configured_target_min_rows": configured_minimum,
+        "configured_target_max_rows": configured_maximum,
+        "exploratory_override": not passed,
+        "passed": passed,
+    }
+
+
 def recommended_collection_gate(
     rows: Sequence[Mapping[str, Any]],
     *,
@@ -1083,6 +1720,219 @@ def targeted_state_coverage(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]
         "missing_cells": sorted(shortfalls),
         "passed": not shortfalls,
     }
+
+
+def evaluate_dagger1_collection_checkpoint(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    d0_training_rows: Sequence[Mapping[str, Any]],
+    target_min_rows: int = DEFAULT_TARGET_MIN_ROWS,
+    target_max_rows: int = DEFAULT_TARGET_MAX_ROWS,
+    rollout_matrix: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Recompute every strict gate at a whole-episode batch boundary."""
+
+    all_rows = [dict(row) for row in rows]
+    candidate_rows = [
+        row for row in all_rows if row.get("production_label_eligible") is True
+    ]
+    selected_rows, selection_report = select_dagger1_collection_rows(
+        candidate_rows,
+        target_min_rows=target_min_rows,
+        target_max_rows=target_max_rows,
+    )
+    collection_gate = recommended_collection_gate(
+        selected_rows,
+        target_min_rows=target_min_rows,
+        target_max_rows=target_max_rows,
+    )
+    targeted_coverage = targeted_state_coverage(selected_rows)
+    independent_root_support = audit_dagger1_independent_root_support(
+        selected_rows
+    )
+    truth_audit_quarantine = (
+        summarize_dagger1_offline_teacher_target_quarantine(all_rows)
+    )
+    if selected_rows:
+        replay_capacity = dagger1_replay_capacity_report(
+            d0_training_rows,
+            selected_rows,
+        )
+    else:
+        replay_capacity = {
+            "schema_version": 1,
+            "contract": "dagger1_duplicate_and_root_limited_capacity_v1",
+            "applicable": False,
+            "reason": "no_selected_d1_recovery_rows",
+            "passed": False,
+        }
+    matrix = dict(rollout_matrix or {"passed": True})
+    passed = bool(
+        selection_report.get("passed") is True
+        and collection_gate.get("passed") is True
+        and targeted_coverage.get("passed") is True
+        and independent_root_support.get("passed") is True
+        and truth_audit_quarantine.get("passed") is True
+        and replay_capacity.get("passed") is True
+        and matrix.get("passed") is True
+    )
+    failed_gate_names = failed_strict_collection_gate_names(
+        collection_gate=collection_gate,
+        targeted_coverage=targeted_coverage,
+        independent_root_support=independent_root_support,
+        truth_audit_quarantine=truth_audit_quarantine,
+        selection_report=selection_report,
+        round1_replay_capacity=replay_capacity,
+        rollout_matrix=matrix,
+    )
+    return {
+        "candidate_rows": len(candidate_rows),
+        "selected_rows": selected_rows,
+        "deterministic_collection_selection": selection_report,
+        "recommended_collection_gate": collection_gate,
+        "targeted_state_coverage": targeted_coverage,
+        "independent_root_support": independent_root_support,
+        "offline_teacher_target_quarantine_summary": (
+            truth_audit_quarantine
+        ),
+        "round1_replay_capacity": replay_capacity,
+        "rollout_disposition_matrix": matrix,
+        "failed_gate_names": failed_gate_names,
+        "passed": passed,
+    }
+
+
+def collect_dagger1_rollout_schedule(
+    scenarios: Sequence[Mapping[str, Any]],
+    *,
+    collection_pass: str,
+    seed: int,
+    max_steps: int,
+    collect_episode: Callable[
+        [Mapping[str, Any], int, int, str, int],
+        Sequence[Mapping[str, Any]],
+    ],
+    checkpoint: Callable[
+        [Sequence[Mapping[str, Any]], Mapping[str, Any]], Mapping[str, Any]
+    ]
+    | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any], dict[str, Any] | None]:
+    """Execute the finite schedule and stop at the first passing whole batch."""
+
+    batches = dagger1_rollout_batches(
+        scenarios, collection_pass=collection_pass
+    )
+    rows: list[dict[str, Any]] = []
+    episode_reports: list[dict[str, Any]] = []
+    executed_batch_ids: list[str] = []
+    gate_snapshots: list[dict[str, Any]] = []
+    last_checkpoint: dict[str, Any] | None = None
+    stopped_after_batch: str | None = None
+    for batch in batches:
+        batch_id = str(batch["batch_id"])
+        replica = int(batch["replica"])
+        scenarios_in_batch = list(batch["scenarios"])
+        orders = list(batch["scenario_orders"])
+        for scenario, collection_order in zip(
+            scenarios_in_batch, orders, strict=True
+        ):
+            grouping = _scenario_grouping(scenario)
+            root = str(
+                grouping.get("physical_root_fingerprint") or ""
+            ).strip()
+            if not root:
+                raise ValueError("scheduled DAgger-1 scenario lacks a physical root")
+            rollout_seed = dagger1_rollout_seed(
+                seed=seed,
+                physical_root_fingerprint=root,
+                replica=replica,
+            )
+            episode_rows = _decorate_rollout_rows(
+                collect_episode(
+                    scenario,
+                    replica,
+                    rollout_seed,
+                    batch_id,
+                    int(collection_order),
+                ),
+                batch_id=batch_id,
+                collection_order=int(collection_order),
+                replica=replica,
+                rollout_seed=rollout_seed,
+            )
+            rows.extend(episode_rows)
+            episode_reports.append(
+                _rollout_episode_disposition(
+                    episode_rows,
+                    batch_id=batch_id,
+                    collection_order=int(collection_order),
+                    replica=replica,
+                    max_steps=max_steps,
+                )
+            )
+        executed_batch_ids.append(batch_id)
+        matrix = dagger1_rollout_disposition_matrix(episode_reports)
+        if checkpoint is not None:
+            last_checkpoint = dict(checkpoint(rows, matrix))
+            gate_snapshots.append(
+                {
+                    "batch_id": batch_id,
+                    "visited_rows": len(rows),
+                    "candidate_rows": int(
+                        last_checkpoint.get("candidate_rows") or 0
+                    ),
+                    "selected_rows": len(
+                        last_checkpoint.get("selected_rows") or []
+                    ),
+                    "failed_gate_names": list(
+                        last_checkpoint.get("failed_gate_names") or []
+                    ),
+                    "passed": last_checkpoint.get("passed") is True,
+                }
+            )
+            if (
+                collection_pass == "training"
+                and last_checkpoint.get("passed") is True
+            ):
+                stopped_after_batch = batch_id
+                break
+
+    matrix = dagger1_rollout_disposition_matrix(episode_reports)
+    planned_batch_ids = [str(batch["batch_id"]) for batch in batches]
+    if collection_pass == "diagnostic":
+        stopping_reason = "diagnostic_primary_complete"
+    elif stopped_after_batch is not None:
+        stopping_reason = "strict_collection_gate_passed"
+    else:
+        stopping_reason = "reserve_exhausted"
+    report = {
+        "contract": DAGGER1_COLLECTION_SCHEDULE_CONTRACT,
+        "collection_pass": collection_pass,
+        "root_local_rng_contract": "dagger1_root_replica_beta_rng_v1",
+        "maximum_rollout_replicas_by_family": dict(
+            sorted(DAGGER1_MAXIMUM_ROLLOUT_REPLICAS_BY_FAMILY.items())
+        ),
+        "planned_batch_ids": planned_batch_ids,
+        "executed_batch_ids": executed_batch_ids,
+        "unexecuted_batch_ids": [
+            batch_id
+            for batch_id in planned_batch_ids
+            if batch_id not in set(executed_batch_ids)
+        ],
+        "planned_episode_count": sum(
+            len(batch["scenarios"]) for batch in batches
+        ),
+        "executed_episode_count": len(episode_reports),
+        "gate_snapshots": gate_snapshots,
+        "stopped_after_batch": stopped_after_batch,
+        "stopping_reason": stopping_reason,
+        "workflow_terminal": True,
+        "passed": (
+            collection_pass == "diagnostic"
+            or stopping_reason == "strict_collection_gate_passed"
+        ),
+    }
+    return rows, matrix, report, last_checkpoint
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1188,6 +2038,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--max-steps", type=int, default=24)
     parser.add_argument("--seed", type=int, default=20260719)
     args = parser.parse_args(list(argv) if argv is not None else None)
+    production_row_target = dagger1_production_row_target_contract(
+        target_min_rows=args.target_min_rows,
+        target_max_rows=args.target_max_rows,
+    )
 
     if args.collection_pass == "diagnostic" and args.require_recommended_target:
         parser.error(
@@ -1201,6 +2055,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(
             "--failed-collection-dir is valid only with "
             "--require-recommended-target"
+        )
+    if (
+        args.require_recommended_target
+        and production_row_target["passed"] is not True
+    ):
+        parser.error(
+            "strict production collection requires the reviewed row bounds "
+            f"{DEFAULT_TARGET_MIN_ROWS}..{DEFAULT_TARGET_MAX_ROWS}; custom "
+            "bounds are exploratory-only"
         )
     if args.collection_pass == "training" and args.all_output is None:
         parser.error(
@@ -1381,19 +2244,59 @@ def main(argv: Sequence[str] | None = None) -> int:
         process_oracle=env.process_oracle,
         candidate_oracle=env.candidate_quality_oracle,
     )
-    rows = DaggerRolloutCollector(
-        env=env,
-        policy=policy,
-        expert_oracle=expert,
-        rng=random.Random(args.seed),
-        supervision_policy=DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
-        forbidden_physical_roots=forbidden_roots,
-    ).collect_iteration(
-        scenarios=scenarios,
-        iteration=args.iteration,
-        beta=args.beta,
-        max_steps=args.max_steps,
-        collection_role=args.collection_pass,
+    d0_training_rows = [
+        row
+        for row in d0_rows
+        if row.get("dataset_split") == "train"
+        and row.get("production_label_eligible") is True
+    ]
+
+    def collect_episode(
+        scenario: Mapping[str, Any],
+        replica: int,
+        rollout_seed: int,
+        batch_id: str,
+        collection_order: int,
+    ) -> Sequence[Mapping[str, Any]]:
+        del replica, batch_id, collection_order
+        return DaggerRolloutCollector(
+            env=env,
+            policy=policy,
+            expert_oracle=expert,
+            rng=random.Random(rollout_seed),
+            supervision_policy=DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
+            forbidden_physical_roots=forbidden_roots,
+        ).collect_iteration(
+            scenarios=[scenario],
+            iteration=args.iteration,
+            beta=args.beta,
+            max_steps=args.max_steps,
+            collection_role=args.collection_pass,
+        )
+
+    def checkpoint(
+        visited_rows: Sequence[Mapping[str, Any]],
+        rollout_matrix: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        return evaluate_dagger1_collection_checkpoint(
+            visited_rows,
+            d0_training_rows=d0_training_rows,
+            target_min_rows=args.target_min_rows,
+            target_max_rows=args.target_max_rows,
+            rollout_matrix=rollout_matrix,
+        )
+
+    rows, rollout_matrix, stopping_report, collection_checkpoint = (
+        collect_dagger1_rollout_schedule(
+            scenarios,
+            collection_pass=args.collection_pass,
+            seed=args.seed,
+            max_steps=args.max_steps,
+            collect_episode=collect_episode,
+            checkpoint=(
+                checkpoint if args.collection_pass == "training" else None
+            ),
+        )
     )
     validate_export_rows_truth_free(rows)
     class_audit = audit_target_aware_state_classes(rows)
@@ -1404,50 +2307,42 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise RuntimeError(
             f"DAgger-1 recovery-label audit failed: {recovery_audit}"
         )
-    truth_audit_quarantine = (
-        summarize_dagger1_offline_teacher_target_quarantine(rows)
-    )
     training_eligible = [
         row for row in rows if row.get("production_label_eligible") is True
     ]
-    targeted_coverage = targeted_state_coverage(training_eligible)
-    independent_root_support = audit_dagger1_independent_root_support(
-        training_eligible
-    )
     if args.collection_pass == "training":
-        output_rows = training_eligible
-        if not output_rows:
-            raise RuntimeError(
-                "DAgger-1 reached no rank-one learner recovery states; "
-                "refusing to write an empty production dataset"
+        if collection_checkpoint is None:
+            raise RuntimeError("training collection produced no gate checkpoint")
+        output_rows = list(collection_checkpoint["selected_rows"])
+        selection_report = dict(
+            collection_checkpoint["deterministic_collection_selection"]
+        )
+        collection_gate = dict(
+            collection_checkpoint["recommended_collection_gate"]
+        )
+        targeted_coverage = dict(
+            collection_checkpoint["targeted_state_coverage"]
+        )
+        independent_root_support = dict(
+            collection_checkpoint["independent_root_support"]
+        )
+        truth_audit_quarantine = dict(
+            collection_checkpoint[
+                "offline_teacher_target_quarantine_summary"
+            ]
+        )
+        replay_capacity = dict(
+            collection_checkpoint["round1_replay_capacity"]
+        )
+        failed_gate_names = list(
+            collection_checkpoint["failed_gate_names"]
+        )
+        if args.require_recommended_target and (
+            collection_checkpoint.get("passed") is not True
+            or stopping_report.get("stopping_reason") != (
+                "strict_collection_gate_passed"
             )
-        d0_training_rows = [
-            row
-            for row in d0_rows
-            if row.get("dataset_split") == "train"
-            and row.get("production_label_eligible") is True
-        ]
-        replay_capacity = dagger1_replay_capacity_report(
-            d0_training_rows,
-            training_eligible,
-        )
-        collection_gate: dict[str, Any] = recommended_collection_gate(
-            output_rows,
-            target_min_rows=args.target_min_rows,
-            target_max_rows=args.target_max_rows,
-        )
-        if args.require_recommended_target and not (
-            collection_gate["passed"]
-            and targeted_coverage["passed"]
-            and independent_root_support["passed"]
-            and truth_audit_quarantine["passed"]
         ):
-            failed_gate_names = failed_strict_collection_gate_names(
-                collection_gate=collection_gate,
-                targeted_coverage=targeted_coverage,
-                independent_root_support=independent_root_support,
-                truth_audit_quarantine=truth_audit_quarantine,
-            )
             failure_evidence = {
                 "failed_gate_names": failed_gate_names,
                 "intended_production_outputs": {
@@ -1540,8 +2435,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "seed": args.seed,
                 "max_steps": args.max_steps,
                 "visited_rows": len(rows),
-                "candidate_recovery_row_count": len(output_rows),
+                "candidate_recovery_row_count": len(training_eligible),
+                "selected_recovery_row_count": len(output_rows),
                 "production_eligible_recovery_rows": len(training_eligible),
+                "production_row_target_contract": production_row_target,
                 "eligible_recovery_strata": dict(
                     sorted(
                         Counter(
@@ -1558,9 +2455,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     }
                 ),
                 "recommended_collection_gate": collection_gate,
+                "deterministic_collection_selection": selection_report,
                 "targeted_state_coverage": targeted_coverage,
                 "independent_root_support": independent_root_support,
                 "round1_replay_capacity": replay_capacity,
+                "rollout_disposition_matrix": rollout_matrix,
+                "collection_stopping_report": stopping_report,
                 "class_audit": class_audit,
                 "recovery_label_audit": recovery_audit,
                 "offline_teacher_target_quarantine_summary": (
@@ -1570,7 +2470,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             assert args.failed_collection_dir is not None
             write_failed_collection_evidence_bundle(
                 args.failed_collection_dir,
-                candidate_rows=output_rows,
+                candidate_rows=training_eligible,
                 all_rows=rows,
                 evidence=failure_evidence,
             )
@@ -1610,11 +2510,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             "reason": "diagnostic_beta_zero_output_is_training_ineligible",
             "passed": False,
         }
+        selection_report = {
+            "applicable": False,
+            "reason": "diagnostic_beta_zero_output_is_training_ineligible",
+            "passed": False,
+        }
         replay_capacity = {
             "applicable": False,
             "reason": "diagnostic_beta_zero_output_is_training_ineligible",
             "passed": False,
         }
+        truth_audit_quarantine = (
+            summarize_dagger1_offline_teacher_target_quarantine(rows)
+        )
+        targeted_coverage = targeted_state_coverage([])
+        independent_root_support = audit_dagger1_independent_root_support([])
 
     artifact_training_eligible = bool(
         args.collection_pass == "training"
@@ -1622,15 +2532,56 @@ def main(argv: Sequence[str] | None = None) -> int:
         and class_audit["passed"]
         and recovery_audit["passed"]
         and truth_audit_quarantine["passed"]
+        and selection_report["passed"]
+        and production_row_target["passed"]
         and collection_gate["passed"]
         and targeted_coverage["passed"]
         and independent_root_support["passed"]
+        and replay_capacity["passed"]
+        and rollout_matrix["passed"]
+        and stopping_report["passed"]
     )
+    selected_example_ids = {
+        str(row.get("example_id") or "") for row in output_rows
+    }
+    for row in rows:
+        example_id = str(row.get("example_id") or "")
+        is_selected = bool(
+            args.collection_pass == "training"
+            and artifact_training_eligible
+            and row.get("production_label_eligible") is True
+            and example_id in selected_example_ids
+        )
+        if args.collection_pass == "training":
+            if is_selected:
+                disposition = "selected_for_round1_training"
+            elif row.get("production_label_eligible") is True:
+                disposition = "safe_candidate_not_selected"
+            else:
+                disposition = "not_safe_candidate"
+        else:
+            disposition = "diagnostic_training_ineligible"
+        row["collection_training_eligible"] = is_selected
+        row["collection_disposition"] = disposition
+        labels = row.get("labels")
+        if isinstance(labels, dict):
+            labels["collection_training_eligible"] = is_selected
+            labels["collection_disposition"] = disposition
+
+    # The selected output is a deep copy made by the deterministic selector.
+    # Apply the same selection annotation as the complete ledger so final
+    # ingestion can require exact row-content equality, not merely matching IDs.
     for row in output_rows:
         row["collection_training_eligible"] = artifact_training_eligible
+        row["collection_disposition"] = (
+            "selected_for_round1_training"
+            if args.collection_pass == "training"
+            else "diagnostic_training_ineligible"
+        )
         labels = row.get("labels")
         if isinstance(labels, dict):
             labels["collection_training_eligible"] = artifact_training_eligible
+            labels["collection_disposition"] = row["collection_disposition"]
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     write_jsonl(args.output, output_rows)
@@ -1726,7 +2677,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "seed": args.seed,
         "max_steps": args.max_steps,
         "visited_rows": len(rows),
+        "candidate_recovery_rows": len(training_eligible),
+        "candidate_recovery_row_count": len(training_eligible),
         "output_rows": len(output_rows),
+        "selected_recovery_row_count": len(output_rows),
         "production_eligible_recovery_rows": len(training_eligible),
         "diagnostic_training_ineligible_recovery_rows": (
             len(output_rows) if args.collection_pass == "diagnostic" else 0
@@ -1747,9 +2701,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             }
         ),
         "recommended_collection_gate": collection_gate,
+        "deterministic_collection_selection": selection_report,
+        "production_row_target_contract": production_row_target,
         "targeted_state_coverage": targeted_coverage,
         "independent_root_support": independent_root_support,
         "round1_replay_capacity": replay_capacity,
+        "rollout_disposition_matrix": rollout_matrix,
+        "collection_stopping_report": stopping_report,
         "class_audit": class_audit,
         "recovery_label_audit": recovery_audit,
         "offline_teacher_target_quarantine_summary": truth_audit_quarantine,

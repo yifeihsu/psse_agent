@@ -23,11 +23,21 @@ from psse_env.sft.provenance import file_sha256, git_source_state, stable_json_s
 
 
 DAGGER1_DEVELOPMENT_HOLDOUT_CONTRACT = (
-    "fresh_train_partition_dagger1_development_holdout_v1"
+    "fresh_train_partition_dagger1_development_holdout_v2"
 )
 DAGGER1_DEVELOPMENT_SUITE_NAME = "dagger1_development"
 DAGGER1_DEVELOPMENT_SPLIT = "dagger_development"
 DAGGER1_DEVELOPMENT_PARAMETER_RANKING_THRESHOLD = 1.0
+DAGGER1_TRAINING_SCENARIO_BUILDER_CONTRACT = (
+    "fresh_train_partition_dagger1_scenarios_v3"
+)
+DEFAULT_DAGGER1_DEVELOPMENT_MULTI_MEASUREMENT_CANDIDATE_REQUEST = 176
+DEFAULT_DAGGER1_DEVELOPMENT_MULTI_MEASUREMENT_CARDINALITY_QUOTA = {
+    2: 3,
+    3: 3,
+    4: 3,
+    5: 3,
+}
 EXPECTED_FROZEN_PHYSICAL_ROOT_COUNT = 115
 DEFAULT_FORBIDDEN_SUITE = (
     Path(__file__).resolve().parent / "suites" / "bc0_eval_suite_v1.json"
@@ -206,7 +216,7 @@ def _require_current_training_boundary(
     d0_raw_path: Path,
     d0_provenance_path: Path,
     frozen_suite_path: Path,
-) -> tuple[list[dict[str, Any]], set[str]]:
+) -> tuple[list[dict[str, Any]], set[str], dict[str, tuple[str, ...]]]:
     scenarios = _load_scenario_list(
         scenarios_path,
         label="D1 training scenarios",
@@ -221,9 +231,72 @@ def _require_current_training_boundary(
     }
     if len(roots) != len(scenarios):
         raise ValueError("D1 training scenarios must have globally unique physical roots")
+    reserved_payload = (
+        manifest.get("development_reserved_roots_by_family")
+        if isinstance(manifest, Mapping)
+        else None
+    )
+    reserved_hashes = (
+        manifest.get("development_reserved_root_set_sha256_by_family")
+        if isinstance(manifest, Mapping)
+        else None
+    )
+    reserved_counts = (
+        manifest.get("withheld_for_development_count_by_family")
+        if isinstance(manifest, Mapping)
+        else None
+    )
+    if not all(
+        isinstance(value, Mapping)
+        for value in (reserved_payload, reserved_hashes, reserved_counts)
+    ):
+        raise RuntimeError(
+            "D1 training scenario manifest lacks the reviewed development "
+            "root reservation"
+        )
+    development_reserved_roots: dict[str, tuple[str, ...]] = {}
+    for family, raw_roots in reserved_payload.items():
+        if not (
+            isinstance(raw_roots, Sequence)
+            and not isinstance(raw_roots, (str, bytes))
+        ):
+            raise RuntimeError(
+                "D1 training development root reservation is malformed"
+            )
+        family_roots = tuple(sorted(str(root).strip() for root in raw_roots))
+        if (
+            any(not root for root in family_roots)
+            or len(set(family_roots)) != len(family_roots)
+            or reserved_counts.get(family) != len(family_roots)
+            or reserved_hashes.get(family)
+            != stable_json_sha256(list(family_roots))
+        ):
+            raise RuntimeError(
+                "D1 training development root reservation is not count/hash bound"
+            )
+        development_reserved_roots[str(family)] = family_roots
+    all_reserved_roots = {
+        root
+        for family_roots in development_reserved_roots.values()
+        for root in family_roots
+    }
+    if len(all_reserved_roots) != sum(
+        len(family_roots)
+        for family_roots in development_reserved_roots.values()
+    ):
+        raise RuntimeError(
+            "D1 training development root reservation repeats roots across families"
+        )
+    if all_reserved_roots & roots:
+        raise RuntimeError(
+            "D1 training scenarios consumed development-reserved roots"
+        )
     checks = {
         "schema_version": isinstance(manifest, Mapping)
         and manifest.get("schema_version") == 1,
+        "builder_contract": isinstance(manifest, Mapping)
+        and manifest.get("builder_contract")
+        == DAGGER1_TRAINING_SCENARIO_BUILDER_CONTRACT,
         "release_evidence_eligible": isinstance(manifest, Mapping)
         and manifest.get("release_evidence_eligible") is False,
         "source_partition": isinstance(manifest, Mapping)
@@ -256,7 +329,7 @@ def _require_current_training_boundary(
             "D1 training scenario boundary is not current/byte-bound: "
             + ", ".join(failed)
         )
-    return scenarios, roots
+    return scenarios, roots, development_reserved_roots
 
 
 def _source_bindings(repo_root: Path) -> dict[str, str]:
@@ -315,13 +388,15 @@ def build_dagger1_development_holdout(
         forbidden_suite_path
     )
     frozen_roots = set(_frozen_physical_roots(forbidden_suite_path))
-    _, training_roots = _require_current_training_boundary(
-        d1_training_scenarios,
-        d1_training_manifest,
-        source_state=source_state,
-        d0_raw_path=d0_raw_path,
-        d0_provenance_path=d0_provenance_path,
-        frozen_suite_path=forbidden_suite_path,
+    _, training_roots, training_development_reserved_roots = (
+        _require_current_training_boundary(
+            d1_training_scenarios,
+            d1_training_manifest,
+            source_state=source_state,
+            d0_raw_path=d0_raw_path,
+            d0_provenance_path=d0_provenance_path,
+            frozen_suite_path=forbidden_suite_path,
+        )
     )
     pairwise_input_overlap = {
         "d0_frozen": sorted(d0_roots & frozen_roots),
@@ -333,6 +408,26 @@ def build_dagger1_development_holdout(
             "existing D0/frozen/D1-training boundaries overlap: "
             + json.dumps(pairwise_input_overlap, sort_keys=True)
         )
+    all_training_development_reserved_roots = {
+        root
+        for family_roots in training_development_reserved_roots.values()
+        for root in family_roots
+    }
+    reserved_boundary_overlap = {
+        "d0": sorted(all_training_development_reserved_roots & d0_roots),
+        "frozen": sorted(
+            all_training_development_reserved_roots & frozen_roots
+        ),
+        "d1_training": sorted(
+            all_training_development_reserved_roots & training_roots
+        ),
+    }
+    if any(reserved_boundary_overlap.values()):
+        raise RuntimeError(
+            "training-manifest development reservation overlaps a protected "
+            "boundary: "
+            + json.dumps(reserved_boundary_overlap, sort_keys=True)
+        )
     protected_roots = d0_roots | frozen_roots | training_roots
 
     generator = Round0ScenarioGenerator(
@@ -342,10 +437,15 @@ def build_dagger1_development_holdout(
             DAGGER1_DEVELOPMENT_PARAMETER_RANKING_THRESHOLD
         ),
     )
+    default_plan = normalized_plan == DEFAULT_DAGGER1_DEVELOPMENT_ROOT_PLAN
     candidate_plan = {
         family: count * candidate_multiplier
         for family, count in sorted(normalized_plan.items())
     }
+    if default_plan:
+        candidate_plan["multi_measurement"] = (
+            DEFAULT_DAGGER1_DEVELOPMENT_MULTI_MEASUREMENT_CANDIDATE_REQUEST
+        )
     candidates = [
         partition_release_scenario_v1(
             scenario,
@@ -394,6 +494,43 @@ def build_dagger1_development_holdout(
                 str(row["execution"].get("scenario_id") or ""),
             ),
         )
+        if family == "multi_measurement" and default_plan:
+            reserved_multi_roots = set(
+                training_development_reserved_roots.get(
+                    "multi_measurement", ()
+                )
+            )
+            if len(reserved_multi_roots) != count:
+                raise RuntimeError(
+                    "training manifest does not reserve the exact reviewed "
+                    f"{count}-root multi-measurement development allocation"
+                )
+            candidate_by_root: dict[str, dict[str, Any]] = {}
+            repeated_candidate_roots: set[str] = set()
+            for envelope in ordered:
+                root = str(
+                    envelope["grouping"]["physical_root_fingerprint"]
+                )
+                if root in candidate_by_root:
+                    repeated_candidate_roots.add(root)
+                candidate_by_root[root] = envelope
+            if repeated_candidate_roots:
+                raise RuntimeError(
+                    "development multi-measurement candidate pool repeats "
+                    f"physical roots: {sorted(repeated_candidate_roots)[:8]}"
+                )
+            missing_reserved_roots = sorted(
+                reserved_multi_roots - set(candidate_by_root)
+            )
+            if missing_reserved_roots:
+                raise RuntimeError(
+                    "full multi-measurement development enumeration does not "
+                    "reconstruct the training-manifest reservation: "
+                    f"{missing_reserved_roots[:8]}"
+                )
+            ordered = [
+                candidate_by_root[root] for root in sorted(reserved_multi_roots)
+            ]
         for envelope in ordered:
             root = str(envelope["grouping"]["physical_root_fingerprint"])
             if root in selected_roots:
@@ -412,6 +549,27 @@ def build_dagger1_development_holdout(
         raise RuntimeError(
             "fresh development candidate pool did not satisfy the exact plan: "
             + json.dumps(shortfalls, sort_keys=True)
+        )
+    selected_multi = [
+        row
+        for row in selected
+        if row["grouping"]["scenario_family"] == "multi_measurement"
+    ]
+    selected_multi_cardinality = Counter(
+        str(row["grouping"].get("error_cardinality"))
+        for row in selected_multi
+    )
+    if default_plan and selected_multi_cardinality != Counter(
+        {
+            str(key): value
+            for key, value in (
+                DEFAULT_DAGGER1_DEVELOPMENT_MULTI_MEASUREMENT_CARDINALITY_QUOTA.items()
+            )
+        }
+    ):
+        raise RuntimeError(
+            "reserved multi-measurement development roots do not satisfy the "
+            "reviewed error-cardinality quota"
         )
     selected.sort(
         key=lambda row: (
@@ -456,6 +614,32 @@ def build_dagger1_development_holdout(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    fresh_candidate_inventory = {}
+    for family, family_candidates in sorted(candidates_by_family.items()):
+        family_roots = sorted(
+            str(row["grouping"]["physical_root_fingerprint"])
+            for row in family_candidates
+        )
+        cardinality = Counter(
+            str(row["grouping"].get("error_cardinality"))
+            for row in family_candidates
+        )
+        fresh_candidate_inventory[family] = {
+            "physical_root_count": len(set(family_roots)),
+            "error_cardinality": dict(
+                sorted(cardinality.items(), key=lambda item: int(item[0]))
+            ),
+            "physical_root_set_sha256": stable_json_sha256(
+                sorted(set(family_roots))
+            ),
+        }
+    selected_multi_roots = sorted(
+        str(row["grouping"]["physical_root_fingerprint"])
+        for row in selected_multi
+    )
+    reserved_multi_roots = list(
+        training_development_reserved_roots.get("multi_measurement", ())
+    )
     manifest = {
         "schema_version": 1,
         "scenario_schema_version": 1,
@@ -473,9 +657,32 @@ def build_dagger1_development_holdout(
         "seed": int(seed),
         "plan": normalized_plan,
         "candidate_multiplier": int(candidate_multiplier),
+        "candidate_request_plan": candidate_plan,
         "candidate_plan": candidate_plan,
         "candidate_count": len(candidates),
+        "fresh_candidate_inventory": fresh_candidate_inventory,
         "selected_count_by_family": dict(sorted(selected_counts.items())),
+        "selected_multi_measurement_cardinality_inventory": dict(
+            sorted(
+                selected_multi_cardinality.items(),
+                key=lambda item: int(item[0]),
+            )
+        ),
+        "training_development_reserved_roots_by_family": {
+            family: list(roots)
+            for family, roots in sorted(
+                training_development_reserved_roots.items()
+            )
+        },
+        "training_development_reserved_multi_measurement_root_set_sha256": (
+            stable_json_sha256(reserved_multi_roots)
+        ),
+        "selected_multi_measurement_root_set_sha256": stable_json_sha256(
+            selected_multi_roots
+        ),
+        "selected_multi_measurement_matches_training_reservation": (
+            selected_multi_roots == reserved_multi_roots
+        ),
         "scenario_count": len(selected),
         "physical_root_count": len(selected_roots),
         "filtered_protected_root_count": len(filtered_protected),
@@ -514,6 +721,9 @@ def build_dagger1_development_holdout(
             "development": stable_json_sha256(sorted(selected_roots)),
         },
         "pairwise_input_overlap": pairwise_input_overlap,
+        "training_development_reserved_boundary_overlap": (
+            reserved_boundary_overlap
+        ),
         "development_protected_overlap": development_overlap,
         "output_sha256": file_sha256(output),
         "generator_report_sha256": file_sha256(generator_report_path),
