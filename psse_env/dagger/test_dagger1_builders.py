@@ -619,6 +619,13 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
+        development_generator_report_path = (
+            root / "development.generator-report.json"
+        ).resolve()
+        development_generator_report_path.write_text(
+            json.dumps({"source_partition": "train"}, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         development_roots = sorted(
             row["grouping"]["physical_root_fingerprint"]
             for row in development_rows
@@ -658,6 +665,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                 "d1_training": [],
             },
             "output_sha256": file_sha256(development_path),
+            "generator_report_sha256": file_sha256(
+                development_generator_report_path
+            ),
             "d1_training_scenarios_sha256": file_sha256(scenario_input),
             "d1_training_manifest_sha256": file_sha256(scenario_manifest),
             "d0_raw_sha256": file_sha256(d0_raw_path),
@@ -725,6 +735,12 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
             "development_holdout_manifest": str(development_manifest_path),
             "development_holdout_manifest_sha256": file_sha256(
                 development_manifest_path
+            ),
+            "development_holdout_generator_report": str(
+                development_generator_report_path
+            ),
+            "development_holdout_generator_report_sha256": file_sha256(
+                development_generator_report_path
             ),
             "development_holdout_root_count": len(development_roots),
             "development_physical_root_count": len(development_roots),
@@ -1000,11 +1016,112 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                 [row], [row], manifest
             )
 
+    def test_aggregate_requires_development_generator_report_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            d0_dir = _write_d0_inputs(root)
+            d1_path, manifest_path = self._write_d1_inputs(root)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            report_path = Path(
+                manifest["development_holdout_generator_report"]
+            )
+            report_path.unlink()
+
+            with (
+                patch.object(
+                    aggregate_module,
+                    "git_source_state",
+                    return_value=SOURCE_STATE,
+                ),
+                self.assertRaises(FileNotFoundError) as raised,
+            ):
+                aggregate_module.build_round1_aggregate(
+                    d0_aggregate_dir=d0_dir,
+                    d1_path=d1_path,
+                    d1_manifest_path=manifest_path,
+                    output_dir=root / "missing-development-report",
+                    seed=20260719,
+                    size=None,
+                    d1_share=0.25,
+                    minimum_d1_share=0.20,
+                    maximum_d1_share=0.30,
+                    max_duplicate_count=2,
+                    max_rows_per_root=8,
+                )
+            self.assertIn(str(report_path), str(raised.exception))
+
+    def test_aggregate_binds_development_generator_report_to_both_manifests(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            d0_dir = _write_d0_inputs(root)
+            d1_path, manifest_path = self._write_d1_inputs(root)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            report_path = Path(
+                manifest["development_holdout_generator_report"]
+            )
+            with report_path.open("ab") as handle:
+                handle.write(b"\n")
+
+            def build(output_name: str) -> None:
+                aggregate_module.build_round1_aggregate(
+                    d0_aggregate_dir=d0_dir,
+                    d1_path=d1_path,
+                    d1_manifest_path=manifest_path,
+                    output_dir=root / output_name,
+                    seed=20260719,
+                    size=None,
+                    d1_share=0.25,
+                    minimum_d1_share=0.20,
+                    maximum_d1_share=0.30,
+                    max_duplicate_count=2,
+                    max_rows_per_root=8,
+                )
+
+            with patch.object(
+                aggregate_module,
+                "git_source_state",
+                return_value=SOURCE_STATE,
+            ):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "generator-report bytes do not match the collection manifest",
+                ):
+                    build("tampered-development-report")
+
+                manifest["development_holdout_generator_report_sha256"] = (
+                    file_sha256(report_path)
+                )
+                manifest_path.write_text(
+                    json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "does not match the development manifest",
+                ):
+                    build("forged-development-report-binding")
+
     def test_public_builder_binds_inputs_rejects_tamper_and_no_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             d0_dir = _write_d0_inputs(root)
             d1_path, d1_manifest_path = self._write_d1_inputs(root)
+            d1_manifest = json.loads(
+                d1_manifest_path.read_text(encoding="utf-8")
+            )
+            development_payload = json.loads(
+                Path(d1_manifest["development_holdout"]).read_text(
+                    encoding="utf-8"
+                )
+            )
+            development_roots = frozenset(
+                row["grouping"]["physical_root_fingerprint"]
+                for row in development_payload[
+                    DAGGER1_DEVELOPMENT_SUITE_NAME
+                ]
+            )
 
             def fake_view(d0_rows, d1_rows, **kwargs):
                 del kwargs
@@ -1044,6 +1161,11 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                     aggregate_module,
                     "build_dagger1_training_view",
                     side_effect=fake_view,
+                ),
+                patch.object(
+                    aggregate_module,
+                    "validate_development_holdout_binding",
+                    return_value=development_roots,
                 ),
                 patch.object(
                     aggregate_module,
@@ -1136,6 +1258,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                         ],
                         "manifest_sha256": collection_manifest[
                             "development_holdout_manifest_sha256"
+                        ],
+                        "generator_report_sha256": collection_manifest[
+                            "development_holdout_generator_report_sha256"
                         ],
                         "physical_root_count": 30,
                         "root_set_sha256": collection_manifest[

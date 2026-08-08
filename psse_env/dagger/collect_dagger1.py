@@ -19,10 +19,12 @@ from typing import Any
 
 from psse_env.dagger.build_dagger1_development_holdout import (
     APPROVED_DAGGER1_DEVELOPMENT_ROOT_COUNT,
+    DAGGER1_DEVELOPMENT_PARAMETER_RANKING_THRESHOLD,
     DAGGER1_DEVELOPMENT_HOLDOUT_CONTRACT,
     DAGGER1_DEVELOPMENT_SPLIT,
     DAGGER1_DEVELOPMENT_SUITE_NAME,
     DEFAULT_DAGGER1_DEVELOPMENT_ROOT_PLAN,
+    REQUIRED_POST_EVALUATION_RECOVERY_STRATA,
 )
 from psse_env.dagger.dataset_builder import write_jsonl
 from psse_env.dagger.release_factories import (
@@ -91,6 +93,89 @@ DAGGER1_RESERVE_FAMILY_PRIORITY = (
     "multi_measurement",
     "measurement+parameter",
     "parameter",
+)
+DAGGER1_PRIMARY_PLAN = {
+    "measurement+parameter": 48,
+    "multi_measurement": 48,
+    "parameter": 24,
+}
+DAGGER1_RESERVE_PLAN = {
+    "measurement+parameter": 48,
+    "multi_measurement": 31,
+    "parameter": 0,
+}
+DAGGER1_TRAINING_POOL_PLAN = {
+    family: DAGGER1_PRIMARY_PLAN[family] + DAGGER1_RESERVE_PLAN[family]
+    for family in DAGGER1_PRIMARY_PLAN
+}
+DAGGER1_CANDIDATE_REQUEST_PLAN = {
+    "measurement+parameter": 96,
+    "multi_measurement": 176,
+    "parameter": 48,
+}
+DAGGER1_PRIMARY_MULTI_MEASUREMENT_CARDINALITY_QUOTA = {
+    "2": 16,
+    "3": 6,
+    "4": 10,
+    "5": 16,
+}
+DAGGER1_RESERVE_MULTI_MEASUREMENT_CARDINALITY_INVENTORY = {
+    "3": 12,
+    "4": 5,
+    "5": 14,
+}
+DAGGER1_DEVELOPMENT_MULTI_MEASUREMENT_CARDINALITY_INVENTORY = {
+    "2": 3,
+    "3": 3,
+    "4": 3,
+    "5": 3,
+}
+DAGGER1_DEVELOPMENT_RESERVED_COUNT_BY_FAMILY = {
+    "measurement+parameter": 0,
+    "multi_measurement": 12,
+    "parameter": 0,
+}
+DAGGER1_FRESH_CANDIDATE_COUNT_BY_FAMILY = {
+    "measurement+parameter": 96,
+    "multi_measurement": 91,
+    "parameter": 35,
+}
+DAGGER1_FRESH_CANDIDATE_CARDINALITY_INVENTORY = {
+    "measurement+parameter": {"2": 96},
+    "multi_measurement": {"2": 19, "3": 21, "4": 18, "5": 33},
+    "parameter": {"1": 35},
+}
+DAGGER1_UNUSED_FRESH_CANDIDATE_COUNT_BY_FAMILY = {
+    "measurement+parameter": 0,
+    "multi_measurement": 0,
+    "parameter": 11,
+}
+DAGGER1_RAW_CANDIDATE_COUNT = 259
+DAGGER1_FRESH_CANDIDATE_COUNT = 222
+DAGGER1_DEVELOPMENT_CANDIDATE_REQUEST_PLAN = {
+    "measurement+parameter": 48,
+    "multi_measurement": 176,
+    "parameter": 24,
+}
+DAGGER1_DEVELOPMENT_FRESH_CANDIDATE_COUNT_BY_FAMILY = {
+    "measurement+parameter": 48,
+    "multi_measurement": 12,
+    "parameter": 9,
+}
+DAGGER1_DEVELOPMENT_FRESH_CANDIDATE_CARDINALITY_INVENTORY = {
+    "measurement+parameter": {"2": 48},
+    "multi_measurement": {"2": 3, "3": 3, "4": 3, "5": 3},
+    "parameter": {"1": 9},
+}
+DAGGER1_DEVELOPMENT_RAW_CANDIDATE_COUNT = 187
+DAGGER1_SCENARIO_SEED = 20260720
+DAGGER1_DEVELOPMENT_SEED = 20260721
+DAGGER1_DEVELOPMENT_SOURCE_BINDINGS = frozenset(
+    {
+        "psse_env/dagger/build_dagger1_development_holdout.py",
+        "psse_env/dagger/suite_builder.py",
+        "psse_env/providers/scenario_generator.py",
+    }
 )
 FAILED_COLLECTION_ARTIFACT_TYPE = (
     "dagger1_failed_strict_collection_diagnostic_bundle"
@@ -422,6 +507,7 @@ def validate_development_holdout_binding(
     holdout_path: Path,
     manifest_path: Path,
     *,
+    generator_report_path: Path,
     source_state: Mapping[str, Any],
     scenario_input_path: Path,
     scenario_manifest_path: Path,
@@ -433,14 +519,30 @@ def validate_development_holdout_binding(
 ) -> frozenset[str]:
     """Validate and return the independently reserved development roots."""
 
-    if not holdout_path.is_file() or not manifest_path.is_file():
+    if not (
+        holdout_path.is_file()
+        and manifest_path.is_file()
+        and generator_report_path.is_file()
+    ):
         raise FileNotFoundError(
-            "DAgger-1 development holdout and manifest must both exist"
+            "DAgger-1 development holdout, manifest, and generator report "
+            "must all exist"
         )
     payload = json.loads(holdout_path.read_text(encoding="utf-8"))
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    generator_report = json.loads(
+        generator_report_path.read_text(encoding="utf-8")
+    )
+    scenario_manifest = json.loads(
+        scenario_manifest_path.read_text(encoding="utf-8")
+    )
     if not isinstance(payload, Mapping) or not isinstance(manifest, Mapping):
         raise ValueError("development holdout and manifest must be JSON objects")
+    if not isinstance(generator_report, Mapping):
+        raise ValueError("development holdout generator report must be an object")
+    validate_training_source_report(generator_report)
+    if not isinstance(scenario_manifest, Mapping):
+        raise ValueError("D1 training scenario manifest must be a JSON object")
     if set(payload) != {DAGGER1_DEVELOPMENT_SUITE_NAME}:
         raise ValueError("development holdout has an unexpected suite mapping")
     rows = payload.get(DAGGER1_DEVELOPMENT_SUITE_NAME)
@@ -449,6 +551,8 @@ def validate_development_holdout_binding(
 
     roots: set[str] = set()
     family_counts: Counter[str] = Counter()
+    multi_measurement_roots: set[str] = set()
+    multi_measurement_cardinality: Counter[str] = Counter()
     for index, row in enumerate(rows):
         if not isinstance(row, Mapping) or row.get("scenario_schema_version") != 1:
             raise ValueError(f"development holdout row {index} is not schema-v1")
@@ -476,12 +580,18 @@ def validate_development_holdout_binding(
             raise ValueError("development holdout physical roots are not unique")
         roots.add(root)
         family_counts[family] += 1
+        if family == "multi_measurement":
+            multi_measurement_roots.add(root)
+            multi_measurement_cardinality[
+                str(grouping.get("error_cardinality"))
+            ] += 1
 
     manifest_source = manifest.get("source_state")
     source_bindings = manifest.get("source_bindings")
     repo_root = Path(__file__).resolve().parents[2]
-    source_bindings_current = isinstance(source_bindings, Mapping) and bool(
-        source_bindings
+    source_bindings_current = (
+        isinstance(source_bindings, Mapping)
+        and set(source_bindings) == DAGGER1_DEVELOPMENT_SOURCE_BINDINGS
     )
     if source_bindings_current:
         for relative_value, expected_sha256 in source_bindings.items():
@@ -499,13 +609,40 @@ def validate_development_holdout_binding(
             ):
                 source_bindings_current = False
                 break
-        required_builder = "psse_env/dagger/build_dagger1_development_holdout.py"
-        source_bindings_current = bool(
-            source_bindings_current and required_builder in source_bindings
-        )
+    d0_rows = _load_json_or_jsonl(d0_raw_path)
+    d0_roots = {
+        str(row.get("physical_root_fingerprint") or "").strip()
+        for row in d0_rows
+        if str(row.get("physical_root_fingerprint") or "").strip()
+    }
+    frozen_roots = set(frozen_physical_roots(forbidden_suite_path))
+    training_rows = _load_json_or_jsonl(scenario_input_path)
+    training_roots = {
+        str(
+            _scenario_grouping(row).get("physical_root_fingerprint") or ""
+        ).strip()
+        for row in training_rows
+        if str(
+            _scenario_grouping(row).get("physical_root_fingerprint") or ""
+        ).strip()
+    }
+    root_sets = {
+        "d0": d0_roots,
+        "frozen": frozen_roots,
+        "d1_training": training_roots,
+        "development": roots,
+    }
+    declared_root_counts = manifest.get("root_counts")
+    declared_root_hashes = manifest.get("root_set_sha256")
+    pairwise_overlap = manifest.get("pairwise_input_overlap")
+    expected_pairwise_overlap = {
+        "d0_frozen": sorted(d0_roots & frozen_roots),
+        "d0_d1_training": sorted(d0_roots & training_roots),
+        "frozen_d1_training": sorted(frozen_roots & training_roots),
+    }
     plan = manifest.get("plan")
     selected_counts = manifest.get("selected_count_by_family")
-    root_set_hashes = manifest.get("root_set_sha256")
+    root_set_hashes = declared_root_hashes
     overlaps = manifest.get("development_protected_overlap")
     normalized_plan = (
         {str(key): value for key, value in plan.items()}
@@ -520,13 +657,50 @@ def validate_development_holdout_binding(
     declared_model_selection_eligible = manifest.get(
         "diagnostic_closed_loop_model_selection_eligible"
     )
+    training_reserved_roots, training_reservation_valid = (
+        _development_reservation_from_manifest(scenario_manifest)
+    )
+    expected_reserved_multi_roots = training_reserved_roots.get(
+        "multi_measurement", []
+    )
+    declared_training_reservation = manifest.get(
+        "training_development_reserved_roots_by_family"
+    )
+    reservation_boundary_overlap = manifest.get(
+        "training_development_reserved_boundary_overlap"
+    )
+    fresh_candidate_inventory = manifest.get("fresh_candidate_inventory")
+    fresh_candidate_count = (
+        sum(
+            int(item.get("physical_root_count") or 0)
+            for item in fresh_candidate_inventory.values()
+            if isinstance(item, Mapping)
+        )
+        if isinstance(fresh_candidate_inventory, Mapping)
+        else -1
+    )
+    filtered_protected_count = manifest.get("filtered_protected_root_count")
+    filtered_parameter_scan_count = manifest.get(
+        "filtered_multi_measurement_with_parameter_scans_root_count"
+    )
     checks = {
         "schema_version": manifest.get("schema_version") == 1,
+        "scenario_schema_version": manifest.get("scenario_schema_version") == 1,
+        "artifact_type": manifest.get("artifact_type")
+        == "dagger1_development_holdout_suite",
         "builder_contract": manifest.get("builder_contract")
         == DAGGER1_DEVELOPMENT_HOLDOUT_CONTRACT,
         "suite_name": manifest.get("suite_name")
         == DAGGER1_DEVELOPMENT_SUITE_NAME,
+        "suite_format": manifest.get("suite_format")
+        == "evaluation_suite_mapping_v1",
         "split": manifest.get("split") == DAGGER1_DEVELOPMENT_SPLIT,
+        "source_partition": manifest.get("source_partition") == "train",
+        "parameter_threshold": manifest.get(
+            "parameter_ranking_dominance_threshold"
+        )
+        == DAGGER1_DEVELOPMENT_PARAMETER_RANKING_THRESHOLD,
+        "seed": manifest.get("seed") == DAGGER1_DEVELOPMENT_SEED,
         "source_commit": isinstance(manifest_source, Mapping)
         and manifest_source.get("release_eligible_source") is True
         and manifest_source.get("source_commit")
@@ -534,6 +708,8 @@ def validate_development_holdout_binding(
         "source_bindings": source_bindings_current,
         "output_sha256": manifest.get("output_sha256")
         == _file_sha256(holdout_path),
+        "generator_report_sha256": manifest.get("generator_report_sha256")
+        == _file_sha256(generator_report_path),
         "scenario_count": manifest.get("scenario_count") == len(rows),
         "physical_root_count": manifest.get("physical_root_count") == len(roots),
         "family_counts": isinstance(selected_counts, Mapping)
@@ -542,6 +718,102 @@ def validate_development_holdout_binding(
         "root_set_sha256": isinstance(root_set_hashes, Mapping)
         and root_set_hashes.get("development")
         == stable_json_sha256(sorted(roots)),
+        "root_counts": isinstance(declared_root_counts, Mapping)
+        and dict(declared_root_counts)
+        == {name: len(values) for name, values in root_sets.items()},
+        "all_root_set_sha256": isinstance(declared_root_hashes, Mapping)
+        and dict(declared_root_hashes)
+        == {
+            name: stable_json_sha256(sorted(values))
+            for name, values in root_sets.items()
+        },
+        "pairwise_input_overlap": isinstance(pairwise_overlap, Mapping)
+        and dict(pairwise_overlap) == expected_pairwise_overlap
+        and not any(expected_pairwise_overlap.values()),
+        "candidate_multiplier": manifest.get("candidate_multiplier") == 4,
+        "candidate_request_plan": (
+            _exact_string_int_mapping(
+                manifest.get("candidate_request_plan"),
+                DAGGER1_DEVELOPMENT_CANDIDATE_REQUEST_PLAN,
+            )
+            and _exact_string_int_mapping(
+                manifest.get("candidate_plan"),
+                DAGGER1_DEVELOPMENT_CANDIDATE_REQUEST_PLAN,
+            )
+        ),
+        "candidate_count": manifest.get("candidate_count")
+        == DAGGER1_DEVELOPMENT_RAW_CANDIDATE_COUNT,
+        "candidate_count_arithmetic": (
+            isinstance(filtered_protected_count, int)
+            and not isinstance(filtered_protected_count, bool)
+            and filtered_protected_count >= 0
+            and isinstance(filtered_parameter_scan_count, int)
+            and not isinstance(filtered_parameter_scan_count, bool)
+            and filtered_parameter_scan_count >= 0
+            and manifest.get("candidate_count")
+            == fresh_candidate_count
+            + filtered_protected_count
+            + filtered_parameter_scan_count
+        ),
+        "fresh_candidate_inventory": _candidate_inventory_matches(
+            manifest.get("fresh_candidate_inventory"),
+            expected_counts=(
+                DAGGER1_DEVELOPMENT_FRESH_CANDIDATE_COUNT_BY_FAMILY
+            ),
+            expected_cardinality=(
+                DAGGER1_DEVELOPMENT_FRESH_CANDIDATE_CARDINALITY_INVENTORY
+            ),
+        ),
+        "training_reservation": training_reservation_valid,
+        "training_reservation_copy": (
+            isinstance(declared_training_reservation, Mapping)
+            and dict(declared_training_reservation)
+            == training_reserved_roots
+        ),
+        "selected_multi_measurement_cardinality": (
+            _exact_string_int_mapping(
+                manifest.get(
+                    "selected_multi_measurement_cardinality_inventory"
+                ),
+                DAGGER1_DEVELOPMENT_MULTI_MEASUREMENT_CARDINALITY_INVENTORY,
+            )
+            and dict(multi_measurement_cardinality)
+            == DAGGER1_DEVELOPMENT_MULTI_MEASUREMENT_CARDINALITY_INVENTORY
+        ),
+        "selected_multi_measurement_reservation": (
+            manifest.get(
+                "selected_multi_measurement_matches_training_reservation"
+            )
+            is True
+            and sorted(multi_measurement_roots)
+            == expected_reserved_multi_roots
+            and manifest.get(
+                "training_development_reserved_multi_measurement_root_set_sha256"
+            )
+            == stable_json_sha256(expected_reserved_multi_roots)
+            and manifest.get("selected_multi_measurement_root_set_sha256")
+            == stable_json_sha256(sorted(multi_measurement_roots))
+        ),
+        "training_reservation_boundary_overlap": (
+            isinstance(reservation_boundary_overlap, Mapping)
+            and set(reservation_boundary_overlap)
+            == {"d0", "frozen", "d1_training"}
+            and all(value == [] for value in reservation_boundary_overlap.values())
+        ),
+        "intended_use": manifest.get("intended_use")
+        == "dagger1_closed_loop_development_model_selection_only",
+        "required_recovery_strata": manifest.get(
+            "required_post_evaluation_recovery_strata"
+        )
+        == list(REQUIRED_POST_EVALUATION_RECOVERY_STRATA),
+        "recovery_coverage_contract": manifest.get(
+            "recovery_strata_coverage_requires_closed_loop_evaluation"
+        )
+        is True,
+        "recovery_qualification_status": manifest.get(
+            "recovery_strata_qualification_status"
+        )
+        == "pending_teacher_opportunity_trace_instrumentation",
         "training_eligible": manifest.get("training_eligible") is False,
         "training_collection_eligible": manifest.get(
             "training_collection_eligible"
@@ -734,6 +1006,90 @@ def validate_training_source_report(report: Mapping[str, Any]) -> None:
         )
 
 
+def _exact_string_int_mapping(value: Any, expected: Mapping[str, int]) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    if any(
+        isinstance(item, bool) or not isinstance(item, int)
+        for item in value.values()
+    ):
+        return False
+    return {str(key): item for key, item in value.items()} == dict(expected)
+
+
+def _candidate_inventory_matches(
+    value: Any,
+    *,
+    expected_counts: Mapping[str, int],
+    expected_cardinality: Mapping[str, Mapping[str, int]],
+) -> bool:
+    if not isinstance(value, Mapping) or set(value) != set(expected_counts):
+        return False
+    for family, expected_count in expected_counts.items():
+        item = value.get(family)
+        if not isinstance(item, Mapping) or set(item) != {
+            "physical_root_count",
+            "error_cardinality",
+            "physical_root_set_sha256",
+        }:
+            return False
+        root_hash = item.get("physical_root_set_sha256")
+        if not (
+            item.get("physical_root_count") == expected_count
+            and _exact_string_int_mapping(
+                item.get("error_cardinality"),
+                expected_cardinality[family],
+            )
+            and isinstance(root_hash, str)
+            and _ADAPTER_TREE_REVISION.fullmatch(root_hash) is not None
+        ):
+            return False
+    return True
+
+
+def _development_reservation_from_manifest(
+    manifest: Mapping[str, Any],
+) -> tuple[dict[str, list[str]], bool]:
+    raw_roots = manifest.get("development_reserved_roots_by_family")
+    raw_hashes = manifest.get(
+        "development_reserved_root_set_sha256_by_family"
+    )
+    raw_counts = manifest.get("withheld_for_development_count_by_family")
+    families = set(DAGGER1_DEVELOPMENT_RESERVED_COUNT_BY_FAMILY)
+    if not (
+        isinstance(raw_roots, Mapping)
+        and isinstance(raw_hashes, Mapping)
+        and isinstance(raw_counts, Mapping)
+        and set(raw_roots) == families
+        and set(raw_hashes) == families
+        and set(raw_counts) == families
+    ):
+        return {}, False
+    normalized: dict[str, list[str]] = {}
+    for family in sorted(families):
+        roots = raw_roots.get(family)
+        if not (
+            isinstance(roots, Sequence)
+            and not isinstance(roots, (str, bytes))
+        ):
+            return {}, False
+        materialized = [str(root).strip() for root in roots]
+        if (
+            materialized != sorted(materialized)
+            or any(not root for root in materialized)
+            or len(set(materialized)) != len(materialized)
+            or raw_counts.get(family)
+            != DAGGER1_DEVELOPMENT_RESERVED_COUNT_BY_FAMILY[family]
+            or len(materialized)
+            != DAGGER1_DEVELOPMENT_RESERVED_COUNT_BY_FAMILY[family]
+            or raw_hashes.get(family) != stable_json_sha256(materialized)
+        ):
+            return {}, False
+        normalized[family] = materialized
+    all_roots = [root for roots in normalized.values() for root in roots]
+    return normalized, len(all_roots) == len(set(all_roots))
+
+
 def validate_scenario_builder_manifest(
     manifest: Mapping[str, Any],
     *,
@@ -756,6 +1112,9 @@ def validate_scenario_builder_manifest(
     reserve_counts = manifest.get("reserve_count_by_family")
     selected_counts = manifest.get("selected_count_by_family")
     schedule = manifest.get("collection_schedule")
+    reserved_roots_by_family, reservation_valid = (
+        _development_reservation_from_manifest(manifest)
+    )
     if not all(
         isinstance(value, Mapping)
         for value in (
@@ -799,7 +1158,11 @@ def validate_scenario_builder_manifest(
     actual_counts: Counter[str] = Counter()
     actual_primary_counts: Counter[str] = Counter()
     actual_reserve_counts: Counter[str] = Counter()
+    actual_primary_multi_cardinality: Counter[str] = Counter()
+    actual_reserve_multi_cardinality: Counter[str] = Counter()
     actual_roots: set[str] = set()
+    actual_primary_roots: set[str] = set()
+    actual_reserve_roots: set[str] = set()
     for scenario in scenarios:
         grouping = _scenario_grouping(scenario)
         family = str(grouping.get("scenario_family") or "").strip()
@@ -809,8 +1172,18 @@ def validate_scenario_builder_manifest(
             actual_counts[family] += 1
             if cohort == "primary":
                 actual_primary_counts[family] += 1
+                actual_primary_roots.add(root)
+                if family == "multi_measurement":
+                    actual_primary_multi_cardinality[
+                        str(grouping.get("error_cardinality"))
+                    ] += 1
             elif cohort == "reserve":
                 actual_reserve_counts[family] += 1
+                actual_reserve_roots.add(root)
+                if family == "multi_measurement":
+                    actual_reserve_multi_cardinality[
+                        str(grouping.get("error_cardinality"))
+                    ] += 1
         if root:
             actual_roots.add(root)
     # Recompute all per-scenario ordering/priority invariants, not only the
@@ -820,6 +1193,28 @@ def validate_scenario_builder_manifest(
     normalized_schedule_replicas = schedule.get(
         "maximum_rollout_replicas_by_family"
     )
+    d0_roots = {
+        str(row.get("physical_root_fingerprint") or "").strip()
+        for row in _load_json_or_jsonl(d0_raw_path)
+        if str(row.get("physical_root_fingerprint") or "").strip()
+    }
+    frozen_roots = frozen_physical_roots(forbidden_suite_path)
+    fresh_inventory = manifest.get("fresh_candidate_inventory")
+    fresh_inventory_count = (
+        sum(
+            int(item.get("physical_root_count") or 0)
+            for item in fresh_inventory.values()
+            if isinstance(item, Mapping)
+        )
+        if isinstance(fresh_inventory, Mapping)
+        else -1
+    )
+    filtered_protected_count = manifest.get("filtered_protected_root_count")
+    filtered_parameter_scan_count = manifest.get(
+        "filtered_multi_measurement_with_parameter_scans_root_count"
+    )
+    candidate_count = manifest.get("candidate_count")
+    fresh_candidate_count = manifest.get("fresh_candidate_count")
     checks = {
         "schema_version": manifest.get("schema_version") == 1,
         "builder_contract": (
@@ -844,6 +1239,116 @@ def validate_scenario_builder_manifest(
             manifest.get("parameter_ranking_dominance_threshold")
             == BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD
         ),
+        "seed": manifest.get("seed") == DAGGER1_SCENARIO_SEED,
+        "d0_root_count": manifest.get("d0_root_count") == len(d0_roots),
+        "frozen_root_count": manifest.get("frozen_root_count")
+        == len(frozen_roots),
+        "primary_plan": (
+            _exact_string_int_mapping(
+                manifest.get("plan"), DAGGER1_PRIMARY_PLAN
+            )
+            and _exact_string_int_mapping(
+                manifest.get("primary_plan"), DAGGER1_PRIMARY_PLAN
+            )
+        ),
+        "primary_count_contract": normalized_primary
+        == DAGGER1_PRIMARY_PLAN,
+        "reserve_count_contract": normalized_reserve
+        == DAGGER1_RESERVE_PLAN,
+        "selected_count_contract": normalized_selected
+        == DAGGER1_TRAINING_POOL_PLAN,
+        "training_pool_plan": _exact_string_int_mapping(
+            manifest.get("training_pool_plan"),
+            DAGGER1_TRAINING_POOL_PLAN,
+        ),
+        "candidate_multiplier": manifest.get("candidate_multiplier") == 2,
+        "candidate_request_plan": (
+            _exact_string_int_mapping(
+                manifest.get("candidate_request_plan"),
+                DAGGER1_CANDIDATE_REQUEST_PLAN,
+            )
+            and _exact_string_int_mapping(
+                manifest.get("candidate_plan"),
+                DAGGER1_CANDIDATE_REQUEST_PLAN,
+            )
+        ),
+        "candidate_counts": (
+            candidate_count == DAGGER1_RAW_CANDIDATE_COUNT
+            and fresh_candidate_count == DAGGER1_FRESH_CANDIDATE_COUNT
+            and fresh_inventory_count == fresh_candidate_count
+            and isinstance(filtered_protected_count, int)
+            and not isinstance(filtered_protected_count, bool)
+            and filtered_protected_count >= 0
+            and isinstance(filtered_parameter_scan_count, int)
+            and not isinstance(filtered_parameter_scan_count, bool)
+            and filtered_parameter_scan_count >= 0
+            and candidate_count
+            == fresh_candidate_count
+            + filtered_protected_count
+            + filtered_parameter_scan_count
+        ),
+        "fresh_candidate_inventory": _candidate_inventory_matches(
+            manifest.get("fresh_candidate_inventory"),
+            expected_counts=DAGGER1_FRESH_CANDIDATE_COUNT_BY_FAMILY,
+            expected_cardinality=(
+                DAGGER1_FRESH_CANDIDATE_CARDINALITY_INVENTORY
+            ),
+        ),
+        "unused_fresh_candidate_counts": _exact_string_int_mapping(
+            manifest.get("unused_fresh_candidate_count_by_family"),
+            DAGGER1_UNUSED_FRESH_CANDIDATE_COUNT_BY_FAMILY,
+        )
+        and all(
+            DAGGER1_FRESH_CANDIDATE_COUNT_BY_FAMILY[family]
+            == DAGGER1_TRAINING_POOL_PLAN[family]
+            + DAGGER1_DEVELOPMENT_RESERVED_COUNT_BY_FAMILY[family]
+            + DAGGER1_UNUSED_FRESH_CANDIDATE_COUNT_BY_FAMILY[family]
+            for family in DAGGER1_FRESH_CANDIDATE_COUNT_BY_FAMILY
+        ),
+        "primary_multi_measurement_quota": (
+            _exact_string_int_mapping(
+                manifest.get(
+                    "primary_multi_measurement_cardinality_quota"
+                ),
+                DAGGER1_PRIMARY_MULTI_MEASUREMENT_CARDINALITY_QUOTA,
+            )
+            and _exact_string_int_mapping(
+                manifest.get(
+                    "primary_multi_measurement_cardinality_count"
+                ),
+                DAGGER1_PRIMARY_MULTI_MEASUREMENT_CARDINALITY_QUOTA,
+            )
+            and dict(actual_primary_multi_cardinality)
+            == DAGGER1_PRIMARY_MULTI_MEASUREMENT_CARDINALITY_QUOTA
+        ),
+        "reserve_multi_measurement_inventory": (
+            _exact_string_int_mapping(
+                manifest.get(
+                    "reserve_multi_measurement_cardinality_inventory"
+                ),
+                DAGGER1_RESERVE_MULTI_MEASUREMENT_CARDINALITY_INVENTORY,
+            )
+            and dict(actual_reserve_multi_cardinality)
+            == DAGGER1_RESERVE_MULTI_MEASUREMENT_CARDINALITY_INVENTORY
+        ),
+        "development_reservation": reservation_valid,
+        "development_reservation_disjoint": reservation_valid
+        and not (
+            set(
+                root
+                for family_roots in reserved_roots_by_family.values()
+                for root in family_roots
+            )
+            & actual_roots
+        ),
+        "development_reservation_cardinality": (
+            _exact_string_int_mapping(
+                manifest.get(
+                    "withheld_for_development_multi_measurement_cardinality_inventory"
+                ),
+                DAGGER1_DEVELOPMENT_MULTI_MEASUREMENT_CARDINALITY_INVENTORY,
+            )
+        ),
         "exact_family_counts": normalized_selected == expected_selected,
         "primary_family_counts": dict(actual_primary_counts)
         == {key: value for key, value in normalized_primary.items() if value},
@@ -852,6 +1357,15 @@ def validate_scenario_builder_manifest(
         "collection_schedule_contract": (
             schedule.get("contract") == DAGGER1_COLLECTION_SCHEDULE_CONTRACT
         ),
+        "collection_schedule_fields_exact": set(schedule)
+        == {
+            "contract",
+            "cohort_order",
+            "reserve_family_priority",
+            "priority_field",
+            "order_field",
+            "maximum_rollout_replicas_by_family",
+        },
         "collection_schedule_cohorts": schedule.get("cohort_order")
         == ["primary", "reserve"],
         "collection_schedule_family_priority": schedule.get(
@@ -876,6 +1390,18 @@ def validate_scenario_builder_manifest(
         "actual_scenario_count": len(scenarios)
         == sum(expected_selected.values()),
         "actual_unique_roots": len(actual_roots) == len(scenarios),
+        "primary_root_set_sha256": manifest.get(
+            "primary_physical_root_set_sha256"
+        )
+        == stable_json_sha256(sorted(actual_primary_roots)),
+        "reserve_root_set_sha256": manifest.get(
+            "reserve_physical_root_set_sha256"
+        )
+        == stable_json_sha256(sorted(actual_reserve_roots)),
+        "training_root_set_sha256": manifest.get(
+            "training_physical_root_set_sha256"
+        )
+        == stable_json_sha256(sorted(actual_roots)),
         "protected_root_overlap": manifest.get("protected_root_overlap") == [],
         "d0_raw_sha256": manifest.get("d0_raw_sha256") == _file_sha256(d0_raw_path),
         "d0_provenance_sha256": (
@@ -1980,6 +2506,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--development-holdout-generator-report",
+        type=Path,
+        help=(
+            "Round0ScenarioGenerator report byte-bound by the development "
+            "holdout manifest; required with the holdout inputs"
+        ),
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         required=True,
@@ -2070,17 +2604,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             "training collection requires --all-output so truth-audit "
             "quarantines remain independently recomputable"
         )
-    if (args.development_holdout is None) != (
-        args.development_holdout_manifest is None
+    development_inputs = (
+        args.development_holdout,
+        args.development_holdout_manifest,
+        args.development_holdout_generator_report,
+    )
+    if any(value is not None for value in development_inputs) and not all(
+        value is not None for value in development_inputs
     ):
         parser.error(
-            "--development-holdout and --development-holdout-manifest must "
-            "be provided together"
+            "--development-holdout, --development-holdout-manifest, and "
+            "--development-holdout-generator-report must be provided together"
         )
     if args.collection_pass == "training" and args.development_holdout is None:
         parser.error(
             "training collection requires --development-holdout and "
-            "--development-holdout-manifest"
+            "--development-holdout-manifest and "
+            "--development-holdout-generator-report"
         )
     learner_seed: dict[str, Any] | None = None
     if args.collection_pass == "training":
@@ -2159,6 +2699,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             [
                 args.development_holdout,
                 args.development_holdout_manifest,
+                args.development_holdout_generator_report,
             ]
         )
     output_manifest_path = validate_collection_output_paths(
@@ -2204,6 +2745,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         development_roots = validate_development_holdout_binding(
             args.development_holdout,
             args.development_holdout_manifest,
+            generator_report_path=(
+                args.development_holdout_generator_report
+            ),
             source_state=source_state,
             scenario_input_path=args.input,
             scenario_manifest_path=args.scenario_manifest,
@@ -2381,6 +2925,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
                 "development_holdout_manifest_sha256": _file_sha256(
                     args.development_holdout_manifest
+                ),
+                "development_holdout_generator_report": str(
+                    args.development_holdout_generator_report.resolve()
+                ),
+                "development_holdout_generator_report_sha256": _file_sha256(
+                    args.development_holdout_generator_report
                 ),
                 "development_holdout_root_count": len(development_roots),
                 "development_holdout_root_set_sha256": stable_json_sha256(
@@ -2630,6 +3180,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         "development_holdout_manifest_sha256": (
             _file_sha256(args.development_holdout_manifest)
             if args.development_holdout_manifest is not None
+            else None
+        ),
+        "development_holdout_generator_report": (
+            str(args.development_holdout_generator_report.resolve())
+            if args.development_holdout_generator_report is not None
+            else None
+        ),
+        "development_holdout_generator_report_sha256": (
+            _file_sha256(args.development_holdout_generator_report)
+            if args.development_holdout_generator_report is not None
             else None
         ),
         "development_holdout_root_count": len(development_roots),

@@ -30,6 +30,7 @@ ADAPTER_REVISION = "b" * 64
 COLLECTION_MANIFEST_SHA256 = "c" * 64
 DEVELOPMENT_HOLDOUT_SHA256 = "1" * 64
 DEVELOPMENT_HOLDOUT_MANIFEST_SHA256 = "2" * 64
+DEVELOPMENT_HOLDOUT_GENERATOR_REPORT_SHA256 = "4" * 64
 DEVELOPMENT_HOLDOUT_ROOT_SET_SHA256 = "3" * 64
 DEVELOPMENT_HOLDOUT_ROOT_COUNT = 30
 
@@ -61,6 +62,9 @@ class Round1SourceMixGateTests(unittest.TestCase):
             "development_holdout_sha256": DEVELOPMENT_HOLDOUT_SHA256,
             "development_holdout_manifest_sha256": (
                 DEVELOPMENT_HOLDOUT_MANIFEST_SHA256
+            ),
+            "development_holdout_generator_report_sha256": (
+                DEVELOPMENT_HOLDOUT_GENERATOR_REPORT_SHA256
             ),
             "development_holdout_root_count": DEVELOPMENT_HOLDOUT_ROOT_COUNT,
             "development_physical_root_count": DEVELOPMENT_HOLDOUT_ROOT_COUNT,
@@ -161,6 +165,9 @@ class Round1SourceMixGateTests(unittest.TestCase):
                 "d1_development_holdout": {
                     "holdout_sha256": DEVELOPMENT_HOLDOUT_SHA256,
                     "manifest_sha256": DEVELOPMENT_HOLDOUT_MANIFEST_SHA256,
+                    "generator_report_sha256": (
+                        DEVELOPMENT_HOLDOUT_GENERATOR_REPORT_SHA256
+                    ),
                     "physical_root_count": DEVELOPMENT_HOLDOUT_ROOT_COUNT,
                     "root_set_sha256": DEVELOPMENT_HOLDOUT_ROOT_SET_SHA256,
                 },
@@ -406,6 +413,23 @@ class Round1SourceMixGateTests(unittest.TestCase):
             payload["d1_collection_manifest"][
                 "development_holdout_root_set_sha256"
             ] = "4" * 64
+            preflight.write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                GateError,
+                "development-holdout binding differs from the D1 collection manifest",
+            ):
+                self._validate(provenance, preflight)
+
+    def test_d1_manifest_development_generator_report_must_match(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provenance, preflight = self._write_valid_artifacts(Path(temp_dir))
+            payload = json.loads(preflight.read_text(encoding="utf-8"))
+            payload["d1_collection_manifest"][
+                "development_holdout_generator_report_sha256"
+            ] = "5" * 64
             preflight.write_text(
                 json.dumps(payload, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",

@@ -555,35 +555,62 @@ def build_round1_aggregate(
     development_manifest_value = str(
         d1_manifest.get("development_holdout_manifest") or ""
     ).strip()
+    development_generator_report_value = str(
+        d1_manifest.get("development_holdout_generator_report") or ""
+    ).strip()
     development_holdout_path = Path(development_holdout_value)
     development_manifest_path = Path(development_manifest_value)
+    development_generator_report_path = Path(
+        development_generator_report_value
+    )
     if (
         not development_holdout_value
         or not development_manifest_value
+        or not development_generator_report_value
         or not development_holdout_path.is_absolute()
         or not development_manifest_path.is_absolute()
+        or not development_generator_report_path.is_absolute()
     ):
         raise ValueError(
-            "D1 training manifest must bind absolute development holdout paths"
+            "D1 training manifest must bind absolute development holdout, "
+            "manifest, and generator-report paths"
         )
     if not development_holdout_path.is_file():
         raise FileNotFoundError(development_holdout_path)
     if not development_manifest_path.is_file():
         raise FileNotFoundError(development_manifest_path)
+    if not development_generator_report_path.is_file():
+        raise FileNotFoundError(development_generator_report_path)
     development_holdout_sha256 = file_sha256(development_holdout_path)
     development_manifest_sha256 = file_sha256(development_manifest_path)
+    development_generator_report_sha256 = file_sha256(
+        development_generator_report_path
+    )
     if (
         d1_manifest.get("development_holdout_sha256")
         != development_holdout_sha256
         or d1_manifest.get("development_holdout_manifest_sha256")
         != development_manifest_sha256
+        or d1_manifest.get("development_holdout_generator_report_sha256")
+        != development_generator_report_sha256
     ):
         raise ValueError(
-            "D1 development holdout bytes do not match the collection manifest"
+            "D1 development holdout bytes, manifest bytes, or "
+            "generator-report bytes do not match the collection manifest"
+        )
+    development_manifest = _load_mapping(development_manifest_path)
+    if (
+        development_manifest.get("generator_report_sha256")
+        != development_generator_report_sha256
+    ):
+        raise ValueError(
+            "D1 development generator report does not match the development "
+            "manifest"
         )
     development_roots = validate_development_holdout_binding(
         development_holdout_path,
         development_manifest_path,
+        generator_report_path=development_generator_report_path,
         source_state=source_state,
         scenario_input_path=scenario_input_path,
         scenario_manifest_path=scenario_manifest_path,
@@ -610,6 +637,7 @@ def build_round1_aggregate(
     development_holdout_binding = {
         "holdout_sha256": development_holdout_sha256,
         "manifest_sha256": development_manifest_sha256,
+        "generator_report_sha256": development_generator_report_sha256,
         "physical_root_count": len(development_roots),
         "root_set_sha256": development_root_set_sha256,
     }

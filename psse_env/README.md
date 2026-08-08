@@ -549,6 +549,10 @@ python scripts/build_dagger1_development_holdout.py \
   --seed 20260721
 ```
 
+Rebuild both artifacts after upgrading: collection accepts only the v3
+training-scenario manifest and v2 development-holdout manifest, and requires
+the development generator report alongside the holdout and its manifest.
+
 The second command freezes 30 additional diagnostic development roots in a
 12/12/6 family split, with exactly three multi-measurement roots held back for
 each measurement-error cardinality 2, 3, 4, and 5. The first command requests a
@@ -604,6 +608,7 @@ python scripts/collect_dagger1_recovery.py \
   --scenario-generator-report "$D1_DIR/scenario_generator_report.json" \
   --development-holdout "$D1_DIR/development_holdout.json" \
   --development-holdout-manifest "$D1_DIR/development_holdout.json.manifest.json" \
+  --development-holdout-generator-report "$D1_DIR/development_holdout.generator.json" \
   --d0-aggregate-dir "$D0_DIR" \
   --output "$D1_DIR/diagnostic_beta0.jsonl" \
   --all-output "$D1_DIR/diagnostic_beta0.all.jsonl" \
@@ -617,6 +622,7 @@ python scripts/collect_dagger1_recovery.py \
   --scenario-generator-report "$D1_DIR/scenario_generator_report.json" \
   --development-holdout "$D1_DIR/development_holdout.json" \
   --development-holdout-manifest "$D1_DIR/development_holdout.json.manifest.json" \
+  --development-holdout-generator-report "$D1_DIR/development_holdout.generator.json" \
   --d0-aggregate-dir "$D0_DIR" \
   --output "$D1_DIR/training_beta025.jsonl" \
   --all-output "$D1_DIR/training_beta025.all.jsonl" \

@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import psse_env.dagger.collect_dagger1 as collect_module
 from psse_env.dagger.collect_dagger1 import (
     DAGGER1_COLLECTION_SCHEDULE_CONTRACT,
     DAGGER1_MAXIMUM_ROLLOUT_REPLICAS_BY_FAMILY,
@@ -457,6 +458,8 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                     "development.json",
                     "--development-holdout-manifest",
                     "development.manifest.json",
+                    "--development-holdout-generator-report",
+                    "development.generator.json",
                     "--output",
                     "eligible.jsonl",
                     "--all-output",
@@ -535,23 +538,62 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                     "policy.json",
                     "development.json",
                     "development.json.manifest.json",
+                    "development.generator.json",
                 )
             }
-            for index, name in enumerate(
-                (
-                    "scenarios.json",
-                    "scenarios.manifest.json",
-                    "aggregate.raw.jsonl",
-                    "aggregate.generation_provenance.json",
-                    "suite.json",
-                    "policy.json",
+            training_rows = [
+                {
+                    "scenario_schema_version": 1,
+                    "execution": {},
+                    "audit": {},
+                    "grouping": {
+                        "scenario_family": "parameter",
+                        "physical_root_fingerprint": "training-root",
+                    },
+                }
+            ]
+            paths["scenarios.json"].write_text(
+                json.dumps(training_rows, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            paths["aggregate.raw.jsonl"].write_text(
+                json.dumps({"physical_root_fingerprint": "d0-root"}) + "\n",
+                encoding="utf-8",
+            )
+            paths["aggregate.generation_provenance.json"].write_text(
+                "{}\n", encoding="utf-8"
+            )
+            paths["suite.json"].write_text(
+                json.dumps(
+                    {
+                        "suite": [
+                            {
+                                "grouping": {
+                                    "physical_root_fingerprint": "frozen-root"
+                                }
+                            }
+                        ]
+                    },
+                    sort_keys=True,
                 )
-            ):
-                paths[name].write_text(f"fixture-{index}\n", encoding="utf-8")
+                + "\n",
+                encoding="utf-8",
+            )
+            paths["policy.json"].write_text("{}\n", encoding="utf-8")
+            paths["development.generator.json"].write_text(
+                json.dumps(self._release_threshold_report(), sort_keys=True)
+                + "\n",
+                encoding="utf-8",
+            )
 
             rows = []
             for family, count in DEFAULT_DAGGER1_DEVELOPMENT_ROOT_PLAN.items():
                 for index in range(count):
+                    cardinality = (
+                        index % 4 + 2
+                        if family == "multi_measurement"
+                        else (2 if family == "measurement+parameter" else 1)
+                    )
                     rows.append(
                         {
                             "scenario_schema_version": 1,
@@ -563,6 +605,7 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                                 "physical_root_fingerprint": (
                                     f"development-{family}-{index}"
                                 ),
+                                "error_cardinality": cardinality,
                             },
                         }
                     )
@@ -579,33 +622,124 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 "release_eligible_source": True,
             }
 
+            reserved_roots = {
+                "measurement+parameter": [],
+                "multi_measurement": sorted(
+                    row["grouping"]["physical_root_fingerprint"]
+                    for row in rows
+                    if row["grouping"]["scenario_family"]
+                    == "multi_measurement"
+                ),
+                "parameter": [],
+            }
+            training_manifest = {
+                "schema_version": 1,
+                "builder_contract": DAGGER1_SCENARIO_BUILDER_CONTRACT,
+                "development_reserved_roots_by_family": reserved_roots,
+                "development_reserved_root_set_sha256_by_family": {
+                    family: stable_json_sha256(family_roots)
+                    for family, family_roots in reserved_roots.items()
+                },
+                "withheld_for_development_count_by_family": {
+                    family: len(family_roots)
+                    for family, family_roots in reserved_roots.items()
+                },
+            }
+            paths["scenarios.manifest.json"].write_text(
+                json.dumps(training_manifest, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
             def digest(name: str) -> str:
                 return hashlib.sha256(paths[name].read_bytes()).hexdigest()
 
+            repo_root = Path(__file__).resolve().parents[2]
+            source_bindings = {
+                relative: hashlib.sha256(
+                    (repo_root / relative).read_bytes()
+                ).hexdigest()
+                for relative in collect_module.DAGGER1_DEVELOPMENT_SOURCE_BINDINGS
+            }
+            root_sets = {
+                "d0": ["d0-root"],
+                "frozen": ["frozen-root"],
+                "d1_training": ["training-root"],
+                "development": roots,
+            }
+
             manifest = {
                 "schema_version": 1,
+                "scenario_schema_version": 1,
+                "artifact_type": "dagger1_development_holdout_suite",
                 "builder_contract": DAGGER1_DEVELOPMENT_HOLDOUT_CONTRACT,
                 "suite_name": DAGGER1_DEVELOPMENT_SUITE_NAME,
+                "suite_format": "evaluation_suite_mapping_v1",
                 "split": DAGGER1_DEVELOPMENT_SPLIT,
+                "source_partition": "train",
+                "parameter_ranking_dominance_threshold": 1.0,
+                "seed": collect_module.DAGGER1_DEVELOPMENT_SEED,
                 "source_state": source_state,
-                "source_bindings": {
-                    "psse_env/dagger/build_dagger1_development_holdout.py": (
-                        hashlib.sha256(
-                            (
-                                Path(__file__).resolve().parents[2]
-                                / "psse_env"
-                                / "dagger"
-                                / "build_dagger1_development_holdout.py"
-                            ).read_bytes()
-                        ).hexdigest()
+                "source_bindings": source_bindings,
+                "plan": DEFAULT_DAGGER1_DEVELOPMENT_ROOT_PLAN,
+                "candidate_multiplier": 4,
+                "candidate_request_plan": (
+                    collect_module.DAGGER1_DEVELOPMENT_CANDIDATE_REQUEST_PLAN
+                ),
+                "candidate_plan": (
+                    collect_module.DAGGER1_DEVELOPMENT_CANDIDATE_REQUEST_PLAN
+                ),
+                "candidate_count": (
+                    collect_module.DAGGER1_DEVELOPMENT_RAW_CANDIDATE_COUNT
+                ),
+                "filtered_protected_root_count": 118,
+                "filtered_multi_measurement_with_parameter_scans_root_count": 0,
+                "fresh_candidate_inventory": {
+                    family: {
+                        "physical_root_count": count,
+                        "error_cardinality": (
+                            collect_module
+                            .DAGGER1_DEVELOPMENT_FRESH_CANDIDATE_CARDINALITY_INVENTORY[
+                                family
+                            ]
+                        ),
+                        "physical_root_set_sha256": str(index + 1) * 64,
+                    }
+                    for index, (family, count) in enumerate(
+                        collect_module
+                        .DAGGER1_DEVELOPMENT_FRESH_CANDIDATE_COUNT_BY_FAMILY.items()
                     )
                 },
-                "plan": DEFAULT_DAGGER1_DEVELOPMENT_ROOT_PLAN,
                 "selected_count_by_family": DEFAULT_DAGGER1_DEVELOPMENT_ROOT_PLAN,
+                "selected_multi_measurement_cardinality_inventory": {
+                    "2": 3,
+                    "3": 3,
+                    "4": 3,
+                    "5": 3,
+                },
+                "training_development_reserved_roots_by_family": (
+                    reserved_roots
+                ),
+                "training_development_reserved_multi_measurement_root_set_sha256": (
+                    stable_json_sha256(reserved_roots["multi_measurement"])
+                ),
+                "selected_multi_measurement_root_set_sha256": (
+                    stable_json_sha256(reserved_roots["multi_measurement"])
+                ),
+                "selected_multi_measurement_matches_training_reservation": True,
                 "scenario_count": 30,
                 "physical_root_count": 30,
+                "root_counts": {
+                    name: len(root_values)
+                    for name, root_values in root_sets.items()
+                },
                 "root_set_sha256": {
-                    "development": stable_json_sha256(roots)
+                    name: stable_json_sha256(root_values)
+                    for name, root_values in root_sets.items()
+                },
+                "pairwise_input_overlap": {
+                    "d0_frozen": [],
+                    "d0_d1_training": [],
+                    "frozen_d1_training": [],
                 },
                 "training_eligible": False,
                 "training_collection_eligible": False,
@@ -613,12 +747,30 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 "promotion_evidence_eligible": False,
                 "diagnostic_closed_loop_model_selection_eligible": True,
                 "recovery_stratum_qualified_model_selection_eligible": False,
+                "intended_use": (
+                    "dagger1_closed_loop_development_model_selection_only"
+                ),
+                "required_post_evaluation_recovery_strata": list(
+                    collect_module.REQUIRED_POST_EVALUATION_RECOVERY_STRATA
+                ),
+                "recovery_strata_coverage_requires_closed_loop_evaluation": True,
+                "recovery_strata_qualification_status": (
+                    "pending_teacher_opportunity_trace_instrumentation"
+                ),
+                "training_development_reserved_boundary_overlap": {
+                    "d0": [],
+                    "frozen": [],
+                    "d1_training": [],
+                },
                 "development_protected_overlap": {
                     "d0": [],
                     "frozen": [],
                     "d1_training": [],
                 },
                 "output_sha256": digest("development.json"),
+                "generator_report_sha256": digest(
+                    "development.generator.json"
+                ),
                 "d1_training_scenarios_sha256": digest("scenarios.json"),
                 "d1_training_manifest_sha256": digest(
                     "scenarios.manifest.json"
@@ -635,6 +787,7 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 encoding="utf-8",
             )
             kwargs = {
+                "generator_report_path": paths["development.generator.json"],
                 "source_state": source_state,
                 "scenario_input_path": paths["scenarios.json"],
                 "scenario_manifest_path": paths["scenarios.manifest.json"],
@@ -682,6 +835,60 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "source_bindings"):
+                validate_development_holdout_binding(
+                    paths["development.json"],
+                    paths["development.json.manifest.json"],
+                    **kwargs,
+                )
+
+            for field, mutation, failure in (
+                (
+                    "selected_multi_measurement_cardinality_inventory",
+                    {"2": 2, "3": 3, "4": 3, "5": 3},
+                    "selected_multi_measurement_cardinality",
+                ),
+                (
+                    "training_development_reserved_roots_by_family",
+                    {
+                        **reserved_roots,
+                        "multi_measurement": reserved_roots[
+                            "multi_measurement"
+                        ][1:],
+                    },
+                    "training_reservation_copy",
+                ),
+                (
+                    "selected_multi_measurement_matches_training_reservation",
+                    False,
+                    "selected_multi_measurement_reservation",
+                ),
+            ):
+                tampered_field = copy.deepcopy(manifest)
+                tampered_field[field] = mutation
+                paths["development.json.manifest.json"].write_text(
+                    json.dumps(tampered_field, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                with self.subTest(field=field), self.assertRaisesRegex(
+                    ValueError, failure
+                ):
+                    validate_development_holdout_binding(
+                        paths["development.json"],
+                        paths["development.json.manifest.json"],
+                        **kwargs,
+                    )
+
+            paths["development.json.manifest.json"].write_text(
+                json.dumps(manifest, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            report = self._release_threshold_report()
+            report["tampered"] = True
+            paths["development.generator.json"].write_text(
+                json.dumps(report, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "generator_report_sha256"):
                 validate_development_holdout_binding(
                     paths["development.json"],
                     paths["development.json.manifest.json"],
@@ -808,8 +1015,78 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                     "policy.json",
                 )
             }
-            for index, path in enumerate(paths.values()):
-                path.write_text(f"payload-{index}\n", encoding="utf-8")
+            paths["generator.json"].write_text("{}\n", encoding="utf-8")
+            paths["aggregate.raw.jsonl"].write_text(
+                json.dumps({"physical_root_fingerprint": "d0-root"}) + "\n",
+                encoding="utf-8",
+            )
+            paths["aggregate.generation_provenance.json"].write_text(
+                "{}\n", encoding="utf-8"
+            )
+            paths["suite.json"].write_text(
+                json.dumps(
+                    {
+                        "suite": [
+                            {
+                                "grouping": {
+                                    "physical_root_fingerprint": "frozen-root"
+                                }
+                            }
+                        ]
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            paths["policy.json"].write_text("{}\n", encoding="utf-8")
+
+            scenarios = []
+
+            def append_scenarios(
+                family: str,
+                cohort: str,
+                cardinalities: list[int],
+            ) -> None:
+                priority = (
+                    0
+                    if cohort == "primary"
+                    else DAGGER1_RESERVE_FAMILY_PRIORITY.index(family) + 1
+                )
+                for cardinality in cardinalities:
+                    order = len(scenarios)
+                    scenarios.append(
+                        {
+                            "grouping": {
+                                "scenario_family": family,
+                                "physical_root_fingerprint": (
+                                    f"{cohort}-{family}-{order}"
+                                ),
+                                "error_cardinality": cardinality,
+                                "collection_cohort": cohort,
+                                "collection_priority": priority,
+                                "collection_order": order,
+                            }
+                        }
+                    )
+
+            append_scenarios("measurement+parameter", "primary", [2] * 48)
+            append_scenarios(
+                "multi_measurement",
+                "primary",
+                [2] * 16 + [3] * 6 + [4] * 10 + [5] * 16,
+            )
+            append_scenarios("parameter", "primary", [1] * 24)
+            append_scenarios(
+                "multi_measurement",
+                "reserve",
+                [3] * 12 + [4] * 5 + [5] * 14,
+            )
+            append_scenarios("measurement+parameter", "reserve", [2] * 48)
+            paths["scenarios.json"].write_text(
+                json.dumps(scenarios, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
 
             def digest(path):
                 return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -825,9 +1102,54 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 "source_state": source_state,
                 "source_partition": "train",
                 "parameter_ranking_dominance_threshold": 1.0,
-                "primary_count_by_family": {"multi_measurement": 1},
-                "reserve_count_by_family": {"multi_measurement": 0},
-                "selected_count_by_family": {"multi_measurement": 1},
+                "seed": collect_module.DAGGER1_SCENARIO_SEED,
+                "plan": collect_module.DAGGER1_PRIMARY_PLAN,
+                "primary_plan": collect_module.DAGGER1_PRIMARY_PLAN,
+                "primary_count_by_family": collect_module.DAGGER1_PRIMARY_PLAN,
+                "reserve_count_by_family": collect_module.DAGGER1_RESERVE_PLAN,
+                "selected_count_by_family": (
+                    collect_module.DAGGER1_TRAINING_POOL_PLAN
+                ),
+                "training_pool_plan": collect_module.DAGGER1_TRAINING_POOL_PLAN,
+                "candidate_multiplier": 2,
+                "candidate_request_plan": (
+                    collect_module.DAGGER1_CANDIDATE_REQUEST_PLAN
+                ),
+                "candidate_plan": collect_module.DAGGER1_CANDIDATE_REQUEST_PLAN,
+                "candidate_count": collect_module.DAGGER1_RAW_CANDIDATE_COUNT,
+                "fresh_candidate_count": (
+                    collect_module.DAGGER1_FRESH_CANDIDATE_COUNT
+                ),
+                "fresh_candidate_inventory": {
+                    family: {
+                        "physical_root_count": count,
+                        "error_cardinality": (
+                            collect_module
+                            .DAGGER1_FRESH_CANDIDATE_CARDINALITY_INVENTORY[family]
+                        ),
+                        "physical_root_set_sha256": str(index + 1) * 64,
+                    }
+                    for index, (family, count) in enumerate(
+                        collect_module
+                        .DAGGER1_FRESH_CANDIDATE_COUNT_BY_FAMILY.items()
+                    )
+                },
+                "unused_fresh_candidate_count_by_family": (
+                    collect_module
+                    .DAGGER1_UNUSED_FRESH_CANDIDATE_COUNT_BY_FAMILY
+                ),
+                "primary_multi_measurement_cardinality_quota": (
+                    collect_module
+                    .DAGGER1_PRIMARY_MULTI_MEASUREMENT_CARDINALITY_QUOTA
+                ),
+                "primary_multi_measurement_cardinality_count": (
+                    collect_module
+                    .DAGGER1_PRIMARY_MULTI_MEASUREMENT_CARDINALITY_QUOTA
+                ),
+                "reserve_multi_measurement_cardinality_inventory": (
+                    collect_module
+                    .DAGGER1_RESERVE_MULTI_MEASUREMENT_CARDINALITY_INVENTORY
+                ),
                 "collection_schedule": {
                     "contract": DAGGER1_COLLECTION_SCHEDULE_CONTRACT,
                     "cohort_order": ["primary", "reserve"],
@@ -840,8 +1162,27 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                         DAGGER1_MAXIMUM_ROLLOUT_REPLICAS_BY_FAMILY
                     ),
                 },
-                "scenario_count": 1,
-                "physical_root_count": 1,
+                "development_reserved_roots_by_family": {
+                    "measurement+parameter": [],
+                    "multi_measurement": [
+                        f"development-multi-{index:02d}" for index in range(12)
+                    ],
+                    "parameter": [],
+                },
+                "withheld_for_development_count_by_family": (
+                    collect_module
+                    .DAGGER1_DEVELOPMENT_RESERVED_COUNT_BY_FAMILY
+                ),
+                "withheld_for_development_multi_measurement_cardinality_inventory": (
+                    collect_module
+                    .DAGGER1_DEVELOPMENT_MULTI_MEASUREMENT_CARDINALITY_INVENTORY
+                ),
+                "scenario_count": len(scenarios),
+                "physical_root_count": len(scenarios),
+                "filtered_protected_root_count": 37,
+                "filtered_multi_measurement_with_parameter_scans_root_count": 0,
+                "d0_root_count": 1,
+                "frozen_root_count": 1,
                 "protected_root_overlap": [],
                 "output_sha256": digest(paths["scenarios.json"]),
                 "generator_report_sha256": digest(paths["generator.json"]),
@@ -852,18 +1193,32 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 "frozen_suite_sha256": digest(paths["suite.json"]),
                 "evaluation_policy_sha256": digest(paths["policy.json"]),
             }
+            reserved = manifest["development_reserved_roots_by_family"]
+            manifest["development_reserved_root_set_sha256_by_family"] = {
+                family: stable_json_sha256(family_roots)
+                for family, family_roots in reserved.items()
+            }
+            primary_roots = sorted(
+                row["grouping"]["physical_root_fingerprint"]
+                for row in scenarios
+                if row["grouping"]["collection_cohort"] == "primary"
+            )
+            reserve_roots = sorted(
+                row["grouping"]["physical_root_fingerprint"]
+                for row in scenarios
+                if row["grouping"]["collection_cohort"] == "reserve"
+            )
+            manifest["primary_physical_root_set_sha256"] = stable_json_sha256(
+                primary_roots
+            )
+            manifest["reserve_physical_root_set_sha256"] = stable_json_sha256(
+                reserve_roots
+            )
+            manifest["training_physical_root_set_sha256"] = stable_json_sha256(
+                sorted(primary_roots + reserve_roots)
+            )
             kwargs = {
-                "scenarios": [
-                    {
-                        "grouping": {
-                            "scenario_family": "multi_measurement",
-                            "physical_root_fingerprint": "fresh-root",
-                            "collection_cohort": "primary",
-                            "collection_priority": 0,
-                            "collection_order": 0,
-                        }
-                    }
-                ],
+                "scenarios": scenarios,
                 "input_path": paths["scenarios.json"],
                 "generator_report_path": paths["generator.json"],
                 "source_state": source_state,
@@ -875,6 +1230,53 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 "evaluation_policy_path": paths["policy.json"],
             }
             validate_scenario_builder_manifest(manifest, **kwargs)
+
+            for field, mutation, failure in (
+                (
+                    "candidate_request_plan",
+                    {
+                        **collect_module.DAGGER1_CANDIDATE_REQUEST_PLAN,
+                        "multi_measurement": 175,
+                    },
+                    "candidate_request_plan",
+                ),
+                (
+                    "primary_multi_measurement_cardinality_quota",
+                    {"2": 15, "3": 6, "4": 10, "5": 16},
+                    "primary_multi_measurement_quota",
+                ),
+                (
+                    "reserve_multi_measurement_cardinality_inventory",
+                    {"3": 11, "4": 5, "5": 14},
+                    "reserve_multi_measurement_inventory",
+                ),
+            ):
+                tampered = copy.deepcopy(manifest)
+                tampered[field] = mutation
+                with self.subTest(field=field), self.assertRaisesRegex(
+                    ValueError, failure
+                ):
+                    validate_scenario_builder_manifest(tampered, **kwargs)
+
+            tampered_reservation = copy.deepcopy(manifest)
+            tampered_reservation["development_reserved_roots_by_family"][
+                "multi_measurement"
+            ][0] = "tampered-root"
+            with self.assertRaisesRegex(ValueError, "development_reservation"):
+                validate_scenario_builder_manifest(
+                    tampered_reservation, **kwargs
+                )
+
+            tampered_schedule = copy.deepcopy(manifest)
+            tampered_schedule["collection_schedule"]["cohort_order"] = [
+                "reserve",
+                "primary",
+            ]
+            with self.assertRaisesRegex(
+                ValueError, "collection_schedule_cohorts"
+            ):
+                validate_scenario_builder_manifest(tampered_schedule, **kwargs)
+
             paths["generator.json"].write_text("tampered\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "generator_report_sha256"):
                 validate_scenario_builder_manifest(manifest, **kwargs)

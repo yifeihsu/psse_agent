@@ -52,6 +52,7 @@ _D1_DEVELOPMENT_HOLDOUT_BINDING_KEYS = frozenset(
     {
         "holdout_sha256",
         "manifest_sha256",
+        "generator_report_sha256",
         "physical_root_count",
         "root_set_sha256",
     }
@@ -301,7 +302,12 @@ def validate_round1_source_mix_gate(
     descriptor_root_count = descriptor_holdout.get("physical_root_count")
     descriptor_hashes_valid = all(
         _is_sha256(descriptor_holdout.get(key))
-        for key in ("holdout_sha256", "manifest_sha256", "root_set_sha256")
+        for key in (
+            "holdout_sha256",
+            "manifest_sha256",
+            "generator_report_sha256",
+            "root_set_sha256",
+        )
     )
     descriptor_count_valid = (
         isinstance(descriptor_root_count, int)
@@ -326,6 +332,9 @@ def validate_round1_source_mix_gate(
         "manifest_sha256": d1_manifest.get(
             "development_holdout_manifest_sha256"
         ),
+        "generator_report_sha256": d1_manifest.get(
+            "development_holdout_generator_report_sha256"
+        ),
         "physical_root_count": manifest_root_count,
         "root_set_sha256": d1_manifest.get(
             "development_holdout_root_set_sha256"
@@ -334,6 +343,7 @@ def validate_round1_source_mix_gate(
     manifest_holdout_valid = (
         _is_sha256(expected_holdout["holdout_sha256"])
         and _is_sha256(expected_holdout["manifest_sha256"])
+        and _is_sha256(expected_holdout["generator_report_sha256"])
         and _is_sha256(expected_holdout["root_set_sha256"])
         and isinstance(manifest_root_count, int)
         and not isinstance(manifest_root_count, bool)
