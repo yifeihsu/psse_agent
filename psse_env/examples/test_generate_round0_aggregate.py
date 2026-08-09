@@ -10,7 +10,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from psse_env.actions import RECOVERY_OPTIONS_EXHAUSTED_REQUEST
+from psse_env.actions import (
+    ASK_FOR_MORE_EVIDENCE,
+    POST_CORRECTION_CONFIRMATION_SIGNATURE,
+    RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+)
 from psse_env.dagger.evaluator import fingerprint_evaluation_suites
 from psse_env.dagger.release_audit import (
     ACCEPTED_TARGET_NONREGRESSION_CHECK,
@@ -23,6 +27,7 @@ from psse_env.dagger.release_audit import (
     POST_CORRECTION_COMPLETION_CONTRACT,
     REMAINING_FAULTS_CHECK,
     ReleaseAuditTolerances,
+    observable_post_correction_handoff_certificate,
 )
 from psse_env.dagger.rollout_collector import classify_state_example
 from psse_env.dagger.splits import PHYSICAL_FINGERPRINT_VERSION
@@ -54,6 +59,8 @@ from psse_env.examples.generate_round0_aggregate import (
     _input_artifact_release_failures,
     _input_corpus_release_failures,
     _round0_lifecycle_safety_audit,
+    _round0_final_observable_state,
+    _round0_handoff_runtime_anchor,
     _stratified_approximate_realizability,
     _stratified_realizability_release_failures,
     _terminal_scenario_matrix,
@@ -193,6 +200,86 @@ def _runtime_anchor(audit: dict, assessment: dict) -> dict:
     }
 
 
+def _post_correction_final_state() -> dict[str, object]:
+    state_id = "episode:s1"
+    state_hash = "a" * 64
+    output = {
+        "active_state_id": state_id,
+        "candidate_state_id": None,
+        "error_code": None,
+        "error_detail": None,
+        "execution_status": "success",
+        "state_mutated": False,
+        "tool_metrics": {
+            "additional_evidence_available": False,
+            "operator_review_required": True,
+            "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+            "state_hash": state_hash,
+            "state_id": state_id,
+            "terminal_outcome": "operator_escalation",
+            "operator_escalation_audit": {
+                "active_state_hash": state_hash,
+                "active_state_id": state_id,
+                "additional_evidence_available": False,
+                "missing_required_contexts": [],
+                "operator_review_required": True,
+                "outstanding_recovery_targets": [],
+                "post_correction_confirmation_deferred": False,
+                "post_correction_confirmation_handoff": True,
+                "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                "unexplained_signature_count": 1,
+            },
+        },
+        "valid_next_actions": [],
+    }
+    transition = {
+        "action": {
+            "tool": ASK_FOR_MORE_EVIDENCE,
+            "arguments": {
+                "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                "state_id": state_id,
+            },
+        },
+        "state_id": state_id,
+        "tool_output": copy.deepcopy(output),
+        "transition_label": {
+            "error_code": None,
+            "error_detail": None,
+            "execution_status": "success",
+            "process_valid": True,
+            "reason": None,
+            "valid_next_actions": [],
+        },
+    }
+    return {
+        "accepted_corrections": [
+            {
+                "candidate_parent_id": "episode:s0",
+                "candidate_state_id": state_id,
+                "source_action": {
+                    "tool": "correct_measurements",
+                    "arguments": {
+                        "state_id": "episode:s0",
+                        "suspect_group": [1],
+                    },
+                },
+            }
+        ],
+        "active_state_id": state_id,
+        "candidate_state_id": None,
+        "explained_anomalies": [],
+        "has_open_candidate": False,
+        "has_unverified_candidate": False,
+        "has_verified_candidate": False,
+        "history_window": [transition],
+        "last_tool": ASK_FOR_MORE_EVIDENCE,
+        "last_tool_output": output,
+        "last_tool_status": "success",
+        "no_material_anomaly_remaining": False,
+        "unresolved_signatures": [POST_CORRECTION_CONFIRMATION_SIGNATURE],
+    }
+
+
 def _with_safe_lifecycle(audit: dict) -> dict:
     return {
         **audit,
@@ -234,6 +321,99 @@ class GeneratorCliTests(unittest.TestCase):
             return_value=self._report(release_eligible=True),
         ):
             self.assertIsNone(main())
+
+
+class Round0FinalObservableStateTests(unittest.TestCase):
+    def test_terminal_collector_history_rebinds_store_state_and_anchor(self) -> None:
+        terminal_state = _post_correction_final_state()
+        transition = terminal_state["history_window"][-1]
+        final_row = {
+            "executed_action": copy.deepcopy(transition["action"]),
+            "tool_output": copy.deepcopy(transition["tool_output"]),
+            "transition_label": copy.deepcopy(transition["transition_label"]),
+            "next_state_summary": copy.deepcopy(terminal_state),
+        }
+        store_state = copy.deepcopy(terminal_state)
+        store_state.pop("history_window")
+        env = SimpleNamespace(
+            get_policy_observation=lambda history: SimpleNamespace(
+                as_dict=lambda: {
+                    **copy.deepcopy(store_state),
+                    "history_window": copy.deepcopy(history),
+                }
+            )
+        )
+
+        rebound = _round0_final_observable_state(
+            env,
+            [final_row],
+            store_state,
+        )
+
+        self.assertFalse(
+            observable_post_correction_handoff_certificate(
+                store_state,
+                terminal=True,
+                terminal_outcome="operator_escalation",
+            )["passed"]
+        )
+        certificate = observable_post_correction_handoff_certificate(
+            rebound,
+            terminal=True,
+            terminal_outcome="operator_escalation",
+        )
+        self.assertTrue(certificate["passed"], certificate["failures"])
+        scenario = {
+            "scenario_id": "post-correction",
+            "physical_root_fingerprint": "physical-post-correction",
+            "scenario_family": "measurement",
+        }
+        anchor = _round0_handoff_runtime_anchor(
+            scenario,
+            rebound,
+            {
+                "state_id": rebound["active_state_id"],
+                "state_hash": "a" * 64,
+            },
+            terminal=True,
+            terminal_outcome="operator_escalation",
+        )
+        self.assertEqual(anchor["final_action_tool"], ASK_FOR_MORE_EVIDENCE)
+        self.assertEqual(
+            anchor["final_action_request"],
+            RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+        )
+        for field in (
+            "final_action_state_id",
+            "transition_state_id",
+            "output_active_state_id",
+            "physical_state_id",
+        ):
+            self.assertEqual(anchor[field], rebound["active_state_id"])
+        self.assertEqual(
+            anchor["last_accepted_candidate_state_id"],
+            rebound["active_state_id"],
+        )
+
+    def test_terminal_transition_disagreement_fails_closed(self) -> None:
+        terminal_state = _post_correction_final_state()
+        transition = terminal_state["history_window"][-1]
+        final_row = {
+            "executed_action": copy.deepcopy(transition["action"]),
+            "tool_output": copy.deepcopy(transition["tool_output"]),
+            "transition_label": copy.deepcopy(transition["transition_label"]),
+            "next_state_summary": copy.deepcopy(terminal_state),
+        }
+        final_row["executed_action"]["arguments"]["state_id"] = "other-state"
+        store_state = copy.deepcopy(terminal_state)
+        store_state.pop("history_window")
+        env = SimpleNamespace()
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "final transition disagrees with row action",
+        ):
+            _round0_final_observable_state(env, [final_row], store_state)
 
 
 class TerminalScenarioMatrixTests(unittest.TestCase):

@@ -804,6 +804,83 @@ def _runtime_anchor_validation(
     return not failures, list(dict.fromkeys(failures))
 
 
+def _round0_final_observable_state(
+    env: TransactionalPSSEEnv,
+    rows: Sequence[Mapping[str, Any]],
+    store_final_state: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Rebind the final store summary to the collector's terminal history.
+
+    ``TransactionalPSSEEnv.current_state()`` is authoritative for the current
+    controller/store state, but it does not retain the collector-added
+    transition label.  The release handoff certificate needs that exact final
+    transition.  Re-read the policy observation with the history persisted in
+    the final collector row, then cross-check every overlapping lifecycle field
+    against both the row summary and the store summary.
+    """
+
+    if not rows or not isinstance(rows[-1], Mapping):
+        raise RuntimeError("Round-0 collection has no final transition row")
+    final_row = rows[-1]
+    row_final_state = final_row.get("next_state_summary")
+    if not isinstance(row_final_state, Mapping):
+        raise RuntimeError("Round-0 final row lacks next_state_summary")
+    history = row_final_state.get("history_window")
+    if (
+        not isinstance(history, Sequence)
+        or isinstance(history, (str, bytes))
+        or not history
+        or not isinstance(history[-1], Mapping)
+    ):
+        raise RuntimeError("Round-0 final row lacks terminal transition history")
+    final_transition = history[-1]
+    expected_transition_fields = {
+        "action": final_row.get("executed_action"),
+        "tool_output": final_row.get("tool_output"),
+        "transition_label": final_row.get("transition_label"),
+    }
+    for field, expected in expected_transition_fields.items():
+        if not isinstance(expected, Mapping) or final_transition.get(field) != expected:
+            raise RuntimeError(
+                f"Round-0 final transition disagrees with row {field}"
+            )
+
+    observation = env.get_policy_observation(copy.deepcopy(list(history)))
+    if hasattr(observation, "as_dict"):
+        final_state = observation.as_dict()
+    elif isinstance(observation, Mapping):
+        final_state = dict(observation)
+    else:
+        raise RuntimeError("Round-0 final policy observation is malformed")
+    if not isinstance(final_state, Mapping):
+        raise RuntimeError("Round-0 final policy observation is not a mapping")
+    final_state = copy.deepcopy(dict(final_state))
+    if final_state.get("history_window") != list(history):
+        raise RuntimeError("Round-0 final policy history is not transition bound")
+
+    shared_fields = (
+        "active_state_id",
+        "accepted_corrections",
+        "has_open_candidate",
+        "has_unverified_candidate",
+        "has_verified_candidate",
+        "candidate_state_id",
+        "last_tool",
+        "last_tool_output",
+        "last_tool_status",
+        "unresolved_signatures",
+    )
+    for field in shared_fields:
+        value = final_state.get(field)
+        if value != row_final_state.get(field) or value != store_final_state.get(field):
+            raise RuntimeError(
+                f"Round-0 final observable/store state disagrees on {field}"
+            )
+    if not str(final_state.get("active_state_id") or "").strip():
+        raise RuntimeError("Round-0 final observable state lacks active_state_id")
+    return final_state
+
+
 def collect_round0(
     args: argparse.Namespace,
     scenarios: list[dict[str, Any]],
@@ -838,13 +915,18 @@ def collect_round0(
             labels = row.get("labels")
             if isinstance(labels, dict):
                 labels["episode_terminal_outcome"] = env.terminal_outcome
-        final_state = env.current_state()
+        store_final_state = env.current_state()
+        final_state = _round0_final_observable_state(
+            env,
+            rows,
+            store_final_state,
+        )
         active_physical_state = env.store.get_state(
             str(final_state["active_state_id"])
         )
         audit = audit_episode_against_truth(
             scenario,
-            final_state,
+            store_final_state,
             terminal=env.is_terminal(),
             terminal_outcome=env.terminal_outcome,
             active_physical_state=active_physical_state,
