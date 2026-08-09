@@ -46,7 +46,7 @@ REVIEWED_SOURCE_COMMIT=${REVIEWED_SOURCE_COMMIT:-}
 
 BASE_MODEL_ID=unsloth/gemma-4-31B-it
 BASE_MODEL_REVISION=8a796db4df380b178065ed910849477ff0e99c87
-EXPERT_POLICY_IDENTITY=bc0-observable-expert-v1
+EXPERT_POLICY_IDENTITY=bc0-observable-handoff-expert-v2
 EXPERT_EVALUATION_ARTIFACT=artifacts/evaluations/expert_baseline_evaluation.json
 ENV_FACTORY=psse_env.dagger.release_factories:production_environment_factory
 CASE_LOADER=psse_env.dagger.release_factories:deterministic_case_loader

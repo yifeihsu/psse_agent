@@ -816,7 +816,9 @@ class AggregateReleaseContractTests(unittest.TestCase):
             }
         ]
         row["dataset_mode"] = "production"
-        row["supervision_policy"] = "bc0_observable_sequential_v1"
+        row["supervision_policy"] = (
+            "bc0_observable_sequential_handoff_v2"
+        )
 
         self.assertEqual(_apply_single_label_eligibility(row), 1)
 
@@ -1063,7 +1065,7 @@ class AggregateReleaseContractTests(unittest.TestCase):
         )
         self.assertEqual(
             config["supervision_policy"],
-            "bc0_observable_sequential_v1",
+            "bc0_observable_sequential_handoff_v2",
         )
         self.assertEqual(
             config["dagger_iteration_1_recovery_gate"],

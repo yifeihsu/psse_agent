@@ -28,6 +28,12 @@ from psse_env.actions import (
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,
 )
+from psse_env.private_target_matching import (
+    PARAMETER_BRANCH_COLUMNS as _SHARED_PARAMETER_BRANCH_COLUMNS,
+    canonical_branch_target as _canonical_branch_target,
+    measurement_action_targets as _shared_measurement_action_targets,
+    measurement_fault_target as _shared_measurement_fault_target,
+)
 
 
 AUDIT_VERSION = "strict_offline_episode_truth_v3"
@@ -74,14 +80,7 @@ _CORRECTION_FAMILY = {
     CORRECT_TOPOLOGY: "topology",
     "correct_topology_from_path": "topology",
 }
-_PARAMETER_BRANCH_COLUMNS = {
-    "r": (2,),
-    "x": (3,),
-    "rx": (2, 3),
-    "b": (4,),
-    "tap": (8,),
-    "shift": (9,),
-}
+_PARAMETER_BRANCH_COLUMNS = _SHARED_PARAMETER_BRANCH_COLUMNS
 
 
 @dataclass(frozen=True)
@@ -261,8 +260,7 @@ def _measurement_truth_targets(
         if not isinstance(item, Mapping):
             problems.append("true_measurement_targets_malformed")
             continue
-        index = item.get("index", item.get("index0"))
-        index = _nonnegative_integer(index)
+        index = _shared_measurement_fault_target(item)
         if index is None:
             problems.append("true_measurement_targets_malformed")
             continue
@@ -271,26 +269,7 @@ def _measurement_truth_targets(
 
 
 def _branch_target(item: Mapping[str, Any]) -> tuple[str, Any] | None:
-    rows: list[int] = []
-    if item.get("branch_row0") is not None:
-        row0 = _nonnegative_integer(item["branch_row0"])
-        if row0 is None:
-            return None
-        rows.append(row0)
-    for key in ("line_index1", "line_index"):
-        if item.get(key) is not None:
-            line1 = _nonnegative_integer(item[key])
-            if line1 is None or line1 < 1:
-                return None
-            rows.append(line1 - 1)
-    if rows:
-        if len(set(rows)) != 1:
-            return None
-        return ("branch_row0", rows[0])
-    for key in ("branch_id", "cb_name", "dss_element"):
-        if item.get(key) is not None and str(item[key]).strip():
-            return ("branch_id", str(item[key]).strip())
-    return None
+    return _canonical_branch_target(item)
 
 
 def _branch_truth_targets(
@@ -315,36 +294,7 @@ def _branch_truth_targets(
 
 
 def _measurement_action_targets(arguments: Mapping[str, Any]) -> set[int] | None:
-    targets: set[int] = set()
-    group = arguments.get("suspect_group")
-    if group is not None:
-        rows = _as_sequence(group)
-        if rows is None:
-            return None
-        for raw in rows:
-            index = _nonnegative_integer(raw)
-            if index is None:
-                return None
-            targets.add(index)
-    updates = arguments.get("measurement_updates")
-    if updates is not None:
-        if isinstance(updates, Mapping):
-            raw_indices = list(updates)
-        else:
-            update_rows = _as_sequence(updates)
-            if update_rows is None:
-                return None
-            raw_indices = []
-            for item in update_rows:
-                if not isinstance(item, Mapping):
-                    return None
-                raw_indices.append(item.get("index", item.get("index0")))
-        for raw in raw_indices:
-            index = _nonnegative_integer(raw)
-            if index is None:
-                return None
-            targets.add(index)
-    return targets
+    return _shared_measurement_action_targets(arguments)
 
 
 def _audit_accepted_targets(

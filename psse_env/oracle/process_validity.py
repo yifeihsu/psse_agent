@@ -23,8 +23,10 @@ from psse_env.actions import (
     VERIFY_CANDIDATE,
     action_signature,
     safe_normalize_action,
+    terminal_explanation_signatures,
     unexplained_signatures,
 )
+from psse_env.state_store import SYNTHETIC_TERMINAL_COMPATIBILITY_KEY
 
 
 _CORRECTION_CONTEXT_FAMILY = {
@@ -267,7 +269,28 @@ class ProcessValidityOracle:
         return context_state_id is not None and str(context_state_id) == str(state.get("active_state_id"))
 
     def _terminal_condition_met(self, state: Any) -> bool:
-        if state.get("no_material_anomaly_remaining") or state.get("oracle_terminal_eligible"):
+        signatures = terminal_explanation_signatures(
+            state.get("unresolved_signatures") or []
+        )
+        anomalies_explained = bool(signatures) and not unexplained_signatures(
+            signatures, state.get("explained_anomalies")
+        )
+        synthetic_terminal_eligible = bool(
+            state.get(SYNTHETIC_TERMINAL_COMPATIBILITY_KEY)
+            and state.get("oracle_terminal_eligible")
+        )
+        if synthetic_terminal_eligible:
+            # Legacy synthetic fixtures may close from private truth, but the
+            # capability bit is never part of a PolicyObservation and is never
+            # injected by a production environment.
+            return True
+        if state.get("accepted_corrections"):
+            # Candidate WLS evidence is sufficient to accept a transaction,
+            # not to certify the whole corrected state as release-final.
+            # A later diagnostic explanation closes only its own signature;
+            # it is not an independent certificate for prior corrections.
+            return False
+        if state.get("no_material_anomaly_remaining"):
             return True
         remaining = state.get("remaining_anomaly_score")
         if remaining is not None and float(remaining) < self.anomaly_threshold:
@@ -275,10 +298,7 @@ class ProcessValidityOracle:
         # A residual anomaly is diagnosed, not unresolved, once every
         # observable signature is accounted for by a recorded diagnostic
         # explanation (localized harmonic source, estimated HIF).
-        signatures = state.get("unresolved_signatures") or []
-        return bool(signatures) and not unexplained_signatures(
-            signatures, state.get("explained_anomalies")
-        )
+        return anomalies_explained
 
     def _context_supported_correction_failure(
         self,

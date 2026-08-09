@@ -72,10 +72,10 @@ _ADAPTER_TREE_REVISION = re.compile(r"[0-9a-fA-F]{64}")
 DEFAULT_TARGET_MIN_ROWS = 300
 DEFAULT_TARGET_MAX_ROWS = 600
 DAGGER1_SCENARIO_BUILDER_CONTRACT = (
-    "fresh_train_partition_dagger1_scenarios_v3"
+    "fresh_train_partition_dagger1_scenarios_v4"
 )
 DAGGER1_COLLECTION_SCHEDULE_CONTRACT = (
-    "dagger1_predeclared_collection_schedule_v1"
+    "dagger1_predeclared_collection_schedule_v2"
 )
 DAGGER1_COLLECTION_SELECTION_CONTRACT = (
     "dagger1_floor_preserving_natural_row_selection_v1"
@@ -99,17 +99,44 @@ DAGGER1_PRIMARY_PLAN = {
     "multi_measurement": 48,
     "parameter": 24,
 }
-DAGGER1_RESERVE_PLAN = {
+DAGGER1_BASE_RESERVE_PLAN = {
     "measurement+parameter": 48,
     "multi_measurement": 31,
     "parameter": 0,
 }
+DAGGER1_TOPUP_RESERVE_PLAN = {
+    # These are new physical roots, not additional replicas of an existing
+    # root.  They are an explicit deterministic margin for independent-root
+    # recovery gates after the 02db912c9037 collection exhausted its reserve.
+    "measurement+parameter": 12,
+    "multi_measurement": 0,
+    "parameter": 0,
+}
+DAGGER1_RESERVE_PLAN = {
+    family: DAGGER1_BASE_RESERVE_PLAN[family]
+    + DAGGER1_TOPUP_RESERVE_PLAN[family]
+    for family in DAGGER1_PRIMARY_PLAN
+}
+DAGGER1_PREDECESSOR_SOURCE_COMMIT = (
+    "02db912c9037f4ca22ba8c3e86299148091c13e9"
+)
+DAGGER1_PREDECESSOR_TRAINING_ROOT_SET_SHA256 = (
+    "9eb1f70c6d957cb1ba886b207780b09807d476c4a82f57ad5f873a04594d3c70"
+)
+DAGGER1_TOPUP_SUBCOHORT = "fresh_root_topup"
+_DAGGER1_REVIEWED_COMBINED_RESERVE_PLAN = {
+    "measurement+parameter": 60,
+    "multi_measurement": 31,
+    "parameter": 0,
+}
+if DAGGER1_RESERVE_PLAN != _DAGGER1_REVIEWED_COMBINED_RESERVE_PLAN:
+    raise RuntimeError("DAgger-1 base plus top-up reserve plan drifted")
 DAGGER1_TRAINING_POOL_PLAN = {
     family: DAGGER1_PRIMARY_PLAN[family] + DAGGER1_RESERVE_PLAN[family]
     for family in DAGGER1_PRIMARY_PLAN
 }
 DAGGER1_CANDIDATE_REQUEST_PLAN = {
-    "measurement+parameter": 96,
+    "measurement+parameter": 108,
     "multi_measurement": 176,
     "parameter": 48,
 }
@@ -136,12 +163,12 @@ DAGGER1_DEVELOPMENT_RESERVED_COUNT_BY_FAMILY = {
     "parameter": 0,
 }
 DAGGER1_FRESH_CANDIDATE_COUNT_BY_FAMILY = {
-    "measurement+parameter": 96,
+    "measurement+parameter": 108,
     "multi_measurement": 91,
     "parameter": 35,
 }
 DAGGER1_FRESH_CANDIDATE_CARDINALITY_INVENTORY = {
-    "measurement+parameter": {"2": 96},
+    "measurement+parameter": {"2": 108},
     "multi_measurement": {"2": 19, "3": 21, "4": 18, "5": 33},
     "parameter": {"1": 35},
 }
@@ -150,8 +177,8 @@ DAGGER1_UNUSED_FRESH_CANDIDATE_COUNT_BY_FAMILY = {
     "multi_measurement": 0,
     "parameter": 11,
 }
-DAGGER1_RAW_CANDIDATE_COUNT = 259
-DAGGER1_FRESH_CANDIDATE_COUNT = 222
+DAGGER1_RAW_CANDIDATE_COUNT = 271
+DAGGER1_FRESH_CANDIDATE_COUNT = 234
 DAGGER1_DEVELOPMENT_CANDIDATE_REQUEST_PLAN = {
     "measurement+parameter": 48,
     "multi_measurement": 176,
@@ -283,6 +310,19 @@ def _failed_collection_rows(
     return result
 
 
+def _round1_publication_contract(
+    training_eligible: object,
+) -> dict[str, bool]:
+    """Publish Round-1 outputs only for an exact training-eligibility GO."""
+
+    eligible = training_eligible is True
+    return {
+        "strict_gate_passed": eligible,
+        "round1_aggregate_eligible": eligible,
+        "production_outputs_published": eligible,
+    }
+
+
 def failed_strict_collection_gate_names(
     *,
     collection_gate: Mapping[str, Any],
@@ -372,10 +412,8 @@ def write_failed_collection_evidence_bundle(
                 "diagnostic_only": True,
                 "training_eligible": False,
                 "release_evidence_eligible": False,
-                "round1_aggregate_eligible": False,
-                "production_outputs_published": False,
+                **_round1_publication_contract(False),
                 "strict_gate_requested": True,
-                "strict_gate_passed": False,
                 "expected_exit_code": 1,
                 "diagnostic_artifacts": {
                     "candidate_recovery_rows": {
@@ -1090,6 +1128,50 @@ def _development_reservation_from_manifest(
     return normalized, len(all_roots) == len(set(all_roots))
 
 
+def _topup_reservation_from_manifest(
+    manifest: Mapping[str, Any],
+) -> tuple[dict[str, list[str]], bool]:
+    raw_roots = manifest.get("topup_reserve_roots_by_family")
+    raw_hashes = manifest.get("topup_reserve_root_set_sha256_by_family")
+    raw_counts = manifest.get("topup_reserve_count_by_family")
+    families = set(DAGGER1_TOPUP_RESERVE_PLAN)
+    if not (
+        isinstance(raw_roots, Mapping)
+        and isinstance(raw_hashes, Mapping)
+        and isinstance(raw_counts, Mapping)
+        and set(raw_roots) == families
+        and set(raw_hashes) == families
+        and set(raw_counts) == families
+    ):
+        return {}, False
+    normalized: dict[str, list[str]] = {}
+    for family in sorted(families):
+        roots = raw_roots.get(family)
+        if not (
+            isinstance(roots, Sequence)
+            and not isinstance(roots, (str, bytes))
+        ):
+            return {}, False
+        materialized = [str(root).strip() for root in roots]
+        if (
+            materialized != sorted(materialized)
+            or any(not root for root in materialized)
+            or len(set(materialized)) != len(materialized)
+            or raw_counts.get(family) != DAGGER1_TOPUP_RESERVE_PLAN[family]
+            or len(materialized) != DAGGER1_TOPUP_RESERVE_PLAN[family]
+            or raw_hashes.get(family) != stable_json_sha256(materialized)
+        ):
+            return {}, False
+        normalized[family] = materialized
+    all_roots = [root for roots in normalized.values() for root in roots]
+    valid = bool(
+        len(all_roots) == len(set(all_roots))
+        and manifest.get("topup_reserve_physical_root_set_sha256")
+        == stable_json_sha256(sorted(all_roots))
+    )
+    return normalized, valid
+
+
 def validate_scenario_builder_manifest(
     manifest: Mapping[str, Any],
     *,
@@ -1115,6 +1197,9 @@ def validate_scenario_builder_manifest(
     reserved_roots_by_family, reservation_valid = (
         _development_reservation_from_manifest(manifest)
     )
+    topup_roots_by_family, topup_binding_valid = (
+        _topup_reservation_from_manifest(manifest)
+    )
     if not all(
         isinstance(value, Mapping)
         for value in (
@@ -1125,7 +1210,7 @@ def validate_scenario_builder_manifest(
         )
     ):
         raise ValueError(
-            "scenario-builder manifest lacks the exact v3 collection schedule"
+            "scenario-builder manifest lacks the exact v4 collection schedule"
         )
     if any(
         isinstance(value, bool) or not isinstance(value, int) or value < 0
@@ -1160,17 +1245,24 @@ def validate_scenario_builder_manifest(
     actual_reserve_counts: Counter[str] = Counter()
     actual_primary_multi_cardinality: Counter[str] = Counter()
     actual_reserve_multi_cardinality: Counter[str] = Counter()
+    actual_topup_counts: Counter[str] = Counter()
+    actual_topup_roots_by_family: dict[str, set[str]] = {
+        family: set() for family in DAGGER1_TOPUP_RESERVE_PLAN
+    }
     actual_roots: set[str] = set()
     actual_primary_roots: set[str] = set()
     actual_reserve_roots: set[str] = set()
+    subcohort_valid = True
     for scenario in scenarios:
         grouping = _scenario_grouping(scenario)
         family = str(grouping.get("scenario_family") or "").strip()
         root = str(grouping.get("physical_root_fingerprint") or "").strip()
         cohort = str(grouping.get("collection_cohort") or "").strip()
+        subcohort = str(grouping.get("collection_subcohort") or "").strip()
         if family:
             actual_counts[family] += 1
             if cohort == "primary":
+                subcohort_valid = subcohort_valid and subcohort == "primary"
                 actual_primary_counts[family] += 1
                 actual_primary_roots.add(root)
                 if family == "multi_measurement":
@@ -1184,6 +1276,17 @@ def validate_scenario_builder_manifest(
                     actual_reserve_multi_cardinality[
                         str(grouping.get("error_cardinality"))
                     ] += 1
+                if subcohort == DAGGER1_TOPUP_SUBCOHORT:
+                    actual_topup_counts[family] += 1
+                    actual_topup_roots_by_family.setdefault(family, set()).add(
+                        root
+                    )
+                else:
+                    subcohort_valid = (
+                        subcohort_valid and subcohort == "base_reserve"
+                    )
+            else:
+                subcohort_valid = False
         if root:
             actual_roots.add(root)
     # Recompute all per-scenario ordering/priority invariants, not only the
@@ -1215,6 +1318,22 @@ def validate_scenario_builder_manifest(
     )
     candidate_count = manifest.get("candidate_count")
     fresh_candidate_count = manifest.get("fresh_candidate_count")
+    actual_topup_roots = {
+        root
+        for roots in actual_topup_roots_by_family.values()
+        for root in roots
+    }
+    actual_base_training_roots = actual_roots - actual_topup_roots
+    declared_development_roots = {
+        root
+        for roots in reserved_roots_by_family.values()
+        for root in roots
+    }
+    declared_topup_roots = {
+        root
+        for roots in topup_roots_by_family.values()
+        for root in roots
+    }
     checks = {
         "schema_version": manifest.get("schema_version") == 1,
         "builder_contract": (
@@ -1255,6 +1374,48 @@ def validate_scenario_builder_manifest(
         == DAGGER1_PRIMARY_PLAN,
         "reserve_count_contract": normalized_reserve
         == DAGGER1_RESERVE_PLAN,
+        "base_reserve_plan": _exact_string_int_mapping(
+            manifest.get("base_reserve_plan"), DAGGER1_BASE_RESERVE_PLAN
+        ),
+        "topup_reserve_plan": _exact_string_int_mapping(
+            manifest.get("topup_reserve_plan"), DAGGER1_TOPUP_RESERVE_PLAN
+        ),
+        "topup_reserve_binding": topup_binding_valid,
+        "topup_reserve_subcohort": (
+            subcohort_valid
+            and dict(actual_topup_counts)
+            == {
+                family: count
+                for family, count in DAGGER1_TOPUP_RESERVE_PLAN.items()
+                if count
+            }
+            and actual_topup_roots == declared_topup_roots
+            and all(
+                actual_topup_roots_by_family.get(family, set())
+                == set(topup_roots_by_family.get(family, []))
+                for family in DAGGER1_TOPUP_RESERVE_PLAN
+            )
+        ),
+        "topup_predecessor_binding": (
+            manifest.get("predecessor_source_commit")
+            == DAGGER1_PREDECESSOR_SOURCE_COMMIT
+            and manifest.get("predecessor_training_root_count")
+            == len(actual_base_training_roots)
+            == sum(DAGGER1_PRIMARY_PLAN.values())
+            + sum(DAGGER1_BASE_RESERVE_PLAN.values())
+            and manifest.get("predecessor_training_root_set_sha256")
+            == DAGGER1_PREDECESSOR_TRAINING_ROOT_SET_SHA256
+            == stable_json_sha256(sorted(actual_base_training_roots))
+            and manifest.get("topup_predecessor_overlap") == []
+            and not (actual_topup_roots & actual_base_training_roots)
+        ),
+        "topup_development_reservation_disjoint": (
+            manifest.get("topup_development_reserved_overlap") == []
+            and not (actual_topup_roots & declared_development_roots)
+        ),
+        "topup_protected_roots_disjoint": not (
+            actual_topup_roots & (d0_roots | set(frozen_roots))
+        ),
         "selected_count_contract": normalized_selected
         == DAGGER1_TRAINING_POOL_PLAN,
         "training_pool_plan": _exact_string_int_mapping(
@@ -1364,6 +1525,8 @@ def validate_scenario_builder_manifest(
             "reserve_family_priority",
             "priority_field",
             "order_field",
+            "subcohort_field",
+            "reserve_subcohort_order",
             "maximum_rollout_replicas_by_family",
         },
         "collection_schedule_cohorts": schedule.get("cohort_order")
@@ -1375,6 +1538,10 @@ def validate_scenario_builder_manifest(
         "collection_schedule_fields": (
             schedule.get("priority_field") == "grouping.collection_priority"
             and schedule.get("order_field") == "grouping.collection_order"
+            and schedule.get("subcohort_field")
+            == "grouping.collection_subcohort"
+            and schedule.get("reserve_subcohort_order")
+            == ["base_reserve", DAGGER1_TOPUP_SUBCOHORT]
         ),
         "collection_schedule_replicas": isinstance(
             normalized_schedule_replicas, Mapping
@@ -2343,7 +2510,7 @@ def collect_dagger1_rollout_schedule(
     ]
     | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any], dict[str, Any] | None]:
-    """Execute the finite schedule and stop at the first passing whole batch."""
+    """Execute the finite schedule until a whole-batch terminal decision."""
 
     batches = dagger1_rollout_batches(
         scenarios, collection_pass=collection_pass
@@ -2354,6 +2521,7 @@ def collect_dagger1_rollout_schedule(
     gate_snapshots: list[dict[str, Any]] = []
     last_checkpoint: dict[str, Any] | None = None
     stopped_after_batch: str | None = None
+    terminal_failure: dict[str, Any] | None = None
     for batch in batches:
         batch_id = str(batch["batch_id"])
         replica = int(batch["replica"])
@@ -2400,6 +2568,14 @@ def collect_dagger1_rollout_schedule(
         matrix = dagger1_rollout_disposition_matrix(episode_reports)
         if checkpoint is not None:
             last_checkpoint = dict(checkpoint(rows, matrix))
+            truth_quarantine = last_checkpoint.get(
+                "offline_teacher_target_quarantine_summary"
+            )
+            quarantined_rows = (
+                int(truth_quarantine.get("quarantined_rows") or 0)
+                if isinstance(truth_quarantine, Mapping)
+                else 0
+            )
             gate_snapshots.append(
                 {
                     "batch_id": batch_id,
@@ -2413,9 +2589,26 @@ def collect_dagger1_rollout_schedule(
                     "failed_gate_names": list(
                         last_checkpoint.get("failed_gate_names") or []
                     ),
+                    "offline_teacher_target_quarantined_rows": (
+                        quarantined_rows
+                    ),
                     "passed": last_checkpoint.get("passed") is True,
                 }
             )
+            if (
+                collection_pass == "training"
+                and quarantined_rows > 0
+            ):
+                stopped_after_batch = batch_id
+                terminal_failure = {
+                    "gate": "offline_teacher_target_quarantine_summary",
+                    "reason": (
+                        "strict_zero_quarantine_gate_is_cumulative_and_"
+                        "irreversible"
+                    ),
+                    "quarantined_rows": quarantined_rows,
+                }
+                break
             if (
                 collection_pass == "training"
                 and last_checkpoint.get("passed") is True
@@ -2427,6 +2620,8 @@ def collect_dagger1_rollout_schedule(
     planned_batch_ids = [str(batch["batch_id"]) for batch in batches]
     if collection_pass == "diagnostic":
         stopping_reason = "diagnostic_primary_complete"
+    elif terminal_failure is not None:
+        stopping_reason = "irreversible_truth_audit_quarantine"
     elif stopped_after_batch is not None:
         stopping_reason = "strict_collection_gate_passed"
     else:
@@ -2452,6 +2647,7 @@ def collect_dagger1_rollout_schedule(
         "gate_snapshots": gate_snapshots,
         "stopped_after_batch": stopped_after_batch,
         "stopping_reason": stopping_reason,
+        "terminal_failure": terminal_failure,
         "workflow_terminal": True,
         "passed": (
             collection_pass == "diagnostic"
@@ -3148,6 +3344,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "schema_version": 1,
         "release_evidence_eligible": False,
         "training_eligible": artifact_training_eligible,
+        **_round1_publication_contract(artifact_training_eligible),
         "output_sha256": _file_sha256(args.output),
         "all_output": all_output_path,
         "all_output_sha256": all_output_sha256,

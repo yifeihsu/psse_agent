@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from psse_env.actions import action_signature
+from psse_env.actions import (
+    ASK_FOR_MORE_EVIDENCE,
+    POST_CORRECTION_CONFIRMATION_SIGNATURE,
+    RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+    action_signature,
+)
 from psse_env.oracle import ExpertPolicyOracle, ProcessValidityOracle
 
 
@@ -22,6 +27,89 @@ def _context_event(tool: str, state_id: str, corrections: list[dict]) -> dict:
 class SequentialRecoveryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.oracle = ExpertPolicyOracle()
+
+    def test_post_correction_confirmation_uses_last_step_budget_handoff(self) -> None:
+        state_id = "episode:s1"
+        state = {
+            "active_state_id": state_id,
+            "accepted_corrections": [
+                {
+                    "candidate_state_id": state_id,
+                    "source_action": {
+                        "tool": "correct_measurements",
+                        "arguments": {
+                            "state_id": "episode:s0",
+                            "suspect_group": [3],
+                        },
+                    },
+                }
+            ],
+            "remaining_anomaly_score": 0.5,
+            "no_material_anomaly_remaining": False,
+            "unresolved_signatures": [
+                POST_CORRECTION_CONFIRMATION_SIGNATURE
+            ],
+            "remaining_budget": 1,
+            "last_tool": "commit_state",
+            "semantic_field_provenance": {
+                "remaining_anomaly_score": "deployment_wls:candidate_verification"
+            },
+        }
+        history = [
+            {
+                "action": {
+                    "tool": "run_wls",
+                    "arguments": {"state_id": state_id},
+                },
+                "tool_output": {"execution_status": "success"},
+            }
+        ]
+
+        action = self.oracle.next_actions(state, history)[0]
+
+        self.assertEqual(action["tool"], ASK_FOR_MORE_EVIDENCE)
+        self.assertEqual(
+            action["arguments"]["request"],
+            RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+        )
+
+    def test_post_correction_confirmation_spends_two_steps_on_investigation(self) -> None:
+        state_id = "episode:s1"
+        state = {
+            "active_state_id": state_id,
+            "accepted_corrections": [
+                {
+                    "candidate_state_id": state_id,
+                    "source_action": {
+                        "tool": "correct_measurements",
+                        "arguments": {"state_id": "episode:s0", "suspect_group": [3]},
+                    },
+                }
+            ],
+            "remaining_anomaly_score": 0.5,
+            "no_material_anomaly_remaining": False,
+            "unresolved_signatures": [
+                POST_CORRECTION_CONFIRMATION_SIGNATURE
+            ],
+            "remaining_budget": 2,
+            "last_tool": "commit_state",
+            "semantic_field_provenance": {
+                "remaining_anomaly_score": "deployment_wls:candidate_verification"
+            },
+        }
+        history = [
+            {
+                "action": {
+                    "tool": "run_wls",
+                    "arguments": {"state_id": state_id},
+                },
+                "tool_output": {"execution_status": "success"},
+            }
+        ]
+
+        action = self.oracle.next_actions(state, history)[0]
+
+        self.assertEqual(action["tool"], "get_measurement_context")
 
     def test_rollback_uses_next_observable_context_alternative(self) -> None:
         state_id = "episode:s0"
@@ -462,7 +550,72 @@ class ReleaseMixedErrorRecoveryTests(unittest.TestCase):
                 scenario.pop(key, None)
         return scenario
 
-    def test_default_measurement_topology_matrix_is_truth_free_and_terminal(self) -> None:
+    def _assert_truth_safe_operator_handoff(self, env, source: dict) -> None:
+        from psse_env.dagger.release_audit import (
+            ACCEPTED_TARGET_NONREGRESSION_CHECK,
+            ACCEPTED_TARGETS_CHECK,
+            REMAINING_FAULTS_CHECK,
+        )
+        from psse_env.examples.generate_round0_aggregate import (
+            audit_episode_against_truth,
+        )
+
+        self.assertTrue(env.is_terminal(), source["scenario_id"])
+        self.assertEqual(
+            env.terminal_outcome,
+            "operator_escalation",
+            source["scenario_id"],
+        )
+        executed_tools = [
+            str((record.get("action") or {}).get("tool") or "")
+            for record in env.history
+        ]
+        self.assertNotIn("finalize_diagnosis", executed_tools)
+
+        final_state = env.current_state()
+        active_physical_state = env.store.get_state(
+            str(final_state["active_state_id"])
+        )
+        handoff_audit = audit_episode_against_truth(
+            source,
+            final_state,
+            terminal=True,
+            terminal_outcome=env.terminal_outcome,
+            active_physical_state=active_physical_state,
+            remaining_truth=None,
+        )
+        # The operator handoff itself must contain no false correction or
+        # physical-regression decision.
+        self.assertEqual(handoff_audit["problems"], [])
+        for check in (
+            ACCEPTED_TARGETS_CHECK,
+            ACCEPTED_TARGET_NONREGRESSION_CHECK,
+        ):
+            self.assertEqual(handoff_audit["checks"][check]["status"], "passed")
+        self.assertEqual(
+            handoff_audit["checks"][REMAINING_FAULTS_CHECK]["status"],
+            "not_required",
+        )
+
+        # This is a truth-side regression check only; it does not mint an
+        # online finalize label.  Zero derived remaining targets, combined
+        # with the accepted-target check above, proves exact target coverage.
+        physical_resolution_audit = audit_episode_against_truth(
+            source,
+            final_state,
+            terminal=True,
+            terminal_outcome="resolved",
+            active_physical_state=active_physical_state,
+            remaining_truth=None,
+        )
+        self.assertEqual(physical_resolution_audit["problems"], [])
+        remaining_check = physical_resolution_audit["checks"][
+            REMAINING_FAULTS_CHECK
+        ]
+        self.assertEqual(remaining_check["status"], "passed")
+        self.assertEqual(remaining_check["derived_remaining_fault_count"], 0)
+
+    def test_default_measurement_topology_matrix_is_truth_free_and_hands_off(self) -> None:
         from psse_env.providers import MatpowerDeploymentProviders
         from psse_env.providers.scenario_generator import Round0ScenarioGenerator
         from psse_env.transactional_env import TransactionalPSSEEnv
@@ -494,8 +647,7 @@ class ReleaseMixedErrorRecoveryTests(unittest.TestCase):
                     correction_signatures.append(action_signature(action))
                 env.step(action)
 
-            self.assertTrue(env.is_terminal(), source["scenario_id"])
-            self.assertEqual(env.terminal_outcome, "resolved", source["scenario_id"])
+            self._assert_truth_safe_operator_handoff(env, source)
             self.assertEqual(
                 len(correction_signatures),
                 len(set(correction_signatures)),
@@ -512,10 +664,7 @@ class ReleaseMixedErrorRecoveryTests(unittest.TestCase):
                 source["scenario_id"],
             )
 
-    def test_near_tied_healthy_topology_partial_is_not_committed(self) -> None:
-        from psse_env.examples.generate_round0_aggregate import (
-            audit_episode_against_truth,
-        )
+    def test_near_tied_healthy_topology_partial_hands_off_safely(self) -> None:
         from psse_env.providers import MatpowerDeploymentProviders
         from psse_env.providers.scenario_generator import Round0ScenarioGenerator
         from psse_env.transactional_env import TransactionalPSSEEnv
@@ -537,31 +686,9 @@ class ReleaseMixedErrorRecoveryTests(unittest.TestCase):
             self.assertTrue(actions)
             env.step(actions[0])
 
-        final_state = env.current_state()
-        audit = audit_episode_against_truth(
-            source,
-            final_state,
-            terminal=env.is_terminal(),
-            terminal_outcome=env.terminal_outcome,
-            active_physical_state=env.store.get_state(
-                str(final_state["active_state_id"])
-            ),
-            remaining_truth=None,
-        )
-        self.assertTrue(env.is_terminal())
-        self.assertEqual(audit["problems"], [])
-        remaining_check = audit["checks"]["remaining_true_faults"]
-        self.assertEqual(remaining_check["status"], "passed")
-        self.assertEqual(remaining_check["derived_remaining_fault_count"], 0)
-        self.assertEqual(
-            remaining_check["evidence_source"],
-            "offline_scenario_truth_derivation",
-        )
+        self._assert_truth_safe_operator_handoff(env, source)
 
-    def test_measurement_parameter_ambiguity_resolves_with_exact_targets(self) -> None:
-        from psse_env.examples.generate_round0_aggregate import (
-            audit_episode_against_truth,
-        )
+    def test_measurement_parameter_ambiguity_repairs_then_hands_off(self) -> None:
         from psse_env.providers import MatpowerDeploymentProviders
         from psse_env.providers.scenario_generator import Round0ScenarioGenerator
         from psse_env.transactional_env import TransactionalPSSEEnv
@@ -583,21 +710,9 @@ class ReleaseMixedErrorRecoveryTests(unittest.TestCase):
             self.assertTrue(actions)
             env.step(actions[0])
 
-        self.assertTrue(env.is_terminal())
         final_state = env.current_state()
         self.assertFalse(final_state["has_open_candidate"])
-        self.assertEqual(env.terminal_outcome, "resolved")
-        audit = audit_episode_against_truth(
-            source,
-            final_state,
-            terminal=True,
-            terminal_outcome=env.terminal_outcome,
-            active_physical_state=env.store.get_state(
-                str(final_state["active_state_id"])
-            ),
-            remaining_truth=None,
-        )
-        self.assertEqual(audit["problems"], [])
+        self._assert_truth_safe_operator_handoff(env, source)
 
 
 class MeasurementTargetIndexContractTests(unittest.TestCase):

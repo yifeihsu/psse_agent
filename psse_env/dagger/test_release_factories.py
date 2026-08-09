@@ -28,6 +28,11 @@ from psse_env.dagger.evaluator import (
     _call_factory,
     _load_import_spec,
 )
+from psse_env.dagger.release_audit import (
+    ACCEPTED_TARGET_NONREGRESSION_CHECK,
+    ACCEPTED_TARGETS_CHECK,
+    REMAINING_FAULTS_CHECK,
+)
 from psse_env.sft.gates import GateError
 
 
@@ -171,6 +176,9 @@ class FactoryImportSpecTests(unittest.TestCase):
         environment = _call_factory(environment_factory, 101)
         self.assertIs(environment.production_dataset_mode, True)
         self.assertEqual(environment.candidate_quality_oracle.mode, "deployment")
+        self.assertTrue(
+            callable(environment.candidate_quality_oracle.case_loader)
+        )
 
         expert = _call_factory(
             expert_factory,
@@ -229,7 +237,9 @@ class FactoryImportSpecTests(unittest.TestCase):
 
 class ObservableExpertFactoryTests(unittest.TestCase):
     def test_factory_requires_and_exposes_exact_identity(self) -> None:
-        with self.assertRaisesRegex(ValueError, "bc0-observable-expert-v1"):
+        with self.assertRaisesRegex(
+            ValueError, "bc0-observable-handoff-expert-v2"
+        ):
             factories.observable_expert_policy_factory(policy_identity="other")
 
         policy = factories.observable_expert_policy_factory(
@@ -238,7 +248,9 @@ class ObservableExpertFactoryTests(unittest.TestCase):
         self.assertEqual(
             policy.release_policy_identity,
             {
-                "explicit_policy_identity": "bc0-observable-expert-v1",
+                "explicit_policy_identity": (
+                    "bc0-observable-handoff-expert-v2"
+                ),
                 "model_id": None,
                 "model_revision": None,
             },
@@ -606,7 +618,7 @@ class RealProductionExpertRecoveryTests(unittest.TestCase):
                     [RUN_WLS, FINALIZE_DIAGNOSIS],
                 )
 
-    def test_every_frozen_parameter_route_resolves_with_release_expert(self) -> None:
+    def test_every_frozen_parameter_route_repairs_then_hands_off(self) -> None:
         suite_path = (
             Path(factories.__file__).with_name("suites") / "bc0_eval_suite_v1.json"
         )
@@ -653,15 +665,45 @@ class RealProductionExpertRecoveryTests(unittest.TestCase):
                     family=family,
                 ):
                     self.assertIs(episode["terminal"], True)
-                    self.assertEqual(episode["terminal_outcome"], "resolved")
-                    self.assertIs(episode["final_physical_success"], True)
+                    self.assertEqual(
+                        episode["terminal_outcome"], "operator_escalation"
+                    )
                     self.assertIn(CORRECT_PARAMETERS, tools)
                     if family == "measurement+parameter":
                         self.assertIn(CORRECT_MEASUREMENTS, tools)
+                    self.assertNotIn(FINALIZE_DIAGNOSIS, tools)
+                    self.assertEqual(tools[-1], ASK_FOR_MORE_EVIDENCE)
                     self.assertEqual(episode["false_commit_count"], 0)
                     self.assertEqual(episode["false_finalization_count"], 0)
                     self.assertEqual(episode["false_rollback_count"], 0)
+                    self.assertEqual(episode["invalid_action_count"], 0)
                     self.assertIs(episode["loop_detected"], False)
+
+                    target_audit = episode["audit"]["accepted_target_audit"]
+                    self.assertEqual(target_audit["problems"], [])
+                    self.assertEqual(
+                        target_audit["accepted_targets"],
+                        target_audit["true_targets"],
+                    )
+                    self.assertEqual(
+                        target_audit["uncovered_standard_faults"], 0
+                    )
+                    strict = episode["audit"]["strict_release_audit"]
+                    self.assertEqual(strict["problems"], [])
+                    self.assertEqual(
+                        strict["checks"][ACCEPTED_TARGETS_CHECK]["status"],
+                        "passed",
+                    )
+                    self.assertEqual(
+                        strict["checks"][ACCEPTED_TARGET_NONREGRESSION_CHECK][
+                            "status"
+                        ],
+                        "passed",
+                    )
+                    self.assertEqual(
+                        strict["checks"][REMAINING_FAULTS_CHECK]["status"],
+                        "not_required",
+                    )
 
         self.assertTrue(prior_failures <= observed_regressions)
 

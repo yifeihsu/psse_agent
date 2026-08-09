@@ -51,24 +51,6 @@ class ParameterExpert:
         if partial_measurement:
             priority_evidence.append("measurement_correction_accepted_partial")
 
-        proposals: list[ExpertActionProposal] = []
-        hint_actions = normalized_hint_actions(
-            list(oracle_hints or ()),
-            allowed_tools={CORRECT_PARAMETERS},
-            active_state_id=active_id,
-        )
-        for action in hint_actions:
-            proposals.append(
-                ExpertActionProposal(
-                    action=action,
-                    source_expert=self.source_expert,
-                    confidence=0.995 if priority_evidence else 0.98,
-                    evidence_codes=["oracle_action_hint", "parameter_family", *priority_evidence],
-                    admissible=action["tool"] != CORRECT_PARAMETERS or has_context,
-                    estimated_immediate_risk=0.14 if action["tool"] == CORRECT_PARAMETERS else 0.02,
-                )
-            )
-
         unresolved = state_value(state, "unresolved_signatures", [])
         parameter_codes = matching_evidence_codes(
             unresolved,
@@ -92,6 +74,39 @@ class ParameterExpert:
             for code in parameter_codes
             if not str(code).startswith("wls_branch_multiplier")
         ]
+        suppress_parameter_hints = bool(
+            measurement_dominant
+            and not branch_dominant
+            and not explicit_parameter_codes
+            and not partial_measurement
+        )
+        proposals: list[ExpertActionProposal] = []
+        hint_actions = (
+            []
+            if suppress_parameter_hints
+            else normalized_hint_actions(
+                list(oracle_hints or ()),
+                allowed_tools={CORRECT_PARAMETERS},
+                active_state_id=active_id,
+            )
+        )
+        for action in hint_actions:
+            proposals.append(
+                ExpertActionProposal(
+                    action=action,
+                    source_expert=self.source_expert,
+                    confidence=0.995 if priority_evidence else 0.98,
+                    evidence_codes=[
+                        "oracle_action_hint",
+                        "parameter_family",
+                        *priority_evidence,
+                    ],
+                    admissible=action["tool"] != CORRECT_PARAMETERS or has_context,
+                    estimated_immediate_risk=(
+                        0.14 if action["tool"] == CORRECT_PARAMETERS else 0.02
+                    ),
+                )
+            )
         # A rejected or partial measurement correction is useful priority
         # evidence only when the *current* active state still carries
         # observable branch-family evidence.  It must not manufacture a
@@ -99,12 +114,7 @@ class ParameterExpert:
         # clearly measurement-dominant solve must not be reinterpreted as a
         # branch fault merely because one bounded measurement candidate was
         # rejected.
-        parameter_signal = bool(parameter_codes) and not (
-            measurement_dominant
-            and not branch_dominant
-            and not explicit_parameter_codes
-            and not partial_measurement
-        )
+        parameter_signal = bool(parameter_codes) and not suppress_parameter_hints
         diagnosis_needed = parameter_signal
         if diagnosis_needed and not has_context and active_id:
             # Once measurement work has failed or only partially succeeded,

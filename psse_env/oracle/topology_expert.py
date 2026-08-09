@@ -42,24 +42,6 @@ class TopologyExpert:
             and context_state_id is not None
             and str(context_state_id) == str(active_id)
         )
-        proposals: list[ExpertActionProposal] = []
-        hint_actions = normalized_hint_actions(
-            list(oracle_hints or ()),
-            allowed_tools={CORRECT_TOPOLOGY},
-            active_state_id=active_id,
-        )
-        for action in hint_actions:
-            proposals.append(
-                ExpertActionProposal(
-                    action=action,
-                    source_expert=self.source_expert,
-                    confidence=0.98,
-                    evidence_codes=["oracle_action_hint", "topology_family"],
-                    admissible=action["tool"] != CORRECT_TOPOLOGY or has_context,
-                    estimated_immediate_risk=0.18 if action["tool"] == CORRECT_TOPOLOGY else 0.02,
-                )
-            )
-
         unresolved = state_value(state, "unresolved_signatures", [])
         topology_codes = matching_evidence_codes(
             unresolved,
@@ -84,6 +66,35 @@ class TopologyExpert:
             if not str(code).startswith("wls_branch_multiplier")
         ]
         partial_measurement = self._accepted_partial_measurement(state)
+        suppress_topology_hints = bool(
+            measurement_dominant
+            and not branch_dominant
+            and not explicit_topology_codes
+            and not partial_measurement
+        )
+        proposals: list[ExpertActionProposal] = []
+        hint_actions = (
+            []
+            if suppress_topology_hints
+            else normalized_hint_actions(
+                list(oracle_hints or ()),
+                allowed_tools={CORRECT_TOPOLOGY},
+                active_state_id=active_id,
+            )
+        )
+        for action in hint_actions:
+            proposals.append(
+                ExpertActionProposal(
+                    action=action,
+                    source_expert=self.source_expert,
+                    confidence=0.98,
+                    evidence_codes=["oracle_action_hint", "topology_family"],
+                    admissible=action["tool"] != CORRECT_TOPOLOGY or has_context,
+                    estimated_immediate_risk=(
+                        0.18 if action["tool"] == CORRECT_TOPOLOGY else 0.02
+                    ),
+                )
+            )
         # The WLS solve emits a few bounded cross-family findings even for a
         # clear gross-measurement case.  A non-dominant branch multiplier is
         # useful ambiguity evidence only when measurement evidence is not
@@ -92,12 +103,7 @@ class TopologyExpert:
         # candidates.  Explicit topology/connectivity sensor signatures are
         # unaffected because they do not coexist with this WLS-only dominance
         # relation.
-        topology_signal = bool(topology_codes) and not (
-            measurement_dominant
-            and not branch_dominant
-            and not explicit_topology_codes
-            and not partial_measurement
-        )
+        topology_signal = bool(topology_codes) and not suppress_topology_hints
         if topology_signal and not has_context and active_id:
             evidence = ["topology_context_missing"]
             evidence.extend(["topology_anomaly_evidence", *topology_codes])

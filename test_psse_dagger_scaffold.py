@@ -1450,9 +1450,9 @@ class CandidateQualityTests(unittest.TestCase):
 
     def test_parameter_target_conventions_resolve_to_same_branch(self):
         pairs = (
-            ({"line_index": 0}, {"line_index1": 1}),
+            ({"line_index": 1}, {"line_index1": 1}),
             ({"branch_row0": 0}, {"branch_id": "b0"}),
-            ({"branch_id": "b0"}, {"line_index": 0}),
+            ({"branch_id": "b0"}, {"line_index": 1}),
         )
         for truth_target, action_target in pairs:
             env = TransactionalPSSEEnv()

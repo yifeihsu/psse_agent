@@ -89,6 +89,93 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
         self.assertEqual(exploratory["required_target_min_rows"], 300)
         self.assertEqual(exploratory["required_target_max_rows"], 600)
 
+    def test_round1_publication_contract_is_symmetric_and_fail_closed(self):
+        expected_go = {
+            "strict_gate_passed": True,
+            "round1_aggregate_eligible": True,
+            "production_outputs_published": True,
+        }
+        self.assertEqual(
+            collect_module._round1_publication_contract(True),
+            expected_go,
+        )
+
+        expected_no_go = {key: False for key in expected_go}
+        for ineligible in (False, None, 1, "true"):
+            with self.subTest(ineligible=ineligible):
+                self.assertEqual(
+                    collect_module._round1_publication_contract(ineligible),
+                    expected_no_go,
+                )
+
+    def test_reviewed_mixed_family_coverage_buffer_is_exact(self):
+        self.assertEqual(
+            DAGGER1_SCENARIO_BUILDER_CONTRACT,
+            "fresh_train_partition_dagger1_scenarios_v4",
+        )
+        self.assertEqual(
+            DAGGER1_COLLECTION_SCHEDULE_CONTRACT,
+            "dagger1_predeclared_collection_schedule_v2",
+        )
+        self.assertEqual(
+            collect_module.DAGGER1_CANDIDATE_REQUEST_PLAN,
+            {
+                "measurement+parameter": 108,
+                "multi_measurement": 176,
+                "parameter": 48,
+            },
+        )
+        self.assertEqual(
+            collect_module.DAGGER1_RESERVE_PLAN,
+            {
+                "measurement+parameter": 60,
+                "multi_measurement": 31,
+                "parameter": 0,
+            },
+        )
+        self.assertEqual(
+            collect_module.DAGGER1_TRAINING_POOL_PLAN,
+            {
+                "measurement+parameter": 108,
+                "multi_measurement": 79,
+                "parameter": 24,
+            },
+        )
+        self.assertEqual(
+            collect_module.DAGGER1_FRESH_CANDIDATE_COUNT_BY_FAMILY,
+            {
+                "measurement+parameter": 108,
+                "multi_measurement": 91,
+                "parameter": 35,
+            },
+        )
+        self.assertEqual(collect_module.DAGGER1_RAW_CANDIDATE_COUNT, 271)
+        self.assertEqual(collect_module.DAGGER1_FRESH_CANDIDATE_COUNT, 234)
+        self.assertEqual(
+            DAGGER1_MAXIMUM_ROLLOUT_REPLICAS_BY_FAMILY,
+            {
+                "measurement+parameter": 2,
+                "multi_measurement": 3,
+                "parameter": 1,
+            },
+        )
+        self.assertEqual(
+            collect_module.DAGGER1_BASE_RESERVE_PLAN,
+            {
+                "measurement+parameter": 48,
+                "multi_measurement": 31,
+                "parameter": 0,
+            },
+        )
+        self.assertEqual(
+            collect_module.DAGGER1_TOPUP_RESERVE_PLAN,
+            {
+                "measurement+parameter": 12,
+                "multi_measurement": 0,
+                "parameter": 0,
+            },
+        )
+
     @staticmethod
     def _scheduled_scenarios():
         specifications = (
@@ -106,6 +193,9 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                     "physical_root_fingerprint": name,
                     "scenario_family": family,
                     "collection_cohort": cohort,
+                    "collection_subcohort": (
+                        "primary" if cohort == "primary" else "base_reserve"
+                    ),
                     "collection_priority": priority,
                     "collection_order": order,
                     "split": "dagger_train",
@@ -1047,14 +1137,20 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 family: str,
                 cohort: str,
                 cardinalities: list[int],
+                *,
+                topup_count: int = 0,
             ) -> None:
                 priority = (
                     0
                     if cohort == "primary"
                     else DAGGER1_RESERVE_FAMILY_PRIORITY.index(family) + 1
                 )
-                for cardinality in cardinalities:
+                for family_index, cardinality in enumerate(cardinalities):
                     order = len(scenarios)
+                    is_topup = bool(
+                        topup_count
+                        and family_index >= len(cardinalities) - topup_count
+                    )
                     scenarios.append(
                         {
                             "grouping": {
@@ -1064,6 +1160,15 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                                 ),
                                 "error_cardinality": cardinality,
                                 "collection_cohort": cohort,
+                                "collection_subcohort": (
+                                    collect_module.DAGGER1_TOPUP_SUBCOHORT
+                                    if is_topup
+                                    else (
+                                        "primary"
+                                        if cohort == "primary"
+                                        else "base_reserve"
+                                    )
+                                ),
                                 "collection_priority": priority,
                                 "collection_order": order,
                             }
@@ -1082,7 +1187,12 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 "reserve",
                 [3] * 12 + [4] * 5 + [5] * 14,
             )
-            append_scenarios("measurement+parameter", "reserve", [2] * 48)
+            append_scenarios(
+                "measurement+parameter",
+                "reserve",
+                [2] * 60,
+                topup_count=12,
+            )
             paths["scenarios.json"].write_text(
                 json.dumps(scenarios, sort_keys=True) + "\n",
                 encoding="utf-8",
@@ -1107,6 +1217,8 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 "primary_plan": collect_module.DAGGER1_PRIMARY_PLAN,
                 "primary_count_by_family": collect_module.DAGGER1_PRIMARY_PLAN,
                 "reserve_count_by_family": collect_module.DAGGER1_RESERVE_PLAN,
+                "base_reserve_plan": collect_module.DAGGER1_BASE_RESERVE_PLAN,
+                "topup_reserve_plan": collect_module.DAGGER1_TOPUP_RESERVE_PLAN,
                 "selected_count_by_family": (
                     collect_module.DAGGER1_TRAINING_POOL_PLAN
                 ),
@@ -1158,6 +1270,11 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                     ),
                     "priority_field": "grouping.collection_priority",
                     "order_field": "grouping.collection_order",
+                    "subcohort_field": "grouping.collection_subcohort",
+                    "reserve_subcohort_order": [
+                        "base_reserve",
+                        collect_module.DAGGER1_TOPUP_SUBCOHORT,
+                    ],
                     "maximum_rollout_replicas_by_family": (
                         DAGGER1_MAXIMUM_ROLLOUT_REPLICAS_BY_FAMILY
                     ),
@@ -1217,6 +1334,51 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
             manifest["training_physical_root_set_sha256"] = stable_json_sha256(
                 sorted(primary_roots + reserve_roots)
             )
+            topup_roots = sorted(
+                row["grouping"]["physical_root_fingerprint"]
+                for row in scenarios
+                if row["grouping"]["collection_subcohort"]
+                == collect_module.DAGGER1_TOPUP_SUBCOHORT
+            )
+            base_training_roots = sorted(
+                set(primary_roots + reserve_roots) - set(topup_roots)
+            )
+            topup_roots_by_family = {
+                "measurement+parameter": topup_roots,
+                "multi_measurement": [],
+                "parameter": [],
+            }
+            manifest.update(
+                {
+                    "topup_reserve_count_by_family": (
+                        collect_module.DAGGER1_TOPUP_RESERVE_PLAN
+                    ),
+                    "topup_reserve_roots_by_family": topup_roots_by_family,
+                    "topup_reserve_root_set_sha256_by_family": {
+                        family: stable_json_sha256(roots)
+                        for family, roots in topup_roots_by_family.items()
+                    },
+                    "topup_reserve_physical_root_set_sha256": (
+                        stable_json_sha256(topup_roots)
+                    ),
+                    "predecessor_source_commit": (
+                        collect_module.DAGGER1_PREDECESSOR_SOURCE_COMMIT
+                    ),
+                    "predecessor_training_root_count": len(base_training_roots),
+                    "predecessor_training_root_set_sha256": (
+                        stable_json_sha256(base_training_roots)
+                    ),
+                    "topup_predecessor_overlap": [],
+                    "topup_development_reserved_overlap": [],
+                }
+            )
+            predecessor_patch = patch.object(
+                collect_module,
+                "DAGGER1_PREDECESSOR_TRAINING_ROOT_SET_SHA256",
+                stable_json_sha256(base_training_roots),
+            )
+            predecessor_patch.start()
+            self.addCleanup(predecessor_patch.stop)
             kwargs = {
                 "scenarios": scenarios,
                 "input_path": paths["scenarios.json"],
@@ -1230,6 +1392,17 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 "evaluation_policy_path": paths["policy.json"],
             }
             validate_scenario_builder_manifest(manifest, **kwargs)
+            production_batches = dagger1_rollout_batches(
+                scenarios, collection_pass="training"
+            )
+            self.assertEqual(
+                sum(len(batch["scenarios"]) for batch in production_batches),
+                477,
+            )
+            self.assertEqual(
+                production_batches[-1]["batch_id"],
+                "repeat-multi_measurement-r2",
+            )
 
             for field, mutation, failure in (
                 (
@@ -1249,6 +1422,15 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                     "reserve_multi_measurement_cardinality_inventory",
                     {"3": 11, "4": 5, "5": 14},
                     "reserve_multi_measurement_inventory",
+                ),
+                (
+                    "topup_reserve_count_by_family",
+                    {
+                        "measurement+parameter": 11,
+                        "multi_measurement": 0,
+                        "parameter": 0,
+                    },
+                    "topup_reserve_binding",
                 ),
             ):
                 tampered = copy.deepcopy(manifest)
@@ -1691,6 +1873,69 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
             report["stopping_reason"], "strict_collection_gate_passed"
         )
         self.assertTrue(report["unexecuted_batch_ids"])
+
+    def test_schedule_stops_at_first_irreversible_truth_quarantine_batch(self):
+        scenarios = self._scheduled_scenarios()
+
+        def collect_episode(scenario, replica, rollout_seed, batch_id, order):
+            del replica, rollout_seed, batch_id, order
+            grouping = scenario["grouping"]
+            scenario_id = scenario["execution"]["scenario_id"]
+            return [
+                {
+                    "example_id": f"{scenario_id}-step0",
+                    "scenario_id": scenario_id,
+                    "physical_root_fingerprint": grouping[
+                        "physical_root_fingerprint"
+                    ],
+                    "scenario_family": grouping["scenario_family"],
+                    "step": 0,
+                    "terminal_outcome": "resolved",
+                }
+            ]
+
+        rows, _, report, checkpoint = collect_dagger1_rollout_schedule(
+            scenarios,
+            collection_pass="training",
+            seed=19,
+            max_steps=24,
+            collect_episode=collect_episode,
+            checkpoint=lambda rows, matrix: {
+                "candidate_rows": len(rows),
+                "selected_rows": [],
+                "failed_gate_names": [
+                    "offline_teacher_target_quarantine_summary"
+                ],
+                "offline_teacher_target_quarantine_summary": {
+                    "passed": False,
+                    "quarantined_rows": 1,
+                },
+                "passed": False,
+            },
+        )
+
+        self.assertEqual(len(rows), 2)
+        self.assertFalse(checkpoint["passed"])
+        self.assertEqual(report["executed_batch_ids"], ["primary-r0"])
+        self.assertEqual(report["stopped_after_batch"], "primary-r0")
+        self.assertEqual(
+            report["stopping_reason"],
+            "irreversible_truth_audit_quarantine",
+        )
+        self.assertEqual(
+            report["terminal_failure"],
+            {
+                "gate": "offline_teacher_target_quarantine_summary",
+                "reason": (
+                    "strict_zero_quarantine_gate_is_cumulative_and_"
+                    "irreversible"
+                ),
+                "quarantined_rows": 1,
+            },
+        )
+        self.assertEqual(report["executed_episode_count"], 2)
+        self.assertTrue(report["unexecuted_batch_ids"])
+        self.assertFalse(report["passed"])
 
     def test_horizon_truncation_is_an_explicit_valid_rollout_disposition(self):
         scenarios = self._scheduled_scenarios()

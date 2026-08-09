@@ -56,7 +56,7 @@ class ReleaseEvaluationLauncherTests(unittest.TestCase):
             "ROLE=expert-baseline",
             "ROLE=base-baseline",
             "ROLE=checkpoint-promotion",
-            "EXPERT_POLICY_IDENTITY=bc0-observable-expert-v1",
+            "EXPERT_POLICY_IDENTITY=bc0-observable-handoff-expert-v2",
             'EVALUATE+=(--policy-identity "$EXPERT_POLICY_IDENTITY")',
             'GATE+=(--expected-policy-identity "$EXPERT_POLICY_IDENTITY")',
             "inspect_release_checkpoint",

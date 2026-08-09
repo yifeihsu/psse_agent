@@ -50,6 +50,7 @@ from psse_env.actions import (
     GET_PARAMETER_CONTEXT,
     GET_TOPOLOGY_CONTEXT,
     HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
+    POST_CORRECTION_CONFIRMATION_SIGNATURE,
     RECOVERY_BUDGET_EXHAUSTED_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     RUN_HSE_FROM_PATH,
@@ -485,7 +486,9 @@ class MatpowerDeploymentProviders:
         from psse_env.oracle import CandidateQualityOracle
 
         return CandidateQualityOracle(
-            mode="deployment", case_differ=matpower_case_differ
+            mode="deployment",
+            case_differ=matpower_case_differ,
+            case_loader=_load_python_case,
         )
 
     def request_additional_evidence(self, state: Mapping[str, Any]) -> dict[str, Any]:
@@ -521,10 +524,24 @@ class MatpowerDeploymentProviders:
                 score_unresolved = score is not None and float(score) >= 1.0
             except (TypeError, ValueError):
                 score_unresolved = False
+            try:
+                remaining_budget = int(observation.get("remaining_budget") or 0)
+            except (TypeError, ValueError):
+                remaining_budget = 0
+            unresolved = observation.get("unresolved_signatures") or []
+            post_correction_budget_deferral = bool(
+                request == RECOVERY_BUDGET_EXHAUSTED_REQUEST
+                and remaining_budget == 1
+                and observation.get("accepted_corrections")
+                and POST_CORRECTION_CONFIRMATION_SIGNATURE in unresolved
+            )
             if not (
-                (observation.get("unresolved_signatures") or score_unresolved)
+                (unresolved or score_unresolved)
                 and "run_wls" in attempted
-                and bool(attempted & investigation_tools)
+                and (
+                    bool(attempted & investigation_tools)
+                    or post_correction_budget_deferral
+                )
             ):
                 return self._failure(
                     "recovery_evidence_inventory_incomplete",
@@ -534,10 +551,6 @@ class MatpowerDeploymentProviders:
                 str(item) for item in observation.get("available_evidence") or []
             }
             if request == RECOVERY_BUDGET_EXHAUSTED_REQUEST:
-                try:
-                    remaining_budget = int(observation.get("remaining_budget") or 0)
-                except (TypeError, ValueError):
-                    remaining_budget = 0
                 if not 0 < remaining_budget < 4:
                     return self._failure(
                         "recovery_budget_not_exhausted",
@@ -552,6 +565,9 @@ class MatpowerDeploymentProviders:
                     "autonomous_budget_available": False,
                     "operator_review_required": True,
                     "remaining_budget": remaining_budget,
+                    "post_correction_confirmation_deferred": (
+                        post_correction_budget_deferral
+                    ),
                     "attempted_tools": sorted(attempted),
                     "available_evidence_channels": sorted(available),
                 }

@@ -216,7 +216,7 @@ class _FakeDefaultPoolGenerator(_FakeTrainGenerator):
         if plan != scenario_module.DEFAULT_DAGGER1_CANDIDATE_REQUEST_PLAN:
             raise AssertionError(plan)
         rows: list[dict] = []
-        for index in range(96):
+        for index in range(108):
             rows.append(
                 {
                     "root": f"mixed-{index:03d}",
@@ -378,6 +378,17 @@ class Dagger1ScenarioBuilderTests(unittest.TestCase):
             d0_dir = _write_d0_inputs(root)
             output = root / "scenarios.json"
             report = root / "generator.json"
+            fake_predecessor_roots = {
+                *(f"mixed-{index:03d}" for index in range(96)),
+                *(f"parameter-{index:03d}" for index in range(24)),
+                *(f"multi-2-{index:03d}" for index in range(16)),
+                *(f"multi-3-{index:03d}" for index in range(6)),
+                *(f"multi-3-{index:03d}" for index in range(9, 21)),
+                *(f"multi-4-{index:03d}" for index in range(10)),
+                *(f"multi-4-{index:03d}" for index in range(13, 18)),
+                *(f"multi-5-{index:03d}" for index in range(16)),
+                *(f"multi-5-{index:03d}" for index in range(19, 33)),
+            }
             with (
                 patch.object(
                     scenario_module,
@@ -399,6 +410,11 @@ class Dagger1ScenarioBuilderTests(unittest.TestCase):
                     "frozen_physical_roots",
                     return_value=frozenset(),
                 ),
+                patch.object(
+                    scenario_module,
+                    "DAGGER1_PREDECESSOR_TRAINING_ROOT_SET_SHA256",
+                    stable_json_sha256(sorted(fake_predecessor_roots)),
+                ),
             ):
                 manifest = scenario_module.build_dagger1_scenarios(
                     d0_aggregate_dir=d0_dir,
@@ -418,11 +434,11 @@ class Dagger1ScenarioBuilderTests(unittest.TestCase):
                     )
 
             scenarios = json.loads(output.read_text(encoding="utf-8"))
-            self.assertEqual(len(scenarios), 199)
+            self.assertEqual(len(scenarios), 211)
             self.assertEqual(
                 manifest["candidate_request_plan"],
                 {
-                    "measurement+parameter": 96,
+                    "measurement+parameter": 108,
                     "multi_measurement": 176,
                     "parameter": 48,
                 },
@@ -431,6 +447,11 @@ class Dagger1ScenarioBuilderTests(unittest.TestCase):
                 manifest["fresh_candidate_inventory"]["multi_measurement"]
                 ["error_cardinality"],
                 {"2": 19, "3": 21, "4": 18, "5": 33},
+            )
+            self.assertEqual(
+                manifest["fresh_candidate_inventory"]
+                ["measurement+parameter"]["physical_root_count"],
+                108,
             )
             self.assertEqual(
                 manifest["primary_count_by_family"],
@@ -443,10 +464,38 @@ class Dagger1ScenarioBuilderTests(unittest.TestCase):
             self.assertEqual(
                 manifest["reserve_count_by_family"],
                 {
+                    "measurement+parameter": 60,
+                    "multi_measurement": 31,
+                    "parameter": 0,
+                },
+            )
+            self.assertEqual(
+                manifest["base_reserve_plan"],
+                {
                     "measurement+parameter": 48,
                     "multi_measurement": 31,
                     "parameter": 0,
                 },
+            )
+            self.assertEqual(
+                manifest["topup_reserve_plan"],
+                {
+                    "measurement+parameter": 12,
+                    "multi_measurement": 0,
+                    "parameter": 0,
+                },
+            )
+            topup_roots = manifest["topup_reserve_roots_by_family"][
+                "measurement+parameter"
+            ]
+            self.assertEqual(
+                topup_roots,
+                [f"mixed-{index:03d}" for index in range(96, 108)],
+            )
+            self.assertEqual(manifest["topup_predecessor_overlap"], [])
+            self.assertEqual(
+                manifest["topup_reserve_physical_root_set_sha256"],
+                stable_json_sha256(topup_roots),
             )
             self.assertEqual(
                 manifest["reserve_multi_measurement_cardinality_inventory"],
@@ -468,7 +517,7 @@ class Dagger1ScenarioBuilderTests(unittest.TestCase):
             }))
             self.assertEqual(
                 [row["grouping"]["collection_order"] for row in scenarios],
-                list(range(199)),
+                list(range(211)),
             )
             self.assertEqual(
                 {
@@ -487,6 +536,15 @@ class Dagger1ScenarioBuilderTests(unittest.TestCase):
             self.assertEqual(
                 reserve_priorities,
                 {"multi_measurement": 1, "measurement+parameter": 2},
+            )
+            self.assertEqual(
+                {
+                    row["grouping"]["physical_root_fingerprint"]
+                    for row in scenarios
+                    if row["grouping"]["collection_subcohort"]
+                    == "fresh_root_topup"
+                },
+                set(topup_roots),
             )
 
     def test_builder_rejects_d0_with_non_release_eligible_source(self) -> None:

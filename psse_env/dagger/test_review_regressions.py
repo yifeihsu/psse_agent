@@ -593,6 +593,7 @@ class DaggerExecutionRegressionTests(unittest.TestCase):
                 **envelope["execution"],
                 "clean_measurements": [1.0],
                 "true_measurement_errors": [{"index": 0}],
+                "release_audit": {"offline_only": True},
             },
         )
         self.assertNotIn("audit", env.last_reset_scenario)
@@ -603,7 +604,12 @@ class DaggerExecutionRegressionTests(unittest.TestCase):
         exported_payload = json.dumps(
             [row["policy_observation"] for row in rows], sort_keys=True
         )
-        for private_key in ("true_measurement_errors", "clean_measurements"):
+        for private_key in (
+            "true_measurement_errors",
+            "clean_measurements",
+            "release_audit",
+            "offline_only",
+        ):
             self.assertNotIn(private_key, policy_payload)
             self.assertNotIn(private_key, exported_payload)
 

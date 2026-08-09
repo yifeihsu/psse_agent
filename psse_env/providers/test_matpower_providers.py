@@ -10,6 +10,10 @@ from unittest.mock import patch
 import numpy as np
 
 from mcp_server.matpower_server import _load_python_case
+from psse_env.actions import (
+    POST_CORRECTION_CONFIRMATION_SIGNATURE,
+    RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+)
 from psse_env.providers import MatpowerDeploymentProviders
 from psse_env.providers.scenario_generator import build_measurement_vector
 from psse_env.transactional_env import TransactionalPSSEEnv
@@ -204,6 +208,37 @@ class WlsRunnerTests(unittest.TestCase):
 
         self.assertIs(metrics["additional_evidence_available"], False)
         self.assertIs(metrics["operator_review_required"], True)
+        self.assertNotIn("no_material_anomaly_remaining", metrics)
+        self.assertNotIn("anomaly_explanation", metrics)
+
+    def test_last_step_post_correction_budget_handoff_is_truthful(self) -> None:
+        state = {
+            **self.state,
+            "evidence_request": RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+            "policy_observation": {
+                "unresolved_signatures": [
+                    POST_CORRECTION_CONFIRMATION_SIGNATURE
+                ],
+                "accepted_corrections": [
+                    {"candidate_state_id": self.state["state_id"]}
+                ],
+                "remaining_anomaly_score": 0.5,
+                "remaining_budget": 1,
+                "available_evidence": [],
+                "tried_action_signatures": [
+                    f'run_wls:{{"state_id":"{self.state["state_id"]}"}}'
+                ],
+            },
+        }
+
+        metrics = self.providers.request_additional_evidence(state)
+
+        self.assertIs(metrics["additional_evidence_available"], True)
+        self.assertIs(metrics["autonomous_budget_available"], False)
+        self.assertIs(metrics["operator_review_required"], True)
+        self.assertIs(
+            metrics["post_correction_confirmation_deferred"], True
+        )
         self.assertNotIn("no_material_anomaly_remaining", metrics)
         self.assertNotIn("anomaly_explanation", metrics)
 

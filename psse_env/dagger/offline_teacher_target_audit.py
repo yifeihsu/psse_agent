@@ -32,6 +32,11 @@ from psse_env.actions import (
 )
 from psse_env.dagger.release_audit import audit_episode_against_truth
 from psse_env.state_store import OracleState, PolicyObservation
+from psse_env.private_target_matching import (
+    canonical_branch_target,
+    measurement_action_targets,
+    measurement_fault_target,
+)
 
 
 OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT = (
@@ -251,38 +256,7 @@ def _oracle_truth(oracle_state: Any) -> dict[str, Any]:
 
 
 def _measurement_targets(arguments: Mapping[str, Any]) -> set[int] | None:
-    targets: set[int] = set()
-    updates = arguments.get("measurement_updates")
-    if updates is not None:
-        if not isinstance(updates, Mapping):
-            return None
-        try:
-            targets.update(int(value) for value in updates)
-        except (TypeError, ValueError, OverflowError):
-            return None
-    group = arguments.get("suspect_group")
-    if group is not None:
-        if not isinstance(group, Sequence) or isinstance(group, (str, bytes)):
-            return None
-        try:
-            targets.update(int(value) for value in group)
-        except (TypeError, ValueError, OverflowError):
-            return None
-    for key in (
-        "measurement_index",
-        "measurement_id",
-        "index",
-        "index0",
-        "target",
-        "meter",
-    ):
-        if arguments.get(key) is None:
-            continue
-        try:
-            targets.add(int(arguments[key]))
-        except (TypeError, ValueError, OverflowError):
-            return None
-    return targets
+    return measurement_action_targets(arguments)
 
 
 def _truth_measurement_targets(truth: Mapping[str, Any]) -> set[int] | None:
@@ -293,44 +267,23 @@ def _truth_measurement_targets(truth: Mapping[str, Any]) -> set[int] | None:
     for fault in raw:
         if not isinstance(fault, Mapping):
             return None
-        value = next(
-            (
-                fault[key]
-                for key in ("index", "index0", "measurement_index")
-                if fault.get(key) is not None
-            ),
-            None,
-        )
+        value = measurement_fault_target(fault)
         if value is None:
             return None
-        try:
-            targets.add(int(value))
-        except (TypeError, ValueError, OverflowError):
-            return None
+        targets.add(value)
     return targets
 
 
 def _branch_row0(value: Mapping[str, Any]) -> int | None:
-    for key, offset in (
-        ("branch_row0", 0),
-        ("line_index1", -1),
-        ("line_index", -1),
-    ):
-        if value.get(key) is None:
-            continue
-        try:
-            result = int(value[key]) + offset
-        except (TypeError, ValueError, OverflowError):
-            return None
-        return result if result >= 0 else None
-    return None
+    target = canonical_branch_target(value)
+    return int(target[1]) if target is not None and target[0] == "branch_row0" else None
 
 
 def _named_branch_target(value: Mapping[str, Any]) -> tuple[str, str] | None:
-    for key in ("branch_id", "cb_name"):
-        if value.get(key) is not None:
-            return key, str(value[key])
-    return None
+    target = canonical_branch_target(value)
+    if target is None or target[0] != "branch_id":
+        return None
+    return "branch_id", str(target[1])
 
 
 def _branch_target_matches(
@@ -338,16 +291,13 @@ def _branch_target_matches(
 ) -> tuple[bool, Mapping[str, Any] | None]:
     if not isinstance(faults, Sequence) or isinstance(faults, (str, bytes)):
         return False, None
-    action_row = _branch_row0(arguments)
-    action_named = _named_branch_target(arguments)
-    if action_row is None and action_named is None:
+    action_target = canonical_branch_target(arguments)
+    if action_target is None:
         return False, None
     for fault in faults:
         if not isinstance(fault, Mapping):
             continue
-        if action_row is not None and _branch_row0(fault) == action_row:
-            return True, fault
-        if action_named is not None and _named_branch_target(fault) == action_named:
+        if canonical_branch_target(fault) == action_target:
             return True, fault
     return False, None
 

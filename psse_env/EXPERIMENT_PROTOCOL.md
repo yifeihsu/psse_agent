@@ -70,14 +70,40 @@ directory whose inspected tree digest is the supplied 64-hex model revision.
 The collection manifest, final aggregate, and `STAGE=round1`
 `INITIAL_ADAPTER_REVISION` must all bind that exact learner-seed digest.
 
-Build one finite, deterministic candidate inventory by requesting 96
+Do not equate a post-correction WLS pass with physical release finality. The
+same public residual pattern can occur after both a correct repair and a repair
+that masks a remaining fault. Production therefore persists a policy-visible
+confirmation obligation after an accepted correction, investigates the active
+state with observable context, and uses an audited operator handoff when the
+remaining budget or autonomous evidence is exhausted. The private truth audit
+may reject a proposed finalization, but it may not rewrite the observable
+teacher target into a privileged resolution label.
+
+The safety-first behavior is bound to
+`bc0_observable_sequential_handoff_v2` and
+`bc0-observable-handoff-expert-v2`; DAgger-1 rows bind
+`dagger1_observable_recovery_handoff_v2`. It does not lower the pinned
+autonomous resolution or maximum-escalation thresholds; failure to meet those
+thresholds remains an explicit release NO-GO.
+
+Build one finite, deterministic candidate inventory by requesting 108
 measurement-plus-parameter, 176 multi-measurement, and 48 parameter candidates.
 From the eligible fresh roots, select the 48/48/24 primary training allocation,
-the exact 12/12/6 development allocation, and a finite reserve of 48 additional
+the exact 12/12/6 development allocation, and a finite reserve of 60 additional
 measurement-plus-parameter plus 31 additional multi-measurement roots. There is
 no parameter reserve. The development multi-measurement allocation must hold
 back exactly three roots for each measurement-error cardinality 2, 3, 4, and 5.
 All allocations remain disjoint from D0 and the frozen evaluation suite.
+
+This 12-root mixed-family reserve buffer is an explicitly named and hashed
+fresh-root top-up in response to the exhausted prior schedule: seven of the
+nine independently supported `post_failure_no_candidate` roots came from the
+measurement-plus-parameter family. The prior 199-root allocation is hash-bound
+as the predecessor set, and the top-up must be disjoint from it and from the
+development reservation. It increases natural physical-root opportunity
+without manufacturing a failure, counting a replica as independent support, or
+weakening the 10-root support floor; the finite collector can still terminate
+NO-GO.
 
 The mixed-policy collector uses a root-local deterministic beta seed, so an
 episode's expert/learner choices do not change when earlier roots terminate or
@@ -87,6 +113,12 @@ measurement-plus-parameter root, three replicas of a multi-measurement root,
 and one replica of a parameter root. This is pure DAgger collection: reserve
 and repeat episodes follow the same learner/expert mixture and do not inject a
 scripted failure or teacher action.
+Full reserve exhaustion is therefore finite at 477 episodes. The collector
+stops after the first passing whole-episode batch checkpoint. Because the
+strict truth-audit gate requires zero quarantined targets and all visited rows
+remain in the cumulative audit, the first whole-batch checkpoint containing a
+quarantined target instead terminates immediately with an explicit irreversible
+NO-GO; later batches cannot repair that failure.
 
 Every executed episode must end with one explicit disposition:
 `resolved`, `operator_escalation`, or `horizon_truncated`. Horizon truncation is

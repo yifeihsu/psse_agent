@@ -1561,6 +1561,15 @@ class EndToEndRound0EpisodeTests(unittest.TestCase):
         self.assertTrue(any(true_index in group for group in groups))
 
     def test_measurement_cycle_is_autonomous_without_truth_or_hints(self) -> None:
+        from psse_env.dagger.release_audit import (
+            ACCEPTED_TARGET_NONREGRESSION_CHECK,
+            ACCEPTED_TARGETS_CHECK,
+            REMAINING_FAULTS_CHECK,
+        )
+        from psse_env.examples.generate_round0_aggregate import (
+            audit_episode_against_truth,
+        )
+
         generator = Round0ScenarioGenerator(seed=29)
         source = generator.build({"measurement": 1})[0]
         true_index = int(source["true_measurement_errors"][0]["index"])
@@ -1568,6 +1577,7 @@ class EndToEndRound0EpisodeTests(unittest.TestCase):
         env, executed = self._run_episode(scenario)
 
         self.assertTrue(env.is_terminal())
+        self.assertEqual(env.terminal_outcome, "operator_escalation")
         oracle_state = env.get_oracle_state()
         self.assertFalse(oracle_state.true_measurement_errors)
         self.assertFalse(oracle_state.oracle_action_hints)
@@ -1580,9 +1590,11 @@ class EndToEndRound0EpisodeTests(unittest.TestCase):
                 "correct_measurements",
                 "run_wls",
                 "commit_state",
-                "finalize_diagnosis",
+                "get_measurement_context",
+                "ask_for_more_evidence",
             ],
         )
+        self.assertNotIn("finalize_diagnosis", tools)
         group = next(
             action["arguments"]["suspect_group"]
             for action, _ in executed
@@ -1590,6 +1602,47 @@ class EndToEndRound0EpisodeTests(unittest.TestCase):
         )
         self.assertIn(true_index, group)
         self._assert_scoped_candidate_physical_evidence(executed)
+
+        final_state = env.current_state()
+        active_physical_state = env.store.get_state(
+            str(final_state["active_state_id"])
+        )
+        handoff_audit = audit_episode_against_truth(
+            source,
+            final_state,
+            terminal=True,
+            terminal_outcome=env.terminal_outcome,
+            active_physical_state=active_physical_state,
+        )
+        self.assertEqual(handoff_audit["problems"], [])
+        self.assertEqual(
+            handoff_audit["checks"][ACCEPTED_TARGETS_CHECK]["status"],
+            "passed",
+        )
+        self.assertEqual(
+            handoff_audit["checks"][ACCEPTED_TARGET_NONREGRESSION_CHECK][
+                "status"
+            ],
+            "passed",
+        )
+        self.assertEqual(
+            handoff_audit["checks"][REMAINING_FAULTS_CHECK]["status"],
+            "not_required",
+        )
+
+        physical_resolution_audit = audit_episode_against_truth(
+            source,
+            final_state,
+            terminal=True,
+            terminal_outcome="resolved",
+            active_physical_state=active_physical_state,
+        )
+        self.assertEqual(physical_resolution_audit["problems"], [])
+        remaining_check = physical_resolution_audit["checks"][
+            REMAINING_FAULTS_CHECK
+        ]
+        self.assertEqual(remaining_check["status"], "passed")
+        self.assertEqual(remaining_check["derived_remaining_fault_count"], 0)
 
     def test_topology_scenario_resolves_by_status_flip_on_true_line(self) -> None:
         generator = Round0ScenarioGenerator(seed=31)

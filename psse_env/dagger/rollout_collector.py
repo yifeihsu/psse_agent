@@ -25,8 +25,12 @@ from psse_env.state_store import OracleState, PolicyObservation, policy_safe_cop
 
 
 ALL_ADMISSIBLE_SUPERVISION = "all_admissible"
-BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION = "bc0_observable_sequential_v1"
-DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION = "dagger1_observable_recovery_v1"
+BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION = (
+    "bc0_observable_sequential_handoff_v2"
+)
+DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION = (
+    "dagger1_observable_recovery_handoff_v2"
+)
 OFFLINE_TEACHER_TARGET_QUARANTINE_SUMMARY_CONTRACT = (
     "dagger1_offline_teacher_target_quarantine_summary_v1"
 )
@@ -866,6 +870,13 @@ class DaggerRolloutCollector:
                 )
                 release_audit = raw_audit.get("release_audit")
                 if isinstance(release_audit, Mapping):
+                    # This profile is private physical-audit input.  The
+                    # environment retains it only in OracleState so commit-time
+                    # truth retirement uses the same declared tolerance as the
+                    # strict offline release audit.
+                    runtime_scenario["release_audit"] = copy.deepcopy(
+                        dict(release_audit)
+                    )
                     offline_audit_scenario["release_audit"] = copy.deepcopy(
                         dict(release_audit)
                     )

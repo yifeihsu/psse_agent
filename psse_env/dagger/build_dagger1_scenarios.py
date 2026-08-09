@@ -6,10 +6,15 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from psse_env.dagger.collect_dagger1 import (
+    DAGGER1_BASE_RESERVE_PLAN,
     DAGGER1_COLLECTION_SCHEDULE_CONTRACT,
     DAGGER1_MAXIMUM_ROLLOUT_REPLICAS_BY_FAMILY,
+    DAGGER1_PREDECESSOR_SOURCE_COMMIT,
+    DAGGER1_PREDECESSOR_TRAINING_ROOT_SET_SHA256,
     DAGGER1_RESERVE_FAMILY_PRIORITY,
     DAGGER1_SCENARIO_BUILDER_CONTRACT,
+    DAGGER1_TOPUP_RESERVE_PLAN,
+    DAGGER1_TOPUP_SUBCOHORT,
     DEFAULT_EVALUATION_POLICY,
     DEFAULT_FORBIDDEN_SUITE,
     frozen_physical_roots,
@@ -41,7 +46,7 @@ DEFAULT_DAGGER1_ROOT_PLAN = {
 # it publishes.  This creates a finite reserve collection pool while leaving a
 # named, root-disjoint multi-measurement allocation for development.
 DEFAULT_DAGGER1_CANDIDATE_REQUEST_PLAN = {
-    "measurement+parameter": 96,
+    "measurement+parameter": 108,
     "multi_measurement": 176,
     "parameter": 48,
 }
@@ -58,7 +63,7 @@ DEFAULT_DAGGER1_MULTI_MEASUREMENT_DEVELOPMENT_QUOTA = {
     5: 3,
 }
 DEFAULT_DAGGER1_TRAINING_POOL_PLAN = {
-    "measurement+parameter": 96,
+    "measurement+parameter": 108,
     "multi_measurement": 79,
     "parameter": 24,
 }
@@ -206,7 +211,7 @@ def build_dagger1_scenarios(
     if default_pool and candidate_multiplier != 2:
         raise ValueError(
             "the reviewed default DAgger-1 plan uses the explicit "
-            "96/176/48 candidate request; candidate_multiplier must remain 2"
+            "108/176/48 candidate request; candidate_multiplier must remain 2"
         )
     candidate_plan = (
         dict(DEFAULT_DAGGER1_CANDIDATE_REQUEST_PLAN)
@@ -285,6 +290,9 @@ def build_dagger1_scenarios(
         family: [] for family in normalized_plan
     }
     reserve_by_family: dict[str, list[dict[str, Any]]] = {
+        family: [] for family in normalized_plan
+    }
+    topup_by_family: dict[str, list[dict[str, Any]]] = {
         family: [] for family in normalized_plan
     }
     development_reserved_by_family: dict[str, list[dict[str, Any]]] = {
@@ -374,6 +382,19 @@ def build_dagger1_scenarios(
                 + mixed_reserve_count
             ]
         )
+        topup_start = (
+            normalized_plan["measurement+parameter"]
+            + DAGGER1_BASE_RESERVE_PLAN["measurement+parameter"]
+        )
+        topup_stop = (
+            topup_start
+            + DAGGER1_TOPUP_RESERVE_PLAN["measurement+parameter"]
+        )
+        topup_by_family["measurement+parameter"] = (
+            fresh_candidates_by_family["measurement+parameter"][
+                topup_start:topup_stop
+            ]
+        )
     else:
         for family, requested_count in normalized_plan.items():
             primary_by_family[family] = fresh_candidates_by_family[family][
@@ -400,6 +421,14 @@ def build_dagger1_scenarios(
     reserve_counts = {
         family: len(reserve_by_family[family]) for family in normalized_plan
     }
+    topup_counts = {
+        family: len(topup_by_family[family]) for family in normalized_plan
+    }
+    if default_pool and topup_counts != DAGGER1_TOPUP_RESERVE_PLAN:
+        raise RuntimeError(
+            "DAgger-1 fresh-root top-up does not satisfy the reviewed plan: "
+            + json.dumps(topup_counts, sort_keys=True)
+        )
     if default_pool:
         pool_shortfalls = {
             family: {
@@ -442,11 +471,21 @@ def build_dagger1_scenarios(
         ),
     )
     envelopes = primary + reserve
+    topup_roots = {
+        str(row["grouping"]["physical_root_fingerprint"])
+        for rows in topup_by_family.values()
+        for row in rows
+    }
     for collection_order, envelope in enumerate(envelopes):
         grouping = envelope["grouping"]
         family = str(grouping["scenario_family"])
         cohort = "primary" if collection_order < len(primary) else "reserve"
         grouping["collection_cohort"] = cohort
+        grouping["collection_subcohort"] = (
+            DAGGER1_TOPUP_SUBCOHORT
+            if str(grouping["physical_root_fingerprint"]) in topup_roots
+            else ("primary" if cohort == "primary" else "base_reserve")
+        )
         grouping["collection_priority"] = (
             0
             if cohort == "primary"
@@ -470,6 +509,38 @@ def build_dagger1_scenarios(
     if selected_roots & development_reserved_roots:
         raise RuntimeError(
             "DAgger-1 development-reserved roots entered the training pool"
+        )
+    topup_development_overlap = sorted(
+        topup_roots & development_reserved_roots
+    )
+    if topup_development_overlap:
+        raise RuntimeError(
+            "DAgger-1 fresh-root top-up consumed development-reserved roots"
+        )
+    base_training = [
+        row
+        for row in envelopes
+        if row["grouping"]["collection_subcohort"]
+        != DAGGER1_TOPUP_SUBCOHORT
+    ]
+    predecessor_root_hash = _root_set_sha256(base_training)
+    if (
+        default_pool
+        and predecessor_root_hash
+        != DAGGER1_PREDECESSOR_TRAINING_ROOT_SET_SHA256
+    ):
+        raise RuntimeError(
+            "DAgger-1 base training roots no longer reproduce the frozen "
+            f"{DAGGER1_PREDECESSOR_SOURCE_COMMIT[:12]} predecessor allocation"
+        )
+    predecessor_roots = {
+        str(row["grouping"]["physical_root_fingerprint"])
+        for row in base_training
+    }
+    topup_predecessor_overlap = sorted(topup_roots & predecessor_roots)
+    if topup_predecessor_overlap:
+        raise RuntimeError(
+            "DAgger-1 fresh-root top-up reuses predecessor training roots"
         )
     generated_roots = {
         str(row["grouping"]["physical_root_fingerprint"]) for row in envelopes
@@ -524,6 +595,17 @@ def build_dagger1_scenarios(
         family: stable_json_sha256(roots)
         for family, roots in development_reserved_roots_by_family.items()
     }
+    topup_roots_by_family = {
+        family: sorted(
+            str(row["grouping"]["physical_root_fingerprint"])
+            for row in topup_by_family[family]
+        )
+        for family in normalized_plan
+    }
+    topup_root_set_sha256_by_family = {
+        family: stable_json_sha256(roots)
+        for family, roots in topup_roots_by_family.items()
+    }
     selected_roots_by_family = {
         family: {
             str(row["grouping"]["physical_root_fingerprint"])
@@ -550,6 +632,8 @@ def build_dagger1_scenarios(
         ),
         "priority_field": "grouping.collection_priority",
         "order_field": "grouping.collection_order",
+        "subcohort_field": "grouping.collection_subcohort",
+        "reserve_subcohort_order": ["base_reserve", DAGGER1_TOPUP_SUBCOHORT],
         "maximum_rollout_replicas_by_family": dict(
             DAGGER1_MAXIMUM_ROLLOUT_REPLICAS_BY_FAMILY
         ),
@@ -577,6 +661,25 @@ def build_dagger1_scenarios(
             else {}
         ),
         "reserve_count_by_family": reserve_counts,
+        "base_reserve_plan": (
+            dict(DAGGER1_BASE_RESERVE_PLAN) if default_pool else reserve_counts
+        ),
+        "topup_reserve_plan": (
+            dict(DAGGER1_TOPUP_RESERVE_PLAN) if default_pool else topup_counts
+        ),
+        "topup_reserve_count_by_family": topup_counts,
+        "topup_reserve_roots_by_family": topup_roots_by_family,
+        "topup_reserve_root_set_sha256_by_family": (
+            topup_root_set_sha256_by_family
+        ),
+        "topup_reserve_physical_root_set_sha256": stable_json_sha256(
+            sorted(topup_roots)
+        ),
+        "predecessor_source_commit": DAGGER1_PREDECESSOR_SOURCE_COMMIT,
+        "predecessor_training_root_count": len(predecessor_roots),
+        "predecessor_training_root_set_sha256": predecessor_root_hash,
+        "topup_predecessor_overlap": topup_predecessor_overlap,
+        "topup_development_reserved_overlap": topup_development_overlap,
         "reserve_multi_measurement_cardinality_inventory": (
             _cardinality_inventory(reserve_by_family["multi_measurement"])
             if "multi_measurement" in reserve_by_family
@@ -660,7 +763,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=2,
         help=(
             "Scale custom plans before protected-root filtering; the reviewed "
-            "default uses explicit 96/176/48 requests and requires value 2"
+            "default uses explicit 108/176/48 requests and requires value 2"
         ),
     )
     parser.add_argument(

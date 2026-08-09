@@ -14,11 +14,13 @@ from psse_env.actions import (
     GET_MEASUREMENT_CONTEXT,
     GET_PARAMETER_CONTEXT,
     GET_TOPOLOGY_CONTEXT,
+    POST_CORRECTION_CONFIRMATION_SIGNATURE,
     RECOVERY_BUDGET_EXHAUSTED_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     RUN_WLS,
     action_signature,
     safe_normalize_action,
+    terminal_explanation_signatures,
 )
 from psse_env.oracle.candidate_quality import CandidateQualityOracle
 from psse_env.oracle.diagnostics_expert import DiagnosticsExpert
@@ -32,7 +34,12 @@ from psse_env.oracle.process_validity import ProcessValidityOracle
 from psse_env.oracle.recovery_expert import RecoveryExpert
 from psse_env.oracle.termination_expert import TerminationExpert
 from psse_env.oracle.topology_expert import TopologyExpert
-from psse_env.state_store import OracleState, PolicyObservation, policy_safe_copy
+from psse_env.state_store import (
+    SYNTHETIC_TERMINAL_COMPATIBILITY_KEY,
+    OracleState,
+    PolicyObservation,
+    policy_safe_copy,
+)
 
 
 @dataclass(frozen=True)
@@ -164,6 +171,20 @@ class ExpertPolicyOracle:
                 seen_signatures=seen_signatures,
                 blocked_correction_tools=blocked_correction_tools,
                 mandatory=True,
+            )
+
+        post_correction_handoff = (
+            self._post_correction_confirmation_handoff_proposals(
+                policy, context.history
+            )
+        )
+        if post_correction_handoff:
+            return self._rank_and_filter(
+                post_correction_handoff,
+                policy,
+                seen_signatures=seen_signatures,
+                blocked_correction_tools=blocked_correction_tools,
+                mandatory=False,
             )
 
         budget_handoff = self._recovery_budget_proposals(policy, context.history)
@@ -451,6 +472,14 @@ class ExpertPolicyOracle:
             policy["candidate_disposition"] = state.candidate_disposition
             policy["candidate_lifecycle"] = state.candidate_lifecycle
             policy["candidate_assessment"] = dict(state.candidate_assessment)
+            if (
+                policy.get("accepted_corrections")
+                and state.hidden_truth.get("oracle_terminal_eligible") is True
+            ):
+                # This private expert-only view preserves legacy synthetic
+                # finality.  Neither key can survive policy serialization.
+                policy["oracle_terminal_eligible"] = True
+                policy[SYNTHETIC_TERMINAL_COMPATIBILITY_KEY] = True
             hints = [dict(item) for item in state.oracle_action_hints if isinstance(item, Mapping)]
             if state.true_measurement_errors:
                 fault_families.add("measurement")
@@ -797,6 +826,57 @@ class ExpertPolicyOracle:
             return False
         return True
 
+    def _post_correction_confirmation_handoff_proposals(
+        self,
+        policy: PolicyObservation | Mapping[str, Any],
+        history: Sequence[Mapping[str, Any]],
+    ) -> list[ExpertActionProposal]:
+        """Hand a quiescent corrected state to an operator after confirmation.
+
+        The controller marker requests one fresh same-state investigation; it
+        is not anomaly evidence authorizing another autonomous correction.
+        Provider suggestions from that confirmation remain in the observable
+        ledger for operator review, but cannot turn into a masking commit.
+        """
+
+        if self._get(policy, "has_open_candidate", False):
+            return []
+        active_id = self._get(policy, "active_state_id")
+        signatures = list(self._get(policy, "unresolved_signatures", []) or [])
+        if (
+            active_id is None
+            or not self._get(policy, "accepted_corrections", [])
+            or POST_CORRECTION_CONFIRMATION_SIGNATURE not in signatures
+            or terminal_explanation_signatures(signatures)
+        ):
+            return []
+        successful_current_wls, investigation_seen = (
+            self._observable_recovery_prerequisites(
+                policy, history, active_id=active_id
+            )
+        )
+        if not (successful_current_wls and investigation_seen):
+            return []
+        return [
+            ExpertActionProposal(
+                action={
+                    "tool": ASK_FOR_MORE_EVIDENCE,
+                    "arguments": {
+                        "state_id": active_id,
+                        "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                    },
+                },
+                source_expert="recovery_expert",
+                confidence=1.0,
+                evidence_codes=[
+                    "post_correction_confirmation_complete",
+                    "operator_confirmation_required",
+                ],
+                admissible=True,
+                estimated_immediate_risk=0.0,
+            )
+        ]
+
     def _recovery_exhaustion_proposals(
         self,
         policy: PolicyObservation | Mapping[str, Any],
@@ -888,7 +968,16 @@ class ExpertPolicyOracle:
                 policy, history, active_id=active_id
             )
         )
-        if not (successful_current_wls and investigation_seen):
+        post_correction_budget_deferral = bool(
+            remaining_budget == 1
+            and self._get(policy, "accepted_corrections", [])
+            and POST_CORRECTION_CONFIRMATION_SIGNATURE
+            in (self._get(policy, "unresolved_signatures", []) or [])
+        )
+        if not (
+            successful_current_wls
+            and (investigation_seen or post_correction_budget_deferral)
+        ):
             return []
         return [
             ExpertActionProposal(

@@ -8,9 +8,11 @@ from psse_env.actions import (
     FINALIZE_DIAGNOSIS,
     ROLLBACK_STATE,
     RUN_WLS,
+    terminal_explanation_signatures,
     unexplained_signatures,
 )
 from psse_env.oracle.expert_types import ExpertActionProposal, state_value
+from psse_env.state_store import SYNTHETIC_TERMINAL_COMPATIBILITY_KEY
 
 
 class TerminationExpert:
@@ -109,18 +111,42 @@ class TerminationExpert:
             below_threshold = score is not None and float(score) < self.anomaly_threshold
         except (TypeError, ValueError):
             below_threshold = False
-        signatures = state_value(state, "unresolved_signatures", []) or []
+        accepted_corrections = state_value(state, "accepted_corrections", []) or []
+        synthetic_terminal_eligible = bool(
+            state_value(state, SYNTHETIC_TERMINAL_COMPATIBILITY_KEY, False)
+            and state_value(state, "oracle_terminal_eligible", False)
+        )
+        signatures = terminal_explanation_signatures(
+            state_value(state, "unresolved_signatures", []) or []
+        )
         anomalies_explained = bool(signatures) and not unexplained_signatures(
             signatures, state_value(state, "explained_anomalies", [])
         )
-        if not (no_anomaly or below_threshold or anomalies_explained):
+        statistical_closure = no_anomaly or below_threshold
+        # A candidate-quality ACCEPT_FINAL verdict establishes that the
+        # proposed transaction is safe and locally successful.  It is not an
+        # independent release certificate for the newly active state.  Once a
+        # correction has been accepted, neither WLS quiescence nor a separate
+        # diagnostic explanation can certify that correction path as final.
+        if accepted_corrections and not synthetic_terminal_eligible:
+            # A later diagnostic explanation can close its own waveform or
+            # localization signature, but it does not independently certify
+            # that earlier physical corrections removed every fault.
             return []
-        if no_anomaly:
-            evidence = "no_material_anomaly_remaining"
-        elif below_threshold:
-            evidence = "anomaly_score_below_threshold"
-        else:
+        if not (
+            synthetic_terminal_eligible
+            or statistical_closure
+            or anomalies_explained
+        ):
+            return []
+        if synthetic_terminal_eligible:
+            evidence = "synthetic_oracle_terminal_eligible"
+        elif anomalies_explained:
             evidence = "anomalies_explained_by_diagnostics"
+        elif no_anomaly:
+            evidence = "no_material_anomaly_remaining"
+        else:
+            evidence = "anomaly_score_below_threshold"
         return [
             ExpertActionProposal(
                 action={"tool": FINALIZE_DIAGNOSIS, "arguments": {}},

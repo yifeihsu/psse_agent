@@ -128,6 +128,24 @@ missing or malformed inputs leave it null/inconclusive, so acceptance remains
 fail-closed. Topology fixtures clamp PYPOWER generator voltage setpoints to
 their declared bus bounds before synthesis.
 
+Candidate acceptance and episode finality are separate decisions. In
+production, a successful correction followed by a quiescent WLS statistic is
+evidence that the transaction may be committed, but it is not an independent
+certificate that every physical error has been removed. The controller keeps
+an observable post-correction confirmation obligation, requests same-state
+context, and hands off to an operator if no independently supported autonomous
+route remains. It never exposes or consumes the private truth audit to choose
+that action. Clean states and explanation-only diagnostic states with no
+accepted correction retain their existing finalization routes.
+
+This changed finality behavior is explicitly versioned as supervision policy
+`bc0_observable_sequential_handoff_v2` and expert identity
+`bc0-observable-handoff-expert-v2`; DAgger-1 binds the corresponding
+`dagger1_observable_recovery_handoff_v2` collector contract. The pinned family
+resolution and escalation thresholds are not relaxed: until an actually
+independent observable certificate exists, an expert-baseline report can
+remain a deliberate release NO-GO even when its audited handoffs are safe.
+
 ## Round-0 BC0 release path
 
 `providers/scenario_generator.py` builds the round-0 offline aggregate from
@@ -157,7 +175,7 @@ in `dagger/release_audit.py`; audit truth and audit results are never merged
 into model observations or SFT targets.
 
 BC0 uses the machine-readable supervision policy
-`bc0_observable_sequential_v1`. At each expert-controlled state, the policy
+`bc0_observable_sequential_handoff_v2`. At each expert-controlled state, the policy
 supervises only the current rank-one action in the deterministic observable
 protocol. Other process-valid proposals remain in the raw row as
 `deferred_expert_actions`; they become eligible only after the preceding
@@ -311,7 +329,7 @@ checkpoint promotion bounds tool-call efficiency for mixed-error recovery,
 not only diagnostic escalation. The environment factory requires production dataset
 mode, a deployment candidate oracle, and the 24-step protocol. The expert
 factory consumes policy-safe observations only and exposes identity
-`bc0-observable-expert-v1`. The Gemma factory loads only the exact local
+`bc0-observable-handoff-expert-v2`. The Gemma factory loads only the exact local
 `unsloth/gemma-4-31B-it@8a796db4df380b178065ed910849477ff0e99c87`
 snapshot, verifies its byte manifest, and content-addresses any PEFT adapter.
 The case loader resolves repository-root paths deterministically through the
@@ -549,21 +567,30 @@ python scripts/build_dagger1_development_holdout.py \
   --seed 20260721
 ```
 
-Rebuild both artifacts after upgrading: collection accepts only the v3
+Rebuild both artifacts after upgrading: collection accepts only the v4
 training-scenario manifest and v2 development-holdout manifest, and requires
 the development generator report alongside the holdout and its manifest.
 
 The second command freezes 30 additional diagnostic development roots in a
 12/12/6 family split, with exactly three multi-measurement roots held back for
 each measurement-error cardinality 2, 3, 4, and 5. The first command requests a
-finite candidate inventory of 96 measurement-plus-parameter, 176
+finite candidate inventory of 108 measurement-plus-parameter, 176
 multi-measurement, and 48 parameter candidates. From fresh eligible roots it
-binds a 48/48/24 primary training allocation plus finite reserves of 48
+binds a 48/48/24 primary training allocation plus finite reserves of 60
 measurement-plus-parameter and 31 multi-measurement roots; there is no
 parameter reserve. Primary, reserve, and development allocations are
 byte-bound and mutually disjoint from D0 and the frozen 115-root promotion
 suite. Development roots are explicitly ineligible for SFT and promotion
 evidence.
+
+The final 12 mixed-family reserve roots form an explicitly named and hashed
+fresh-root top-up motivated by the exhausted prior run: seven of its nine
+independently supported `post_failure_no_candidate` roots were
+measurement-plus-parameter roots. The original 199-root training allocation is
+hash-bound as the predecessor set, and every top-up root must be disjoint from
+that set and the development reservation. The buffer remains natural DAgger
+data; it does not force a failure, lower the 10-root floor, count a replica as
+independent support, or turn reserve exhaustion into success.
 
 Use the failed-promotion adapter only as the learner. The `beta=0` diagnostic
 pass runs the primary allocation only, is learner-only, and is always
@@ -573,6 +600,11 @@ schedule. A measurement-plus-parameter root may have at most two replicas, a
 multi-measurement root at most three, and a parameter root one. Reserve and
 repeat episodes use the same mixed learner/expert policy as the primary pass;
 they do not inject scripted failures or teacher actions.
+The complete predeclared schedule is finite at 477 episodes. It stops after the
+first whole-episode batch that satisfies every strict gate. The zero-quarantine
+truth-audit gate is cumulative, so the first batch checkpoint containing a
+quarantined target instead terminates with an explicit irreversible NO-GO and
+does not waste GPU time on later batches that cannot restore strict eligibility.
 
 Every executed episode records exactly one terminal collection disposition:
 `resolved`, `operator_escalation`, or `horizon_truncated`. A horizon-truncated

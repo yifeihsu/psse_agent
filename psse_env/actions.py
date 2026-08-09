@@ -26,6 +26,15 @@ RECOVERY_OPTIONS_EXHAUSTED_REQUEST = (
 RECOVERY_BUDGET_EXHAUSTED_REQUEST = (
     "operator_escalation:recovery_budget_exhausted"
 )
+# An accepted correction can make the candidate WLS statistic quiescent
+# without proving that every physical error has been removed.  Production
+# mode persists this policy-visible protocol obligation until a same-state
+# investigation either supplies another supported correction or justifies an
+# operator handoff.  It is deliberately an observable controller marker, not
+# a hidden-truth fault label.
+POST_CORRECTION_CONFIRMATION_SIGNATURE = (
+    "post_correction_resolution_confirmation_required:measurement_context"
+)
 GET_HARMONIC_CONTEXT = "get_harmonic_context"
 RUN_HSE_FROM_PATH = "run_hse_from_path"
 RUN_THREE_PHASE_NLM_FROM_PATH = "run_three_phase_nlm_from_path"
@@ -117,6 +126,22 @@ def unexplained_signatures(
         for signature in record.get("explained_signatures") or []:
             explained.add(str(signature))
     return [str(item) for item in (unresolved or []) if str(item) not in explained]
+
+
+def terminal_explanation_signatures(unresolved: Any) -> list[str]:
+    """Return physical/diagnostic signatures relevant to explanation closure.
+
+    The post-correction confirmation marker is a process obligation rather
+    than an anomaly that a diagnostic estimator can explain.  Filtering it
+    here preserves valid explanation-only closure while ensuring that the
+    marker by itself never authorizes finalization.
+    """
+
+    return [
+        str(item)
+        for item in (unresolved or [])
+        if str(item) != POST_CORRECTION_CONFIRMATION_SIGNATURE
+    ]
 
 
 def invalid_action(error_code: str, error_detail: str | None = None) -> dict[str, Any]:

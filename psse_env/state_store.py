@@ -11,6 +11,9 @@ from typing import Any, Mapping
 from .actions import action_signature
 
 
+SYNTHETIC_TERMINAL_COMPATIBILITY_KEY = "_synthetic_terminal_compatibility"
+
+
 FORBIDDEN_POLICY_KEYS = frozenset(
     {
         "suggested_actions",
@@ -33,6 +36,9 @@ FORBIDDEN_POLICY_KEYS = frozenset(
         "progress_class",
         "target_fixed",
         "healthy_component_modified",
+        "release_audit",
+        "oracle_terminal_eligible",
+        SYNTHETIC_TERMINAL_COMPATIBILITY_KEY,
         "hidden_truth",
     }
 )

@@ -61,7 +61,7 @@ from psse_env.sft.training import infer_required_side_input_names
 from psse_env.transactional_env import TransactionalPSSEEnv
 
 
-EXPERT_POLICY_IDENTITY = "bc0-observable-expert-v1"
+EXPERT_POLICY_IDENTITY = "bc0-observable-handoff-expert-v2"
 BASE_MODEL_ID = "unsloth/gemma-4-31B-it"
 BASE_MODEL_REVISION = "8a796db4df380b178065ed910849477ff0e99c87"
 # Exact repository tree at BASE_MODEL_REVISION. Git-managed files use their

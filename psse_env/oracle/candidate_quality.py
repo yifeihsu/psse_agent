@@ -2,10 +2,16 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-import math
 from typing import Any, Mapping
 
 from psse_env.actions import CORRECT_MEASUREMENTS, CORRECT_PARAMETERS, CORRECT_TOPOLOGY
+from psse_env.private_target_matching import (
+    action_targets_private_fault,
+    canonical_branch_target,
+    correction_family,
+    correction_matches_private_fault,
+    matched_private_fault_indices,
+)
 
 
 class CandidateDisposition(str, Enum):
@@ -79,6 +85,7 @@ class CandidateQualityOracle:
         max_new_violations: int = 0,
         mode: str = "auto",
         case_differ: Any = None,
+        case_loader: Any = None,
     ) -> None:
         self.min_target_progress = float(min_target_progress)
         self.min_partial_global_progress = float(min_partial_global_progress)
@@ -103,6 +110,10 @@ class CandidateQualityOracle:
         # for two case paths; without one, path-case corrections are treated
         # as unverifiable collateral damage (fail closed).
         self.case_differ = case_differ
+        # Private truth retirement additionally needs the target branch values,
+        # not only a structural diff.  The loader remains oracle-only and is
+        # never reachable from PolicyObservation.
+        self.case_loader = case_loader
 
     def label_candidate(
         self,
@@ -375,18 +386,6 @@ class CandidateQualityOracle:
         faults = truth.get(f"true_{family}_errors") or []
         if not faults:
             return False
-        targets = self._action_targets(action)
-        relevant = (
-            list(faults)
-            if not targets and len(faults) == 1
-            else [
-                fault
-                for fault in faults
-                if self._action_fault_targets_match(action, fault, parent_state)
-            ]
-        )
-        if not relevant:
-            return False
         matches = [
             self._correction_matches_fault(
                 action,
@@ -395,7 +394,7 @@ class CandidateQualityOracle:
                 parent_state=parent_state,
                 candidate_state=candidate_state,
             )
-            for fault in relevant
+            for fault in faults
         ]
         if any(match is True for match in matches):
             return True
@@ -840,11 +839,7 @@ class CandidateQualityOracle:
 
     @staticmethod
     def _action_family(action: Mapping[str, Any]) -> str | None:
-        return {
-            CORRECT_MEASUREMENTS: "measurement",
-            CORRECT_PARAMETERS: "parameter",
-            CORRECT_TOPOLOGY: "topology",
-        }.get(action.get("tool"))
+        return correction_family(action)
 
     @staticmethod
     def _action_targets(action: Mapping[str, Any]) -> set[str]:
@@ -859,6 +854,9 @@ class CandidateQualityOracle:
         updates = args.get("measurement_updates")
         if isinstance(updates, Mapping):
             targets.update(str(key) for key in updates)
+        group = args.get("suspect_group")
+        if isinstance(group, (list, tuple, set)):
+            targets.update(str(value) for value in group)
         return targets
 
     @staticmethod
@@ -900,30 +898,16 @@ class CandidateQualityOracle:
         candidate_state: Mapping[str, Any],
     ) -> list[int]:
         """Return exactly the synthetic faults fixed by the physical candidate."""
-        family = self._action_family(action)
-        if family is None:
-            return []
-        faults = list(truth.get(f"true_{family}_errors") or [])
-        targets = self._action_targets(action)
-        return [
-            index
-            for index, fault in enumerate(faults)
-            if (
-                not targets and len(faults) == 1
-                or self._action_fault_targets_match(action, fault, parent_state)
-            )
-            and self._correction_matches_fault(
-                action,
-                fault,
-                truth=truth,
-                parent_state=parent_state,
-                candidate_state=candidate_state,
-            ) is True
-        ]
+        return matched_private_fault_indices(
+            action,
+            truth,
+            parent_state=parent_state,
+            candidate_state=candidate_state,
+            case_loader=self.case_loader,
+        )
 
-    @classmethod
     def _correction_matches_fault(
-        cls,
+        self,
         action: Mapping[str, Any],
         fault: Any,
         *,
@@ -931,100 +915,16 @@ class CandidateQualityOracle:
         parent_state: Mapping[str, Any],
         candidate_state: Mapping[str, Any],
     ) -> bool | None:
-        changed = cls._physical_state_changed(parent_state, candidate_state)
-        if changed is False:
-            return False
         if not isinstance(fault, Mapping):
             return None
-        expected = _first_present(
-            fault.get("clean"),
-            fault.get("clean_value"),
-            fault.get("true_value"),
-            fault.get("expected_value"),
-            fault.get("correct_value"),
-            fault.get("expected_status"),
+        return correction_matches_private_fault(
+            action,
+            fault,
+            truth=truth,
+            parent_state=parent_state,
+            candidate_state=candidate_state,
+            case_loader=self.case_loader,
         )
-        args = action.get("arguments") if isinstance(action.get("arguments"), Mapping) else {}
-        actual = None
-        target: Any = None
-        updates = args.get("measurement_updates")
-        if isinstance(updates, Mapping):
-            fault_targets = cls._fault_targets(fault)
-            for key, value in updates.items():
-                if str(key) in fault_targets:
-                    target = key
-                    actual = value
-                    break
-        if target is None:
-            target = _first_present(
-                fault.get("index"),
-                fault.get("index0"),
-                fault.get("measurement_index"),
-                fault.get("line_index"),
-                fault.get("line_index1"),
-                fault.get("branch_row0"),
-                fault.get("branch_id"),
-                fault.get("cb_name"),
-            )
-        if expected is None and action.get("tool") == CORRECT_MEASUREMENTS:
-            clean_measurements = truth.get("clean_measurements")
-            try:
-                if isinstance(clean_measurements, (list, tuple)) and target is not None:
-                    expected = clean_measurements[int(target)]
-            except (TypeError, ValueError, IndexError):
-                expected = None
-        if expected is None and action.get("tool") == CORRECT_PARAMETERS:
-            clean_values = truth.get("clean_parameter_values")
-            if isinstance(clean_values, Mapping) and target is not None:
-                expected = clean_values.get(target, clean_values.get(str(target)))
-            elif isinstance(clean_values, (list, tuple)) and target is not None:
-                try:
-                    expected = clean_values[int(target)]
-                except (TypeError, ValueError, IndexError):
-                    expected = None
-        parameter_field = str(args.get("parameter") or args.get("field") or "x")
-        topology_field: str | None = None
-        if action.get("tool") == CORRECT_TOPOLOGY:
-            parent_row = cls._branch_row(parent_state.get("case"), args)
-            topology_field = cls._topology_field(args, parent_row)
-            fault_field = fault.get("status_field")
-            if fault_field is not None and str(fault_field) != topology_field:
-                return False
-        if expected is None and action.get("tool") in {CORRECT_PARAMETERS, CORRECT_TOPOLOGY}:
-            clean_row = cls._branch_row(truth.get("clean_case"), fault)
-            if isinstance(clean_row, Mapping):
-                if action.get("tool") == CORRECT_PARAMETERS:
-                    expected = clean_row.get(parameter_field)
-                else:
-                    expected = clean_row.get(str(fault.get("status_field") or topology_field))
-        if actual is None:
-            actual = _first_present(
-                args.get("value"),
-                args.get("corrected_value"),
-                args.get("new_value"),
-                args.get("multiplier"),
-                args.get("status"),
-            )
-        if action.get("tool") == CORRECT_MEASUREMENTS:
-            measurements = candidate_state.get("measurements")
-            try:
-                if isinstance(measurements, (list, tuple)) and target is not None:
-                    actual = measurements[int(target)]
-            except (TypeError, ValueError, IndexError):
-                actual = None
-        elif action.get("tool") in {CORRECT_PARAMETERS, CORRECT_TOPOLOGY}:
-            candidate_row = cls._branch_row(candidate_state.get("case"), args)
-            if isinstance(candidate_row, Mapping):
-                if action.get("tool") == CORRECT_PARAMETERS:
-                    actual = candidate_row.get(parameter_field)
-                else:
-                    actual = candidate_row.get(str(topology_field))
-        if expected is None or actual is None:
-            return None
-        try:
-            return math.isclose(float(actual), float(expected), rel_tol=1e-6, abs_tol=1e-9)
-        except (TypeError, ValueError):
-            return actual == expected
 
     @staticmethod
     def _physical_state_changed(
@@ -1042,40 +942,30 @@ class CandidateQualityOracle:
                     return True
         return False if comparable else None
 
-    @classmethod
     def _action_fault_targets_match(
-        cls,
+        self,
         action: Mapping[str, Any],
         fault: Any,
         state: Mapping[str, Any],
     ) -> bool:
         if not isinstance(fault, Mapping):
-            return bool(cls._action_targets(action) & cls._fault_targets(fault))
-        family = cls._action_family(action)
-        if family == "measurement":
-            return bool(cls._action_targets(action) & cls._fault_targets(fault))
-        args = action.get("arguments") if isinstance(action.get("arguments"), Mapping) else {}
-        if family == "parameter":
-            action_field = str(args.get("parameter") or args.get("field") or "x")
-            fault_field = str(fault.get("parameter") or fault.get("field") or "x")
-            if action_field != fault_field:
-                return False
-        elif family == "topology" and fault.get("status_field") is not None:
-            row = cls._branch_row(state.get("case"), args)
-            if cls._topology_field(args, row) != str(fault.get("status_field")):
-                return False
-        case = state.get("case")
-        action_index = cls._branch_index(case, args)
-        fault_index = cls._branch_index(case, fault)
-        if action_index is not None and fault_index is not None:
-            return action_index == fault_index
-        return bool(cls._action_targets(action) & cls._fault_targets(fault))
+            return False
+        return action_targets_private_fault(
+            action,
+            fault,
+            parent_state=state,
+            case_loader=self.case_loader,
+        )
 
     @staticmethod
     def _branch_index(case: Any, descriptor: Mapping[str, Any]) -> int | None:
         if not isinstance(case, Mapping) or not isinstance(case.get("branch"), list):
             return None
         rows = case["branch"]
+        target = canonical_branch_target(descriptor)
+        if target is not None and target[0] == "branch_row0":
+            index = int(target[1])
+            return index if 0 <= index < len(rows) else None
         reference = _first_present(descriptor.get("branch_id"), descriptor.get("cb_name"))
         if reference is not None:
             for index, row in enumerate(rows):
@@ -1086,27 +976,12 @@ class CandidateQualityOracle:
                     for key in ("branch_id", "id", "name", "cb_name")
                 ):
                     return index
-        if descriptor.get("branch_row0") is not None:
-            raw_index = descriptor.get("branch_row0")
-            try:
-                index = int(raw_index)
-            except (TypeError, ValueError):
-                return None
-        elif descriptor.get("line_index1") is not None:
-            raw_index = descriptor.get("line_index1")
-            try:
-                index = int(raw_index) - 1
-            except (TypeError, ValueError):
-                return None
-        else:
-            raw_index = _first_present(descriptor.get("line_index"), reference)
-            try:
-                index = int(raw_index)
-            except (TypeError, ValueError):
-                return None
-            if not 0 <= index < len(rows) and 1 <= index <= len(rows):
-                index -= 1
-        return index if 0 <= index < len(rows) else None
+        # Compatibility for pre-contract synthetic fixtures that used the
+        # impossible one-based value zero.  Every positive ``line_index`` is
+        # handled above using the reviewed one-based production contract.
+        if descriptor.get("line_index") == 0:
+            return 0 if rows else None
+        return None
 
     @classmethod
     def _branch_row(cls, case: Any, descriptor: Mapping[str, Any]) -> Mapping[str, Any] | None:

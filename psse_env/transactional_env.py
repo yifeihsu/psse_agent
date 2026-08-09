@@ -26,6 +26,7 @@ from .actions import (
     GET_TOPOLOGY_CONTEXT,
     HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
     INVALID_ACTION,
+    POST_CORRECTION_CONFIRMATION_SIGNATURE,
     RECOVERY_BUDGET_EXHAUSTED_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     ROLLBACK_STATE,
@@ -36,6 +37,7 @@ from .actions import (
     VERIFY_CANDIDATE,
     action_signature,
     safe_normalize_action,
+    terminal_explanation_signatures,
     unexplained_signatures,
 )
 from .oracle.candidate_quality import CandidateAssessment, CandidateDisposition, CandidateQualityOracle
@@ -50,9 +52,11 @@ from .oracle.measurement_recovery_evidence import (
     verified_terminal_measurement_closure_action,
 )
 from .oracle.process_validity import ProcessValidityOracle
+from .private_target_matching import correction_family
 from .state_store import (
     CandidateLifecycle,
     FORBIDDEN_POLICY_KEYS,
+    SYNTHETIC_TERMINAL_COMPATIBILITY_KEY,
     OracleState,
     PolicyObservation,
     PowerSystemStateStore,
@@ -540,6 +544,13 @@ class TransactionalPSSEEnv:
             elif key in raw_metadata:
                 oracle_payload[key] = copy.deepcopy(raw_metadata[key])
                 truth_was_supplied = True
+        private_release_audit = scenario.get("release_audit")
+        if private_release_audit is not None:
+            if not isinstance(private_release_audit, Mapping):
+                raise ValueError("release_audit must be a private mapping.")
+            oracle_payload["release_audit"] = copy.deepcopy(
+                dict(private_release_audit)
+            )
         if (
             "remaining_fault_count" in oracle_payload
             and "remaining_true_fault_count" not in oracle_payload
@@ -830,11 +841,14 @@ class TransactionalPSSEEnv:
         validity_state["audited_evaluation_setup_correction"] = bool(
             self._audited_evaluation_setup_correction
         )
-        # Synthetic terminal eligibility remains an oracle-side process fact;
-        # it is deliberately absent from PolicyObservation.
-        validity_state["oracle_terminal_eligible"] = bool(
-            self._oracle_payload.get("oracle_terminal_eligible", False)
-        )
+        # Synthetic pilot mode may use a private terminal fixture.  Deployment
+        # training must never consume that oracle-only bit as a legality
+        # bypass; its finalization labels require public evidence below.
+        if not self.production_dataset_mode:
+            validity_state["oracle_terminal_eligible"] = bool(
+                self._oracle_payload.get("oracle_terminal_eligible", False)
+            )
+            validity_state[SYNTHETIC_TERMINAL_COMPATIBILITY_KEY] = True
         validity = self.process_oracle.check(validity_state, normalized, store=self.store)
         if not validity["process_valid"]:
             output = self.record_noop_failure(
@@ -940,7 +954,12 @@ class TransactionalPSSEEnv:
             )
             self._invalidate_context_flags()
             self.current_candidate_id = None
-            if accept_final:
+            if self.production_dataset_mode:
+                # ``ACCEPT_FINAL`` is a candidate-quality disposition, not a
+                # privileged certificate for the whole episode.  Do not mint
+                # or retain the synthetic process bypass in deployment mode.
+                self._oracle_payload.pop("oracle_terminal_eligible", None)
+            elif accept_final:
                 self._oracle_payload["oracle_terminal_eligible"] = True
             return self._standard_output(
                 execution_status="success",
@@ -1238,6 +1257,13 @@ class TransactionalPSSEEnv:
                 )
             except (TypeError, ValueError):
                 score_resolved = False
+            accepted_corrections = state.get("accepted_corrections") or []
+            if accepted_corrections:
+                raise ValueError(
+                    "Production training row for finalize_diagnosis lacks an "
+                    "independent post-correction release certificate."
+                )
+            terminal_field = None
             terminal_field = (
                 "no_material_anomaly_remaining"
                 if state.get("no_material_anomaly_remaining")
@@ -1248,7 +1274,9 @@ class TransactionalPSSEEnv:
             provenance = state.get("semantic_field_provenance") or {}
             source = provenance.get(terminal_field) if terminal_field else None
             if terminal_field is None or not _observable_provenance_source(source):
-                signatures = state.get("unresolved_signatures") or []
+                signatures = terminal_explanation_signatures(
+                    state.get("unresolved_signatures") or []
+                )
                 records = [
                     record
                     for record in (state.get("explained_anomalies") or [])
@@ -1440,6 +1468,16 @@ class TransactionalPSSEEnv:
             summary.get("unresolved_signatures") or [],
             summary.get("explained_anomalies") or [],
         )
+        try:
+            remaining_budget = int(summary.get("remaining_budget") or 0)
+        except (TypeError, ValueError):
+            remaining_budget = 0
+        post_correction_budget_deferral = bool(
+            request == RECOVERY_BUDGET_EXHAUSTED_REQUEST
+            and remaining_budget == 1
+            and summary.get("accepted_corrections")
+            and POST_CORRECTION_CONFIRMATION_SIGNATURE in unresolved
+        )
         hif_signatures = matching_evidence_codes(
             unresolved, *ANOMALY_FAMILY_MARKERS["hif"]
         )
@@ -1454,6 +1492,13 @@ class TransactionalPSSEEnv:
             )
         except (TypeError, ValueError):
             score_unresolved = False
+        post_correction_confirmation_handoff = bool(
+            request == RECOVERY_OPTIONS_EXHAUSTED_REQUEST
+            and summary.get("accepted_corrections")
+            and POST_CORRECTION_CONFIRMATION_SIGNATURE in unresolved
+            and not terminal_explanation_signatures(unresolved)
+            and not score_unresolved
+        )
         if request in {
             RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
             RECOVERY_BUDGET_EXHAUSTED_REQUEST,
@@ -1959,6 +2004,13 @@ class TransactionalPSSEEnv:
                     for signature in supported_recovery_targets
                     if signature.startswith(f"{CORRECT_MEASUREMENTS}:")
                 )
+            if post_correction_confirmation_handoff:
+                # Confirmation-provider suggestions are retained for operator
+                # review, but the synthetic controller obligation is not a
+                # license for another autonomous correction.
+                safety_blocked_recovery_targets.update(
+                    supported_recovery_targets
+                )
             outstanding_recovery_targets = [
                 signature
                 for signature in supported_recovery_targets
@@ -1966,18 +2018,20 @@ class TransactionalPSSEEnv:
                 and signature not in safety_blocked_recovery_targets
                 and signature.split(":", 1)[0] not in exhausted_families
             ]
-            if not investigation_tools:
+            if not investigation_tools and not post_correction_budget_deferral:
                 missing.append("same_state_investigation_evidence_missing")
             if request == RECOVERY_OPTIONS_EXHAUSTED_REQUEST:
-                if missing_required_contexts:
+                if (
+                    missing_required_contexts
+                    and not post_correction_confirmation_handoff
+                ):
                     missing.append("required_recovery_contexts_missing")
-                if outstanding_recovery_targets:
+                if (
+                    outstanding_recovery_targets
+                    and not post_correction_confirmation_handoff
+                ):
                     missing.append("same_state_supported_corrections_unexhausted")
             else:
-                try:
-                    remaining_budget = int(summary.get("remaining_budget") or 0)
-                except (TypeError, ValueError):
-                    remaining_budget = 0
                 if not 0 < remaining_budget < 4:
                     missing.append("autonomous_recovery_budget_not_exhausted")
 
@@ -2036,6 +2090,12 @@ class TransactionalPSSEEnv:
             "additional_evidence_available": additional_evidence_available,
             "autonomous_budget_available": (
                 False if request == RECOVERY_BUDGET_EXHAUSTED_REQUEST else None
+            ),
+            "post_correction_confirmation_deferred": (
+                post_correction_budget_deferral
+            ),
+            "post_correction_confirmation_handoff": (
+                post_correction_confirmation_handoff
             ),
             "operator_review_required": True,
         }
@@ -3292,6 +3352,46 @@ class TransactionalPSSEEnv:
                 "no_material_anomaly_remaining", "controller_default_after_commit"
             )
 
+        if not (
+            self.production_dataset_mode
+            and self.context_flags.get("accepted_corrections")
+        ):
+            return
+        try:
+            statistically_quiescent = bool(
+                self.context_flags.get("no_material_anomaly_remaining")
+                or (
+                    self.context_flags.get("remaining_anomaly_score") is not None
+                    and float(self.context_flags["remaining_anomaly_score"])
+                    < float(self.process_oracle.anomaly_threshold)
+                )
+            )
+        except (TypeError, ValueError, OverflowError):
+            statistically_quiescent = bool(
+                self.context_flags.get("no_material_anomaly_remaining")
+            )
+        if not statistically_quiescent:
+            return
+
+        # Candidate verification and active-state release finality are
+        # intentionally separate.  This obligation is derived entirely from
+        # public controller state (an accepted correction plus quiescent WLS),
+        # never from the remaining hidden fault count.
+        signatures = list(self.context_flags.get("unresolved_signatures") or [])
+        if POST_CORRECTION_CONFIRMATION_SIGNATURE not in signatures:
+            signatures.append(POST_CORRECTION_CONFIRMATION_SIGNATURE)
+        confirmation_source = (
+            "controller_default:post_correction_resolution_confirmation_required"
+        )
+        self.context_flags["unresolved_signatures"] = signatures
+        self._set_semantic_provenance(
+            "unresolved_signatures", confirmation_source
+        )
+        self.context_flags["no_material_anomaly_remaining"] = False
+        self._set_semantic_provenance(
+            "no_material_anomaly_remaining", confirmation_source
+        )
+
     @staticmethod
     def _provider_metrics_are_substantive(metrics: Mapping[str, Any]) -> bool:
         source = str(metrics.get("evidence_source") or "")
@@ -3474,11 +3574,7 @@ class TransactionalPSSEEnv:
         if not next_payload.get("truth_complete"):
             return next_payload
         source_action = candidate_payload.get("source_action") or {}
-        family = {
-            "correct_measurements": "measurement",
-            "correct_parameters": "parameter",
-            "correct_topology": "topology",
-        }.get(source_action.get("tool"))
+        family = correction_family(source_action)
         if family:
             key = f"true_{family}_errors"
             faults = list(next_payload.get(key) or [])
@@ -3487,8 +3583,16 @@ class TransactionalPSSEEnv:
                 parent_payload = self.store.get_state(str(parent_id)) if parent_id else {}
                 truth = copy.deepcopy(next_payload)
                 truth["truth_complete"] = True
-                matcher = CandidateQualityOracle(mode="synthetic")
-                matched_indices = matcher.matched_fault_indices(
+                matcher = getattr(
+                    self.candidate_quality_oracle,
+                    "matched_fault_indices",
+                    None,
+                )
+                if not callable(matcher):
+                    matcher = CandidateQualityOracle(
+                        mode="synthetic"
+                    ).matched_fault_indices
+                matched_indices = matcher(
                     source_action,
                     truth,
                     parent_state=parent_payload,

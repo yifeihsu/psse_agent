@@ -335,7 +335,13 @@ class ProductionConfigurationTests(unittest.TestCase):
         self.assertTrue(audit_target_aware_state_classes(rows)["passed"])
         provenance = env.get_policy_observation().semantic_field_provenance
         self.assertTrue(provenance["remaining_anomaly_score"].startswith("configured_provider:"))
-        self.assertTrue(provenance["no_material_anomaly_remaining"].startswith("configured_provider:"))
+        confirmation_source = (
+            "controller_default:post_correction_resolution_confirmation_required"
+        )
+        self.assertEqual(
+            provenance["no_material_anomaly_remaining"], confirmation_source
+        )
+        self.assertEqual(provenance["unresolved_signatures"], confirmation_source)
 
 
 class ProductionEvidenceTests(unittest.TestCase):
@@ -1253,6 +1259,11 @@ class ProductionEvidenceTests(unittest.TestCase):
             env.assert_training_decision_evidence(
                 {"tool": FINALIZE_DIAGNOSIS, "arguments": {}}
             )
+        _, output = env.step(
+            {"tool": FINALIZE_DIAGNOSIS, "arguments": {}}
+        )
+        self.assertEqual(output["execution_status"], "failure")
+        self.assertEqual(output["error_code"], "terminal_condition_not_met")
 
         clean = _measurement_scenario()
         clean["measurements"] = [1.0]
@@ -1262,6 +1273,52 @@ class ProductionEvidenceTests(unittest.TestCase):
         env.step({"tool": RUN_WLS, "arguments": {"state_id": state["active_state_id"]}})
         env.assert_training_decision_evidence(
             {"tool": FINALIZE_DIAGNOSIS, "arguments": {}}
+        )
+
+    def test_deployment_accept_final_does_not_mint_private_terminal_bypass(self):
+        env = _production_env()
+        root = env.reset(_measurement_scenario())
+        env.step(
+            {
+                "tool": GET_MEASUREMENT_CONTEXT,
+                "arguments": {"state_id": root["active_state_id"]},
+            }
+        )
+        candidate, _ = env.step(
+            {
+                "tool": CORRECT_MEASUREMENTS,
+                "arguments": {
+                    "state_id": root["active_state_id"],
+                    "measurement_updates": {0: 1.0},
+                },
+            }
+        )
+        candidate_id = candidate["candidate_state_id"]
+        env.step({"tool": RUN_WLS, "arguments": {"state_id": candidate_id}})
+        state, output = env.step(
+            {
+                "tool": COMMIT_STATE,
+                "arguments": {"candidate_state_id": candidate_id},
+            }
+        )
+
+        self.assertEqual(output["execution_status"], "success")
+        self.assertNotIn("oracle_terminal_eligible", env._oracle_payload)
+        self.assertFalse(state["no_material_anomaly_remaining"])
+        self.assertIn(
+            "post_correction_resolution_confirmation_required:measurement_context",
+            state["unresolved_signatures"],
+        )
+        confirmation_source = (
+            "controller_default:post_correction_resolution_confirmation_required"
+        )
+        self.assertEqual(
+            state["semantic_field_provenance"]["unresolved_signatures"],
+            confirmation_source,
+        )
+        self.assertEqual(
+            state["semantic_field_provenance"]["no_material_anomaly_remaining"],
+            confirmation_source,
         )
 
 
