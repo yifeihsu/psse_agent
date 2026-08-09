@@ -222,11 +222,16 @@ class _FakeDefaultPoolGenerator(_FakeTrainGenerator):
             raise AssertionError(plan)
         rows: list[dict] = []
         for index in range(108):
+            root = (
+                f"z-mixed-predecessor-{index:03d}"
+                if index < 96
+                else f"a-mixed-topup-{index - 96:03d}"
+            )
             rows.append(
                 {
-                    "root": f"mixed-{index:03d}",
+                    "root": root,
                     "parameter_scans": {},
-                    "scenario_id": f"mixed-{index:03d}",
+                    "scenario_id": root,
                     "scenario_family": "measurement+parameter",
                     "error_cardinality": 2,
                 }
@@ -388,7 +393,7 @@ class Dagger1ScenarioBuilderTests(unittest.TestCase):
             output = root / "scenarios.json"
             report = root / "generator.json"
             fake_predecessor_roots = {
-                *(f"mixed-{index:03d}" for index in range(96)),
+                *(f"z-mixed-predecessor-{index:03d}" for index in range(96)),
                 *(f"parameter-{index:03d}" for index in range(24)),
                 *(f"multi-2-{index:03d}" for index in range(16)),
                 *(f"multi-3-{index:03d}" for index in range(6)),
@@ -497,9 +502,49 @@ class Dagger1ScenarioBuilderTests(unittest.TestCase):
             topup_roots = manifest["topup_reserve_roots_by_family"][
                 "measurement+parameter"
             ]
+            expected_predecessor_mixed = {
+                f"z-mixed-predecessor-{index:03d}" for index in range(96)
+            }
+            selected_predecessor_mixed = {
+                row["grouping"]["physical_root_fingerprint"]
+                for row in scenarios
+                if row["grouping"]["scenario_family"]
+                == "measurement+parameter"
+                and row["grouping"]["collection_subcohort"]
+                != scenario_module.DAGGER1_TOPUP_SUBCOHORT
+            }
+            self.assertEqual(
+                selected_predecessor_mixed,
+                expected_predecessor_mixed,
+            )
             self.assertEqual(
                 topup_roots,
-                [f"mixed-{index:03d}" for index in range(96, 108)],
+                [f"a-mixed-topup-{index:03d}" for index in range(12)],
+            )
+            selected_topup_mixed = {
+                row["grouping"]["physical_root_fingerprint"]
+                for row in scenarios
+                if row["grouping"]["collection_subcohort"]
+                == scenario_module.DAGGER1_TOPUP_SUBCOHORT
+            }
+            self.assertEqual(selected_topup_mixed, set(topup_roots))
+            self.assertTrue(
+                selected_topup_mixed.isdisjoint(selected_predecessor_mixed)
+            )
+            mixed_reserve = [
+                row
+                for row in scenarios
+                if row["grouping"]["scenario_family"]
+                == "measurement+parameter"
+                and row["grouping"]["collection_cohort"] == "reserve"
+            ]
+            self.assertEqual(
+                [
+                    row["grouping"]["collection_subcohort"]
+                    for row in mixed_reserve
+                ],
+                ["base_reserve"] * 48
+                + [scenario_module.DAGGER1_TOPUP_SUBCOHORT] * 12,
             )
             self.assertEqual(manifest["topup_predecessor_overlap"], [])
             self.assertEqual(

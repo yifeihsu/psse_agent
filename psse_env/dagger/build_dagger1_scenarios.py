@@ -280,14 +280,12 @@ def build_dagger1_scenarios(
 
     # Treat physical-root collisions as a builder error rather than silently
     # allowing the candidate ordering to decide which family owns a root.
-    fresh_candidates_by_family: dict[str, list[dict[str, Any]]] = {}
+    generated_candidates_by_family: dict[str, list[dict[str, Any]]] = {}
     candidate_root_family: dict[str, str] = {}
     for family in sorted(normalized_plan):
         family_candidates: list[dict[str, Any]] = []
         family_roots: set[str] = set()
-        for envelope in sorted(
-            candidates_by_family.get(family, []), key=_scenario_sort_key
-        ):
+        for envelope in candidates_by_family.get(family, []):
             root = str(envelope["grouping"]["physical_root_fingerprint"])
             if root in family_roots:
                 raise RuntimeError(
@@ -302,7 +300,11 @@ def build_dagger1_scenarios(
             family_roots.add(root)
             candidate_root_family[root] = family
             family_candidates.append(envelope)
-        fresh_candidates_by_family[family] = family_candidates
+        generated_candidates_by_family[family] = family_candidates
+    fresh_candidates_by_family = {
+        family: sorted(candidates, key=_scenario_sort_key)
+        for family, candidates in generated_candidates_by_family.items()
+    }
 
     primary_by_family: dict[str, list[dict[str, Any]]] = {
         family: [] for family in normalized_plan
@@ -317,11 +319,46 @@ def build_dagger1_scenarios(
         family: [] for family in normalized_plan
     }
     if default_pool:
-        for family in ("measurement+parameter", "parameter"):
-            requested = normalized_plan[family]
-            primary_by_family[family] = fresh_candidates_by_family[family][
-                :requested
-            ]
+        primary_by_family["parameter"] = fresh_candidates_by_family[
+            "parameter"
+        ][: normalized_plan["parameter"]]
+
+        # Expanding the mixed request from 96 to 108 must not allow a newly
+        # generated root with a lexically smaller fingerprint to displace a
+        # frozen predecessor root.  The generator is prefix-stable: its first
+        # 96 accepted mixed roots are the complete predecessor request, and
+        # the following 12 are the predeclared top-up.  Partition that
+        # generation sequence first, then sort within each immutable cohort.
+        mixed_predecessor_count = (
+            normalized_plan["measurement+parameter"]
+            + DAGGER1_BASE_RESERVE_PLAN["measurement+parameter"]
+        )
+        mixed_topup_count = DAGGER1_TOPUP_RESERVE_PLAN[
+            "measurement+parameter"
+        ]
+        mixed_generation_order = generated_candidates_by_family[
+            "measurement+parameter"
+        ]
+        mixed_predecessor = sorted(
+            mixed_generation_order[:mixed_predecessor_count],
+            key=_scenario_sort_key,
+        )
+        mixed_topup = sorted(
+            mixed_generation_order[
+                mixed_predecessor_count : mixed_predecessor_count
+                + mixed_topup_count
+            ],
+            key=_scenario_sort_key,
+        )
+        mixed_primary_count = normalized_plan["measurement+parameter"]
+        primary_by_family["measurement+parameter"] = mixed_predecessor[
+            :mixed_primary_count
+        ]
+        reserve_by_family["measurement+parameter"] = [
+            *mixed_predecessor[mixed_primary_count:],
+            *mixed_topup,
+        ]
+        topup_by_family["measurement+parameter"] = mixed_topup
 
         multi_candidates = fresh_candidates_by_family["multi_measurement"]
         multi_by_cardinality: dict[int, list[dict[str, Any]]] = {}
@@ -389,30 +426,6 @@ def build_dagger1_scenarios(
             multi_reserve_candidates, key=_scenario_sort_key
         )[:multi_reserve_count]
 
-        mixed_reserve_count = (
-            DEFAULT_DAGGER1_TRAINING_POOL_PLAN["measurement+parameter"]
-            - normalized_plan["measurement+parameter"]
-        )
-        reserve_by_family["measurement+parameter"] = (
-            fresh_candidates_by_family["measurement+parameter"][
-                normalized_plan["measurement+parameter"] :
-                normalized_plan["measurement+parameter"]
-                + mixed_reserve_count
-            ]
-        )
-        topup_start = (
-            normalized_plan["measurement+parameter"]
-            + DAGGER1_BASE_RESERVE_PLAN["measurement+parameter"]
-        )
-        topup_stop = (
-            topup_start
-            + DAGGER1_TOPUP_RESERVE_PLAN["measurement+parameter"]
-        )
-        topup_by_family["measurement+parameter"] = (
-            fresh_candidates_by_family["measurement+parameter"][
-                topup_start:topup_stop
-            ]
-        )
     else:
         for family, requested_count in normalized_plan.items():
             primary_by_family[family] = fresh_candidates_by_family[family][
@@ -475,6 +488,11 @@ def build_dagger1_scenarios(
             *_scenario_sort_key(row),
         ),
     )
+    topup_roots = {
+        str(row["grouping"]["physical_root_fingerprint"])
+        for rows in topup_by_family.values()
+        for row in rows
+    }
     reserve = sorted(
         (
             envelope
@@ -485,15 +503,14 @@ def build_dagger1_scenarios(
             DAGGER1_RESERVE_FAMILY_PRIORITY.index(
                 str(row["grouping"]["scenario_family"])
             ),
+            int(
+                str(row["grouping"]["physical_root_fingerprint"])
+                in topup_roots
+            ),
             *_scenario_sort_key(row),
         ),
     )
     envelopes = primary + reserve
-    topup_roots = {
-        str(row["grouping"]["physical_root_fingerprint"])
-        for rows in topup_by_family.values()
-        for row in rows
-    }
     for collection_order, envelope in enumerate(envelopes):
         grouping = envelope["grouping"]
         family = str(grouping["scenario_family"])
