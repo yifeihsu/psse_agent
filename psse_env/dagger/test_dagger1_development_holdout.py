@@ -89,6 +89,11 @@ def _write_boundaries(
         ],
     )
     d0_provenance = d0_dir / "aggregate.generation_provenance.json"
+    d0_manifest = d0_dir / "aggregate.manifest.json"
+    d0_manifest.write_text(
+        json.dumps({"episode_audits": []}, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     d0_descriptor = {"source_state": SOURCE_STATE}
     d0_provenance.write_text(
         json.dumps(
@@ -96,7 +101,10 @@ def _write_boundaries(
                 "release_eligible": True,
                 "generation_descriptor": d0_descriptor,
                 "generation_provenance_id": stable_json_sha256(d0_descriptor),
-                "dataset_hashes": {d0_raw.name: file_sha256(d0_raw)},
+                "dataset_hashes": {
+                    d0_raw.name: file_sha256(d0_raw),
+                    d0_manifest.name: file_sha256(d0_manifest),
+                },
             },
             sort_keys=True,
         )
@@ -129,6 +137,7 @@ def _write_boundaries(
                 "protected_root_overlap": [],
                 "d0_raw_sha256": file_sha256(d0_raw),
                 "d0_generation_provenance_sha256": file_sha256(d0_provenance),
+                "d0_manifest_sha256": file_sha256(d0_manifest),
                 "frozen_suite_sha256": file_sha256(
                     holdout_module.DEFAULT_FORBIDDEN_SUITE
                 ),
@@ -382,6 +391,10 @@ class Dagger1DevelopmentHoldoutTests(unittest.TestCase):
             )
             self.assertEqual(first_manifest["physical_root_count"], 3)
             self.assertEqual(
+                first_manifest["d0_manifest_sha256"],
+                file_sha256(d0_dir / "aggregate.manifest.json"),
+            )
+            self.assertEqual(
                 first_manifest["development_protected_overlap"],
                 {"d0": [], "d1_training": [], "frozen": []},
             )
@@ -587,6 +600,42 @@ class Dagger1DevelopmentHoldoutTests(unittest.TestCase):
                         seed=1,
                         plan={"parameter": 1},
                     )
+
+    def test_d0_manifest_is_required_and_hash_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            d0_dir, training_path, training_manifest = _write_boundaries(root)
+            d0_manifest = d0_dir / "aggregate.manifest.json"
+            d0_manifest.unlink()
+            with self._patch_builder(), self.assertRaisesRegex(
+                FileNotFoundError,
+                "manifest",
+            ):
+                holdout_module.build_dagger1_development_holdout(
+                    d0_aggregate_dir=d0_dir,
+                    d1_training_scenarios=training_path,
+                    d1_training_manifest=training_manifest,
+                    output=root / "missing-manifest.json",
+                    generator_report_path=root / "missing-manifest-report.json",
+                    seed=1,
+                    plan={"parameter": 1},
+                )
+
+            d0_dir, training_path, training_manifest = _write_boundaries(root)
+            d0_manifest.write_text("tampered\n", encoding="utf-8")
+            with self._patch_builder(), self.assertRaisesRegex(
+                RuntimeError,
+                "manifest is not byte-bound",
+            ):
+                holdout_module.build_dagger1_development_holdout(
+                    d0_aggregate_dir=d0_dir,
+                    d1_training_scenarios=training_path,
+                    d1_training_manifest=training_manifest,
+                    output=root / "tampered-manifest.json",
+                    generator_report_path=root / "tampered-manifest-report.json",
+                    seed=1,
+                    plan={"parameter": 1},
+                )
 
     def test_substituted_frozen_suite_fails_policy_binding(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

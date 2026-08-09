@@ -26,6 +26,7 @@ from psse_env.sft.gates import (
 )
 from psse_env.sft.smoke import run_generation_tool_call_smoke, run_training_smoke
 from psse_env.sft.provenance import (
+    ROUND1_AGGREGATE_BUILDER_CONTRACT,
     file_sha256,
     stable_json_sha256,
     validate_generation_provenance,
@@ -430,12 +431,18 @@ class TestGenerationProvenance(unittest.TestCase):
         }
         for path in datasets.values():
             path.write_text(json.dumps(source_row) + "\n", encoding="utf-8")
+        aggregate_manifest = root / "aggregate.manifest.json"
+        aggregate_manifest.write_text(
+            json.dumps({"episode_audits": []}) + "\n",
+            encoding="utf-8",
+        )
         manifest = {
             **descriptor,
             "generation_descriptor": descriptor,
             "generation_provenance_id": provenance_id,
             "dataset_hashes": {
-                path.name: file_sha256(path) for path in datasets.values()
+                path.name: file_sha256(path)
+                for path in (*datasets.values(), aggregate_manifest)
             },
             "release_eligible": True,
             "release_failures": [],
@@ -518,6 +525,75 @@ class TestGenerationProvenance(unittest.TestCase):
                 )
         self.assertFalse(result["passed"])
         self.assertTrue(any("commit" in item for item in result["failures"]))
+
+    def test_round0_private_manifest_is_mandatory_and_hash_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_row, datasets, source_state = self._fixture(root)
+            aggregate_manifest = root / "aggregate.manifest.json"
+            aggregate_manifest.unlink()
+            with mock.patch(
+                "psse_env.sft.provenance.git_source_state",
+                return_value=source_state,
+            ):
+                missing = validate_generation_provenance(
+                    repo_root=Path(__file__).resolve().parents[3],
+                    datasets=datasets,
+                    rows=[source_row, source_row],
+                )
+            self.assertFalse(missing["passed"])
+            self.assertTrue(
+                any("aggregate.manifest.json is missing" in item for item in missing["failures"])
+            )
+
+            source_row, datasets, source_state = self._fixture(root)
+            aggregate_manifest.write_text("tampered\n", encoding="utf-8")
+            with mock.patch(
+                "psse_env.sft.provenance.git_source_state",
+                return_value=source_state,
+            ):
+                tampered = validate_generation_provenance(
+                    repo_root=Path(__file__).resolve().parents[3],
+                    datasets=datasets,
+                    rows=[source_row, source_row],
+                )
+            self.assertFalse(tampered["passed"])
+            self.assertTrue(
+                any("manifest.json hash" in item for item in tampered["failures"])
+            )
+
+    def test_round1_union_provenance_does_not_require_a_d0_style_manifest(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_row, datasets, source_state = self._fixture(root)
+            provenance_path = root / "aggregate.generation_provenance.json"
+            provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+            descriptor = provenance["generation_descriptor"]
+            descriptor["builder_contract"] = ROUND1_AGGREGATE_BUILDER_CONTRACT
+            provenance_id = stable_json_sha256(descriptor)
+            provenance["generation_provenance_id"] = provenance_id
+            provenance["dataset_hashes"].pop("aggregate.manifest.json")
+            source_row["generation_provenance_id"] = provenance_id
+            for path in datasets.values():
+                path.write_text(json.dumps(source_row) + "\n", encoding="utf-8")
+                provenance["dataset_hashes"][path.name] = file_sha256(path)
+            provenance_path.write_text(
+                json.dumps(provenance),
+                encoding="utf-8",
+            )
+            (root / "aggregate.manifest.json").unlink()
+            with mock.patch(
+                "psse_env.sft.provenance.git_source_state",
+                return_value=source_state,
+            ):
+                result = validate_generation_provenance(
+                    repo_root=Path(__file__).resolve().parents[3],
+                    datasets=datasets,
+                    rows=[source_row, source_row],
+                )
+        self.assertTrue(result["passed"], result["failures"])
 
     def test_training_prepare_requires_explicit_nonrelease_override(self) -> None:
         source_rows = [row("g0", "a"), row("g1", "b")]

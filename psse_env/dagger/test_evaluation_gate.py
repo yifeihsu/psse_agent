@@ -6,15 +6,25 @@ import json
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import asdict
 from pathlib import Path
 from unittest import mock
 
+from psse_env.actions import (
+    ASK_FOR_MORE_EVIDENCE,
+    RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+)
 from psse_env.dagger.evaluation_gate import (
     EvaluationGateResult,
+    _audited_post_correction_handoff,
     _trace_action_schema_failure,
     current_registry_sha256,
     main as gate_main,
     validate_evaluation_artifact,
+)
+from psse_env.dagger.release_audit import (
+    POST_CORRECTION_COMPLETION_CONTRACT,
+    ReleaseAuditTolerances,
 )
 from psse_env.dagger.evaluator import (
     EVALUATION_SUITES,
@@ -31,7 +41,7 @@ COMMIT = "a" * 40
 MODEL_REVISION = "c" * 40
 SEED = 19
 MAX_STEPS = 8
-TEST_POLICY_ID = "test-hard-gate-v2"
+TEST_POLICY_ID = "test-hard-gate-v3"
 TEST_SUITES = ("standard_success", "efficiency")
 SUITE_MANIFEST_FIELDS = (
     "suite_manifest",
@@ -180,7 +190,7 @@ def _policy(suite_path: Path, contract: dict) -> dict:
         for row in contract["suite_manifest"].values()
     )
     return {
-        "policy_schema_version": 2,
+        "policy_schema_version": 3,
         "policy_id": TEST_POLICY_ID,
         "approved_factories": {
             "environment": [
@@ -234,8 +244,8 @@ def _policy(suite_path: Path, contract: dict) -> dict:
         "family_policy": {
             "no_error": {
                 "minimum_physical_roots": total_roots,
-                "minimum_resolution_rate": 1.0,
-                "maximum_operator_escalation_rate": 0.0,
+                "minimum_audited_completion_rate": 1.0,
+                "maximum_unqualified_operator_escalation_rate": 0.0,
             }
         },
     }
@@ -338,6 +348,7 @@ def _canonical_policy_trace_row(
         "error_code": None,
         "candidate_disposition_offline": None,
         "tool_regret": None,
+        "runtime_state_hash": None,
         "terminal_outcome": terminal_outcome,
         **progress,
     }
@@ -423,6 +434,7 @@ def _episode(
                 "error_code": intervention["error_code"],
                 "candidate_disposition_offline": None,
                 "tool_regret": None,
+                "runtime_state_hash": None,
                 "terminal_outcome": None,
                 **progress_to(copy.deepcopy(current_state), state_mutated=False),
             }
@@ -464,6 +476,7 @@ def _episode(
                         else None
                     ),
                     "tool_regret": None,
+                    "runtime_state_hash": None,
                     "terminal_outcome": None,
                     **progress_to(
                         after_state,
@@ -498,6 +511,7 @@ def _episode(
                 "error_code": None,
                 "candidate_disposition_offline": None,
                 "tool_regret": None,
+                "runtime_state_hash": None,
                 "terminal_outcome": outcome if index == 1 else None,
                 **progress_to(
                     after_state,
@@ -506,6 +520,25 @@ def _episode(
                 ),
             }
         )
+    handoff_assessment = {
+        "assessment_version": POST_CORRECTION_COMPLETION_CONTRACT,
+        "status": "not_applicable",
+        "eligible": False,
+        "reasons": [],
+        "actual_terminal_outcome": outcome,
+        "runtime_contract": {
+            "contract": POST_CORRECTION_COMPLETION_CONTRACT,
+            "passed": False,
+            "failures": ["handoff_marker_missing"],
+            "active_state_id": str(current_state["active_state_id"]),
+            "active_state_hash": None,
+            "accepted_correction_count": len(
+                current_state["accepted_corrections"]
+            ),
+            "post_correction_confirmation_handoff": False,
+        },
+        "counterfactual_completion_audit": None,
+    }
     return {
         "episode_key": manifest_row["episode_key"],
         "scenario_id": manifest_row["scenario_id"],
@@ -571,6 +604,7 @@ def _episode(
             "audit_mode": "strict_release_audit",
             "evidence_complete": True,
             "quarantined": False,
+            "post_correction_handoff_assessment": handoff_assessment,
             "strict_release_audit": {
                 "audit_version": "strict_offline_episode_truth_v3",
                 "terminal": terminal,
@@ -599,6 +633,11 @@ def _overall(episodes: list[dict]) -> dict:
         and row["terminal_outcome"] == "operator_escalation"
         for row in episodes
     )
+    audited_handoffs = sum(
+        _audited_post_correction_handoff(row)[0] for row in episodes
+    )
+    audited_completions = resolved + audited_handoffs
+    unqualified_escalations = escalated - audited_handoffs
     injected = sum(
         row["evaluation_intervention"]["injected_failure_count"]
         for row in episodes
@@ -615,6 +654,20 @@ def _overall(episodes: list[dict]) -> dict:
         "resolution_rate": resolved / total if total else 0.0,
         "operator_escalation_episodes": escalated,
         "operator_escalation_rate": escalated / total if total else 0.0,
+        "audited_post_correction_handoff_episodes": audited_handoffs,
+        "audited_post_correction_handoff_rate": (
+            audited_handoffs / total if total else 0.0
+        ),
+        "audited_completion_episodes": audited_completions,
+        "audited_completion_rate": (
+            audited_completions / total if total else 0.0
+        ),
+        "unqualified_operator_escalation_episodes": (
+            unqualified_escalations
+        ),
+        "unqualified_operator_escalation_rate": (
+            unqualified_escalations / total if total else 0.0
+        ),
         "false_commit_count": sum(row["false_commit_count"] for row in episodes),
         "false_rollback_count": sum(
             row["false_rollback_count"] for row in episodes
@@ -675,8 +728,92 @@ def _set_operator_escalation(
     episode["audit"]["strict_release_audit"][
         "terminal_outcome"
     ] = "operator_escalation"
+    episode["audit"]["post_correction_handoff_assessment"][
+        "actual_terminal_outcome"
+    ] = "operator_escalation"
     episode["trace"][-1]["terminal_outcome"] = "operator_escalation"
     episode["trace"][-1]["terminal_after"] = True
+    suite_metrics["overall"] = _overall(suite_metrics["episodes"])
+    _rehash(artifact)
+
+
+def _set_audited_post_correction_handoff(
+    artifact: dict,
+    episode_index: int,
+) -> None:
+    """Replace one resolved fixture with a fully bound audited handoff."""
+
+    _set_operator_escalation(artifact, episode_index)
+    suite_metrics = artifact["evaluation"]["suite_metrics"]
+    episode = suite_metrics["episodes"][episode_index]
+    final_row = episode["trace"][-1]
+    accepted_count = final_row["state_after"]["accepted_correction_count"]
+    if accepted_count < 1:
+        raise AssertionError("audited handoff fixture requires a committed correction")
+    active_state_id = final_row["state_after"]["active_state_id"]
+    final_row["action"] = {
+        "tool": ASK_FOR_MORE_EVIDENCE,
+        "arguments": {
+            "state_id": active_state_id,
+            "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+        },
+    }
+    final_row["runtime_state_hash"] = final_row["state_after_sha256"]
+    passed_check = {"status": "passed", "problems": []}
+    counterfactual_checks = {
+        "accepted_correction_targets": copy.deepcopy(passed_check),
+        "accepted_target_nonregression": {
+            **copy.deepcopy(passed_check),
+            "target_evidence": [
+                {
+                    "family": "measurement",
+                    "index0": 0,
+                    "status": "passed",
+                    "initial_distance": 1.0,
+                    "final_distance": 0.0,
+                    "tolerance": 1.0e-6,
+                }
+            ],
+        },
+        "remaining_true_faults": {
+            **copy.deepcopy(passed_check),
+            "derived_remaining_fault_count": 0,
+            "evidence_source": "offline_scenario_truth_derivation",
+        },
+        "healthy_measurements_preserved": copy.deepcopy(passed_check),
+        "healthy_case_components_preserved": copy.deepcopy(passed_check),
+        "final_measurements_match_clean": copy.deepcopy(passed_check),
+        "final_case_matches_clean": copy.deepcopy(passed_check),
+    }
+    counterfactual = {
+        "audit_version": "strict_offline_episode_truth_v3",
+        "scenario_id": episode["scenario_id"],
+        "physical_root_fingerprint": episode["physical_root"],
+        "scenario_family": episode["family"],
+        "terminal": True,
+        "terminal_outcome": "resolved",
+        "checks": counterfactual_checks,
+        "tolerances": asdict(ReleaseAuditTolerances()),
+        "problems": [],
+        "quarantined": False,
+    }
+    episode["audit"]["post_correction_handoff_assessment"] = {
+        "assessment_version": POST_CORRECTION_COMPLETION_CONTRACT,
+        "status": "passed",
+        "eligible": True,
+        "reasons": [],
+        "actual_terminal_outcome": "operator_escalation",
+        "runtime_contract": {
+            "contract": POST_CORRECTION_COMPLETION_CONTRACT,
+            "passed": True,
+            "failures": [],
+            "active_state_id": active_state_id,
+            "active_state_hash": final_row["state_after_sha256"],
+            "accepted_correction_count": accepted_count,
+            "post_correction_confirmation_handoff": True,
+        },
+        "counterfactual_completion_audit": counterfactual,
+    }
     suite_metrics["overall"] = _overall(suite_metrics["episodes"])
     _rehash(artifact)
 
@@ -814,7 +951,7 @@ def _artifact(
     core["identity_sha256"] = stable_json_sha256(core)
     provenance = {**core, "release_eligible": True, "release_failures": []}
     artifact = {
-        "artifact_schema_version": 2,
+        "artifact_schema_version": 3,
         "artifact_type": "closed_loop_release_evaluation",
         "release_eligible": True,
         "release_failures": [],
@@ -823,6 +960,7 @@ def _artifact(
             "score": -1.0e12,
             "metrics": {},
             "suite_metrics": {
+                "schema_version": 3,
                 "configuration": configuration,
                 "overall": _overall(episodes),
                 "episodes": episodes,
@@ -873,7 +1011,7 @@ def _validate(
     )
 
 
-class EvaluationGateV2Tests(unittest.TestCase):
+class EvaluationGateV3Tests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary_directory.name)
@@ -907,6 +1045,172 @@ class EvaluationGateV2Tests(unittest.TestCase):
         self.assertTrue(result.performance_enforced)
         self.assertEqual(result.validation_role, "expert-baseline")
         self.assertEqual(result.frozen_suite_sha256, file_sha256(self.suite_path))
+
+    def test_generic_operator_escalation_is_unqualified_not_completion(self) -> None:
+        artifact = _artifact(self.suite_path, self.contract)
+        _set_operator_escalation(artifact, 0)
+
+        result = _validate(
+            artifact,
+            role="expert-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
+        )
+
+        self.assertTrue(result.evidence_passed, result.evidence_failures)
+        self.assertFalse(result.performance_passed)
+        self.assertFalse(result.passed)
+        overall = artifact["evaluation"]["suite_metrics"]["overall"]
+        self.assertEqual(overall["operator_escalation_episodes"], 1)
+        self.assertEqual(overall["audited_post_correction_handoff_episodes"], 0)
+        self.assertEqual(overall["audited_completion_episodes"], 1)
+        self.assertEqual(overall["unqualified_operator_escalation_episodes"], 1)
+        self.assertTrue(
+            any(
+                "audited completion failed" in failure
+                for failure in result.performance_failures
+            ),
+            result.performance_failures,
+        )
+        self.assertTrue(
+            any(
+                "unqualified operator escalation failed" in failure
+                for failure in result.performance_failures
+            ),
+            result.performance_failures,
+        )
+
+    def test_state_bound_audited_handoff_satisfies_completion_policy(self) -> None:
+        suite_path, _contract, policy, artifact = self._fixture_for_suite(
+            "partial_success_retention"
+        )
+        _set_audited_post_correction_handoff(artifact, 0)
+
+        result = _validate(
+            artifact,
+            role="expert-baseline",
+            policy=policy,
+            suite_path=suite_path,
+        )
+
+        self.assertTrue(result.passed, result.failures)
+        overall = artifact["evaluation"]["suite_metrics"]["overall"]
+        self.assertEqual(overall["resolved_episodes"], 0)
+        self.assertEqual(overall["operator_escalation_episodes"], 1)
+        self.assertEqual(overall["audited_post_correction_handoff_episodes"], 1)
+        self.assertEqual(overall["audited_completion_episodes"], 1)
+        self.assertEqual(overall["unqualified_operator_escalation_episodes"], 0)
+        observed = result.observed["families"]["no_error"]
+        self.assertEqual(observed["resolved_roots"], 0)
+        self.assertEqual(observed["operator_escalation_roots"], 1)
+        self.assertEqual(observed["audited_completion_roots"], 1)
+        self.assertEqual(observed["unqualified_operator_escalation_roots"], 0)
+
+    def test_audited_handoff_is_recomputed_from_final_trace_binding(self) -> None:
+        suite_path, _contract, policy, artifact = self._fixture_for_suite(
+            "partial_success_retention"
+        )
+        _set_audited_post_correction_handoff(artifact, 0)
+        episode = artifact["evaluation"]["suite_metrics"]["episodes"][0]
+        episode["audit"]["post_correction_handoff_assessment"][
+            "runtime_contract"
+        ]["active_state_id"] = "forged-active-state"
+        artifact["evaluation"]["suite_metrics"]["overall"] = _overall(
+            [episode]
+        )
+        _rehash(artifact)
+
+        result = _validate(
+            artifact,
+            role="expert-baseline",
+            policy=policy,
+            suite_path=suite_path,
+        )
+
+        self.assertFalse(result.evidence_passed)
+        self.assertTrue(
+            any(
+                "final action state id is unbound" in failure
+                for failure in result.evidence_failures
+            ),
+            result.evidence_failures,
+        )
+
+    def test_failed_claimed_handoff_is_evidence_failure(self) -> None:
+        suite_path, _contract, policy, artifact = self._fixture_for_suite(
+            "partial_success_retention"
+        )
+        _set_audited_post_correction_handoff(artifact, 0)
+        episode = artifact["evaluation"]["suite_metrics"]["episodes"][0]
+        assessment = episode["audit"]["post_correction_handoff_assessment"]
+        assessment["status"] = "failed"
+        assessment["eligible"] = False
+        assessment["reasons"] = ["counterfactual_completion_quarantined"]
+        artifact["evaluation"]["suite_metrics"]["overall"] = _overall(
+            [episode]
+        )
+        _rehash(artifact)
+
+        result = _validate(
+            artifact,
+            role="expert-baseline",
+            policy=policy,
+            suite_path=suite_path,
+        )
+
+        self.assertFalse(result.evidence_passed)
+        self.assertTrue(
+            any(
+                "claimed post-correction handoff assessment failed" in failure
+                for failure in result.evidence_failures
+            ),
+            result.evidence_failures,
+        )
+
+    def test_audited_handoff_rejects_substituted_runtime_state_hash(self) -> None:
+        suite_path, _contract, policy, artifact = self._fixture_for_suite(
+            "partial_success_retention"
+        )
+        _set_audited_post_correction_handoff(artifact, 0)
+        episode = artifact["evaluation"]["suite_metrics"]["episodes"][0]
+        episode["audit"]["post_correction_handoff_assessment"][
+            "runtime_contract"
+        ]["active_state_hash"] = "f" * 64
+        artifact["evaluation"]["suite_metrics"]["overall"] = _overall(
+            [episode]
+        )
+        _rehash(artifact)
+
+        result = _validate(
+            artifact,
+            role="expert-baseline",
+            policy=policy,
+            suite_path=suite_path,
+        )
+
+        self.assertFalse(result.evidence_passed)
+        self.assertTrue(
+            any(
+                "final state hash is unbound" in failure
+                for failure in result.evidence_failures
+            ),
+            result.evidence_failures,
+        )
+
+    def test_false_rollback_ceiling_cannot_be_weakened(self) -> None:
+        policy = copy.deepcopy(self.policy)
+        policy["hard_constraints"]["maximum_false_rollback_count"] = 1
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "maximum_false_rollback_count=0",
+        ):
+            _validate(
+                _artifact(self.suite_path, self.contract),
+                role="expert-baseline",
+                policy=policy,
+                suite_path=self.suite_path,
+            )
 
     def test_episode_intervention_must_match_the_frozen_suite(self) -> None:
         artifact = _artifact(self.suite_path, self.contract)
@@ -1507,7 +1811,8 @@ class EvaluationGateV2Tests(unittest.TestCase):
 
     def test_schema_versions_require_exact_integers(self) -> None:
         artifact = _artifact(self.suite_path, self.contract)
-        artifact["artifact_schema_version"] = 2.0
+        artifact["artifact_schema_version"] = 3.0
+        artifact["evaluation"]["suite_metrics"]["schema_version"] = 3.0
         artifact["provenance"]["provenance_schema_version"] = 1.0
         _rehash_provenance(artifact)
         _rehash(artifact)
@@ -1524,6 +1829,10 @@ class EvaluationGateV2Tests(unittest.TestCase):
         )
         self.assertTrue(
             any("provenance_schema_version" in failure for failure in result.failures),
+            result.failures,
+        )
+        self.assertTrue(
+            any("suite report schema_version" in failure for failure in result.failures),
             result.failures,
         )
 
@@ -2218,8 +2527,8 @@ class EvaluationGateV2Tests(unittest.TestCase):
         policy = copy.deepcopy(self.policy)
         policy["family_policy"]["no_error"].update(
             {
-                "minimum_resolution_rate": 0.5,
-                "maximum_operator_escalation_rate": 0.5,
+                "minimum_audited_completion_rate": 0.5,
+                "maximum_unqualified_operator_escalation_rate": 0.5,
             }
         )
         checkpoint_artifact = _artifact(
@@ -2277,8 +2586,8 @@ class EvaluationGateV2Tests(unittest.TestCase):
         policy["hard_constraints"]["maximum_loop_episode_rate"] = 0.5
         policy["family_policy"]["no_error"].update(
             {
-                "minimum_resolution_rate": 0.5,
-                "maximum_operator_escalation_rate": 0.5,
+                "minimum_audited_completion_rate": 0.5,
+                "maximum_unqualified_operator_escalation_rate": 0.5,
             }
         )
         checkpoint_artifact = _artifact(

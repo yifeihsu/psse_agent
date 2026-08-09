@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import math
 import random
 import subprocess
 from collections import Counter
@@ -44,10 +45,16 @@ import psse_env.providers.matpower as matpower_provider_module
 import psse_env.providers.scenario_generator as scenario_generator_module
 import psse_env.transactional_env as transactional_env_module
 from psse_env.actions import (
+    ASK_FOR_MORE_EVIDENCE,
+    COMMIT_STATE,
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,
+    FINALIZE_DIAGNOSIS,
+    RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+    ROLLBACK_STATE,
     RUN_WLS,
+    action_signature,
 )
 from psse_env.dagger.counterfactual_generator import CounterfactualGenerator
 from psse_env.dagger.dataset_builder import (
@@ -74,7 +81,10 @@ from psse_env.dagger.replay_buffer import (
     build_balanced_training_view,
 )
 from psse_env.dagger.release_audit import (
+    POST_CORRECTION_COMPLETION_CONTRACT,
+    audit_post_correction_controller_handoff,
     audit_episode_against_truth as strict_audit_episode_against_truth,
+    validate_post_correction_handoff_assessment,
 )
 from psse_env.dagger.sft_audit import (
     admissible_semantic_action_count,
@@ -128,67 +138,67 @@ DEFAULT_PLAN: dict[str, int] = {
     "measurement+hif": 2,
 }
 
-# Every positive-count release family has an explicit outcome contract.  The
-# directly recoverable and deterministic diagnostic families must resolve all
-# of their small default suites; the mixed parameter/topology suites permit at
-# most one safe handoff in twenty.  Pure multi-measurement and HIF-bearing
-# families keep an explicit handoff allowance until their observable evidence
-# contracts can safely authorize autonomous continuation, and that allowance
-# is reported rather than counted as recovery.
+# Every positive-count release family has an explicit outcome contract.
+# Audited completion means either a truth-audited autonomous resolution or a
+# separately certified post-correction controller handoff whose counterfactual
+# strict-v3 completion audit passes. Generic/partial/HIF handoffs remain
+# unqualified escalations. The v3 floor and ceiling values are byte-for-byte
+# the old resolution/escalation thresholds; only the explicitly versioned
+# numerator classification changed.
 BC0_FAMILY_RELEASE_POLICY: dict[str, dict[str, float | int]] = {
     "no_error": {
         "minimum_physical_roots": 4,
-        "minimum_resolution_rate": 1.0,
-        "maximum_operator_escalation_rate": 0.0,
+        "minimum_audited_completion_rate": 1.0,
+        "maximum_unqualified_operator_escalation_rate": 0.0,
     },
     "measurement": {
         "minimum_physical_roots": 8,
-        "minimum_resolution_rate": 1.0,
-        "maximum_operator_escalation_rate": 0.0,
+        "minimum_audited_completion_rate": 1.0,
+        "maximum_unqualified_operator_escalation_rate": 0.0,
     },
     "multi_measurement": {
         "minimum_physical_roots": 20,
-        "minimum_resolution_rate": 0.0,
-        "maximum_operator_escalation_rate": 1.0,
+        "minimum_audited_completion_rate": 0.0,
+        "maximum_unqualified_operator_escalation_rate": 1.0,
     },
     "parameter": {
         "minimum_physical_roots": 8,
-        "minimum_resolution_rate": 1.0,
-        "maximum_operator_escalation_rate": 0.0,
+        "minimum_audited_completion_rate": 1.0,
+        "maximum_unqualified_operator_escalation_rate": 0.0,
     },
     "topology": {
         "minimum_physical_roots": 8,
-        "minimum_resolution_rate": 1.0,
-        "maximum_operator_escalation_rate": 0.0,
+        "minimum_audited_completion_rate": 1.0,
+        "maximum_unqualified_operator_escalation_rate": 0.0,
     },
     "harmonic": {
         "minimum_physical_roots": 4,
-        "minimum_resolution_rate": 1.0,
-        "maximum_operator_escalation_rate": 0.0,
+        "minimum_audited_completion_rate": 1.0,
+        "maximum_unqualified_operator_escalation_rate": 0.0,
     },
     # Explicit HIF-family handoff allowance: safe escalation is retained as a
     # reported outcome and never contributes to the resolution numerator.
     "hif": {
         "minimum_physical_roots": 17,
-        "minimum_resolution_rate": 0.0,
-        "maximum_operator_escalation_rate": 1.0,
+        "minimum_audited_completion_rate": 0.0,
+        "maximum_unqualified_operator_escalation_rate": 1.0,
     },
     "measurement+parameter": {
         "minimum_physical_roots": 22,
-        "minimum_resolution_rate": 0.95,
-        "maximum_operator_escalation_rate": 0.05,
+        "minimum_audited_completion_rate": 0.95,
+        "maximum_unqualified_operator_escalation_rate": 0.05,
     },
     "measurement+topology": {
         "minimum_physical_roots": 22,
-        "minimum_resolution_rate": 0.95,
-        "maximum_operator_escalation_rate": 0.05,
+        "minimum_audited_completion_rate": 0.95,
+        "maximum_unqualified_operator_escalation_rate": 0.05,
     },
     # The two-root composition remains an observability pilot.  Like pure HIF,
     # it may hand off safely but may not report that handoff as resolution.
     "measurement+hif": {
         "minimum_physical_roots": 2,
-        "minimum_resolution_rate": 0.0,
-        "maximum_operator_escalation_rate": 1.0,
+        "minimum_audited_completion_rate": 0.0,
+        "maximum_unqualified_operator_escalation_rate": 1.0,
     },
 }
 
@@ -475,15 +485,323 @@ def _truth_free_execution_scenario(
     scenario: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Remove offline audit truth before the observable teacher is executed."""
-    execution = copy.deepcopy(dict(scenario))
-    for key in list(execution):
-        if (
-            str(key).startswith("true_")
-            or str(key).startswith("clean_")
-            or key in {"hidden_truth", "oracle_action_hints"}
-        ):
-            execution.pop(key, None)
+    # TransactionalPSSEEnv also recognizes private aliases nested under
+    # metadata. Reuse the evaluator's recursive reviewed boundary so a nested
+    # known or future ``true_*``/``clean_*`` key cannot reach the online
+    # observable teacher while its separate audit copy remains intact.
+    execution = evaluator_module.strip_offline_truth(scenario)
+    # BC0's collector predates the partitioned DAgger-1 envelope and reads
+    # non-model grouping fields from this same mapping after reset. Preserve
+    # only that explicit audit/export identity allowlist; TransactionalPSSEEnv
+    # does not project these fields into PolicyObservation.
+    for key in (
+        "root_scenario_id",
+        "physical_root_fingerprint",
+        "scenario_family",
+        "error_cardinality",
+        "network_case",
+        "source_tier",
+        "dataset_split",
+        "split",
+        "parameter_scans_available",
+    ):
+        if key in scenario:
+            execution[key] = copy.deepcopy(scenario[key])
     return execution
+
+
+ROUND0_LIFECYCLE_SAFETY_CONTRACT = "round0_episode_lifecycle_safety_v1"
+ROUND0_HANDOFF_RUNTIME_ANCHOR_CONTRACT = "round0_handoff_runtime_anchor_v1"
+
+
+def _round0_lifecycle_safety_audit(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    strict_audit: Mapping[str, Any],
+    terminal: bool,
+) -> dict[str, Any]:
+    """Derive transition safety from the immutable expert trajectory."""
+
+    false_commits = 0
+    false_rollbacks = 0
+    finalize_actions = 0
+    nonadvancing_signatures: set[str] = set()
+    loop_detected = False
+    for index, row in enumerate(rows):
+        action = row.get("executed_action")
+        action = action if isinstance(action, Mapping) else {}
+        tool = str(action.get("tool") or "")
+        labels = row.get("labels")
+        labels = labels if isinstance(labels, Mapping) else {}
+        disposition = labels.get("target_candidate_disposition")
+        if disposition is None:
+            disposition = labels.get("candidate_disposition")
+        if tool == COMMIT_STATE and disposition not in {
+            "ACCEPT_FINAL",
+            "ACCEPT_PARTIAL",
+        }:
+            false_commits += 1
+        elif tool == ROLLBACK_STATE and disposition in {
+            "ACCEPT_FINAL",
+            "ACCEPT_PARTIAL",
+        }:
+            false_rollbacks += 1
+        elif tool == FINALIZE_DIAGNOSIS:
+            finalize_actions += 1
+
+        before = row.get("parent_state_summary")
+        after = row.get("next_state_summary")
+        output = row.get("tool_output")
+        if not all(isinstance(item, Mapping) for item in (before, after, output)):
+            loop_detected = True
+            continue
+        progress = evaluator_module.trace_progress_evidence(
+            before=before,
+            after=after,
+            output=output,
+            terminal=bool(terminal and index == len(rows) - 1),
+        )
+        try:
+            advanced = evaluator_module.trace_progress_advanced(progress)
+        except ValueError:
+            loop_detected = True
+            continue
+        signature = action_signature(action)
+        if advanced:
+            nonadvancing_signatures.clear()
+        elif signature in nonadvancing_signatures:
+            loop_detected = True
+        else:
+            nonadvancing_signatures.add(signature)
+
+    checks = strict_audit.get("checks")
+    checks = checks if isinstance(checks, Mapping) else {}
+    remaining = checks.get("remaining_true_faults")
+    remaining = remaining if isinstance(remaining, Mapping) else {}
+    valid_finalize = bool(
+        strict_audit.get("terminal") is True
+        and strict_audit.get("terminal_outcome") == "resolved"
+        and strict_audit.get("quarantined") is False
+        and remaining.get("status") == "passed"
+        and remaining.get("derived_remaining_fault_count") == 0
+    )
+    false_finalizations = finalize_actions if finalize_actions and not valid_finalize else 0
+    passed = bool(
+        false_commits == 0
+        and false_rollbacks == 0
+        and false_finalizations == 0
+        and not loop_detected
+    )
+    return {
+        "contract": ROUND0_LIFECYCLE_SAFETY_CONTRACT,
+        "false_commit_count": false_commits,
+        "false_rollback_count": false_rollbacks,
+        "false_finalization_count": false_finalizations,
+        "loop_detected": loop_detected,
+        "passed": passed,
+    }
+
+
+def _lifecycle_safety_passed(audit: Mapping[str, Any]) -> bool:
+    lifecycle = audit.get("lifecycle_safety")
+    return bool(
+        isinstance(lifecycle, Mapping)
+        and set(lifecycle)
+        == {
+            "contract",
+            "false_commit_count",
+            "false_rollback_count",
+            "false_finalization_count",
+            "loop_detected",
+            "passed",
+        }
+        and lifecycle.get("contract") == ROUND0_LIFECYCLE_SAFETY_CONTRACT
+        and lifecycle.get("false_commit_count") == 0
+        and lifecycle.get("false_rollback_count") == 0
+        and lifecycle.get("false_finalization_count") == 0
+        and lifecycle.get("loop_detected") is False
+        and lifecycle.get("passed") is True
+    )
+
+
+def _round0_handoff_runtime_anchor(
+    scenario: Mapping[str, Any],
+    final_state: Mapping[str, Any],
+    active_physical_state: Mapping[str, Any],
+    *,
+    terminal: bool,
+    terminal_outcome: str | None,
+) -> dict[str, Any]:
+    """Persist a non-private store/transition anchor independent of assessment."""
+
+    history = final_state.get("history_window")
+    history = list(history) if isinstance(history, (list, tuple)) else []
+    transition = history[-1] if history and isinstance(history[-1], Mapping) else {}
+    action = transition.get("action")
+    action = action if isinstance(action, Mapping) else {}
+    arguments = action.get("arguments")
+    arguments = arguments if isinstance(arguments, Mapping) else {}
+    output = final_state.get("last_tool_output")
+    output = output if isinstance(output, Mapping) else {}
+    accepted = final_state.get("accepted_corrections")
+    accepted = list(accepted) if isinstance(accepted, (list, tuple)) else []
+    last_accepted = (
+        accepted[-1] if accepted and isinstance(accepted[-1], Mapping) else {}
+    )
+    return {
+        "contract": ROUND0_HANDOFF_RUNTIME_ANCHOR_CONTRACT,
+        "scenario_id": str(scenario.get("scenario_id") or ""),
+        "physical_root_fingerprint": str(
+            scenario.get("physical_root_fingerprint") or ""
+        ),
+        "scenario_family": str(scenario.get("scenario_family") or "unknown"),
+        "terminal": bool(terminal),
+        "terminal_outcome": terminal_outcome,
+        "final_action_tool": action.get("tool"),
+        "final_action_request": arguments.get("request"),
+        "final_action_state_id": arguments.get("state_id"),
+        "transition_state_id": transition.get("state_id"),
+        "transition_candidate_state_id": transition.get("candidate_state_id"),
+        "execution_status": output.get("execution_status"),
+        "state_mutated": output.get("state_mutated"),
+        "output_active_state_id": output.get("active_state_id"),
+        "output_candidate_state_id": output.get("candidate_state_id"),
+        "active_state_id": final_state.get("active_state_id"),
+        "physical_state_id": active_physical_state.get("state_id"),
+        "active_state_hash": active_physical_state.get("state_hash"),
+        "accepted_correction_count": len(accepted),
+        "last_accepted_candidate_state_id": last_accepted.get(
+            "candidate_state_id"
+        ),
+        "has_open_candidate": final_state.get("has_open_candidate"),
+        "has_unverified_candidate": final_state.get(
+            "has_unverified_candidate"
+        ),
+        "has_verified_candidate": final_state.get("has_verified_candidate"),
+        "candidate_state_id": final_state.get("candidate_state_id"),
+    }
+
+
+_ROUND0_HANDOFF_RUNTIME_ANCHOR_FIELDS = frozenset(
+    {
+        "contract",
+        "scenario_id",
+        "physical_root_fingerprint",
+        "scenario_family",
+        "terminal",
+        "terminal_outcome",
+        "final_action_tool",
+        "final_action_request",
+        "final_action_state_id",
+        "transition_state_id",
+        "transition_candidate_state_id",
+        "execution_status",
+        "state_mutated",
+        "output_active_state_id",
+        "output_candidate_state_id",
+        "active_state_id",
+        "physical_state_id",
+        "active_state_hash",
+        "accepted_correction_count",
+        "last_accepted_candidate_state_id",
+        "has_open_candidate",
+        "has_unverified_candidate",
+        "has_verified_candidate",
+        "candidate_state_id",
+    }
+)
+
+
+def _runtime_anchor_validation(
+    anchor: Mapping[str, Any] | None,
+    assessment: Mapping[str, Any],
+    *,
+    audit: Mapping[str, Any],
+    qualified_claim: bool,
+) -> tuple[bool, list[str]]:
+    failures: list[str] = []
+
+    def require(condition: bool, reason: str) -> None:
+        if not condition:
+            failures.append(reason)
+
+    if not isinstance(anchor, Mapping):
+        return False, ["missing_round0_handoff_runtime_anchor"]
+    require(
+        set(anchor) == _ROUND0_HANDOFF_RUNTIME_ANCHOR_FIELDS,
+        "round0_handoff_runtime_anchor_schema_mismatch",
+    )
+    require(
+        anchor.get("contract") == ROUND0_HANDOFF_RUNTIME_ANCHOR_CONTRACT,
+        "round0_handoff_runtime_anchor_contract_mismatch",
+    )
+    for field in ("scenario_id", "physical_root_fingerprint", "scenario_family"):
+        require(
+            str(anchor.get(field) or "") == str(audit.get(field) or ""),
+            f"round0_handoff_runtime_anchor_{field}_mismatch",
+        )
+    require(
+        anchor.get("terminal") is True
+        and anchor.get("terminal_outcome") == audit.get("terminal_outcome"),
+        "round0_handoff_runtime_anchor_terminal_mismatch",
+    )
+    active_state_id = anchor.get("active_state_id")
+    state_hash = anchor.get("active_state_hash")
+    accepted_count = anchor.get("accepted_correction_count")
+    require(
+        isinstance(active_state_id, str)
+        and bool(active_state_id)
+        and anchor.get("physical_state_id") == active_state_id
+        and anchor.get("final_action_state_id") == active_state_id
+        and anchor.get("transition_state_id") == active_state_id
+        and anchor.get("output_active_state_id") == active_state_id,
+        "round0_handoff_runtime_anchor_state_id_mismatch",
+    )
+    require(
+        isinstance(state_hash, str)
+        and len(state_hash) == 64
+        and state_hash == state_hash.lower()
+        and set(state_hash) <= set("0123456789abcdef"),
+        "round0_handoff_runtime_anchor_state_hash_invalid",
+    )
+    require(
+        not isinstance(accepted_count, bool)
+        and isinstance(accepted_count, int)
+        and accepted_count >= 0,
+        "round0_handoff_runtime_anchor_accepted_count_invalid",
+    )
+    require(
+        anchor.get("execution_status") == "success"
+        and anchor.get("state_mutated") is False
+        and anchor.get("output_candidate_state_id") is None,
+        "round0_handoff_runtime_anchor_output_invalid",
+    )
+    require(
+        anchor.get("has_open_candidate") is False
+        and anchor.get("has_unverified_candidate") is False
+        and anchor.get("has_verified_candidate") is False
+        and anchor.get("candidate_state_id") is None
+        and anchor.get("transition_candidate_state_id") is None,
+        "round0_handoff_runtime_anchor_candidate_open",
+    )
+    runtime = assessment.get("runtime_contract")
+    runtime = runtime if isinstance(runtime, Mapping) else {}
+    require(
+        runtime.get("active_state_id") == active_state_id
+        and runtime.get("active_state_hash") == state_hash
+        and runtime.get("accepted_correction_count") == accepted_count,
+        "round0_handoff_runtime_anchor_assessment_mismatch",
+    )
+    if qualified_claim:
+        require(
+            anchor.get("final_action_tool") == ASK_FOR_MORE_EVIDENCE
+            and anchor.get("final_action_request")
+            == RECOVERY_OPTIONS_EXHAUSTED_REQUEST
+            and accepted_count > 0
+            and anchor.get("last_accepted_candidate_state_id") == active_state_id,
+            "round0_handoff_runtime_anchor_qualified_claim_invalid",
+        )
+    return not failures, list(dict.fromkeys(failures))
 
 
 def collect_round0(
@@ -496,6 +814,8 @@ def collect_round0(
     episode_rows: list[dict[str, Any]] = []
     recovery_rows: list[dict[str, Any]] = []
     episode_audits: list[dict[str, Any]] = []
+    episode_handoff_assessments: list[dict[str, Any]] = []
+    episode_handoff_runtime_anchors: list[dict[str, Any]] = []
     quarantined_rows = 0
 
     for scenario in scenarios:
@@ -530,7 +850,42 @@ def collect_round0(
             active_physical_state=active_physical_state,
             remaining_truth=None,
         )
+        audit["lifecycle_safety"] = _round0_lifecycle_safety_audit(
+            rows,
+            strict_audit=audit,
+            terminal=env.is_terminal(),
+        )
         episode_audits.append(audit)
+        handoff_assessment = audit_post_correction_controller_handoff(
+            scenario,
+            final_state,
+            terminal=env.is_terminal(),
+            terminal_outcome=env.terminal_outcome,
+            active_physical_state=active_physical_state,
+            remaining_truth=None,
+            case_loader=matpower_provider_module._load_python_case,
+        )
+        episode_handoff_assessments.append(
+            {
+                "scenario_id": str(scenario.get("scenario_id") or ""),
+                "physical_root_fingerprint": str(
+                    scenario.get("physical_root_fingerprint") or ""
+                ),
+                "scenario_family": str(
+                    scenario.get("scenario_family") or "unknown"
+                ),
+                **handoff_assessment,
+            }
+        )
+        episode_handoff_runtime_anchors.append(
+            _round0_handoff_runtime_anchor(
+                scenario,
+                final_state,
+                active_physical_state,
+                terminal=env.is_terminal(),
+                terminal_outcome=env.terminal_outcome,
+            )
+        )
         if audit["quarantined"]:
             quarantined_rows += len(rows)
         else:
@@ -559,6 +914,8 @@ def collect_round0(
         "episode_rows": episode_rows,
         "recovery_rows": recovery_rows,
         "episode_audits": episode_audits,
+        "episode_handoff_assessments": episode_handoff_assessments,
+        "episode_handoff_runtime_anchors": episode_handoff_runtime_anchors,
         "quarantined_rows": quarantined_rows,
     }
 
@@ -622,7 +979,7 @@ def _collection_release_failures(
     return failures
 
 
-def _family_resolution_release_failures(
+def _family_completion_release_failures(
     terminal_matrix: Mapping[str, Mapping[str, Any]],
     *,
     policy: Mapping[str, Mapping[str, float | int]] = BC0_FAMILY_RELEASE_POLICY,
@@ -646,14 +1003,28 @@ def _family_resolution_release_failures(
             continue
         entry = terminal_matrix.get(family) or {}
         distinct_roots = int(entry.get("distinct_physical_roots") or 0)
-        resolution_rate = float(entry.get("resolution_rate") or 0.0)
-        escalation_rate = float(entry.get("operator_escalation_rate") or 0.0)
+        completion_rate = float(entry.get("audited_completion_rate") or 0.0)
+        unqualified_escalation_rate = float(
+            entry.get("unqualified_operator_escalation_rate") or 0.0
+        )
+        rates_valid = bool(
+            math.isfinite(completion_rate)
+            and 0.0 <= completion_rate <= 1.0
+            and math.isfinite(unqualified_escalation_rate)
+            and 0.0 <= unqualified_escalation_rate <= 1.0
+        )
+        if not rates_valid:
+            failures.append(f"{family}: completion/escalation rates are invalid")
         missing_root_ids = list(
             entry.get("missing_physical_root_episode_ids") or []
         )
         minimum_roots = int(requirements["minimum_physical_roots"])
-        minimum_resolution = float(requirements["minimum_resolution_rate"])
-        maximum_escalation = float(requirements["maximum_operator_escalation_rate"])
+        minimum_completion = float(
+            requirements["minimum_audited_completion_rate"]
+        )
+        maximum_unqualified_escalation = float(
+            requirements["maximum_unqualified_operator_escalation_rate"]
+        )
         if distinct_roots < minimum_roots:
             failures.append(
                 f"{family}: {distinct_roots} distinct physical roots < required "
@@ -664,22 +1035,197 @@ def _family_resolution_release_failures(
                 f"{family}: {len(missing_root_ids)} episode(s) lack an explicit "
                 "physical_root_fingerprint"
             )
-        if resolution_rate + 1e-12 < minimum_resolution:
+        if entry and entry.get("release_terminal_coverage") is not True:
             failures.append(
-                f"{family}: resolution rate {resolution_rate:.3f} < required "
-                f"{minimum_resolution:.3f}"
+                f"{family}: terminal/evidence coverage failed: nonterminal="
+                f"{len(entry.get('nonterminal_physical_root_fingerprints') or [])}, "
+                "quarantined="
+                f"{len(entry.get('quarantined_physical_root_fingerprints') or [])}, "
+                "unknown="
+                f"{len(entry.get('unknown_terminal_outcome_physical_root_fingerprints') or [])}, "
+                "handoff_evidence="
+                f"{len(entry.get('handoff_assessment_evidence_failure_physical_root_fingerprints') or [])}, "
+                "lifecycle="
+                f"{len(entry.get('lifecycle_safety_failure_physical_root_fingerprints') or [])}"
             )
-        if escalation_rate - 1e-12 > maximum_escalation:
+        if rates_valid and completion_rate + 1e-12 < minimum_completion:
             failures.append(
-                f"{family}: operator-escalation rate {escalation_rate:.3f} > allowed "
-                f"{maximum_escalation:.3f}"
+                f"{family}: audited-completion rate {completion_rate:.3f} < "
+                f"required {minimum_completion:.3f}"
+            )
+        if rates_valid and (
+            unqualified_escalation_rate - 1e-12
+            > maximum_unqualified_escalation
+        ):
+            failures.append(
+                f"{family}: unqualified operator-escalation rate "
+                f"{unqualified_escalation_rate:.3f} > allowed "
+                f"{maximum_unqualified_escalation:.3f}"
             )
     return failures
+
+
+def _episode_evidence_cardinality_failures(
+    episode_audits: Sequence[Mapping[str, Any]],
+    handoff_assessments: Sequence[Mapping[str, Any]],
+    runtime_anchors: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    """Require one identity-bound assessment and runtime anchor per episode."""
+
+    failures: list[str] = []
+    audit_ids = [str(row.get("scenario_id") or "") for row in episode_audits]
+    audit_counts = Counter(audit_ids)
+    if "" in audit_counts or any(count != 1 for count in audit_counts.values()):
+        failures.append("episode audit identities are missing or duplicated")
+    audit_by_id = {
+        str(row.get("scenario_id") or ""): row for row in episode_audits
+    }
+    for label, rows in (
+        ("handoff assessment", handoff_assessments),
+        ("handoff runtime anchor", runtime_anchors),
+    ):
+        ids = [str(row.get("scenario_id") or "") for row in rows]
+        counts = Counter(ids)
+        if counts != audit_counts:
+            failures.append(
+                f"{label} episode identity multiset disagrees with episode audits"
+            )
+        for row in rows:
+            scenario_id = str(row.get("scenario_id") or "")
+            audit = audit_by_id.get(scenario_id)
+            if audit is None:
+                continue
+            if any(
+                str(row.get(field) or "") != str(audit.get(field) or "")
+                for field in (
+                    "physical_root_fingerprint",
+                    "scenario_family",
+                )
+            ):
+                failures.append(f"{label} identity mismatch for {scenario_id!r}")
+    return list(dict.fromkeys(failures))
+
+
+def _handoff_assessment_classification(
+    assessment: Mapping[str, Any] | None,
+    runtime_anchor: Mapping[str, Any] | None,
+    *,
+    audit: Mapping[str, Any],
+) -> tuple[bool, bool, list[str]]:
+    """Return ``(qualified, evidence_valid, reasons)`` fail closed."""
+
+    if not isinstance(assessment, Mapping):
+        return False, False, ["missing_post_correction_handoff_assessment"]
+    for field in (
+        "scenario_id",
+        "physical_root_fingerprint",
+        "scenario_family",
+    ):
+        if str(assessment.get(field) or "") != str(audit.get(field) or ""):
+            return False, False, [f"handoff_assessment_{field}_mismatch"]
+    status = assessment.get("status")
+    if status == "passed":
+        qualified, reasons = validate_post_correction_handoff_assessment(
+            assessment,
+            str(audit.get("scenario_id") or ""),
+            str(audit.get("physical_root_fingerprint") or ""),
+            str(audit.get("scenario_family") or ""),
+        )
+        anchor_valid, anchor_reasons = _runtime_anchor_validation(
+            runtime_anchor,
+            assessment,
+            audit=audit,
+            qualified_claim=True,
+        )
+        return (
+            qualified and anchor_valid,
+            qualified and anchor_valid,
+            [*reasons, *anchor_reasons],
+        )
+    if status == "failed":
+        reasons = assessment.get("reasons")
+        reasons = reasons if isinstance(reasons, list) else []
+        return False, False, [
+            "claimed_post_correction_handoff_assessment_failed",
+            *(str(reason) for reason in reasons),
+        ]
+    if status != "not_applicable":
+        return False, False, ["handoff_assessment_status_invalid"]
+
+    expected_fields = {
+        "scenario_id",
+        "physical_root_fingerprint",
+        "scenario_family",
+        "assessment_version",
+        "status",
+        "eligible",
+        "reasons",
+        "actual_terminal_outcome",
+        "runtime_contract",
+        "counterfactual_completion_audit",
+    }
+    runtime = assessment.get("runtime_contract")
+    runtime = runtime if isinstance(runtime, Mapping) else {}
+    runtime_failures = runtime.get("failures")
+    accepted_count = runtime.get("accepted_correction_count")
+    state_id = runtime.get("active_state_id")
+    state_hash = runtime.get("active_state_hash")
+    valid_not_applicable = bool(
+        set(assessment) == expected_fields
+        and assessment.get("assessment_version")
+        == POST_CORRECTION_COMPLETION_CONTRACT
+        and assessment.get("eligible") is False
+        and assessment.get("reasons") == []
+        and assessment.get("actual_terminal_outcome")
+        == audit.get("terminal_outcome")
+        and assessment.get("counterfactual_completion_audit") is None
+        and set(runtime)
+        == {
+            "contract",
+            "passed",
+            "failures",
+            "active_state_id",
+            "active_state_hash",
+            "accepted_correction_count",
+            "post_correction_confirmation_handoff",
+        }
+        and runtime.get("contract") == POST_CORRECTION_COMPLETION_CONTRACT
+        and runtime.get("passed") is False
+        and isinstance(runtime_failures, list)
+        and bool(runtime_failures)
+        and all(isinstance(reason, str) and reason for reason in runtime_failures)
+        and len(runtime_failures) == len(set(runtime_failures))
+        and runtime.get("post_correction_confirmation_handoff") is False
+        and not isinstance(accepted_count, bool)
+        and isinstance(accepted_count, int)
+        and accepted_count >= 0
+        and (state_id is None or isinstance(state_id, str) and bool(state_id))
+        and (
+            state_hash is None
+            or isinstance(state_hash, str)
+            and len(state_hash) == 64
+            and state_hash == state_hash.lower()
+            and set(state_hash) <= set("0123456789abcdef")
+        )
+    )
+    anchor_valid, anchor_reasons = _runtime_anchor_validation(
+        runtime_anchor,
+        assessment,
+        audit=audit,
+        qualified_claim=False,
+    )
+    evidence_valid = valid_not_applicable and anchor_valid
+    reasons = [] if valid_not_applicable else [
+        "handoff_not_applicable_evidence_invalid"
+    ]
+    return False, evidence_valid, [*reasons, *anchor_reasons]
 
 
 def _terminal_scenario_matrix(
     episode_audits: Iterable[Mapping[str, Any]],
     *,
+    handoff_assessments: Iterable[Mapping[str, Any]] = (),
+    handoff_runtime_anchors: Iterable[Mapping[str, Any]] = (),
     policy: Mapping[str, Mapping[str, float | int]] = BC0_FAMILY_RELEASE_POLICY,
 ) -> dict[str, dict[str, Any]]:
     """Summarize terminality and policy coverage with one vote per physical root.
@@ -690,6 +1236,19 @@ def _terminal_scenario_matrix(
     therefore cannot inflate either the resolution numerator or denominator.
     Conflicting duplicate outcomes fail terminal coverage conservatively.
     """
+    assessments_by_scenario: dict[str, list[Mapping[str, Any]]] = {}
+    for assessment in handoff_assessments:
+        if not isinstance(assessment, Mapping):
+            continue
+        scenario_id = str(assessment.get("scenario_id") or "")
+        assessments_by_scenario.setdefault(scenario_id, []).append(assessment)
+    anchors_by_scenario: dict[str, list[Mapping[str, Any]]] = {}
+    for anchor in handoff_runtime_anchors:
+        if not isinstance(anchor, Mapping):
+            continue
+        scenario_id = str(anchor.get("scenario_id") or "")
+        anchors_by_scenario.setdefault(scenario_id, []).append(anchor)
+
     grouped: dict[str, dict[str, Any]] = {}
     for audit in episode_audits:
         family = str(audit.get("scenario_family") or "unknown")
@@ -703,6 +1262,11 @@ def _terminal_scenario_matrix(
                 "claimed_resolved_episode_ids": [],
                 "resolved_episode_ids": [],
                 "operator_escalation_episode_ids": [],
+                "audited_post_correction_handoff_episode_ids": [],
+                "unqualified_operator_escalation_episode_ids": [],
+                "handoff_assessment_evidence_failure_episode_ids": [],
+                "handoff_assessment_failure_reasons_by_episode": {},
+                "lifecycle_safety_failure_episode_ids": [],
                 "unknown_terminal_outcome_episode_ids": [],
                 "episode_terminal_outcome_counts": Counter(),
                 "missing_physical_root_episode_ids": [],
@@ -728,12 +1292,54 @@ def _terminal_scenario_matrix(
                     entry["resolved_episode_ids"].append(scenario_id)
             elif outcome == "operator_escalation":
                 entry["operator_escalation_episode_ids"].append(scenario_id)
+                assessments = assessments_by_scenario.get(scenario_id, [])
+                anchors = anchors_by_scenario.get(scenario_id, [])
+                if len(assessments) == 1 and len(anchors) == 1:
+                    qualified, evidence_valid, reasons = (
+                        _handoff_assessment_classification(
+                            assessments[0], anchors[0], audit=audit
+                        )
+                    )
+                elif not assessments:
+                    qualified = False
+                    evidence_valid = False
+                    reasons = ["missing_post_correction_handoff_assessment"]
+                elif not anchors:
+                    qualified = False
+                    evidence_valid = False
+                    reasons = ["missing_round0_handoff_runtime_anchor"]
+                elif len(anchors) != 1:
+                    qualified = False
+                    evidence_valid = False
+                    reasons = ["duplicate_round0_handoff_runtime_anchor"]
+                else:
+                    qualified = False
+                    evidence_valid = False
+                    reasons = ["duplicate_post_correction_handoff_assessment"]
+                if qualified:
+                    entry[
+                        "audited_post_correction_handoff_episode_ids"
+                    ].append(scenario_id)
+                else:
+                    entry[
+                        "unqualified_operator_escalation_episode_ids"
+                    ].append(scenario_id)
+                if not evidence_valid:
+                    entry[
+                        "handoff_assessment_evidence_failure_episode_ids"
+                    ].append(scenario_id)
+                if reasons:
+                    entry[
+                        "handoff_assessment_failure_reasons_by_episode"
+                    ][scenario_id] = reasons
             else:
                 entry["unknown_terminal_outcome_episode_ids"].append(scenario_id)
         else:
             entry["nonterminal_episode_ids"].append(scenario_id)
         if audit.get("quarantined") is True:
             entry["quarantined_episode_ids"].append(scenario_id)
+        if not _lifecycle_safety_passed(audit):
+            entry["lifecycle_safety_failure_episode_ids"].append(scenario_id)
     for family, entry in grouped.items():
         audits_by_root = entry.pop("_audits_by_physical_root")
         entry["physical_root_fingerprints"] = sorted(audits_by_root)
@@ -749,6 +1355,12 @@ def _terminal_scenario_matrix(
         claimed_resolved_roots: list[str] = []
         resolved_roots: list[str] = []
         escalation_roots: list[str] = []
+        audited_handoff_roots: list[str] = []
+        unqualified_escalation_roots: list[str] = []
+        audited_completion_roots: list[str] = []
+        conflicting_handoff_qualification_roots: list[str] = []
+        handoff_assessment_evidence_failure_roots: list[str] = []
+        lifecycle_safety_failure_roots: list[str] = []
         unknown_outcome_roots: list[str] = []
         conflicting_outcome_roots: list[str] = []
         root_outcome_counts: Counter[str] = Counter()
@@ -757,6 +1369,11 @@ def _terminal_scenario_matrix(
             root_quarantined = any(
                 audit.get("quarantined") is True for _, audit in records
             )
+            root_lifecycle_safe = all(
+                _lifecycle_safety_passed(audit) for _, audit in records
+            )
+            if not root_lifecycle_safe:
+                lifecycle_safety_failure_roots.append(fingerprint)
             if root_quarantined:
                 quarantined_roots.append(fingerprint)
             if not root_terminal:
@@ -775,6 +1392,34 @@ def _terminal_scenario_matrix(
             elif outcomes == {"operator_escalation"}:
                 escalation_roots.append(fingerprint)
                 root_outcome_counts["operator_escalation"] += 1
+                qualifications: list[bool] = []
+                evidence_validity: list[bool] = []
+                for scenario_id, audit in records:
+                    assessments = assessments_by_scenario.get(scenario_id, [])
+                    anchors = anchors_by_scenario.get(scenario_id, [])
+                    qualified = False
+                    evidence_valid = False
+                    if len(assessments) == 1 and len(anchors) == 1:
+                        qualified, evidence_valid, _ = (
+                            _handoff_assessment_classification(
+                                assessments[0], anchors[0], audit=audit
+                            )
+                        )
+                    qualifications.append(qualified)
+                    evidence_validity.append(evidence_valid)
+                if not all(evidence_validity):
+                    handoff_assessment_evidence_failure_roots.append(fingerprint)
+                if (
+                    qualifications
+                    and all(qualifications)
+                    and not root_quarantined
+                    and root_lifecycle_safe
+                ):
+                    audited_handoff_roots.append(fingerprint)
+                else:
+                    unqualified_escalation_roots.append(fingerprint)
+                    if len(set(qualifications)) > 1:
+                        conflicting_handoff_qualification_roots.append(fingerprint)
             elif len(outcomes) == 1:
                 unknown_outcome_roots.append(fingerprint)
                 root_outcome_counts[next(iter(outcomes))] += 1
@@ -782,6 +1427,9 @@ def _terminal_scenario_matrix(
                 conflicting_outcome_roots.append(fingerprint)
                 unknown_outcome_roots.append(fingerprint)
                 root_outcome_counts["conflicting"] += 1
+
+        audited_completion_roots.extend(resolved_roots)
+        audited_completion_roots.extend(audited_handoff_roots)
 
         entry["terminal_physical_root_fingerprints"] = terminal_roots
         entry["nonterminal_physical_root_fingerprints"] = nonterminal_roots
@@ -791,6 +1439,24 @@ def _terminal_scenario_matrix(
         )
         entry["resolved_physical_root_fingerprints"] = resolved_roots
         entry["operator_escalation_physical_root_fingerprints"] = escalation_roots
+        entry["audited_post_correction_handoff_physical_root_fingerprints"] = (
+            audited_handoff_roots
+        )
+        entry["unqualified_operator_escalation_physical_root_fingerprints"] = (
+            unqualified_escalation_roots
+        )
+        entry["audited_completion_physical_root_fingerprints"] = sorted(
+            audited_completion_roots
+        )
+        entry[
+            "conflicting_handoff_qualification_physical_root_fingerprints"
+        ] = conflicting_handoff_qualification_roots
+        entry[
+            "handoff_assessment_evidence_failure_physical_root_fingerprints"
+        ] = handoff_assessment_evidence_failure_roots
+        entry["lifecycle_safety_failure_physical_root_fingerprints"] = (
+            lifecycle_safety_failure_roots
+        )
         entry["unknown_terminal_outcome_physical_root_fingerprints"] = (
             unknown_outcome_roots
         )
@@ -819,6 +1485,21 @@ def _terminal_scenario_matrix(
             if distinct_roots
             else 0.0
         )
+        entry["audited_post_correction_handoff_rate"] = (
+            len(audited_handoff_roots) / distinct_roots
+            if distinct_roots
+            else 0.0
+        )
+        entry["audited_completion_rate"] = (
+            len(audited_completion_roots) / distinct_roots
+            if distinct_roots
+            else 0.0
+        )
+        entry["unqualified_operator_escalation_rate"] = (
+            len(unqualified_escalation_roots) / distinct_roots
+            if distinct_roots
+            else 0.0
+        )
         entry["episode_terminal_outcome_counts"] = dict(
             sorted(entry["episode_terminal_outcome_counts"].items())
         )
@@ -831,6 +1512,8 @@ def _terminal_scenario_matrix(
             and not entry["missing_physical_root_episode_ids"]
             and not quarantined_roots
             and not unknown_outcome_roots
+            and not handoff_assessment_evidence_failure_roots
+            and not lifecycle_safety_failure_roots
         )
         requirements = policy.get(family)
         minimum_roots = (
@@ -838,22 +1521,23 @@ def _terminal_scenario_matrix(
             if requirements is not None
             else 1
         )
-        minimum_resolution = (
-            float(requirements["minimum_resolution_rate"])
+        minimum_completion = (
+            float(requirements["minimum_audited_completion_rate"])
             if requirements is not None
             else 1.0
         )
-        maximum_escalation = (
-            float(requirements["maximum_operator_escalation_rate"])
+        maximum_unqualified_escalation = (
+            float(requirements["maximum_unqualified_operator_escalation_rate"])
             if requirements is not None
             else 0.0
         )
-        entry["release_resolution_coverage"] = bool(
+        entry["release_audited_completion_coverage"] = bool(
             entry["release_terminal_coverage"]
             and distinct_roots >= minimum_roots
-            and entry["resolution_rate"] + 1e-12 >= minimum_resolution
-            and entry["operator_escalation_rate"] - 1e-12
-            <= maximum_escalation
+            and entry["audited_completion_rate"] + 1e-12
+            >= minimum_completion
+            and entry["unqualified_operator_escalation_rate"] - 1e-12
+            <= maximum_unqualified_escalation
         )
     return {family: grouped[family] for family in sorted(grouped)}
 
@@ -1881,6 +2565,18 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         plan,
         builder_environment=builder_environment,
     )
+    configured_policy_path = Path(
+        getattr(args, "evaluation_policy", None)
+        or DEFAULT_EVALUATION_POLICY_PATH
+    )
+    configured_family_policy = load_evaluation_policy(configured_policy_path).get(
+        "family_policy"
+    )
+    if configured_family_policy != BC0_FAMILY_RELEASE_POLICY:
+        raise RuntimeError(
+            "configured evaluation policy family contract disagrees with the "
+            "aggregate generator's audited-completion contract"
+        )
     generation_provenance_id = stable_json_sha256(generation_descriptor)
     repo_root = Path(__file__).resolve().parents[2]
     configured_corpora = _configured_input_corpora(args, plan)
@@ -2181,10 +2877,22 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         ],
         "family_by_root": family_by_root,
         "episode_audits": collected["episode_audits"],
+        "episode_handoff_assessments": collected[
+            "episode_handoff_assessments"
+        ],
+        "episode_handoff_runtime_anchors": collected[
+            "episode_handoff_runtime_anchors"
+        ],
     }
-    (output_dir / "aggregate.manifest.json").write_text(
+    manifest_path = output_dir / "aggregate.manifest.json"
+    manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    # The manifest carries the private strict audits and separately validated
+    # handoff assessments that support the v3 completion numerator. Bind that
+    # evidence alongside every JSONL payload rather than hashing data rows
+    # while leaving their release decision mutable.
+    dataset_paths.append(manifest_path)
 
     nonterminal_episodes = [
         audit["scenario_id"]
@@ -2206,7 +2914,11 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         and audit.get("terminal_outcome") not in {"resolved", "operator_escalation"}
     ]
     terminal_scenario_matrix = _terminal_scenario_matrix(
-        collected["episode_audits"]
+        collected["episode_audits"],
+        handoff_assessments=collected["episode_handoff_assessments"],
+        handoff_runtime_anchors=collected[
+            "episode_handoff_runtime_anchors"
+        ],
     )
     report = {
         "seed": args.seed,
@@ -2219,6 +2931,12 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         "auxiliary_ineligible_rows": len(auxiliary_rows),
         "quarantined_rows": collected["quarantined_rows"],
         "quarantined_episodes": quarantined_episodes,
+        "episode_handoff_assessments": collected[
+            "episode_handoff_assessments"
+        ],
+        "episode_handoff_runtime_anchors": collected[
+            "episode_handoff_runtime_anchors"
+        ],
         "nonterminal_episodes": nonterminal_episodes,
         "operator_escalation_episodes": operator_escalation_episodes,
         "unknown_terminal_outcome_episodes": unknown_terminal_outcome_episodes,
@@ -2335,7 +3053,14 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         )
     )
     release_failures.extend(
-        _family_resolution_release_failures(
+        _episode_evidence_cardinality_failures(
+            collected["episode_audits"],
+            collected["episode_handoff_assessments"],
+            collected["episode_handoff_runtime_anchors"],
+        )
+    )
+    release_failures.extend(
+        _family_completion_release_failures(
             terminal_scenario_matrix,
             plan=plan,
         )

@@ -56,10 +56,12 @@ from psse_env.examples.generate_round0_aggregate import (
     BC0_SAME_ROOT_PREREQUISITE_RULES,
 )
 from psse_env.sft.provenance import (
+    AGGREGATE_MANIFEST_FILENAME,
     file_sha256,
     git_source_state,
     stable_json_sha256,
     tool_schema_hashes,
+    validate_aggregate_manifest_binding,
 )
 from psse_env.oracle.expert_policy import ExpertPolicyOracle
 
@@ -471,7 +473,14 @@ def build_round1_aggregate(
     validation_path = d0_aggregate_dir / "aggregate.validation.jsonl"
     test_path = d0_aggregate_dir / "aggregate.test.jsonl"
     d0_provenance_path = d0_aggregate_dir / "aggregate.generation_provenance.json"
-    for path in (d0_raw_path, validation_path, test_path, d0_provenance_path):
+    d0_manifest_path = d0_aggregate_dir / AGGREGATE_MANIFEST_FILENAME
+    for path in (
+        d0_raw_path,
+        validation_path,
+        test_path,
+        d0_provenance_path,
+        d0_manifest_path,
+    ):
         if not path.is_file():
             raise FileNotFoundError(path)
     d0_provenance = _load_mapping(d0_provenance_path)
@@ -499,9 +508,23 @@ def build_round1_aggregate(
         (test_path, "D0 test split"),
     ):
         _verify_recorded_hash(provenance=d0_provenance, path=path, label=label)
+    d0_manifest_binding = validate_aggregate_manifest_binding(
+        d0_provenance,
+        aggregate_dir=d0_aggregate_dir,
+    )
+    if d0_manifest_binding["passed"] is not True:
+        raise ValueError(
+            "D0 aggregate manifest does not match its provenance: "
+            + "; ".join(d0_manifest_binding["failures"])
+        )
 
     d1_manifest = _load_mapping(d1_manifest_path)
     d1_manifest_sha256 = file_sha256(d1_manifest_path)
+    if d1_manifest.get("d0_manifest_sha256") != file_sha256(d0_manifest_path):
+        raise ValueError(
+            "D1 collection manifest is bound to a different D0 aggregate "
+            "manifest"
+        )
     if d1_manifest.get("release_evidence_eligible") is not False:
         raise ValueError("D1 manifest must explicitly reject promotion-evidence use")
     if d1_manifest.get("training_eligible") is not True:
@@ -616,6 +639,7 @@ def build_round1_aggregate(
         scenario_manifest_path=scenario_manifest_path,
         d0_raw_path=d0_raw_path,
         d0_provenance_path=d0_provenance_path,
+        d0_manifest_path=d0_manifest_path,
         forbidden_suite_path=DEFAULT_FORBIDDEN_SUITE,
         evaluation_policy_path=DEFAULT_EVALUATION_POLICY,
         require_model_selection_eligible=True,
@@ -964,6 +988,7 @@ def build_round1_aggregate(
                 "generation_provenance_id"
             ),
             "d0_generation_provenance_sha256": file_sha256(d0_provenance_path),
+            "d0_manifest_sha256": file_sha256(d0_manifest_path),
             "d0_raw_sha256": file_sha256(d0_raw_path),
             "d0_validation_sha256": file_sha256(validation_path),
             "d0_test_sha256": file_sha256(test_path),

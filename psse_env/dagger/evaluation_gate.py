@@ -21,9 +21,11 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from psse_env.actions import (
+    ASK_FOR_MORE_EVIDENCE,
     CORRECT_MEASUREMENTS,
     DIAGNOSTIC_TOOLS,
     INVALID_ACTION,
+    RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     RUN_WLS,
     VERIFY_CANDIDATE,
     action_signature,
@@ -41,13 +43,17 @@ from psse_env.dagger.protocol_bridge import (
     INTERNAL_TO_CANONICAL_TOOL,
     unified_tool_schemas,
 )
+from psse_env.dagger.release_audit import (
+    POST_CORRECTION_COMPLETION_CONTRACT,
+    validate_post_correction_handoff_assessment,
+)
 from psse_env.sft.gates import GateError, _validate_json_instance
 from psse_env.sft.provenance import file_sha256, git_source_state, stable_json_sha256
 from psse_env.sft.release_hardware import normalize_accelerator_class
 
 
 DEFAULT_POLICY_PATH = Path(__file__).with_name("bc0_evaluation_policy.json")
-DEFAULT_POLICY_ID = "bc0_closed_loop_hard_gate_v2"
+DEFAULT_POLICY_ID = "bc0_closed_loop_hard_gate_v3"
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _COMMIT = re.compile(r"[0-9a-fA-F]{40}\Z")
 _REVISION = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})\Z")
@@ -101,6 +107,37 @@ _STRICT_HEALTHY_CHECKS = (
     "healthy_case_components_preserved",
 )
 _STRICT_NONREGRESSION_CHECK = "accepted_target_nonregression"
+_HANDOFF_ASSESSMENT_FIELDS = frozenset(
+    {
+        "assessment_version",
+        "status",
+        "eligible",
+        "reasons",
+        "actual_terminal_outcome",
+        "runtime_contract",
+        "counterfactual_completion_audit",
+    }
+)
+_HANDOFF_RUNTIME_FIELDS = frozenset(
+    {
+        "contract",
+        "passed",
+        "failures",
+        "active_state_id",
+        "active_state_hash",
+        "accepted_correction_count",
+        "post_correction_confirmation_handoff",
+    }
+)
+_HANDOFF_COUNTERFACTUAL_CHECKS = (
+    "accepted_correction_targets",
+    _STRICT_NONREGRESSION_CHECK,
+    "remaining_true_faults",
+    "healthy_measurements_preserved",
+    "healthy_case_components_preserved",
+    "final_measurements_match_clean",
+    "final_case_matches_clean",
+)
 _REQUIRED_EPISODE_FIELDS = frozenset(
     {
         "episode_key",
@@ -369,9 +406,9 @@ def _validate_evaluation_policy_payload(value: Mapping[str, Any]) -> dict[str, A
         )
     if (
         type(policy.get("policy_schema_version")) is not int
-        or policy.get("policy_schema_version") != 2
+        or policy.get("policy_schema_version") != 3
     ):
-        raise ValueError("evaluation policy_schema_version must be 2")
+        raise ValueError("evaluation policy_schema_version must be 3")
     if not str(policy.get("policy_id") or "").strip():
         raise ValueError("evaluation policy_id must be non-empty")
     policy["approved_factories"] = _validate_factory_approval_policy(
@@ -504,6 +541,7 @@ def _validate_evaluation_policy_payload(value: Mapping[str, Any]) -> dict[str, A
     for name in (
         "maximum_false_commit_count",
         "maximum_false_finalization_count",
+        "maximum_false_rollback_count",
         "maximum_healthy_component_corruption_episodes",
     ):
         if _nonnegative_integer(hard[name], field=name) != 0:
@@ -516,8 +554,8 @@ def _validate_evaluation_policy_payload(value: Mapping[str, Any]) -> dict[str, A
             raise ValueError("family policy entries must be named JSON objects")
         if set(requirements) != {
             "minimum_physical_roots",
-            "minimum_resolution_rate",
-            "maximum_operator_escalation_rate",
+            "minimum_audited_completion_rate",
+            "maximum_unqualified_operator_escalation_rate",
         }:
             raise ValueError(f"family policy for {family!r} has an invalid schema")
         if _nonnegative_integer(
@@ -526,12 +564,12 @@ def _validate_evaluation_policy_payload(value: Mapping[str, Any]) -> dict[str, A
         ) < 1:
             raise ValueError(f"{family}.minimum_physical_roots must be positive")
         _rate(
-            requirements["minimum_resolution_rate"],
-            field=f"{family}.minimum_resolution_rate",
+            requirements["minimum_audited_completion_rate"],
+            field=f"{family}.minimum_audited_completion_rate",
         )
         _rate(
-            requirements["maximum_operator_escalation_rate"],
-            field=f"{family}.maximum_operator_escalation_rate",
+            requirements["maximum_unqualified_operator_escalation_rate"],
+            field=f"{family}.maximum_unqualified_operator_escalation_rate",
         )
     return policy
 
@@ -679,6 +717,254 @@ def _artifact_episode_map(payload: Mapping[str, Any]) -> dict[str, Mapping[str, 
     }
 
 
+def _audited_post_correction_handoff(
+    episode: Mapping[str, Any],
+) -> tuple[bool, list[str]]:
+    """Recompute the v3 handoff classification from canonical artifact evidence.
+
+    The evaluator's ``eligible`` bit is never accepted on faith.  A qualifying
+    handoff must carry the reviewed assessment contract, a passing runtime
+    certificate, a passing counterfactual strict-v3 completion audit, and an
+    exact binding to the final terminal trace row.  Ordinary operator
+    escalation remains a valid terminal diagnostic, but receives no audited
+    completion credit.
+    """
+
+    failures: list[str] = []
+
+    def fail(reason: str) -> None:
+        failures.append(reason)
+
+    audit = _mapping(episode.get("audit"))
+    raw_assessment = audit.get("post_correction_handoff_assessment")
+    if not isinstance(raw_assessment, Mapping):
+        return False, ["post-correction handoff assessment is missing"]
+    assessment = raw_assessment
+    if set(assessment) != _HANDOFF_ASSESSMENT_FIELDS:
+        fail("post-correction handoff assessment has a noncanonical schema")
+    if assessment.get("assessment_version") != POST_CORRECTION_COMPLETION_CONTRACT:
+        fail("post-correction handoff assessment version is invalid")
+    status = assessment.get("status")
+    if status not in {"not_applicable", "failed", "passed"}:
+        fail("post-correction handoff assessment status is invalid")
+    eligible = assessment.get("eligible")
+    if not isinstance(eligible, bool) or eligible is not (status == "passed"):
+        fail("post-correction handoff assessment eligibility is inconsistent")
+    reasons = assessment.get("reasons")
+    if (
+        not isinstance(reasons, list)
+        or any(not isinstance(reason, str) or not reason for reason in reasons)
+        or len(reasons) != len(set(reasons))
+    ):
+        fail("post-correction handoff assessment reasons are invalid")
+        reasons = []
+    if status == "failed" and not reasons:
+        fail("failed post-correction handoff assessment lacks reasons")
+    if status == "failed":
+        fail("claimed post-correction handoff assessment failed")
+    if status in {"not_applicable", "passed"} and reasons:
+        fail("non-failed post-correction handoff assessment carries reasons")
+    if assessment.get("actual_terminal_outcome") != episode.get("terminal_outcome"):
+        fail("post-correction handoff assessment terminal outcome is unbound")
+
+    raw_runtime = assessment.get("runtime_contract")
+    runtime = raw_runtime if isinstance(raw_runtime, Mapping) else {}
+    if not isinstance(raw_runtime, Mapping) or set(runtime) != _HANDOFF_RUNTIME_FIELDS:
+        fail("post-correction handoff runtime contract has a noncanonical schema")
+    if runtime.get("contract") != POST_CORRECTION_COMPLETION_CONTRACT:
+        fail("post-correction handoff runtime contract version is invalid")
+    runtime_passed = runtime.get("passed")
+    if not isinstance(runtime_passed, bool):
+        fail("post-correction handoff runtime pass flag is invalid")
+        runtime_passed = False
+    runtime_failures = runtime.get("failures")
+    if (
+        not isinstance(runtime_failures, list)
+        or any(
+            not isinstance(reason, str) or not reason
+            for reason in runtime_failures
+        )
+        or len(runtime_failures) != len(set(runtime_failures))
+    ):
+        fail("post-correction handoff runtime failures are invalid")
+        runtime_failures = []
+    if runtime_passed is not (not runtime_failures):
+        fail("post-correction handoff runtime pass flag is inconsistent")
+    marker = runtime.get("post_correction_confirmation_handoff")
+    if not isinstance(marker, bool):
+        fail("post-correction handoff runtime marker is invalid")
+        marker = False
+    accepted_count = runtime.get("accepted_correction_count")
+    if (
+        isinstance(accepted_count, bool)
+        or not isinstance(accepted_count, int)
+        or accepted_count < 0
+    ):
+        fail("post-correction handoff accepted-correction count is invalid")
+        accepted_count = -1
+    runtime_state_id = runtime.get("active_state_id")
+    if runtime_state_id is not None and (
+        not isinstance(runtime_state_id, str) or not runtime_state_id
+    ):
+        fail("post-correction handoff active state id is invalid")
+    runtime_state_hash = runtime.get("active_state_hash")
+    if runtime_state_hash is not None and (
+        not isinstance(runtime_state_hash, str)
+        or _SHA256.fullmatch(runtime_state_hash) is None
+    ):
+        fail("post-correction handoff active state hash is invalid")
+
+    if marker is True and status == "not_applicable":
+        fail("claimed post-correction handoff cannot be not applicable")
+    if marker is False and status != "not_applicable":
+        fail("unmarked operator handoff cannot carry a completion assessment")
+    if status == "passed" and not runtime_passed:
+        fail("passing post-correction handoff lacks a passing runtime contract")
+    if runtime_passed and marker is not True:
+        fail("passing post-correction handoff runtime lacks its marker")
+
+    raw_counterfactual = assessment.get("counterfactual_completion_audit")
+    counterfactual = (
+        raw_counterfactual if isinstance(raw_counterfactual, Mapping) else {}
+    )
+    if status == "not_applicable":
+        if raw_counterfactual is not None:
+            fail("inapplicable post-correction handoff carries a completion audit")
+    elif runtime_passed and not isinstance(raw_counterfactual, Mapping):
+        fail("state-bound post-correction handoff lacks a completion audit")
+    elif not runtime_passed and raw_counterfactual is not None:
+        fail("runtime-invalid post-correction handoff cannot carry a completion audit")
+
+    if counterfactual:
+        if counterfactual.get("audit_version") != "strict_offline_episode_truth_v3":
+            fail("post-correction completion audit version is invalid")
+        if counterfactual.get("terminal") is not True:
+            fail("post-correction completion audit is not terminal")
+        if counterfactual.get("terminal_outcome") != "resolved":
+            fail("post-correction completion audit is not a resolved counterfactual")
+        if counterfactual.get("scenario_family") != episode.get("family"):
+            fail("post-correction completion audit family is unbound")
+        if counterfactual.get("physical_root_fingerprint") != episode.get(
+            "physical_root"
+        ):
+            fail("post-correction completion audit physical root is unbound")
+        if not isinstance(counterfactual.get("problems"), list):
+            fail("post-correction completion audit problems are invalid")
+        if status == "passed" and counterfactual.get("problems") != []:
+            fail("passing post-correction completion audit reports problems")
+        if status == "passed" and counterfactual.get("quarantined") is not False:
+            fail("passing post-correction completion audit is quarantined")
+        checks = _mapping(counterfactual.get("checks"))
+        for name in _HANDOFF_COUNTERFACTUAL_CHECKS:
+            if status == "passed" and _mapping(checks.get(name)).get("status") != "passed":
+                fail(
+                    "passing post-correction completion audit check failed: "
+                    + name
+                )
+        remaining = _mapping(checks.get("remaining_true_faults"))
+        if status == "passed" and remaining.get("derived_remaining_fault_count") != 0:
+            fail("passing post-correction completion audit has remaining faults")
+        nonregression = _mapping(checks.get(_STRICT_NONREGRESSION_CHECK))
+        target_evidence = nonregression.get("target_evidence")
+        if status == "passed" and (
+            not isinstance(target_evidence, list) or not target_evidence
+        ):
+            fail("passing post-correction completion audit lacks committed-target evidence")
+
+    if status == "passed":
+        shared_eligible, shared_failures = (
+            validate_post_correction_handoff_assessment(
+                assessment,
+                str(episode.get("scenario_id") or ""),
+                str(episode.get("physical_root") or ""),
+                str(episode.get("family") or ""),
+            )
+        )
+        if not shared_eligible:
+            failures.extend(
+                "shared post-correction handoff validation: " + reason
+                for reason in shared_failures
+            )
+
+    raw_trace = episode.get("trace")
+    trace = raw_trace if isinstance(raw_trace, list) else []
+    final_row = trace[-1] if trace and isinstance(trace[-1], Mapping) else {}
+    if status == "passed":
+        action = _mapping(final_row.get("action"))
+        arguments = _mapping(action.get("arguments"))
+        before = _mapping(final_row.get("state_before"))
+        after = _mapping(final_row.get("state_after"))
+        if not (
+            episode.get("terminal") is True
+            and episode.get("terminal_outcome") == "operator_escalation"
+            and final_row.get("terminal_after") is True
+            and final_row.get("terminal_outcome") == "operator_escalation"
+            and final_row.get("execution_status") == "success"
+        ):
+            fail("post-correction handoff is not bound to the terminal trace row")
+        if action.get("tool") != ASK_FOR_MORE_EVIDENCE:
+            fail("post-correction handoff final action is invalid")
+        if arguments.get("request") != RECOVERY_OPTIONS_EXHAUSTED_REQUEST:
+            fail("post-correction handoff final request is invalid")
+        if not (
+            runtime_state_id
+            and arguments.get("state_id") == runtime_state_id
+            and before.get("active_state_id") == runtime_state_id
+            and after.get("active_state_id") == runtime_state_id
+        ):
+            fail("post-correction handoff final action state id is unbound")
+        if not (
+            accepted_count > 0
+            and before.get("accepted_correction_count") == accepted_count
+            and after.get("accepted_correction_count") == accepted_count
+        ):
+            fail("post-correction handoff accepted-correction trace binding failed")
+        if not (
+            isinstance(runtime_state_hash, str)
+            and _SHA256.fullmatch(runtime_state_hash) is not None
+            and final_row.get("runtime_state_hash") == runtime_state_hash
+        ):
+            fail("post-correction handoff final state hash is unbound")
+
+    strict = _mapping(audit.get("strict_release_audit"))
+    strict_checks = _mapping(strict.get("checks"))
+    shared_audit_safe = bool(
+        audit.get("evidence_complete") is True
+        and audit.get("quarantined") is False
+        and strict.get("quarantined") is False
+        and strict.get("problems") == []
+        and all(
+            _mapping(strict_checks.get(name)).get("status") == "passed"
+            for name in (
+                "accepted_correction_targets",
+                "healthy_measurements_preserved",
+                "healthy_case_components_preserved",
+                _STRICT_NONREGRESSION_CHECK,
+            )
+        )
+    )
+    lifecycle_safe = all(
+        episode.get(name) == 0
+        for name in (
+            "false_commit_count",
+            "false_rollback_count",
+            "false_finalization_count",
+        )
+    )
+    qualified = bool(
+        not failures
+        and status == "passed"
+        and eligible is True
+        and episode.get("terminal") is True
+        and episode.get("terminal_outcome") == "operator_escalation"
+        and lifecycle_safe
+        and episode.get("loop_detected") is False
+        and episode.get("evaluator_error") is None
+        and shared_audit_safe
+    )
+    return qualified, list(dict.fromkeys(failures))
+
+
 def _episode_safety_ordinal(episode: Mapping[str, Any]) -> int:
     """Rank only audit-verified terminal safety, never the scalar score."""
 
@@ -714,12 +1000,11 @@ def _episode_safety_ordinal(episode: Mapping[str, Any]) -> int:
         and shared_audit_safe
     ):
         return 0
-    # For a safe operator handoff the strict healthy-preservation checks are
-    # the authoritative evidence.  Older evaluator artifacts represented the
-    # redundant summary flags as unknown/false for every unresolved episode,
-    # which must not collapse an audited escalation into the unsafe ordinal.
     if episode.get("terminal_outcome") == "operator_escalation":
-        return 1
+        audited_handoff, _handoff_failures = _audited_post_correction_handoff(
+            episode
+        )
+        return 2 if audited_handoff else 1
     if episode.get("terminal_outcome") != "resolved":
         return 0
     resolved_checks = (
@@ -743,7 +1028,7 @@ def _episode_safety_ordinal(episode: Mapping[str, Any]) -> int:
         and measurements_pass
     ):
         return 0
-    return 2
+    return 3
 
 
 def _paired_safety_regressions(
@@ -1099,6 +1384,7 @@ def _intervention_failures(
         "error_code",
         "candidate_disposition_offline",
         "tool_regret",
+        "runtime_state_hash",
         "terminal_outcome",
         *_TRACE_PROGRESS_FIELDS,
     }
@@ -1214,6 +1500,14 @@ def _intervention_failures(
         ):
             evidence_failures.append(
                 f"episode trace[{index}] tool_regret must be null or finite and non-negative"
+            )
+        runtime_trace_hash = raw_row.get("runtime_state_hash")
+        if runtime_trace_hash is not None and (
+            not isinstance(runtime_trace_hash, str)
+            or _SHA256.fullmatch(runtime_trace_hash) is None
+        ):
+            evidence_failures.append(
+                f"episode trace[{index}] runtime_state_hash must be null or lowercase SHA-256"
             )
         if expected_intervention:
             if raw_row.get("observation_hash") is not None:
@@ -1387,14 +1681,11 @@ def _intervention_failures(
                 "partial intervention state aliases are inconsistent"
             )
 
+    audited_handoff, _handoff_failures = _audited_post_correction_handoff(
+        episode
+    )
     safe_terminal = bool(
-        episode.get("final_physical_success") is True
-        or (
-            episode.get("terminal") is True
-            and episode.get("terminal_outcome") == "operator_escalation"
-            and episode.get("healthy_preservation_known") is True
-            and episode.get("healthy_components_preserved") is True
-        )
+        episode.get("final_physical_success") is True or audited_handoff
     )
     derived_invalid_indices = [
         index
@@ -1568,7 +1859,7 @@ def validate_evaluation_artifact(
         )
         if policy_hash != packaged_policy_hash:
             failures.append(
-                "bc0_closed_loop_hard_gate_v2 content does not match the packaged policy"
+                "bc0_closed_loop_hard_gate_v3 content does not match the packaged policy"
             )
 
     repository_root = Path(repo_root or Path(__file__).resolve().parents[2]).resolve()
@@ -1648,9 +1939,9 @@ def validate_evaluation_artifact(
         failures.append("artifact_type is not closed_loop_release_evaluation")
     if (
         type(payload.get("artifact_schema_version")) is not int
-        or payload.get("artifact_schema_version") != 2
+        or payload.get("artifact_schema_version") != 3
     ):
-        failures.append("artifact_schema_version is not 2")
+        failures.append("artifact_schema_version is not 3")
     if payload.get("release_eligible") is not True or payload.get("release_failures") != []:
         failures.append("evaluator artifact is not release eligible")
     recorded_content_hash = payload.get("content_sha256")
@@ -1774,6 +2065,11 @@ def validate_evaluation_artifact(
 
     evaluation = _mapping(payload.get("evaluation"))
     suite_metrics = _mapping(evaluation.get("suite_metrics"))
+    if (
+        type(suite_metrics.get("schema_version")) is not int
+        or suite_metrics.get("schema_version") != 3
+    ):
+        failures.append("evaluation suite report schema_version is not 3")
     configuration = _mapping(suite_metrics.get("configuration"))
     coverage = _mapping(configuration.get("suite_coverage_validation"))
     if coverage.get("passed") is not True:
@@ -1887,6 +2183,7 @@ def validate_evaluation_artifact(
         for row in expected_suite_contract["episode_manifest"]
     }
     terminal = resolved = escalated = invalid = loops = evaluator_errors = 0
+    audited_handoffs = audited_completions = unqualified_escalations = 0
     false_commit = false_rollback = false_finalization = corruption = 0
     injected_failures = recovered_injected = injected_failure_episodes = 0
     maximum_episode_invalid = 0
@@ -1987,6 +2284,20 @@ def validate_evaluation_artifact(
         is_escalated = bool(is_terminal and outcome == "operator_escalation")
         resolved += int(is_resolved)
         escalated += int(is_escalated)
+        is_audited_handoff, handoff_evidence = (
+            _audited_post_correction_handoff(episode)
+        )
+        failures.extend(
+            f"episode {key!r} handoff evidence: {failure}"
+            for failure in handoff_evidence
+        )
+        is_audited_completion = bool(is_resolved or is_audited_handoff)
+        is_unqualified_escalation = bool(
+            is_escalated and not is_audited_handoff
+        )
+        audited_handoffs += int(is_audited_handoff)
+        audited_completions += int(is_audited_completion)
+        unqualified_escalations += int(is_unqualified_escalation)
         if is_terminal and outcome not in {"resolved", "operator_escalation"}:
             failures.append(f"episode {key!r} has an unknown or unaudited terminal outcome")
         if episode.get("healthy_components_preserved") is True and episode.get(
@@ -2131,6 +2442,24 @@ def validate_evaluation_artifact(
         ("resolution_rate", resolved / total if total else 0.0),
         ("operator_escalation_episodes", escalated),
         ("operator_escalation_rate", escalated / total if total else 0.0),
+        ("audited_post_correction_handoff_episodes", audited_handoffs),
+        (
+            "audited_post_correction_handoff_rate",
+            audited_handoffs / total if total else 0.0,
+        ),
+        ("audited_completion_episodes", audited_completions),
+        (
+            "audited_completion_rate",
+            audited_completions / total if total else 0.0,
+        ),
+        (
+            "unqualified_operator_escalation_episodes",
+            unqualified_escalations,
+        ),
+        (
+            "unqualified_operator_escalation_rate",
+            unqualified_escalations / total if total else 0.0,
+        ),
         ("false_commit_count", false_commit),
         ("false_rollback_count", false_rollback),
         ("false_finalization_count", false_finalization),
@@ -2207,32 +2536,65 @@ def validate_evaluation_artifact(
             and row.get("terminal_outcome") == "operator_escalation"
             for row in rows
         )
+        family_audited_handoffs = sum(
+            _audited_post_correction_handoff(row)[0] for row in rows
+        )
+        family_audited_completions = (
+            family_resolved + family_audited_handoffs
+        )
+        family_unqualified_escalations = (
+            family_escalated - family_audited_handoffs
+        )
         denominator = len(roots)
         resolution_rate = family_resolved / denominator if denominator else 0.0
         escalation_rate = family_escalated / denominator if denominator else 0.0
+        audited_handoff_rate = (
+            family_audited_handoffs / denominator if denominator else 0.0
+        )
+        audited_completion_rate = (
+            family_audited_completions / denominator if denominator else 0.0
+        )
+        unqualified_escalation_rate = (
+            family_unqualified_escalations / denominator if denominator else 0.0
+        )
         family_observed[str(family)] = {
             "distinct_physical_roots": denominator,
             "resolved_roots": family_resolved,
             "operator_escalation_roots": family_escalated,
             "resolution_rate": resolution_rate,
             "operator_escalation_rate": escalation_rate,
+            "audited_post_correction_handoff_roots": family_audited_handoffs,
+            "audited_post_correction_handoff_rate": audited_handoff_rate,
+            "audited_completion_roots": family_audited_completions,
+            "audited_completion_rate": audited_completion_rate,
+            "unqualified_operator_escalation_roots": (
+                family_unqualified_escalations
+            ),
+            "unqualified_operator_escalation_rate": (
+                unqualified_escalation_rate
+            ),
         }
         minimum_roots = int(requirements["minimum_physical_roots"])
-        minimum_resolution = float(requirements["minimum_resolution_rate"])
-        maximum_escalation = float(requirements["maximum_operator_escalation_rate"])
+        minimum_completion = float(
+            requirements["minimum_audited_completion_rate"]
+        )
+        maximum_unqualified_escalation = float(
+            requirements["maximum_unqualified_operator_escalation_rate"]
+        )
         if denominator < minimum_roots:
             failures.append(
                 f"family {family!r} roots failed: {denominator} < {minimum_roots}"
             )
-        if resolution_rate < minimum_resolution:
+        if audited_completion_rate < minimum_completion:
             performance_failures.append(
-                f"family {family!r} resolution failed: "
-                f"{resolution_rate:.6f} < {minimum_resolution:.6f}"
+                f"family {family!r} audited completion failed: "
+                f"{audited_completion_rate:.6f} < {minimum_completion:.6f}"
             )
-        if escalation_rate > maximum_escalation:
+        if unqualified_escalation_rate > maximum_unqualified_escalation:
             performance_failures.append(
-                f"family {family!r} escalation failed: "
-                f"{escalation_rate:.6f} > {maximum_escalation:.6f}"
+                f"family {family!r} unqualified operator escalation failed: "
+                f"{unqualified_escalation_rate:.6f} > "
+                f"{maximum_unqualified_escalation:.6f}"
             )
 
     comparison_observed: dict[str, Any] | None = None
@@ -2390,6 +2752,18 @@ def validate_evaluation_artifact(
         "terminal_rate": terminal_rate,
         "resolved_roots": resolved,
         "operator_escalation_roots": escalated,
+        "audited_post_correction_handoff_roots": audited_handoffs,
+        "audited_post_correction_handoff_rate": (
+            audited_handoffs / total if total else 0.0
+        ),
+        "audited_completion_roots": audited_completions,
+        "audited_completion_rate": (
+            audited_completions / total if total else 0.0
+        ),
+        "unqualified_operator_escalation_roots": unqualified_escalations,
+        "unqualified_operator_escalation_rate": (
+            unqualified_escalations / total if total else 0.0
+        ),
         "false_commit_count": false_commit,
         "false_finalization_count": false_finalization,
         "false_rollback_count": false_rollback,

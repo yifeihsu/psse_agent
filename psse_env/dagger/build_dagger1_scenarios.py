@@ -27,9 +27,11 @@ from psse_env.dagger.release_factories import (
 from psse_env.dagger.suite_builder import partition_release_scenario_v1
 from psse_env.providers.scenario_generator import Round0ScenarioGenerator
 from psse_env.sft.provenance import (
+    AGGREGATE_MANIFEST_FILENAME,
     file_sha256,
     git_source_state,
     stable_json_sha256,
+    validate_aggregate_manifest_binding,
 )
 
 
@@ -153,8 +155,15 @@ def build_dagger1_scenarios(
         )
     d0_raw_path = d0_aggregate_dir / "aggregate.raw.jsonl"
     d0_provenance_path = d0_aggregate_dir / "aggregate.generation_provenance.json"
-    if not d0_raw_path.is_file() or not d0_provenance_path.is_file():
-        raise FileNotFoundError("D0 aggregate raw rows/provenance are missing")
+    d0_manifest_path = d0_aggregate_dir / AGGREGATE_MANIFEST_FILENAME
+    if not (
+        d0_raw_path.is_file()
+        and d0_provenance_path.is_file()
+        and d0_manifest_path.is_file()
+    ):
+        raise FileNotFoundError(
+            "D0 aggregate raw rows/provenance/manifest are missing"
+        )
     d0_provenance = json.loads(d0_provenance_path.read_text(encoding="utf-8"))
     descriptor = (
         d0_provenance.get("generation_descriptor")
@@ -188,6 +197,15 @@ def build_dagger1_scenarios(
     d0_hashes = d0_hashes if isinstance(d0_hashes, Mapping) else {}
     if d0_hashes.get(d0_raw_path.name) != file_sha256(d0_raw_path):
         raise RuntimeError("D0 aggregate raw bytes do not match provenance")
+    d0_manifest_binding = validate_aggregate_manifest_binding(
+        d0_provenance,
+        aggregate_dir=d0_aggregate_dir,
+    )
+    if d0_manifest_binding["passed"] is not True:
+        raise RuntimeError(
+            "D0 aggregate manifest does not match provenance: "
+            + "; ".join(d0_manifest_binding["failures"])
+        )
     d0_rows = load_jsonl(d0_raw_path)
     d0_roots = {
         str(row.get("physical_root_fingerprint"))
@@ -738,6 +756,7 @@ def build_dagger1_scenarios(
         "generator_report_sha256": file_sha256(generator_report_path),
         "d0_raw_sha256": file_sha256(d0_raw_path),
         "d0_generation_provenance_sha256": file_sha256(d0_provenance_path),
+        "d0_manifest_sha256": file_sha256(d0_manifest_path),
         "frozen_suite_sha256": file_sha256(DEFAULT_FORBIDDEN_SUITE),
         "evaluation_policy_sha256": file_sha256(DEFAULT_EVALUATION_POLICY),
         "release_evidence_eligible": False,

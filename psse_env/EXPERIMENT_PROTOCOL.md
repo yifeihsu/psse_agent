@@ -82,9 +82,20 @@ teacher target into a privileged resolution label.
 The safety-first behavior is bound to
 `bc0_observable_sequential_handoff_v2` and
 `bc0-observable-handoff-expert-v2`; DAgger-1 rows bind
-`dagger1_observable_recovery_handoff_v2`. It does not lower the pinned
-autonomous resolution or maximum-escalation thresholds; failure to meet those
-thresholds remains an explicit release NO-GO.
+`dagger1_observable_recovery_handoff_v2`. Release policy v3 preserves every
+pinned numeric floor and ceiling but makes the evidence category explicit:
+audited completion is strict physical resolution or an exact state-bound
+post-correction controller handoff with a passing separate private completion
+audit. The production label remains `operator_escalation`. Partial, HIF,
+budget, or otherwise generic handoffs remain unqualified escalations and do
+not enter the numerator; failure to meet the audited-completion or
+unqualified-escalation bounds remains an explicit release NO-GO.
+
+The Round-0 manifest must bind every strict audit and completion assessment to
+an independently persisted final transition/store anchor and a zero-false
+lifecycle audit. Its SHA-256 is a required D0 input binding for scenario,
+holdout, collection, and Round-1 aggregate builders; transport packages retain
+an external archive checksum as the trust anchor for the unpacked evidence.
 
 Build one finite, deterministic candidate inventory by requesting 108
 measurement-plus-parameter, 176 multi-measurement, and 48 parameter candidates.

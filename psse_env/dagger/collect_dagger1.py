@@ -49,9 +49,11 @@ from psse_env.dagger.rollout_collector import (
 from psse_env.oracle.expert_policy import ExpertPolicyOracle
 from psse_env.providers.matpower import PARAMETER_RANKING_CONTRACT
 from psse_env.sft.provenance import (
+    AGGREGATE_MANIFEST_FILENAME,
     file_sha256,
     git_source_state,
     stable_json_sha256,
+    validate_aggregate_manifest_binding,
 )
 
 
@@ -520,6 +522,10 @@ def validate_d0_provenance_binding(
     descriptor = descriptor if isinstance(descriptor, Mapping) else None
     d0_source = descriptor.get("source_state") if descriptor is not None else None
     dataset_hashes = provenance.get("dataset_hashes")
+    manifest_binding = validate_aggregate_manifest_binding(
+        provenance,
+        aggregate_dir=raw_path.parent,
+    )
     checks = {
         "release_eligible": provenance.get("release_eligible") is True,
         "generation_descriptor": descriptor is not None,
@@ -532,6 +538,7 @@ def validate_d0_provenance_binding(
         and d0_source.get("source_commit") == source_state.get("source_commit"),
         "raw_sha256": isinstance(dataset_hashes, Mapping)
         and dataset_hashes.get(raw_path.name) == _file_sha256(raw_path),
+        "aggregate_manifest_sha256": manifest_binding["passed"] is True,
     }
     failed = sorted(name for name, passed in checks.items() if not passed)
     if failed:
@@ -551,6 +558,7 @@ def validate_development_holdout_binding(
     scenario_manifest_path: Path,
     d0_raw_path: Path,
     d0_provenance_path: Path,
+    d0_manifest_path: Path,
     forbidden_suite_path: Path,
     evaluation_policy_path: Path,
     require_model_selection_eligible: bool,
@@ -891,6 +899,8 @@ def validate_development_holdout_binding(
             "d0_generation_provenance_sha256"
         )
         == _file_sha256(d0_provenance_path),
+        "d0_manifest_sha256": manifest.get("d0_manifest_sha256")
+        == _file_sha256(d0_manifest_path),
         "frozen_suite_sha256": manifest.get("frozen_suite_sha256")
         == _file_sha256(forbidden_suite_path),
         "evaluation_policy_sha256": manifest.get("evaluation_policy_sha256")
@@ -1181,6 +1191,7 @@ def validate_scenario_builder_manifest(
     source_state: Mapping[str, Any],
     d0_raw_path: Path,
     d0_provenance_path: Path,
+    d0_manifest_path: Path,
     forbidden_suite_path: Path,
     evaluation_policy_path: Path,
 ) -> None:
@@ -1575,6 +1586,8 @@ def validate_scenario_builder_manifest(
             manifest.get("d0_generation_provenance_sha256")
             == _file_sha256(d0_provenance_path)
         ),
+        "d0_manifest_sha256": manifest.get("d0_manifest_sha256")
+        == _file_sha256(d0_manifest_path),
         "forbidden_suite_sha256": (
             manifest.get("frozen_suite_sha256")
             == _file_sha256(forbidden_suite_path)
@@ -2881,6 +2894,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     d0_provenance_path = (
         args.d0_aggregate_dir / "aggregate.generation_provenance.json"
     )
+    d0_manifest_path = args.d0_aggregate_dir / AGGREGATE_MANIFEST_FILENAME
     protected_paths = [
         args.input,
         args.scenario_generator_report,
@@ -2889,6 +2903,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         DEFAULT_EVALUATION_POLICY,
         d0_raw_path,
         d0_provenance_path,
+        d0_manifest_path,
     ]
     if args.development_holdout is not None:
         protected_paths.extend(
@@ -2904,10 +2919,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         failed_collection_dir=args.failed_collection_dir,
         protected_paths=protected_paths,
     )
-    if not d0_raw_path.is_file() or not d0_provenance_path.is_file():
+    if not (
+        d0_raw_path.is_file()
+        and d0_provenance_path.is_file()
+        and d0_manifest_path.is_file()
+    ):
         raise FileNotFoundError(
-            "--d0-aggregate-dir must contain aggregate.raw.jsonl and "
-            "aggregate.generation_provenance.json"
+            "--d0-aggregate-dir must contain aggregate.raw.jsonl, "
+            "aggregate.generation_provenance.json, and "
+            "aggregate.manifest.json"
         )
     d0_rows = _load_json_or_jsonl(d0_raw_path)
     d0_roots = frozenset(
@@ -2933,6 +2953,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         source_state=source_state,
         d0_raw_path=d0_raw_path,
         d0_provenance_path=d0_provenance_path,
+        d0_manifest_path=d0_manifest_path,
         forbidden_suite_path=args.forbidden_suite,
         evaluation_policy_path=DEFAULT_EVALUATION_POLICY,
     )
@@ -2949,6 +2970,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             scenario_manifest_path=args.scenario_manifest,
             d0_raw_path=d0_raw_path,
             d0_provenance_path=d0_provenance_path,
+            d0_manifest_path=d0_manifest_path,
             forbidden_suite_path=args.forbidden_suite,
             evaluation_policy_path=DEFAULT_EVALUATION_POLICY,
             require_model_selection_eligible=(
@@ -3171,6 +3193,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "d0_generation_provenance_sha256": _file_sha256(
                     d0_provenance_path
                 ),
+                "d0_manifest_sha256": _file_sha256(d0_manifest_path),
                 "model_id": args.model_id,
                 "model_revision": args.model_revision.lower(),
                 "learner_seed": learner_seed,
@@ -3424,6 +3447,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "d0_aggregate_dir": str(args.d0_aggregate_dir),
         "d0_raw_sha256": _file_sha256(d0_raw_path),
         "d0_generation_provenance_sha256": _file_sha256(d0_provenance_path),
+        "d0_manifest_sha256": _file_sha256(d0_manifest_path),
         "model_id": args.model_id,
         "model_revision": args.model_revision.lower(),
         "learner_seed": learner_seed,

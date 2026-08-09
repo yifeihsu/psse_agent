@@ -142,9 +142,12 @@ This changed finality behavior is explicitly versioned as supervision policy
 `bc0_observable_sequential_handoff_v2` and expert identity
 `bc0-observable-handoff-expert-v2`; DAgger-1 binds the corresponding
 `dagger1_observable_recovery_handoff_v2` collector contract. The pinned family
-resolution and escalation thresholds are not relaxed: until an actually
-independent observable certificate exists, an expert-baseline report can
-remain a deliberate release NO-GO even when its audited handoffs are safe.
+numeric floors and ceilings are not relaxed. Release policy v3 instead names
+the quantity that can be supported without a privileged production label:
+audited completion is either strict physical resolution or a state-bound
+post-correction controller handoff whose separate private completion audit
+passes. The actual outcome remains `operator_escalation`; partial, HIF, and
+generic handoffs do not enter the audited-completion numerator.
 
 ## Round-0 BC0 release path
 
@@ -248,21 +251,37 @@ Terminality is not synonymous with successful recovery. The state classes
 `terminal_resolved` and `terminal_operator_escalation` are separate, and
 `terminal_scenario_matrix` records their counts and physical-root IDs by
 family. A verified operator handoff is an auditable safe outcome, but it does
-not count as resolution. Release policy therefore enforces per-family minimum
-root counts, resolution floors, and escalation ceilings; nonterminal,
-quarantined, or unknown terminal outcomes fail. `measurement+parameter` and
-`measurement+topology` each require at least 20 roots, at least 95% resolution,
-and at most 5% escalation. The 20-root pure `multi_measurement` family is
-currently an audited safety/handoff family with a 0% resolution floor and a
-100% escalation ceiling. This is an explicit non-claim of autonomous
+not count as resolution. Release policy v3 reports raw resolution and total
+escalation separately, while gating per-family minimum roots, audited
+completion, and unqualified escalation. A post-correction handoff qualifies
+only when its final observable action, accepted-correction ledger, active
+state ID/hash, and controller marker agree and a separate strict offline audit
+proves complete target repair, tolerance compliance, and healthy-component
+preservation. Missing, conflicting, partial, HIF, or generic handoff evidence
+fails closed as unqualified escalation. `measurement+parameter` and
+`measurement+topology` each require at least 22 roots, at least 95% audited
+completion, and at most 5% unqualified escalation. The 20-root pure
+`multi_measurement` family is currently an audited safety/handoff family with
+a 0% audited-completion floor and a 100% unqualified-escalation ceiling. This
+is an explicit non-claim of autonomous
 multi-meter recovery: after a verified partial meter commit, an unavailable or
 inconclusive same-state branch route cannot safely authorize another meter
 correction. Every such handoff must still be terminal, retain accepted targets,
 avoid healthy-component corruption, and record zero false commits,
 finalizations, or rollbacks. HIF requires 17 roots and measurement+HIF requires
-two roots, both with an explicit audited handoff allowance. The remaining
-direct BC0 families require full resolution and no escalation. Audited HIF or
-multi-measurement handoff must not be reported as general recovery success.
+two roots, both with an explicit unqualified-handoff allowance. The remaining
+direct BC0 families require full audited completion and no unqualified
+escalation. HIF or partial multi-measurement handoff must not be reported as
+general recovery success.
+
+`aggregate.manifest.json` persists each strict audit, the separate private
+completion assessment, a non-private final transition/store anchor, and a
+zero-false-commit/rollback/finalize/loop lifecycle record. Qualification is
+recomputed from those bindings with one vote per physical root; missing,
+duplicated, mismatched, or failed evidence blocks release. The manifest hash is
+recorded beside the JSONL hashes in generation provenance and is mandatory at
+downstream DAgger-1 D0 source gates. Packed handoff artifacts must additionally
+retain their externally published archive checksum.
 
 Splits are assigned before descendants are generated and group every row by
 `physical_root_fingerprint`. The deterministic split is stratified by network
@@ -312,7 +331,7 @@ recovery, loops, WLS and specialized-tool use, and tool regret, grouped by
 suite, family, cardinality, case, split, source tier, and physical root.
 
 `python -m psse_env.dagger.validate_evaluation` implements the content-pinned
-v2 contract in `dagger/bc0_evaluation_policy.json`. It recomputes identity
+v3 contract in `dagger/bc0_evaluation_policy.json`. It recomputes identity
 hashes, binds the artifact to the current clean commit and frozen suite,
 enforces strict audit v3, exact-matches schema-v1 evaluator configuration and approved
 factory identities, and checks hard safety, terminality, loop, invalid-call,

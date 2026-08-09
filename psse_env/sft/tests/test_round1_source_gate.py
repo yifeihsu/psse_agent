@@ -33,6 +33,7 @@ DEVELOPMENT_HOLDOUT_MANIFEST_SHA256 = "2" * 64
 DEVELOPMENT_HOLDOUT_GENERATOR_REPORT_SHA256 = "4" * 64
 DEVELOPMENT_HOLDOUT_ROOT_SET_SHA256 = "3" * 64
 DEVELOPMENT_HOLDOUT_ROOT_COUNT = 30
+D0_MANIFEST_SHA256 = "0" * 64
 
 
 class Round1SourceMixGateTests(unittest.TestCase):
@@ -59,6 +60,7 @@ class Round1SourceMixGateTests(unittest.TestCase):
             },
             "scenario_builder_contract": DAGGER1_SCENARIO_BUILDER_CONTRACT,
             "scenario_manifest_sha256": "d" * 64,
+            "d0_manifest_sha256": D0_MANIFEST_SHA256,
             "development_holdout_sha256": DEVELOPMENT_HOLDOUT_SHA256,
             "development_holdout_manifest_sha256": (
                 DEVELOPMENT_HOLDOUT_MANIFEST_SHA256
@@ -160,6 +162,7 @@ class Round1SourceMixGateTests(unittest.TestCase):
             "training_view_report_sha256": stable_json_sha256(training_view),
             "audit_report_sha256": audit_hashes,
             "input_artifacts": {
+                "d0_manifest_sha256": D0_MANIFEST_SHA256,
                 "d1_rows_sha256": "e" * 64,
                 "d1_manifest_sha256": COLLECTION_MANIFEST_SHA256,
                 "d1_development_holdout": {
@@ -308,6 +311,37 @@ class Round1SourceMixGateTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 GateError,
                 "generation_provenance_id does not hash",
+            ):
+                self._validate(provenance, preflight)
+
+    def test_d0_manifest_binding_is_mandatory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provenance, preflight = self._write_valid_artifacts(Path(temp_dir))
+            self._rewrite_descriptor(
+                provenance,
+                preflight,
+                lambda descriptor: descriptor["input_artifacts"].pop(
+                    "d0_manifest_sha256"
+                ),
+            )
+            with self.assertRaisesRegex(
+                GateError,
+                "bound D0 aggregate manifest hash",
+            ):
+                self._validate(provenance, preflight)
+
+    def test_d0_manifest_binding_must_match_collection_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provenance, preflight = self._write_valid_artifacts(Path(temp_dir))
+            payload = json.loads(preflight.read_text(encoding="utf-8"))
+            payload["d1_collection_manifest"]["d0_manifest_sha256"] = "f" * 64
+            preflight.write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                GateError,
+                "differs from the D1 collection manifest",
             ):
                 self._validate(provenance, preflight)
 

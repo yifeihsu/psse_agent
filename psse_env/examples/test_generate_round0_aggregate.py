@@ -5,12 +5,25 @@ import json
 import sys
 import tempfile
 import unittest
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from psse_env.actions import RECOVERY_OPTIONS_EXHAUSTED_REQUEST
 from psse_env.dagger.evaluator import fingerprint_evaluation_suites
+from psse_env.dagger.release_audit import (
+    ACCEPTED_TARGET_NONREGRESSION_CHECK,
+    ACCEPTED_TARGETS_CHECK,
+    AUDIT_VERSION,
+    FINAL_CASE_CHECK,
+    FINAL_MEASUREMENTS_CHECK,
+    HEALTHY_CASE_CHECK,
+    HEALTHY_MEASUREMENTS_CHECK,
+    POST_CORRECTION_COMPLETION_CONTRACT,
+    REMAINING_FAULTS_CHECK,
+    ReleaseAuditTolerances,
+)
 from psse_env.dagger.rollout_collector import classify_state_example
 from psse_env.dagger.splits import PHYSICAL_FINGERPRINT_VERSION
 from psse_env.examples.generate_round0_aggregate import (
@@ -26,17 +39,21 @@ from psse_env.examples.generate_round0_aggregate import (
     DEFAULT_EVALUATION_POLICY_PATH,
     DEFAULT_EVALUATION_SUITE_PATH,
     DEFAULT_PLAN,
+    ROUND0_HANDOFF_RUNTIME_ANCHOR_CONTRACT,
+    ROUND0_LIFECYCLE_SAFETY_CONTRACT,
     _apply_single_label_eligibility,
     _assert_training_view_export_integrity,
     _configured_input_corpora,
     _evaluation_policy_binding,
     _evaluation_suite_binding,
-    _family_resolution_release_failures,
+    _episode_evidence_cardinality_failures,
+    _family_completion_release_failures,
     _generation_descriptor,
     _holdout_disjointness_report,
     _holdout_release_failures,
     _input_artifact_release_failures,
     _input_corpus_release_failures,
+    _round0_lifecycle_safety_audit,
     _stratified_approximate_realizability,
     _stratified_realizability_release_failures,
     _terminal_scenario_matrix,
@@ -53,6 +70,141 @@ _EVAL_PHYSICAL_1 = _PHYSICAL_PREFIX + "1" * 64
 _EVAL_PHYSICAL_2 = _PHYSICAL_PREFIX + "2" * 64
 _TRAIN_PHYSICAL_1 = _PHYSICAL_PREFIX + "3" * 64
 _EASY_EVAL_PHYSICAL = _PHYSICAL_PREFIX + "4" * 64
+
+
+def _qualified_handoff_assessment(audit: dict) -> dict:
+    checks = {
+        name: {"status": "passed", "problems": []}
+        for name in (
+            ACCEPTED_TARGETS_CHECK,
+            ACCEPTED_TARGET_NONREGRESSION_CHECK,
+            REMAINING_FAULTS_CHECK,
+            HEALTHY_MEASUREMENTS_CHECK,
+            HEALTHY_CASE_CHECK,
+            FINAL_MEASUREMENTS_CHECK,
+            FINAL_CASE_CHECK,
+        )
+    }
+    checks[ACCEPTED_TARGET_NONREGRESSION_CHECK]["target_evidence"] = [
+        {
+            "family": "measurement",
+            "index0": 0,
+            "initial_distance": 1.0,
+            "final_distance": 0.0,
+            "tolerance": 1e-6,
+            "status": "passed",
+        }
+    ]
+    checks[REMAINING_FAULTS_CHECK]["derived_remaining_fault_count"] = 0
+    checks[REMAINING_FAULTS_CHECK][
+        "evidence_source"
+    ] = "offline_scenario_truth_derivation"
+    return {
+        "scenario_id": audit["scenario_id"],
+        "physical_root_fingerprint": audit["physical_root_fingerprint"],
+        "scenario_family": audit["scenario_family"],
+        "assessment_version": POST_CORRECTION_COMPLETION_CONTRACT,
+        "status": "passed",
+        "eligible": True,
+        "reasons": [],
+        "actual_terminal_outcome": "operator_escalation",
+        "runtime_contract": {
+            "contract": POST_CORRECTION_COMPLETION_CONTRACT,
+            "passed": True,
+            "failures": [],
+            "active_state_id": "state-1",
+            "active_state_hash": "a" * 64,
+            "accepted_correction_count": 1,
+            "post_correction_confirmation_handoff": True,
+        },
+        "counterfactual_completion_audit": {
+            "audit_version": AUDIT_VERSION,
+            "scenario_id": audit["scenario_id"],
+            "physical_root_fingerprint": audit["physical_root_fingerprint"],
+            "scenario_family": audit["scenario_family"],
+            "terminal": True,
+            "terminal_outcome": "resolved",
+            "checks": checks,
+            "tolerances": asdict(ReleaseAuditTolerances()),
+            "problems": [],
+            "quarantined": False,
+        },
+    }
+
+
+def _not_applicable_handoff_assessment(audit: dict) -> dict:
+    return {
+        "scenario_id": audit["scenario_id"],
+        "physical_root_fingerprint": audit["physical_root_fingerprint"],
+        "scenario_family": audit["scenario_family"],
+        "assessment_version": POST_CORRECTION_COMPLETION_CONTRACT,
+        "status": "not_applicable",
+        "eligible": False,
+        "reasons": [],
+        "actual_terminal_outcome": audit["terminal_outcome"],
+        "runtime_contract": {
+            "contract": POST_CORRECTION_COMPLETION_CONTRACT,
+            "passed": False,
+            "failures": ["handoff_marker_missing"],
+            "active_state_id": "state-1",
+            "active_state_hash": "a" * 64,
+            "accepted_correction_count": 0,
+            "post_correction_confirmation_handoff": False,
+        },
+        "counterfactual_completion_audit": None,
+    }
+
+
+def _runtime_anchor(audit: dict, assessment: dict) -> dict:
+    runtime = assessment["runtime_contract"]
+    accepted_count = runtime["accepted_correction_count"]
+    qualified = assessment["status"] == "passed"
+    return {
+        "contract": ROUND0_HANDOFF_RUNTIME_ANCHOR_CONTRACT,
+        "scenario_id": audit["scenario_id"],
+        "physical_root_fingerprint": audit["physical_root_fingerprint"],
+        "scenario_family": audit["scenario_family"],
+        "terminal": True,
+        "terminal_outcome": audit["terminal_outcome"],
+        "final_action_tool": "ask_for_more_evidence",
+        "final_action_request": (
+            RECOVERY_OPTIONS_EXHAUSTED_REQUEST
+            if qualified
+            else "operator_escalation:hif_diagnostics_exhausted"
+        ),
+        "final_action_state_id": "state-1",
+        "transition_state_id": "state-1",
+        "transition_candidate_state_id": None,
+        "execution_status": "success",
+        "state_mutated": False,
+        "output_active_state_id": "state-1",
+        "output_candidate_state_id": None,
+        "active_state_id": "state-1",
+        "physical_state_id": "state-1",
+        "active_state_hash": "a" * 64,
+        "accepted_correction_count": accepted_count,
+        "last_accepted_candidate_state_id": (
+            "state-1" if accepted_count else None
+        ),
+        "has_open_candidate": False,
+        "has_unverified_candidate": False,
+        "has_verified_candidate": False,
+        "candidate_state_id": None,
+    }
+
+
+def _with_safe_lifecycle(audit: dict) -> dict:
+    return {
+        **audit,
+        "lifecycle_safety": {
+            "contract": ROUND0_LIFECYCLE_SAFETY_CONTRACT,
+            "false_commit_count": 0,
+            "false_rollback_count": 0,
+            "false_finalization_count": 0,
+            "loop_detected": False,
+            "passed": True,
+        },
+    }
 
 
 class GeneratorCliTests(unittest.TestCase):
@@ -85,6 +237,63 @@ class GeneratorCliTests(unittest.TestCase):
 
 
 class TerminalScenarioMatrixTests(unittest.TestCase):
+    @staticmethod
+    def _lifecycle_row(
+        tool: str,
+        *,
+        disposition: str | None = None,
+    ) -> dict:
+        state = {
+            "active_state_id": "state-1",
+            "candidate_state_id": None,
+            "accepted_corrections": [],
+            "explained_anomalies": [],
+        }
+        return {
+            "executed_action": {"tool": tool, "arguments": {}},
+            "labels": {"target_candidate_disposition": disposition},
+            "parent_state_summary": copy.deepcopy(state),
+            "next_state_summary": copy.deepcopy(state),
+            "tool_output": {
+                "execution_status": "success",
+                "state_mutated": False,
+            },
+        }
+
+    def test_lifecycle_audit_detects_false_dispositions_finalize_and_loop(
+        self,
+    ) -> None:
+        rows = [
+            self._lifecycle_row("commit_state", disposition="REJECT"),
+            self._lifecycle_row("rollback_state", disposition="ACCEPT_FINAL"),
+            self._lifecycle_row("run_wls"),
+            self._lifecycle_row("run_wls"),
+            self._lifecycle_row("finalize_diagnosis"),
+        ]
+        strict_audit = {
+            "terminal": False,
+            "terminal_outcome": None,
+            "quarantined": True,
+            "checks": {
+                "remaining_true_faults": {
+                    "status": "failed",
+                    "derived_remaining_fault_count": 1,
+                }
+            },
+        }
+
+        result = _round0_lifecycle_safety_audit(
+            rows,
+            strict_audit=strict_audit,
+            terminal=False,
+        )
+
+        self.assertEqual(result["false_commit_count"], 1)
+        self.assertEqual(result["false_rollback_count"], 1)
+        self.assertEqual(result["false_finalization_count"], 1)
+        self.assertTrue(result["loop_detected"])
+        self.assertFalse(result["passed"])
+
     def test_training_view_export_integrity_rejects_dropped_rows(self) -> None:
         selected = [
             {"example_id": "row-a"},
@@ -127,34 +336,36 @@ class TerminalScenarioMatrixTests(unittest.TestCase):
     def test_matrix_requires_every_root_terminal_and_unquarantined(self) -> None:
         matrix = _terminal_scenario_matrix(
             [
-                {
+                _with_safe_lifecycle({
                     "scenario_id": "m1",
                     "physical_root_fingerprint": "physical-m1",
                     "scenario_family": "measurement",
                     "terminal": True,
                     "terminal_outcome": "resolved",
                     "quarantined": False,
-                },
-                {
+                }),
+                _with_safe_lifecycle({
                     "scenario_id": "mt1",
                     "physical_root_fingerprint": "physical-mt1",
                     "scenario_family": "measurement+topology",
                     "terminal": False,
                     "quarantined": False,
-                },
-                {
+                }),
+                _with_safe_lifecycle({
                     "scenario_id": "mt2",
                     "physical_root_fingerprint": "physical-mt2",
                     "scenario_family": "measurement+topology",
                     "terminal": True,
                     "terminal_outcome": "operator_escalation",
                     "quarantined": True,
-                },
+                }),
             ]
         )
 
         self.assertTrue(matrix["measurement"]["release_terminal_coverage"])
-        self.assertFalse(matrix["measurement"]["release_resolution_coverage"])
+        self.assertFalse(
+            matrix["measurement"]["release_audited_completion_coverage"]
+        )
         self.assertEqual(matrix["measurement"]["distinct_physical_roots"], 1)
         self.assertEqual(
             matrix["measurement"]["terminal_outcome_counts"], {"resolved": 1}
@@ -169,67 +380,230 @@ class TerminalScenarioMatrixTests(unittest.TestCase):
             mixed["terminal_outcome_counts"], {"operator_escalation": 1}
         )
         self.assertFalse(mixed["release_terminal_coverage"])
-        self.assertFalse(mixed["release_resolution_coverage"])
+        self.assertFalse(mixed["release_audited_completion_coverage"])
 
     def test_escalation_is_terminal_but_not_resolution_coverage(self) -> None:
+        audit = _with_safe_lifecycle({
+            "scenario_id": "mh1",
+            "physical_root_fingerprint": "physical-mh1",
+            "scenario_family": "measurement+hif",
+            "terminal": True,
+            "terminal_outcome": "operator_escalation",
+            "quarantined": False,
+        })
+        assessment = _not_applicable_handoff_assessment(audit)
         matrix = _terminal_scenario_matrix(
-            [
-                {
-                    "scenario_id": "mh1",
-                    "physical_root_fingerprint": "physical-mh1",
-                    "scenario_family": "measurement+hif",
-                    "terminal": True,
-                    "terminal_outcome": "operator_escalation",
-                    "quarantined": False,
-                }
-            ]
+            [audit],
+            handoff_assessments=[assessment],
+            handoff_runtime_anchors=[_runtime_anchor(audit, assessment)],
         )
 
         hif = matrix["measurement+hif"]
         self.assertTrue(hif["release_terminal_coverage"])
-        self.assertFalse(hif["release_resolution_coverage"])
+        self.assertFalse(hif["release_audited_completion_coverage"])
         self.assertEqual(hif["resolution_rate"], 0.0)
         self.assertEqual(hif["operator_escalation_rate"], 1.0)
 
-    def test_release_resolution_coverage_honors_policy_boundary(self) -> None:
+    def test_release_completion_coverage_honors_policy_boundary(self) -> None:
         audits = [
-            {
+            _with_safe_lifecycle({
                 "scenario_id": f"mp{index}",
                 "physical_root_fingerprint": f"physical-mp{index}",
                 "scenario_family": "measurement+parameter",
                 "terminal": True,
                 "terminal_outcome": (
-                    "resolved" if index < 38 else "operator_escalation"
+                    "resolved" if index < 37 else "operator_escalation"
                 ),
                 "quarantined": False,
-            }
+            })
             for index in range(40)
         ]
+        handoffs = [
+            _qualified_handoff_assessment(audits[37]),
+            _not_applicable_handoff_assessment(audits[38]),
+            _not_applicable_handoff_assessment(audits[39]),
+        ]
+        anchors = [
+            _runtime_anchor(audit, assessment)
+            for audit, assessment in zip(audits[37:], handoffs)
+        ]
 
-        entry = _terminal_scenario_matrix(audits)["measurement+parameter"]
+        entry = _terminal_scenario_matrix(
+            audits,
+            handoff_assessments=handoffs,
+            handoff_runtime_anchors=anchors,
+        )["measurement+parameter"]
 
-        self.assertEqual(entry["audit_verified_resolution_rate"], 0.95)
-        self.assertEqual(entry["operator_escalation_rate"], 0.05)
+        self.assertEqual(entry["audit_verified_resolution_rate"], 37 / 40)
+        self.assertEqual(entry["operator_escalation_rate"], 3 / 40)
+        self.assertEqual(entry["audited_post_correction_handoff_rate"], 1 / 40)
+        self.assertEqual(entry["audited_completion_rate"], 0.95)
+        self.assertEqual(entry["unqualified_operator_escalation_rate"], 0.05)
         self.assertTrue(entry["release_terminal_coverage"])
-        self.assertTrue(entry["release_resolution_coverage"])
+        self.assertTrue(entry["release_audited_completion_coverage"])
 
-    def test_release_resolution_coverage_requires_policy_root_floor(self) -> None:
+    def test_generic_escalation_never_earns_audited_completion(self) -> None:
+        audit = _with_safe_lifecycle({
+            "scenario_id": "measurement-generic",
+            "physical_root_fingerprint": "physical-measurement-generic",
+            "scenario_family": "measurement",
+            "terminal": True,
+            "terminal_outcome": "operator_escalation",
+            "quarantined": False,
+        })
+        assessment = _not_applicable_handoff_assessment(audit)
+
+        entry = _terminal_scenario_matrix(
+            [audit],
+            handoff_assessments=[assessment],
+            handoff_runtime_anchors=[_runtime_anchor(audit, assessment)],
+        )["measurement"]
+
+        self.assertEqual(entry["audited_completion_rate"], 0.0)
+        self.assertEqual(entry["unqualified_operator_escalation_rate"], 1.0)
+        self.assertEqual(
+            entry["unqualified_operator_escalation_episode_ids"],
+            ["measurement-generic"],
+        )
+        self.assertEqual(
+            entry["handoff_assessment_evidence_failure_episode_ids"], []
+        )
+
+    def test_missing_handoff_assessment_fails_terminal_release_evidence(
+        self,
+    ) -> None:
+        audit = _with_safe_lifecycle({
+            "scenario_id": "missing-assessment",
+            "physical_root_fingerprint": "physical-missing-assessment",
+            "scenario_family": "measurement+hif",
+            "terminal": True,
+            "terminal_outcome": "operator_escalation",
+            "quarantined": False,
+        })
+
+        assessment = _not_applicable_handoff_assessment(audit)
+        entry = _terminal_scenario_matrix(
+            [audit],
+            handoff_runtime_anchors=[_runtime_anchor(audit, assessment)],
+        )["measurement+hif"]
+
+        self.assertFalse(entry["release_terminal_coverage"])
+        self.assertEqual(
+            entry["handoff_assessment_evidence_failure_episode_ids"],
+            ["missing-assessment"],
+        )
+
+    def test_duplicate_root_qualification_disagreement_fails_closed(self) -> None:
         audits = [
+            _with_safe_lifecycle({
+                "scenario_id": scenario_id,
+                "physical_root_fingerprint": "physical-shared",
+                "scenario_family": "measurement+parameter",
+                "terminal": True,
+                "terminal_outcome": "operator_escalation",
+                "quarantined": False,
+            })
+            for scenario_id in ("mp-a", "mp-b")
+        ]
+
+        handoffs = [
+            _qualified_handoff_assessment(audits[0]),
+            _not_applicable_handoff_assessment(audits[1]),
+        ]
+        entry = _terminal_scenario_matrix(
+            audits,
+            handoff_assessments=handoffs,
+            handoff_runtime_anchors=[
+                _runtime_anchor(audit, assessment)
+                for audit, assessment in zip(audits, handoffs)
+            ],
+        )["measurement+parameter"]
+
+        self.assertEqual(entry["audited_completion_rate"], 0.0)
+        self.assertEqual(entry["unqualified_operator_escalation_rate"], 1.0)
+        self.assertEqual(
+            entry[
+                "conflicting_handoff_qualification_physical_root_fingerprints"
+            ],
+            ["physical-shared"],
+        )
+
+    def test_lifecycle_violation_cannot_earn_audited_completion(self) -> None:
+        audit = _with_safe_lifecycle(
             {
+                "scenario_id": "unsafe-lifecycle",
+                "physical_root_fingerprint": "physical-unsafe-lifecycle",
+                "scenario_family": "measurement",
+                "terminal": True,
+                "terminal_outcome": "operator_escalation",
+                "quarantined": False,
+            }
+        )
+        audit["lifecycle_safety"]["false_commit_count"] = 1
+        audit["lifecycle_safety"]["passed"] = False
+
+        assessment = _qualified_handoff_assessment(audit)
+        entry = _terminal_scenario_matrix(
+            [audit],
+            handoff_assessments=[assessment],
+            handoff_runtime_anchors=[_runtime_anchor(audit, assessment)],
+        )["measurement"]
+
+        self.assertEqual(entry["audited_completion_rate"], 0.0)
+        self.assertEqual(entry["unqualified_operator_escalation_rate"], 1.0)
+        self.assertFalse(entry["release_terminal_coverage"])
+        self.assertEqual(
+            entry["lifecycle_safety_failure_episode_ids"],
+            ["unsafe-lifecycle"],
+        )
+
+    def test_runtime_anchor_hash_mismatch_cannot_earn_completion(self) -> None:
+        audit = _with_safe_lifecycle(
+            {
+                "scenario_id": "anchor-mismatch",
+                "physical_root_fingerprint": "physical-anchor-mismatch",
+                "scenario_family": "measurement",
+                "terminal": True,
+                "terminal_outcome": "operator_escalation",
+                "quarantined": False,
+            }
+        )
+        assessment = _qualified_handoff_assessment(audit)
+        anchor = _runtime_anchor(audit, assessment)
+        anchor["active_state_hash"] = "b" * 64
+
+        entry = _terminal_scenario_matrix(
+            [audit],
+            handoff_assessments=[assessment],
+            handoff_runtime_anchors=[anchor],
+        )["measurement"]
+
+        self.assertEqual(entry["audited_completion_rate"], 0.0)
+        self.assertFalse(entry["release_terminal_coverage"])
+        self.assertIn(
+            "round0_handoff_runtime_anchor_assessment_mismatch",
+            entry["handoff_assessment_failure_reasons_by_episode"][
+                "anchor-mismatch"
+            ],
+        )
+
+    def test_release_completion_coverage_requires_policy_root_floor(self) -> None:
+        audits = [
+            _with_safe_lifecycle({
                 "scenario_id": f"mp{index}",
                 "physical_root_fingerprint": f"physical-mp{index}",
                 "scenario_family": "measurement+parameter",
                 "terminal": True,
                 "terminal_outcome": "resolved",
                 "quarantined": False,
-            }
+            })
             for index in range(19)
         ]
 
         entry = _terminal_scenario_matrix(audits)["measurement+parameter"]
 
         self.assertTrue(entry["release_terminal_coverage"])
-        self.assertFalse(entry["release_resolution_coverage"])
+        self.assertFalse(entry["release_audited_completion_coverage"])
 
     def test_duplicate_episodes_do_not_inflate_distinct_root_floor_or_rates(self) -> None:
         audits = [
@@ -255,7 +629,7 @@ class TerminalScenarioMatrixTests(unittest.TestCase):
             entry["duplicate_physical_root_fingerprints"],
             {"physical-mp0": ["mp0", "mp19"]},
         )
-        self.assertFalse(entry["release_resolution_coverage"])
+        self.assertFalse(entry["release_audited_completion_coverage"])
 
     def test_missing_physical_root_fingerprint_fails_closed(self) -> None:
         entry = _terminal_scenario_matrix(
@@ -275,7 +649,7 @@ class TerminalScenarioMatrixTests(unittest.TestCase):
             entry["missing_physical_root_episode_ids"], ["missing-root"]
         )
         self.assertFalse(entry["release_terminal_coverage"])
-        self.assertFalse(entry["release_resolution_coverage"])
+        self.assertFalse(entry["release_audited_completion_coverage"])
 
     def test_quarantined_resolved_claim_is_not_verified_resolution(self) -> None:
         matrix = _terminal_scenario_matrix(
@@ -315,23 +689,24 @@ class TerminalScenarioMatrixTests(unittest.TestCase):
         self.assertFalse(entry["release_terminal_coverage"])
 
 
-class FamilyResolutionReleaseTests(unittest.TestCase):
+class FamilyCompletionReleaseTests(unittest.TestCase):
     POLICY = {
         "mixed": {
             "minimum_physical_roots": 20,
-            "minimum_resolution_rate": 0.95,
-            "maximum_operator_escalation_rate": 0.05,
+            "minimum_audited_completion_rate": 0.95,
+            "maximum_unqualified_operator_escalation_rate": 0.05,
         }
     }
 
     def test_root_resolution_and_escalation_shortfalls_are_all_reported(self) -> None:
-        failures = _family_resolution_release_failures(
+        failures = _family_completion_release_failures(
             {
                 "mixed": {
                     "episodes": 19,
                     "distinct_physical_roots": 19,
-                    "resolution_rate": 18 / 19,
-                    "operator_escalation_rate": 1 / 19,
+                    "audited_completion_rate": 18 / 19,
+                    "unqualified_operator_escalation_rate": 1 / 19,
+                    "release_terminal_coverage": True,
                 }
             },
             policy=self.POLICY,
@@ -342,21 +717,26 @@ class FamilyResolutionReleaseTests(unittest.TestCase):
             "mixed: 19 distinct physical roots < required 20", failures
         )
         self.assertTrue(
-            any("resolution rate" in failure for failure in failures), failures
+            any("audited-completion rate" in failure for failure in failures),
+            failures,
         )
         self.assertTrue(
-            any("operator-escalation rate" in failure for failure in failures),
+            any(
+                "unqualified operator-escalation rate" in failure
+                for failure in failures
+            ),
             failures,
         )
 
     def test_policy_accepts_rates_exactly_on_release_boundaries(self) -> None:
-        failures = _family_resolution_release_failures(
+        failures = _family_completion_release_failures(
             {
                 "mixed": {
                     "episodes": 20,
                     "distinct_physical_roots": 20,
-                    "resolution_rate": 0.95,
-                    "operator_escalation_rate": 0.05,
+                    "audited_completion_rate": 0.95,
+                    "unqualified_operator_escalation_rate": 0.05,
+                    "release_terminal_coverage": True,
                 }
             },
             policy=self.POLICY,
@@ -364,15 +744,56 @@ class FamilyResolutionReleaseTests(unittest.TestCase):
 
         self.assertEqual(failures, [])
 
+    def test_terminal_or_lifecycle_evidence_failure_blocks_release(self) -> None:
+        failures = _family_completion_release_failures(
+            {
+                "mixed": {
+                    "episodes": 20,
+                    "distinct_physical_roots": 20,
+                    "audited_completion_rate": 0.95,
+                    "unqualified_operator_escalation_rate": 0.05,
+                    "release_terminal_coverage": False,
+                    "lifecycle_safety_failure_physical_root_fingerprints": [
+                        "unsafe-root"
+                    ],
+                }
+            },
+            policy=self.POLICY,
+        )
+
+        self.assertEqual(len(failures), 1)
+        self.assertIn("terminal/evidence coverage failed", failures[0])
+        self.assertIn("lifecycle=1", failures[0])
+
+    def test_nonfinite_family_rate_fails_closed(self) -> None:
+        failures = _family_completion_release_failures(
+            {
+                "mixed": {
+                    "episodes": 20,
+                    "distinct_physical_roots": 20,
+                    "audited_completion_rate": float("nan"),
+                    "unqualified_operator_escalation_rate": 0.0,
+                    "release_terminal_coverage": True,
+                }
+            },
+            policy=self.POLICY,
+        )
+
+        self.assertEqual(
+            failures, ["mixed: completion/escalation rates are invalid"]
+        )
+
     def test_missing_family_fails_closed(self) -> None:
-        failures = _family_resolution_release_failures({}, policy=self.POLICY)
+        failures = _family_completion_release_failures({}, policy=self.POLICY)
 
         self.assertEqual(len(failures), 2)
         self.assertTrue(any("physical roots" in failure for failure in failures))
-        self.assertTrue(any("resolution rate" in failure for failure in failures))
+        self.assertTrue(
+            any("audited-completion rate" in failure for failure in failures)
+        )
 
     def test_positive_count_planned_family_without_policy_fails_closed(self) -> None:
-        failures = _family_resolution_release_failures(
+        failures = _family_completion_release_failures(
             {},
             policy={},
             plan={"future_family": 1, "disabled_family": 0},
@@ -385,6 +806,30 @@ class FamilyResolutionReleaseTests(unittest.TestCase):
                 "future_family"
             ],
         )
+
+    def test_episode_evidence_cardinality_rejects_missing_and_orphan_rows(
+        self,
+    ) -> None:
+        audit = {
+            "scenario_id": "expected",
+            "physical_root_fingerprint": "physical-expected",
+            "scenario_family": "measurement",
+        }
+        orphan = {
+            "scenario_id": "orphan",
+            "physical_root_fingerprint": "physical-orphan",
+            "scenario_family": "measurement",
+        }
+
+        failures = _episode_evidence_cardinality_failures(
+            [audit],
+            [orphan],
+            [],
+        )
+
+        self.assertEqual(len(failures), 2)
+        self.assertTrue(any("assessment" in item for item in failures))
+        self.assertTrue(any("runtime anchor" in item for item in failures))
 
 
 class OfflineTruthBoundaryTests(unittest.TestCase):
@@ -400,7 +845,9 @@ class OfflineTruthBoundaryTests(unittest.TestCase):
         scenario = {
             "scenario_id": "mixed-root",
             "root_scenario_id": "mixed-root",
+            "physical_root_fingerprint": "physical-mixed-root",
             "scenario_family": "measurement+parameter",
+            "error_cardinality": 2,
             "case": "case14",
             "measurements": [1.0, 2.0],
             "true_measurement_errors": [{"index": 1}],
@@ -413,7 +860,16 @@ class OfflineTruthBoundaryTests(unittest.TestCase):
             "hidden_truth": {"true_hif_errors": [{"branch_row0": 1}]},
             "oracle_action_hints": [{"tool": "correct_measurements"}],
             "release_audit": {"tolerances": {"measurement_abs": 0.01}},
-            "metadata": {"observable_source": "tracked"},
+            "metadata": {
+                "observable_source": "tracked",
+                "true_measurement_errors": [{"index": 0}],
+                "clean_future_reference": {"value": 1.0},
+                "nested": {
+                    "true_custom_future_family": [{"target": 9}],
+                    "oracle_action_hints": [{"tool": "finalize_diagnosis"}],
+                    "observable_flag": True,
+                },
+            },
         }
         original = copy.deepcopy(scenario)
 
@@ -425,11 +881,19 @@ class OfflineTruthBoundaryTests(unittest.TestCase):
             {
                 "scenario_id",
                 "root_scenario_id",
+                "physical_root_fingerprint",
                 "scenario_family",
+                "error_cardinality",
                 "case",
                 "measurements",
-                "release_audit",
                 "metadata",
+            },
+        )
+        self.assertEqual(
+            execution["metadata"],
+            {
+                "observable_source": "tracked",
+                "nested": {"observable_flag": True},
             },
         )
         self.assertIsNot(execution["measurements"], scenario["measurements"])
@@ -856,9 +1320,14 @@ class AggregateReleaseContractTests(unittest.TestCase):
         for family in ("hif", "measurement+hif"):
             with self.subTest(family=family):
                 requirements = BC0_FAMILY_RELEASE_POLICY[family]
-                self.assertEqual(requirements["minimum_resolution_rate"], 0.0)
                 self.assertEqual(
-                    requirements["maximum_operator_escalation_rate"], 1.0
+                    requirements["minimum_audited_completion_rate"], 0.0
+                )
+                self.assertEqual(
+                    requirements[
+                        "maximum_unqualified_operator_escalation_rate"
+                    ],
+                    1.0,
                 )
 
     def test_critical_tool_family_root_floors_fit_default_family_plans(

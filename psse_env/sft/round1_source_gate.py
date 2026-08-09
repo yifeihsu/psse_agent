@@ -280,6 +280,16 @@ def validate_round1_source_mix_gate(
         failures.append("D1 collection lacks the reviewed fresh-root scenario binding")
 
     inputs = _mapping(descriptor.get("input_artifacts"))
+    d0_manifest_sha256 = inputs.get("d0_manifest_sha256")
+    if not _is_sha256(d0_manifest_sha256):
+        failures.append(
+            "round-1 provenance lacks the bound D0 aggregate manifest hash"
+        )
+    elif d1_manifest.get("d0_manifest_sha256") != d0_manifest_sha256:
+        failures.append(
+            "round-1 D0 aggregate manifest binding differs from the D1 "
+            "collection manifest"
+        )
     descriptor_holdout_value = inputs.get("d1_development_holdout")
     preflight_holdout_value = preflight.get("d1_development_holdout")
     descriptor_holdout = _mapping(descriptor_holdout_value)

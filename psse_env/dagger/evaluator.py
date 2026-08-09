@@ -65,7 +65,9 @@ from psse_env.dagger.release_audit import (
     HEALTHY_CASE_CHECK,
     HEALTHY_MEASUREMENTS_CHECK,
     REMAINING_FAULTS_CHECK,
+    audit_post_correction_controller_handoff,
     audit_episode_against_truth as strict_audit_episode_against_truth,
+    validate_post_correction_handoff_assessment,
 )
 from psse_env.state_store import OracleState, PolicyObservation, policy_safe_copy
 from psse_env.sft.provenance import file_sha256, git_source_state, stable_json_sha256
@@ -94,6 +96,9 @@ class RecoveryMetrics:
     terminal_rate: float = 0.0
     resolution_rate: float = 0.0
     operator_escalation_rate: float = 0.0
+    audited_post_correction_handoff: float = 0.0
+    audited_completion: float = 0.0
+    unqualified_operator_escalation: float = 0.0
     healthy_component_preservation: float = 0.0
     invalid_action_recovery: float = 0.0
     mean_wls_calls: float = 0.0
@@ -1261,7 +1266,7 @@ class ClosedLoopRolloutEvaluator:
             )
         }
         report = {
-            "schema_version": 2,
+            "schema_version": 3,
             "configuration": {
                 "seed": self.seed,
                 "max_steps": self.max_steps,
@@ -1435,6 +1440,9 @@ class ClosedLoopRolloutEvaluator:
                         "error_code": intervention_contract["error_code"],
                         "candidate_disposition_offline": None,
                         "tool_regret": None,
+                        "runtime_state_hash": _output_runtime_state_hash(
+                            injected_output
+                        ),
                         "terminal_outcome": None,
                         **trace_progress_evidence(
                             before=injected_state,
@@ -1551,6 +1559,9 @@ class ClosedLoopRolloutEvaluator:
                             "error_code": None,
                             "candidate_disposition_offline": disposition,
                             "tool_regret": None,
+                            "runtime_state_hash": _output_runtime_state_hash(
+                                output
+                            ),
                             "terminal_outcome": _output_terminal_outcome(output),
                             **trace_progress_evidence(
                                 before=current,
@@ -1859,6 +1870,7 @@ class ClosedLoopRolloutEvaluator:
                     "error_code": output.get("error_code"),
                     "candidate_disposition_offline": disposition,
                     "tool_regret": regret,
+                    "runtime_state_hash": _output_runtime_state_hash(output),
                     "terminal_outcome": _output_terminal_outcome(output),
                     **trace_progress_evidence(
                         before=state_before_action,
@@ -1941,6 +1953,25 @@ class ClosedLoopRolloutEvaluator:
                 )
             audit.update(copy.deepcopy(dict(supplied)))
 
+        post_correction_handoff_assessment = (
+            audit_post_correction_controller_handoff(
+                _strict_audit_scenario(audit_scenario),
+                final_state,
+                terminal=terminal,
+                terminal_outcome=outcome,
+                active_physical_state=active_physical_state,
+                remaining_truth=_complete_remaining_truth(final_oracle),
+                case_loader=self.case_loader,
+            )
+        )
+        # This is a sibling offline assessment, not a replacement for the
+        # actual production outcome or the strict physical audit.  Keeping it
+        # under ``audit`` also prevents privileged truth from entering the
+        # policy observation or trajectory target.
+        audit["post_correction_handoff_assessment"] = copy.deepcopy(
+            post_correction_handoff_assessment
+        )
+
         physical_known = bool(audit.get("physical_correctness_known", False))
         physical_correct = physical_known and bool(
             audit.get("final_physical_correct", False)
@@ -2004,13 +2035,24 @@ class ClosedLoopRolloutEvaluator:
         final_success = bool(
             terminal and outcome == "resolved" and physical_correct
         )
-        safe_escalation = bool(
-            terminal
-            and outcome == "operator_escalation"
-            and healthy_known
-            and healthy_preserved
+        audited_handoff = _is_audited_post_correction_handoff(
+            terminal=terminal,
+            terminal_outcome=outcome,
+            assessment=post_correction_handoff_assessment,
+            scenario_id=scenario_id,
+            physical_root_fingerprint=groups["physical_root"],
+            scenario_family=groups["family"],
+            false_commit_count=false_commits,
+            false_rollback_count=false_rollbacks,
+            false_finalization_count=false_finalizations,
+            loop_detected=loop_detected,
+            evaluator_error=evaluator_error,
         )
-        recovery_terminal = bool(final_success or safe_escalation)
+        # A generic operator escalation remains a valid fail-closed terminal
+        # outcome, but it is not evidence that an injected/invalid failure was
+        # recovered.  Only strict resolution or the audited post-correction
+        # completion contract can close those recovery numerators.
+        recovery_terminal = bool(final_success or audited_handoff)
         if intervention_evidence["injected_failure_count"]:
             intervention_evidence["recovered_failure_count"] = int(
                 recovery_terminal and bool(advancing_indices)
@@ -2604,7 +2646,7 @@ def write_evaluation_artifact(
         recorded_provenance["release_eligible"] = not release_failures
         recorded_provenance["release_failures"] = release_failures
     payload: dict[str, Any] = {
-        "artifact_schema_version": 2,
+        "artifact_schema_version": 3,
         "artifact_type": (
             "closed_loop_diagnostic_evaluation"
             if diagnostic_only
@@ -2839,6 +2881,59 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
+def _is_audited_post_correction_handoff(
+    *,
+    terminal: bool,
+    terminal_outcome: str | None,
+    assessment: Any,
+    scenario_id: str,
+    physical_root_fingerprint: str,
+    scenario_family: str,
+    false_commit_count: int,
+    false_rollback_count: int,
+    false_finalization_count: int,
+    loop_detected: bool,
+    evaluator_error: str | None,
+) -> bool:
+    """Recognize only the versioned, safety-clean completion assessment."""
+
+    assessment_valid, _ = validate_post_correction_handoff_assessment(
+        assessment,
+        scenario_id,
+        physical_root_fingerprint,
+        scenario_family,
+    )
+    return bool(
+        terminal
+        and terminal_outcome == "operator_escalation"
+        and assessment_valid
+        and false_commit_count == 0
+        and false_rollback_count == 0
+        and false_finalization_count == 0
+        and not loop_detected
+        and evaluator_error is None
+    )
+
+
+def _episode_has_audited_post_correction_handoff(
+    episode: EpisodeEvaluation,
+) -> bool:
+    audit = episode.audit if isinstance(episode.audit, Mapping) else {}
+    return _is_audited_post_correction_handoff(
+        terminal=episode.terminal,
+        terminal_outcome=episode.terminal_outcome,
+        assessment=audit.get("post_correction_handoff_assessment"),
+        scenario_id=episode.scenario_id,
+        physical_root_fingerprint=episode.physical_root,
+        scenario_family=episode.family,
+        false_commit_count=episode.false_commit_count,
+        false_rollback_count=episode.false_rollback_count,
+        false_finalization_count=episode.false_finalization_count,
+        loop_detected=episode.loop_detected,
+        evaluator_error=episode.evaluator_error,
+    )
+
+
 def summarize_episode_evaluations(
     episodes: Iterable[EpisodeEvaluation],
 ) -> dict[str, Any]:
@@ -2852,6 +2947,20 @@ def summarize_episode_evaluations(
     escalated = sum(
         row.terminal and row.terminal_outcome == "operator_escalation"
         for row in rows
+    )
+    audited_handoff_flags = [
+        _episode_has_audited_post_correction_handoff(row) for row in rows
+    ]
+    audited_handoffs = sum(audited_handoff_flags)
+    audited_completions = sum(
+        row.final_physical_success or audited_handoff
+        for row, audited_handoff in zip(rows, audited_handoff_flags)
+    )
+    unqualified_escalations = sum(
+        row.terminal
+        and row.terminal_outcome == "operator_escalation"
+        and not audited_handoff
+        for row, audited_handoff in zip(rows, audited_handoff_flags)
     )
     physical_known = sum(row.physical_correctness_known for row in rows)
     physical_correct = sum(row.final_physical_correct for row in rows)
@@ -2897,6 +3006,14 @@ def summarize_episode_evaluations(
         "resolution_rate": _rate(resolved, total),
         "operator_escalation_episodes": escalated,
         "operator_escalation_rate": _rate(escalated, total),
+        "audited_post_correction_handoff_episodes": audited_handoffs,
+        "audited_post_correction_handoff_rate": _rate(audited_handoffs, total),
+        "audited_completion_episodes": audited_completions,
+        "audited_completion_rate": _rate(audited_completions, total),
+        "unqualified_operator_escalation_episodes": unqualified_escalations,
+        "unqualified_operator_escalation_rate": _rate(
+            unqualified_escalations, total
+        ),
         "unknown_terminal_outcome_episodes": sum(
             row.terminal and row.terminal_outcome not in {"resolved", "operator_escalation"}
             for row in rows
@@ -3015,6 +3132,13 @@ def _recovery_metrics(summary: Mapping[str, Any]) -> RecoveryMetrics:
         terminal_rate=float(summary["terminal_rate"]),
         resolution_rate=float(summary["resolution_rate"]),
         operator_escalation_rate=float(summary["operator_escalation_rate"]),
+        audited_post_correction_handoff=float(
+            summary["audited_post_correction_handoff_rate"]
+        ),
+        audited_completion=float(summary["audited_completion_rate"]),
+        unqualified_operator_escalation=float(
+            summary["unqualified_operator_escalation_rate"]
+        ),
         healthy_component_preservation=float(
             summary["healthy_component_preservation_rate"]
         ),
@@ -3692,6 +3816,14 @@ def _output_terminal_outcome(output: Mapping[str, Any]) -> str | None:
     metrics = output.get("tool_metrics")
     nested = metrics.get("terminal_outcome") if isinstance(metrics, Mapping) else None
     value = direct if direct is not None else nested
+    return str(value) if value is not None else None
+
+
+def _output_runtime_state_hash(output: Mapping[str, Any]) -> str | None:
+    """Persist the tool-reported physical-state hash for offline binding."""
+
+    metrics = output.get("tool_metrics")
+    value = metrics.get("state_hash") if isinstance(metrics, Mapping) else None
     return str(value) if value is not None else None
 
 

@@ -129,6 +129,11 @@ def _write_d0_inputs(root: Path) -> Path:
     )
     _write_jsonl(validation_path, [{"example_id": "validation-example"}])
     _write_jsonl(test_path, [{"example_id": "test-example"}])
+    manifest_path = aggregate_dir / "aggregate.manifest.json"
+    manifest_path.write_text(
+        json.dumps({"episode_audits": []}, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     generation_descriptor = {"source_state": SOURCE_STATE}
     provenance = {
         "release_eligible": True,
@@ -136,7 +141,7 @@ def _write_d0_inputs(root: Path) -> Path:
         "generation_provenance_id": stable_json_sha256(generation_descriptor),
         "dataset_hashes": {
             path.name: file_sha256(path)
-            for path in (raw_path, validation_path, test_path)
+            for path in (raw_path, validation_path, test_path, manifest_path)
         },
     }
     (aggregate_dir / "aggregate.generation_provenance.json").write_text(
@@ -363,6 +368,10 @@ class Dagger1ScenarioBuilderTests(unittest.TestCase):
                 1,
             )
             self.assertEqual(first_manifest["protected_root_overlap"], [])
+            self.assertEqual(
+                first_manifest["d0_manifest_sha256"],
+                file_sha256(d0_dir / "aggregate.manifest.json"),
+            )
             selected_roots = {
                 row["grouping"]["physical_root_fingerprint"]
                 for row in json.loads(first_output.read_text(encoding="utf-8"))
@@ -614,6 +623,46 @@ class Dagger1ScenarioBuilderTests(unittest.TestCase):
                     plan={"parameter": 1},
                 )
 
+    def test_builder_rejects_missing_or_tampered_d0_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            d0_dir = _write_d0_inputs(root)
+            manifest_path = d0_dir / "aggregate.manifest.json"
+            manifest_path.unlink()
+            with (
+                patch.object(
+                    scenario_module,
+                    "git_source_state",
+                    return_value=SOURCE_STATE,
+                ),
+                self.assertRaisesRegex(FileNotFoundError, "manifest"),
+            ):
+                scenario_module.build_dagger1_scenarios(
+                    d0_aggregate_dir=d0_dir,
+                    output=root / "missing-scenarios.json",
+                    generator_report_path=root / "missing-generator.json",
+                    seed=20260720,
+                    plan={"parameter": 1},
+                )
+
+            d0_dir = _write_d0_inputs(root)
+            manifest_path.write_text("tampered\n", encoding="utf-8")
+            with (
+                patch.object(
+                    scenario_module,
+                    "git_source_state",
+                    return_value=SOURCE_STATE,
+                ),
+                self.assertRaisesRegex(RuntimeError, "manifest does not match"),
+            ):
+                scenario_module.build_dagger1_scenarios(
+                    d0_aggregate_dir=d0_dir,
+                    output=root / "tampered-scenarios.json",
+                    generator_report_path=root / "tampered-generator.json",
+                    seed=20260720,
+                    plan={"parameter": 1},
+                )
+
 
 class Dagger1AggregateBuilderTests(unittest.TestCase):
     def _write_d1_inputs(self, root: Path) -> tuple[Path, Path]:
@@ -651,6 +700,7 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
         d0_provenance_path = (
             d0_dir / "aggregate.generation_provenance.json"
         )
+        d0_manifest_path = d0_dir / "aggregate.manifest.json"
         development_rows = []
         for family, count in DEFAULT_DAGGER1_DEVELOPMENT_ROOT_PLAN.items():
             for index in range(count):
@@ -732,6 +782,7 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
             "d0_generation_provenance_sha256": file_sha256(
                 d0_provenance_path
             ),
+            "d0_manifest_sha256": file_sha256(d0_manifest_path),
             "frozen_suite_sha256": file_sha256(DEFAULT_FORBIDDEN_SUITE),
             "evaluation_policy_sha256": file_sha256(
                 DEFAULT_EVALUATION_POLICY
@@ -788,6 +839,7 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
             "input_sha256": file_sha256(scenario_input),
             "scenario_manifest": str(scenario_manifest),
             "scenario_manifest_sha256": file_sha256(scenario_manifest),
+            "d0_manifest_sha256": file_sha256(d0_manifest_path),
             "development_holdout": str(development_path),
             "development_holdout_sha256": file_sha256(development_path),
             "development_holdout_manifest": str(development_manifest_path),
@@ -1291,6 +1343,12 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                     )
                 )
                 self.assertEqual(
+                    provenance["generation_descriptor"]["input_artifacts"][
+                        "d0_manifest_sha256"
+                    ],
+                    file_sha256(d0_dir / "aggregate.manifest.json"),
+                )
+                self.assertEqual(
                     provenance["generation_descriptor"]["learner_seed"],
                     {
                         "role": "learner_seed_only",
@@ -1410,8 +1468,52 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                     )
                 d0_provenance_path.write_bytes(original_d0_provenance)
 
+                d0_manifest_path = d0_dir / "aggregate.manifest.json"
+                original_d0_manifest = d0_manifest_path.read_bytes()
+                d0_manifest_path.write_text("tampered\n", encoding="utf-8")
+                with self.assertRaisesRegex(
+                    ValueError, "manifest does not match its provenance"
+                ):
+                    aggregate_module.build_round1_aggregate(
+                        d0_aggregate_dir=d0_dir,
+                        d1_path=d1_path,
+                        d1_manifest_path=d1_manifest_path,
+                        output_dir=root / "d0-bad-manifest",
+                        seed=20260719,
+                        size=None,
+                        d1_share=0.25,
+                        minimum_d1_share=0.20,
+                        maximum_d1_share=0.30,
+                        max_duplicate_count=2,
+                        max_rows_per_root=8,
+                    )
+                d0_manifest_path.write_bytes(original_d0_manifest)
+
                 original_d1 = d1_path.read_bytes()
                 original_manifest = d1_manifest_path.read_bytes()
+                d1_wrong_d0 = json.loads(original_manifest)
+                d1_wrong_d0["d0_manifest_sha256"] = "f" * 64
+                d1_manifest_path.write_text(
+                    json.dumps(d1_wrong_d0, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(
+                    ValueError, "bound to a different D0 aggregate manifest"
+                ):
+                    aggregate_module.build_round1_aggregate(
+                        d0_aggregate_dir=d0_dir,
+                        d1_path=d1_path,
+                        d1_manifest_path=d1_manifest_path,
+                        output_dir=root / "d1-wrong-d0-manifest",
+                        seed=20260719,
+                        size=None,
+                        d1_share=0.25,
+                        minimum_d1_share=0.20,
+                        maximum_d1_share=0.30,
+                        max_duplicate_count=2,
+                        max_rows_per_root=8,
+                    )
+                d1_manifest_path.write_bytes(original_manifest)
                 original_all_output_path = Path(
                     json.loads(original_manifest)["all_output"]
                 )

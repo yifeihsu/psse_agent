@@ -24,9 +24,12 @@ from numbers import Real
 from typing import Any, Callable, Mapping, Sequence
 
 from psse_env.actions import (
+    ASK_FOR_MORE_EVIDENCE,
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,
+    POST_CORRECTION_CONFIRMATION_SIGNATURE,
+    RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
 )
 from psse_env.private_target_matching import (
     PARAMETER_BRANCH_COLUMNS as _SHARED_PARAMETER_BRANCH_COLUMNS,
@@ -37,6 +40,9 @@ from psse_env.private_target_matching import (
 
 
 AUDIT_VERSION = "strict_offline_episode_truth_v3"
+POST_CORRECTION_COMPLETION_CONTRACT = (
+    "audit_verified_post_correction_controller_handoff_v1"
+)
 
 ACCEPTED_TARGETS_CHECK = "accepted_correction_targets"
 ACCEPTED_TARGET_NONREGRESSION_CHECK = "accepted_target_nonregression"
@@ -245,6 +251,200 @@ def _accepted_corrections(final_state: Mapping[str, Any]) -> tuple[list[Mapping[
 def _correction_action(item: Mapping[str, Any]) -> Mapping[str, Any] | None:
     action = item.get("source_action") or item.get("action") or item
     return action if isinstance(action, Mapping) else None
+
+
+def observable_post_correction_handoff_certificate(
+    final_state: Mapping[str, Any],
+    *,
+    terminal: bool,
+    terminal_outcome: str | None,
+) -> dict[str, Any]:
+    """Validate the observable controller handoff emitted after a commit.
+
+    This certificate is truth-free.  It proves only that the controller
+    reached the reviewed, state-bound post-correction handoff path; the
+    separate private completion assessment below decides whether that handoff
+    may count toward an offline release-availability numerator.
+    """
+
+    failures: list[str] = []
+
+    def require(condition: bool, reason: str) -> None:
+        if not condition:
+            failures.append(reason)
+
+    accepted, accepted_well_formed = _accepted_corrections(final_state)
+    history = _as_sequence(final_state.get("history_window")) or []
+    last_transition = history[-1] if history and isinstance(history[-1], Mapping) else {}
+    action = last_transition.get("action")
+    action = action if isinstance(action, Mapping) else {}
+    arguments = action.get("arguments")
+    arguments = arguments if isinstance(arguments, Mapping) else {}
+    output = final_state.get("last_tool_output")
+    output = output if isinstance(output, Mapping) else {}
+    transition_output = last_transition.get("tool_output")
+    transition_output = (
+        transition_output if isinstance(transition_output, Mapping) else {}
+    )
+    metrics = output.get("tool_metrics")
+    metrics = metrics if isinstance(metrics, Mapping) else {}
+    escalation = metrics.get("operator_escalation_audit")
+    escalation = escalation if isinstance(escalation, Mapping) else {}
+
+    active_state_id = final_state.get("active_state_id")
+    state_bindings = (
+        active_state_id,
+        last_transition.get("state_id"),
+        arguments.get("state_id"),
+        output.get("active_state_id"),
+        metrics.get("state_id"),
+        escalation.get("active_state_id"),
+    )
+    output_state_hash = metrics.get("state_hash")
+    audit_state_hash = escalation.get("active_state_hash")
+    transition_label = last_transition.get("transition_label")
+    transition_label = (
+        transition_label if isinstance(transition_label, Mapping) else {}
+    )
+    accepted_actions = [_correction_action(item) for item in accepted]
+    accepted_candidate_ids = [item.get("candidate_state_id") for item in accepted]
+
+    require(bool(terminal), "handoff_requires_terminal_episode")
+    require(
+        terminal_outcome == "operator_escalation",
+        "handoff_requires_operator_escalation_outcome",
+    )
+    require(
+        final_state.get("last_tool") == ASK_FOR_MORE_EVIDENCE,
+        "handoff_last_tool_mismatch",
+    )
+    require(
+        action.get("tool") == ASK_FOR_MORE_EVIDENCE,
+        "handoff_final_action_mismatch",
+    )
+    require(
+        arguments.get("request") == RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+        "handoff_action_request_mismatch",
+    )
+    require(
+        metrics.get("request") == RECOVERY_OPTIONS_EXHAUSTED_REQUEST
+        and escalation.get("request") == RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+        "handoff_output_request_mismatch",
+    )
+    require(
+        output.get("execution_status") == "success"
+        and output.get("state_mutated") is False
+        and output.get("candidate_state_id") is None
+        and output.get("error_code") is None
+        and output.get("error_detail") is None
+        and final_state.get("last_tool_status") == "success",
+        "handoff_output_not_successful_read_only",
+    )
+    require(
+        transition_output == output,
+        "handoff_history_output_disagrees_with_final_output",
+    )
+    require(
+        transition_label.get("execution_status") == "success"
+        and transition_label.get("process_valid") is True
+        and transition_label.get("error_code") is None
+        and transition_label.get("error_detail") is None,
+        "handoff_transition_label_invalid",
+    )
+    require(
+        metrics.get("terminal_outcome") == "operator_escalation",
+        "handoff_output_terminal_outcome_mismatch",
+    )
+    require(
+        accepted_well_formed
+        and bool(accepted)
+        and all(
+            isinstance(accepted_action, Mapping)
+            and accepted_action.get("tool") in _CORRECTION_FAMILY
+            and isinstance(accepted_action.get("arguments"), Mapping)
+            for accepted_action in accepted_actions
+        ),
+        "handoff_requires_accepted_correction",
+    )
+    require(
+        final_state.get("has_open_candidate") is False
+        and final_state.get("has_unverified_candidate") is False
+        and final_state.get("has_verified_candidate") is False
+        and final_state.get("candidate_state_id") is None,
+        "handoff_requires_no_open_candidate",
+    )
+    require(
+        isinstance(active_state_id, str)
+        and bool(active_state_id)
+        and all(value == active_state_id for value in state_bindings),
+        "handoff_active_state_binding_mismatch",
+    )
+    require(
+        isinstance(output_state_hash, str)
+        and len(output_state_hash) == 64
+        and output_state_hash == output_state_hash.lower()
+        and set(output_state_hash) <= set("0123456789abcdef")
+        and output_state_hash == audit_state_hash,
+        "handoff_active_state_hash_binding_mismatch",
+    )
+    require(
+        bool(accepted_candidate_ids)
+        and all(
+            isinstance(candidate_id, str) and bool(candidate_id)
+            for candidate_id in accepted_candidate_ids
+        )
+        and accepted_candidate_ids[-1] == active_state_id,
+        "handoff_accepted_correction_state_binding_mismatch",
+    )
+    require(
+        escalation.get("post_correction_confirmation_handoff") is True,
+        "handoff_marker_missing",
+    )
+    require(
+        escalation.get("post_correction_confirmation_deferred") is False,
+        "handoff_confirmation_still_deferred",
+    )
+    require(
+        metrics.get("operator_review_required") is True
+        and escalation.get("operator_review_required") is True,
+        "handoff_operator_review_not_required",
+    )
+    require(
+        metrics.get("additional_evidence_available") is False
+        and escalation.get("additional_evidence_available") is False,
+        "handoff_additional_evidence_still_available",
+    )
+    require(
+        escalation.get("missing_required_contexts") == [],
+        "handoff_required_context_missing",
+    )
+    require(
+        escalation.get("outstanding_recovery_targets") == [],
+        "handoff_recovery_target_outstanding",
+    )
+    require(
+        escalation.get("unexplained_signature_count") == 1,
+        "handoff_unexplained_signature_count_mismatch",
+    )
+    require(
+        list(final_state.get("unresolved_signatures") or [])
+        == [POST_CORRECTION_CONFIRMATION_SIGNATURE],
+        "handoff_confirmation_signature_mismatch",
+    )
+
+    return {
+        "contract": POST_CORRECTION_COMPLETION_CONTRACT,
+        "passed": not failures,
+        "failures": list(dict.fromkeys(failures)),
+        "active_state_id": active_state_id if isinstance(active_state_id, str) else None,
+        "active_state_hash": (
+            output_state_hash if isinstance(output_state_hash, str) else None
+        ),
+        "accepted_correction_count": len(accepted),
+        "post_correction_confirmation_handoff": (
+            escalation.get("post_correction_confirmation_handoff") is True
+        ),
+    }
 
 
 def _measurement_truth_targets(
@@ -1824,11 +2024,403 @@ def audit_episode_against_truth(
     }
 
 
+def audit_post_correction_controller_handoff(
+    scenario: Mapping[str, Any],
+    final_state: Mapping[str, Any],
+    *,
+    terminal: bool,
+    terminal_outcome: str | None,
+    active_physical_state: Mapping[str, Any] | None = None,
+    remaining_truth: Mapping[str, Any] | None = None,
+    case_loader: Callable[[Any], Any] | None = None,
+    tolerances: ReleaseAuditTolerances | Mapping[str, Any] | None = None,
+    not_applicable: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Score a truth-free controller handoff as an offline completion.
+
+    The production outcome remains ``operator_escalation``. Private truth is
+    used only after the episode to decide whether the handoff may contribute
+    to a release-availability numerator. Partial or generic handoffs remain
+    valid safe terminal outcomes, but they cannot pass this assessment.
+    """
+
+    certificate = observable_post_correction_handoff_certificate(
+        final_state,
+        terminal=terminal,
+        terminal_outcome=terminal_outcome,
+    )
+    marker_claimed = certificate.get("post_correction_confirmation_handoff") is True
+    reasons: list[str] = []
+    counterfactual: dict[str, Any] | None = None
+    physical_binding_reasons: list[str] = []
+    if marker_claimed and certificate.get("passed") is True:
+        if not isinstance(active_physical_state, Mapping):
+            physical_binding_reasons.append(
+                "handoff_active_physical_state_missing_or_malformed"
+            )
+        else:
+            physical_state_id = active_physical_state.get("state_id")
+            physical_state_hash = active_physical_state.get("state_hash")
+            if physical_state_id != certificate.get("active_state_id"):
+                physical_binding_reasons.append(
+                    "handoff_active_physical_state_id_mismatch"
+                )
+            if not (
+                isinstance(physical_state_hash, str)
+                and len(physical_state_hash) == 64
+                and physical_state_hash == physical_state_hash.lower()
+                and set(physical_state_hash) <= set("0123456789abcdef")
+                and physical_state_hash == certificate.get("active_state_hash")
+            ):
+                physical_binding_reasons.append(
+                    "handoff_active_physical_state_hash_mismatch"
+                )
+    if not marker_claimed:
+        status = "not_applicable"
+    elif certificate.get("passed") is not True:
+        status = "failed"
+        reasons.extend(str(item) for item in certificate.get("failures") or [])
+    elif physical_binding_reasons:
+        status = "failed"
+        reasons.extend(physical_binding_reasons)
+    else:
+        # Reuse the reviewed strict-v3 physical-completion semantics without
+        # changing the actual production label. The nested audit is plainly
+        # marked counterfactual and never reaches PolicyObservation or SFT.
+        counterfactual = audit_episode_against_truth(
+            scenario,
+            final_state,
+            terminal=terminal,
+            terminal_outcome="resolved",
+            active_physical_state=active_physical_state,
+            remaining_truth=remaining_truth,
+            case_loader=case_loader,
+            tolerances=tolerances,
+            not_applicable=not_applicable,
+        )
+        checks = counterfactual.get("checks")
+        checks = checks if isinstance(checks, Mapping) else {}
+        required_checks = (
+            ACCEPTED_TARGETS_CHECK,
+            ACCEPTED_TARGET_NONREGRESSION_CHECK,
+            REMAINING_FAULTS_CHECK,
+            HEALTHY_MEASUREMENTS_CHECK,
+            HEALTHY_CASE_CHECK,
+            FINAL_MEASUREMENTS_CHECK,
+            FINAL_CASE_CHECK,
+        )
+        for name in required_checks:
+            check = checks.get(name)
+            check = check if isinstance(check, Mapping) else {}
+            if check.get("status") != "passed":
+                reasons.append(f"counterfactual_completion_check_failed:{name}")
+        remaining = checks.get(REMAINING_FAULTS_CHECK)
+        remaining = remaining if isinstance(remaining, Mapping) else {}
+        if remaining.get("derived_remaining_fault_count") != 0:
+            reasons.append("counterfactual_completion_remaining_truth_nonzero")
+        nonregression = checks.get(ACCEPTED_TARGET_NONREGRESSION_CHECK)
+        nonregression = nonregression if isinstance(nonregression, Mapping) else {}
+        target_evidence = nonregression.get("target_evidence")
+        if not isinstance(target_evidence, list) or not target_evidence:
+            reasons.append("counterfactual_completion_has_no_committed_target")
+        if counterfactual.get("quarantined") is not False:
+            reasons.append("counterfactual_completion_quarantined")
+        if counterfactual.get("problems") != []:
+            reasons.append("counterfactual_completion_reported_problems")
+        status = "passed" if not reasons else "failed"
+
+    return {
+        "assessment_version": POST_CORRECTION_COMPLETION_CONTRACT,
+        "status": status,
+        "eligible": status == "passed",
+        "reasons": list(dict.fromkeys(reasons)),
+        "actual_terminal_outcome": terminal_outcome,
+        "runtime_contract": certificate,
+        "counterfactual_completion_audit": counterfactual,
+    }
+
+
+_POST_CORRECTION_ASSESSMENT_FIELDS = frozenset(
+    {
+        "assessment_version",
+        "status",
+        "eligible",
+        "reasons",
+        "actual_terminal_outcome",
+        "runtime_contract",
+        "counterfactual_completion_audit",
+    }
+)
+_POST_CORRECTION_ASSESSMENT_IDENTITY_FIELDS = frozenset(
+    {"scenario_id", "physical_root_fingerprint", "scenario_family"}
+)
+_POST_CORRECTION_RUNTIME_FIELDS = frozenset(
+    {
+        "contract",
+        "passed",
+        "failures",
+        "active_state_id",
+        "active_state_hash",
+        "accepted_correction_count",
+        "post_correction_confirmation_handoff",
+    }
+)
+_POST_CORRECTION_COUNTERFACTUAL_CHECKS = (
+    ACCEPTED_TARGETS_CHECK,
+    ACCEPTED_TARGET_NONREGRESSION_CHECK,
+    REMAINING_FAULTS_CHECK,
+    HEALTHY_MEASUREMENTS_CHECK,
+    HEALTHY_CASE_CHECK,
+    FINAL_MEASUREMENTS_CHECK,
+    FINAL_CASE_CHECK,
+)
+
+
+def validate_post_correction_handoff_assessment(
+    assessment: Mapping[str, Any],
+    scenario_id: str,
+    physical_root_fingerprint: str,
+    scenario_family: str,
+) -> tuple[bool, list[str]]:
+    """Recompute handoff eligibility from canonical persisted evidence.
+
+    The reported ``eligible`` bit is checked only for consistency. It never
+    supplies eligibility: exact contract versions, runtime evidence, private
+    audit bindings, completion checks, and committed-target evidence must all
+    independently validate. The helper is pure so generation and evaluation
+    gates can apply the same fail-closed interpretation.
+    """
+
+    failures: list[str] = []
+
+    def require(condition: bool, reason: str) -> None:
+        if not condition:
+            failures.append(reason)
+
+    if not isinstance(assessment, Mapping):
+        return False, ["handoff_assessment_missing_or_malformed"]
+
+    expected_identity = {
+        "scenario_id": str(scenario_id or ""),
+        "physical_root_fingerprint": str(physical_root_fingerprint or ""),
+        "scenario_family": str(scenario_family or ""),
+    }
+    require(
+        all(expected_identity.values()),
+        "handoff_assessment_expected_identity_missing",
+    )
+    assessment_fields = frozenset(assessment)
+    require(
+        assessment_fields
+        in {
+            _POST_CORRECTION_ASSESSMENT_FIELDS,
+            _POST_CORRECTION_ASSESSMENT_FIELDS
+            | _POST_CORRECTION_ASSESSMENT_IDENTITY_FIELDS,
+        },
+        "handoff_assessment_schema_mismatch",
+    )
+    for field, expected in expected_identity.items():
+        if field in assessment:
+            require(
+                assessment.get(field) == expected,
+                f"handoff_assessment_{field}_mismatch",
+            )
+
+    require(
+        assessment.get("assessment_version")
+        == POST_CORRECTION_COMPLETION_CONTRACT,
+        "handoff_assessment_version_mismatch",
+    )
+    require(
+        assessment.get("status") == "passed",
+        "handoff_assessment_not_passed",
+    )
+    require(
+        assessment.get("eligible") is True,
+        "handoff_assessment_declared_eligibility_invalid",
+    )
+    require(
+        assessment.get("reasons") == [],
+        "handoff_assessment_reported_reasons",
+    )
+    require(
+        assessment.get("actual_terminal_outcome") == "operator_escalation",
+        "handoff_assessment_terminal_outcome_mismatch",
+    )
+
+    raw_runtime = assessment.get("runtime_contract")
+    runtime = raw_runtime if isinstance(raw_runtime, Mapping) else {}
+    require(
+        isinstance(raw_runtime, Mapping)
+        and set(runtime) == _POST_CORRECTION_RUNTIME_FIELDS,
+        "handoff_runtime_schema_mismatch",
+    )
+    require(
+        runtime.get("contract") == POST_CORRECTION_COMPLETION_CONTRACT,
+        "handoff_runtime_contract_mismatch",
+    )
+    require(runtime.get("passed") is True, "handoff_runtime_not_passed")
+    require(runtime.get("failures") == [], "handoff_runtime_reported_failures")
+    require(
+        runtime.get("post_correction_confirmation_handoff") is True,
+        "handoff_runtime_marker_missing",
+    )
+    active_state_id = runtime.get("active_state_id")
+    require(
+        isinstance(active_state_id, str) and bool(active_state_id),
+        "handoff_runtime_active_state_id_invalid",
+    )
+    active_state_hash = runtime.get("active_state_hash")
+    require(
+        isinstance(active_state_hash, str)
+        and len(active_state_hash) == 64
+        and active_state_hash == active_state_hash.lower()
+        and set(active_state_hash) <= set("0123456789abcdef"),
+        "handoff_runtime_active_state_hash_invalid",
+    )
+    accepted_count = runtime.get("accepted_correction_count")
+    require(
+        not isinstance(accepted_count, bool)
+        and isinstance(accepted_count, int)
+        and accepted_count > 0,
+        "handoff_runtime_accepted_correction_missing",
+    )
+
+    raw_counterfactual = assessment.get("counterfactual_completion_audit")
+    counterfactual = (
+        raw_counterfactual if isinstance(raw_counterfactual, Mapping) else {}
+    )
+    require(
+        isinstance(raw_counterfactual, Mapping),
+        "handoff_counterfactual_audit_missing_or_malformed",
+    )
+    require(
+        counterfactual.get("audit_version") == AUDIT_VERSION,
+        "handoff_counterfactual_audit_version_mismatch",
+    )
+    for field, expected in expected_identity.items():
+        require(
+            counterfactual.get(field) == expected,
+            f"handoff_counterfactual_{field}_mismatch",
+        )
+    require(
+        counterfactual.get("terminal") is True,
+        "handoff_counterfactual_not_terminal",
+    )
+    require(
+        counterfactual.get("terminal_outcome") == "resolved",
+        "handoff_counterfactual_outcome_mismatch",
+    )
+    require(
+        counterfactual.get("quarantined") is False,
+        "handoff_counterfactual_quarantined",
+    )
+    require(
+        counterfactual.get("problems") == [],
+        "handoff_counterfactual_reported_problems",
+    )
+    raw_tolerances = counterfactual.get("tolerances")
+    require(
+        isinstance(raw_tolerances, Mapping)
+        and set(raw_tolerances)
+        == {item.name for item in fields(ReleaseAuditTolerances)},
+        "handoff_counterfactual_tolerances_invalid",
+    )
+    try:
+        _coerce_tolerances(raw_tolerances)
+    except (TypeError, ValueError):
+        failures.append("handoff_counterfactual_tolerances_invalid")
+
+    raw_checks = counterfactual.get("checks")
+    checks = raw_checks if isinstance(raw_checks, Mapping) else {}
+    require(
+        isinstance(raw_checks, Mapping),
+        "handoff_counterfactual_checks_missing_or_malformed",
+    )
+    for name in _POST_CORRECTION_COUNTERFACTUAL_CHECKS:
+        raw_check = checks.get(name)
+        check = raw_check if isinstance(raw_check, Mapping) else {}
+        require(
+            isinstance(raw_check, Mapping)
+            and check.get("status") == "passed"
+            and check.get("problems") == [],
+            f"handoff_counterfactual_check_failed:{name}",
+        )
+
+    remaining = checks.get(REMAINING_FAULTS_CHECK)
+    remaining = remaining if isinstance(remaining, Mapping) else {}
+    require(
+        remaining.get("derived_remaining_fault_count") == 0,
+        "handoff_counterfactual_remaining_truth_nonzero",
+    )
+    require(
+        remaining.get("evidence_source")
+        == "offline_scenario_truth_derivation",
+        "handoff_counterfactual_remaining_truth_source_invalid",
+    )
+
+    nonregression = checks.get(ACCEPTED_TARGET_NONREGRESSION_CHECK)
+    nonregression = nonregression if isinstance(nonregression, Mapping) else {}
+    target_evidence = nonregression.get("target_evidence")
+    require(
+        isinstance(target_evidence, list) and bool(target_evidence),
+        "handoff_counterfactual_target_evidence_missing",
+    )
+    evidence_targets: set[tuple[str, int]] = set()
+    if isinstance(target_evidence, list):
+        for item in target_evidence:
+            evidence = item if isinstance(item, Mapping) else {}
+            family = evidence.get("family")
+            target: tuple[str, int] | None = None
+            if family == "measurement":
+                index0 = evidence.get("index0")
+                if (
+                    not isinstance(index0, bool)
+                    and isinstance(index0, int)
+                    and index0 >= 0
+                ):
+                    target = ("measurement", index0)
+            elif family in {"parameter", "topology"}:
+                raw_target = _as_sequence(evidence.get("target"))
+                if (
+                    raw_target is not None
+                    and len(raw_target) == 2
+                    and raw_target[0] == "branch_row0"
+                    and not isinstance(raw_target[1], bool)
+                    and isinstance(raw_target[1], int)
+                    and raw_target[1] >= 0
+                ):
+                    target = (str(family), raw_target[1])
+            initial_distance = _finite_number(evidence.get("initial_distance"))
+            final_distance = _finite_number(evidence.get("final_distance"))
+            tolerance = _finite_number(evidence.get("tolerance"))
+            require(
+                isinstance(item, Mapping)
+                and target is not None
+                and target not in evidence_targets
+                and evidence.get("status") == "passed"
+                and initial_distance is not None
+                and initial_distance >= 0.0
+                and final_distance is not None
+                and final_distance >= 0.0
+                and tolerance is not None
+                and tolerance >= 0.0
+                and final_distance <= tolerance,
+                "handoff_counterfactual_target_evidence_invalid",
+            )
+            if target is not None:
+                evidence_targets.add(target)
+
+    unique_failures = list(dict.fromkeys(failures))
+    return not unique_failures, unique_failures
+
+
 __all__ = [
     "ACCEPTED_TARGET_NONREGRESSION_CHECK",
     "ACCEPTED_TARGETS_CHECK",
     "ALLOWED_NOT_APPLICABLE_CHECKS",
     "AUDIT_VERSION",
+    "POST_CORRECTION_COMPLETION_CONTRACT",
     "DIAGNOSTIC_FAMILY_CHECK",
     "DIAGNOSTIC_LOCALIZATION_CHECK",
     "EXPLANATION_ONLY_DIAGNOSTIC_CONTRACT",
@@ -1838,5 +2430,8 @@ __all__ = [
     "HEALTHY_MEASUREMENTS_CHECK",
     "REMAINING_FAULTS_CHECK",
     "ReleaseAuditTolerances",
+    "audit_post_correction_controller_handoff",
     "audit_episode_against_truth",
+    "observable_post_correction_handoff_certificate",
+    "validate_post_correction_handoff_assessment",
 ]

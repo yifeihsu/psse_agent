@@ -3,6 +3,11 @@ from __future__ import annotations
 import copy
 import unittest
 
+from psse_env.actions import (
+    ASK_FOR_MORE_EVIDENCE,
+    POST_CORRECTION_CONFIRMATION_SIGNATURE,
+    RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+)
 from psse_env.dagger.release_audit import (
     ACCEPTED_TARGET_NONREGRESSION_CHECK,
     ACCEPTED_TARGETS_CHECK,
@@ -12,8 +17,12 @@ from psse_env.dagger.release_audit import (
     FINAL_MEASUREMENTS_CHECK,
     HEALTHY_CASE_CHECK,
     HEALTHY_MEASUREMENTS_CHECK,
+    POST_CORRECTION_COMPLETION_CONTRACT,
     REMAINING_FAULTS_CHECK,
+    audit_post_correction_controller_handoff,
     audit_episode_against_truth,
+    observable_post_correction_handoff_certificate,
+    validate_post_correction_handoff_assessment,
 )
 
 
@@ -48,6 +57,7 @@ def _active(
 ) -> dict[str, object]:
     return {
         "state_id": "episode:s2",
+        "state_hash": "a" * 64,
         "case": copy.deepcopy(_case() if case is None else case),
         "measurements": list(measurements or [1.0, 2.0, 3.0]),
     }
@@ -63,6 +73,117 @@ def _final_state(
         ],
         "explained_anomalies": copy.deepcopy(explanations or []),
     }
+
+
+def _post_correction_handoff_state() -> dict[str, object]:
+    state_id = "episode:s2"
+    state_hash = "a" * 64
+    output = {
+        "active_state_id": state_id,
+        "candidate_state_id": None,
+        "error_code": None,
+        "error_detail": None,
+        "execution_status": "success",
+        "state_mutated": False,
+        "tool_metrics": {
+            "additional_evidence_available": False,
+            "operator_review_required": True,
+            "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+            "state_hash": state_hash,
+            "state_id": state_id,
+            "terminal_outcome": "operator_escalation",
+            "operator_escalation_audit": {
+                "active_state_hash": state_hash,
+                "active_state_id": state_id,
+                "additional_evidence_available": False,
+                "missing_required_contexts": [],
+                "operator_review_required": True,
+                "outstanding_recovery_targets": [],
+                "post_correction_confirmation_deferred": False,
+                "post_correction_confirmation_handoff": True,
+                "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                "unexplained_signature_count": 1,
+            },
+        },
+        "valid_next_actions": [],
+    }
+    return {
+        "accepted_corrections": [
+            {
+                "candidate_parent_id": "episode:s0",
+                "candidate_state_id": state_id,
+                "source_action": {
+                    "tool": "correct_measurements",
+                    "arguments": {
+                        "state_id": "episode:s0",
+                        "suspect_group": [1],
+                    },
+                },
+            }
+        ],
+        "active_state_id": state_id,
+        "candidate_state_id": None,
+        "explained_anomalies": [],
+        "has_open_candidate": False,
+        "has_unverified_candidate": False,
+        "has_verified_candidate": False,
+        "history_window": [
+            {
+                "action": {
+                    "tool": ASK_FOR_MORE_EVIDENCE,
+                    "arguments": {
+                        "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                        "state_id": state_id,
+                    },
+                },
+                "state_id": state_id,
+                "tool_output": copy.deepcopy(output),
+                "transition_label": {
+                    "error_code": None,
+                    "error_detail": None,
+                    "execution_status": "success",
+                    "process_valid": True,
+                    "reason": None,
+                    "valid_next_actions": [],
+                },
+            }
+        ],
+        "last_tool": ASK_FOR_MORE_EVIDENCE,
+        "last_tool_output": output,
+        "last_tool_status": "success",
+        "no_material_anomaly_remaining": False,
+        "unresolved_signatures": [POST_CORRECTION_CONFIRMATION_SIGNATURE],
+    }
+
+
+def _post_correction_scenario() -> dict[str, object]:
+    scenario = _base_scenario()
+    scenario["physical_root_fingerprint"] = "physical_v3_" + "b" * 64
+    return scenario
+
+
+def _post_correction_assessment(
+    *,
+    scenario: dict[str, object] | None = None,
+    final_state: dict[str, object] | None = None,
+    active: dict[str, object] | None = None,
+    remaining: dict[str, object] | None = None,
+    tolerances: dict[str, float] | None = None,
+) -> dict[str, object]:
+    return audit_post_correction_controller_handoff(
+        scenario or _post_correction_scenario(),
+        final_state or _post_correction_handoff_state(),
+        terminal=True,
+        terminal_outcome="operator_escalation",
+        active_physical_state=active or _active(),
+        remaining_truth=remaining
+        or {
+            "remaining_true_fault_count": 0,
+            "remaining_true_faults": [],
+            "truth_complete": True,
+        },
+        tolerances=tolerances,
+    )
 
 
 def _audit_resolved(
@@ -1194,6 +1315,266 @@ class DiagnosticLocalizationTests(unittest.TestCase):
                     result["checks"]["audit_evidence_contract"]["status"],
                     "failed",
                 )
+
+
+class PostCorrectionHandoffAssessmentTests(unittest.TestCase):
+    def _validate(self, assessment: dict[str, object]) -> tuple[bool, list[str]]:
+        scenario = _post_correction_scenario()
+        return validate_post_correction_handoff_assessment(
+            assessment,
+            str(scenario["scenario_id"]),
+            str(scenario["physical_root_fingerprint"]),
+            str(scenario["scenario_family"]),
+        )
+
+    @staticmethod
+    def _synchronize_output(state: dict[str, object]) -> None:
+        history = state["history_window"]
+        assert isinstance(history, list)
+        transition = history[-1]
+        assert isinstance(transition, dict)
+        transition["tool_output"] = copy.deepcopy(state["last_tool_output"])
+
+    def test_valid_exact_handoff_passes_runtime_private_and_persisted_checks(
+        self,
+    ) -> None:
+        state = _post_correction_handoff_state()
+        runtime = observable_post_correction_handoff_certificate(
+            state,
+            terminal=True,
+            terminal_outcome="operator_escalation",
+        )
+        self.assertTrue(runtime["passed"], runtime["failures"])
+
+        assessment = _post_correction_assessment(final_state=state)
+        self.assertEqual(
+            assessment["assessment_version"],
+            POST_CORRECTION_COMPLETION_CONTRACT,
+        )
+        self.assertEqual(assessment["status"], "passed")
+        self.assertTrue(assessment["eligible"])
+        self.assertEqual(
+            assessment["actual_terminal_outcome"], "operator_escalation"
+        )
+        before_validation = copy.deepcopy(assessment)
+        qualified, reasons = self._validate(assessment)
+        self.assertTrue(qualified, reasons)
+        self.assertEqual(reasons, [])
+        self.assertEqual(assessment, before_validation)
+
+    def test_forged_marker_alone_cannot_claim_completion(self) -> None:
+        state = _post_correction_handoff_state()
+        state["unresolved_signatures"] = [
+            "wls_residual_outlier_dominant index=1"
+        ]
+        assessment = _post_correction_assessment(final_state=state)
+
+        self.assertEqual(assessment["status"], "failed")
+        self.assertFalse(assessment["eligible"])
+        self.assertIn(
+            "handoff_confirmation_signature_mismatch", assessment["reasons"]
+        )
+        self.assertIsNone(assessment["counterfactual_completion_audit"])
+
+    def test_wrong_action_request_state_or_hash_fails_runtime_certificate(self) -> None:
+        def wrong_action(state: dict[str, object]) -> None:
+            state["history_window"][-1]["action"]["tool"] = "run_wls"
+
+        def wrong_request(state: dict[str, object]) -> None:
+            state["history_window"][-1]["action"]["arguments"]["request"] = (
+                "operator_escalation:forged"
+            )
+
+        def wrong_state(state: dict[str, object]) -> None:
+            state["history_window"][-1]["action"]["arguments"]["state_id"] = (
+                "episode:forged"
+            )
+
+        def wrong_hash(state: dict[str, object]) -> None:
+            state["last_tool_output"]["tool_metrics"][
+                "operator_escalation_audit"
+            ]["active_state_hash"] = "c" * 64
+
+        mutations = {
+            "action": (wrong_action, "handoff_final_action_mismatch"),
+            "request": (wrong_request, "handoff_action_request_mismatch"),
+            "state": (wrong_state, "handoff_active_state_binding_mismatch"),
+            "hash": (wrong_hash, "handoff_active_state_hash_binding_mismatch"),
+        }
+        for label, (mutate, expected) in mutations.items():
+            with self.subTest(field=label):
+                state = _post_correction_handoff_state()
+                mutate(state)
+                if label == "hash":
+                    self._synchronize_output(state)
+                result = observable_post_correction_handoff_certificate(
+                    state,
+                    terminal=True,
+                    terminal_outcome="operator_escalation",
+                )
+                self.assertFalse(result["passed"])
+                self.assertIn(expected, result["failures"])
+
+    def test_no_accepted_correction_fails_closed(self) -> None:
+        state = _post_correction_handoff_state()
+        state["accepted_corrections"] = []
+        assessment = _post_correction_assessment(final_state=state)
+
+        self.assertEqual(assessment["status"], "failed")
+        self.assertIn(
+            "handoff_requires_accepted_correction", assessment["reasons"]
+        )
+        self.assertIn(
+            "handoff_accepted_correction_state_binding_mismatch",
+            assessment["reasons"],
+        )
+
+    def test_open_candidate_fails_closed(self) -> None:
+        state = _post_correction_handoff_state()
+        state["has_open_candidate"] = True
+        state["has_unverified_candidate"] = True
+        state["candidate_state_id"] = "episode:s3"
+        assessment = _post_correction_assessment(final_state=state)
+
+        self.assertEqual(assessment["status"], "failed")
+        self.assertIn(
+            "handoff_requires_no_open_candidate", assessment["reasons"]
+        )
+
+    def test_wrong_active_physical_state_hash_fails_before_private_audit(self) -> None:
+        active = _active()
+        active["state_hash"] = "d" * 64
+        assessment = _post_correction_assessment(active=active)
+
+        self.assertEqual(assessment["status"], "failed")
+        self.assertFalse(assessment["eligible"])
+        self.assertIn(
+            "handoff_active_physical_state_hash_mismatch",
+            assessment["reasons"],
+        )
+        self.assertIsNone(assessment["counterfactual_completion_audit"])
+
+    def test_incomplete_targets_and_nonzero_remaining_truth_fail(self) -> None:
+        scenario = _post_correction_scenario()
+        scenario["measurements"] = [1.0, 99.0, 88.0]
+        scenario["true_measurement_errors"] = [
+            {"index": 1, "clean": 2.0},
+            {"index": 2, "clean": 3.0},
+        ]
+        assessment = _post_correction_assessment(
+            scenario=scenario,
+            active=_active(measurements=[1.0, 2.0, 88.0]),
+            remaining={
+                "remaining_true_fault_count": 1,
+                "remaining_true_faults": [{"index": 2, "clean": 3.0}],
+                "truth_complete": True,
+            },
+        )
+
+        self.assertEqual(assessment["status"], "failed")
+        self.assertIn(
+            "counterfactual_completion_check_failed:remaining_true_faults",
+            assessment["reasons"],
+        )
+        self.assertIn(
+            "counterfactual_completion_remaining_truth_nonzero",
+            assessment["reasons"],
+        )
+
+    def test_nonzero_supplied_ledger_fails_even_when_targets_are_complete(self) -> None:
+        assessment = _post_correction_assessment(
+            remaining={
+                "remaining_true_fault_count": 1,
+                "remaining_true_faults": [{"index": 1, "clean": 2.0}],
+                "truth_complete": True,
+            }
+        )
+
+        self.assertEqual(assessment["status"], "failed")
+        self.assertIn(
+            "counterfactual_completion_check_failed:remaining_true_faults",
+            assessment["reasons"],
+        )
+        nested = assessment["counterfactual_completion_audit"]
+        self.assertIn(
+            "supplied_remaining_truth_ledger_disagrees_with_derived",
+            nested["problems"],
+        )
+        self.assertEqual(
+            nested["checks"][REMAINING_FAULTS_CHECK][
+                "derived_remaining_fault_count"
+            ],
+            0,
+        )
+
+    def test_outside_tolerance_correction_fails_completion(self) -> None:
+        assessment = _post_correction_assessment(
+            active=_active(measurements=[1.0, 2.5, 3.0]),
+            tolerances={"measurement_abs": 0.1, "measurement_rel": 0.0},
+        )
+
+        self.assertEqual(assessment["status"], "failed")
+        self.assertIn(
+            "counterfactual_completion_check_failed:final_measurements_match_clean",
+            assessment["reasons"],
+        )
+        forged = copy.deepcopy(assessment)
+        forged["status"] = "passed"
+        forged["eligible"] = True
+        forged["reasons"] = []
+        qualified, reasons = self._validate(forged)
+        self.assertFalse(qualified)
+        self.assertIn(
+            "handoff_counterfactual_check_failed:final_measurements_match_clean",
+            reasons,
+        )
+        self.assertIn(
+            "handoff_counterfactual_target_evidence_invalid", reasons
+        )
+
+    def test_revalidator_does_not_trust_claimed_eligibility(self) -> None:
+        valid = _post_correction_assessment()
+
+        def wrong_version(row: dict[str, object]) -> None:
+            row["assessment_version"] = "forged-v0"
+
+        def wrong_status(row: dict[str, object]) -> None:
+            row["status"] = "failed"
+
+        def wrong_runtime(row: dict[str, object]) -> None:
+            row["runtime_contract"]["passed"] = False
+
+        def wrong_binding(row: dict[str, object]) -> None:
+            row["counterfactual_completion_audit"]["scenario_id"] = (
+                "forged-scenario"
+            )
+
+        def wrong_remaining(row: dict[str, object]) -> None:
+            row["counterfactual_completion_audit"]["checks"][
+                REMAINING_FAULTS_CHECK
+            ]["derived_remaining_fault_count"] = 1
+
+        cases = {
+            "version": (wrong_version, "handoff_assessment_version_mismatch"),
+            "status": (wrong_status, "handoff_assessment_not_passed"),
+            "runtime": (wrong_runtime, "handoff_runtime_not_passed"),
+            "binding": (
+                wrong_binding,
+                "handoff_counterfactual_scenario_id_mismatch",
+            ),
+            "remaining": (
+                wrong_remaining,
+                "handoff_counterfactual_remaining_truth_nonzero",
+            ),
+        }
+        for label, (mutate, expected) in cases.items():
+            with self.subTest(field=label):
+                forged = copy.deepcopy(valid)
+                self.assertTrue(forged["eligible"])
+                mutate(forged)
+                qualified, reasons = self._validate(forged)
+                self.assertFalse(qualified)
+                self.assertIn(expected, reasons)
 
 
 class AuditBoundaryTests(unittest.TestCase):

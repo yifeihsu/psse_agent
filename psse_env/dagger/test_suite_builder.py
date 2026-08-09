@@ -242,8 +242,8 @@ class BC0SuiteBuilderTests(unittest.TestCase):
             family_policy["multi_measurement"],
             {
                 "minimum_physical_roots": 20,
-                "minimum_resolution_rate": 0.0,
-                "maximum_operator_escalation_rate": 1.0,
+                "minimum_audited_completion_rate": 0.0,
+                "maximum_unqualified_operator_escalation_rate": 1.0,
             },
         )
         for family in ("measurement+parameter", "measurement+topology"):
@@ -252,8 +252,8 @@ class BC0SuiteBuilderTests(unittest.TestCase):
                     family_policy[family],
                     {
                         "minimum_physical_roots": 22,
-                        "minimum_resolution_rate": 0.95,
-                        "maximum_operator_escalation_rate": 0.05,
+                        "minimum_audited_completion_rate": 0.95,
+                        "maximum_unqualified_operator_escalation_rate": 0.05,
                     },
                 )
 

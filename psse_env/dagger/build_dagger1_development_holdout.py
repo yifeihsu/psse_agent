@@ -19,7 +19,13 @@ from typing import Any
 from psse_env.dagger.dataset_builder import load_jsonl
 from psse_env.dagger.suite_builder import partition_release_scenario_v1
 from psse_env.providers.scenario_generator import Round0ScenarioGenerator
-from psse_env.sft.provenance import file_sha256, git_source_state, stable_json_sha256
+from psse_env.sft.provenance import (
+    AGGREGATE_MANIFEST_FILENAME,
+    file_sha256,
+    git_source_state,
+    stable_json_sha256,
+    validate_aggregate_manifest_binding,
+)
 
 
 DAGGER1_DEVELOPMENT_HOLDOUT_CONTRACT = (
@@ -171,11 +177,18 @@ def _require_current_d0(
     d0_aggregate_dir: Path,
     *,
     source_state: Mapping[str, Any],
-) -> tuple[Path, Path, set[str]]:
+) -> tuple[Path, Path, Path, set[str]]:
     raw_path = d0_aggregate_dir / "aggregate.raw.jsonl"
     provenance_path = d0_aggregate_dir / "aggregate.generation_provenance.json"
-    if not raw_path.is_file() or not provenance_path.is_file():
-        raise FileNotFoundError("D0 aggregate raw rows/provenance are missing")
+    manifest_path = d0_aggregate_dir / AGGREGATE_MANIFEST_FILENAME
+    if not (
+        raw_path.is_file()
+        and provenance_path.is_file()
+        and manifest_path.is_file()
+    ):
+        raise FileNotFoundError(
+            "D0 aggregate raw rows/provenance/manifest are missing"
+        )
     provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     descriptor = (
         provenance.get("generation_descriptor")
@@ -197,6 +210,15 @@ def _require_current_d0(
         and dataset_hashes.get(raw_path.name) == file_sha256(raw_path)
     ):
         raise RuntimeError("D0 aggregate is not byte-bound to the clean current source")
+    manifest_binding = validate_aggregate_manifest_binding(
+        provenance,
+        aggregate_dir=d0_aggregate_dir,
+    )
+    if manifest_binding["passed"] is not True:
+        raise RuntimeError(
+            "D0 aggregate manifest is not byte-bound to provenance: "
+            + "; ".join(manifest_binding["failures"])
+        )
     rows = load_jsonl(raw_path)
     roots = {
         str(row.get("physical_root_fingerprint") or "").strip()
@@ -205,7 +227,7 @@ def _require_current_d0(
     }
     if not roots:
         raise ValueError("D0 aggregate has no physical roots")
-    return raw_path, provenance_path, roots
+    return raw_path, provenance_path, manifest_path, roots
 
 
 def _require_current_training_boundary(
@@ -380,7 +402,12 @@ def build_dagger1_development_holdout(
     if any(path.exists() for path in builder_paths):
         raise FileExistsError("development output/report/manifest already exists")
 
-    d0_raw_path, d0_provenance_path, d0_roots = _require_current_d0(
+    (
+        d0_raw_path,
+        d0_provenance_path,
+        d0_manifest_path,
+        d0_roots,
+    ) = _require_current_d0(
         d0_aggregate_dir,
         source_state=source_state,
     )
@@ -729,6 +756,7 @@ def build_dagger1_development_holdout(
         "generator_report_sha256": file_sha256(generator_report_path),
         "d0_raw_sha256": file_sha256(d0_raw_path),
         "d0_generation_provenance_sha256": file_sha256(d0_provenance_path),
+        "d0_manifest_sha256": file_sha256(d0_manifest_path),
         "d1_training_scenarios_sha256": file_sha256(d1_training_scenarios),
         "d1_training_manifest_sha256": file_sha256(d1_training_manifest),
         "frozen_suite_sha256": frozen_suite_sha256,

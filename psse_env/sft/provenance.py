@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
+AGGREGATE_MANIFEST_FILENAME = "aggregate.manifest.json"
+ROUND1_AGGREGATE_BUILDER_CONTRACT = "deterministic_d0_d1_balanced_union_v1"
+
+
 def stable_json_sha256(value: Any) -> str:
     payload = json.dumps(
         value,
@@ -26,6 +30,53 @@ def file_sha256(path: str | Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def validate_aggregate_manifest_binding(
+    provenance: Mapping[str, Any],
+    *,
+    aggregate_dir: str | Path,
+) -> dict[str, Any]:
+    """Verify the immutable private aggregate manifest against provenance.
+
+    Round-0's ``aggregate.manifest.json`` contains the episode-level audit
+    evidence used by later DAgger builders.  Treating only the JSONL bytes as
+    immutable would leave that evidence replaceable after generation, so every
+    release consumer must require the sibling manifest and its recorded hash.
+    """
+
+    manifest_path = Path(aggregate_dir) / AGGREGATE_MANIFEST_FILENAME
+    failures: list[str] = []
+    dataset_hashes = provenance.get("dataset_hashes")
+    dataset_hashes = (
+        dataset_hashes if isinstance(dataset_hashes, Mapping) else {}
+    )
+    expected_hash = dataset_hashes.get(AGGREGATE_MANIFEST_FILENAME)
+    if not manifest_path.is_file():
+        failures.append(f"{AGGREGATE_MANIFEST_FILENAME} is missing.")
+        actual_hash = None
+    else:
+        actual_hash = file_sha256(manifest_path)
+    if not (
+        isinstance(expected_hash, str)
+        and len(expected_hash) == 64
+        and expected_hash == expected_hash.lower()
+        and all(character in "0123456789abcdef" for character in expected_hash)
+    ):
+        failures.append(
+            "Generation provenance lacks a valid aggregate.manifest.json hash."
+        )
+    elif actual_hash is not None and actual_hash != expected_hash:
+        failures.append(
+            "aggregate.manifest.json hash does not match generation provenance."
+        )
+    return {
+        "passed": not failures,
+        "failures": failures,
+        "manifest_path": str(manifest_path),
+        "recorded_sha256": expected_hash,
+        "computed_sha256": actual_hash,
+    }
 
 
 def git_source_state(repo_root: str | Path) -> dict[str, Any]:
@@ -322,6 +373,16 @@ def validate_generation_provenance(
         schema_hashes = tool_schema_hashes(rows)
         if schema_hashes != [descriptor.get("schema_registry_hash")]:
             failures.append("Row tool schemas do not match generation provenance.")
+        if (
+            len(parents) == 1
+            and descriptor.get("builder_contract")
+            != ROUND1_AGGREGATE_BUILDER_CONTRACT
+        ):
+            aggregate_manifest = validate_aggregate_manifest_binding(
+                payload,
+                aggregate_dir=next(iter(parents)),
+            )
+            failures.extend(aggregate_manifest["failures"])
     return {
         "passed": not failures,
         "failures": failures,
@@ -335,11 +396,14 @@ def validate_generation_provenance(
 
 
 __all__ = [
+    "AGGREGATE_MANIFEST_FILENAME",
+    "ROUND1_AGGREGATE_BUILDER_CONTRACT",
     "build_gate_provenance",
     "file_sha256",
     "git_source_state",
     "stable_json_sha256",
     "tool_schema_hashes",
+    "validate_aggregate_manifest_binding",
     "validate_generation_provenance",
     "validate_release_gate_report",
 ]

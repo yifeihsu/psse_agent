@@ -572,6 +572,8 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             raw_path = Path(temp_dir) / "aggregate.raw.jsonl"
             raw_path.write_text("{}\n", encoding="utf-8")
+            manifest_path = Path(temp_dir) / "aggregate.manifest.json"
+            manifest_path.write_text("{}\n", encoding="utf-8")
             source_state = {
                 "source_commit": "a" * 40,
                 "release_eligible_source": True,
@@ -582,7 +584,10 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 "generation_descriptor": descriptor,
                 "generation_provenance_id": stable_json_sha256(descriptor),
                 "dataset_hashes": {
-                    raw_path.name: hashlib.sha256(raw_path.read_bytes()).hexdigest()
+                    raw_path.name: hashlib.sha256(raw_path.read_bytes()).hexdigest(),
+                    manifest_path.name: hashlib.sha256(
+                        manifest_path.read_bytes()
+                    ).hexdigest(),
                 },
             }
             validate_d0_provenance_binding(
@@ -614,6 +619,14 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                     source_state=source_state,
                 )
 
+            manifest_path.write_text("tampered\n", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "aggregate_manifest_sha256"):
+                validate_d0_provenance_binding(
+                    valid,
+                    raw_path=raw_path,
+                    source_state=source_state,
+                )
+
     def test_development_holdout_is_byte_and_training_manifest_bound(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -624,6 +637,7 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                     "scenarios.manifest.json",
                     "aggregate.raw.jsonl",
                     "aggregate.generation_provenance.json",
+                    "aggregate.manifest.json",
                     "suite.json",
                     "policy.json",
                     "development.json",
@@ -651,6 +665,9 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 encoding="utf-8",
             )
             paths["aggregate.generation_provenance.json"].write_text(
+                "{}\n", encoding="utf-8"
+            )
+            paths["aggregate.manifest.json"].write_text(
                 "{}\n", encoding="utf-8"
             )
             paths["suite.json"].write_text(
@@ -869,6 +886,7 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 "d0_generation_provenance_sha256": digest(
                     "aggregate.generation_provenance.json"
                 ),
+                "d0_manifest_sha256": digest("aggregate.manifest.json"),
                 "frozen_suite_sha256": digest("suite.json"),
                 "evaluation_policy_sha256": digest("policy.json"),
             }
@@ -885,6 +903,7 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 "d0_provenance_path": paths[
                     "aggregate.generation_provenance.json"
                 ],
+                "d0_manifest_path": paths["aggregate.manifest.json"],
                 "forbidden_suite_path": paths["suite.json"],
                 "evaluation_policy_path": paths["policy.json"],
                 "require_model_selection_eligible": True,
@@ -1101,6 +1120,7 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                     "generator.json",
                     "aggregate.raw.jsonl",
                     "aggregate.generation_provenance.json",
+                    "aggregate.manifest.json",
                     "suite.json",
                     "policy.json",
                 )
@@ -1111,6 +1131,9 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 encoding="utf-8",
             )
             paths["aggregate.generation_provenance.json"].write_text(
+                "{}\n", encoding="utf-8"
+            )
+            paths["aggregate.manifest.json"].write_text(
                 "{}\n", encoding="utf-8"
             )
             paths["suite.json"].write_text(
@@ -1307,6 +1330,7 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 "d0_generation_provenance_sha256": digest(
                     paths["aggregate.generation_provenance.json"]
                 ),
+                "d0_manifest_sha256": digest(paths["aggregate.manifest.json"]),
                 "frozen_suite_sha256": digest(paths["suite.json"]),
                 "evaluation_policy_sha256": digest(paths["policy.json"]),
             }
@@ -1388,6 +1412,7 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 "d0_provenance_path": paths[
                     "aggregate.generation_provenance.json"
                 ],
+                "d0_manifest_path": paths["aggregate.manifest.json"],
                 "forbidden_suite_path": paths["suite.json"],
                 "evaluation_policy_path": paths["policy.json"],
             }

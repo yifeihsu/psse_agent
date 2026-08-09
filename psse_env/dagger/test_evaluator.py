@@ -21,6 +21,8 @@ from psse_env.actions import (
     FINALIZE_DIAGNOSIS,
     GET_HARMONIC_CONTEXT,
     INVALID_ACTION,
+    POST_CORRECTION_CONFIRMATION_SIGNATURE,
+    RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     ROLLBACK_STATE,
     RUN_HSE_FROM_PATH,
     RUN_WLS,
@@ -235,6 +237,100 @@ class _ScriptEnv:
 
     def is_terminal(self, state: Mapping[str, Any] | None = None) -> bool:
         return self.terminal
+
+
+class _AuditedHandoffEnv(_ScriptEnv):
+    """Expose the exact observable post-correction handoff certificate."""
+
+    _STATE_HASH = "a" * 64
+
+    def reset(self, scenario: Mapping[str, Any]) -> dict[str, Any]:
+        self.transition_history: list[dict[str, Any]] = []
+        self.last_action: dict[str, Any] | None = None
+        self.last_output: dict[str, Any] = {}
+        state = super().reset(scenario)
+        self.physical_state["state_id"] = "active"
+        self.physical_state["state_hash"] = self._STATE_HASH
+        return state
+
+    def step(self, action: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        _, output = super().step(action)
+        if action.get("tool") == ASK_FOR_MORE_EVIDENCE and self.terminal:
+            output = {
+                "execution_status": "success",
+                "error_code": None,
+                "error_detail": None,
+                "state_mutated": False,
+                "active_state_id": "active",
+                "candidate_state_id": None,
+                "tool_metrics": {
+                    "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                    "state_id": "active",
+                    "state_hash": self._STATE_HASH,
+                    "terminal_outcome": "operator_escalation",
+                    "operator_review_required": True,
+                    "additional_evidence_available": False,
+                    "operator_escalation_audit": {
+                        "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                        "active_state_id": "active",
+                        "active_state_hash": self._STATE_HASH,
+                        "post_correction_confirmation_handoff": True,
+                        "post_correction_confirmation_deferred": False,
+                        "operator_review_required": True,
+                        "additional_evidence_available": False,
+                        "missing_required_contexts": [],
+                        "outstanding_recovery_targets": [],
+                        "unexplained_signature_count": 1,
+                    },
+                },
+            }
+        self.last_action = copy.deepcopy(dict(action))
+        self.last_output = copy.deepcopy(output)
+        self.transition_history.append(
+            {
+                "state_id": "active",
+                "action": copy.deepcopy(dict(action)),
+                "tool_output": copy.deepcopy(output),
+                "transition_label": {
+                    "execution_status": output.get("execution_status"),
+                    "process_valid": output.get("execution_status") == "success",
+                    "error_code": output.get("error_code"),
+                    "error_detail": output.get("error_detail"),
+                },
+            }
+        )
+        return self.current_state(), copy.deepcopy(output)
+
+    def current_state(self) -> dict[str, Any]:
+        state = super().current_state()
+        last_action = getattr(self, "last_action", None)
+        state.update(
+            {
+                "has_open_candidate": state.get("candidate_state_id") is not None,
+                "has_unverified_candidate": False,
+                "has_verified_candidate": False,
+                "history_window": copy.deepcopy(
+                    getattr(self, "transition_history", [])
+                ),
+                "last_tool": (
+                    last_action.get("tool")
+                    if isinstance(last_action, Mapping)
+                    else None
+                ),
+                "last_tool_output": copy.deepcopy(
+                    getattr(self, "last_output", {})
+                ),
+                "last_tool_status": (
+                    getattr(self, "last_output", {}).get("execution_status")
+                ),
+                "unresolved_signatures": (
+                    [POST_CORRECTION_CONFIRMATION_SIGNATURE]
+                    if self.terminal
+                    else []
+                ),
+            }
+        )
+        return state
 
 
 class _ReleaseScriptEnv(_ScriptEnv):
@@ -455,6 +551,42 @@ def _escalation_scenario() -> dict[str, Any]:
             },
         ],
     }
+
+
+def _audited_handoff_scenario() -> dict[str, Any]:
+    scenario = _resolved_scenario()
+    scenario.update(
+        {
+            "scenario_id": "audited-handoff-root",
+            "root_scenario_id": "audited-handoff-root",
+            "physical_root_fingerprint": "fp-audited-handoff",
+            "scenario_family": "measurement",
+            "error_cardinality": 1,
+            "hidden_truth": {},
+            "final_remaining": 0,
+            "script": [
+                {
+                    "phase": "partial_commit",
+                    "candidate_state_id": "active",
+                    "disposition": "ACCEPT_FINAL",
+                    "remaining": 0,
+                    "accepted_action": {
+                        "tool": CORRECT_MEASUREMENTS,
+                        "arguments": {
+                            "state_id": "active",
+                            "suspect_group": [7],
+                        },
+                    },
+                },
+                {
+                    "phase": "escalate",
+                    "remaining": 0,
+                    "terminal_outcome": "operator_escalation",
+                },
+            ],
+        }
+    )
+    return scenario
 
 
 class ClosedLoopEvaluatorTests(unittest.TestCase):
@@ -1195,10 +1327,14 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         )
 
         overall = result.suite_metrics["overall"]
+        self.assertEqual(result.suite_metrics["schema_version"], 3)
         self.assertEqual(overall["episodes"], 2)
         self.assertEqual(overall["terminal_rate"], 1.0)
         self.assertEqual(overall["resolution_rate"], 0.5)
         self.assertEqual(overall["operator_escalation_rate"], 0.5)
+        self.assertEqual(overall["audited_post_correction_handoff_rate"], 0.0)
+        self.assertEqual(overall["audited_completion_rate"], 0.5)
+        self.assertEqual(overall["unqualified_operator_escalation_rate"], 0.5)
         self.assertEqual(overall["final_physical_success_rate"], 0.5)
         self.assertEqual(overall["invalid_action_count"], 1)
         self.assertEqual(overall["invalid_action_recovery_rate"], 1.0)
@@ -1263,10 +1399,89 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         self.assertFalse(episode["final_physical_success"])
         self.assertTrue(episode["healthy_preservation_known"])
         self.assertTrue(episode["healthy_components_preserved"])
+        assessment = episode["audit"]["post_correction_handoff_assessment"]
+        self.assertEqual(assessment["status"], "not_applicable")
+        self.assertFalse(assessment["eligible"])
+        self.assertEqual(
+            result.suite_metrics["overall"][
+                "unqualified_operator_escalation_episodes"
+            ],
+            1,
+        )
+        self.assertEqual(
+            result.suite_metrics["overall"]["audited_completion_episodes"],
+            0,
+        )
         checks = episode["audit"]["strict_release_audit"]["checks"]
         self.assertEqual(checks["healthy_measurements_preserved"]["status"], "passed")
         self.assertEqual(
             checks["healthy_case_components_preserved"]["status"], "passed"
+        )
+
+    def test_only_audited_post_correction_handoff_counts_as_completion(
+        self,
+    ) -> None:
+        result = evaluate_rollout_suites(
+            [_audited_handoff_scenario()],
+            env_factory=_AuditedHandoffEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+        )
+
+        episode = result.suite_metrics["episodes"][0]
+        assessment = episode["audit"]["post_correction_handoff_assessment"]
+        self.assertEqual(episode["terminal_outcome"], "operator_escalation")
+        self.assertEqual(assessment["status"], "passed")
+        self.assertTrue(assessment["eligible"])
+        self.assertEqual(
+            assessment["actual_terminal_outcome"], "operator_escalation"
+        )
+        self.assertTrue(assessment["runtime_contract"]["passed"])
+        self.assertEqual(
+            episode["trace"][-1]["runtime_state_hash"],
+            assessment["runtime_contract"]["active_state_hash"],
+        )
+        self.assertFalse(
+            assessment["counterfactual_completion_audit"]["quarantined"]
+        )
+        overall = result.suite_metrics["overall"]
+        self.assertEqual(overall["resolution_rate"], 0.0)
+        self.assertEqual(overall["audited_post_correction_handoff_rate"], 1.0)
+        self.assertEqual(overall["audited_completion_rate"], 1.0)
+        self.assertEqual(overall["unqualified_operator_escalation_rate"], 0.0)
+
+    def test_generic_escalation_does_not_recover_injected_failure(self) -> None:
+        scenario = _pre_policy_failure_scenario(malformed=False)
+        scenario["execution"]["script"] = [
+            {"phase": "wls", "remaining": 1},
+            {
+                "phase": "escalate",
+                "remaining": 1,
+                "terminal_outcome": "operator_escalation",
+            },
+        ]
+
+        result = evaluate_rollout_suites(
+            {"forced_error_recovery": [scenario]},
+            env_factory=_ScriptEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+        )
+
+        episode = result.suite_metrics["episodes"][0]
+        self.assertEqual(
+            episode["evaluation_intervention"]["injected_failure_count"], 1
+        )
+        self.assertEqual(
+            episode["evaluation_intervention"]["recovered_failure_count"], 0
+        )
+        self.assertEqual(
+            result.suite_metrics["overall"]["injected_failure_recovery_rate"],
+            0.0,
+        )
+        self.assertEqual(
+            result.suite_metrics["overall"][
+                "unqualified_operator_escalation_episodes"
+            ],
+            1,
         )
 
     def test_uses_offline_per_step_cost_labels_without_a_resolver(self) -> None:
@@ -2561,7 +2776,10 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             self.assertEqual(
                 artifact["artifact_type"], "closed_loop_release_evaluation"
             )
-            self.assertEqual(artifact["artifact_schema_version"], 2)
+            self.assertEqual(artifact["artifact_schema_version"], 3)
+            self.assertEqual(
+                artifact["evaluation"]["suite_metrics"]["schema_version"], 3
+            )
             self.assertTrue(artifact["release_eligible"])
             self.assertEqual(artifact["release_failures"], [])
             self.assertEqual(len(artifact["content_sha256"]), 64)
