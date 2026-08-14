@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from psse_env.actions import (
+    ASK_FOR_MORE_EVIDENCE,
     COMMIT_STATE,
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
@@ -11,6 +12,8 @@ from psse_env.actions import (
     GET_MEASUREMENT_CONTEXT,
     GET_PARAMETER_CONTEXT,
     GET_TOPOLOGY_CONTEXT,
+    POST_CORRECTION_CONFIRMATION_SIGNATURE,
+    RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     RUN_WLS,
 )
 from psse_env.oracle import ExpertPolicyOracle, ProcessValidityOracle
@@ -314,6 +317,210 @@ class PostCorrectionFinalizationRegressionTests(unittest.TestCase):
             FINALIZE_DIAGNOSIS,
             {action["tool"] for action in expert_actions},
         )
+
+    def test_confirmation_marker_blocks_off_policy_autonomous_correction(
+        self,
+    ) -> None:
+        state_id = "episode:s1"
+        correction = {
+            "tool": CORRECT_MEASUREMENTS,
+            "arguments": {
+                "state_id": state_id,
+                "suspect_group": [65],
+            },
+        }
+        state = {
+            **_uncertified_post_correction_observation(),
+            "active_state_id": state_id,
+            "no_material_anomaly_remaining": False,
+            "unresolved_signatures": [
+                POST_CORRECTION_CONFIRMATION_SIGNATURE
+            ],
+            "has_fresh_measurement_context": True,
+            "measurement_context_state_id": state_id,
+            "fresh_context_evidence": {
+                "measurement": {
+                    "state_id": state_id,
+                    "supported_corrections": [correction],
+                }
+            },
+        }
+        process = ProcessValidityOracle(
+            executor_hydrated_corrections=True
+        )
+
+        blocked = process.check(state, correction)
+
+        self.assertFalse(blocked["process_valid"], blocked)
+        self.assertEqual(
+            blocked["error_code"],
+            "post_correction_confirmation_required",
+        )
+        self.assertEqual(
+            blocked["valid_next_actions"],
+            [
+                {
+                    "tool": ASK_FOR_MORE_EVIDENCE,
+                    "arguments": {
+                        "state_id": state_id,
+                        "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                    },
+                }
+            ],
+        )
+
+        no_confirmation_context = {
+            **state,
+            "has_fresh_measurement_context": False,
+            "measurement_context_state_id": None,
+        }
+        off_policy_parameter = {
+            "tool": CORRECT_PARAMETERS,
+            "arguments": {"state_id": state_id, "line_index": 5},
+        }
+        canonical_repair = process.check(
+            no_confirmation_context,
+            off_policy_parameter,
+        )
+        self.assertFalse(canonical_repair["process_valid"], canonical_repair)
+        self.assertEqual(
+            canonical_repair["valid_next_actions"],
+            [
+                {
+                    "tool": GET_MEASUREMENT_CONTEXT,
+                    "arguments": {"state_id": state_id},
+                }
+            ],
+        )
+
+        # A substantive anomaly signature still permits the exact
+        # context-supported sequential correction even when the controller
+        # marker remains appended.  The marker is a handoff obligation only
+        # when it is the sole unresolved signature.
+        active_recovery = {
+            **state,
+            "unresolved_signatures": [
+                POST_CORRECTION_CONFIRMATION_SIGNATURE,
+                "measurement_residual_outlier",
+            ],
+        }
+        allowed = process.check(active_recovery, correction)
+        self.assertTrue(allowed["process_valid"], allowed)
+
+        # The marker is a reserved controller obligation, but its literal
+        # string alone cannot activate the post-commit guard without an
+        # accepted correction ledger.
+        no_accepted_correction = {
+            **state,
+            "accepted_corrections": [],
+        }
+        unarmed = process.check(no_accepted_correction, correction)
+        self.assertTrue(unarmed["process_valid"], unarmed)
+
+    def test_confirmation_guard_failure_is_not_counted_as_exhausted_target(
+        self,
+    ) -> None:
+        env = _production_env()
+        root = env.reset(
+            {
+                "scenario_id": "confirmation-process-failure-audit",
+                "case": {},
+                "measurements": [1.0],
+                "clean_measurements": [1.0],
+                "true_measurement_errors": [],
+            }
+        )
+        state_id = root["active_state_id"]
+        state_hash = env.store.get_state(state_id)["state_hash"]
+        correction = {
+            "tool": CORRECT_MEASUREMENTS,
+            "arguments": {"state_id": state_id, "suspect_group": [0]},
+        }
+        env.context_flags.update(
+            {
+                "accepted_corrections": [
+                    {
+                        "candidate_parent_id": "parent:s0",
+                        "candidate_state_id": state_id,
+                        "source_action": {
+                            "tool": CORRECT_MEASUREMENTS,
+                            "arguments": {
+                                "state_id": "parent:s0",
+                                "suspect_group": [0],
+                            },
+                        },
+                    }
+                ],
+                "unresolved_signatures": [
+                    POST_CORRECTION_CONFIRMATION_SIGNATURE
+                ],
+                "remaining_anomaly_score": 0.5,
+                "no_material_anomaly_remaining": False,
+            }
+        )
+        env.context_flags["semantic_field_provenance"][
+            "unresolved_signatures"
+        ] = "controller_default:post_correction_resolution_confirmation_required"
+        env.history = [
+            {
+                "action": {
+                    "tool": RUN_WLS,
+                    "arguments": {"state_id": state_id},
+                },
+                "tool_output": {
+                    "execution_status": "success",
+                    "tool_metrics": {
+                        "state_id": state_id,
+                        "state_hash": state_hash,
+                        "evidence_source": "deployment_wls:test",
+                    },
+                },
+            },
+            {
+                "action": {
+                    "tool": GET_MEASUREMENT_CONTEXT,
+                    "arguments": {"state_id": state_id},
+                },
+                "tool_output": {
+                    "execution_status": "success",
+                    "tool_metrics": {
+                        "state_id": state_id,
+                        "state_hash": state_hash,
+                        "evidence_source": "deployment_context:test",
+                        "supported_corrections": [correction],
+                    },
+                },
+            },
+            {
+                "action": correction,
+                "tool_output": {
+                    "execution_status": "failure",
+                    "error_code": "post_correction_confirmation_required",
+                    "error_detail": (
+                        "measurement_autonomous_correction_blocked_for_operator_review"
+                    ),
+                },
+            },
+        ]
+
+        audit = env._operator_escalation_audit(
+            {
+                "tool": ASK_FOR_MORE_EVIDENCE,
+                "arguments": {
+                    "state_id": state_id,
+                    "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                },
+            }
+        )
+
+        # The fixture intentionally omits the external escalation provider;
+        # this assertion targets the independent environment history ledger.
+        self.assertIn("operator_escalation_provider_missing", audit["missing"])
+        ledger = audit["ledger"]
+        self.assertEqual(ledger["supported_recovery_target_count"], 1)
+        self.assertEqual(ledger["exhausted_recovery_target_count"], 0)
+        self.assertEqual(len(ledger["safety_blocked_recovery_targets"]), 1)
+        self.assertEqual(ledger["outstanding_recovery_targets"], [])
 
     def test_all_current_contexts_do_not_certify_a_masked_correction(self) -> None:
         state = _all_context_masking_observation()

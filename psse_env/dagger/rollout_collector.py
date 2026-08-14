@@ -160,6 +160,7 @@ def classify_dagger1_recovery_stratum(
         "correction_not_supported_by_current_context",
         "correction_route_not_actionable",
         "parameter_scans_missing",
+        "post_correction_confirmation_required",
     }
     if (
         previous_failed

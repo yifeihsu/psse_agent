@@ -1914,6 +1914,7 @@ class TransactionalPSSEEnv:
                 "unknown_state_id",
                 "state_reference_mismatch",
                 "missing_precondition",
+                "post_correction_confirmation_required",
             }
             exhausted_families: set[str] = set()
             for event in self.history:

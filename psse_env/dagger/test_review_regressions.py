@@ -768,6 +768,21 @@ class DaggerExecutionRegressionTests(unittest.TestCase):
             ),
             (
                 {
+                    "last_tool": "correct_measurements",
+                    "last_tool_status": "failure",
+                    "last_tool_output": {
+                        "execution_status": "failure",
+                        "error_code": "post_correction_confirmation_required",
+                    },
+                },
+                target,
+                "parameter",
+                1,
+                "clean_successful",
+                "unsupported_correction_recovery",
+            ),
+            (
+                {
                     "last_tool": "run_hse_from_path",
                     "last_tool_status": "failure",
                     "last_tool_output": {

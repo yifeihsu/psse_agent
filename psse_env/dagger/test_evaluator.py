@@ -780,6 +780,13 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             (
                 "parameter",
                 CORRECT_PARAMETERS,
+                "post_correction_confirmation_required",
+                "unsupported_correction",
+                None,
+            ),
+            (
+                "parameter",
+                CORRECT_PARAMETERS,
                 "correction_route_not_actionable",
                 "correction_route_not_actionable",
                 None,

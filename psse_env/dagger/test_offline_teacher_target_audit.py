@@ -18,6 +18,7 @@ from psse_env.actions import (
 )
 from psse_env.dagger.dataset_builder import examples_to_chat_sft
 from psse_env.dagger.offline_teacher_target_audit import (
+    LEGACY_OFFLINE_TEACHER_TARGET_AUDIT_CONTRACTS,
     OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT,
     offline_teacher_target_audit,
     validate_offline_teacher_target_audit_metadata,
@@ -274,6 +275,225 @@ class OfflineTeacherTargetAuditTests(unittest.TestCase):
         self.assertFalse(self._audit(commit, env=unsafe_env)["passed"])
         self.assertTrue(self._audit(rollback, env=unsafe_env)["passed"])
 
+    def test_commit_failure_reasons_are_individually_attributable(self):
+        # The retired umbrella code could not separate a mis-targeted candidate
+        # from an undispositioned one or from new physical harm, so a
+        # quarantine could not be triaged without re-running collection.
+        report = self._audit(
+            {"tool": COMMIT_STATE, "arguments": {"candidate_state_id": "episode:s1"}},
+            env=self._candidate_env(safe=False),
+        )
+        self.assertFalse(report["passed"])
+        self.assertEqual(
+            sorted(report["reason_codes"]),
+            [
+                "candidate_commit_introduces_new_physical_harm",
+                "candidate_disposition_not_accepted",
+                "candidate_source_target_outside_remaining_truth",
+            ],
+        )
+
+        # A wrong healthy target that moves only within the declared physical
+        # tolerance is still a private target-identity failure, but is not
+        # falsely attributed as new numerical harm.
+        tolerant_scenario = _scenario()
+        tolerant_scenario["release_audit"] = {
+            "tolerances": {"measurement_abs": 0.05}
+        }
+        tolerant_wrong_target = _Env(
+            {
+                "episode:s0": {
+                    "state_id": "episode:s0",
+                    "state_hash": "parent-hash",
+                    "case": _case(),
+                    "measurements": [1.0, 9.0, 3.0],
+                },
+                "episode:s1": {
+                    "state_id": "episode:s1",
+                    "state_hash": "candidate-hash",
+                    "parent_state_id": "episode:s0",
+                    "case": _case(),
+                    "measurements": [1.01, 9.0, 3.0],
+                    "source_action": {
+                        "tool": CORRECT_MEASUREMENTS,
+                        "arguments": {
+                            "state_id": "episode:s0",
+                            "measurement_updates": {0: 1.01},
+                        },
+                    },
+                    "verification_output": {
+                        "execution_status": "success",
+                        "state_id": "episode:s1",
+                        "state_hash": "candidate-hash",
+                    },
+                    "candidate_disposition": "ACCEPT_FINAL",
+                },
+            },
+            active="episode:s0",
+            candidate="episode:s1",
+        )
+        tolerant_report = self._audit(
+            {"tool": COMMIT_STATE, "arguments": {"candidate_state_id": "episode:s1"}},
+            truth=tolerant_scenario,
+            scenario=tolerant_scenario,
+            env=tolerant_wrong_target,
+        )
+        self.assertFalse(tolerant_report["passed"], tolerant_report)
+        self.assertEqual(
+            tolerant_report["reason_codes"],
+            ["candidate_source_target_outside_remaining_truth"],
+        )
+
+    def _contaminated_commit_env(self, *, candidate_measurements) -> _Env:
+        return _Env(
+            {
+                "episode:s0": {
+                    "state_id": "episode:s0",
+                    "state_hash": "parent-hash",
+                    "case": _case(),
+                    # Index 0 is healthy but already corrupted by a commit the
+                    # learner made earlier in this episode.
+                    "measurements": [99.0, 9.0, 3.0],
+                },
+                "episode:s1": {
+                    "state_id": "episode:s1",
+                    "state_hash": "candidate-hash",
+                    "parent_state_id": "episode:s0",
+                    "case": _case(),
+                    "measurements": list(candidate_measurements),
+                    "source_action": {
+                        "tool": CORRECT_MEASUREMENTS,
+                        "arguments": {
+                            "state_id": "episode:s0",
+                            "measurement_updates": {1: 2.0},
+                        },
+                    },
+                    "verification_output": {
+                        "execution_status": "success",
+                        "state_id": "episode:s1",
+                        "state_hash": "candidate-hash",
+                    },
+                    "candidate_disposition": "ACCEPT_FINAL",
+                },
+            },
+            active="episode:s0",
+            candidate="episode:s1",
+        )
+
+    def test_commit_is_judged_on_the_harm_it_introduces_not_what_it_inherited(self):
+        commit = {
+            "tool": COMMIT_STATE,
+            "arguments": {"candidate_state_id": "episode:s1"},
+        }
+        contaminated = _observation(
+            accepted=[
+                {
+                    "source_action": {
+                        "tool": CORRECT_MEASUREMENTS,
+                        "arguments": {
+                            "state_id": "episode:s0",
+                            "measurement_updates": {0: 99.0},
+                        },
+                    }
+                }
+            ]
+        )
+        # Correctly retires the one true measurement fault; the inherited
+        # corruption of index 0 is untouched and unfixable from here.
+        report = self._audit(
+            commit,
+            observation=contaminated,
+            env=self._contaminated_commit_env(
+                candidate_measurements=[99.0, 2.0, 3.0]
+            ),
+        )
+        self.assertTrue(report["passed"], report)
+
+        # The same inherited state, but this commit corrupts index 2 as well.
+        worse = self._audit(
+            commit,
+            observation=contaminated,
+            env=self._contaminated_commit_env(
+                candidate_measurements=[99.0, 2.0, 42.0]
+            ),
+        )
+        self.assertFalse(worse["passed"], worse)
+        self.assertEqual(
+            worse["reason_codes"],
+            ["candidate_commit_introduces_new_physical_harm"],
+        )
+
+        # An inherited false ledger entry must not short-circuit evaluation of
+        # the current true target.  This candidate moves the true measurement
+        # farther from clean than its parent and must fail attribution.
+        regressed_target = self._audit(
+            commit,
+            observation=contaminated,
+            env=self._contaminated_commit_env(
+                candidate_measurements=[99.0, 20.0, 3.0]
+            ),
+        )
+        self.assertFalse(regressed_target["passed"], regressed_target)
+        self.assertEqual(
+            regressed_target["reason_codes"],
+            ["candidate_commit_introduces_new_physical_harm"],
+        )
+
+        multi_fault_scenario = _scenario()
+        multi_fault_scenario.update(
+            {
+                "measurements": [1.0, 9.0, 8.0],
+                "clean_measurements": [1.0, 2.0, 3.0],
+                "true_measurement_errors": [
+                    {"index": 1, "clean": 2.0},
+                    {"index": 2, "clean": 3.0},
+                ],
+            }
+        )
+        collateral_true_target_regression = _Env(
+            {
+                "episode:s0": {
+                    "state_id": "episode:s0",
+                    "state_hash": "parent-hash",
+                    "case": _case(),
+                    "measurements": [1.0, 9.0, 8.0],
+                },
+                "episode:s1": {
+                    "state_id": "episode:s1",
+                    "state_hash": "candidate-hash",
+                    "parent_state_id": "episode:s0",
+                    "case": _case(),
+                    "measurements": [1.0, 2.0, 100.0],
+                    "source_action": {
+                        "tool": CORRECT_MEASUREMENTS,
+                        "arguments": {
+                            "state_id": "episode:s0",
+                            "measurement_updates": {1: 2.0},
+                        },
+                    },
+                    "verification_output": {
+                        "execution_status": "success",
+                        "state_id": "episode:s1",
+                        "state_hash": "candidate-hash",
+                    },
+                    "candidate_disposition": "ACCEPT_FINAL",
+                },
+            },
+            active="episode:s0",
+            candidate="episode:s1",
+        )
+        collateral_report = self._audit(
+            commit,
+            truth=multi_fault_scenario,
+            scenario=multi_fault_scenario,
+            env=collateral_true_target_regression,
+        )
+        self.assertFalse(collateral_report["passed"], collateral_report)
+        self.assertEqual(
+            collateral_report["reason_codes"],
+            ["candidate_commit_introduces_new_physical_harm"],
+        )
+
     def test_rollback_fails_closed_when_source_or_private_truth_is_unknown(self):
         rollback = {
             "tool": ROLLBACK_STATE,
@@ -308,6 +528,48 @@ class OfflineTeacherTargetAuditTests(unittest.TestCase):
             ]
         )
         self.assertIn("private_ledger_incomplete", truth_report["reason_codes"])
+
+    def test_handoff_fails_closed_when_private_audit_evidence_is_incomplete(self):
+        action = {
+            "tool": ASK_FOR_MORE_EVIDENCE,
+            "arguments": {
+                "state_id": "episode:s0",
+                "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+            },
+        }
+
+        incomplete_truth = _scenario()
+        incomplete_truth["truth_complete"] = False
+        incomplete_report = self._audit(
+            action,
+            truth=incomplete_truth,
+            scenario=incomplete_truth,
+        )
+        self.assertFalse(incomplete_report["passed"], incomplete_report)
+        self.assertEqual(
+            incomplete_report["reason_codes"],
+            ["handoff_state_audit_unavailable"],
+        )
+
+        missing_hif_truth = _scenario()
+        missing_hif_truth.update(
+            {
+                "scenario_family": "hif",
+                "true_measurement_errors": [],
+                "true_parameter_errors": [],
+                "true_topology_errors": [],
+            }
+        )
+        missing_report = self._audit(
+            action,
+            truth=missing_hif_truth,
+            scenario=missing_hif_truth,
+        )
+        self.assertFalse(missing_report["passed"], missing_report)
+        self.assertEqual(
+            missing_report["reason_codes"],
+            ["handoff_state_audit_unavailable"],
+        )
 
     def test_finalize_requires_no_remaining_fault_or_correct_diagnostic_explanation(self):
         clean = _scenario()
@@ -409,19 +671,67 @@ class OfflineTeacherTargetAuditTests(unittest.TestCase):
         self.assertTrue(
             passed["checks"]["terminal_claim_is_handoff_not_resolution"]
         )
+        self.assertTrue(passed["checks"]["handoff_state_audit_evaluable"])
+
+    def test_operator_escalation_does_not_inherit_learner_damage(self):
+        # An escalation mutates nothing, so damage already committed by the
+        # learner is not attributable to this target -- and no action available
+        # to the teacher retires a committed correction.  Charging it here
+        # would quarantine the only correct response to an unrecoverable state.
+        action = {
+            "tool": ASK_FOR_MORE_EVIDENCE,
+            "arguments": {"request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST},
+        }
+        observation = _observation(
+            accepted=[
+                {
+                    "source_action": {
+                        "tool": CORRECT_MEASUREMENTS,
+                        "arguments": {
+                            "state_id": "episode:s0",
+                            # Index 0 is a healthy meter: a wrong-target commit.
+                            "measurement_updates": {0: 99.0},
+                        },
+                    }
+                }
+            ]
+        )
         corrupted = _Env(
             {
                 "episode:s0": {
                     "state_id": "episode:s0",
                     "state_hash": "corrupted",
                     "case": _case(),
-                    "measurements": [99.0, 2.0, 3.0],
+                    "measurements": [99.0, 9.0, 3.0],
                 }
             }
         )
-        self.assertFalse(
-            self._audit(action, observation=observation, env=corrupted)["passed"]
+        report = self._audit(action, observation=observation, env=corrupted)
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(report["reason_codes"], [])
+
+    def test_operator_escalation_fails_closed_on_unverifiable_state(self):
+        # Excusing inherited damage must not excuse an audit that could not
+        # run: a state whose evidence cannot be verified stays quarantined.
+        action = {
+            "tool": ASK_FOR_MORE_EVIDENCE,
+            "arguments": {"request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST},
+        }
+        unverifiable = _Env(
+            {
+                "episode:s0": {
+                    "state_id": "episode:s0",
+                    "state_hash": "truncated",
+                    "case": _case(),
+                    # Shorter than the scenario measurement vector.
+                    "measurements": [1.0, 9.0],
+                }
+            }
         )
+        report = self._audit(action, env=unverifiable)
+        self.assertFalse(report["passed"], report)
+        self.assertIn("handoff_state_audit_unavailable", report["reason_codes"])
+        self.assertFalse(report["checks"]["handoff_state_audit_evaluable"])
 
     def test_read_only_actions_use_only_observable_gate(self):
         action = {"tool": RUN_WLS, "arguments": {"state_id": "episode:s0"}}
@@ -534,7 +844,7 @@ class OfflineTeacherTargetAuditTests(unittest.TestCase):
                 "resolved_claim_matches_private_ledger": True,
             },
             "operator_escalation": {
-                "accepted_state_nonregressive_and_healthy": True,
+                "handoff_state_audit_evaluable": True,
                 "observable_evidence_gate_passed": True,
                 "terminal_claim_is_handoff_not_resolution": True,
             },
@@ -582,6 +892,81 @@ class OfflineTeacherTargetAuditTests(unittest.TestCase):
                 }
                 with self.assertRaisesRegex(ValueError, "cannot pass"):
                     validate_offline_teacher_target_audit_metadata(forged)
+
+    def test_each_contract_validates_only_its_own_escalation_check_set(self):
+        # Artifacts collected before v2 must stay readable, and neither
+        # contract may borrow the other's check set to claim a pass.
+        v1 = sorted(LEGACY_OFFLINE_TEACHER_TARGET_AUDIT_CONTRACTS)[0]
+        v1_checks = {
+            "accepted_state_nonregressive_and_healthy": True,
+            "observable_evidence_gate_passed": True,
+            "terminal_claim_is_handoff_not_resolution": True,
+        }
+        v2_checks = {
+            "handoff_state_audit_evaluable": True,
+            "observable_evidence_gate_passed": True,
+            "terminal_claim_is_handoff_not_resolution": True,
+        }
+
+        def record(contract: str, checks: dict[str, bool]) -> dict[str, Any]:
+            return {
+                "contract": contract,
+                "passed": True,
+                "action_class": "operator_escalation",
+                "checks": copy.deepcopy(checks),
+                "reason_codes": [],
+            }
+
+        for contract, checks in (
+            (v1, v1_checks),
+            (OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT, v2_checks),
+        ):
+            with self.subTest(contract=contract):
+                valid = record(contract, checks)
+                self.assertEqual(
+                    validate_offline_teacher_target_audit_metadata(
+                        valid, require_passed=True
+                    ),
+                    valid,
+                )
+        for contract, checks in (
+            (v1, v2_checks),
+            (OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT, v1_checks),
+        ):
+            with self.subTest(mismatched_contract=contract):
+                with self.assertRaisesRegex(ValueError, "check schema"):
+                    validate_offline_teacher_target_audit_metadata(
+                        record(contract, checks)
+                    )
+
+        for contract, checks, retired_reason in (
+            (
+                v1,
+                v1_checks,
+                "handoff_state_audit_unavailable",
+            ),
+            (
+                OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT,
+                v2_checks,
+                "handoff_failed_private_safety_audit",
+            ),
+        ):
+            with self.subTest(cross_version_reason_contract=contract):
+                invalid_reason = record(contract, checks)
+                invalid_reason["passed"] = False
+                invalid_reason["checks"] = {
+                    **invalid_reason["checks"],
+                    next(iter(checks)): False,
+                }
+                invalid_reason["reason_codes"] = [retired_reason]
+                with self.assertRaisesRegex(ValueError, "reason code"):
+                    validate_offline_teacher_target_audit_metadata(
+                        invalid_reason
+                    )
+        with self.assertRaisesRegex(ValueError, "contract mismatch"):
+            validate_offline_teacher_target_audit_metadata(
+                record("dagger1_offline_teacher_target_truth_audit_v0", v2_checks)
+            )
 
 
 if __name__ == "__main__":

@@ -17,6 +17,8 @@ from psse_env.actions import (
     GET_TOPOLOGY_CONTEXT,
     INVALID_ACTION,
     MACRO_ACTIONS,
+    POST_CORRECTION_CONFIRMATION_SIGNATURE,
+    RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     ROLLBACK_STATE,
     RUN_ALTERNATIVE_TEST,
     RUN_WLS,
@@ -96,12 +98,35 @@ class ProcessValidityOracle:
             error_code, error_detail = "unknown_tool", str(tool)
         elif tool in CORRECTION_TOOLS:
             requested = args.get("state_id") or active_id
+            confirmation_required = (
+                bool(state.get("accepted_corrections"))
+                and POST_CORRECTION_CONFIRMATION_SIGNATURE
+                in (signatures := {
+                    str(item)
+                    for item in state.get("unresolved_signatures") or []
+                })
+                and signatures == {POST_CORRECTION_CONFIRMATION_SIGNATURE}
+            )
             if has_open_candidate:
                 error_code, error_detail = "candidate_lifecycle_violation", "correction_with_open_candidate"
             elif not self._known_current_state(store, requested):
                 error_code, error_detail = "unknown_state_id", str(requested)
             elif str(requested) != str(active_id):
                 error_code, error_detail = "state_reference_mismatch", "correction_state_not_active"
+            elif confirmation_required:
+                # This controller marker is created only after an accepted
+                # correction reaches observable statistical quiescence.  It
+                # requests one same-state investigation followed by operator
+                # handoff; provider suggestions remain review evidence, not a
+                # license for another autonomous transaction.  Without this
+                # process-level guard an off-policy learner can ignore the
+                # expert handoff, open a healthy-target candidate, and then
+                # make the expert disposition an impossible safety choice.
+                family = _CORRECTION_CONTEXT_FAMILY[tool]
+                error_code = "post_correction_confirmation_required"
+                error_detail = (
+                    f"{family}_autonomous_correction_blocked_for_operator_review"
+                )
             elif tool == CORRECT_PARAMETERS and not self._context_is_fresh(state, "parameter"):
                 error_code, error_detail = "missing_precondition", "parameter_context_missing"
             elif tool == CORRECT_TOPOLOGY and not self._context_is_fresh(state, "topology"):
@@ -481,6 +506,26 @@ class ProcessValidityOracle:
                 "measurement_context_missing": GET_MEASUREMENT_CONTEXT,
             }.get(error_detail, GET_PARAMETER_CONTEXT)
             return [{"tool": tool, "arguments": {"state_id": active_id}}]
+        if error_code == "post_correction_confirmation_required":
+            # The controller marker names the canonical measurement-context
+            # confirmation protocol.  Its repair must not vary with whichever
+            # off-policy correction family the learner happened to attempt.
+            if not self._context_is_fresh(state, "measurement"):
+                return [
+                    {
+                        "tool": GET_MEASUREMENT_CONTEXT,
+                        "arguments": {"state_id": active_id},
+                    }
+                ]
+            return [
+                {
+                    "tool": ASK_FOR_MORE_EVIDENCE,
+                    "arguments": {
+                        "state_id": active_id,
+                        "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                    },
+                }
+            ]
         if error_code in {
             "correction_not_supported_by_current_context",
             "correction_route_not_actionable",

@@ -30,7 +30,12 @@ from psse_env.actions import (
     VERIFY_CANDIDATE,
     safe_normalize_action,
 )
-from psse_env.dagger.release_audit import audit_episode_against_truth
+from psse_env.dagger.release_audit import (
+    ACCEPTED_TARGET_NONREGRESSION_CHECK,
+    HEALTHY_CASE_CHECK,
+    HEALTHY_MEASUREMENTS_CHECK,
+    audit_episode_against_truth,
+)
 from psse_env.state_store import OracleState, PolicyObservation
 from psse_env.private_target_matching import (
     canonical_branch_target,
@@ -40,7 +45,13 @@ from psse_env.private_target_matching import (
 
 
 OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT = (
-    "dagger1_offline_teacher_target_truth_audit_v1"
+    "dagger1_offline_teacher_target_truth_audit_v2"
+)
+# v2 replaced the operator-escalation check set.  Records written by v1 remain
+# readable so already-collected artifacts keep validating under their own
+# contract; only newly produced records use the current vocabulary.
+LEGACY_OFFLINE_TEACHER_TARGET_AUDIT_CONTRACTS = frozenset(
+    {"dagger1_offline_teacher_target_truth_audit_v1"}
 )
 _ESCALATION_REQUESTS = frozenset(
     {
@@ -66,6 +77,28 @@ _OBSERVABLE_ONLY_ACTIONS = frozenset(
 )
 _AUDIT_FIELDS = frozenset(
     {"contract", "passed", "action_class", "checks", "reason_codes"}
+)
+# Release-audit checks whose verdict is attributable to a single commit once
+# the audit is rebased onto the state that commit mutates.
+_COMMIT_ATTRIBUTABLE_CHECKS = frozenset(
+    {
+        ACCEPTED_TARGET_NONREGRESSION_CHECK,
+        HEALTHY_CASE_CHECK,
+        HEALTHY_MEASUREMENTS_CHECK,
+    }
+)
+# Release-audit problems that mean "could not verify" rather than "unsafe".
+# These must keep failing closed even where inherited harm is excused.
+_EVIDENCE_INTEGRITY_MARKERS = (
+    "_malformed",
+    "_unloadable",
+    "_unverifiable",
+    "_invalid",
+    "_missing",
+    "_out_of_range",
+    "_prohibited",
+    "_unsupported",
+    "evidence_missing",
 )
 _ACTION_CLASS_CHECKS = {
     "missing_target": frozenset({"teacher_target_present"}),
@@ -118,7 +151,7 @@ _ACTION_CLASS_CHECKS = {
     ),
     "operator_escalation": frozenset(
         {
-            "accepted_state_nonregressive_and_healthy",
+            "handoff_state_audit_evaluable",
             "observable_evidence_gate_passed",
             "terminal_claim_is_handoff_not_resolution",
         }
@@ -128,16 +161,34 @@ _ACTION_CLASS_CHECKS = {
         {"teacher_target_is_known_nonmutating_action"}
     ),
 }
+_V1_ACTION_CLASS_CHECKS = {
+    **_ACTION_CLASS_CHECKS,
+    "operator_escalation": frozenset(
+        {
+            "accepted_state_nonregressive_and_healthy",
+            "observable_evidence_gate_passed",
+            "terminal_claim_is_handoff_not_resolution",
+        }
+    ),
+}
+_ACTION_CLASS_CHECKS_BY_CONTRACT = {
+    OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT: _ACTION_CLASS_CHECKS,
+    **{
+        contract: _V1_ACTION_CLASS_CHECKS
+        for contract in LEGACY_OFFLINE_TEACHER_TARGET_AUDIT_CONTRACTS
+    },
+}
 _ACTION_CLASSES = frozenset(_ACTION_CLASS_CHECKS)
 _FAILURE_ONLY_ACTION_CLASSES = frozenset(
     {"missing_target", "invalid_target", "unknown_target"}
 )
 _CHECK_NAMES = frozenset(
     check
-    for checks in _ACTION_CLASS_CHECKS.values()
+    for checks_by_class in _ACTION_CLASS_CHECKS_BY_CONTRACT.values()
+    for checks in checks_by_class.values()
     for check in checks
 )
-_REASON_CODES = frozenset(
+_COMMON_REASON_CODES = frozenset(
     {
         "teacher_target_missing",
         "teacher_target_invalid",
@@ -148,13 +199,28 @@ _REASON_CODES = frozenset(
         "candidate_missing",
         "candidate_verification_missing",
         "observable_evidence_gate_failed",
-        "candidate_failed_private_commit_safety",
         "rollback_would_discard_truth_safe_candidate",
         "resolved_claim_failed_private_release_audit",
-        "handoff_failed_private_safety_audit",
         "teacher_target_action_class_unknown",
     }
 )
+_V2_REASON_CODES = _COMMON_REASON_CODES | {
+    "candidate_disposition_not_accepted",
+    "candidate_source_target_outside_remaining_truth",
+    "candidate_commit_introduces_new_physical_harm",
+    "handoff_state_audit_unavailable",
+}
+_V1_REASON_CODES = _COMMON_REASON_CODES | {
+    "candidate_failed_private_commit_safety",
+    "handoff_failed_private_safety_audit",
+}
+_REASON_CODES_BY_CONTRACT = {
+    OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT: _V2_REASON_CODES,
+    **{
+        contract: _V1_REASON_CODES
+        for contract in LEGACY_OFFLINE_TEACHER_TARGET_AUDIT_CONTRACTS
+    },
+}
 
 
 def _report(
@@ -195,7 +261,8 @@ def validate_offline_teacher_target_audit_metadata(
     keys = set(value)
     if any(not isinstance(key, str) for key in keys) or keys != _AUDIT_FIELDS:
         raise ValueError("offline teacher-target audit has unexpected fields")
-    if value.get("contract") != OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT:
+    contract = value.get("contract")
+    if contract not in _ACTION_CLASS_CHECKS_BY_CONTRACT:
         raise ValueError("offline teacher-target audit contract mismatch")
     if not isinstance(value.get("passed"), bool):
         raise ValueError("offline teacher-target audit passed must be boolean")
@@ -209,7 +276,7 @@ def validate_offline_teacher_target_audit_metadata(
         raise ValueError("offline teacher-target audit check name is invalid")
     if any(not isinstance(item, bool) for item in checks.values()):
         raise ValueError("offline teacher-target audit checks must be boolean")
-    expected_checks = _ACTION_CLASS_CHECKS[action_class]
+    expected_checks = _ACTION_CLASS_CHECKS_BY_CONTRACT[contract][action_class]
     if set(checks) != expected_checks:
         raise ValueError(
             "offline teacher-target audit check schema is incomplete or unexpected"
@@ -217,7 +284,11 @@ def validate_offline_teacher_target_audit_metadata(
     reasons = value.get("reason_codes")
     if not isinstance(reasons, list):
         raise ValueError("offline teacher-target audit reason codes must be a list")
-    if any(not isinstance(item, str) or item not in _REASON_CODES for item in reasons):
+    if any(
+        not isinstance(item, str)
+        or item not in _REASON_CODES_BY_CONTRACT[contract]
+        for item in reasons
+    ):
         raise ValueError("offline teacher-target audit reason code is invalid")
     if len(reasons) != len(set(reasons)):
         raise ValueError("offline teacher-target audit reason codes must be unique")
@@ -441,6 +512,137 @@ def _release_safety_check(
     return result.get("quarantined") is False
 
 
+def _release_audit_problems(
+    *,
+    scenario: Mapping[str, Any],
+    policy_observation: Mapping[str, Any],
+    active_physical_state: Mapping[str, Any] | None,
+    terminal_outcome: str,
+    remaining_truth: Mapping[str, Any] | None,
+    case_loader: Callable[[Any], Any] | None,
+    check_names: frozenset[str] | None = None,
+) -> frozenset[str] | None:
+    """Return the release-audit problem set, or ``None`` if it could not run.
+
+    ``_release_safety_check`` collapses the audit to one boolean, which cannot
+    distinguish harm a teacher target introduces from harm it inherited from
+    the learner's already-committed corrections.  Callers that must attribute
+    a problem to the target need the problem set itself.  ``check_names``
+    narrows the result to named checks so attribution selects a check by
+    identity rather than by matching problem text.
+    """
+
+    try:
+        result = audit_episode_against_truth(
+            scenario,
+            policy_observation,
+            terminal=True,
+            terminal_outcome=terminal_outcome,
+            active_physical_state=active_physical_state,
+            remaining_truth=remaining_truth,
+            case_loader=case_loader,
+        )
+    except Exception:
+        return None
+    if check_names is None:
+        problems = result.get("problems")
+        if not isinstance(problems, Sequence) or isinstance(problems, (str, bytes)):
+            return None
+        return frozenset(str(item) for item in problems)
+    checks = result.get("checks")
+    if not isinstance(checks, Mapping):
+        return None
+    collected: set[str] = set()
+    for name in check_names:
+        entry = checks.get(name)
+        if not isinstance(entry, Mapping):
+            return None
+        problems = entry.get("problems")
+        if not isinstance(problems, Sequence) or isinstance(problems, (str, bytes)):
+            return None
+        collected.update(str(item) for item in problems)
+    return frozenset(collected)
+
+
+def _evidence_integrity_failure(problems: frozenset[str] | None) -> bool:
+    """Fail closed when the release audit could not actually verify the state.
+
+    The release-audit vocabulary marks every unverifiable outcome with one of
+    these suffixes, so an evidence gap can never be mistaken for a physically
+    safe state.
+    """
+
+    if problems is None:
+        return True
+    return any(
+        marker in problem
+        for problem in problems
+        for marker in _EVIDENCE_INTEGRITY_MARKERS
+    )
+
+
+def _declared_truth_target_actions(
+    scenario: Mapping[str, Any], *, state_id: str
+) -> list[dict[str, Any]] | None:
+    """Build an internal audit ledger covering every physical truth target.
+
+    This is private counterfactual evidence only; it is never returned in the
+    low-bandwidth audit report.  Covering all targets lets the shared release
+    audit detect collateral regression of a different true fault, which the
+    healthy-state checks intentionally exclude.
+    """
+
+    actions: list[dict[str, Any]] = []
+    raw_measurements = scenario.get("true_measurement_errors", [])
+    if not isinstance(raw_measurements, Sequence) or isinstance(
+        raw_measurements, (str, bytes)
+    ):
+        return None
+    measurement_targets: set[int] = set()
+    for fault in raw_measurements:
+        if not isinstance(fault, Mapping):
+            return None
+        target = measurement_fault_target(fault)
+        if target is None:
+            return None
+        measurement_targets.add(target)
+    if measurement_targets:
+        actions.append(
+            {
+                "tool": CORRECT_MEASUREMENTS,
+                "arguments": {
+                    "state_id": state_id,
+                    "suspect_group": sorted(measurement_targets),
+                },
+            }
+        )
+
+    for truth_key, tool in (
+        ("true_parameter_errors", CORRECT_PARAMETERS),
+        ("true_topology_errors", CORRECT_TOPOLOGY),
+    ):
+        raw_faults = scenario.get(truth_key, [])
+        if not isinstance(raw_faults, Sequence) or isinstance(
+            raw_faults, (str, bytes)
+        ):
+            return None
+        targets: set[tuple[str, Any]] = set()
+        for fault in raw_faults:
+            if not isinstance(fault, Mapping):
+                return None
+            target = canonical_branch_target(fault)
+            if target is None:
+                return None
+            targets.add(target)
+        for kind, value in sorted(
+            targets, key=lambda item: (str(item[0]), str(item[1]))
+        ):
+            arguments: dict[str, Any] = {"state_id": state_id}
+            arguments[kind] = value
+            actions.append({"tool": tool, "arguments": arguments})
+    return actions
+
+
 def _default_case_loader() -> Callable[[Any], Any] | None:
     # Imported only after the model target is fixed.  Keeping this dependency
     # lazy avoids coupling policy construction to the release I/O stack.
@@ -534,25 +736,89 @@ def offline_teacher_target_audit(
             in {"ACCEPT_FINAL", "ACCEPT_PARTIAL"}
         )
         hypothetical = copy.deepcopy(observation)
-        accepted = [
-            copy.deepcopy(dict(item))
-            for item in observation.get("accepted_corrections") or []
-            if isinstance(item, Mapping)
-        ]
+        # This counterfactual judges one candidate transition.  Prior accepted
+        # entries may already contain a false target; including them makes the
+        # shared non-regression audit short-circuit before it evaluates the
+        # current target.  Physical inherited effects are neutralized below by
+        # rebasing the scenario onto the parent state, while the current source
+        # action remains the sole accepted entry in this attribution view.
+        accepted: list[dict[str, Any]] = []
         if source_action is not None:
             accepted.append({"source_action": source_action})
         hypothetical["accepted_corrections"] = accepted
         loader = case_loader if case_loader is not None else _default_case_loader()
-        physically_safe = bool(
-            isinstance(candidate, Mapping)
-            and _release_safety_check(
-                scenario=scenario,
+        # Isolate this commit's own physical effect by rebasing the audit's
+        # "initial" state onto the state the commit would mutate.  Corrections
+        # the learner already committed cannot be retired by any action
+        # available here, so charging their damage to this target would
+        # quarantine a correct commit for damage it did not do -- while
+        # differencing whole-episode problem *sets* would hide new damage of a
+        # kind the inherited state already exhibits.
+        parent_state = _active_physical_state(env)
+        commit_scenario = dict(scenario)
+        if isinstance(parent_state, Mapping):
+            for key in ("measurements", "case"):
+                if parent_state.get(key) is not None:
+                    commit_scenario[key] = copy.deepcopy(parent_state[key])
+        current_target_problems = (
+            _release_audit_problems(
+                scenario=commit_scenario,
                 policy_observation=hypothetical,
                 active_physical_state=candidate,
                 terminal_outcome="operator_escalation",
                 remaining_truth=None,
                 case_loader=loader,
+                check_names=_COMMIT_ATTRIBUTABLE_CHECKS,
             )
+            if isinstance(candidate, Mapping) and isinstance(parent_state, Mapping)
+            else None
+        )
+        if current_target_problems is not None:
+            # The attribution ledger now contains only this candidate.  A
+            # false-target verdict therefore belongs to the independent
+            # source-identity check below, while any numeric collateral change
+            # still appears in the healthy-state checks.  Removing it here
+            # avoids mislabeling an in-tolerance wrong target as new physical
+            # harm without allowing an inherited ledger entry to short-circuit
+            # current-target non-regression.
+            current_target_problems = current_target_problems - {
+                "accepted_target_nonregression_false_target"
+            }
+        declared_actions = (
+            _declared_truth_target_actions(
+                commit_scenario,
+                state_id=str(parent_state.get("state_id") or ""),
+            )
+            if isinstance(parent_state, Mapping)
+            else None
+        )
+        all_target_problems: frozenset[str] | None = None
+        if (
+            isinstance(candidate, Mapping)
+            and declared_actions is not None
+            and isinstance(parent_state, Mapping)
+        ):
+            all_target_hypothetical = copy.deepcopy(observation)
+            all_target_hypothetical["accepted_corrections"] = [
+                {"source_action": action} for action in declared_actions
+            ]
+            all_target_problems = _release_audit_problems(
+                scenario=commit_scenario,
+                policy_observation=all_target_hypothetical,
+                active_physical_state=candidate,
+                terminal_outcome="operator_escalation",
+                remaining_truth=None,
+                case_loader=loader,
+                check_names=frozenset({ACCEPTED_TARGET_NONREGRESSION_CHECK}),
+            )
+        introduced_problems = (
+            current_target_problems | all_target_problems
+            if current_target_problems is not None
+            and all_target_problems is not None
+            else None
+        )
+        physically_safe = bool(
+            introduced_problems is not None and not introduced_problems
         )
         target_correct = bool(
             source_truth_checks
@@ -591,7 +857,20 @@ def offline_teacher_target_audit(
         if not observable_evidence_passed:
             reasons.append("observable_evidence_gate_failed")
         if tool == COMMIT_STATE and not truth_safe_to_commit:
-            reasons.append("candidate_failed_private_commit_safety")
+            # One umbrella code could not distinguish a mis-targeted candidate
+            # from an undispositioned one or from new physical harm, so a
+            # quarantine could not be triaged without re-running collection.
+            # Each code fires only where it is the non-redundant cause; a
+            # missing or unverified candidate is already reported above.
+            if verified:
+                if not accepted_disposition:
+                    reasons.append("candidate_disposition_not_accepted")
+                if source_truth_evidence_complete and not target_correct:
+                    reasons.append(
+                        "candidate_source_target_outside_remaining_truth"
+                    )
+                if not physically_safe:
+                    reasons.append("candidate_commit_introduces_new_physical_harm")
         if tool == ROLLBACK_STATE and truth_safe_to_commit:
             reasons.append("rollback_would_discard_truth_safe_candidate")
         return _report(
@@ -631,7 +910,14 @@ def offline_teacher_target_audit(
     )
     if is_escalation:
         loader = case_loader if case_loader is not None else _default_case_loader()
-        safe = _release_safety_check(
+        # An escalation mutates nothing: it audits exactly the state it
+        # inherited.  Every problem found here therefore came from corrections
+        # the learner already committed, and no action available to the teacher
+        # retires a committed correction -- ``rollback_state`` discards only an
+        # open candidate.  Quarantining the target for that inherited damage
+        # would reject the one correct response to an unrecoverable state.  The
+        # audit must still be *runnable*: unverifiable evidence fails closed.
+        inherited_problems = _release_audit_problems(
             scenario=scenario,
             policy_observation=observation,
             active_physical_state=_active_physical_state(env),
@@ -639,16 +925,20 @@ def offline_teacher_target_audit(
             remaining_truth=truth,
             case_loader=loader,
         )
+        evaluable = bool(
+            truth.get("truth_complete") is True
+            and not _evidence_integrity_failure(inherited_problems)
+        )
         checks = {
-            "accepted_state_nonregressive_and_healthy": safe,
+            "handoff_state_audit_evaluable": evaluable,
             "observable_evidence_gate_passed": observable_evidence_passed,
             "terminal_claim_is_handoff_not_resolution": True,
         }
         reasons = []
         if not observable_evidence_passed:
             reasons.append("observable_evidence_gate_failed")
-        if not safe:
-            reasons.append("handoff_failed_private_safety_audit")
+        if not evaluable:
+            reasons.append("handoff_state_audit_unavailable")
         return _report(
             action_class="operator_escalation",
             checks=checks,
@@ -677,6 +967,7 @@ def offline_teacher_target_audit(
 
 
 __all__ = [
+    "LEGACY_OFFLINE_TEACHER_TARGET_AUDIT_CONTRACTS",
     "OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT",
     "offline_teacher_target_audit",
     "validate_offline_teacher_target_audit_metadata",

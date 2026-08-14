@@ -446,12 +446,14 @@ _DETERMINISTIC_CORRECTION_FAILURE_KINDS = {
     "correction_not_supported_by_current_context": "unsupported_correction",
     "correction_route_not_actionable": "correction_route_not_actionable",
     "parameter_scans_missing": "parameter_scans_missing",
+    "post_correction_confirmation_required": "unsupported_correction",
     "topology_correction_unsupported": "unsupported_correction",
 }
 _FAMILY_WIDE_CORRECTION_FAILURE_CODES = frozenset(
     {
         "correction_route_not_actionable",
         "parameter_scans_missing",
+        "post_correction_confirmation_required",
         "topology_correction_unsupported",
     }
 )
