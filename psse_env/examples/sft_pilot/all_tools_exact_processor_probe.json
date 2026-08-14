@@ -1,0 +1,78 @@
+{
+  "historical": true,
+  "release_eligible": false,
+  "superseded_reason": "13-tool report predates current registry and clean-source provenance gate",
+  "adversarial_episode_id": "e",
+  "processors": {
+    "unsloth/gemma-4-31B-it": {
+      "failures": [],
+      "length_audit": {
+        "empty_thought_injected_rows": 13,
+        "maximum": 1268,
+        "p50": 1253,
+        "p95": 1268,
+        "p99": 1268,
+        "prompt_truncated_rows": 0,
+        "rows_prepared": 13,
+        "rows_seen": 13,
+        "supervised_token_maximum": 36,
+        "supervised_token_p50": 19,
+        "supervised_token_p95": 36,
+        "supervised_token_p99": 36,
+        "target_truncated_rows": 0,
+        "used_maximum": 1268,
+        "used_p50": 1253,
+        "used_p95": 1268,
+        "used_p99": 1268,
+        "zero_supervision_rows": 0
+      },
+      "passed": true,
+      "processor_loader": "AutoProcessor",
+      "revision": "8a796db4df380b178065ed910849477ff0e99c87",
+      "tool_round_trips": 13
+    },
+    "unsloth/gemma-4-E2B-it": {
+      "failures": [],
+      "length_audit": {
+        "empty_thought_injected_rows": 0,
+        "maximum": 1264,
+        "p50": 1249,
+        "p95": 1264,
+        "p99": 1264,
+        "prompt_truncated_rows": 0,
+        "rows_prepared": 13,
+        "rows_seen": 13,
+        "supervised_token_maximum": 36,
+        "supervised_token_p50": 19,
+        "supervised_token_p95": 36,
+        "supervised_token_p99": 36,
+        "target_truncated_rows": 0,
+        "used_maximum": 1264,
+        "used_p50": 1249,
+        "used_p95": 1264,
+        "used_p99": 1264,
+        "zero_supervision_rows": 0
+      },
+      "passed": true,
+      "processor_loader": "AutoProcessor",
+      "revision": "f0c5915f17ad6c66dbeb577fb06ff8925bf8d7ae",
+      "tool_round_trips": 13
+    }
+  },
+  "rows": 13,
+  "tool_targets": [
+    "run_wls",
+    "verify_candidate",
+    "get_measurement_context",
+    "get_parameter_context",
+    "get_topology_context",
+    "correct_measurements",
+    "correct_parameters",
+    "correct_topology",
+    "commit_state",
+    "rollback_state",
+    "finalize_diagnosis",
+    "ask_for_more_evidence",
+    "run_alternative_test"
+  ]
+}

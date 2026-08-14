@@ -55,6 +55,7 @@ from mcp_server.matpower_server import (
     correct_parameters_from_path,
     correct_topology_from_path,
     estimate_hif_location_magnitude_from_path,
+    estimate_hif_location_magnitude_multiscan_from_path,
     run_hse_from_path,
     run_three_phase_nlm_from_path,
     wls_from_path,
@@ -115,6 +116,7 @@ TOOL_MAP = {
     "correct_parameters_from_path": correct_parameters_from_path,
     "correct_topology_from_path": correct_topology_from_path,
     "estimate_hif_location_magnitude_from_path": estimate_hif_location_magnitude_from_path,
+    "estimate_hif_location_magnitude_multiscan_from_path": estimate_hif_location_magnitude_multiscan_from_path,
     "run_hse_from_path": run_hse_from_path,
     "run_three_phase_nlm_from_path": run_three_phase_nlm_from_path,
 }
@@ -125,6 +127,7 @@ CORE_TOOL_NAMES = frozenset(
         "correct_parameters_from_path",
         "correct_topology_from_path",
         "estimate_hif_location_magnitude_from_path",
+        "estimate_hif_location_magnitude_multiscan_from_path",
         "run_hse_from_path",
         "run_three_phase_nlm_from_path",
     }
@@ -1349,6 +1352,8 @@ def post_wls_allowed_tools(runtime_context: Mapping[str, Any] | None) -> list[st
         allowed.append("get_topology_context")
     if isinstance(tool_context.get("harmonic_context"), Mapping):
         allowed.append("get_harmonic_context")
+    if isinstance(tool_context.get("hif_context"), Mapping):
+        allowed.append("run_three_phase_nlm_from_path")
     allowed.append("final_json")
     return allowed
 
@@ -1400,6 +1405,20 @@ def controller_allowed_next_tools(
             allowed.append("get_harmonic_context")
         elif "run_hse_from_path" not in successful_tools:
             allowed.append("run_hse_from_path")
+
+    hif_context = tool_context.get("hif_context")
+    if isinstance(hif_context, Mapping):
+        if "run_three_phase_nlm_from_path" not in successful_tools:
+            allowed.append("run_three_phase_nlm_from_path")
+        else:
+            scans = hif_context.get("scans")
+            estimator = (
+                "estimate_hif_location_magnitude_multiscan_from_path"
+                if isinstance(scans, list) and len(scans) > 1
+                else "estimate_hif_location_magnitude_from_path"
+            )
+            if estimator not in successful_tools:
+                allowed.append(estimator)
 
     allowed.append("final_json")
     deduped: list[str] = []
@@ -1694,6 +1713,21 @@ def compact_tool_arguments_for_prompt(tool_name: str, arguments: dict[str, Any])
             "r_grid_size",
             "r_hif_pu_min",
             "r_hif_pu_max",
+        },
+        "estimate_hif_location_magnitude_multiscan_from_path": {
+            "scan_window_path",
+            "candidate_branch_row0",
+            "candidate_phase",
+            "resistance_mode",
+            "max_scans",
+            "scan_selection",
+            "top_k",
+            "alpha_grid_size",
+            "r_grid_size",
+            "r_hif_pu_min",
+            "r_hif_pu_max",
+            "robust_loss",
+            "smoothness_lambda",
         },
     }.get(tool_name)
     if keep_keys is None:

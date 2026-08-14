@@ -1,0 +1,119 @@
+{
+  "historical": true,
+  "release_eligible": false,
+  "superseded_reason": "pilot report predates current registry and clean-source provenance gate",
+  "native_chat_audit": {
+    "errors": [],
+    "invalid_rows": 0,
+    "passed": true,
+    "total_rows": 90
+  },
+  "preferred_action_distribution": {
+    "commit_state": 15,
+    "correct_measurements": 5,
+    "correct_parameters": 5,
+    "correct_topology": 5,
+    "finalize_diagnosis": 15,
+    "get_measurement_context": 5,
+    "get_parameter_context": 5,
+    "get_topology_context": 5,
+    "run_wls": 30
+  },
+  "production_dataset_mode": true,
+  "provider_configuration": {
+    "production_dataset_mode": true,
+    "providers": {
+      "correct_measurements": {
+        "approved_deterministic": true,
+        "provider": "__main__.ReviewedDeterministicPilotAdapters",
+        "provider_kind": "deterministic"
+      },
+      "correct_parameters": {
+        "approved_deterministic": true,
+        "provider": "__main__.ReviewedDeterministicPilotAdapters",
+        "provider_kind": "deterministic"
+      },
+      "correct_topology": {
+        "approved_deterministic": true,
+        "provider": "__main__.ReviewedDeterministicPilotAdapters",
+        "provider_kind": "deterministic"
+      },
+      "get_measurement_context": {
+        "approved_deterministic": true,
+        "provider": "__main__.ReviewedDeterministicPilotAdapters",
+        "provider_kind": "deterministic"
+      },
+      "get_parameter_context": {
+        "approved_deterministic": true,
+        "provider": "__main__.ReviewedDeterministicPilotAdapters",
+        "provider_kind": "deterministic"
+      },
+      "get_topology_context": {
+        "approved_deterministic": true,
+        "provider": "__main__.ReviewedDeterministicPilotAdapters",
+        "provider_kind": "deterministic"
+      },
+      "run_wls": {
+        "approved_deterministic": true,
+        "provider": "__main__.ReviewedDeterministicPilotAdapters",
+        "provider_kind": "deterministic"
+      }
+    }
+  },
+  "raw_rows": 90,
+  "root_ownership": {
+    "pilot_root_000": "train",
+    "pilot_root_001": "train",
+    "pilot_root_002": "train",
+    "pilot_root_003": "train",
+    "pilot_root_004": "test",
+    "pilot_root_005": "train",
+    "pilot_root_006": "train",
+    "pilot_root_007": "train",
+    "pilot_root_008": "train",
+    "pilot_root_009": "train",
+    "pilot_root_010": "train",
+    "pilot_root_011": "train",
+    "pilot_root_012": "validation",
+    "pilot_root_013": "train",
+    "pilot_root_014": "train"
+  },
+  "root_scenarios": 15,
+  "seed": 20260715,
+  "split_rows": {
+    "test": 6,
+    "train": 78,
+    "validation": 6
+  },
+  "state_class_distribution": {
+    "accepted_final_commit": 15,
+    "clean_successful": 60,
+    "terminal_decision": 15
+  },
+  "target_aware_class_audit": {
+    "class_counts": {
+      "accepted_final_commit": 15,
+      "clean_successful": 60,
+      "terminal_decision": 15
+    },
+    "mismatches": [],
+    "passed": true,
+    "semantic_violations": [],
+    "total_rows": 90
+  },
+  "teacher_realizability": {
+    "conflict_details_truncated": 0,
+    "conflict_observations": 0,
+    "conflict_rate": 0.0,
+    "conflict_tolerance": 0.0,
+    "conflicting_examples": 0,
+    "conflicts": [],
+    "invalid_examples": [],
+    "labeled_examples": 90,
+    "passed": true,
+    "total_examples": 90,
+    "unique_observations": 38,
+    "unlabeled_or_invalid_examples": 0
+  },
+  "train_validation_rows": 84
+}

@@ -26,3 +26,41 @@ BRANCH_ORDER = [
     "Line.12-13",
     "Line.13-14",
 ]
+
+IEEE14_LOAD_BASE_KW = {
+    "b2": 21700.0,
+    "b3": 94200.0,
+    "b4": 47800.0,
+    "b5": 7600.0,
+    "b6": 11200.0,
+    "b9": 29500.0,
+    "b10": 9000.0,
+    "b11": 3500.0,
+    "b12": 6100.0,
+    "b13": 13500.0,
+    "b14": 14900.0,
+}
+
+IEEE14_GENERATOR_DISPATCH_KW = {
+    "b2": 40000.0,
+    "b3": 1.0,
+    "b6": 1.0,
+    "b8": 1.0,
+}
+
+IEEE14_GENERATOR_VOLTAGE_PU = {
+    "b2": 1.045,
+    "b3": 1.010,
+    "b6": 1.070,
+    "b8": 1.090,
+}
+
+IEEE14_SOURCE_VOLTAGE_PU = 1.060
+
+IEEE14_OPERATING_POINT_KEYS = (
+    "load_scale",
+    "bus_load_scales",
+    "generator_dispatch_kw",
+    "voltage_setpoints_pu",
+    "source_voltage_pu",
+)

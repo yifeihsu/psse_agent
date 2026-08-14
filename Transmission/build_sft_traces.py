@@ -147,6 +147,9 @@ class BuilderConfig:
     timeout_s: int = 60
     hif_estimator_alpha_grid_size: int = 31
     hif_estimator_r_grid_size: int = 35
+    hif_estimator_max_scans: int = 10
+    hif_estimator_scan_selection: str = "information_greedy"
+    hif_estimator_resistance_mode: str = "shared"
 
 
 # ----------------------------- low-level helpers -----------------------------
@@ -615,6 +618,28 @@ def call_tool_json(endpoint: str, name: str, arguments: Mapping[str, Any], timeo
                 r_hif_pu_max=arguments.get("r_hif_pu_max", 1000.0),
             )
             return _make_serializable(result)
+
+        elif name == "estimate_hif_location_magnitude_multiscan_from_path":
+            result = mp_tools.estimate_hif_location_magnitude_multiscan_from_path.fn(
+                scan_window_path=arguments["scan_window_path"],
+                scans=arguments.get("scans"),
+                sigma_z=arguments.get("sigma_z"),
+                case_path=arguments.get("case_path", "case14"),
+                candidate_branch_row0=arguments["candidate_branch_row0"],
+                candidate_phase=arguments.get("candidate_phase"),
+                pristine_model_dir=arguments.get("pristine_model_dir"),
+                resistance_mode=arguments.get("resistance_mode", "shared"),
+                max_scans=arguments.get("max_scans", 10),
+                scan_selection=arguments.get("scan_selection", "information_greedy"),
+                top_k=arguments.get("top_k", 5),
+                alpha_grid_size=arguments.get("alpha_grid_size", 31),
+                r_grid_size=arguments.get("r_grid_size", 35),
+                r_hif_pu_min=arguments.get("r_hif_pu_min", 5.0),
+                r_hif_pu_max=arguments.get("r_hif_pu_max", 1000.0),
+                robust_loss=arguments.get("robust_loss", "soft_l1"),
+                smoothness_lambda=arguments.get("smoothness_lambda", 0.10),
+            )
+            return _make_serializable(result)
             
         else:
             return {"success": False, "error": f"Unknown tool name locally: {name}"}
@@ -831,9 +856,19 @@ def make_mock_hif_parameter_estimate_payload(
     fault_v = float(kv_ln) * 1000.0
     p_kw = (fault_v**2) / float(r_hif_ohm) / 1000.0 if float(r_hif_ohm) > 0 else None
     i_amp = fault_v / float(r_hif_ohm) if float(r_hif_ohm) > 0 else None
+    scan_count = len(rec.get("scans", [])) if isinstance(rec.get("scans"), list) else 0
+    is_multiscan = scan_count > 1
     return {
         "success": True,
-        "method": "mock_model_based_hif_parameter_search",
+        "synthetic_oracle": True,
+        "parameter_identifiable": True if is_multiscan else None,
+        "method": (
+            "multiscan_augmented_hif_parameter_estimation"
+            if is_multiscan
+            else "mock_model_based_hif_parameter_search"
+        ),
+        "scan_count": scan_count if is_multiscan else None,
+        "selected_scan_count": scan_count if is_multiscan else None,
         "candidate_branch_row0": int(candidate_branch_row0),
         "input_branch_row0": int(candidate_branch_row0),
         "dss_element": lab.get("dss_element"),
@@ -852,10 +887,27 @@ def make_mock_hif_parameter_estimate_payload(
         },
         "fit": {
             "weighted_residual_norm": 0.0,
+            "multiscan_weighted_residual_norm": 0.0 if is_multiscan else None,
             "residual_reduction_vs_no_refinement": 1.0,
             "localization_certainty": "well_separated",
             "ambiguity": False,
         },
+        "observability": (
+            {
+                "parameter_dimension": 2,
+                "effective_rank": 2,
+                "smallest_singular_value": 0.01,
+                "condition_number": 100.0,
+                "alpha_log_r_correlation": 0.0,
+                "information_gain_vs_best_single_scan": float(scan_count),
+                "scan_diversity_score": 0.5,
+                "status": "full_rank_well_conditioned",
+                "parameter_identifiable": True,
+                "diagnostic_method": "mock_finite_difference_reduced_information",
+            }
+            if is_multiscan
+            else None
+        ),
         "uncertainty": {
             "near_best_alpha_interval": [max(0.01, float(alpha) - 0.025), min(0.99, float(alpha) + 0.025)],
             "near_best_r_hif_pu_interval": [float(r_hif_pu) * 0.9, float(r_hif_pu) * 1.1],
@@ -978,11 +1030,24 @@ def make_user_payload(rec: Mapping[str, Any], meta: Mapping[str, Any], case_path
             "If imbalance is suspected, request three-phase substation voltages."
         )
     if normalize_scenario(str(rec.get("scenario", ""))) == "high_impedance_fault":
-        payload["note"] = (
-            "This snapshot is a 1φ-equivalent operator vector from a copied IEEE-14 OpenDSS scenario. "
-            "If a hidden high-impedance fault is suspected, use the three-phase NLM localization tool, "
-            "then estimate the HIF position and magnitude on the NLM-selected line."
-        )
+        scan_count = len(rec.get("scans", [])) if isinstance(rec.get("scans"), list) else 0
+        if scan_count > 1:
+            payload["hif_scan_window"] = {
+                "available": True,
+                "scan_count": scan_count,
+                "scan_window_path": f"bound://hif_window/{rec.get('id')}",
+            }
+            payload["note"] = (
+                "This snapshot is the reference scan from a persistent IEEE-14 HIF event window. "
+                "Use three-phase NLM for the line, then use the multi-scan HIF estimator without "
+                "repeating the bound scan measurements."
+            )
+        else:
+            payload["note"] = (
+                "This snapshot is a 1-phi-equivalent operator vector from a copied IEEE-14 OpenDSS scenario. "
+                "If a hidden high-impedance fault is suspected, use the three-phase NLM localization tool, "
+                "then estimate the HIF position and magnitude on the NLM-selected line."
+            )
     return round_user_payload(payload)
 
 
@@ -1062,6 +1127,10 @@ def make_hif_context_payload(rec: Mapping[str, Any], case_path: str) -> Dict[str
             "case_path": case_path,
             "z_obs": rec.get("z_obs", []),
             "three_phase_voltages": rec.get("three_phase_voltages", []),
+            "scan_window_path": f"bound://hif_window/{rec.get('id')}",
+            "scans": rec.get("scans", []),
+            "sigma_z": rec.get("sigma_z"),
+            "scan_count": len(rec.get("scans", [])) if isinstance(rec.get("scans"), list) else 0,
             "nlm_diagnostic": nlm_diagnostic,
             "label": label,
             "pristine_model_dir": str(REPO_ROOT / "IEEE_14_OpenDSS"),
@@ -1740,11 +1809,41 @@ def build_final_target(
         estimated = compact_hif_estimate.get("estimated") if isinstance(compact_hif_estimate.get("estimated"), Mapping) else {}
         fit = compact_hif_estimate.get("fit") if isinstance(compact_hif_estimate.get("fit"), Mapping) else {}
         if estimated:
+            observability = (
+                compact_hif_estimate.get("observability")
+                if isinstance(compact_hif_estimate.get("observability"), Mapping)
+                else {}
+            )
+            is_multiscan = (
+                compact_hif_estimate.get("method")
+                == "multiscan_augmented_hif_parameter_estimation"
+            )
+            point_alpha_supported = bool(
+                not is_multiscan
+                or (
+                    compact_hif_estimate.get("parameter_identifiable")
+                    and not fit.get("ambiguity")
+                    and observability.get("status")
+                    in {"full_rank_well_conditioned", "full_rank_weakly_conditioned"}
+                )
+            )
+            evidence_estimated = dict(estimated)
+            if not point_alpha_supported:
+                evidence_estimated.pop("alpha_from_from_bus", None)
+                evidence_estimated.pop("distance_percent_from_from_bus", None)
             evidence["hif_parameter_estimate"] = {
-                **dict(estimated),
+                **evidence_estimated,
                 "localization_certainty": fit.get("localization_certainty"),
                 "ambiguity": fit.get("ambiguity"),
                 "weighted_residual_norm": fit.get("weighted_residual_norm"),
+                "parameter_identifiable": compact_hif_estimate.get("parameter_identifiable"),
+                "observability_status": observability.get("status"),
+                "near_best_alpha_interval": compact_hif_estimate.get("uncertainty", {}).get(
+                    "near_best_alpha_interval"
+                ),
+                "near_best_r_hif_pu_interval": compact_hif_estimate.get("uncertainty", {}).get(
+                    "near_best_r_hif_pu_interval"
+                ),
             }
 
     families = multi_error_families(rec)
@@ -2124,22 +2223,60 @@ def build_final_target(
             if isinstance(compact_hif_estimate.get("uncertainty"), Mapping)
             else {}
         )
-        if estimated:
-            details.update(
-                {
-                    "alpha_from_from_bus": estimated.get("alpha_from_from_bus"),
-                    "distance_percent_from_from_bus": estimated.get("distance_percent_from_from_bus"),
-                    "r_hif_pu": estimated.get("r_hif_pu"),
-                    "r_hif_ohm": estimated.get("r_hif_ohm"),
-                    "g_hif_siemens": estimated.get("g_hif_siemens"),
-                    "i_hif_amp": estimated.get("i_hif_amp"),
-                    "p_hif_kw": estimated.get("p_hif_kw"),
-                    "q_hif_kvar": estimated.get("q_hif_kvar"),
-                    "parameter_fit": fit,
-                    "parameter_uncertainty": uncertainty,
-                    "top_parameter_candidates": compact_hif_estimate.get("top_parameter_candidates"),
-                }
+        observability = (
+            compact_hif_estimate.get("observability")
+            if isinstance(compact_hif_estimate.get("observability"), Mapping)
+            else {}
+        )
+        estimator_tool_name = (
+            "estimate_hif_location_magnitude_multiscan_from_path"
+            if compact_hif_estimate.get("method") == "multiscan_augmented_hif_parameter_estimation"
+            else "estimate_hif_location_magnitude_from_path"
+        )
+        report_point_estimate = bool(
+            estimator_tool_name != "estimate_hif_location_magnitude_multiscan_from_path"
+            or (
+                observability.get("parameter_identifiable")
+                and not fit.get("ambiguity")
+                and observability.get("status")
+                in {"full_rank_well_conditioned", "full_rank_weakly_conditioned"}
             )
+        )
+        if estimated:
+            parameter_details = {
+                "parameter_fit": fit,
+                "parameter_uncertainty": uncertainty,
+                "parameter_observability": observability,
+                "top_parameter_candidates": compact_hif_estimate.get("top_parameter_candidates"),
+            }
+            if report_point_estimate:
+                parameter_details.update(
+                    {
+                        "alpha_from_from_bus": estimated.get("alpha_from_from_bus"),
+                        "distance_percent_from_from_bus": estimated.get("distance_percent_from_from_bus"),
+                        "r_hif_pu": estimated.get("r_hif_pu"),
+                        "r_hif_ohm": estimated.get("r_hif_ohm"),
+                        "g_hif_siemens": estimated.get("g_hif_siemens"),
+                        "i_hif_amp": estimated.get("i_hif_amp"),
+                        "p_hif_kw": estimated.get("p_hif_kw"),
+                        "q_hif_kvar": estimated.get("q_hif_kvar"),
+                    }
+                )
+            else:
+                parameter_details.update(
+                    {
+                        "near_best_alpha_interval": uncertainty.get("near_best_alpha_interval"),
+                        "near_best_r_hif_pu_interval": uncertainty.get("near_best_r_hif_pu_interval"),
+                        "r_hif_pu": estimated.get("r_hif_pu"),
+                        "r_hif_ohm": estimated.get("r_hif_ohm"),
+                        "g_hif_siemens": estimated.get("g_hif_siemens"),
+                        "i_hif_amp": estimated.get("i_hif_amp"),
+                        "p_hif_kw": estimated.get("p_hif_kw"),
+                        "q_hif_kvar": estimated.get("q_hif_kvar"),
+                        "parameter_identifiable": False,
+                    }
+                )
+            details.update(parameter_details)
             if estimated.get("phase") is not None:
                 details["phase"] = estimated.get("phase")
         suspected_phase = compact_nlm.get("suspected_phase")
@@ -2154,23 +2291,42 @@ def build_final_target(
             "details": {k: v for k, v in details.items() if v not in (None, [], {})},
         }
         applied_tool = (
-            "estimate_hif_location_magnitude_from_path"
+            estimator_tool_name
             if isinstance(hif_estimate_payload, Mapping) and hif_estimate_payload.get("success", True)
             else "run_three_phase_nlm_from_path"
         )
+        estimator_arguments = {
+            "case_path": "case14",
+            "candidate_branch_row0": branch_row0,
+        }
+        if estimator_tool_name == "estimate_hif_location_magnitude_multiscan_from_path":
+            estimator_arguments["scan_window_path"] = f"bound://hif_window/{rec.get('id')}"
         action = {
             "applied_tool": applied_tool,
             "arguments_hint": {
-                "high_impedance_fault": {
-                    "case_path": "case14",
-                    "candidate_branch_row0": branch_row0,
-                }
+                "high_impedance_fault": estimator_arguments,
             },
             "request_more_data": False,
             "requested_data": None,
             "verification_summary": None,
         }
-        if estimated:
+        if estimated and estimator_tool_name == "estimate_hif_location_magnitude_multiscan_from_path":
+            if report_point_estimate and observability.get("status") == "full_rank_well_conditioned":
+                summary = (
+                    "Three-phase NLM localized the suspected HIF line, and the multi-scan fit "
+                    "identified a shared fault position and resistance across operating points."
+                )
+            elif report_point_estimate:
+                summary = (
+                    "The multi-scan HIF fit favors an approximate along-line position and resistance, "
+                    "but the position remains weakly conditioned."
+                )
+            else:
+                summary = (
+                    "The multi-scan HIF fit narrows the parameter range, but the along-line "
+                    "position remains ambiguous or weakly observable."
+                )
+        elif estimated:
             summary = (
                 "Three-phase NLM localized the suspected HIF line, and model-based parameter fitting "
                 "estimated the fault position and HIF resistance."
@@ -2202,9 +2358,12 @@ def build_final_target(
     if (
         not tool_list
         and family == "high_impedance_fault"
-        and action.get("applied_tool") == "estimate_hif_location_magnitude_from_path"
+        and action.get("applied_tool") in {
+            "estimate_hif_location_magnitude_from_path",
+            "estimate_hif_location_magnitude_multiscan_from_path",
+        }
     ):
-        tool_list = ["run_three_phase_nlm_from_path", "estimate_hif_location_magnitude_from_path"]
+        tool_list = ["run_three_phase_nlm_from_path", str(action.get("applied_tool"))]
     elif not tool_list and action.get("applied_tool"):
         tool_list = [str(action["applied_tool"])]
     action["first_applied_tool"] = tool_list[0] if tool_list else None
@@ -2345,7 +2504,13 @@ def rejection_reason(final_target: Mapping[str, Any]) -> Optional[str]:
         applied = action.get("applied_tools") if isinstance(action.get("applied_tools"), list) else []
         if "run_three_phase_nlm_from_path" not in applied:
             return "high_impedance_fault_missing_nlm_tool"
-        if "estimate_hif_location_magnitude_from_path" not in applied:
+        if not any(
+            tool in applied
+            for tool in {
+                "estimate_hif_location_magnitude_from_path",
+                "estimate_hif_location_magnitude_multiscan_from_path",
+            }
+        ):
             return "high_impedance_fault_missing_parameter_estimator_tool"
         hif_groups = evidence.get("top_hif_groups", [])
         if not isinstance(hif_groups, list) or not hif_groups:
@@ -2656,17 +2821,15 @@ def append_multi_error_actions(
             if line_row0 is None or not isinstance(rec.get("z_scans"), list) or not isinstance(rec.get("initial_states"), list):
                 continue
 
-            correction_case_backend = (
-                rec.get("parameter_error_case_path")
-                or rec.get("correction_case_path")
-                or current_case_backend
+            # The correction call must load the operator's current DB case
+            # (stale nominal parameters); the physical-truth parameter case is
+            # reserved for post-correction verification below. Seeding the
+            # estimator with the truth case would start the search at the
+            # answer and skip the actual multi-scan estimation.
+            truth_case_backend = rec.get("parameter_error_case_path") or rec.get(
+                "correction_case_path"
             )
             correction_case_visible = current_case_visible
-            if correction_case_backend != current_case_backend:
-                correction_case_visible = make_case_alias(base_case_visible, "parameter_case", sid)
-                runtime_context["case_aliases"][correction_case_visible] = runtime_case_reference(
-                    correction_case_backend
-                )
 
             parameter_context = make_parameter_followup_payload(param_rec, correction_case_visible)
             runtime_context["tool_context"]["parameter_context"] = parameter_context
@@ -2768,7 +2931,8 @@ def append_multi_error_actions(
                     )
                     if (
                         explicit.get("z_obs_policy") == "preserve_current_z_obs"
-                        and correction_case_backend != current_case_backend
+                        and truth_case_backend
+                        and truth_case_backend != current_case_backend
                         and len(current_z_obs) != len(rec.get("z_obs", []))
                         and isinstance(rec.get("z_obs"), list)
                     ):
@@ -2781,11 +2945,10 @@ def append_multi_error_actions(
                         current_case_visible = verification_case_visible
                         current_case_backend = explicit.get("case_path") or current_case_backend
                 else:
-                    correction_case_backend = rec.get("parameter_error_case_path") or rec.get("correction_case_path")
-                    if correction_case_backend:
+                    if truth_case_backend:
                         verification_case_visible = make_case_alias(base_case_visible, "parameter_verify", sid)
                         current_case_visible = verification_case_visible
-                        current_case_backend = correction_case_backend
+                        current_case_backend = truth_case_backend
                         runtime_context["case_aliases"][verification_case_visible] = runtime_case_reference(
                             current_case_backend
                         )
@@ -3448,13 +3611,14 @@ def build_sft(config: BuilderConfig) -> None:
                 line_row0 = _maybe_int(rec.get("label", {}).get("line_row"))
                 if line_row0 is not None and isinstance(rec.get("z_scans"), list) and isinstance(rec.get("initial_states"), list):
                     correction_tool_name = "correct_parameters_from_path"
-                    correction_case_backend = rec.get("parameter_error_case_path") or rec.get("correction_case_path") or base_case_backend
+                    # The correction call must load the operator's base DB case
+                    # (stale nominal parameters); the physical-truth parameter
+                    # case is reserved for post-correction verification, where
+                    # it stands in for the DB with the corrected [R, X] applied.
+                    truth_case_backend = rec.get("parameter_error_case_path") or rec.get(
+                        "correction_case_path"
+                    )
                     correction_case_visible = base_case_visible
-                    if correction_case_backend != base_case_backend:
-                        correction_case_visible = make_case_alias(base_case_visible, "parameter_case", sid)
-                        runtime_context["case_aliases"][correction_case_visible] = runtime_case_reference(
-                            correction_case_backend
-                        )
                     parameter_context = make_parameter_followup_payload(rec, correction_case_visible)
                     runtime_context["tool_context"]["parameter_context"] = parameter_context
                     hidden_context["parameter_context"] = parameter_context
@@ -3507,8 +3671,11 @@ def build_sft(config: BuilderConfig) -> None:
                     if param_payload.get("success", True) and isinstance(rec.get("z_true"), list):
                         verify_stage = "post_parameter_correction"
                         verification_case_visible = make_case_alias(base_case_visible, "parameter_verify", sid)
+                        # Verify against the physical-truth parameter case: it
+                        # models the DB after the corrected [R, X] are applied,
+                        # so the post-correction WLS shows the anomaly cleared.
                         runtime_context["case_aliases"][verification_case_visible] = runtime_case_reference(
-                            base_case_backend
+                            truth_case_backend or base_case_backend
                         )
                         verification_snapshot = make_verification_snapshot_payload(
                             verification_case_visible,
@@ -3808,15 +3975,31 @@ def build_sft(config: BuilderConfig) -> None:
                         }
                     )
                     continue
+                hif_scan_count = len(rec.get("scans", [])) if isinstance(rec.get("scans"), list) else 0
+                hif_estimator_tool = (
+                    "estimate_hif_location_magnitude_multiscan_from_path"
+                    if hif_scan_count > 1
+                    else "estimate_hif_location_magnitude_from_path"
+                )
                 hif_estimate_args = {
-                    "case_path": base_case_visible,
                     "candidate_branch_row0": candidate_branch,
                     "top_k": 5,
                     "alpha_grid_size": config.hif_estimator_alpha_grid_size,
                     "r_grid_size": config.hif_estimator_r_grid_size,
                 }
+                if hif_scan_count > 1:
+                    hif_estimate_args.update(
+                        {
+                            "scan_window_path": f"bound://hif_window/{sid}",
+                            "resistance_mode": config.hif_estimator_resistance_mode,
+                            "max_scans": config.hif_estimator_max_scans,
+                            "scan_selection": config.hif_estimator_scan_selection,
+                        }
+                    )
+                else:
+                    hif_estimate_args["case_path"] = base_case_visible
                 hif_estimate_call = make_tool_call(
-                    "estimate_hif_location_magnitude_from_path",
+                    hif_estimator_tool,
                     f"call_hif_est_{sha_short(sid)}",
                     hif_estimate_args,
                 )
@@ -3827,7 +4010,7 @@ def build_sft(config: BuilderConfig) -> None:
                         if config.mock
                         else call_backend_tool(
                             config.endpoint,
-                            "estimate_hif_location_magnitude_from_path",
+                            hif_estimator_tool,
                             hif_estimate_args,
                             messages,
                             hidden_context,
@@ -3840,10 +4023,10 @@ def build_sft(config: BuilderConfig) -> None:
                     {
                         "role": "tool",
                         "tool_call_id": hif_estimate_call["id"],
-                        "name": "estimate_hif_location_magnitude_from_path",
+                        "name": hif_estimator_tool,
                         "content": as_tool_return_text(
                             summarize_tool_result_for_conversation(
-                                "estimate_hif_location_magnitude_from_path",
+                                hif_estimator_tool,
                                 hif_estimate_payload,
                                 meta,
                                 idx_map,
@@ -3861,7 +4044,7 @@ def build_sft(config: BuilderConfig) -> None:
                         }
                     )
                     continue
-                applied_tools.append("estimate_hif_location_magnitude_from_path")
+                applied_tools.append(hif_estimator_tool)
 
             elif scenario == "three_phase_imbalance":
                 three_phase = rec.get("three_phase_voltages")
@@ -4055,6 +4238,25 @@ def parse_args() -> BuilderConfig:
         help="HIF resistance grid size for parameter-estimator tool calls in generated traces.",
     )
     p.add_argument(
+        "--hif-estimator-max-scans",
+        type=int,
+        default=10,
+        help=(
+            "Maximum scans selected from each persistent HIF event window. "
+            "Ten is the measured accuracy/runtime default; retain up to 20 candidates."
+        ),
+    )
+    p.add_argument(
+        "--hif-estimator-scan-selection",
+        choices=["all", "diversity_greedy", "information_greedy"],
+        default="information_greedy",
+    )
+    p.add_argument(
+        "--hif-estimator-resistance-mode",
+        choices=["shared", "scan_specific_smooth"],
+        default="shared",
+    )
+    p.add_argument(
         "--hardening-examples",
         type=int,
         default=0,
@@ -4089,6 +4291,9 @@ def parse_args() -> BuilderConfig:
         timeout_s=int(args.timeout),
         hif_estimator_alpha_grid_size=int(args.hif_estimator_alpha_grid_size),
         hif_estimator_r_grid_size=int(args.hif_estimator_r_grid_size),
+        hif_estimator_max_scans=int(args.hif_estimator_max_scans),
+        hif_estimator_scan_selection=str(args.hif_estimator_scan_selection),
+        hif_estimator_resistance_mode=str(args.hif_estimator_resistance_mode),
     )
 
 

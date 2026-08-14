@@ -1,0 +1,195 @@
+{
+  "historical": true,
+  "release_eligible": false,
+  "superseded_reason": "pilot report predates current registry and clean-source provenance gate",
+  "grouped_pilot": {
+    "action_distribution": {
+      "test": {
+        "commit_state": 1,
+        "correct_parameters": 1,
+        "finalize_diagnosis": 1,
+        "get_parameter_context": 1,
+        "run_wls": 2
+      },
+      "train": {
+        "commit_state": 13,
+        "correct_measurements": 4,
+        "correct_parameters": 4,
+        "correct_topology": 5,
+        "finalize_diagnosis": 13,
+        "get_measurement_context": 4,
+        "get_parameter_context": 4,
+        "get_topology_context": 5,
+        "run_wls": 26
+      },
+      "validation": {
+        "commit_state": 1,
+        "correct_measurements": 1,
+        "finalize_diagnosis": 1,
+        "get_measurement_context": 1,
+        "run_wls": 2
+      }
+    },
+    "class_distribution": {
+      "test": {
+        "accepted_final_commit": 1,
+        "clean_successful": 4,
+        "terminal_decision": 1
+      },
+      "train": {
+        "accepted_final_commit": 13,
+        "clean_successful": 52,
+        "terminal_decision": 13
+      },
+      "validation": {
+        "accepted_final_commit": 1,
+        "clean_successful": 4,
+        "terminal_decision": 1
+      }
+    },
+    "failures": [],
+    "overlapping_groups": {},
+    "passed": true,
+    "split_group_counts": {
+      "test": 1,
+      "train": 13,
+      "validation": 1
+    },
+    "split_rows": {
+      "test": 6,
+      "train": 78,
+      "validation": 6
+    },
+    "total_rows": 90
+  },
+  "model": "unsloth/gemma-4-31B-it",
+  "passed": true,
+  "pilot_sha256": {
+    "test": "29ace51178355195d59fe5d94ef0b12c2d4d3efb784ca902eb21edef84c4c8dd",
+    "train": "9b0026d33e06762371192a804d95fd152d3bcc07820885cbd52b6b3c6329061c",
+    "validation": "ce0070d6dbaae0b4a2f358f9ca38a4c528bfaad5c760391e35c6c22e5eca3bfd"
+  },
+  "processor_loader": "AutoProcessor",
+  "revision": "8a796db4df380b178065ed910849477ff0e99c87",
+  "test": {
+    "action_distribution": {
+      "commit_state": 1,
+      "correct_parameters": 1,
+      "finalize_diagnosis": 1,
+      "get_parameter_context": 1,
+      "run_wls": 2
+    },
+    "class_distribution": {
+      "accepted_final_commit": 1,
+      "clean_successful": 4,
+      "terminal_decision": 1
+    },
+    "failures": [],
+    "length_audit": {
+      "empty_thought_injected_rows": 6,
+      "maximum": 2440,
+      "p50": 2099,
+      "p95": 2440,
+      "p99": 2440,
+      "prompt_truncated_rows": 0,
+      "rows_prepared": 6,
+      "rows_seen": 6,
+      "supervised_token_maximum": 36,
+      "supervised_token_p50": 18,
+      "supervised_token_p95": 36,
+      "supervised_token_p99": 36,
+      "target_truncated_rows": 0,
+      "used_maximum": 2440,
+      "used_p50": 2099,
+      "used_p95": 2440,
+      "used_p99": 2440,
+      "zero_supervision_rows": 0
+    },
+    "passed": true,
+    "tool_call_rows": 6,
+    "tool_round_trips": 6,
+    "warnings": []
+  },
+  "train": {
+    "action_distribution": {
+      "commit_state": 13,
+      "correct_measurements": 4,
+      "correct_parameters": 4,
+      "correct_topology": 5,
+      "finalize_diagnosis": 13,
+      "get_measurement_context": 4,
+      "get_parameter_context": 4,
+      "get_topology_context": 5,
+      "run_wls": 26
+    },
+    "class_distribution": {
+      "accepted_final_commit": 13,
+      "clean_successful": 52,
+      "terminal_decision": 13
+    },
+    "failures": [],
+    "length_audit": {
+      "empty_thought_injected_rows": 78,
+      "maximum": 2440,
+      "p50": 2070,
+      "p95": 2440,
+      "p99": 2440,
+      "prompt_truncated_rows": 0,
+      "rows_prepared": 78,
+      "rows_seen": 78,
+      "supervised_token_maximum": 36,
+      "supervised_token_p50": 18,
+      "supervised_token_p95": 36,
+      "supervised_token_p99": 36,
+      "target_truncated_rows": 0,
+      "used_maximum": 2440,
+      "used_p50": 2070,
+      "used_p95": 2440,
+      "used_p99": 2440,
+      "zero_supervision_rows": 0
+    },
+    "passed": true,
+    "tool_call_rows": 78,
+    "tool_round_trips": 78,
+    "warnings": []
+  },
+  "validation": {
+    "action_distribution": {
+      "commit_state": 1,
+      "correct_measurements": 1,
+      "finalize_diagnosis": 1,
+      "get_measurement_context": 1,
+      "run_wls": 2
+    },
+    "class_distribution": {
+      "accepted_final_commit": 1,
+      "clean_successful": 4,
+      "terminal_decision": 1
+    },
+    "failures": [],
+    "length_audit": {
+      "empty_thought_injected_rows": 6,
+      "maximum": 2397,
+      "p50": 2048,
+      "p95": 2397,
+      "p99": 2397,
+      "prompt_truncated_rows": 0,
+      "rows_prepared": 6,
+      "rows_seen": 6,
+      "supervised_token_maximum": 28,
+      "supervised_token_p50": 18,
+      "supervised_token_p95": 28,
+      "supervised_token_p99": 28,
+      "target_truncated_rows": 0,
+      "used_maximum": 2397,
+      "used_p50": 2048,
+      "used_p95": 2397,
+      "used_p99": 2397,
+      "zero_supervision_rows": 0
+    },
+    "passed": true,
+    "tool_call_rows": 6,
+    "tool_round_trips": 6,
+    "warnings": []
+  }
+}

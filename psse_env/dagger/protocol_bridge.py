@@ -1,0 +1,515 @@
+"""Bidirectional mapping between controller actions and the canonical tool surface.
+
+The transactional DAgger environment speaks an internal controller protocol
+(``run_wls``/``state_id``/``commit_state``).  The production SFT corpus and the
+deployment agent speak the canonical power-tool protocol defined by
+``trace_protocol.CANONICAL_POWER_TOOLS`` (``wls_from_path``/``case_path``).
+This module lets DAgger export and inference use one model-visible protocol —
+the canonical one — without changing transaction semantics:
+
+- ``internal_to_canonical_action`` converts an expert/controller action to the
+  canonical tool name and argument keys for SFT export.  Correction *values*
+  are intentionally dropped: canonical correction tools compute the corrected
+  values themselves, so the model is only supervised on target selection.
+- ``canonical_to_internal_action`` converts a model-generated canonical call
+  back to the controller protocol for env execution and alias binding.
+  Canonical-only diagnostic tools (harmonics, HSE, three-phase NLM, HIF
+  estimators) pass through unchanged; the environment's process-validity gate
+  turns them into standardized no-op transitions until executors exist.
+
+Note: reverse-mapped ``correct_*_from_path`` calls carry a target but no
+replacement value.  Executing them requires deployment correction providers
+that hydrate values (the same contract as the production runtime wrapper);
+the deterministic pilot adapters do not support that yet.
+"""
+
+from __future__ import annotations
+
+import copy
+from functools import lru_cache
+from typing import Any, Mapping
+
+from psse_env.actions import (
+    ASK_FOR_MORE_EVIDENCE,
+    COMMIT_STATE,
+    CORRECT_MEASUREMENTS,
+    CORRECT_PARAMETERS,
+    CORRECT_TOPOLOGY,
+    ESTIMATE_HIF_FROM_PATH,
+    ESTIMATE_HIF_MULTISCAN_FROM_PATH,
+    FINALIZE_DIAGNOSIS,
+    GET_HARMONIC_CONTEXT,
+    GET_MEASUREMENT_CONTEXT,
+    GET_PARAMETER_CONTEXT,
+    GET_TOPOLOGY_CONTEXT,
+    INVALID_ACTION,
+    ROLLBACK_STATE,
+    RUN_ALTERNATIVE_TEST,
+    RUN_HSE_FROM_PATH,
+    RUN_THREE_PHASE_NLM_FROM_PATH,
+    RUN_WLS,
+    VERIFY_CANDIDATE,
+    safe_normalize_action,
+)
+
+try:  # The canonical registry lives at the repository root.
+    from trace_protocol import CANONICAL_POWER_TOOLS
+except ImportError:  # pragma: no cover - archive layouts without the root module.
+    CANONICAL_POWER_TOOLS = None
+
+
+WLS_FROM_PATH = "wls_from_path"
+GET_VERIFICATION_SNAPSHOT = "get_verification_snapshot"
+CORRECT_MEASUREMENTS_FROM_PATH = "correct_measurements_from_path"
+CORRECT_PARAMETERS_FROM_PATH = "correct_parameters_from_path"
+CORRECT_TOPOLOGY_FROM_PATH = "correct_topology_from_path"
+
+INTERNAL_TO_CANONICAL_TOOL: dict[str, str] = {
+    RUN_WLS: WLS_FROM_PATH,
+    VERIFY_CANDIDATE: GET_VERIFICATION_SNAPSHOT,
+    GET_MEASUREMENT_CONTEXT: GET_MEASUREMENT_CONTEXT,
+    GET_PARAMETER_CONTEXT: GET_PARAMETER_CONTEXT,
+    GET_TOPOLOGY_CONTEXT: GET_TOPOLOGY_CONTEXT,
+    CORRECT_MEASUREMENTS: CORRECT_MEASUREMENTS_FROM_PATH,
+    CORRECT_PARAMETERS: CORRECT_PARAMETERS_FROM_PATH,
+    CORRECT_TOPOLOGY: CORRECT_TOPOLOGY_FROM_PATH,
+    COMMIT_STATE: COMMIT_STATE,
+    ROLLBACK_STATE: ROLLBACK_STATE,
+    FINALIZE_DIAGNOSIS: FINALIZE_DIAGNOSIS,
+    ASK_FOR_MORE_EVIDENCE: ASK_FOR_MORE_EVIDENCE,
+    RUN_ALTERNATIVE_TEST: RUN_ALTERNATIVE_TEST,
+    # Specialized diagnostics keep their canonical names on both surfaces;
+    # only the state-reference argument key differs.
+    GET_HARMONIC_CONTEXT: GET_HARMONIC_CONTEXT,
+    RUN_HSE_FROM_PATH: RUN_HSE_FROM_PATH,
+    RUN_THREE_PHASE_NLM_FROM_PATH: RUN_THREE_PHASE_NLM_FROM_PATH,
+    ESTIMATE_HIF_FROM_PATH: ESTIMATE_HIF_FROM_PATH,
+    ESTIMATE_HIF_MULTISCAN_FROM_PATH: ESTIMATE_HIF_MULTISCAN_FROM_PATH,
+}
+CANONICAL_TO_INTERNAL_TOOL: dict[str, str] = {
+    canonical: internal for internal, canonical in INTERNAL_TO_CANONICAL_TOOL.items()
+}
+
+# Tools that reference the open candidate rather than the active state.
+_CANDIDATE_REFERENCE_TOOLS = frozenset({COMMIT_STATE, ROLLBACK_STATE})
+# Tools whose canonical state reference is the persistent scan window.
+_SCAN_WINDOW_REFERENCE_TOOLS = frozenset({ESTIMATE_HIF_MULTISCAN_FROM_PATH})
+# Model-visible state-reference argument keys on the canonical surface.
+CANONICAL_STATE_REFERENCE_KEYS = frozenset({"case_path", "scan_window_path"})
+
+# Expert corrections carry replacement values; canonical correction tools
+# compute values from the target, so these keys never reach the model.
+_DROPPED_CORRECTION_VALUE_KEYS = frozenset(
+    {
+        "field",
+        "parameter",
+        "value",
+        "corrected_value",
+        "new_value",
+        "multiplier",
+        "status_field",
+    }
+)
+_MEASUREMENT_TARGET_ALIAS_KEYS = frozenset(
+    {"measurement_index", "index", "index0", "target", "meter", "measurement_id"}
+)
+
+_TRANSACTIONAL_TOOL_SCHEMAS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": GET_MEASUREMENT_CONTEXT,
+            "description": (
+                "Retrieve observable measurement-residual context for bad-data "
+                "correction on the referenced case."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_path": {"type": "string", "description": "Case identifier or path."},
+                },
+                "required": ["case_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": COMMIT_STATE,
+            "description": "Commit a verified acceptable candidate case.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_path": {
+                        "type": "string",
+                        "description": "Candidate case identifier or path to commit.",
+                    },
+                },
+                "required": ["case_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": ROLLBACK_STATE,
+            "description": "Roll back a verified rejected or inconclusive candidate case.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_path": {
+                        "type": "string",
+                        "description": "Candidate case identifier or path to roll back.",
+                    },
+                },
+                "required": ["case_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": FINALIZE_DIAGNOSIS,
+            "description": (
+                "Finish only after observable evidence shows no material anomaly remains."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": ASK_FOR_MORE_EVIDENCE,
+            "description": "Request additional observable evidence for the referenced case.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_path": {"type": "string", "description": "Case identifier or path."},
+                    "request": {"type": "string", "description": "Evidence being requested."},
+                },
+                "required": ["case_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": RUN_ALTERNATIVE_TEST,
+            "description": "Run an alternative observable diagnostic test on the referenced case.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_path": {"type": "string", "description": "Case identifier or path."},
+                    "test_name": {"type": "string", "description": "Diagnostic test to run."},
+                },
+                "required": ["case_path"],
+            },
+        },
+    },
+]
+
+# The deployment correction provider resolves branch rows numerically.  Keep
+# the model-visible targets narrower than the controller's internal aliases:
+# parameter correction retains its pinned 1-based ``line_index`` schema, while
+# topology correction uses the explicit 1-based ``line_index1`` spelling.
+_TOPOLOGY_LINE_INDEX1_PROPERTY: dict[str, Any] = {
+    "type": "integer",
+    "description": "1-based branch row index.",
+}
+_TOPOLOGY_NUMERIC_TARGET_KEYS = ("line_index", "line_index1", "branch_row0")
+_NONEXECUTABLE_NAMED_BRANCH_TARGET_KEYS = ("branch_id", "cb_name")
+
+
+def _require_registry() -> list[dict[str, Any]]:
+    if CANONICAL_POWER_TOOLS is None:
+        raise RuntimeError(
+            "trace_protocol.CANONICAL_POWER_TOOLS is unavailable; the canonical "
+            "protocol requires the repository-root trace_protocol module."
+        )
+    return copy.deepcopy(CANONICAL_POWER_TOOLS)
+
+
+def unified_tool_schemas() -> list[dict[str, Any]]:
+    """Return the canonical registry extended with transactional DAgger tools.
+
+    Canonical schemas are preserved except for the reviewed execution boundary
+    required by the transactional environment:
+
+    - ``get_verification_snapshot`` gains an optional ``case_path`` so a
+      verification can reference the open candidate explicitly, while its
+      presentation-only ``stage`` hint is removed.
+    - ``get_parameter_context`` omits its unused ``line_index`` hint.
+    - ``correct_measurements_from_path`` exposes only the target group; solver
+      switches and tolerances remain pinned provider configuration rather than
+      model-controlled action arguments.
+    - ``correct_parameters_from_path`` exposes only the provider-executable
+      1-based ``line_index`` target.
+    - ``correct_topology_from_path`` exposes only the provider-executable
+      1-based ``line_index1`` target and requires the desired status.
+
+    These restrictions are not cosmetic.  Every generated call is validated
+    against this registry before canonical-to-controller bridging, so the
+    recorded controller action must have the same executable meaning as the
+    model-visible call.
+    """
+    schemas = _require_registry()
+    by_name = {schema["function"]["name"]: schema for schema in schemas}
+
+    parameter_context = by_name[GET_PARAMETER_CONTEXT]["function"]["parameters"]
+    parameter_context["properties"].pop("line_index", None)
+
+    verification_function = by_name[GET_VERIFICATION_SNAPSHOT]["function"]
+    verification_function["description"] = (
+        "Verify the open transactional candidate. Optionally provide its "
+        "candidate case identifier; otherwise the controller binds the open "
+        "candidate alias."
+    )
+    verification = verification_function["parameters"]
+    verification["properties"].pop("stage", None)
+    verification["properties"].setdefault(
+        "case_path",
+        {"type": "string", "description": "Optional candidate case identifier to verify."},
+    )
+
+    measurement = by_name[CORRECT_MEASUREMENTS_FROM_PATH]["function"]["parameters"]
+    measurement["properties"] = {
+        key: copy.deepcopy(measurement["properties"][key])
+        for key in ("case_path", "suspect_group")
+    }
+    measurement["required"] = ["case_path", "suspect_group"]
+
+    parameters = by_name[CORRECT_PARAMETERS_FROM_PATH]["function"]["parameters"]
+    for key in (
+        "branch_id",
+        "cb_name",
+        "line_index1",
+        "branch_row0",
+    ):
+        parameters["properties"].pop(key, None)
+    parameters["required"] = ["case_path", "line_index"]
+
+    topology = by_name[CORRECT_TOPOLOGY_FROM_PATH]["function"]["parameters"]
+    for key in (
+        *_TOPOLOGY_NUMERIC_TARGET_KEYS,
+        *_NONEXECUTABLE_NAMED_BRANCH_TARGET_KEYS,
+    ):
+        topology["properties"].pop(key, None)
+    topology["properties"]["line_index1"] = copy.deepcopy(
+        _TOPOLOGY_LINE_INDEX1_PROPERTY
+    )
+    topology["required"] = ["case_path", "line_index1", "desired_status"]
+
+    schemas.extend(copy.deepcopy(_TRANSACTIONAL_TOOL_SCHEMAS))
+    # Release generation rejects undeclared arguments for every tool.  Make
+    # that executable boundary explicit in the model-visible registry instead
+    # of relying on the stricter validator interpretation of an omitted
+    # ``additionalProperties`` keyword.
+    for schema in schemas:
+        schema["function"]["parameters"]["additionalProperties"] = False
+    return schemas
+
+
+@lru_cache(maxsize=1)
+def _executable_canonical_argument_names() -> dict[str, frozenset[str]]:
+    """Cache immutable argument-name sets for the per-step bridge boundary."""
+
+    return {
+        str(schema["function"]["name"]): frozenset(
+            str(name)
+            for name in schema["function"]["parameters"].get("properties", {})
+        )
+        for schema in unified_tool_schemas()
+    }
+
+
+@lru_cache(maxsize=1)
+def _executable_canonical_required_argument_names() -> dict[str, frozenset[str]]:
+    """Cache required argument names for the executable bridge boundary."""
+
+    return {
+        str(schema["function"]["name"]): frozenset(
+            str(name)
+            for name in schema["function"]["parameters"].get("required", ())
+        )
+        for schema in unified_tool_schemas()
+    }
+
+
+def canonical_tool_names() -> set[str]:
+    return {schema["function"]["name"] for schema in unified_tool_schemas()}
+
+
+def _normalize_or_raise(action: Mapping[str, Any] | str) -> dict[str, Any]:
+    normalized = safe_normalize_action(action)
+    if normalized["tool"] == INVALID_ACTION:
+        raise ValueError(f"Cannot bridge malformed action: {normalized['arguments']}")
+    return {"tool": normalized["tool"], "arguments": copy.deepcopy(normalized["arguments"])}
+
+
+def _move_key(arguments: dict[str, Any], source: str, destination: str) -> None:
+    if source in arguments and arguments[source] is not None:
+        arguments[destination] = arguments.pop(source)
+    else:
+        arguments.pop(source, None)
+
+
+def _normalize_topology_numeric_target(arguments: dict[str, Any]) -> None:
+    """Collapse internal numeric branch aliases to canonical ``line_index1``."""
+
+    selected = [
+        key for key in _TOPOLOGY_NUMERIC_TARGET_KEYS if arguments.get(key) is not None
+    ]
+    if not selected:
+        return
+    if len(selected) != 1:  # Defensive: action normalization already rejects this.
+        raise ValueError("Topology correction must use one numeric branch target.")
+    source = selected[0]
+    raw_value = arguments[source]
+    if not isinstance(raw_value, int) or isinstance(raw_value, bool):
+        raise ValueError(f"Topology correction {source} must be an integer.")
+    line_index1 = raw_value + 1 if source == "branch_row0" else raw_value
+    if line_index1 < 1:
+        raise ValueError("Topology correction line index must be positive.")
+    for key in _TOPOLOGY_NUMERIC_TARGET_KEYS:
+        arguments.pop(key, None)
+    arguments["line_index1"] = line_index1
+
+
+def internal_to_canonical_action(action: Mapping[str, Any] | str) -> dict[str, Any]:
+    """Convert a controller action to the canonical model-visible protocol."""
+    normalized = _normalize_or_raise(action)
+    tool = normalized["tool"]
+    arguments = normalized["arguments"]
+
+    if tool not in INTERNAL_TO_CANONICAL_TOOL:
+        if tool in CANONICAL_TO_INTERNAL_TOOL or tool in canonical_tool_names():
+            # Already canonical (for example a canonical-only diagnostic tool).
+            return normalized
+        raise ValueError(f"No canonical mapping for controller tool: {tool}")
+
+    canonical = INTERNAL_TO_CANONICAL_TOOL[tool]
+    if tool in _CANDIDATE_REFERENCE_TOOLS:
+        _move_key(arguments, "candidate_state_id", "case_path")
+    elif tool in _SCAN_WINDOW_REFERENCE_TOOLS:
+        _move_key(arguments, "state_id", "scan_window_path")
+    else:
+        _move_key(arguments, "state_id", "case_path")
+
+    if tool == CORRECT_MEASUREMENTS:
+        updates = arguments.pop("measurement_updates", None)
+        for alias_key in _MEASUREMENT_TARGET_ALIAS_KEYS:
+            arguments.pop(alias_key, None)
+        if isinstance(updates, Mapping):
+            arguments["suspect_group"] = sorted(int(index) for index in updates)
+        elif "suspect_group" not in arguments:
+            raise ValueError(
+                "correct_measurements requires measurement_updates or suspect_group."
+            )
+    elif tool == CORRECT_PARAMETERS:
+        if arguments.get("branch_row0") is not None:
+            arguments["line_index"] = int(arguments.pop("branch_row0")) + 1
+        elif arguments.get("line_index1") is not None:
+            arguments["line_index"] = int(arguments.pop("line_index1"))
+        if any(
+            arguments.get(key) is not None
+            for key in _NONEXECUTABLE_NAMED_BRANCH_TARGET_KEYS
+        ):
+            raise ValueError(
+                "correct_parameters requires a numeric branch-row target."
+            )
+        if arguments.get("line_index") is None:
+            raise ValueError(
+                "correct_parameters requires a numeric branch-row target."
+            )
+        for key in _DROPPED_CORRECTION_VALUE_KEYS:
+            arguments.pop(key, None)
+    elif tool == CORRECT_TOPOLOGY:
+        if any(
+            arguments.get(key) is not None
+            for key in _NONEXECUTABLE_NAMED_BRANCH_TARGET_KEYS
+        ):
+            raise ValueError(
+                "correct_topology requires a numeric branch-row target."
+            )
+        _normalize_topology_numeric_target(arguments)
+        if arguments.get("line_index1") is None:
+            raise ValueError(
+                "correct_topology requires a numeric branch-row target."
+            )
+        status = arguments.pop("status", arguments.pop("expected_status", None))
+        if status is None:
+            raise ValueError("correct_topology requires a desired status.")
+        arguments["desired_status"] = bool(int(status))
+        arguments.pop("expected_status", None)
+        for key in _DROPPED_CORRECTION_VALUE_KEYS:
+            arguments.pop(key, None)
+
+    return {"tool": canonical, "arguments": arguments}
+
+
+def canonical_to_internal_action(action: Mapping[str, Any] | str) -> dict[str, Any]:
+    """Convert a canonical model tool call back to the controller protocol.
+
+    Canonical-only diagnostic tools are returned unchanged so the environment's
+    process-validity gate can record them as standardized no-op transitions
+    until real executors are integrated.
+    """
+    normalized = _normalize_or_raise(action)
+    tool = normalized["tool"]
+    arguments = normalized["arguments"]
+
+    if tool not in CANONICAL_TO_INTERNAL_TOOL:
+        return normalized
+
+    properties = _executable_canonical_argument_names()[tool]
+    internal = CANONICAL_TO_INTERNAL_TOOL[tool]
+    bridge_consumed = (
+        {"case_path"} if internal in _SCAN_WINDOW_REFERENCE_TOOLS else set()
+    )
+    unsupported = sorted(set(arguments) - properties - bridge_consumed)
+    if unsupported:
+        raise ValueError(
+            f"Canonical tool {tool!r} has arguments outside the executable "
+            f"release registry: {unsupported}"
+        )
+    missing = sorted(
+        _executable_canonical_required_argument_names()[tool] - set(arguments)
+    )
+    if missing:
+        raise ValueError(
+            f"Canonical tool {tool!r} is missing required executable "
+            f"arguments: {missing}"
+        )
+
+    if internal in _CANDIDATE_REFERENCE_TOOLS:
+        _move_key(arguments, "case_path", "candidate_state_id")
+    elif internal == VERIFY_CANDIDATE:
+        _move_key(arguments, "case_path", "state_id")
+        # A verification without a case reference targets the open candidate.
+        arguments.setdefault("state_id", "candidate")
+    elif internal in _SCAN_WINDOW_REFERENCE_TOOLS:
+        # The persistent scan window is bound to the controller state whose
+        # metadata carries it; a stray case_path is dropped in favor of the
+        # scan-window reference.
+        _move_key(arguments, "scan_window_path", "state_id")
+        arguments.pop("case_path", None)
+    else:
+        _move_key(arguments, "case_path", "state_id")
+
+    if internal == CORRECT_TOPOLOGY:
+        desired = arguments.pop("desired_status", None)
+        if desired is not None:
+            arguments["status"] = int(bool(desired))
+
+    return safe_normalize_action({"tool": internal, "arguments": arguments})
+
+
+__all__ = [
+    "CANONICAL_STATE_REFERENCE_KEYS",
+    "CANONICAL_TO_INTERNAL_TOOL",
+    "INTERNAL_TO_CANONICAL_TOOL",
+    "canonical_to_internal_action",
+    "canonical_tool_names",
+    "internal_to_canonical_action",
+    "unified_tool_schemas",
+]

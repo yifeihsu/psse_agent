@@ -180,6 +180,10 @@ _unsloth_sentencepiece_temp/
 /*physical_pt*.tgz
 /IEEE_14_OpenDSS/out_traces*/
 /artifacts/measurements/*
+!/artifacts/measurements/hif_multiscan_benchmark_fixed_diverse_17x20_20260714/
+!/artifacts/measurements/hif_multiscan_benchmark_fixed_diverse_17x20_20260714/meta.json
+!/artifacts/measurements/hif_multiscan_benchmark_fixed_diverse_17x20_20260714/quality_report.json
+!/artifacts/measurements/hif_multiscan_benchmark_fixed_diverse_17x20_20260714/samples.jsonl
 /artifacts/traces/*
 /artifacts/eval_archives/*
 /artifacts/logs/*
