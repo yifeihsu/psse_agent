@@ -14,6 +14,8 @@ from psse_env.providers.scenario_generator import (
     DEFAULT_HIF_FALLBACK_SAMPLE_PATHS,
     Round0ScenarioGenerator,
     ScenarioRejected,
+    SYNTHESIZED_MEASUREMENT_CANONICALIZATION_CONTRACT,
+    _canonicalize_synthesized_measurement_vector,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "case14_z.json"
@@ -163,6 +165,12 @@ class ScenarioConstructionTests(unittest.TestCase):
         self.assertTrue(Path(scenario["clean_case"]).is_file())
         self.assertEqual(int(fault["expected_status"]), 0)
         self.assertEqual(int(fault["line_index1"]), int(fault["branch_row0"]) + 1)
+        self.assertEqual(
+            scenario["measurements"],
+            _canonicalize_synthesized_measurement_vector(
+                scenario["measurements"]
+            ),
+        )
 
     def test_harmonic_scenario_routes_by_sensor_signature(self) -> None:
         scenario = self.by_family["harmonic"]
@@ -263,9 +271,46 @@ class ScenarioConstructionTests(unittest.TestCase):
         self.assertEqual(
             manifest_ids, {scenario["scenario_id"] for scenario in self.scenarios}
         )
+        self.assertEqual(
+            report["synthesized_measurement_canonicalization"],
+            {
+                "contract": SYNTHESIZED_MEASUREMENT_CANONICALIZATION_CONTRACT,
+                "scope": "pypower_topology_z_obs",
+                "decimal_quantum": "1e-12",
+                "rounding": "half_even",
+                "application": "post_admission_pre_scenario_materialization",
+                "canonical_vector_revalidated": True,
+                "maximum_absolute_projection": "5e-13",
+            },
+        )
 
 
 class DeterminismTests(unittest.TestCase):
+    def test_synthesized_measurement_projection_absorbs_solver_jitter(self) -> None:
+        first = _canonicalize_synthesized_measurement_vector(
+            [-0.9476554537357349, -4.0e-14, 1.234567890123]
+        )
+        second = _canonicalize_synthesized_measurement_vector(
+            [-0.9476554537357347, 4.0e-14, 1.234567890123]
+        )
+        self.assertEqual(first, second)
+        self.assertEqual(first, [-0.947655453736, 0.0, 1.234567890123])
+        self.assertGreater(math.copysign(1.0, first[1]), 0.0)
+
+    def test_synthesized_measurement_projection_preserves_larger_difference(
+        self,
+    ) -> None:
+        first = _canonicalize_synthesized_measurement_vector([0.123456789012])
+        second = _canonicalize_synthesized_measurement_vector([0.123456789014])
+        self.assertNotEqual(first, second)
+
+    def test_synthesized_measurement_projection_rejects_nonfinite(self) -> None:
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                ValueError, "must be finite"
+            ):
+                _canonicalize_synthesized_measurement_vector([value])
+
     def test_same_seed_reproduces_scenarios(self) -> None:
         plan = {"measurement": 2, "topology": 1}
         first = Round0ScenarioGenerator(seed=99).build(plan)

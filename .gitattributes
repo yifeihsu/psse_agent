@@ -1,0 +1,5 @@
+# Release gates hash these worktree files as raw bytes. Keep their checkout
+# representation identical on Windows and Linux.
+psse_env/dagger/bc0_evaluation_policy.json text eol=lf
+psse_env/dagger/release_factories.py text eol=lf
+psse_env/dagger/suites/bc0_eval_suite_v1.json text eol=lf

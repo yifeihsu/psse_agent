@@ -149,7 +149,7 @@ BC0_SUITE_FAMILY_QUOTAS: dict[str, dict[str, int]] = {
 
 def _repo_relative(path: Path) -> str:
     try:
-        return str(path.absolute().relative_to(REPO_ROOT.absolute()))
+        return path.absolute().relative_to(REPO_ROOT.absolute()).as_posix()
     except ValueError as exc:
         raise ValueError(f"release-suite input is outside the repository: {path}") from exc
 

@@ -379,6 +379,16 @@ rebuild provenance, but changing that report cannot make `--check` accept
 different suite bytes. Development interpreters may run the unit tests, but
 cannot build or bless the frozen release artifact.
 
+Direct PYPOWER topology synthesis uses the
+`bc0_synthesized_measurement_decimal12_half_even_v1` persistence contract.
+Native telemetry first passes the anomaly and corrected-case physics gates;
+each finite value is then projected to a `1e-12` decimal lattice with half-even
+rounding, signed zero is normalized, and the projected vector passes the same
+gates again before scenario materialization. Both round-0 aggregate and
+evaluation-suite physical-v3 fingerprints therefore consume the same
+platform-stable emitted telemetry; the fingerprint algorithm itself remains
+exact and unchanged.
+
 Shared tabular sources are separated before sampling by
 `sha256_physical_content_modulo_v1`: bucket 0 of 5 is evaluation, while buckets
 1--4 are training. IDs and path aliases are excluded from the physical-content

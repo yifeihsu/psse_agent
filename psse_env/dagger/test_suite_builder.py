@@ -440,7 +440,7 @@ class BC0SuiteBuilderTests(unittest.TestCase):
 
     def test_source_allowlist_is_git_tracked_and_content_addressable(self) -> None:
         inputs = _tracked_release_inputs()
-        relative = {str(path.relative_to(REPO_ROOT)) for path in inputs}
+        relative = {path.relative_to(REPO_ROOT).as_posix() for path in inputs}
         self.assertIn("data/measurements_5class_merged.jsonl", relative)
         self.assertIn("mcp_server/case14.m", relative)
         self.assertTrue(

@@ -37,6 +37,7 @@ import json
 import math
 import os
 import tempfile
+from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -71,6 +72,11 @@ from psse_env.state_store import _state_content_hash, apply_modification
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CHI2_ALPHA = 0.01
+
+SYNTHESIZED_MEASUREMENT_CANONICALIZATION_CONTRACT = (
+    "bc0_synthesized_measurement_decimal12_half_even_v1"
+)
+_SYNTHESIZED_MEASUREMENT_QUANTUM = Decimal("1e-12")
 
 DEFAULT_CORPUS_PATH = _REPO_ROOT / "data" / "measurements_5class_merged.jsonl"
 DEFAULT_HIF_SAMPLE_PATHS = (
@@ -222,6 +228,39 @@ class ScenarioRejected(RuntimeError):
         super().__init__(f"{reason}: {detail}" if detail else reason)
         self.reason = reason
         self.metrics = dict(metrics or {})
+
+
+def _canonicalize_synthesized_measurement_vector(
+    values: Sequence[float],
+) -> list[float]:
+    """Project admitted PYPOWER telemetry onto its release decimal lattice.
+
+    PYPOWER and its linear-algebra dependencies can differ by a few final
+    binary64 bits across otherwise approved hosts.  Release-suite bytes and
+    physical-root fingerprints are pinned exactly, so persist synthesized
+    topology telemetry on a lattice far finer than any recovery tolerance.
+    """
+
+    canonical: list[float] = []
+    # A binary64 value can have 309 integer digits. Quantizing any finite
+    # binary64 value to twelve fractional places therefore needs at most 321
+    # significant decimal digits.
+    with localcontext() as context:
+        context.prec = 400
+        for index, value in enumerate(values):
+            numeric = float(value)
+            if not math.isfinite(numeric):
+                raise ValueError(
+                    "synthesized measurement must be finite: "
+                    f"index={index}, value={numeric!r}"
+                )
+            quantized = Decimal.from_float(numeric).quantize(
+                _SYNTHESIZED_MEASUREMENT_QUANTUM,
+                rounding=ROUND_HALF_EVEN,
+            )
+            normalized = float(quantized)
+            canonical.append(0.0 if normalized == 0.0 else normalized)
+    return canonical
 
 
 def build_measurement_vector(ppc: Mapping[str, Any]) -> np.ndarray:
@@ -1237,6 +1276,11 @@ class Round0ScenarioGenerator:
         corrected_ppc = copy.deepcopy(self._clean_case14())
         corrected_ppc["branch"][row0][10] = 0.0
         corrected_case = self._derived_case(corrected_ppc, f"r0_topo_l{row0 + 1}s0")
+        self._require_anomalous("case14", z_obs, "topology")
+        self._require_clean(corrected_case, z_obs, "topology")
+        z_obs = _canonicalize_synthesized_measurement_vector(z_obs)
+        # The emitted vector, not only the native solver vector, must satisfy
+        # the same physics contract before it is persisted or fingerprinted.
         self._require_anomalous("case14", z_obs, "topology")
         self._require_clean(corrected_case, z_obs, "topology")
 
@@ -2769,6 +2813,15 @@ class Round0ScenarioGenerator:
                 "enforced": self._enforce_parameter_ranking_dominance,
                 "threshold": self.parameter_ranking_dominance_threshold,
             },
+            "synthesized_measurement_canonicalization": {
+                "contract": SYNTHESIZED_MEASUREMENT_CANONICALIZATION_CONTRACT,
+                "scope": "pypower_topology_z_obs",
+                "decimal_quantum": "1e-12",
+                "rounding": "half_even",
+                "application": "post_admission_pre_scenario_materialization",
+                "canonical_vector_revalidated": True,
+                "maximum_absolute_projection": "5e-13",
+            },
             "built_by_family": dict(sorted(family_counts.items())),
             "skipped_by_reason": dict(sorted(skip_reasons.items())),
             "skipped": list(self.skipped),
@@ -2790,4 +2843,5 @@ __all__ = [
     "DEFAULT_IMBALANCE_SAMPLE_PATH",
     "DEFAULT_BALANCED_ARTIFACT_DIR",
     "DEFAULT_CHI2_ALPHA",
+    "SYNTHESIZED_MEASUREMENT_CANONICALIZATION_CONTRACT",
 ]
