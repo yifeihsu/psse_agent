@@ -3651,6 +3651,14 @@ def _independent_handoff_process_label(
         return {}
     if not isinstance(raw_label["valid_next_actions"], list):
         return {}
+    if raw_label["process_valid"] and (
+        any(
+            raw_label[field] is not None
+            for field in ("reason", "error_code", "error_detail")
+        )
+        or raw_label["valid_next_actions"] != []
+    ):
+        return {}
     return policy_safe_copy(
         {field: raw_label[field] for field in sorted(required_fields)}
     )

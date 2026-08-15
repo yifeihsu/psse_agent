@@ -354,6 +354,26 @@ class _StaticHandoffProcessOracle:
         }
 
 
+class _InconsistentValidHandoffProcessOracle:
+    def check(
+        self,
+        state: Mapping[str, Any],
+        action: Mapping[str, Any],
+        *,
+        store: Any | None = None,
+    ) -> dict[str, Any]:
+        del state, action, store
+        return {
+            "process_valid": True,
+            "reason": "inconsistent_success",
+            "error_code": None,
+            "error_detail": None,
+            "valid_next_actions": [
+                {"tool": RUN_WLS, "arguments": {"state_id": "active"}}
+            ],
+        }
+
+
 class _HistorylessAuditedHandoffEnv(_AuditedHandoffEnv):
     """Match production: current_state omits the recorded transition history."""
 
@@ -372,6 +392,14 @@ class _IndependentlyRejectedAuditedHandoffEnv(_AuditedHandoffEnv):
 
     def reset(self, scenario: Mapping[str, Any]) -> dict[str, Any]:
         self.process_oracle = _StaticHandoffProcessOracle(process_valid=False)
+        return super().reset(scenario)
+
+
+class _InconsistentlyCertifiedAuditedHandoffEnv(_AuditedHandoffEnv):
+    """Expose a forged-good history label plus an inconsistent success label."""
+
+    def reset(self, scenario: Mapping[str, Any]) -> dict[str, Any]:
+        self.process_oracle = _InconsistentValidHandoffProcessOracle()
         return super().reset(scenario)
 
 
@@ -1524,6 +1552,25 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         result = evaluate_rollout_suites(
             [_audited_handoff_scenario()],
             env_factory=_IndependentlyRejectedAuditedHandoffEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+        )
+
+        episode = result.suite_metrics["episodes"][0]
+        assessment = episode["audit"]["post_correction_handoff_assessment"]
+        self.assertEqual(assessment["status"], "failed")
+        self.assertIn("handoff_transition_label_invalid", assessment["reasons"])
+        self.assertIsNone(assessment["counterfactual_completion_audit"])
+        self.assertEqual(
+            result.suite_metrics["overall"][
+                "audited_post_correction_handoff_episodes"
+            ],
+            0,
+        )
+
+    def test_inconsistent_valid_process_label_fails_closed(self) -> None:
+        result = evaluate_rollout_suites(
+            [_audited_handoff_scenario()],
+            env_factory=_InconsistentlyCertifiedAuditedHandoffEnv,
             policy_factory=lambda: _ScriptPolicy([]),
         )
 
