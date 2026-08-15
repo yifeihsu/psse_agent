@@ -48,6 +48,7 @@ from psse_env.actions import (
     GET_PARAMETER_CONTEXT,
     GET_TOPOLOGY_CONTEXT,
     INVALID_ACTION,
+    RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     ROLLBACK_STATE,
     RUN_WLS,
     VERIFY_CANDIDATE,
@@ -1382,6 +1383,7 @@ class ClosedLoopRolloutEvaluator:
         regret_total = 0.0
         regret_samples = 0
         evaluator_error: str | None = None
+        last_transition_label: dict[str, Any] | None = None
         policy_steps = 0
         intervention_evidence: dict[str, Any] = {
             "contract": copy.deepcopy(intervention_contract),
@@ -1638,6 +1640,11 @@ class ClosedLoopRolloutEvaluator:
             disposition = _candidate_disposition(pre_oracle)
             pre_remaining = _remaining_fault_count(pre_oracle)
             state_before_action = _current_state(env)
+            independent_process_label = _independent_handoff_process_label(
+                env,
+                state_before_action,
+                action,
+            )
             tool = action["tool"]
             signature = action_signature(action)
             circuit_breaker_error: str | None = None
@@ -1753,6 +1760,14 @@ class ClosedLoopRolloutEvaluator:
             tool_seconds = time.perf_counter() - tool_started
 
             status = str(output.get("execution_status") or "failure")
+            last_transition_label = (
+                {
+                    **independent_process_label,
+                    "execution_status": status,
+                }
+                if independent_process_label is not None
+                else None
+            )
             if (
                 tool == FINALIZE_DIAGNOSIS
                 and status != "success"
@@ -1955,10 +1970,15 @@ class ClosedLoopRolloutEvaluator:
                 )
             audit.update(copy.deepcopy(dict(supplied)))
 
+        handoff_audit_state = _audit_bound_terminal_state(
+            final_state,
+            history,
+            independent_transition_label=last_transition_label,
+        )
         post_correction_handoff_assessment = (
             audit_post_correction_controller_handoff(
                 _strict_audit_scenario(audit_scenario),
-                final_state,
+                handoff_audit_state,
                 terminal=terminal,
                 terminal_outcome=outcome,
                 active_physical_state=active_physical_state,
@@ -3569,6 +3589,123 @@ def _current_state(env: Any) -> dict[str, Any]:
     if not isinstance(state, Mapping):
         raise TypeError("current_state() must return a mapping.")
     return copy.deepcopy(dict(state))
+
+
+def _independent_handoff_process_label(
+    env: Any,
+    state_before: Mapping[str, Any],
+    action: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Independently certify the one terminal action used by the handoff audit.
+
+    The returned label is audit-only: it is never appended to the rollout
+    history supplied to the policy.  ``None`` means the action is not the
+    reviewed handoff or that a test double has no process oracle; an empty
+    mapping means an available checker failed to produce a canonical label and
+    must not be replaced by an environment self-report.
+    """
+
+    normalized = safe_normalize_action(action)
+    if not (
+        normalized["tool"] == ASK_FOR_MORE_EVIDENCE
+        and normalized["arguments"].get("request")
+        == RECOVERY_OPTIONS_EXHAUSTED_REQUEST
+    ):
+        return None
+
+    checker = getattr(getattr(env, "process_oracle", None), "check", None)
+    if not callable(checker):
+        return None
+
+    validity_state = copy.deepcopy(dict(state_before))
+    validity_state["require_context_supported_corrections"] = bool(
+        getattr(env, "production_dataset_mode", False)
+    )
+    validity_state["audited_evaluation_setup_correction"] = bool(
+        getattr(env, "_audited_evaluation_setup_correction", False)
+    )
+    try:
+        raw_label = checker(
+            validity_state,
+            copy.deepcopy(normalized),
+            store=getattr(env, "store", None),
+        )
+    except Exception:
+        return {}
+
+    required_fields = {
+        "process_valid",
+        "reason",
+        "error_code",
+        "error_detail",
+        "valid_next_actions",
+    }
+    if not isinstance(raw_label, Mapping) or not required_fields <= set(raw_label):
+        return {}
+    if not isinstance(raw_label["process_valid"], bool):
+        return {}
+    if any(
+        raw_label[field] is not None and not isinstance(raw_label[field], str)
+        for field in ("reason", "error_code", "error_detail")
+    ):
+        return {}
+    if not isinstance(raw_label["valid_next_actions"], list):
+        return {}
+    return policy_safe_copy(
+        {field: raw_label[field] for field in sorted(required_fields)}
+    )
+
+
+def _audit_bound_terminal_state(
+    final_state: Mapping[str, Any],
+    history: Sequence[Mapping[str, Any]],
+    *,
+    independent_transition_label: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Bind the handoff certificate to the evaluator-owned final transition.
+
+    Production ``current_state()`` intentionally omits history.  Reconstruct
+    only the terminal audit view from the exact evaluator transition.  A test
+    double may supply its own label only when every non-label transition field
+    exactly matches the evaluator record and no independent checker existed.
+    """
+
+    bound = copy.deepcopy(dict(final_state))
+    if not history or not isinstance(history[-1], Mapping):
+        return bound
+
+    terminal_transition = copy.deepcopy(dict(history[-1]))
+    label: dict[str, Any] | None = None
+    if independent_transition_label is not None:
+        # This includes an empty mapping.  A failed independent check must not
+        # fall back to a forged or stale environment-provided valid label.
+        label = copy.deepcopy(dict(independent_transition_label))
+    else:
+        state_history = bound.get("history_window")
+        existing = (
+            state_history[-1]
+            if isinstance(state_history, list)
+            and state_history
+            and isinstance(state_history[-1], Mapping)
+            else None
+        )
+        if existing is not None and all(
+            existing.get(field) == terminal_transition.get(field)
+            for field in (
+                "state_id",
+                "candidate_state_id",
+                "action",
+                "tool_output",
+            )
+        ):
+            existing_label = existing.get("transition_label")
+            if isinstance(existing_label, Mapping):
+                label = copy.deepcopy(dict(existing_label))
+
+    if label is not None:
+        terminal_transition["transition_label"] = label
+    bound["history_window"] = [terminal_transition]
+    return bound
 
 
 def _active_physical_state(

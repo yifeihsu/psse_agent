@@ -704,6 +704,31 @@ class RealProductionExpertRecoveryTests(unittest.TestCase):
                         strict["checks"][REMAINING_FAULTS_CHECK]["status"],
                         "not_required",
                     )
+                    assessment = episode["audit"][
+                        "post_correction_handoff_assessment"
+                    ]
+                    self.assertEqual(
+                        assessment["status"], "passed", assessment["reasons"]
+                    )
+                    self.assertIs(assessment["eligible"], True)
+                    self.assertIs(
+                        assessment["runtime_contract"]["passed"], True
+                    )
+                    self.assertEqual(
+                        assessment["runtime_contract"]["failures"], []
+                    )
+                    self.assertEqual(
+                        assessment["counterfactual_completion_audit"][
+                            "problems"
+                        ],
+                        [],
+                    )
+                    self.assertIs(
+                        assessment["counterfactual_completion_audit"][
+                            "quarantined"
+                        ],
+                        False,
+                    )
 
         self.assertTrue(prior_failures <= observed_regressions)
 
@@ -779,62 +804,29 @@ class RealProductionExpertRecoveryTests(unittest.TestCase):
                     },
                 )
 
-    def test_every_forced_five_meter_root_terminates_without_invalid_actions(self) -> None:
+    def test_prepolicy_recovery_suites_exclude_generic_multi_measurement_roots(
+        self,
+    ) -> None:
         suite_path = (
             Path(factories.__file__).with_name("suites") / "bc0_eval_suite_v1.json"
         )
         suites = json.loads(suite_path.read_text(encoding="utf-8"))
-        scenarios = [
-            row
-            for row in suites["forced_error_recovery"]
-            if row["grouping"]["scenario_family"] == "multi_measurement"
-            and int(row["grouping"]["error_cardinality"]) >= 5
-        ]
-        self.assertGreaterEqual(len(scenarios), 2)
-        result = self._evaluator(required_suite="forced_error_recovery").evaluate(
-            {"forced_error_recovery": scenarios}
+        for suite_name in ("forced_error_recovery", "invalid_action_recovery"):
+            with self.subTest(suite=suite_name):
+                self.assertFalse(
+                    any(
+                        row["grouping"]["scenario_family"]
+                        == "multi_measurement"
+                        for row in suites[suite_name]
+                    )
+                )
+        self.assertEqual(
+            sum(
+                row["grouping"]["scenario_family"] == "multi_measurement"
+                for row in suites["partial_success_retention"]
+            ),
+            16,
         )
-        self.assertEqual(len(result.suite_metrics["episodes"]), len(scenarios))
-        for episode in result.suite_metrics["episodes"]:
-            with self.subTest(scenario_id=episode["scenario_id"]):
-                policy_trace = [
-                    row for row in episode["trace"] if row["intervention"] is False
-                ]
-
-                # The injected failed WLS is history, not state evidence.  The
-                # policy must retry the observable baseline immediately rather
-                # than emit an invalid no-action transition.
-                self.assertEqual(policy_trace[0]["action"]["tool"], RUN_WLS)
-                self.assertIs(episode["terminal"], True)
-                self.assertIn(
-                    episode["terminal_outcome"], {"resolved", "operator_escalation"}
-                )
-                self.assertIs(episode["healthy_preservation_known"], True)
-                self.assertIs(episode["healthy_components_preserved"], True)
-                self.assertEqual(episode["false_finalization_count"], 0)
-                self.assertEqual(episode["invalid_action_count"], 0)
-                self.assertIs(episode["loop_detected"], False)
-                self.assertEqual(
-                    [
-                        row["error_code"]
-                        for row in policy_trace
-                        if row["execution_status"] == "failure"
-                    ],
-                    [],
-                )
-                if episode["terminal_outcome"] == "operator_escalation":
-                    self.assertEqual(
-                        policy_trace[-1]["action"]["tool"], ASK_FOR_MORE_EVIDENCE
-                    )
-                    self.assertEqual(
-                        policy_trace[-1]["action"]["arguments"]["request"],
-                        "operator_escalation:recovery_options_exhausted",
-                    )
-                else:
-                    self.assertIs(episode["final_physical_success"], True)
-                    self.assertEqual(
-                        policy_trace[-1]["action"]["tool"], FINALIZE_DIAGNOSIS
-                    )
 
 
 class DeterministicCaseLoaderTests(unittest.TestCase):

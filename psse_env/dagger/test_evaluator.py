@@ -333,6 +333,48 @@ class _AuditedHandoffEnv(_ScriptEnv):
         return state
 
 
+class _StaticHandoffProcessOracle:
+    def __init__(self, *, process_valid: bool) -> None:
+        self.process_valid = bool(process_valid)
+
+    def check(
+        self,
+        state: Mapping[str, Any],
+        action: Mapping[str, Any],
+        *,
+        store: Any | None = None,
+    ) -> dict[str, Any]:
+        del state, action, store
+        return {
+            "process_valid": self.process_valid,
+            "reason": None if self.process_valid else "independent_rejection",
+            "error_code": None if self.process_valid else "invalid_action",
+            "error_detail": None if self.process_valid else "independent_rejection",
+            "valid_next_actions": [],
+        }
+
+
+class _HistorylessAuditedHandoffEnv(_AuditedHandoffEnv):
+    """Match production: current_state omits the recorded transition history."""
+
+    def reset(self, scenario: Mapping[str, Any]) -> dict[str, Any]:
+        self.process_oracle = _StaticHandoffProcessOracle(process_valid=True)
+        return super().reset(scenario)
+
+    def current_state(self) -> dict[str, Any]:
+        state = super().current_state()
+        state.pop("history_window", None)
+        return state
+
+
+class _IndependentlyRejectedAuditedHandoffEnv(_AuditedHandoffEnv):
+    """Expose a forged-good history label plus an independent rejection."""
+
+    def reset(self, scenario: Mapping[str, Any]) -> dict[str, Any]:
+        self.process_oracle = _StaticHandoffProcessOracle(process_valid=False)
+        return super().reset(scenario)
+
+
 class _ReleaseScriptEnv(_ScriptEnv):
     """Test-only factory whose executable fixture is code-pinned, not suite data."""
 
@@ -1455,6 +1497,47 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         self.assertEqual(overall["audited_post_correction_handoff_rate"], 1.0)
         self.assertEqual(overall["audited_completion_rate"], 1.0)
         self.assertEqual(overall["unqualified_operator_escalation_rate"], 0.0)
+
+    def test_historyless_final_state_binds_independently_checked_handoff(
+        self,
+    ) -> None:
+        result = evaluate_rollout_suites(
+            [_audited_handoff_scenario()],
+            env_factory=_HistorylessAuditedHandoffEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+        )
+
+        episode = result.suite_metrics["episodes"][0]
+        assessment = episode["audit"]["post_correction_handoff_assessment"]
+        self.assertEqual(assessment["status"], "passed", assessment["reasons"])
+        self.assertIs(assessment["eligible"], True)
+        self.assertIs(assessment["runtime_contract"]["passed"], True)
+        self.assertEqual(assessment["runtime_contract"]["failures"], [])
+        self.assertEqual(
+            result.suite_metrics["overall"]["audited_completion_episodes"],
+            1,
+        )
+
+    def test_independent_process_rejection_overrides_forged_good_label(
+        self,
+    ) -> None:
+        result = evaluate_rollout_suites(
+            [_audited_handoff_scenario()],
+            env_factory=_IndependentlyRejectedAuditedHandoffEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+        )
+
+        episode = result.suite_metrics["episodes"][0]
+        assessment = episode["audit"]["post_correction_handoff_assessment"]
+        self.assertEqual(assessment["status"], "failed")
+        self.assertIn("handoff_transition_label_invalid", assessment["reasons"])
+        self.assertIsNone(assessment["counterfactual_completion_audit"])
+        self.assertEqual(
+            result.suite_metrics["overall"][
+                "audited_post_correction_handoff_episodes"
+            ],
+            0,
+        )
 
     def test_generic_escalation_does_not_recover_injected_failure(self) -> None:
         scenario = _pre_policy_failure_scenario(malformed=False)

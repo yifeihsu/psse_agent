@@ -256,6 +256,25 @@ class BC0SuiteBuilderTests(unittest.TestCase):
                         "maximum_unqualified_operator_escalation_rate": 0.05,
                     },
                 )
+        generic_handoff_families = {
+            family
+            for family, contract in family_policy.items()
+            if contract["minimum_audited_completion_rate"] == 0.0
+            and contract["maximum_unqualified_operator_escalation_rate"] == 1.0
+        }
+        for suite in ("forced_error_recovery", "invalid_action_recovery"):
+            with self.subTest(suite=suite):
+                self.assertTrue(
+                    generic_handoff_families.isdisjoint(
+                        BC0_SUITE_FAMILY_QUOTAS[suite]
+                    )
+                )
+        self.assertEqual(
+            BC0_SUITE_FAMILY_QUOTAS["partial_success_retention"][
+                "multi_measurement"
+            ],
+            16,
+        )
 
     def test_packaged_suite_policy_and_factories_are_content_coherent(self) -> None:
         policy = json.loads(DEFAULT_POLICY_PATH.read_text(encoding="utf-8"))
@@ -428,12 +447,12 @@ class BC0SuiteBuilderTests(unittest.TestCase):
             partial_setup_validator=lambda row: int(
                 row["execution"]["scenario_id"].rsplit("-", 1)[1]
             )
-            >= 10,
+            >= 2,
         )
 
         self.assertTrue(
             all(
-                int(row["execution"]["scenario_id"].rsplit("-", 1)[1]) >= 10
+                int(row["execution"]["scenario_id"].rsplit("-", 1)[1]) >= 2
                 for row in suites["partial_success_retention"]
             )
         )

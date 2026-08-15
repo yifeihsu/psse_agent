@@ -105,7 +105,12 @@ BC0_RELEASE_FAMILIES = frozenset(
 # (115 roots total).  The efficiency suite deliberately mixes the diagnostic
 # families with core state-estimation families so checkpoint promotion bounds
 # tool-call efficiency for mixed-error recovery, not only HIF/harmonic
-# diagnosis.
+# diagnosis.  Multi-measurement roots are deliberately absent from the two
+# pre-policy-failure suites: their reviewed family contract permits a generic
+# escalation after a bounded partial repair, whereas injected-failure recovery
+# requires strict resolution or an audited completion.  Reserving the
+# admissible multi-measurement roots for partial retention keeps both contracts
+# fail-closed without weakening either gate.
 BC0_SUITE_FAMILY_QUOTAS: dict[str, dict[str, int]] = {
     "standard_success": {
         "no_error": 4,
@@ -116,23 +121,21 @@ BC0_SUITE_FAMILY_QUOTAS: dict[str, dict[str, int]] = {
         "measurement+topology": 3,
     },
     "forced_error_recovery": {
-        "multi_measurement": 7,
-        "measurement+parameter": 7,
-        "measurement+topology": 7,
+        "measurement+parameter": 11,
+        "measurement+topology": 10,
     },
     "partial_success_retention": {
-        "multi_measurement": 7,
-        "measurement+parameter": 7,
-        "measurement+topology": 7,
+        "multi_measurement": 16,
+        "measurement+parameter": 2,
+        "measurement+topology": 3,
     },
     "invalid_action_recovery": {
         "measurement": 6,
         "parameter": 3,
         "topology": 3,
         "harmonic": 2,
-        "multi_measurement": 2,
-        "measurement+parameter": 2,
-        "measurement+topology": 3,
+        "measurement+parameter": 3,
+        "measurement+topology": 4,
     },
     "efficiency": {
         "hif": 17,
