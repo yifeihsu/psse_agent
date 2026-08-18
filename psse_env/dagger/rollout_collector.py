@@ -89,6 +89,57 @@ def _observable_last_failure(observation: Mapping[str, Any]) -> tuple[bool, str 
     return bool(failed), error_code or None
 
 
+OBSERVABLE_COMMIT_CLASS_CONTRACT = "dagger1_observable_commit_class_v1"
+
+
+def observable_candidate_verified(observation: Mapping[str, Any]) -> bool:
+    """Policy-visible test for a verified, committable candidate.
+
+    Shared by the observable commit/rollback reconstruction, the state-class
+    assignment, and the rank-one target proof so the teacher and the dataset
+    taxonomy cannot drift apart.
+    """
+    lifecycle = str(observation.get("candidate_lifecycle") or "").strip().upper()
+    status = str(observation.get("candidate_status") or "").strip().lower()
+    return bool(
+        observation.get("has_verified_candidate")
+        or status == "verified"
+        or lifecycle == "VERIFIED_CANDIDATE"
+    )
+
+
+def observable_commit_class(
+    observation: Mapping[str, Any],
+    *,
+    declared_disposition: Any = None,
+) -> str:
+    """Replay class for a ``commit_state`` target, from observable evidence.
+
+    The candidate disposition is frequently absent from the policy-visible
+    state: the DAgger-1 round-2 collection carried 159 rows holding a
+    ``VERIFIED_CANDIDATE`` with no disposition from any source, which the
+    previous catch-all misfiled as ``invalid_precondition_recovery``.  Deriving
+    the class from the same lifecycle evidence the expert uses to build the
+    commit target keeps the taxonomy aligned with the teacher without exposing
+    private candidate disposition.
+    """
+    if declared_disposition:
+        token = str(
+            getattr(declared_disposition, "value", declared_disposition)
+        ).strip().upper()
+        if token == "ACCEPT_FINAL":
+            return "accepted_final_commit"
+        if token == "ACCEPT_PARTIAL":
+            return "accepted_partial_commit"
+        if token == "REJECT":
+            return "rejected_candidate_recovery"
+    if not observable_candidate_verified(observation):
+        return "invalid_precondition_recovery"
+    if observation.get("no_material_anomaly_remaining"):
+        return "accepted_final_commit"
+    return "accepted_partial_commit"
+
+
 def _action_family(action: Mapping[str, Any] | str | None) -> str | None:
     normalized = safe_normalize_action(action) if action is not None else None
     tool = normalized["tool"] if normalized is not None else None
@@ -420,11 +471,9 @@ def classify_state_example(
     if preferred_tool == "rollback_state":
         return "rejected_candidate_recovery"
     if preferred_tool == "commit_state":
-        if disposition == "ACCEPT_FINAL":
-            return "accepted_final_commit"
-        if disposition == "ACCEPT_PARTIAL":
-            return "accepted_partial_commit"
-        return "invalid_precondition_recovery"
+        return observable_commit_class(
+            observation, declared_disposition=disposition
+        )
 
     if label.get("process_valid") is False:
         return "invalid_precondition_recovery"

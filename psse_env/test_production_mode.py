@@ -1542,6 +1542,83 @@ class TeacherRealizabilityAndReplayTests(unittest.TestCase):
         self.assertEqual(invalid, "invalid_precondition_recovery")
         self.assertTrue(audit_target_aware_state_classes(rows)["passed"])
 
+    def test_commit_class_uses_observable_evidence_when_disposition_absent(self):
+        """Regression for the DAgger-1 round-2 159-row misclassification.
+
+        Those rows carried a VERIFIED_CANDIDATE with ``commit_state`` as the
+        expert's rank-one target and no candidate disposition from any source
+        (absent from the transition label, empty candidate summary, ``None`` in
+        the observation).  The previous catch-all filed all 159 as
+        ``invalid_precondition_recovery`` even though nothing was invalid.
+        """
+        commit = {
+            "tool": COMMIT_STATE,
+            "arguments": {"candidate_state_id": "r0_fixture_episode1:s3"},
+        }
+        verified = {
+            "active_state_id": "active",
+            "candidate_state_id": "r0_fixture_episode1:s3",
+            "candidate_lifecycle": "VERIFIED_CANDIDATE",
+            "candidate_status": "verified",
+            "has_verified_candidate": True,
+            "has_open_candidate": True,
+            "no_material_anomaly_remaining": False,
+            "candidate_disposition": None,
+        }
+        # No disposition anywhere: the label carries none, as observed in the
+        # failed collection.  Verified candidate with anomalies remaining is a
+        # partial commit, not an invalid precondition.
+        self.assertEqual(
+            classify_state_example(
+                verified,
+                {"process_valid": True},
+                preferred_action=commit,
+            ),
+            "accepted_partial_commit",
+        )
+        # Same evidence, nothing material left to explain -> final commit.
+        self.assertEqual(
+            classify_state_example(
+                {**verified, "no_material_anomaly_remaining": True},
+                {"process_valid": True},
+                preferred_action=commit,
+            ),
+            "accepted_final_commit",
+        )
+        # An unverified or absent candidate is still an invalid precondition.
+        for lifecycle, status, verified_flag in (
+            ("OPEN_UNVERIFIED_CANDIDATE", "unverified", False),
+            ("NO_CANDIDATE", None, False),
+        ):
+            self.assertEqual(
+                classify_state_example(
+                    {
+                        **verified,
+                        "candidate_lifecycle": lifecycle,
+                        "candidate_status": status,
+                        "has_verified_candidate": verified_flag,
+                    },
+                    {"process_valid": True},
+                    preferred_action=commit,
+                ),
+                "invalid_precondition_recovery",
+            )
+        # An explicit disposition still wins over the observable fallback.
+        for disposition, expected in (
+            ("ACCEPT_FINAL", "accepted_final_commit"),
+            ("ACCEPT_PARTIAL", "accepted_partial_commit"),
+            ("REJECT", "rejected_candidate_recovery"),
+        ):
+            self.assertEqual(
+                classify_state_example(
+                    verified,
+                    {"process_valid": True},
+                    preferred_action=commit,
+                    target_candidate_disposition=disposition,
+                ),
+                expected,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

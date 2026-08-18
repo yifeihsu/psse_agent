@@ -2522,8 +2522,21 @@ def collect_dagger1_rollout_schedule(
         [Sequence[Mapping[str, Any]], Mapping[str, Any]], Mapping[str, Any]
     ]
     | None = None,
+    analysis_only_complete_schedule: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any], dict[str, Any] | None]:
-    """Execute the finite schedule until a whole-batch terminal decision."""
+    """Execute the finite schedule until a whole-batch terminal decision.
+
+    ``analysis_only_complete_schedule`` runs every predeclared batch to
+    exhaustion instead of stopping at the first quarantine or the first passing
+    checkpoint.  It exists to answer coverage questions that an early-stopped
+    run cannot: the DAgger-1 round-2 collection stopped after 2 of 6 batches at
+    151 of 477 episodes, so its root-support and replay-capacity shortfalls were
+    measured under censorship and could not be attributed to the schedule.
+
+    The mode never produces production data.  Quarantines are still recorded and
+    still mark the run failed; the report carries ``analysis_only`` and
+    ``training_eligible: False`` so aggregate ingestion refuses the outputs.
+    """
 
     batches = dagger1_rollout_batches(
         scenarios, collection_pass=collection_pass
@@ -2612,26 +2625,40 @@ def collect_dagger1_rollout_schedule(
                 collection_pass == "training"
                 and quarantined_rows > 0
             ):
-                stopped_after_batch = batch_id
-                terminal_failure = {
-                    "gate": "offline_teacher_target_quarantine_summary",
-                    "reason": (
-                        "strict_zero_quarantine_gate_is_cumulative_and_"
-                        "irreversible"
-                    ),
-                    "quarantined_rows": quarantined_rows,
-                }
-                break
+                # Record the first quarantine even in analysis mode: the run is
+                # still a failure, it simply keeps executing so the remaining
+                # batches' coverage contribution can be measured.
+                if terminal_failure is None:
+                    terminal_failure = {
+                        "gate": "offline_teacher_target_quarantine_summary",
+                        "reason": (
+                            "strict_zero_quarantine_gate_is_cumulative_and_"
+                            "irreversible"
+                        ),
+                        "quarantined_rows": quarantined_rows,
+                    }
+                    if analysis_only_complete_schedule:
+                        # Only meaningful when execution continues past the
+                        # stop; the production payload stays byte-identical.
+                        terminal_failure["first_quarantined_batch"] = batch_id
+                elif analysis_only_complete_schedule:
+                    terminal_failure["quarantined_rows"] = quarantined_rows
+                if not analysis_only_complete_schedule:
+                    stopped_after_batch = batch_id
+                    break
             if (
                 collection_pass == "training"
                 and last_checkpoint.get("passed") is True
+                and not analysis_only_complete_schedule
             ):
                 stopped_after_batch = batch_id
                 break
 
     matrix = dagger1_rollout_disposition_matrix(episode_reports)
     planned_batch_ids = [str(batch["batch_id"]) for batch in batches]
-    if collection_pass == "diagnostic":
+    if analysis_only_complete_schedule:
+        stopping_reason = "analysis_only_complete_schedule_exhausted"
+    elif collection_pass == "diagnostic":
         stopping_reason = "diagnostic_primary_complete"
     elif terminal_failure is not None:
         stopping_reason = "irreversible_truth_audit_quarantine"
@@ -2662,9 +2689,14 @@ def collect_dagger1_rollout_schedule(
         "stopping_reason": stopping_reason,
         "terminal_failure": terminal_failure,
         "workflow_terminal": True,
+        "analysis_only": bool(analysis_only_complete_schedule),
+        "training_eligible": not analysis_only_complete_schedule,
         "passed": (
-            collection_pass == "diagnostic"
-            or stopping_reason == "strict_collection_gate_passed"
+            not analysis_only_complete_schedule
+            and (
+                collection_pass == "diagnostic"
+                or stopping_reason == "strict_collection_gate_passed"
+            )
         ),
     }
     return rows, matrix, report, last_checkpoint
@@ -2778,6 +2810,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--require-recommended-target and forbidden otherwise"
         ),
     )
+    parser.add_argument(
+        "--analysis-only-complete-schedule",
+        action="store_true",
+        help=(
+            "Run every predeclared batch to exhaustion instead of stopping at "
+            "the first quarantine, to measure what the complete schedule would "
+            "supply. Never publishes production outputs; all results are "
+            "training-ineligible and rejected by aggregate ingestion."
+        ),
+    )
     parser.add_argument("--max-steps", type=int, default=24)
     parser.add_argument("--seed", type=int, default=20260719)
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -2786,6 +2828,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         target_max_rows=args.target_max_rows,
     )
 
+    if args.analysis_only_complete_schedule:
+        if args.collection_pass != "training":
+            parser.error(
+                "--analysis-only-complete-schedule is valid only for the "
+                "training pass"
+            )
+        if args.failed_collection_dir is None:
+            parser.error(
+                "--analysis-only-complete-schedule requires "
+                "--failed-collection-dir; the mode never publishes production "
+                "outputs"
+            )
+        # Force the failure-evidence path so production outputs can never be
+        # published from an analysis run, whatever the gates report.
+        args.require_recommended_target = True
     if args.collection_pass == "diagnostic" and args.require_recommended_target:
         parser.error(
             "--require-recommended-target is valid only for the training pass"
@@ -3057,6 +3114,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             collect_episode=collect_episode,
             checkpoint=(
                 checkpoint if args.collection_pass == "training" else None
+            ),
+            analysis_only_complete_schedule=(
+                args.analysis_only_complete_schedule
             ),
         )
     )

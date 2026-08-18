@@ -1961,6 +1961,144 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
         self.assertEqual(report["executed_episode_count"], 2)
         self.assertTrue(report["unexecuted_batch_ids"])
         self.assertFalse(report["passed"])
+        # Production payload must stay byte-identical: analysis-only bookkeeping
+        # never leaks into a strict run.
+        self.assertFalse(report["analysis_only"])
+        self.assertTrue(report["training_eligible"])
+
+    def test_analysis_only_mode_runs_complete_schedule_past_quarantine(self):
+        """A censored run cannot attribute coverage shortfalls to the schedule.
+
+        The DAgger-1 round-2 collection stopped after 2 of 6 batches at 151 of
+        477 episodes, so its root-support and replay-capacity shortfalls were
+        measured under censorship.  This mode executes every predeclared batch
+        so the complete schedule's contribution is observable, while remaining
+        incapable of publishing production data.
+        """
+        scenarios = self._scheduled_scenarios()
+
+        def collect_episode(scenario, replica, rollout_seed, batch_id, order):
+            del replica, rollout_seed, batch_id, order
+            grouping = scenario["grouping"]
+            scenario_id = scenario["execution"]["scenario_id"]
+            return [
+                {
+                    "example_id": f"{scenario_id}-step0",
+                    "scenario_id": scenario_id,
+                    "physical_root_fingerprint": grouping[
+                        "physical_root_fingerprint"
+                    ],
+                    "scenario_family": grouping["scenario_family"],
+                    "step": 0,
+                    "terminal_outcome": "resolved",
+                }
+            ]
+
+        quarantining_checkpoint = lambda rows, matrix: {  # noqa: E731
+            "candidate_rows": len(rows),
+            "selected_rows": [],
+            "failed_gate_names": ["offline_teacher_target_quarantine_summary"],
+            "offline_teacher_target_quarantine_summary": {
+                "passed": False,
+                "quarantined_rows": 1,
+            },
+            "passed": False,
+        }
+
+        strict_rows, _, strict_report, _ = collect_dagger1_rollout_schedule(
+            scenarios,
+            collection_pass="training",
+            seed=19,
+            max_steps=24,
+            collect_episode=collect_episode,
+            checkpoint=quarantining_checkpoint,
+        )
+        rows, _, report, _ = collect_dagger1_rollout_schedule(
+            scenarios,
+            collection_pass="training",
+            seed=19,
+            max_steps=24,
+            collect_episode=collect_episode,
+            checkpoint=quarantining_checkpoint,
+            analysis_only_complete_schedule=True,
+        )
+
+        # The strict run stops; the analysis run exhausts the schedule.
+        self.assertEqual(strict_report["executed_batch_ids"], ["primary-r0"])
+        self.assertEqual(
+            report["executed_batch_ids"], report["planned_batch_ids"]
+        )
+        self.assertEqual(report["unexecuted_batch_ids"], [])
+        self.assertEqual(
+            report["executed_episode_count"], report["planned_episode_count"]
+        )
+        self.assertGreater(len(rows), len(strict_rows))
+
+        # The quarantine is still recorded and the run is still a failure.
+        self.assertIsNotNone(report["terminal_failure"])
+        self.assertEqual(
+            report["terminal_failure"]["gate"],
+            "offline_teacher_target_quarantine_summary",
+        )
+        self.assertEqual(
+            report["terminal_failure"]["first_quarantined_batch"], "primary-r0"
+        )
+        self.assertFalse(report["passed"])
+
+        # And it can never be mistaken for production data.
+        self.assertTrue(report["analysis_only"])
+        self.assertFalse(report["training_eligible"])
+        self.assertEqual(
+            report["stopping_reason"],
+            "analysis_only_complete_schedule_exhausted",
+        )
+        self.assertIsNone(report["stopped_after_batch"])
+
+    def test_analysis_only_mode_does_not_stop_on_a_passing_checkpoint(self):
+        scenarios = self._scheduled_scenarios()
+
+        def collect_episode(scenario, replica, rollout_seed, batch_id, order):
+            del replica, rollout_seed, batch_id, order
+            grouping = scenario["grouping"]
+            scenario_id = scenario["execution"]["scenario_id"]
+            return [
+                {
+                    "example_id": f"{scenario_id}-step0",
+                    "scenario_id": scenario_id,
+                    "physical_root_fingerprint": grouping[
+                        "physical_root_fingerprint"
+                    ],
+                    "scenario_family": grouping["scenario_family"],
+                    "step": 0,
+                    "terminal_outcome": "resolved",
+                }
+            ]
+
+        _, _, report, _ = collect_dagger1_rollout_schedule(
+            scenarios,
+            collection_pass="training",
+            seed=19,
+            max_steps=24,
+            collect_episode=collect_episode,
+            checkpoint=lambda rows, matrix: {
+                "candidate_rows": len(rows),
+                "selected_rows": [],
+                "failed_gate_names": [],
+                "offline_teacher_target_quarantine_summary": {
+                    "passed": True,
+                    "quarantined_rows": 0,
+                },
+                "passed": True,
+            },
+            analysis_only_complete_schedule=True,
+        )
+
+        self.assertEqual(report["unexecuted_batch_ids"], [])
+        self.assertIsNone(report["terminal_failure"])
+        # A passing checkpoint must not promote an analysis run to production.
+        self.assertFalse(report["passed"])
+        self.assertTrue(report["analysis_only"])
+        self.assertFalse(report["training_eligible"])
 
     def test_horizon_truncation_is_an_explicit_valid_rollout_disposition(self):
         scenarios = self._scheduled_scenarios()
