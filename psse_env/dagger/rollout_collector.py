@@ -95,9 +95,13 @@ OBSERVABLE_COMMIT_CLASS_CONTRACT = "dagger1_observable_commit_class_v1"
 def observable_candidate_verified(observation: Mapping[str, Any]) -> bool:
     """Policy-visible test for a verified, committable candidate.
 
-    Shared by the observable commit/rollback reconstruction, the state-class
-    assignment, and the rank-one target proof so the teacher and the dataset
-    taxonomy cannot drift apart.
+    Scope note: this is currently a state-class helper aligned with the
+    observable candidate-lifecycle contract, called only from
+    ``observable_commit_class``.  It is deliberately *not* yet the single
+    shared implementation behind expert commit/rollback reconstruction and the
+    rank-one target proof; unifying those paths should reuse the existing
+    observable candidate-disposition implementation rather than add a third
+    independent approximation of it.
     """
     lifecycle = str(observation.get("candidate_lifecycle") or "").strip().upper()
     status = str(observation.get("candidate_status") or "").strip().lower()
@@ -116,12 +120,18 @@ def observable_commit_class(
     """Replay class for a ``commit_state`` target, from observable evidence.
 
     The candidate disposition is frequently absent from the policy-visible
-    state: the DAgger-1 round-2 collection carried 159 rows holding a
+    state.  Recomputing the DAgger-1 round-2 collection shows 215 affected rows
+    — every ``commit_state`` row in the run — each holding a
     ``VERIFIED_CANDIDATE`` with no disposition from any source, which the
-    previous catch-all misfiled as ``invalid_precondition_recovery``.  Deriving
-    the class from the same lifecycle evidence the expert uses to build the
-    commit target keeps the taxonomy aligned with the teacher without exposing
-    private candidate disposition.
+    previous catch-all misfiled as ``invalid_precondition_recovery``.  (The
+    initial diagnosis reported 159, which is the narrower learner-visited,
+    previously unclassified subset of the same population.)  The same
+    recomputation over the D0 aggregate changes 0 of its 256 ``commit_state``
+    rows, so D0 row semantics are unaffected.
+
+    Deriving the class from the same lifecycle evidence the expert uses to
+    build the commit target keeps the taxonomy aligned with the teacher without
+    exposing private candidate disposition.
     """
     if declared_disposition:
         token = str(
