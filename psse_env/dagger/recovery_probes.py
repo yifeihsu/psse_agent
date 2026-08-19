@@ -40,7 +40,11 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from psse_env.actions import CORRECT_MEASUREMENTS, GET_MEASUREMENT_CONTEXT
+from psse_env.actions import (
+    CORRECT_MEASUREMENTS,
+    GET_MEASUREMENT_CONTEXT,
+    RUN_WLS,
+)
 from psse_env.dagger.rollout_collector import classify_dagger1_recovery_stratum
 
 RECOVERY_PROBE_CONTRACT = "dagger1_observable_recovery_probe_v1"
@@ -123,17 +127,51 @@ def _observable_findings(measurement: Mapping[str, Any]) -> list[int]:
     return sorted(seen)
 
 
+def _supported_measurement_groups(
+    measurement: Mapping[str, Any], *, state_id: str
+) -> set[frozenset[int]]:
+    """Exact same-state suspect groups the inventory authorises."""
+
+    supported = measurement.get("supported_corrections")
+    groups: set[frozenset[int]] = set()
+    if not isinstance(supported, Sequence) or isinstance(supported, (str, bytes)):
+        return groups
+    for entry in supported:
+        if not isinstance(entry, Mapping):
+            continue
+        if str(entry.get("tool") or "") != CORRECT_MEASUREMENTS:
+            continue
+        arguments = entry.get("arguments")
+        arguments = arguments if isinstance(arguments, Mapping) else {}
+        if str(arguments.get("state_id") or "") != state_id:
+            continue
+        group = arguments.get("suspect_group")
+        if not isinstance(group, Sequence) or isinstance(group, (str, bytes)):
+            continue
+        try:
+            groups.add(frozenset(int(item) for item in group))
+        except (TypeError, ValueError):
+            continue
+    return groups
+
+
 def unsupported_correction_intervention(
     observation: Mapping[str, Any],
 ) -> dict[str, Any] | None:
-    """Correct a visible finding the same-state inventory does not support.
+    """Repair the two lowest visible findings in one unauthorised action.
 
-    The target is a genuine policy-visible finding, so this is a plausible
-    learner mistake rather than a malformed action; it is simply not a route the
-    provider currently authorises, which is what
-    ``correction_not_supported_by_current_context`` describes.  Returns ``None``
-    when every visible finding is already supported, so the caller moves to the
-    next root instead of forcing a probe.
+    At a fresh context the provider publishes exactly one supported singleton
+    per visible finding, so "a finding outside the inventory" is empty by
+    construction -- the probe pilot measured this on every root.  A learner that
+    tries to repair two anomalies at once is a plausible mistake whose grouped
+    action the same-state inventory genuinely does not authorise, which is what
+    ``correction_not_supported_by_current_context`` describes.  Both targets are
+    real findings, so this never touches a measurement the provider considers
+    healthy.
+
+    Returns ``None`` when fewer than two findings are visible, or when the
+    grouped action happens to be supported, so the caller moves to the next root
+    rather than forcing a probe.
     """
 
     measurement = _measurement_context(observation)
@@ -142,14 +180,18 @@ def unsupported_correction_intervention(
     state_id = str(measurement.get("state_id") or "")
     if not state_id or state_id != str(observation.get("active_state_id") or ""):
         return None
-    supported = _supported_measurement_targets(measurement, state_id=state_id)
-    for target in _observable_findings(measurement):
-        if target not in supported:
-            return {
-                "tool": CORRECT_MEASUREMENTS,
-                "arguments": {"state_id": state_id, "suspect_group": [target]},
-            }
-    return None
+    findings = _observable_findings(measurement)
+    if len(findings) < 2:
+        return None
+    group = findings[:2]
+    if frozenset(group) in _supported_measurement_groups(
+        measurement, state_id=state_id
+    ):
+        return None
+    return {
+        "tool": CORRECT_MEASUREMENTS,
+        "arguments": {"state_id": state_id, "suspect_group": list(group)},
+    }
 
 
 def post_failure_no_candidate_intervention(
@@ -174,6 +216,65 @@ def post_failure_no_candidate_intervention(
         "tool": GET_MEASUREMENT_CONTEXT,
         "arguments": {"state_id": f"{episode}:{_UNBOUND_STATE_SUFFIX}"},
     }
+
+
+#: The same-state supported-correction inventory does not exist at episode
+#: start: it is published by a context request, after the residuals that
+#: motivate it.  A probe that needs to read the inventory must therefore prime
+#: it first, with ordinary legal actions and no reference to hidden truth.
+UNSUPPORTED_CORRECTION_SETUP_TOOLS: tuple[str, ...] = (
+    RUN_WLS,
+    GET_MEASUREMENT_CONTEXT,
+)
+
+
+def unsupported_correction_setup_action(
+    observation: Mapping[str, Any], *, step: int
+) -> dict[str, Any] | None:
+    """Next inventory-priming action, or ``None`` once the context is present.
+
+    Each action is issued against the *current* active state, so the caller must
+    re-observe between steps rather than precomputing the whole sequence: a
+    solve republishes the active state and a stale binding would fail.
+    """
+
+    if _measurement_context(observation) is not None:
+        return None
+    if step < 0 or step >= len(UNSUPPORTED_CORRECTION_SETUP_TOOLS):
+        return None
+    active = str(observation.get("active_state_id") or "")
+    if not active:
+        return None
+    return {
+        "tool": UNSUPPORTED_CORRECTION_SETUP_TOOLS[step],
+        "arguments": {"state_id": active},
+    }
+
+
+def _no_setup(observation: Mapping[str, Any], *, step: int) -> None:
+    del observation, step
+    return None
+
+
+#: Frozen dispatch from target stratum to its inventory-priming rule.
+RECOVERY_PROBE_SETUP = {
+    "post_failure_no_candidate": _no_setup,
+    "unsupported_correction_recovery": unsupported_correction_setup_action,
+}
+
+#: Maximum priming actions before a root is abandoned.
+RECOVERY_PROBE_MAX_SETUP_STEPS = len(UNSUPPORTED_CORRECTION_SETUP_TOOLS)
+
+
+def probe_setup_action(
+    observation: Mapping[str, Any], *, stratum: str, step: int
+) -> dict[str, Any] | None:
+    """Priming action this stratum still needs before its intervention."""
+
+    rule = RECOVERY_PROBE_SETUP.get(str(stratum))
+    if rule is None:
+        raise ValueError(f"no recovery-probe setup rule for stratum {stratum!r}")
+    return rule(observation, step=step)
 
 
 #: Frozen dispatch from target stratum to its intervention rule.
@@ -491,7 +592,10 @@ def generate_recovery_probes(
         for stratum in remaining:
             if root in used_roots[stratum]:
                 continue
-            env.reset(scenario)
+            # Scenario envelopes carry the runtime payload under "execution";
+            # a bare scenario is accepted unchanged so fakes stay simple.
+            runtime = scenario.get("execution")
+            env.reset(runtime if isinstance(runtime, Mapping) else scenario)
             history: list[Any] = []
             observation = env.get_policy_observation(history)
             observation = (
@@ -499,6 +603,35 @@ def generate_recovery_probes(
                 if hasattr(observation, "as_dict")
                 else dict(observation)
             )
+
+            # Prime whatever policy-visible evidence the intervention reads.
+            # Re-observe between steps: a solve republishes the active state, so
+            # a precomputed sequence would bind to a stale id.
+            setup_actions: list[dict[str, Any]] = []
+            for setup_step in range(RECOVERY_PROBE_MAX_SETUP_STEPS):
+                setup = probe_setup_action(
+                    observation, stratum=stratum, step=setup_step
+                )
+                if setup is None:
+                    break
+                setup_result = env.step(setup)
+                setup_output = (
+                    setup_result[1]
+                    if isinstance(setup_result, tuple) and len(setup_result) > 1
+                    else setup_result
+                )
+                setup_actions.append(setup)
+                # The real tool output must reach the history: context freshness
+                # is derived from it, and a null entry leaves the primed
+                # evidence invisible to the very rule that needs it.
+                history.append({"action": setup, "tool_output": setup_output})
+                observation = env.get_policy_observation(history)
+                observation = (
+                    observation.as_dict()
+                    if hasattr(observation, "as_dict")
+                    else dict(observation)
+                )
+
             intervention = probe_intervention(observation, stratum=stratum)
             if intervention is None:
                 skipped[f"{stratum}:rule_declined"] += 1
@@ -544,6 +677,7 @@ def generate_recovery_probes(
                         "scenario_family": family,
                         "error_cardinality": cardinality,
                         "policy_observation": post,
+                        "probe_setup_actions": list(setup_actions),
                         "preferred_action": preferred_action,
                         "state_class": state_class,
                         "scenario_id": grouping.get("scenario_id"),

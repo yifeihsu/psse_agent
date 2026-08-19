@@ -71,18 +71,19 @@ def _after_failure(tool: str, error_code: str, **overrides: Any) -> dict[str, An
 
 
 class RecoveryProbeInterventionTests(unittest.TestCase):
-    def test_unsupported_correction_targets_a_visible_unsupported_finding(self):
+    def test_unsupported_correction_groups_two_visible_findings(self):
+        # A fresh context publishes one supported singleton per finding, so no
+        # single finding is ever unsupported; the grouped action is.
         action = unsupported_correction_intervention(_observation())
-        # 41 is in the supported inventory; 23 is visible but unsupported.
         self.assertEqual(
             action,
             {
                 "tool": CORRECT_MEASUREMENTS,
-                "arguments": {"state_id": STATE, "suspect_group": [23]},
+                "arguments": {"state_id": STATE, "suspect_group": [23, 41]},
             },
         )
 
-    def test_unsupported_correction_declines_when_all_findings_supported(self):
+    def test_unsupported_correction_declines_when_the_group_is_supported(self):
         observation = _observation()
         observation["fresh_context_evidence"]["measurement"][
             "supported_corrections"
@@ -92,6 +93,13 @@ class RecoveryProbeInterventionTests(unittest.TestCase):
                 "arguments": {"state_id": STATE, "suspect_group": [23, 41]},
             }
         ]
+        self.assertIsNone(unsupported_correction_intervention(observation))
+
+    def test_unsupported_correction_declines_with_a_single_finding(self):
+        observation = _observation()
+        observation["fresh_context_evidence"]["measurement"][
+            "measurement_findings"
+        ] = [{"channel": "Pinj", "index0": 23, "value": 4.39}]
         self.assertIsNone(unsupported_correction_intervention(observation))
 
     def test_unsupported_correction_declines_on_stale_context(self):
