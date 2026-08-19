@@ -60,6 +60,27 @@ DAGGER1_RECOVERY_STRATUM_MINIMUM_DISTINCT_ROOTS: dict[str, int] = {
     "premature_commit_recovery": 5,
     "premature_escalation_recovery": 5,
 }
+#: Strata whose occurrence depends on the learner making a specific mistake.
+#: The complete 477-episode DAgger-1 schedule produced three roots for each
+#: against a floor of ten, while every incidence-independent stratum scaled with
+#: episode count.  Holding an absolute on-policy floor here penalises a learner
+#: for improving, so natural support is reported rather than gated, and the
+#: recovery competence it was meant to guarantee is carried by the probe and
+#: combined floors instead.
+DAGGER1_INCIDENCE_DEPENDENT_RECOVERY_STRATA = frozenset(
+    {"post_failure_no_candidate", "unsupported_correction_recovery"}
+)
+#: Natural on-policy floors: every stratum except the incidence-dependent pair.
+DAGGER1_NATURAL_RECOVERY_STRATUM_MINIMUM_DISTINCT_ROOTS: dict[str, int] = {
+    stratum: floor
+    for stratum, floor in DAGGER1_RECOVERY_STRATUM_MINIMUM_DISTINCT_ROOTS.items()
+    if stratum not in DAGGER1_INCIDENCE_DEPENDENT_RECOVERY_STRATA
+}
+#: Probe and combined floors govern only the incidence-dependent pair.
+DAGGER1_INCIDENCE_DEPENDENT_MINIMUM_DISTINCT_ROOTS: dict[str, int] = {
+    stratum: DAGGER1_RECOVERY_STRATUM_MINIMUM_DISTINCT_ROOTS[stratum]
+    for stratum in sorted(DAGGER1_INCIDENCE_DEPENDENT_RECOVERY_STRATA)
+}
 
 
 def _state_class(row: Mapping[str, Any]) -> str:
@@ -801,6 +822,175 @@ def audit_dagger1_independent_root_support(
         "targeted_state_cells_passed": not cell_shortfalls,
         "recovery_strata_passed": not stratum_shortfalls,
         "passed": not cell_shortfalls and not stratum_shortfalls,
+    }
+
+
+DAGGER1_TRAINING_SUPPORT_CONTRACT = "dagger1_natural_probe_combined_support_v1"
+
+
+def audit_dagger1_training_support(
+    natural_rows: Iterable[Mapping[str, Any]],
+    probe_rows: Iterable[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Report natural, probe, and combined recovery support separately.
+
+    Three questions are deliberately kept apart, because one number cannot
+    answer them:
+
+    * how often the current learner naturally reaches each recovery state;
+    * whether the auxiliary probe suite supplies independent supervision for the
+      two incidence-dependent strata;
+    * whether the training corpus as a whole clears the competence floor.
+
+    Natural support for the incidence-dependent pair is reported, never gated:
+    an improved learner makes fewer mistakes and would otherwise fail release
+    for getting better.  Every other floor stays a natural on-policy floor, so
+    probe rows cannot paper over a genuine coverage gap.
+    """
+
+    natural = list(natural_rows)
+    probes = list(probe_rows)
+
+    natural_support = audit_dagger1_independent_root_support(
+        natural,
+        recovery_stratum_minimum_distinct_roots=(
+            DAGGER1_NATURAL_RECOVERY_STRATUM_MINIMUM_DISTINCT_ROOTS
+        ),
+    )
+    def strata_only(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
+        """Support for the incidence-dependent pair alone.
+
+        Targeted-state cells are a property of the natural corpus: an auxiliary
+        probe is not meant to cover them, so judging the probe or combined
+        report against cell floors would fail for the wrong reason.
+        """
+
+        full = audit_dagger1_independent_root_support(
+            rows,
+            recovery_stratum_minimum_distinct_roots=(
+                DAGGER1_INCIDENCE_DEPENDENT_MINIMUM_DISTINCT_ROOTS
+            ),
+        )
+        strata = {
+            name: entry
+            for name, entry in full["recovery_strata"].items()
+            if name in DAGGER1_INCIDENCE_DEPENDENT_RECOVERY_STRATA
+        }
+        shortfalls = {
+            name: entry
+            for name, entry in strata.items()
+            if entry["required_for_release"] and not entry["passed"]
+        }
+        return {
+            "contract": full["contract"],
+            "total_rows": full["total_rows"],
+            "recovery_stratum_minimum_distinct_roots": (
+                DAGGER1_INCIDENCE_DEPENDENT_MINIMUM_DISTINCT_ROOTS
+            ),
+            "recovery_strata": strata,
+            "recovery_stratum_shortfalls": shortfalls,
+            "passed": not shortfalls,
+        }
+
+    probe_support = strata_only(probes)
+    combined_support = strata_only(natural + probes)
+
+    # Report natural support for the ungated pair explicitly, so a reader never
+    # has to infer it from the absence of a floor.
+    natural_incidence = {
+        stratum: {
+            "distinct_physical_roots": int(
+                natural_support["recovery_strata"]
+                .get(stratum, {})
+                .get("distinct_physical_roots", 0)
+            ),
+            "gated": False,
+        }
+        for stratum in sorted(DAGGER1_INCIDENCE_DEPENDENT_RECOVERY_STRATA)
+    }
+    passed = bool(
+        natural_support.get("passed")
+        and probe_support.get("passed")
+        and combined_support.get("passed")
+    )
+    return {
+        "contract": DAGGER1_TRAINING_SUPPORT_CONTRACT,
+        "natural_on_policy_support": natural_support,
+        "observable_probe_support": probe_support,
+        "combined_training_support": combined_support,
+        "incidence_dependent_recovery_strata": sorted(
+            DAGGER1_INCIDENCE_DEPENDENT_RECOVERY_STRATA
+        ),
+        "natural_incidence_report_only": natural_incidence,
+        "natural_rows": len(natural),
+        "probe_rows": len(probes),
+        "passed": passed,
+    }
+
+
+def dagger1_probe_replay_quota(
+    probe_rows: Iterable[Mapping[str, Any]],
+    *,
+    total_size: int,
+    probe_share: float,
+    max_duplicate_count: int = 2,
+    max_rows_per_root: int = 8,
+) -> dict[str, Any]:
+    """Size the probe replay bucket without drawing on the natural D1 share.
+
+    Probe rows occupy their own quota so an auxiliary row can never displace a
+    natural on-policy row: the D0/D1 split is computed over the remaining
+    ``1 - probe_share`` of the view.
+
+    ``probe_share`` has no default on purpose.  Its value is a preregistration
+    decision, not something this function may pick.
+    """
+
+    rows = list(probe_rows)
+    if not rows:
+        raise ValueError("probe replay quota requires at least one probe row")
+    if int(total_size) < 1:
+        raise ValueError("total_size must be a positive integer")
+    if not 0.0 < float(probe_share) < 1.0:
+        raise ValueError("probe_share must satisfy 0 < share < 1")
+
+    # Same duplicate/root rule the D0 and D1 sources use: a root contributes at
+    # most ``max_rows_per_root`` rows, and each distinct example at most
+    # ``max_duplicate_count`` copies.
+    duplicate_cap = int(max_duplicate_count)
+    root_cap = int(max_rows_per_root)
+    examples_by_root: dict[str, set[str]] = defaultdict(set)
+    malformed = 0
+    for row in rows:
+        root = _physical_root(row)
+        example_id = str(row.get("example_id") or "").strip()
+        if root is None or not str(root).strip() or not example_id:
+            malformed += 1
+            continue
+        examples_by_root[str(root).strip()].add(example_id)
+    capacity_by_root = {
+        root: min(root_cap, len(example_ids) * duplicate_cap)
+        for root, example_ids in sorted(examples_by_root.items())
+    }
+    requested = int(round(float(probe_share) * int(total_size)))
+    available = sum(capacity_by_root.values())
+    shortfall = max(requested - available, 0)
+    return {
+        "contract": "dagger1_probe_replay_quota_v1",
+        "probe_share": float(probe_share),
+        "total_size": int(total_size),
+        "requested_probe_rows": requested,
+        "available_probe_rows": available,
+        "probe_capacity_shortfall": shortfall,
+        "distinct_physical_roots": len(examples_by_root),
+        "malformed_probe_rows": malformed,
+        "capacity_by_physical_root": capacity_by_root,
+        "max_duplicate_count": duplicate_cap,
+        "max_rows_per_root": root_cap,
+        # What the D0/D1 split may still divide between them.
+        "natural_share_remaining": round(1.0 - float(probe_share), 6),
+        "natural_rows_remaining": int(total_size) - requested,
+        "passed": shortfall == 0 and malformed == 0,
     }
 
 
