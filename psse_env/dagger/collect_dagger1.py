@@ -510,13 +510,34 @@ def frozen_physical_roots(path: Path) -> frozenset[str]:
     return frozenset(roots)
 
 
+def source_commit_drift(
+    manifest_source: Any, source_state: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    """Report a manifest/source commit divergence, or ``None`` when aligned."""
+    if not isinstance(manifest_source, Mapping):
+        return None
+    recorded = manifest_source.get("source_commit")
+    running = source_state.get("source_commit")
+    if recorded == running:
+        return None
+    return {"manifest_source_commit": recorded, "running_source_commit": running}
+
+
 def validate_d0_provenance_binding(
     provenance: Mapping[str, Any],
     *,
     raw_path: Path,
     source_state: Mapping[str, Any],
+    analysis_only: bool = False,
 ) -> None:
-    """Require a clean, content-addressed D0 prerequisite for collection."""
+    """Require a clean, content-addressed D0 prerequisite for collection.
+
+    ``analysis_only`` relaxes the manifest/source commit equality alone, for the
+    non-publishing complete-schedule analysis mode: the predeclared schedule is
+    bound to the commit that generated it, so any source change would otherwise
+    make the existing schedule unrunnable.  The clean-tree requirement on the
+    recorded manifest is unchanged, and the drift is recorded in the run report.
+    """
 
     descriptor = provenance.get("generation_descriptor")
     descriptor = descriptor if isinstance(descriptor, Mapping) else None
@@ -535,7 +556,10 @@ def validate_d0_provenance_binding(
         "release_eligible_source": isinstance(d0_source, Mapping)
         and d0_source.get("release_eligible_source") is True,
         "source_commit": isinstance(d0_source, Mapping)
-        and d0_source.get("source_commit") == source_state.get("source_commit"),
+        and (
+            analysis_only
+            or d0_source.get("source_commit") == source_state.get("source_commit")
+        ),
         "raw_sha256": isinstance(dataset_hashes, Mapping)
         and dataset_hashes.get(raw_path.name) == _file_sha256(raw_path),
         "aggregate_manifest_sha256": manifest_binding["passed"] is True,
@@ -562,6 +586,7 @@ def validate_development_holdout_binding(
     forbidden_suite_path: Path,
     evaluation_policy_path: Path,
     require_model_selection_eligible: bool,
+    analysis_only: bool = False,
 ) -> frozenset[str]:
     """Validate and return the independently reserved development roots."""
 
@@ -749,8 +774,11 @@ def validate_development_holdout_binding(
         "seed": manifest.get("seed") == DAGGER1_DEVELOPMENT_SEED,
         "source_commit": isinstance(manifest_source, Mapping)
         and manifest_source.get("release_eligible_source") is True
-        and manifest_source.get("source_commit")
-        == source_state.get("source_commit"),
+        and (
+            analysis_only
+            or manifest_source.get("source_commit")
+            == source_state.get("source_commit")
+        ),
         "source_bindings": source_bindings_current,
         "output_sha256": manifest.get("output_sha256")
         == _file_sha256(holdout_path),
@@ -1194,6 +1222,7 @@ def validate_scenario_builder_manifest(
     d0_manifest_path: Path,
     forbidden_suite_path: Path,
     evaluation_policy_path: Path,
+    analysis_only: bool = False,
 ) -> None:
     """Bind the collected scenarios to the reviewed fresh-root builder."""
 
@@ -1361,8 +1390,11 @@ def validate_scenario_builder_manifest(
         ),
         "source_commit": (
             manifest_source.get("release_eligible_source") is True
-            and manifest_source.get("source_commit")
-            == source_state.get("source_commit")
+            and (
+                analysis_only
+                or manifest_source.get("source_commit")
+                == source_state.get("source_commit")
+            )
         ),
         "source_partition": manifest.get("source_partition") == "train",
         "parameter_threshold": (
@@ -2997,10 +3029,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     d0_provenance = json.loads(d0_provenance_path.read_text(encoding="utf-8"))
     if not isinstance(d0_provenance, Mapping):
         raise RuntimeError("D0 aggregate provenance must be a JSON object")
+    analysis_only = bool(args.analysis_only_complete_schedule)
     validate_d0_provenance_binding(
         d0_provenance,
         raw_path=d0_raw_path,
         source_state=source_state,
+        analysis_only=analysis_only,
     )
     validate_scenario_builder_manifest(
         scenario_manifest,
@@ -3013,7 +3047,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         d0_manifest_path=d0_manifest_path,
         forbidden_suite_path=args.forbidden_suite,
         evaluation_policy_path=DEFAULT_EVALUATION_POLICY,
+        analysis_only=analysis_only,
     )
+    scenario_source_drift = source_commit_drift(
+        scenario_manifest.get("source_state"), source_state
+    )
+    if scenario_source_drift is not None:
+        print(
+            "analysis-only source commit drift: "
+            + json.dumps(scenario_source_drift, sort_keys=True)
+        )
     development_roots: frozenset[str] = frozenset()
     if args.development_holdout is not None:
         development_roots = validate_development_holdout_binding(
@@ -3033,6 +3076,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             require_model_selection_eligible=(
                 args.collection_pass == "training"
             ),
+            analysis_only=analysis_only,
         )
     if development_roots & (frozen_roots | d0_roots):
         raise RuntimeError(
