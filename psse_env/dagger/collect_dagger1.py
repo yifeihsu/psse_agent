@@ -2344,6 +2344,22 @@ def select_dagger1_collection_rows(
         )
         selected.add(chosen)
         selected_rows_by_root[root_by_index[chosen]] += 1
+    # Reservation-stage support is not the published support: the fill stage
+    # adds rows without touching ``selected_roots_by_group``.  Recount over the
+    # final selection so the reported per-group support agrees with
+    # ``selected_independent_root_support``, and so the loss check below is
+    # evaluated against what is actually published rather than what was
+    # reserved.
+    final_roots_by_group: dict[str, set[str]] = {
+        group: set() for group in required_floors
+    }
+    for index in selected:
+        root = root_by_index[index]
+        if not root:
+            continue
+        for group in groups_by_index[index]:
+            if group in final_roots_by_group:
+                final_roots_by_group[group].add(root)
     selected_rows = [
         copy.deepcopy(materialized[index])
         for index in sorted(
@@ -2372,12 +2388,11 @@ def select_dagger1_collection_rows(
         group: {
             "attainable_root_target": attainable_floors[group],
             "candidate_distinct_physical_roots": len(candidate_roots_by_group[group]),
-            "selected_distinct_physical_roots": len(selected_roots_by_group[group]),
-            "root_loss": attainable_floors[group]
-            - len(selected_roots_by_group[group]),
+            "selected_distinct_physical_roots": len(final_roots_by_group[group]),
+            "root_loss": attainable_floors[group] - len(final_roots_by_group[group]),
         }
         for group in sorted(required_floors)
-        if len(selected_roots_by_group[group]) < attainable_floors[group]
+        if len(final_roots_by_group[group]) < attainable_floors[group]
     }
     row_target_passed = minimum <= len(selected_rows) <= maximum
     passed = bool(
@@ -2418,6 +2433,10 @@ def select_dagger1_collection_rows(
         },
         "attainable_root_targets": dict(sorted(attainable_floors.items())),
         "selected_distinct_roots_by_group": {
+            group: len(final_roots_by_group[group])
+            for group in sorted(required_floors)
+        },
+        "reserved_distinct_roots_by_group": {
             group: len(selected_roots_by_group[group])
             for group in sorted(required_floors)
         },

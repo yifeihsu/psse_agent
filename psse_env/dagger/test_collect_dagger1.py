@@ -2240,10 +2240,16 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
         # floor (6 of 10) but must still retain every root it can supply.
         add("ucr", 3, "unsupported_correction_recovery")
         add("pfnc", 6, "post_failure_no_candidate")
-        add("filler", 40, "loop_escape")
+        # Well supplied against a floor of 5, so the fill stage contributes
+        # roots beyond the reservation stage.
+        add("pcr", 12, "premature_commit_recovery")
+        add("filler", 10, "loop_escape")
 
+        # Reservation takes 3 + 6 + 5 = 14 rows, leaving 17 (7 pcr, 10 filler).
+        # Filling to 28 must therefore draw at least 4 pcr rows whatever the
+        # hash order, so the fill stage provably contributes pcr roots.
         selected, report = select_dagger1_collection_rows(
-            rows, target_min_rows=10, target_max_rows=12
+            rows, target_min_rows=20, target_max_rows=28
         )
 
         ucr = "recovery_stratum:unsupported_correction_recovery"
@@ -2257,6 +2263,23 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
         self.assertEqual(report["selected_distinct_roots_by_group"][pfnc], 6)
         self.assertEqual(report["selected_attainable_root_loss"], {})
 
+        # Reported support must describe the *published* set, not just the
+        # reservation stage.  The fill stage adds rows without touching the
+        # reservation counter, so counting reservation alone understated every
+        # well-supplied group: against the real analysis rows it reported 10
+        # for a group that actually published 70.
+        pcr = "recovery_stratum:premature_commit_recovery"
+        self.assertEqual(report["reserved_distinct_roots_by_group"][pcr], 5)
+        published = {
+            row["physical_root_fingerprint"]
+            for row in selected
+            if row.get("recovery_stratum") == "premature_commit_recovery"
+        }
+        self.assertGreater(len(published), 5)
+        self.assertEqual(
+            report["selected_distinct_roots_by_group"][pcr], len(published)
+        )
+
         # Preserving attainable support must not soften the release gate: both
         # candidate shortfalls are still reported and the selection still fails.
         self.assertEqual(
@@ -2266,7 +2289,7 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
             report["candidate_root_group_shortfalls"][pfnc]["root_shortfall"], 4
         )
         self.assertFalse(report["passed"])
-        self.assertLessEqual(len(selected), 12)
+        self.assertLessEqual(len(selected), 28)
 
     def test_strict_checkpoint_includes_round1_replay_capacity(self):
         rows = self._strict_coverage_rows(extra_rows=70)
