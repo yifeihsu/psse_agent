@@ -32,6 +32,10 @@ from psse_env.dagger.recovery_probes import (
     recovery_probe_manifest,
 )
 from psse_env.dagger.release_factories import production_environment_factory
+from psse_env.dagger.root_sets import (
+    physical_roots_from_artifact,
+    root_set_digest,
+)
 from psse_env.dagger.rollout_collector import classify_state_example
 from psse_env.oracle.expert_policy import ExpertPolicyOracle
 
@@ -39,37 +43,20 @@ PROBE_SUITE_ARTIFACT_TYPE = "dagger1_observable_recovery_probe_suite"
 
 
 def envelope_roots(path: Path) -> set[str]:
-    """Physical roots named by a scenario-envelope list."""
+    """Physical roots named by a scenario list or a suite mapping.
 
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(payload, list):
-        raise ValueError(f"{path} must contain a list of scenario envelopes")
-    roots: set[str] = set()
-    for envelope in payload:
-        if not isinstance(envelope, Mapping):
-            continue
-        grouping = envelope.get("grouping")
-        grouping = grouping if isinstance(grouping, Mapping) else envelope
-        root = str(grouping.get("physical_root_fingerprint") or "").strip()
-        if root:
-            roots.add(root)
-    return roots
+    Delegates to the shared reader.  The real development holdout is a suite
+    mapping, not the envelope list an earlier local reader assumed, so this
+    stage raised before any disjointness check could run.
+    """
+
+    return physical_roots_from_artifact(path)
 
 
 def aggregate_roots(directory: Path) -> set[str]:
     """Physical roots present in a D0 aggregate's raw row file."""
 
-    path = Path(directory) / "aggregate.raw.jsonl"
-    roots: set[str] = set()
-    with path.open(encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            root = str(row.get("physical_root_fingerprint") or "").strip()
-            if root:
-                roots.add(root)
-    return roots
+    return physical_roots_from_artifact(Path(directory) / "aggregate.raw.jsonl")
 
 
 def build_recovery_probe_suite(

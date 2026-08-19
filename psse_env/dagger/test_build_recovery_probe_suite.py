@@ -15,6 +15,7 @@ from psse_env.dagger.build_recovery_probe_suite import (
 
 
 def _envelope(root: str, index: int = 0) -> dict:
+    root = root if root.startswith("physical_v") else f"physical_v3_{root}"
     return {
         "grouping": {
             "physical_root_fingerprint": root,
@@ -38,9 +39,12 @@ class ProbeSuiteRootReaderTests(unittest.TestCase):
             json.dumps([_envelope("root-a", 0), _envelope("root-b", 1)]),
             encoding="utf-8",
         )
-        self.assertEqual(envelope_roots(path), {"root-a", "root-b"})
+        self.assertEqual(
+            envelope_roots(path),
+            {"physical_v3_root-a", "physical_v3_root-b"},
+        )
 
-    def test_envelope_roots_rejects_a_non_list(self):
+    def test_envelope_roots_rejects_a_structure_that_is_neither_shape(self):
         path = self.root / "scenarios.json"
         path.write_text(json.dumps({"not": "a list"}), encoding="utf-8")
         with self.assertRaises(ValueError):
@@ -51,14 +55,15 @@ class ProbeSuiteRootReaderTests(unittest.TestCase):
         directory.mkdir()
         (directory / "aggregate.raw.jsonl").write_text(
             "\n".join(
-                json.dumps({"physical_root_fingerprint": f"d0-root-{i}"})
+                json.dumps({"physical_root_fingerprint": f"physical_v3_d0-root-{i}"})
                 for i in range(3)
             )
             + "\n",
             encoding="utf-8",
         )
         self.assertEqual(
-            aggregate_roots(directory), {"d0-root-0", "d0-root-1", "d0-root-2"}
+            aggregate_roots(directory),
+            {f"physical_v3_d0-root-{i}" for i in range(3)},
         )
 
 

@@ -2280,15 +2280,24 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
             report["selected_distinct_roots_by_group"][pcr], len(published)
         )
 
-        # Preserving attainable support must not soften the release gate: both
-        # candidate shortfalls are still reported and the selection still fails.
-        self.assertEqual(
-            report["candidate_root_group_shortfalls"][ucr]["root_shortfall"], 7
-        )
-        self.assertEqual(
-            report["candidate_root_group_shortfalls"][pfnc]["root_shortfall"], 4
-        )
-        self.assertFalse(report["passed"])
+        # The incidence-dependent pair is reserved but not gated: the complete
+        # 477-episode schedule showed natural support for these two does not
+        # scale with episode count, so a natural floor would fail a learner for
+        # erring less.  Neither may appear as a candidate shortfall, and both
+        # must still be reported.
+        self.assertNotIn(ucr, report["candidate_root_group_shortfalls"])
+        self.assertNotIn(pfnc, report["candidate_root_group_shortfalls"])
+        self.assertNotIn(ucr, report["gated_root_group_floors"])
+        self.assertNotIn(pfnc, report["gated_root_group_floors"])
+        incidence = report["natural_incidence_report_only"]
+        self.assertEqual(incidence[ucr]["candidate_distinct_physical_roots"], 3)
+        self.assertEqual(incidence[ucr]["selected_distinct_physical_roots"], 3)
+        self.assertEqual(incidence[pfnc]["selected_distinct_physical_roots"], 6)
+        self.assertEqual(incidence[pfnc]["reference_floor"], 10)
+        self.assertFalse(incidence[ucr]["gated"])
+
+        # Ungating that pair must not ungate anything else.
+        self.assertIn(pcr, report["gated_root_group_floors"])
         self.assertLessEqual(len(selected), 28)
 
     def test_strict_checkpoint_includes_round1_replay_capacity(self):

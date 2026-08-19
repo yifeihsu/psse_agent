@@ -32,6 +32,8 @@ from psse_env.dagger.release_factories import (
     inspect_release_checkpoint,
 )
 from psse_env.dagger.replay_buffer import (
+    DAGGER1_INCIDENCE_DEPENDENT_RECOVERY_STRATA,
+    DAGGER1_NATURAL_RECOVERY_STRATUM_MINIMUM_DISTINCT_ROOTS,
     DAGGER1_RECOVERY_STRATUM_MINIMUM_DISTINCT_ROOTS,
     DAGGER1_TARGETED_STATE_CELL_MINIMUM_DISTINCT_ROOTS,
     audit_dagger1_independent_root_support,
@@ -2253,6 +2255,23 @@ def select_dagger1_collection_rows(
             )
         },
     }
+    # Reservation and gating use different floor sets on purpose.  The
+    # incidence-dependent strata are reserved so every attainable natural root
+    # survives selection, but they are not gated: the complete 477-episode
+    # schedule produced three roots each against a floor of ten, so an absolute
+    # natural floor fails a learner for making fewer mistakes.  Their competence
+    # guarantee moves to the probe and combined floors.  Every other floor stays
+    # binding here.
+    gated_floors = {
+        group: floor
+        for group, floor in required_floors.items()
+        if group.removeprefix("recovery_stratum:")
+        not in DAGGER1_INCIDENCE_DEPENDENT_RECOVERY_STRATA
+        or not group.startswith("recovery_stratum:")
+    }
+    report_only_groups = {
+        group for group in required_floors if group not in gated_floors
+    }
     candidate_roots_by_group = {
         group: {
             root_by_index[index]
@@ -2367,7 +2386,12 @@ def select_dagger1_collection_rows(
             key=lambda index: _selection_row_key(materialized[index]),
         )
     ]
-    selected_support = audit_dagger1_independent_root_support(selected_rows)
+    selected_support = audit_dagger1_independent_root_support(
+        selected_rows,
+        recovery_stratum_minimum_distinct_roots=(
+            DAGGER1_NATURAL_RECOVERY_STRATUM_MINIMUM_DISTINCT_ROOTS
+        ),
+    )
     selected_targeted_coverage = targeted_state_coverage(selected_rows)
     candidate_shortfalls = {
         group: {
@@ -2377,8 +2401,23 @@ def select_dagger1_collection_rows(
                 floor - len(candidate_roots_by_group[group]), 0
             ),
         }
-        for group, floor in sorted(required_floors.items())
+        for group, floor in sorted(gated_floors.items())
         if len(candidate_roots_by_group[group]) < floor
+    }
+    # Natural incidence for the ungated pair is recorded rather than gated, so a
+    # reader never has to infer it from the absence of a shortfall entry.
+    natural_incidence_report_only = {
+        group: {
+            "candidate_distinct_physical_roots": len(
+                candidate_roots_by_group[group]
+            ),
+            "selected_distinct_physical_roots": len(
+                final_roots_by_group.get(group, set())
+            ),
+            "reference_floor": int(required_floors[group]),
+            "gated": False,
+        }
+        for group in sorted(report_only_groups)
     }
     # Selection must never lose root support the candidate pool could sustain.
     # This is separate from ``candidate_root_group_shortfalls``: that reports
@@ -2427,6 +2466,8 @@ def select_dagger1_collection_rows(
         "duplicate_example_ids": duplicate_example_ids,
         "missing_physical_root_rows": missing_physical_roots,
         "required_root_group_floors": required_floors,
+        "gated_root_group_floors": dict(sorted(gated_floors.items())),
+        "natural_incidence_report_only": natural_incidence_report_only,
         "candidate_distinct_roots_by_group": {
             group: len(candidate_roots_by_group[group])
             for group in sorted(required_floors)
@@ -2572,8 +2613,14 @@ def evaluate_dagger1_collection_checkpoint(
         target_max_rows=target_max_rows,
     )
     targeted_coverage = targeted_state_coverage(selected_rows)
+    # Natural floors only.  The incidence-dependent pair is carried by the probe
+    # and combined floors at aggregate ingestion; gating it here would fail the
+    # strict collection for a learner that errs less often.
     independent_root_support = audit_dagger1_independent_root_support(
-        selected_rows
+        selected_rows,
+        recovery_stratum_minimum_distinct_roots=(
+            DAGGER1_NATURAL_RECOVERY_STRATUM_MINIMUM_DISTINCT_ROOTS
+        ),
     )
     truth_audit_quarantine = (
         summarize_dagger1_offline_teacher_target_quarantine(all_rows)
