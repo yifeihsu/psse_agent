@@ -20,6 +20,7 @@ from psse_env.dagger.dataset_builder import examples_to_chat_sft
 from psse_env.dagger.offline_teacher_target_audit import (
     LEGACY_OFFLINE_TEACHER_TARGET_AUDIT_CONTRACTS,
     OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT,
+    _verified_terminal_measurement_closure_check,
     offline_teacher_target_audit,
     validate_offline_teacher_target_audit_metadata,
 )
@@ -971,3 +972,211 @@ class OfflineTeacherTargetAuditTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VerifiedTerminalMeasurementClosureTests(unittest.TestCase):
+    """The audit must admit the designed terminal measurement closure.
+
+    All four DAgger-1 round-2 quarantines were this exact action: every
+    previously accepted measurement target plus exactly one new target,
+    two-stage screened and state-bound.  Ordinary remaining-target membership
+    rejects it because the reused targets were correctly retired from the
+    remaining ledger.  These fixtures follow the observed shape of
+    r0_9826886a46fd step 17 -- accepted {92, 97}, new {88}.
+
+    Clauses covering non-regression, healthy-state modification, and physical
+    constraint failure on the committed candidate are enforced by the existing
+    physical-safety audit, not by this helper, and are not duplicated here.
+    """
+
+    STATE = "r0_9826886a46fd_episode126:s2"
+
+    def _observation(self) -> dict[str, Any]:
+        return {
+            "active_state_id": self.STATE,
+            "accepted_corrections": [
+                {
+                    "source_action": {
+                        "tool": CORRECT_MEASUREMENTS,
+                        "arguments": {"state_id": "ep:s0", "suspect_group": [92]},
+                    }
+                },
+                {
+                    "source_action": {
+                        "tool": CORRECT_MEASUREMENTS,
+                        "arguments": {"state_id": "ep:s1", "suspect_group": [97]},
+                    }
+                },
+            ],
+            "fresh_context_evidence": {
+                "measurement": {
+                    "state_id": self.STATE,
+                    "state_hash": "8508673903d4887d",
+                    "verified_terminal_measurement_closure_targets": [88, 92, 97],
+                    "verified_terminal_measurement_closure_evidence": {
+                        "attempts": [
+                            {
+                                "stage": "new_target_singleton",
+                                "targets": [88],
+                                "disposition": "ACCEPT_FINAL",
+                                "target_test_passed": True,
+                                "physical_constraints_ok": True,
+                            },
+                            {
+                                "stage": "grouped",
+                                "targets": [88, 92, 97],
+                                "disposition": "ACCEPT_FINAL",
+                                "physical_constraints_ok": True,
+                            },
+                        ]
+                    },
+                    "supported_corrections": [
+                        {
+                            "tool": CORRECT_MEASUREMENTS,
+                            "arguments": {
+                                "state_id": self.STATE,
+                                "suspect_group": [88, 92, 97],
+                            },
+                        }
+                    ],
+                }
+            },
+        }
+
+    @classmethod
+    def _action(cls, targets: list[int]) -> dict[str, Any]:
+        return {
+            "tool": CORRECT_MEASUREMENTS,
+            "arguments": {"state_id": cls.STATE, "suspect_group": list(targets)},
+        }
+
+    @staticmethod
+    def _faults(indices: list[int]) -> dict[str, Any]:
+        return {
+            "truth_complete": True,
+            "true_measurement_errors": [{"index": i} for i in indices],
+        }
+
+    def _check(self, *, action=None, observation=None, scenario=None, truth=None):
+        return _verified_terminal_measurement_closure_check(
+            action if action is not None else self._action([88, 92, 97]),
+            observation=(
+                observation if observation is not None else self._observation()
+            ),
+            scenario=scenario if scenario is not None else self._faults([88, 92, 97]),
+            truth=truth if truth is not None else self._faults([88]),
+        )
+
+    def _assert_rejected(self, code: str, **kwargs):
+        checks, reasons = self._check(**kwargs)
+        self.assertIn(code, reasons)
+        self.assertFalse(all(checks.values()), checks)
+
+    def test_designed_terminal_closure_is_admitted(self):
+        checks, reasons = self._check()
+        self.assertEqual(reasons, [])
+        self.assertTrue(checks)
+        self.assertTrue(all(checks.values()), checks)
+
+    def test_ordinary_correction_without_attestation_is_untouched(self):
+        observation = self._observation()
+        measurement = observation["fresh_context_evidence"]["measurement"]
+        del measurement["verified_terminal_measurement_closure_targets"]
+        del measurement["verified_terminal_measurement_closure_evidence"]
+        self.assertEqual(self._check(observation=observation), ({}, []))
+
+    def test_missing_state_hash_is_rejected(self):
+        observation = self._observation()
+        observation["fresh_context_evidence"]["measurement"]["state_hash"] = ""
+        self._assert_rejected(
+            "closure_context_not_state_bound", observation=observation
+        )
+
+    def test_context_bound_to_a_different_state_is_rejected(self):
+        observation = self._observation()
+        observation["active_state_id"] = "some_other_state:s9"
+        self._assert_rejected(
+            "closure_context_not_state_bound", observation=observation
+        )
+
+    def test_action_absent_from_supported_inventory_is_rejected(self):
+        observation = self._observation()
+        observation["fresh_context_evidence"]["measurement"][
+            "supported_corrections"
+        ] = [self._action([88])]
+        self._assert_rejected(
+            "closure_action_not_in_supported_inventory", observation=observation
+        )
+
+    def test_more_than_one_new_target_is_rejected(self):
+        observation = self._observation()
+        measurement = observation["fresh_context_evidence"]["measurement"]
+        measurement["verified_terminal_measurement_closure_targets"] = [
+            88,
+            89,
+            92,
+            97,
+        ]
+        measurement["supported_corrections"] = [self._action([88, 89, 92, 97])]
+        self._assert_rejected(
+            "closure_new_target_count_not_one",
+            action=self._action([88, 89, 92, 97]),
+            observation=observation,
+            scenario=self._faults([88, 89, 92, 97]),
+            truth=self._faults([88, 89]),
+        )
+
+    def test_accepted_target_outside_original_truth_is_rejected(self):
+        self._assert_rejected(
+            "closure_accepted_target_not_original_truth",
+            scenario=self._faults([88, 92]),
+        )
+
+    def test_new_target_outside_remaining_truth_is_rejected(self):
+        self._assert_rejected(
+            "closure_new_target_outside_remaining_truth", truth=self._faults([41])
+        )
+
+    def test_accepted_target_still_owed_is_rejected(self):
+        self._assert_rejected(
+            "closure_accepted_target_still_in_remaining_truth",
+            truth=self._faults([88, 92]),
+        )
+
+    def test_partial_reuse_of_the_accepted_set_is_rejected(self):
+        observation = self._observation()
+        measurement = observation["fresh_context_evidence"]["measurement"]
+        measurement["verified_terminal_measurement_closure_targets"] = [88, 92]
+        measurement["supported_corrections"] = [self._action([88, 92])]
+        self._assert_rejected(
+            "closure_does_not_reuse_entire_accepted_set",
+            action=self._action([88, 92]),
+            observation=observation,
+        )
+
+    def test_reversed_screening_stages_are_rejected(self):
+        observation = self._observation()
+        observation["fresh_context_evidence"]["measurement"][
+            "verified_terminal_measurement_closure_evidence"
+        ]["attempts"].reverse()
+        self._assert_rejected(
+            "closure_screening_incomplete", observation=observation
+        )
+
+    def test_grouped_stage_not_accept_final_is_rejected(self):
+        observation = self._observation()
+        observation["fresh_context_evidence"]["measurement"][
+            "verified_terminal_measurement_closure_evidence"
+        ]["attempts"][1]["disposition"] = "ACCEPT_PARTIAL"
+        self._assert_rejected(
+            "closure_screening_incomplete", observation=observation
+        )
+
+    def test_singleton_stage_with_failed_constraints_is_rejected(self):
+        observation = self._observation()
+        observation["fresh_context_evidence"]["measurement"][
+            "verified_terminal_measurement_closure_evidence"
+        ]["attempts"][0]["physical_constraints_ok"] = False
+        self._assert_rejected(
+            "closure_screening_incomplete", observation=observation
+        )
