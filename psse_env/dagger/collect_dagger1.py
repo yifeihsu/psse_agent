@@ -209,6 +209,13 @@ DAGGER1_DEVELOPMENT_SOURCE_BINDINGS = frozenset(
 FAILED_COLLECTION_ARTIFACT_TYPE = (
     "dagger1_failed_strict_collection_diagnostic_bundle"
 )
+# A complete-schedule analysis bundle and a strict NO-GO bundle are both
+# training-ineligible, but they answer different questions: the strict bundle
+# records where production collection stopped, the analysis bundle records what
+# the full predeclared schedule can generate.  Giving them the same top-level
+# identity made an analysis run indistinguishable from a genuine strict failure
+# once its stdout was gone.
+ANALYSIS_COMPLETE_ARTIFACT_TYPE = "dagger1_complete_schedule_analysis_bundle"
 FAILED_COLLECTION_CANDIDATE_ROWS = (
     "diagnostic.candidate_recovery_rows.jsonl"
 )
@@ -405,17 +412,33 @@ def write_failed_collection_evidence_bundle(
         _write_fsynced_jsonl(candidate_path, diagnostic_candidates)
         _write_fsynced_jsonl(all_rows_path, diagnostic_all_rows)
 
+        # The stopping report is the authoritative in-band record of which mode
+        # produced this bundle; promote it so the top-level identity is
+        # unambiguous without reading nested structures or stdout.
+        analysis_only = bool(
+            (evidence.get("collection_stopping_report") or {}).get("analysis_only")
+        )
         manifest = copy.deepcopy(dict(evidence))
         manifest.update(
             {
                 "artifact_schema_version": 1,
-                "artifact_type": FAILED_COLLECTION_ARTIFACT_TYPE,
-                "collection_outcome": "strict_gate_failed",
+                "artifact_type": (
+                    ANALYSIS_COMPLETE_ARTIFACT_TYPE
+                    if analysis_only
+                    else FAILED_COLLECTION_ARTIFACT_TYPE
+                ),
+                "collection_outcome": (
+                    "analysis_only_complete_schedule_exhausted"
+                    if analysis_only
+                    else "strict_gate_failed"
+                ),
+                "analysis_only": analysis_only,
                 "diagnostic_only": True,
                 "training_eligible": False,
                 "release_evidence_eligible": False,
                 **_round1_publication_contract(False),
                 "strict_gate_requested": True,
+                "strict_gate_evaluated": True,
                 "expected_exit_code": 1,
                 "diagnostic_artifacts": {
                     "candidate_recovery_rows": {
@@ -2243,12 +2266,24 @@ def select_dagger1_collection_rows(
         group: set() for group in required_floors
     }
     selected_rows_by_root: Counter[str] = Counter()
+    # A group whose candidate pool is smaller than its release floor is
+    # intrinsically infeasible for this collection.  Reserve only what the
+    # candidates can actually support, so an infeasible group cannot abandon
+    # the reservation pass for every group behind it.  The release gate still
+    # fails through ``candidate_root_group_shortfalls`` below: this preserves
+    # scarce evidence, it does not admit an under-supported corpus.
+    attainable_floors = {
+        group: min(int(floor), len(candidate_roots_by_group[group]))
+        for group, floor in required_floors.items()
+    }
+    exhausted: set[str] = set()
 
     while True:
         unmet = [
             group
-            for group, floor in required_floors.items()
-            if len(selected_roots_by_group[group]) < floor
+            for group, floor in attainable_floors.items()
+            if group not in exhausted
+            and len(selected_roots_by_group[group]) < floor
         ]
         if not unmet:
             break
@@ -2268,7 +2303,12 @@ def select_dagger1_collection_rows(
             and root_by_index[index] not in selected_roots_by_group[focus]
         ]
         if not choices:
-            break
+            # This group cannot contribute another distinct root.  Retire it
+            # and continue with the remaining groups rather than ending the
+            # reservation pass, which previously discarded attainable support
+            # for every group ordered behind an infeasible one.
+            exhausted.add(focus)
+            continue
 
         def choice_key(index: int) -> tuple[Any, ...]:
             newly_supported = sum(
@@ -2289,6 +2329,7 @@ def select_dagger1_collection_rows(
             if group in selected_roots_by_group:
                 selected_roots_by_group[group].add(root_by_index[chosen])
 
+    reserved_row_count = len(selected)
     target_size = min(maximum, len(materialized))
     while len(selected) < target_size:
         choices = [index for index in order if index not in selected]
@@ -2323,6 +2364,21 @@ def select_dagger1_collection_rows(
         for group, floor in sorted(required_floors.items())
         if len(candidate_roots_by_group[group]) < floor
     }
+    # Selection must never lose root support the candidate pool could sustain.
+    # This is separate from ``candidate_root_group_shortfalls``: that reports
+    # what the collection could not generate, this reports what selection threw
+    # away.
+    attainable_root_loss = {
+        group: {
+            "attainable_root_target": attainable_floors[group],
+            "candidate_distinct_physical_roots": len(candidate_roots_by_group[group]),
+            "selected_distinct_physical_roots": len(selected_roots_by_group[group]),
+            "root_loss": attainable_floors[group]
+            - len(selected_roots_by_group[group]),
+        }
+        for group in sorted(required_floors)
+        if len(selected_roots_by_group[group]) < attainable_floors[group]
+    }
     row_target_passed = minimum <= len(selected_rows) <= maximum
     passed = bool(
         row_target_passed
@@ -2330,6 +2386,7 @@ def select_dagger1_collection_rows(
         and not duplicate_example_ids
         and not missing_physical_roots
         and not candidate_shortfalls
+        and not attainable_root_loss
         and selected_support.get("passed") is True
         and selected_targeted_coverage.get("passed") is True
     )
@@ -2355,6 +2412,17 @@ def select_dagger1_collection_rows(
         "duplicate_example_ids": duplicate_example_ids,
         "missing_physical_root_rows": missing_physical_roots,
         "required_root_group_floors": required_floors,
+        "candidate_distinct_roots_by_group": {
+            group: len(candidate_roots_by_group[group])
+            for group in sorted(required_floors)
+        },
+        "attainable_root_targets": dict(sorted(attainable_floors.items())),
+        "selected_distinct_roots_by_group": {
+            group: len(selected_roots_by_group[group])
+            for group in sorted(required_floors)
+        },
+        "selected_attainable_root_loss": attainable_root_loss,
+        "minimum_rows_needed_for_floor_reservation": reserved_row_count,
         "candidate_root_group_shortfalls": candidate_shortfalls,
         "selected_independent_root_support": selected_support,
         "selected_targeted_state_coverage": selected_targeted_coverage,

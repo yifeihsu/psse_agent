@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from psse_env.dagger.collection_result import (
+    ANALYSIS_COMPLETE,
+    ANALYSIS_COMPLETE_ARTIFACT_TYPE,
     EXIT_CODES,
     INFRASTRUCTURE_FAILURE,
     STRICT_GO,
@@ -136,21 +139,82 @@ class CollectionResultClassificationTests(unittest.TestCase):
         )
         self.assertEqual(result["classification"], INFRASTRUCTURE_FAILURE)
 
-    def test_analysis_only_run_is_flagged_in_the_summary(self):
-        evidence = self._evidence()
-        evidence["collection_stopping_report"].update(
-            {
+    def _analysis_bundle(self, *, executed: int = 477, complete: bool = True) -> Path:
+        """A well-formed complete-schedule analysis bundle with real digests."""
+        d = self.root / "analysis_beta025.failed-collection"
+        d.mkdir(parents=True, exist_ok=True)
+        rows = d / "diagnostic.all_visited_rows.jsonl"
+        rows.write_text('{"example_id": "row-0"}\n', encoding="utf-8")
+        digest = hashlib.sha256(rows.read_bytes()).hexdigest()
+        evidence = {
+            "artifact_type": ANALYSIS_COMPLETE_ARTIFACT_TYPE,
+            "collection_outcome": "analysis_only_complete_schedule_exhausted",
+            "analysis_only": True,
+            "failed_gate_names": ["independent_root_support"],
+            "collection_stopping_report": {
                 "stopping_reason": "analysis_only_complete_schedule_exhausted",
                 "analysis_only": True,
-                "executed_episode_count": 477,
-            }
+                "executed_episode_count": executed,
+                "planned_episode_count": 477,
+            },
+            "rollout_disposition_matrix": {
+                "passed": complete,
+                "workflow_disposition_complete": complete,
+            },
+            "diagnostic_artifacts": {
+                "all_visited_rows": {
+                    "relative_path": rows.name,
+                    "row_count": 1,
+                    "sha256": digest,
+                }
+            },
+        }
+        (d / "failure_evidence.json").write_text(
+            json.dumps(evidence), encoding="utf-8"
+        )
+        return d
+
+    def test_complete_analysis_run_is_not_a_strict_no_go(self):
+        result = classify_collection_result(
+            exit_code=1, failed_collection_dir=self._analysis_bundle()
+        )
+        self.assertEqual(result["classification"], ANALYSIS_COMPLETE)
+        self.assertEqual(result["exit_status"], 30)
+        self.assertTrue(result["analysis_only"])
+        self.assertTrue(result["schedule_complete"])
+        self.assertTrue(result["rollout_dispositions_complete"])
+        self.assertTrue(result["diagnostic_checksums_valid"])
+        # Exit 30 is non-zero so an ``afterok`` aggregate dependency cannot fire.
+        self.assertNotEqual(result["exit_status"], EXIT_CODES[STRICT_GO])
+        self.assertIn("ANALYSIS-ONLY", format_summary(result))
+
+    def test_incomplete_analysis_run_is_not_reported_as_complete(self):
+        result = classify_collection_result(
+            exit_code=1,
+            failed_collection_dir=self._analysis_bundle(executed=151),
+        )
+        self.assertEqual(result["classification"], INFRASTRUCTURE_FAILURE)
+        self.assertFalse(result["schedule_complete"])
+        self.assertIn("did not complete its schedule", result["detail"])
+
+    def test_analysis_bundle_with_corrupt_artifact_is_rejected(self):
+        bundle = self._analysis_bundle()
+        (bundle / "diagnostic.all_visited_rows.jsonl").write_text(
+            '{"example_id": "tampered"}\n', encoding="utf-8"
         )
         result = classify_collection_result(
-            exit_code=1, failed_collection_dir=self._bundle(evidence)
+            exit_code=1, failed_collection_dir=bundle
+        )
+        self.assertFalse(result["diagnostic_checksums_valid"])
+        self.assertEqual(result["classification"], INFRASTRUCTURE_FAILURE)
+
+    def test_strict_no_go_still_classifies_as_no_go(self):
+        result = classify_collection_result(
+            exit_code=1, failed_collection_dir=self._bundle()
         )
         self.assertEqual(result["classification"], STRICT_NO_GO)
-        self.assertTrue(result["analysis_only"])
-        self.assertIn("ANALYSIS-ONLY", format_summary(result))
+        self.assertEqual(result["exit_status"], 20)
+        self.assertFalse(result["analysis_only"])
 
 
 if __name__ == "__main__":

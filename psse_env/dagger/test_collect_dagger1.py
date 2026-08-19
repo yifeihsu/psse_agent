@@ -18,6 +18,7 @@ from psse_env.dagger.collect_dagger1 import (
     DAGGER1_SCENARIO_BUILDER_CONTRACT,
     DEFAULT_FORBIDDEN_SUITE,
     FAILED_COLLECTION_ALL_ROWS,
+    ANALYSIS_COMPLETE_ARTIFACT_TYPE,
     FAILED_COLLECTION_ARTIFACT_TYPE,
     FAILED_COLLECTION_CANDIDATE_ROWS,
     FAILED_COLLECTION_CHECKSUMS,
@@ -1654,6 +1655,56 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 )
             self.assertNotIn("collection_training_eligible", candidate)
 
+    def test_analysis_bundle_carries_an_unmistakable_top_level_identity(self):
+        """A complete-schedule analysis bundle must not read as a strict NO-GO.
+
+        Both bundles are training-ineligible, but they answer different
+        questions.  The round-2 analysis bundle carried the strict failure
+        artifact type and ``collection_outcome=strict_gate_failed``, so once its
+        stdout was gone the only surviving marker was a nested field.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            failed_dir = Path(temp_dir) / "analysis.failed-collection"
+            row = {
+                "example_id": "candidate-1",
+                "production_label_eligible": True,
+                "labels": {"production_label_eligible": True},
+            }
+            manifest = write_failed_collection_evidence_bundle(
+                failed_dir,
+                candidate_rows=[row],
+                all_rows=[row],
+                evidence={
+                    "failed_gate_names": ["independent_root_support"],
+                    "collection_stopping_report": {
+                        "stopping_reason": (
+                            "analysis_only_complete_schedule_exhausted"
+                        ),
+                        "analysis_only": True,
+                        "executed_episode_count": 477,
+                        "planned_episode_count": 477,
+                    },
+                },
+            )
+
+            self.assertEqual(
+                manifest["artifact_type"], ANALYSIS_COMPLETE_ARTIFACT_TYPE
+            )
+            self.assertEqual(
+                manifest["collection_outcome"],
+                "analysis_only_complete_schedule_exhausted",
+            )
+            self.assertIs(manifest["analysis_only"], True)
+            self.assertIs(manifest["strict_gate_evaluated"], True)
+            # Publication safety is identical to a strict NO-GO.
+            for field in (
+                "training_eligible",
+                "round1_aggregate_eligible",
+                "production_outputs_published",
+                "strict_gate_passed",
+            ):
+                self.assertIs(manifest[field], False)
+
     def test_failed_collection_bundle_cleans_partial_staging(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -2157,6 +2208,65 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
         self.assertTrue(
             report["selected_independent_root_support"]["passed"]
         )
+
+    def test_selection_preserves_attainable_roots_behind_infeasible_group(self):
+        """An infeasible group must not abandon reservation for the rest.
+
+        Regression for the DAgger-1 round-2 selector defect.  The reservation
+        loop tested membership against the *required* floor, so a group whose
+        candidate pool was smaller than its floor stayed permanently unmet, was
+        focused first as the most constrained, exhausted its roots, and then
+        broke out of the loop entirely.  Groups ordered behind it kept only the
+        roots the general fill stage happened to pick up: in the real
+        collection three of six ``post_failure_no_candidate`` roots survived.
+        """
+        rows = []
+
+        def add(prefix, count, stratum):
+            for index in range(count):
+                rows.append(
+                    {
+                        "example_id": f"{prefix}-{index}",
+                        "physical_root_fingerprint": f"{prefix}-root-{index}",
+                        "production_label_eligible": True,
+                        "recovery_stratum": stratum,
+                        "scenario_family": "measurement",
+                        "error_cardinality": 1,
+                    }
+                )
+
+        # Group A is intrinsically infeasible (3 candidate roots, floor 10) and
+        # sorts first as the most constrained.  Group B is also short of its
+        # floor (6 of 10) but must still retain every root it can supply.
+        add("ucr", 3, "unsupported_correction_recovery")
+        add("pfnc", 6, "post_failure_no_candidate")
+        add("filler", 40, "loop_escape")
+
+        selected, report = select_dagger1_collection_rows(
+            rows, target_min_rows=10, target_max_rows=12
+        )
+
+        ucr = "recovery_stratum:unsupported_correction_recovery"
+        pfnc = "recovery_stratum:post_failure_no_candidate"
+
+        self.assertEqual(report["candidate_distinct_roots_by_group"][ucr], 3)
+        self.assertEqual(report["candidate_distinct_roots_by_group"][pfnc], 6)
+        self.assertEqual(report["attainable_root_targets"][ucr], 3)
+        self.assertEqual(report["attainable_root_targets"][pfnc], 6)
+        self.assertEqual(report["selected_distinct_roots_by_group"][ucr], 3)
+        self.assertEqual(report["selected_distinct_roots_by_group"][pfnc], 6)
+        self.assertEqual(report["selected_attainable_root_loss"], {})
+
+        # Preserving attainable support must not soften the release gate: both
+        # candidate shortfalls are still reported and the selection still fails.
+        self.assertEqual(
+            report["candidate_root_group_shortfalls"][ucr]["root_shortfall"], 7
+        )
+        self.assertEqual(
+            report["candidate_root_group_shortfalls"][pfnc]["root_shortfall"], 4
+        )
+        self.assertFalse(report["passed"])
+        self.assertLessEqual(len(selected), 12)
 
     def test_strict_checkpoint_includes_round1_replay_capacity(self):
         rows = self._strict_coverage_rows(extra_rows=70)
