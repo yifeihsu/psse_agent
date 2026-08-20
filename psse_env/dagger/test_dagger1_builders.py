@@ -723,6 +723,86 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                     label="test input",
                 )
 
+    def test_final_view_support_is_recomputed_from_placed_source_rows(self) -> None:
+        natural = {
+            "example_id": "natural-placed",
+            "replay_source": "natural_dagger1",
+        }
+        probe = {
+            "example_id": "probe-placed",
+            "replay_source": "observable_recovery_probe",
+        }
+        d0 = {"example_id": "d0-placed", "replay_source": "d0_bc0"}
+        source_probe = {"example_id": "probe-source"}
+        support = {
+            "contract": aggregate_module.FINAL_VIEW_SUPPORT_CONTRACT,
+            "training_support": {"passed": True},
+            "passed": True,
+        }
+        with patch.object(
+            aggregate_module,
+            "audit_dagger1_final_view_support",
+            return_value=copy.deepcopy(support),
+        ) as audit:
+            observed = aggregate_module._recompute_final_view_support(
+                raw_view=[d0, natural, probe],
+                source_probe_rows=[source_probe],
+                training_view_report={
+                    "final_view_support": copy.deepcopy(support)
+                },
+            )
+        self.assertEqual(observed, support)
+        audit.assert_called_once_with(
+            natural_rows=[natural],
+            probe_rows=[probe],
+            source_probe_rows=[source_probe],
+            policy=aggregate_module.ROUND1_THREE_SOURCE_VIEW_POLICY,
+        )
+
+    def test_final_view_support_report_tamper_fails_closed(self) -> None:
+        support = {
+            "contract": aggregate_module.FINAL_VIEW_SUPPORT_CONTRACT,
+            "passed": True,
+        }
+        with patch.object(
+            aggregate_module,
+            "audit_dagger1_final_view_support",
+            return_value=copy.deepcopy(support),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "missing.*final_view_support"):
+                aggregate_module._recompute_final_view_support(
+                    raw_view=[],
+                    source_probe_rows=[],
+                    training_view_report={"passed": True},
+                )
+            tampered = copy.deepcopy(support)
+            tampered["unbound_claim"] = True
+            with self.assertRaisesRegex(RuntimeError, "actual placed"):
+                aggregate_module._recompute_final_view_support(
+                    raw_view=[],
+                    source_probe_rows=[],
+                    training_view_report={"final_view_support": tampered},
+                )
+
+    def test_recomputed_final_view_support_failure_blocks_release(self) -> None:
+        failed = {
+            "contract": aggregate_module.FINAL_VIEW_SUPPORT_CONTRACT,
+            "passed": False,
+        }
+        with (
+            patch.object(
+                aggregate_module,
+                "audit_dagger1_final_view_support",
+                return_value=copy.deepcopy(failed),
+            ),
+            self.assertRaisesRegex(RuntimeError, "placed-view support gate failed"),
+        ):
+            aggregate_module._recompute_final_view_support(
+                raw_view=[],
+                source_probe_rows=[],
+                training_view_report={"final_view_support": failed},
+            )
+
     def test_release_cli_requires_probe_and_exposes_no_allocation_overrides(self):
         import contextlib
         import io
@@ -1345,6 +1425,11 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
             (root / "recovery_probes.manifest.json").write_text(
                 "{}\n", encoding="utf-8"
             )
+            fake_final_view_support = {
+                "contract": aggregate_module.FINAL_VIEW_SUPPORT_CONTRACT,
+                "training_support": {"passed": True},
+                "passed": True,
+            }
 
             def fake_view(*, d0_rows, natural_d1_rows, probe_rows, policy):
                 self.assertEqual(
@@ -1364,6 +1449,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                     "contract": aggregate_module.THREE_SOURCE_VIEW_CONTRACT,
                     "policy_digest": aggregate_module.round1_view_policy_digest(),
                     "placed": dict(policy["allocation"]),
+                    "final_view_support": copy.deepcopy(
+                        fake_final_view_support
+                    ),
                     "passed": True,
                 }
 
@@ -1447,6 +1535,11 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                 ),
                 patch.object(
                     aggregate_module,
+                    "audit_dagger1_final_view_support",
+                    return_value=copy.deepcopy(fake_final_view_support),
+                ),
+                patch.object(
+                    aggregate_module,
                     "audit_dagger1_union_realizability",
                     return_value={"passed": True, "failures": []},
                 ),
@@ -1487,6 +1580,29 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                     (output_dir / "aggregate.generation_provenance.json").read_text(
                         encoding="utf-8"
                     )
+                )
+                self.assertEqual(
+                    provenance["final_view_support"],
+                    fake_final_view_support,
+                )
+                self.assertEqual(
+                    provenance["generation_descriptor"][
+                        "final_view_support_report_sha256"
+                    ],
+                    stable_json_sha256(fake_final_view_support),
+                )
+                self.assertEqual(
+                    provenance["generation_descriptor"]["audit_report_sha256"][
+                        "final_view_support"
+                    ],
+                    stable_json_sha256(fake_final_view_support),
+                )
+                self.assertEqual(
+                    report["final_view_support"], fake_final_view_support
+                )
+                self.assertEqual(
+                    report["training_view"]["final_view_support"],
+                    fake_final_view_support,
                 )
                 self.assertEqual(
                     provenance["generation_descriptor"]["input_artifacts"][

@@ -29,6 +29,7 @@ from psse_env.dagger.round1_view_policy import (
 )
 from psse_env.dagger.three_source_view import (
     THREE_SOURCE_VIEW_CONTRACT,
+    audit_dagger1_final_view_support,
     build_dagger1_three_source_view,
 )
 from psse_env.sft.gates import GateError
@@ -140,6 +141,7 @@ def _audit_report_hashes(
     *,
     recomputed_d1: Mapping[str, Any],
     semantic: Mapping[str, Any],
+    final_view_support: Mapping[str, Any],
 ) -> dict[str, str]:
     reports: dict[str, Mapping[str, Any]] = {
         "d1_offline_teacher_target_quarantine_summary": _mapping(
@@ -160,6 +162,7 @@ def _audit_report_hashes(
         "d1_three_source_training_support": _mapping(
             recomputed_d1.get("three_source_training_support")
         ),
+        "final_view_support": final_view_support,
         "union_realizability": semantic,
     }
     for key in (
@@ -236,6 +239,9 @@ def validate_round1_source_mix_gate(
     d1_manifest = _mapping(preflight.get("d1_collection_manifest"))
     recomputed_d1 = _mapping(preflight.get("recomputed_d1_audits"))
     semantic = _mapping(preflight.get("semantic_realizability"))
+    recorded_final_view_support = _mapping(
+        preflight.get("final_view_support")
+    )
     preflight_audit_hashes = _mapping(preflight.get("audit_report_sha256"))
     descriptor_audit_hashes = _mapping(descriptor.get("audit_report_sha256"))
     failures: list[str] = []
@@ -270,6 +276,7 @@ def validate_round1_source_mix_gate(
     computed_audit_hashes = _audit_report_hashes(
         recomputed_d1=recomputed_d1,
         semantic=semantic,
+        final_view_support=recorded_final_view_support,
     )
     if (
         not descriptor_audit_hashes
@@ -543,6 +550,47 @@ def validate_round1_source_mix_gate(
             failures.append(
                 "Round-1 three-source placement report does not recompute exactly"
             )
+        placed_natural_d1 = [
+            row
+            for row in rebuilt_raw
+            if row.get("replay_source") == "natural_dagger1"
+        ]
+        placed_probes = [
+            row
+            for row in rebuilt_raw
+            if row.get("replay_source") == "observable_recovery_probe"
+        ]
+        recomputed_final_view_support = audit_dagger1_final_view_support(
+            natural_rows=placed_natural_d1,
+            probe_rows=placed_probes,
+            source_probe_rows=probe_rows,
+            policy=ROUND1_THREE_SOURCE_VIEW_POLICY,
+        )
+        provenance_final_view_support = _mapping(
+            provenance.get("final_view_support")
+        )
+        release_checks = _mapping(preflight.get("release_checks"))
+        provenance_release_checks = _mapping(
+            provenance.get("release_checks")
+        )
+        if (
+            recomputed_final_view_support.get("passed") is not True
+            or recomputed_final_view_support
+            != _mapping(rebuilt_report.get("final_view_support"))
+            or recomputed_final_view_support != recorded_final_view_support
+            or recomputed_final_view_support != provenance_final_view_support
+            or descriptor.get("final_view_support_report_sha256")
+            != stable_json_sha256(recomputed_final_view_support)
+            or preflight_audit_hashes.get("final_view_support")
+            != stable_json_sha256(recomputed_final_view_support)
+            or descriptor_audit_hashes.get("final_view_support")
+            != stable_json_sha256(recomputed_final_view_support)
+            or release_checks.get("final_view_support") is not True
+            or provenance_release_checks.get("final_view_support") is not True
+        ):
+            failures.append(
+                "Round-1 final placed-view support does not recompute exactly"
+            )
         for row in rebuilt_raw:
             row["generation_provenance_id"] = provenance_id
         if rebuilt_raw != materialized_raw:
@@ -672,6 +720,9 @@ def validate_round1_source_mix_gate(
         "probe_rows": probe_rows_count,
         "source_allocation": dict(expected_allocation),
         "round1_view_policy_digest": round1_view_policy_digest(),
+        "final_view_support_report_sha256": stable_json_sha256(
+            recomputed_final_view_support
+        ),
         "aggregate_dir": str(aggregate_dir),
         "canonical_dataset_paths": {
             role: str(path) for role, path in expected_data_paths.items()

@@ -55,7 +55,9 @@ from psse_env.dagger.round1_view_policy import (
     round1_view_policy_digest,
 )
 from psse_env.dagger.three_source_view import (
+    FINAL_VIEW_SUPPORT_CONTRACT,
     THREE_SOURCE_VIEW_CONTRACT,
+    audit_dagger1_final_view_support,
     build_dagger1_three_source_view,
 )
 from psse_env.dagger.rollout_collector import (
@@ -420,6 +422,54 @@ def generation_id_independent_rows(
             item["metadata"] = metadata
         projected.append(item)
     return projected
+
+
+def _recompute_final_view_support(
+    *,
+    raw_view: Sequence[Mapping[str, Any]],
+    source_probe_rows: Sequence[Mapping[str, Any]],
+    training_view_report: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Bind final support to the natural/probe rows actually placed."""
+
+    reported = training_view_report.get("final_view_support")
+    if not isinstance(reported, Mapping):
+        raise RuntimeError(
+            "three-source training-view report is missing the canonical "
+            "final_view_support report"
+        )
+    if reported.get("contract") != FINAL_VIEW_SUPPORT_CONTRACT:
+        raise RuntimeError(
+            "three-source final_view_support report has the wrong contract"
+        )
+
+    placed_natural_d1 = [
+        row
+        for row in raw_view
+        if row.get("replay_source") == "natural_dagger1"
+    ]
+    placed_probes = [
+        row
+        for row in raw_view
+        if row.get("replay_source") == "observable_recovery_probe"
+    ]
+    recomputed = audit_dagger1_final_view_support(
+        natural_rows=placed_natural_d1,
+        probe_rows=placed_probes,
+        source_probe_rows=source_probe_rows,
+        policy=ROUND1_THREE_SOURCE_VIEW_POLICY,
+    )
+    if stable_json_sha256(reported) != stable_json_sha256(recomputed):
+        raise RuntimeError(
+            "three-source final_view_support report does not match the "
+            "actual placed natural/probe rows"
+        )
+    if recomputed.get("passed") is not True:
+        raise RuntimeError(
+            "D0/D1/probe final placed-view support gate failed: "
+            f"{recomputed}"
+        )
+    return copy.deepcopy(dict(recomputed))
 
 
 def _source_hash_for_import_spec(spec: str) -> str:
@@ -1063,6 +1113,11 @@ def build_round1_aggregate(
             "D0/D1/probe three-source training-view gate failed: "
             f"{training_view_report}"
         )
+    final_view_support = _recompute_final_view_support(
+        raw_view=raw_view,
+        source_probe_rows=probes,
+        training_view_report=training_view_report,
+    )
 
     natural_rows = [*d0_train, *d1, *probes]
     semantic_realizability = audit_dagger1_union_realizability(
@@ -1086,6 +1141,7 @@ def build_round1_aggregate(
             d1_selection_binding
         ),
         "d1_three_source_training_support": training_support,
+        "final_view_support": final_view_support,
         "union_realizability": semantic_realizability,
     }
     for key in (
@@ -1200,6 +1256,9 @@ def build_round1_aggregate(
         "round1_view_policy": ROUND1_THREE_SOURCE_VIEW_POLICY,
         "training_view_report_sha256": stable_json_sha256(training_view_report),
         "training_support_report_sha256": stable_json_sha256(training_support),
+        "final_view_support_report_sha256": stable_json_sha256(
+            final_view_support
+        ),
         "audit_report_sha256": audit_report_sha256,
         "generation_config": {
             "policy_digest": round1_view_policy_digest(),
@@ -1248,6 +1307,7 @@ def build_round1_aggregate(
         == round1_view_policy_digest(),
         "probe_binding_verified": probe_binding.get("passed") is True,
         "three_source_training_support": training_support.get("passed") is True,
+        "final_view_support": final_view_support.get("passed") is True,
         "d1_recovery_labels_recomputed": d1_recovery_audit.get("passed") is True,
         "d1_state_classes_recomputed": d1_class_audit.get("passed") is True,
         "d1_independent_root_support": d1_root_support.get("passed") is True,
@@ -1266,6 +1326,7 @@ def build_round1_aggregate(
         "probe_binding": probe_binding,
         "actual_natural_probe_root_overlap": actual_natural_probe_overlap,
         "three_source_training_support": training_support,
+        "final_view_support": final_view_support,
         "recomputed_d1_audits": recomputed_d1_audits,
         "d1_collection_selection_binding": d1_selection_binding,
         "semantic_realizability": semantic_realizability,
@@ -1315,6 +1376,7 @@ def build_round1_aggregate(
             "d1_collection_selection_binding": d1_selection_binding,
             "probe_binding": probe_binding,
             "three_source_training_support": training_support,
+            "final_view_support": final_view_support,
             "release_checks": release_checks,
             "release_eligible": release_eligible,
             "release_failures": [],

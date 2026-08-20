@@ -15,7 +15,10 @@ from unittest import mock
 from psse_env.dagger.collect_dagger1 import DAGGER1_SCENARIO_BUILDER_CONTRACT
 from psse_env.dagger.dataset_builder import examples_to_chat_sft
 from psse_env.dagger.round1_view_policy import round1_view_policy_digest
-from psse_env.dagger.three_source_view import build_dagger1_three_source_view
+from psse_env.dagger.three_source_view import (
+    FINAL_VIEW_SUPPORT_CONTRACT,
+    build_dagger1_three_source_view,
+)
 from psse_env.dagger.rollout_collector import (
     OFFLINE_TEACHER_TARGET_QUARANTINE_SUMMARY_CONTRACT,
 )
@@ -77,6 +80,14 @@ class Round1SourceMixGateTests(unittest.TestCase):
     def setUp(self) -> None:
         support = {"contract": "test_support", "passed": True}
         self.support = support
+        self.final_support = {
+            "contract": FINAL_VIEW_SUPPORT_CONTRACT,
+            "natural_rows": 1,
+            "probe_rows": 2,
+            "training_support": support,
+            "probe_source_coverage": {"passed": True},
+            "passed": True,
+        }
         patchers = (
             mock.patch(
                 "psse_env.sft.round1_source_gate.ROUND1_THREE_SOURCE_VIEW_POLICY",
@@ -89,6 +100,16 @@ class Round1SourceMixGateTests(unittest.TestCase):
             mock.patch(
                 "psse_env.sft.round1_source_gate.audit_dagger1_training_support",
                 return_value=support,
+            ),
+            mock.patch(
+                "psse_env.dagger.three_source_view."
+                "audit_dagger1_final_view_support",
+                return_value=self.final_support,
+            ),
+            mock.patch(
+                "psse_env.sft.round1_source_gate."
+                "audit_dagger1_final_view_support",
+                return_value=self.final_support,
             ),
         )
         for patcher in patchers:
@@ -260,6 +281,7 @@ class Round1SourceMixGateTests(unittest.TestCase):
                 "deterministic_collection_selection_binding"
             ],
             "d1_three_source_training_support": self.support,
+            "final_view_support": self.final_support,
             "union_realizability": semantic,
         }
         for key in (
@@ -284,6 +306,9 @@ class Round1SourceMixGateTests(unittest.TestCase):
             },
             "training_view_report_sha256": stable_json_sha256(training_view),
             "training_support_report_sha256": stable_json_sha256(self.support),
+            "final_view_support_report_sha256": stable_json_sha256(
+                self.final_support
+            ),
             "round1_view_policy": TEST_VIEW_POLICY,
             "round1_view_policy_digest": round1_view_policy_digest(
                 TEST_VIEW_POLICY
@@ -367,6 +392,8 @@ class Round1SourceMixGateTests(unittest.TestCase):
                 for name in ROUND1_IMMUTABLE_VIEW_NAMES
             },
             "probe_binding": probe_binding,
+            "final_view_support": self.final_support,
+            "release_checks": {"final_view_support": True},
         }
         preflight = {
             "generation_provenance_id": provenance_id,
@@ -380,6 +407,8 @@ class Round1SourceMixGateTests(unittest.TestCase):
             ],
             "probe_binding": probe_binding,
             "three_source_training_support": self.support,
+            "final_view_support": self.final_support,
+            "release_checks": {"final_view_support": True},
         }
         provenance_path = root / "aggregate.generation_provenance.json"
         preflight_path = root / "aggregate.preflight.json"
@@ -405,6 +434,76 @@ class Round1SourceMixGateTests(unittest.TestCase):
         provenance_id = stable_json_sha256(provenance["generation_descriptor"])
         provenance["generation_provenance_id"] = provenance_id
         preflight["generation_provenance_id"] = provenance_id
+        provenance_path.write_text(
+            json.dumps(provenance, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        preflight_path.write_text(
+            json.dumps(preflight, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    def _forge_all_final_support_records(
+        self,
+        provenance_path: Path,
+        preflight_path: Path,
+        forged: dict[str, Any],
+    ) -> None:
+        """Rewrite every claimed copy/hash while leaving placed rows unchanged."""
+
+        root = provenance_path.parent
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
+        preflight["training_view"]["final_view_support"] = forged
+        preflight["final_view_support"] = forged
+        report_hash = stable_json_sha256(forged)
+        preflight["audit_report_sha256"]["final_view_support"] = report_hash
+
+        descriptor = provenance["generation_descriptor"]
+        descriptor["training_view_report_sha256"] = stable_json_sha256(
+            preflight["training_view"]
+        )
+        descriptor["final_view_support_report_sha256"] = report_hash
+        descriptor["audit_report_sha256"] = preflight["audit_report_sha256"]
+        provenance["final_view_support"] = forged
+        provenance_id = stable_json_sha256(descriptor)
+        provenance["generation_provenance_id"] = provenance_id
+        preflight["generation_provenance_id"] = provenance_id
+
+        def load_rows(name: str) -> list[dict[str, Any]]:
+            return [
+                json.loads(line)
+                for line in (root / name).read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+
+        def write_rows(name: str, rows: list[dict[str, Any]]) -> None:
+            (root / name).write_text(
+                "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+
+        raw_rows = load_rows("aggregate.train_view.raw.jsonl")
+        for row in raw_rows:
+            row["generation_provenance_id"] = provenance_id
+        write_rows("aggregate.train_view.raw.jsonl", raw_rows)
+        write_rows(
+            "aggregate.train_view.jsonl",
+            examples_to_chat_sft(
+                raw_rows,
+                protocol="canonical",
+                allow_ineligible_auxiliary=True,
+            ),
+        )
+        for name in ("aggregate.validation.jsonl", "aggregate.test.jsonl"):
+            rows = load_rows(name)
+            for row in rows:
+                row["generation_provenance_id"] = provenance_id
+            write_rows(name, rows)
+        provenance["dataset_hashes"] = {
+            name: file_sha256(root / name)
+            for name in ROUND1_IMMUTABLE_VIEW_NAMES
+        }
         provenance_path.write_text(
             json.dumps(provenance, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -537,6 +636,72 @@ class Round1SourceMixGateTests(unittest.TestCase):
                 GateError, "exact deterministic three-source reconstruction"
             ):
                 self._validate(provenance, preflight)
+
+    def test_forged_final_support_cannot_be_rehashed_into_acceptance(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provenance, preflight = self._write_valid_artifacts(Path(temp_dir))
+            forged = {
+                **self.final_support,
+                "forged_final_placement_claim": True,
+            }
+            self._forge_all_final_support_records(
+                provenance,
+                preflight,
+                forged,
+            )
+            with self.assertRaisesRegex(
+                GateError,
+                "final placed-view support does not recompute exactly",
+            ):
+                self._validate(provenance, preflight)
+
+    def test_placed_natural_floor_shortfall_fails_source_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provenance, preflight = self._write_valid_artifacts(Path(temp_dir))
+            scarce_floor_failure = {
+                "contract": FINAL_VIEW_SUPPORT_CONTRACT,
+                "natural_rows": 1,
+                "probe_rows": 2,
+                "training_support": {
+                    "contract": "test_support",
+                    "natural_on_policy_support": {
+                        "targeted_state_cell_shortfalls": {
+                            "scarce_natural_cell": {
+                                "minimum_distinct_physical_roots": 1,
+                                "distinct_physical_roots": 0,
+                                "root_shortfall": 1,
+                                "passed": False,
+                            }
+                        },
+                        "passed": False,
+                    },
+                    "observable_probe_support": {"passed": True},
+                    "combined_training_support": {"passed": True},
+                    "passed": False,
+                },
+                "probe_source_coverage": {
+                    "all_unique_probe_source_rows_placed": True,
+                    "passed": True,
+                },
+                "passed": False,
+            }
+            with mock.patch(
+                "psse_env.sft.round1_source_gate."
+                "audit_dagger1_final_view_support",
+                return_value=scarce_floor_failure,
+            ) as recompute:
+                with self.assertRaisesRegex(
+                    GateError,
+                    "final placed-view support does not recompute exactly",
+                ):
+                    self._validate(provenance, preflight)
+            call = recompute.call_args.kwargs
+            self.assertEqual(
+                [row["example_id"] for row in call["natural_rows"]],
+                ["d1"],
+            )
+            self.assertEqual(len(call["probe_rows"]), 2)
+            self.assertEqual(len(call["source_probe_rows"]), 2)
 
     def test_mismatched_provenance_and_preflight_ids_fail(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

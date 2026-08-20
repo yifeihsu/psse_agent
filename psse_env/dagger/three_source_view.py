@@ -29,8 +29,10 @@ from psse_env.dagger.round1_view_policy import (
     round1_view_policy_digest,
     validate_round1_view_policy,
 )
+from psse_env.dagger.replay_buffer import audit_dagger1_training_support
 
-THREE_SOURCE_VIEW_CONTRACT = "dagger1_three_source_training_view_v1"
+THREE_SOURCE_VIEW_CONTRACT = "dagger1_three_source_training_view_v2"
+FINAL_VIEW_SUPPORT_CONTRACT = "dagger1_final_placed_view_support_v1"
 
 
 def _order_key(row: Mapping[str, Any]) -> str:
@@ -58,6 +60,170 @@ def _root(row: Mapping[str, Any]) -> str:
 
 def _example(row: Mapping[str, Any]) -> str:
     return str(row.get("example_id") or "").strip()
+
+
+def _probe_identity(row: Mapping[str, Any]) -> tuple[str, str, str]:
+    """Return the immutable fields that identify one recovery-probe source row.
+
+    Aggregate generation rebinding changes provenance IDs after placement, so a
+    full-row digest is not stable across the final publication boundary.  The
+    probe builder already requires this triple to be present and unique, and
+    the three values survive aggregate rebinding unchanged.
+    """
+
+    return (
+        _example(row),
+        _root(row),
+        str(row.get("recovery_stratum") or "").strip(),
+    )
+
+
+def _identity_payload(identity: tuple[str, str, str]) -> dict[str, str]:
+    return {
+        "example_id": identity[0],
+        "physical_root_fingerprint": identity[1],
+        "recovery_stratum": identity[2],
+    }
+
+
+def _identity_set_sha256(identities: set[tuple[str, str, str]]) -> str:
+    payload = [_identity_payload(identity) for identity in sorted(identities)]
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def audit_dagger1_final_view_support(
+    *,
+    natural_rows: Iterable[Mapping[str, Any]],
+    probe_rows: Iterable[Mapping[str, Any]],
+    source_probe_rows: Iterable[Mapping[str, Any]],
+    policy: Mapping[str, Any] = ROUND1_THREE_SOURCE_VIEW_POLICY,
+) -> dict[str, Any]:
+    """Re-audit support on the rows that actually survived final placement.
+
+    Pre-placement support is only a feasibility claim.  This gate applies the
+    canonical natural/probe support audit to the materialized view, where its
+    set-based physical-root accounting deduplicates replay copies.  It also
+    proves that every one of the source probe rows appears at least once; the
+    remaining probe allocation may contain deterministic replay duplicates.
+    """
+
+    validate_round1_view_policy(dict(policy))
+    natural = list(natural_rows)
+    probes = list(probe_rows)
+    source_probes = list(source_probe_rows)
+    training_support = audit_dagger1_training_support(natural, probes)
+
+    source_identities = [_probe_identity(row) for row in source_probes]
+    placed_identities = [_probe_identity(row) for row in probes]
+    malformed_source_identities = sorted(
+        identity for identity in source_identities if not all(identity)
+    )
+    malformed_placed_identities = sorted(
+        identity for identity in placed_identities if not all(identity)
+    )
+    malformed_source = [
+        _identity_payload(identity) for identity in malformed_source_identities
+    ]
+    malformed_placed = [
+        _identity_payload(identity) for identity in malformed_placed_identities
+    ]
+    source_identity_set = set(source_identities)
+    placed_identity_set = set(placed_identities)
+    missing = source_identity_set - placed_identity_set
+    unexpected = placed_identity_set - source_identity_set
+
+    bucket = policy.get("probe_bucket")
+    bucket = bucket if isinstance(bucket, Mapping) else {}
+    strata = policy.get("incidence_dependent_recovery_strata")
+    strata = list(strata) if isinstance(strata, (list, tuple)) else []
+    expected_unique_count = int(
+        bucket.get("distinct_roots_retained_per_stratum") or 0
+    ) * len(strata)
+    duplicate_source_identities = [
+        _identity_payload(identity)
+        for identity in sorted(
+            identity
+            for identity, count in Counter(source_identities).items()
+            if count != 1
+        )
+    ]
+    expected_unique_per_stratum = {
+        str(stratum): int(
+            bucket.get("distinct_roots_retained_per_stratum") or 0
+        )
+        for stratum in strata
+    }
+    source_unique_per_stratum = {
+        str(stratum): sum(
+            identity[2] == str(stratum) for identity in source_identity_set
+        )
+        for stratum in strata
+    }
+    placed_unique_per_stratum = {
+        str(stratum): sum(
+            identity[2] == str(stratum) for identity in placed_identity_set
+        )
+        for stratum in strata
+    }
+    source_coverage_passed = bool(
+        expected_unique_count > 0
+        and len(source_probes) == expected_unique_count
+        and len(source_identity_set) == expected_unique_count
+        and not malformed_source
+        and not malformed_placed
+        and not duplicate_source_identities
+        and not missing
+        and not unexpected
+        and source_unique_per_stratum == expected_unique_per_stratum
+        and placed_unique_per_stratum == expected_unique_per_stratum
+    )
+    source_coverage = {
+        "expected_unique_probe_source_rows": expected_unique_count,
+        "source_probe_rows": len(source_probes),
+        "source_unique_probe_identities": len(source_identity_set),
+        "placed_probe_rows": len(probes),
+        "placed_unique_probe_identities": len(placed_identity_set),
+        "expected_unique_probe_source_rows_by_stratum": (
+            expected_unique_per_stratum
+        ),
+        "source_unique_probe_identities_by_stratum": source_unique_per_stratum,
+        "placed_unique_probe_identities_by_stratum": placed_unique_per_stratum,
+        "source_probe_identity_set_sha256": _identity_set_sha256(
+            source_identity_set
+        ),
+        "placed_probe_identity_set_sha256": _identity_set_sha256(
+            placed_identity_set
+        ),
+        "duplicate_source_probe_identities": duplicate_source_identities,
+        "malformed_source_probe_identities": malformed_source,
+        "malformed_placed_probe_identities": malformed_placed,
+        "missing_source_probe_identities": [
+            _identity_payload(identity) for identity in sorted(missing)
+        ],
+        "unexpected_placed_probe_identities": [
+            _identity_payload(identity) for identity in sorted(unexpected)
+        ],
+        "all_unique_probe_source_rows_placed": bool(
+            not missing
+            and not malformed_source
+            and not duplicate_source_identities
+            and len(source_identity_set) == expected_unique_count
+        ),
+        "passed": source_coverage_passed,
+    }
+    return {
+        "contract": FINAL_VIEW_SUPPORT_CONTRACT,
+        "natural_rows": len(natural),
+        "probe_rows": len(probes),
+        "training_support": training_support,
+        "probe_source_coverage": source_coverage,
+        "passed": bool(
+            training_support.get("passed") is True
+            and source_coverage.get("passed") is True
+        ),
+    }
 
 
 class _CapLedger:
@@ -210,6 +376,12 @@ def build_dagger1_three_source_view(
     )
 
     probe_short = sum(entry["shortfall"] for entry in probe_report.values())
+    final_view_support = audit_dagger1_final_view_support(
+        natural_rows=natural_placed,
+        probe_rows=probe_placed,
+        source_probe_rows=probes,
+        policy=policy,
+    )
     rows = d0_placed + natural_placed + probe_placed
     cap_violations = sorted(
         root
@@ -238,6 +410,7 @@ def build_dagger1_three_source_view(
             "observable_recovery_probe_rows": probe_short,
         },
         "probe_bucket": probe_report,
+        "final_view_support": final_view_support,
         # Reported because it is the reason caps are enforced on the union.
         "roots_shared_between_probe_and_natural": shared_roots,
         "global_root_cap_violations": cap_violations,
@@ -250,6 +423,7 @@ def build_dagger1_three_source_view(
             and not natural_short
             and not d0_short
             and len(rows) == int(policy["total_rows"])
+            and final_view_support.get("passed") is True
         ),
     }
     return rows, report

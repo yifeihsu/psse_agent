@@ -138,6 +138,14 @@ route remains. It never exposes or consumes the private truth audit to choose
 that action. Clean states and explanation-only diagnostic states with no
 accepted correction retain their existing finalization routes.
 
+The post-correction confirmation *boundary* has one canonical policy-visible
+predicate, owned by `oracle/process_validity.py` and reused by the recovery
+probe generator. This is distinct from the verified terminal measurement-
+closure attestation in `dagger/offline_teacher_target_audit.py`: that private,
+fail-closed audit retains its own parser and screening logic. The repository
+therefore claims shared confirmation-boundary semantics, not a single shared
+terminal-closure attestation parser.
+
 This changed finality behavior is explicitly versioned as supervision policy
 `bc0_observable_sequential_handoff_v2` and expert identity
 `bc0-observable-handoff-expert-v2`; DAgger-1 binds the corresponding
@@ -749,14 +757,25 @@ reruns the D1 row/root/replay audits and exact/approximate
 teacher-realizability gates, preserves `aggregate.raw.jsonl`,
 `aggregate.d0.raw.jsonl`, `aggregate.d1.raw.jsonl`, and
 `aggregate.train_view.raw.jsonl`, and hashes every semantic report into
-generation provenance.
+generation provenance. After the 525 natural-D1 rows and 38 probe replay rows
+are actually placed, it also reruns the independent-root and targeted-state-
+cell floors on that final natural subset, proves all 24 unique probe source
+rows are retained, and recomputes probe and combined support from deduplicated
+`(recovery_stratum, physical_root_fingerprint)` identities. The resulting
+`final_view_support` report is bound into the placement report, aggregate
+preflight, generation provenance, and the independently reconstructed Round-1
+SFT source gate. Passing support on the larger immutable source ledgers cannot
+substitute for support in the rows SFT will consume.
 
 Regenerate the expert and base artifacts at `FREEZE_COMMIT`, then run the
 Round-1 chain against `data/round1_aggregate_release` in this order:
 `gate -> one-batch -> targeted-tiny-overfit -> round1 -> checkpoint evaluation
--> checkpoint-gate`. Submit the data-only `gate` without
-`INITIAL_ADAPTER_PATH`/`INITIAL_ADAPTER_REVISION`; export the learner-seed
-identity for `one-batch`, `targeted-tiny-overfit`, and `round1`. The targeted
+-> checkpoint-gate`. Submit every Round-1 stage, including the data-only
+`gate`, with the exact `INITIAL_ADAPTER_PATH`/`INITIAL_ADAPTER_REVISION` pair.
+The gate validates that learner-seed identity against the D1 manifest and
+aggregate provenance without loading the adapter or allocating the base model;
+`one-batch`, `targeted-tiny-overfit`, and `round1` additionally warm-start from
+it. The targeted
 stage selects five distinct recovery cases,
 sweeps diagnostic learning rates `1e-4`, `3e-4`, and `1e-3`, and requires exact
 generated tools and arguments. These sweep rates do not alter the Round-1
