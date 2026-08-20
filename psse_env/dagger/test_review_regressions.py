@@ -685,14 +685,14 @@ class DaggerExecutionRegressionTests(unittest.TestCase):
         for oracle in (plain_oracle, changed_oracle):
             self.assertEqual(oracle.private_teacher_selection_calls, 0)
             self.assertTrue(oracle.teacher_state_types)
+            # No OracleState may reach teacher selection.
             self.assertNotIn(OracleState, set(oracle.teacher_state_types))
-            self.assertTrue(
-                all(
-                    issubclass(seen, (PolicyObservation, dict))
-                    for seen in oracle.teacher_state_types
-                ),
-                oracle.teacher_state_types,
-            )
+            # And under D1 observable supervision the teacher must receive the
+            # validated truth-free mapping produced by the shared selector.
+            # Asserting the exact type stops a future caller from bypassing the
+            # helper and quietly restoring the PolicyObservation path, which is
+            # the architecture this regression exists to protect.
+            self.assertEqual(set(oracle.teacher_state_types), {dict})
         self.assertEqual(
             [row["preferred_action"]["tool"] for row in plain_rows],
             [RUN_WLS, "rollback_state"],

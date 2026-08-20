@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from collections.abc import Mapping
 from typing import Any
 
 from psse_env.actions import (
@@ -24,7 +25,6 @@ from psse_env.dagger.recovery_probes import (
     probe_intervention,
     recovery_probe_manifest,
     stamp_recovery_probe_row,
-    unsupported_correction_intervention,
     verify_probe_stratum,
 )
 
@@ -84,42 +84,6 @@ _PASS_AUDIT = lambda observation, *, preferred_action, env, history, scenario, o
 }
 
 class RecoveryProbeInterventionTests(unittest.TestCase):
-    def test_unsupported_correction_groups_two_visible_findings(self):
-        # A fresh context publishes one supported singleton per finding, so no
-        # single finding is ever unsupported; the grouped action is.
-        action = unsupported_correction_intervention(_observation())
-        self.assertEqual(
-            action,
-            {
-                "tool": CORRECT_MEASUREMENTS,
-                "arguments": {"state_id": STATE, "suspect_group": [23, 41]},
-            },
-        )
-
-    def test_unsupported_correction_declines_when_the_group_is_supported(self):
-        observation = _observation()
-        observation["fresh_context_evidence"]["measurement"][
-            "supported_corrections"
-        ] = [
-            {
-                "tool": CORRECT_MEASUREMENTS,
-                "arguments": {"state_id": STATE, "suspect_group": [23, 41]},
-            }
-        ]
-        self.assertIsNone(unsupported_correction_intervention(observation))
-
-    def test_unsupported_correction_declines_with_a_single_finding(self):
-        observation = _observation()
-        observation["fresh_context_evidence"]["measurement"][
-            "measurement_findings"
-        ] = [{"channel": "Pinj", "index0": 23, "value": 4.39}]
-        self.assertIsNone(unsupported_correction_intervention(observation))
-
-    def test_unsupported_correction_declines_on_stale_context(self):
-        observation = _observation()
-        observation["fresh_context_evidence"]["measurement"]["state_id"] = "other:s1"
-        self.assertIsNone(unsupported_correction_intervention(observation))
-
     def test_post_failure_probe_declines_when_a_candidate_is_open(self):
         self.assertIsNone(
             post_failure_no_candidate_intervention(
@@ -442,6 +406,14 @@ class _FakeEnv:
         self.scenario = scenario
         self.resets += 1
 
+    def assert_training_decision_evidence(self, action):
+        """Attest the evidence, as the production environment does."""
+        del action
+
+    def get_oracle_state(self, history):
+        del history
+        return {"hidden_truth": {}}
+
     def get_policy_observation(self, history):
         observation = _observation()
         if self.confirmation_pending:
@@ -672,4 +644,190 @@ class ProbeAuditScenarioTests(unittest.TestCase):
         self.assertEqual(scenario["scenario_id"], "s1")
         self.assertEqual(
             scenario["physical_root_fingerprint"], "physical_v3_root-a"
+        )
+
+
+class _VerifiedCandidateEnv:
+    """Reaches the confirmation state only through a verified candidate.
+
+    The raw rule expert returns nothing at a verified candidate, so a generator
+    that calls it directly stalls here and never reaches the confirmation
+    boundary. This fixture therefore fails unless the shared selector's
+    commit/rollback reconstruction is in the path -- it pins the architecture,
+    not just the outcome.
+    """
+
+    def __init__(self):
+        self.scenario = None
+        self.stage = "unverified"
+        self.evidence_calls = []
+
+    def reset(self, scenario):
+        self.scenario = scenario
+        self.stage = "unverified"
+
+    def assert_training_decision_evidence(self, action):
+        self.evidence_calls.append(action)
+
+    def get_oracle_state(self, history):
+        return {"hidden_truth": {}}
+
+    def get_policy_observation(self, history):
+        from psse_env.actions import POST_CORRECTION_CONFIRMATION_SIGNATURE
+
+        base = {
+            "active_state_id": "ep:s1",
+            "history_window": [],
+            "accepted_corrections": [],
+            "unresolved_signatures": [],
+        }
+        if self.stage == "unverified":
+            base.update(
+                {
+                    "candidate_state_id": "ep:c1",
+                    "has_open_candidate": True,
+                    "has_verified_candidate": True,
+                    "candidate_lifecycle": "VERIFIED_CANDIDATE",
+                    "candidate_status": "verified",
+                }
+            )
+        elif self.stage == "confirmation":
+            base.update(
+                {
+                    "accepted_corrections": [
+                        {
+                            "source_action": {
+                                "tool": "correct_measurements",
+                                "arguments": {
+                                    "state_id": "ep:s1",
+                                    "suspect_group": [4],
+                                },
+                            }
+                        }
+                    ],
+                    "unresolved_signatures": [
+                        POST_CORRECTION_CONFIRMATION_SIGNATURE
+                    ],
+                }
+            )
+        else:
+            base.update(
+                {
+                    "accepted_corrections": [
+                        {
+                            "source_action": {
+                                "tool": "correct_measurements",
+                                "arguments": {
+                                    "state_id": "ep:s1",
+                                    "suspect_group": [4],
+                                },
+                            }
+                        }
+                    ],
+                    "unresolved_signatures": [
+                        POST_CORRECTION_CONFIRMATION_SIGNATURE
+                    ],
+                    "last_tool": "correct_measurements",
+                    "last_tool_status": "failure",
+                    "last_tool_output": {
+                        "execution_status": "failure",
+                        "error_code": "post_correction_confirmation_required",
+                    },
+                }
+            )
+        return base
+
+    def step(self, action):
+        # Any observable disposition action closes the candidate; only the
+        # reconstruction can produce one here.
+        if action.get("tool") in {"commit_state", "rollback_state", ASK_FOR_MORE_EVIDENCE}:
+            self.stage = "confirmation"
+            return None, {"execution_status": "success"}
+        self.stage = "post_intervention"
+        return None, {
+            "execution_status": "failure",
+            "error_code": "post_correction_confirmation_required",
+        }
+
+
+class ConfirmationPrefixIntegrationTests(unittest.TestCase):
+    def test_prefix_reaches_confirmation_only_via_the_shared_selector(self):
+        from psse_env.dagger.recovery_probes import generate_recovery_probes
+
+        env = _VerifiedCandidateEnv()
+
+        class _StallingOracle:
+            """The raw rule expert: silent at a verified candidate."""
+
+            def next_actions(self, state, history=None):
+                del history
+                lifecycle = (
+                    state.get("candidate_lifecycle")
+                    if isinstance(state, Mapping)
+                    else None
+                )
+                if lifecycle == "VERIFIED_CANDIDATE":
+                    return []
+                return [
+                    {
+                        "tool": GET_MEASUREMENT_CONTEXT,
+                        "arguments": {"state_id": state.get("active_state_id")},
+                    }
+                ]
+
+        rows, report = generate_recovery_probes(
+            _scenarios(1),
+            env=env,
+            expert_oracle=_StallingOracle(),
+            rank_one_proof_for=_PASS_PROOF,
+            teacher_target_audit_for=_PASS_AUDIT,
+            state_class_for=lambda observation, preferred: "invalid_precondition_recovery",
+            quotas={"unsupported_correction_recovery": 1},
+        )
+        self.assertEqual(len(rows), 1, report["skipped"])
+        row = rows[0]
+        self.assertEqual(
+            row["recovery_stratum"], "unsupported_correction_recovery"
+        )
+        self.assertEqual(
+            row["preferred_action"]["tool"], GET_MEASUREMENT_CONTEXT
+        )
+        # The prefix had to dispose of the verified candidate to get here. The
+        # stalling oracle returns nothing at that state and otherwise only ever
+        # offers get_measurement_context, so a disposition action in the prefix
+        # can only have come from the shared selector's reconstruction.
+        self.assertTrue(
+            any(
+                a["tool"] in {"commit_state", "rollback_state", ASK_FOR_MORE_EVIDENCE}
+                for a in row["probe_setup_actions"]
+            ),
+            row["probe_setup_actions"],
+        )
+        # And the evidence assertion really ran.
+        self.assertTrue(env.evidence_calls)
+
+    def test_absent_evidence_assertion_fails_closed(self):
+        from psse_env.dagger.recovery_probes import generate_recovery_probes
+
+        class _NoEvidenceEnv(_VerifiedCandidateEnv):
+            assert_training_decision_evidence = None
+
+        env = _NoEvidenceEnv()
+
+        rows, report = generate_recovery_probes(
+            _scenarios(1),
+            env=env,
+            expert_oracle=_FakeOracle(),
+            rank_one_proof_for=_PASS_PROOF,
+            teacher_target_audit_for=_PASS_AUDIT,
+            state_class_for=lambda observation, preferred: "invalid_precondition_recovery",
+            quotas={"unsupported_correction_recovery": 1},
+        )
+        self.assertEqual(rows, [])
+        self.assertTrue(
+            any(
+                "training_decision_evidence_unavailable" in reason
+                for reason in report["skipped"]
+            ),
+            report["skipped"],
         )

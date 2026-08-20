@@ -229,7 +229,15 @@ def select_observable_expert_actions(
     # Reject, rather than strip, a caller that crosses the policy/oracle
     # boundary, so an OracleState or hidden truth can never reach the expert.
     validate_policy_payload(observation)
-    raw_history = observation.get("history_window") or []
+    # Absent is legitimate; malformed is not.  ``or []`` silently rewrote every
+    # falsey malformed value -- "", {}, (), 0 -- into an empty history before
+    # the type check could see it, so the documented fail-closed behaviour did
+    # not hold for exactly the inputs most likely to indicate a caller bug.
+    # validate_policy_payload does not type-check this field.
+    if "history_window" not in observation or observation["history_window"] is None:
+        raw_history: Any = []
+    else:
+        raw_history = observation["history_window"]
     if not isinstance(raw_history, list) or any(
         not isinstance(item, Mapping) for item in raw_history
     ):

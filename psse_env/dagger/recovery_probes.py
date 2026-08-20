@@ -83,6 +83,11 @@ RECOVERY_PROBE_ROOT_QUOTAS: dict[str, int] = {
 #: the intervention is reproducible from the observation alone.
 _UNBOUND_STATE_SUFFIX = "probe_unbound_state"
 
+# The former unsupported-correction probe issued a grouped two-target
+# correction. It is deliberately deleted rather than deprecated: it produced two
+# unranked expert actions that the rank-one proof must reject, so any reuse
+# would silently reintroduce a 0/10 stratum.
+
 
 def _measurement_context(observation: Mapping[str, Any]) -> Mapping[str, Any] | None:
     context = observation.get("fresh_context_evidence")
@@ -139,73 +144,6 @@ def _observable_findings(measurement: Mapping[str, Any]) -> list[int]:
     return sorted(seen)
 
 
-def _supported_measurement_groups(
-    measurement: Mapping[str, Any], *, state_id: str
-) -> set[frozenset[int]]:
-    """Exact same-state suspect groups the inventory authorises."""
-
-    supported = measurement.get("supported_corrections")
-    groups: set[frozenset[int]] = set()
-    if not isinstance(supported, Sequence) or isinstance(supported, (str, bytes)):
-        return groups
-    for entry in supported:
-        if not isinstance(entry, Mapping):
-            continue
-        if str(entry.get("tool") or "") != CORRECT_MEASUREMENTS:
-            continue
-        arguments = entry.get("arguments")
-        arguments = arguments if isinstance(arguments, Mapping) else {}
-        if str(arguments.get("state_id") or "") != state_id:
-            continue
-        group = arguments.get("suspect_group")
-        if not isinstance(group, Sequence) or isinstance(group, (str, bytes)):
-            continue
-        try:
-            groups.add(frozenset(int(item) for item in group))
-        except (TypeError, ValueError):
-            continue
-    return groups
-
-
-def unsupported_correction_intervention(
-    observation: Mapping[str, Any],
-) -> dict[str, Any] | None:
-    """Repair the two lowest visible findings in one unauthorised action.
-
-    At a fresh context the provider publishes exactly one supported singleton
-    per visible finding, so "a finding outside the inventory" is empty by
-    construction -- the probe pilot measured this on every root.  A learner that
-    tries to repair two anomalies at once is a plausible mistake whose grouped
-    action the same-state inventory genuinely does not authorise, which is what
-    ``correction_not_supported_by_current_context`` describes.  Both targets are
-    real findings, so this never touches a measurement the provider considers
-    healthy.
-
-    Returns ``None`` when fewer than two findings are visible, or when the
-    grouped action happens to be supported, so the caller moves to the next root
-    rather than forcing a probe.
-    """
-
-    measurement = _measurement_context(observation)
-    if measurement is None:
-        return None
-    state_id = str(measurement.get("state_id") or "")
-    if not state_id or state_id != str(observation.get("active_state_id") or ""):
-        return None
-    findings = _observable_findings(measurement)
-    if len(findings) < 2:
-        return None
-    group = findings[:2]
-    if frozenset(group) in _supported_measurement_groups(
-        measurement, state_id=state_id
-    ):
-        return None
-    return {
-        "tool": CORRECT_MEASUREMENTS,
-        "arguments": {"state_id": state_id, "suspect_group": list(group)},
-    }
-
-
 def post_failure_no_candidate_intervention(
     observation: Mapping[str, Any],
 ) -> dict[str, Any] | None:
@@ -234,62 +172,8 @@ def post_failure_no_candidate_intervention(
 #: start: it is published by a context request, after the residuals that
 #: motivate it.  A probe that needs to read the inventory must therefore prime
 #: it first, with ordinary legal actions and no reference to hidden truth.
-UNSUPPORTED_CORRECTION_SETUP_TOOLS: tuple[str, ...] = (
-    RUN_WLS,
-    GET_MEASUREMENT_CONTEXT,
-)
 
 
-def unsupported_correction_setup_action(
-    observation: Mapping[str, Any], *, step: int
-) -> dict[str, Any] | None:
-    """Next inventory-priming action, or ``None`` once the context is present.
-
-    Each action is issued against the *current* active state, so the caller must
-    re-observe between steps rather than precomputing the whole sequence: a
-    solve republishes the active state and a stale binding would fail.
-    """
-
-    if _measurement_context(observation) is not None:
-        return None
-    if step < 0 or step >= len(UNSUPPORTED_CORRECTION_SETUP_TOOLS):
-        return None
-    active = str(observation.get("active_state_id") or "")
-    if not active:
-        return None
-    return {
-        "tool": UNSUPPORTED_CORRECTION_SETUP_TOOLS[step],
-        "arguments": {"state_id": active},
-    }
-
-
-def _no_setup(observation: Mapping[str, Any], *, step: int) -> None:
-    del observation, step
-    return None
-
-
-#: Frozen dispatch from target stratum to its inventory-priming rule.
-RECOVERY_PROBE_SETUP = {
-    "post_failure_no_candidate": _no_setup,
-    "unsupported_correction_recovery": unsupported_correction_setup_action,
-}
-
-#: Maximum priming actions before a root is abandoned.
-RECOVERY_PROBE_MAX_SETUP_STEPS = len(UNSUPPORTED_CORRECTION_SETUP_TOOLS)
-
-
-def probe_setup_action(
-    observation: Mapping[str, Any], *, stratum: str, step: int
-) -> dict[str, Any] | None:
-    """Priming action this stratum still needs before its intervention."""
-
-    rule = RECOVERY_PROBE_SETUP.get(str(stratum))
-    if rule is None:
-        raise ValueError(f"no recovery-probe setup rule for stratum {stratum!r}")
-    return rule(observation, step=step)
-
-
-#: Frozen dispatch from target stratum to its intervention rule.
 def post_correction_confirmation_pending(observation: Mapping[str, Any]) -> bool:
     """The exact policy-visible state the confirmation guard fires on.
 
@@ -301,6 +185,11 @@ def post_correction_confirmation_pending(observation: Mapping[str, Any]) -> bool
     """
 
     if not observation.get("accepted_corrections"):
+        return False
+    # An open candidate means the previous transaction has not closed, so the
+    # confirmation boundary is not the state under test.  The controller guard
+    # does not read this, but firing here would probe a different situation.
+    if observation.get("has_open_candidate") or observation.get("candidate_state_id"):
         return False
     signatures = {
         str(item) for item in (observation.get("unresolved_signatures") or [])
@@ -631,6 +520,30 @@ _AUDIT_GROUPING_FIELDS = (
 )
 
 
+def prepare_scenario_envelope(envelope: Mapping[str, Any]) -> dict[str, Any]:
+    """Split one envelope into the three views collection needs.
+
+    Returns ``runtime`` (what reaches ``env.reset``), ``audit`` (runtime plus the
+    private truth ledger, for the offline teacher-target audit), and
+    ``grouping`` (public identity).  Keeping the split in one helper is what
+    stops a probe from being audited against a ledger the natural collector
+    would have hydrated: today every probe target is the read-only
+    ``get_measurement_context``, for which the audit's admission condition is
+    the observable-evidence gate, but a future mutating target would be judged
+    on an incomplete ``OracleState`` if these views drifted apart.
+    """
+
+    runtime = envelope.get("execution")
+    runtime = dict(runtime) if isinstance(runtime, Mapping) else dict(envelope)
+    grouping = envelope.get("grouping")
+    grouping = dict(grouping) if isinstance(grouping, Mapping) else {}
+    return {
+        "runtime": runtime,
+        "audit": probe_audit_scenario(envelope),
+        "grouping": grouping,
+    }
+
+
 def probe_audit_scenario(envelope: Mapping[str, Any]) -> dict[str, Any]:
     """Compose the offline-audit scenario: runtime fields plus private truth.
 
@@ -849,15 +762,19 @@ def generate_recovery_probes(
             # claim an admission step it never passed.
             training_decision_evidence_verified = False
             assertion = getattr(env, "assert_training_decision_evidence", None)
-            if assertion is None:
-                training_decision_evidence_verified = True
-            else:
-                try:
-                    assertion(preferred_action)
-                except ValueError:
-                    skipped[f"{stratum}:training_decision_evidence_failed"] += 1
-                    continue
-                training_decision_evidence_verified = True
+            if not callable(assertion):
+                # An environment that cannot attest the evidence is not an
+                # environment whose probes may be admitted.  Treating a missing
+                # assertion as a pass would let a stubbed environment mint rows
+                # that never cleared the check the flag claims.
+                skipped[f"{stratum}:training_decision_evidence_unavailable"] += 1
+                continue
+            try:
+                assertion(preferred_action)
+            except ValueError:
+                skipped[f"{stratum}:training_decision_evidence_failed"] += 1
+                continue
+            training_decision_evidence_verified = True
 
             prove_rank_one = rank_one_proof_for or _default_rank_one_proof
             audit_target = teacher_target_audit_for or _default_teacher_audit
