@@ -70,6 +70,18 @@ def _after_failure(tool: str, error_code: str, **overrides: Any) -> dict[str, An
     return observation
 
 
+
+_PASS_PROOF = lambda observation, *, preferred_action, expert_actions: {
+    "contract": "observable_rank_one_target_v1",
+    "passed": True,
+    "basis": "test_stub",
+}
+_PASS_AUDIT = lambda observation, *, preferred_action, env, history, scenario: {
+    "contract": "dagger1_offline_teacher_target_truth_audit_v3",
+    "passed": True,
+    "action_class": "correct_measurements",
+}
+
 class RecoveryProbeInterventionTests(unittest.TestCase):
     def test_unsupported_correction_groups_two_visible_findings(self):
         # A fresh context publishes one supported singleton per finding, so no
@@ -209,6 +221,9 @@ def _probe_row(stratum: str, root: str) -> dict[str, Any]:
         intervention={"tool": GET_MEASUREMENT_CONTEXT, "arguments": {}},
         expected_stratum=stratum,
         verification=verification,
+        rank_one_proof={"passed": True},
+        teacher_target_audit={"passed": True},
+        training_decision_evidence_verified=True,
     )
 
 
@@ -483,6 +498,8 @@ class RecoveryProbeGeneratorTests(unittest.TestCase):
             _scenarios(20),
             env=_FakeEnv(),
             expert_oracle=_FakeOracle(),
+            rank_one_proof_for=_PASS_PROOF,
+            teacher_target_audit_for=_PASS_AUDIT,
             state_class_for=self._state_class,
             quotas={"post_failure_no_candidate": 4},
         )
@@ -510,6 +527,8 @@ class RecoveryProbeGeneratorTests(unittest.TestCase):
                     "arguments": {"request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST},
                 }
             ),
+            rank_one_proof_for=_PASS_PROOF,
+            teacher_target_audit_for=_PASS_AUDIT,
             state_class_for=self._state_class,
             quotas={"post_failure_no_candidate": 4},
         )
@@ -528,6 +547,8 @@ class RecoveryProbeGeneratorTests(unittest.TestCase):
             _scenarios(5),
             env=_FakeEnv("correction_not_supported_by_current_context"),
             expert_oracle=_FakeOracle(),
+            rank_one_proof_for=_PASS_PROOF,
+            teacher_target_audit_for=_PASS_AUDIT,
             state_class_for=self._state_class,
             quotas={"unsupported_correction_recovery": 3},
         )
@@ -546,6 +567,8 @@ class RecoveryProbeGeneratorTests(unittest.TestCase):
                 _scenarios(2),
                 env=_FakeEnv(),
                 expert_oracle=_FakeOracle(),
-                state_class_for=self._state_class,
+                rank_one_proof_for=_PASS_PROOF,
+            teacher_target_audit_for=_PASS_AUDIT,
+            state_class_for=self._state_class,
                 quotas={"loop_escape": 2},
             )

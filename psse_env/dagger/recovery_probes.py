@@ -45,7 +45,13 @@ from psse_env.actions import (
     GET_MEASUREMENT_CONTEXT,
     RUN_WLS,
 )
-from psse_env.dagger.rollout_collector import classify_dagger1_recovery_stratum
+from psse_env.dagger.offline_teacher_target_audit import (
+    offline_teacher_target_audit,
+)
+from psse_env.dagger.rollout_collector import (
+    classify_dagger1_recovery_stratum,
+    observable_rank_one_target_proof,
+)
 
 RECOVERY_PROBE_CONTRACT = "dagger1_observable_recovery_probe_v1"
 RECOVERY_PROBE_STATE_ORIGIN = "observable_recovery_probe"
@@ -331,18 +337,42 @@ def stamp_recovery_probe_row(
     intervention: Mapping[str, Any],
     expected_stratum: str,
     verification: Mapping[str, Any],
+    rank_one_proof: Mapping[str, Any] | None = None,
+    teacher_target_audit: Mapping[str, Any] | None = None,
+    training_decision_evidence_verified: bool = False,
 ) -> dict[str, Any]:
-    """Stamp the auxiliary-source identity onto one verified probe row.
+    """Stamp the auxiliary-source identity onto one fully audited probe row.
+
+    A probe target earns its place the same way a natural DAgger label does.
+    Being the expert's first returned action is not sufficient: it must carry
+    the observable rank-one proof, and it must survive the private teacher-target
+    audit, exactly as a learner-visited target would.
 
     The row is never marked learner-visited.  ``production_label_eligible``
-    stays false: a probe row may train, but it may not satisfy a natural
-    on-policy release floor.
+    stays false so a probe can never satisfy a natural on-policy release floor;
+    ``auxiliary_training_eligible`` is the separate, explicit permission that the
+    validated probe-ingestion path checks instead.
     """
 
     if verification.get("passed") is not True:
         raise ValueError(
             "refusing to stamp a probe row whose stratum verification failed: "
             f"{verification.get('actual_stratum')!r} != {expected_stratum!r}"
+        )
+    if not training_decision_evidence_verified:
+        raise ValueError(
+            "refusing to stamp a probe row without verified training-decision "
+            "evidence"
+        )
+    if (rank_one_proof or {}).get("passed") is not True:
+        raise ValueError(
+            "refusing to stamp a probe row whose observable rank-one target "
+            f"proof failed: {(rank_one_proof or {}).get('reason')!r}"
+        )
+    if (teacher_target_audit or {}).get("passed") is not True:
+        raise ValueError(
+            "refusing to stamp a probe row quarantined by the private "
+            f"teacher-target audit: {(teacher_target_audit or {}).get('reason_codes')!r}"
         )
     stamped = dict(row)
     stamped.update(
@@ -355,6 +385,10 @@ def stamp_recovery_probe_row(
             "recovery_stratum": str(expected_stratum),
             "probe_intervention": dict(intervention),
             "probe_stratum_verification": dict(verification),
+            "training_decision_evidence_verified": True,
+            "observable_rank_one_target_proof": dict(rank_one_proof or {}),
+            "offline_teacher_target_audit": dict(teacher_target_audit or {}),
+            "auxiliary_training_eligible": True,
             "production_label_eligible": False,
             "natural_on_policy_support_eligible": False,
         }
@@ -537,6 +571,41 @@ def combined_recovery_support(
     }
 
 
+def _default_rank_one_proof(
+    observation: Mapping[str, Any],
+    *,
+    preferred_action: Any,
+    expert_actions: Sequence[Any],
+) -> dict[str, Any]:
+    """The same observable proof a natural DAgger label must carry."""
+
+    return observable_rank_one_target_proof(
+        observation,
+        preferred_action=preferred_action,
+        expert_actions=expert_actions,
+    )
+
+
+def _default_teacher_audit(
+    observation: Mapping[str, Any],
+    *,
+    preferred_action: Any,
+    env: Any,
+    history: Sequence[Any],
+    scenario: Mapping[str, Any],
+) -> dict[str, Any]:
+    """The same private truth audit a natural DAgger target must survive."""
+
+    return offline_teacher_target_audit(
+        preferred_action=preferred_action,
+        oracle_state=env.get_oracle_state(history),
+        policy_observation=observation,
+        scenario=scenario,
+        env=env,
+        observable_evidence_passed=True,
+    )
+
+
 def generate_recovery_probes(
     scenarios: Sequence[Mapping[str, Any]],
     *,
@@ -544,6 +613,8 @@ def generate_recovery_probes(
     expert_oracle: Any,
     state_class_for: Any,
     quotas: Mapping[str, int] | None = None,
+    rank_one_proof_for: Any | None = None,
+    teacher_target_audit_for: Any | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Drive one intervention per root and keep only the verified probe rows.
 
@@ -669,6 +740,32 @@ def generate_recovery_probes(
                 skipped[f"{stratum}:landed_in_{verification.get('actual_stratum')}"] += 1
                 continue
 
+            # A probe target must clear the same two audits a natural DAgger
+            # label clears.  Being the expert's first action is not a reason to
+            # trust it: the observable proof must rank it first on
+            # policy-visible evidence, and private truth must then find the
+            # already-fixed target safe.
+            prove_rank_one = rank_one_proof_for or _default_rank_one_proof
+            audit_target = teacher_target_audit_for or _default_teacher_audit
+            rank_one_proof = prove_rank_one(
+                post,
+                preferred_action=preferred_action,
+                expert_actions=expert_actions,
+            )
+            if rank_one_proof.get("passed") is not True:
+                skipped[f"{stratum}:rank_one_proof_failed"] += 1
+                continue
+            teacher_audit = audit_target(
+                post,
+                preferred_action=preferred_action,
+                env=env,
+                history=history,
+                scenario=runtime if isinstance(runtime, Mapping) else scenario,
+            )
+            if teacher_audit.get("passed") is not True:
+                skipped[f"{stratum}:teacher_target_quarantined"] += 1
+                continue
+
             rows.append(
                 stamp_recovery_probe_row(
                     {
@@ -685,6 +782,9 @@ def generate_recovery_probes(
                     intervention=intervention,
                     expected_stratum=stratum,
                     verification=verification,
+                    rank_one_proof=rank_one_proof,
+                    teacher_target_audit=teacher_audit,
+                    training_decision_evidence_verified=True,
                 )
             )
             used_roots[stratum].add(root)
