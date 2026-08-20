@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import json
 import tempfile
 import unittest
@@ -15,7 +17,9 @@ from psse_env.dagger.build_recovery_probe_suite import (
 
 
 def _envelope(root: str, index: int = 0) -> dict:
-    root = root if root.startswith("physical_v") else f"physical_v3_{root}"
+    if not root.startswith("physical_v"):
+        import hashlib
+        root = "physical_v3_" + hashlib.sha256(root.encode()).hexdigest()
     return {
         "grouping": {
             "physical_root_fingerprint": root,
@@ -41,7 +45,8 @@ class ProbeSuiteRootReaderTests(unittest.TestCase):
         )
         self.assertEqual(
             envelope_roots(path),
-            {"physical_v3_root-a", "physical_v3_root-b"},
+            {_envelope("root-a")["grouping"]["physical_root_fingerprint"],
+             _envelope("root-b")["grouping"]["physical_root_fingerprint"]},
         )
 
     def test_envelope_roots_rejects_a_structure_that_is_neither_shape(self):
@@ -55,7 +60,7 @@ class ProbeSuiteRootReaderTests(unittest.TestCase):
         directory.mkdir()
         (directory / "aggregate.raw.jsonl").write_text(
             "\n".join(
-                json.dumps({"physical_root_fingerprint": f"physical_v3_d0-root-{i}"})
+                json.dumps({"physical_root_fingerprint": "physical_v3_" + hashlib.sha256(f"d0-root-{i}".encode()).hexdigest()})
                 for i in range(3)
             )
             + "\n",
@@ -63,7 +68,7 @@ class ProbeSuiteRootReaderTests(unittest.TestCase):
         )
         self.assertEqual(
             aggregate_roots(directory),
-            {f"physical_v3_d0-root-{i}" for i in range(3)},
+            {"physical_v3_" + hashlib.sha256(f"d0-root-{i}".encode()).hexdigest() for i in range(3)},
         )
 
 

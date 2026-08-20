@@ -19,6 +19,7 @@ from psse_env.dagger.recovery_probes import (
     RECOVERY_PROBE_STATE_ORIGIN,
     audit_recovery_probe_support,
     combined_recovery_support,
+    probe_audit_scenario,
     post_failure_no_candidate_intervention,
     probe_intervention,
     recovery_probe_manifest,
@@ -76,7 +77,7 @@ _PASS_PROOF = lambda observation, *, preferred_action, expert_actions: {
     "passed": True,
     "basis": "test_stub",
 }
-_PASS_AUDIT = lambda observation, *, preferred_action, env, history, scenario: {
+_PASS_AUDIT = lambda observation, *, preferred_action, env, history, scenario, observable_evidence_passed: {
     "contract": "dagger1_offline_teacher_target_truth_audit_v3",
     "passed": True,
     "action_class": "correct_measurements",
@@ -356,79 +357,72 @@ class RecoveryProbeManifestTests(unittest.TestCase):
 
 
 class CombinedRecoverySupportTests(unittest.TestCase):
-    def test_natural_and_probe_support_stay_separable(self):
-        natural = {
-            "recovery_strata": {
-                "post_failure_no_candidate": {
-                    "distinct_physical_roots": 3,
-                    "minimum_distinct_physical_roots": 10,
-                    "passed": False,
-                },
-                "unsupported_correction_recovery": {
-                    "distinct_physical_roots": 3,
-                    "minimum_distinct_physical_roots": 10,
-                    "passed": False,
-                },
-                "multi_measurement_safe_handoff": {
-                    "distinct_physical_roots": 70,
-                    "minimum_distinct_physical_roots": 10,
-                    "passed": True,
-                },
+    """Combined support must deduplicate roots shared by the two sources."""
+
+    @staticmethod
+    def _natural(stratum, count, *, prefix="nat"):
+        return [
+            {
+                "example_id": f"{prefix}-{stratum}-{i}",
+                "physical_root_fingerprint": f"physical_v3_{prefix}-{stratum}-{i}",
+                "recovery_stratum": stratum,
+                "production_label_eligible": True,
             }
-        }
-        probes = audit_recovery_probe_support(
-            [
-                _probe_row(stratum, f"{stratum}-root-{index}")
-                for stratum in RECOVERY_PROBE_ROOT_FLOORS
-                for index in range(10)
-            ]
-        )
+            for i in range(count)
+        ]
+
+    def test_disjoint_sources_add_up(self):
+        natural = self._natural("post_failure_no_candidate", 3)
+        probes = [
+            _probe_row("post_failure_no_candidate", f"physical_v3_probe-{i}")
+            for i in range(10)
+        ]
         report = combined_recovery_support(natural, probes)
-        combined = report["combined_training_support"]
-
-        # The natural figure survives untouched: a probe cannot disguise it.
-        pfnc = combined["post_failure_no_candidate"]
-        self.assertEqual(pfnc["natural_distinct_physical_roots"], 3)
-        self.assertEqual(pfnc["probe_distinct_physical_roots"], 10)
-        self.assertEqual(pfnc["combined_distinct_physical_roots"], 13)
-        self.assertTrue(pfnc["natural_floor_is_report_only"])
-        self.assertTrue(pfnc["passed"])
-
-        # A stratum with no probe source keeps its natural floor as binding.
-        handoff = combined["multi_measurement_safe_handoff"]
-        self.assertFalse(handoff["probe_eligible_stratum"])
-        self.assertFalse(handoff["natural_floor_is_report_only"])
-        self.assertEqual(handoff["probe_distinct_physical_roots"], 0)
-        self.assertTrue(report["passed"], report)
-
-    def test_probe_shortfall_still_fails_the_combined_report(self):
-        natural = {
-            "recovery_strata": {
-                "post_failure_no_candidate": {
-                    "distinct_physical_roots": 3,
-                    "passed": False,
-                }
-            }
-        }
-        probes = audit_recovery_probe_support(
-            [
-                _probe_row("post_failure_no_candidate", f"p-root-{index}")
-                for index in range(4)
-            ]
-        )
-        report = combined_recovery_support(natural, probes)
-        self.assertFalse(report["passed"])
+        combined = report["combined_training_support"]["recovery_strata"]
         self.assertEqual(
-            report["combined_training_support"]["post_failure_no_candidate"][
-                "combined_distinct_physical_roots"
-            ],
-            7,
+            combined["post_failure_no_candidate"]["distinct_physical_roots"], 13
         )
 
+    def test_shared_roots_are_counted_once(self):
+        """The additive helper reported 13 here; the real answer is 10.
 
-if __name__ == "__main__":
-    unittest.main()
+        Every pilot probe root coincided with a natural support root, so an
+        additive combined figure overcounted every one of them.
+        """
+        shared = [f"physical_v3_shared-{i}" for i in range(3)]
+        natural = [
+            {
+                "example_id": f"nat-{i}",
+                "physical_root_fingerprint": root,
+                "recovery_stratum": "post_failure_no_candidate",
+                "production_label_eligible": True,
+            }
+            for i, root in enumerate(shared)
+        ]
+        probes = [
+            _probe_row("post_failure_no_candidate", root) for root in shared
+        ] + [
+            _probe_row("post_failure_no_candidate", f"physical_v3_probe-{i}")
+            for i in range(7)
+        ]
+        report = combined_recovery_support(natural, probes)
+        combined = report["combined_training_support"]["recovery_strata"]
+        self.assertEqual(
+            combined["post_failure_no_candidate"]["distinct_physical_roots"], 10
+        )
 
+    def test_natural_figure_is_never_disguised_by_probes(self):
+        natural = self._natural("post_failure_no_candidate", 3)
+        probes = [
+            _probe_row("post_failure_no_candidate", f"physical_v3_probe-{i}")
+            for i in range(10)
+        ]
+        report = combined_recovery_support(natural, probes)
+        incidence = report["natural_incidence_report_only"]
+        self.assertEqual(
+            incidence["post_failure_no_candidate"]["distinct_physical_roots"], 3
+        )
+        self.assertFalse(incidence["post_failure_no_candidate"]["gated"])
 
 class _FakeEnv:
     """Minimal environment: the intervention always fails as designed."""
@@ -572,3 +566,81 @@ class RecoveryProbeGeneratorTests(unittest.TestCase):
             state_class_for=self._state_class,
                 quotas={"loop_escape": 2},
             )
+
+
+class ProbeAdmissionParityTests(unittest.TestCase):
+    """An unaudited probe row must be impossible to stamp.
+
+    Probe targets are held to the natural DAgger admission standard. Each of
+    these fields is a step that was actually executed, not a caller assertion.
+    """
+
+    def _stamp(self, **overrides):
+        args = {
+            "intervention": {"tool": GET_MEASUREMENT_CONTEXT, "arguments": {}},
+            "expected_stratum": "post_failure_no_candidate",
+            "verification": {
+                "passed": True,
+                "actual_stratum": "post_failure_no_candidate",
+            },
+            "rank_one_proof": {"passed": True},
+            "teacher_target_audit": {"passed": True},
+            "training_decision_evidence_verified": True,
+        }
+        args.update(overrides)
+        return stamp_recovery_probe_row(
+            {
+                "example_id": "probe-a",
+                "physical_root_fingerprint": "physical_v3_root-a",
+            },
+            **args,
+        )
+
+    def test_a_fully_audited_row_is_stamped(self):
+        row = self._stamp()
+        self.assertTrue(row["auxiliary_training_eligible"])
+        self.assertFalse(row["production_label_eligible"])
+        self.assertFalse(row["natural_on_policy_support_eligible"])
+        self.assertTrue(row["training_decision_evidence_verified"])
+
+    def test_unverified_training_decision_evidence_is_refused(self):
+        with self.assertRaises(ValueError):
+            self._stamp(training_decision_evidence_verified=False)
+
+    def test_failed_rank_one_proof_is_refused(self):
+        with self.assertRaises(ValueError):
+            self._stamp(rank_one_proof={"passed": False, "reason": "not_first"})
+        with self.assertRaises(ValueError):
+            self._stamp(rank_one_proof=None)
+
+    def test_quarantined_teacher_target_is_refused(self):
+        with self.assertRaises(ValueError):
+            self._stamp(
+                teacher_target_audit={"passed": False, "reason_codes": ["x"]}
+            )
+        with self.assertRaises(ValueError):
+            self._stamp(teacher_target_audit=None)
+
+    def test_failed_stratum_verification_is_refused(self):
+        with self.assertRaises(ValueError):
+            self._stamp(
+                verification={"passed": False, "actual_stratum": "loop_escape"}
+            )
+
+
+class ProbeAuditScenarioTests(unittest.TestCase):
+    def test_private_truth_reaches_the_audit_scenario(self):
+        envelope = {
+            "execution": {"scenario_id": "s1", "case": {"x": 1}},
+            "audit": {"truth": {"truth_complete": True, "true_measurement_errors": [{"index": 7}]}},
+            "grouping": {"physical_root_fingerprint": "physical_v3_root-a"},
+        }
+        scenario = probe_audit_scenario(envelope)
+        # The runtime envelope alone is truth-free; the audit needs the ledger.
+        self.assertNotIn("true_measurement_errors", envelope["execution"])
+        self.assertTrue(scenario["truth_complete"])
+        self.assertEqual(scenario["true_measurement_errors"], [{"index": 7}])
+        self.assertEqual(scenario["scenario_id"], "s1")
+        self.assertEqual(
+            scenario["physical_root_fingerprint"], "physical_v3_root-a"
+        )

@@ -15,13 +15,17 @@ silently disable a disjointness guard.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 #: Physical roots are versioned; an unversioned value is a different identity
-#: space and must never be compared against these sets.
+#: space and must never be compared against these sets.  A prefix check alone
+#: would admit a truncated or differently-hashed value, so the whole identity
+#: format is required: ``physical_v<version>_<64 hex>``.
 PHYSICAL_ROOT_PREFIX = "physical_v"
+PHYSICAL_ROOT_PATTERN = re.compile(r"^physical_v[0-9]+_[0-9a-f]{64}$")
 
 ROOT_SET_CONTRACT = "dagger1_physical_root_set_reader_v1"
 
@@ -30,9 +34,10 @@ def _fingerprint(value: Any, *, source: str) -> str:
     root = str(value or "").strip()
     if not root:
         raise ValueError(f"{source}: row is missing a physical root fingerprint")
-    if not root.startswith(PHYSICAL_ROOT_PREFIX):
+    if not PHYSICAL_ROOT_PATTERN.match(root):
         raise ValueError(
-            f"{source}: physical root {root!r} is not a versioned fingerprint"
+            f"{source}: physical root {root!r} is not a valid versioned "
+            "fingerprint (expected physical_v<version>_<64 hex>)"
         )
     return root
 

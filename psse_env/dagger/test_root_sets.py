@@ -12,8 +12,8 @@ from psse_env.dagger.root_sets import (
     root_set_digest,
 )
 
-R0 = "physical_v3_" + "a" * 40
-R1 = "physical_v3_" + "b" * 40
+R0 = "physical_v3_" + "a" * 64
+R1 = "physical_v3_" + "b" * 64
 
 
 class RootSetReaderTests(unittest.TestCase):
@@ -61,6 +61,22 @@ class RootSetReaderTests(unittest.TestCase):
         )
         self.assertEqual(physical_roots_from_artifact(path), {R0, R1})
 
+    def test_wrong_length_fingerprint_is_rejected(self):
+        path = self._write(
+            "scenarios.json",
+            [{"grouping": {"physical_root_fingerprint": "physical_v3_" + "a" * 40}}],
+        )
+        with self.assertRaises(ValueError):
+            physical_roots_from_artifact(path)
+
+    def test_uppercase_hex_fingerprint_is_rejected(self):
+        path = self._write(
+            "scenarios.json",
+            [{"grouping": {"physical_root_fingerprint": "physical_v3_" + "A" * 64}}],
+        )
+        with self.assertRaises(ValueError):
+            physical_roots_from_artifact(path)
+
     def test_unversioned_fingerprint_is_rejected(self):
         path = self._write(
             "scenarios.json",
@@ -68,7 +84,7 @@ class RootSetReaderTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError) as caught:
             physical_roots_from_artifact(path)
-        self.assertIn("versioned", str(caught.exception))
+        self.assertIn("fingerprint", str(caught.exception))
 
     def test_missing_fingerprint_is_rejected(self):
         path = self._write("scenarios.json", [{"grouping": {}}])

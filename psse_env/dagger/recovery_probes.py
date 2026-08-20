@@ -16,7 +16,8 @@ suite as an explicitly separate source, so the corpus becomes
 
 rather than a silently redefined DAgger.  The probe rows are never claimed to be
 learner-visited and never count toward natural on-policy support; see
-``combined_recovery_support`` for the three-way report that keeps them apart.
+``audit_dagger1_training_support`` for the three-way report that keeps them
+apart, deduplicating roots shared between the two sources.
 
 Construction rules, in order:
 
@@ -36,6 +37,7 @@ and ``allowed_dataset_sources``, and prohibits ``synthetic_counterfactual``.
 
 from __future__ import annotations
 
+import copy
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -518,57 +520,57 @@ def recovery_probe_manifest(
 
 
 def combined_recovery_support(
-    natural_support: Mapping[str, Any],
-    probe_support: Mapping[str, Any],
+    natural_rows: Sequence[Mapping[str, Any]],
+    probe_rows: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Report natural, probe, and combined support as three separate figures.
+    """Three-way support over the actual rows.
 
-    Keeping them apart measures two different things: how often the current
-    learner naturally reaches a recovery state, and whether the training corpus
-    supervises that recovery at all.  Collapsing them would let auxiliary roots
-    disguise a natural-coverage regression.
+    This used to add natural and probe root counts, on the assumption that probe
+    roots are drawn root-disjointly from natural ones.  The real corpus refutes
+    that: all 24 pilot probe roots coincide with natural support roots, so the
+    additive figure overcounted every shared root.  There is one authoritative
+    implementation, and it deduplicates.
     """
 
-    natural_strata = natural_support.get("recovery_strata")
-    natural_strata = natural_strata if isinstance(natural_strata, Mapping) else {}
-    probe_strata = probe_support.get("probe_strata")
-    probe_strata = probe_strata if isinstance(probe_strata, Mapping) else {}
+    from psse_env.dagger.replay_buffer import audit_dagger1_training_support
 
-    combined: dict[str, Any] = {}
-    for stratum in sorted(set(natural_strata) | set(probe_strata)):
-        natural_entry = natural_strata.get(stratum)
-        natural_entry = natural_entry if isinstance(natural_entry, Mapping) else {}
-        probe_entry = probe_strata.get(stratum)
-        probe_entry = probe_entry if isinstance(probe_entry, Mapping) else {}
-        natural_roots = int(natural_entry.get("distinct_physical_roots") or 0)
-        probe_roots = int(probe_entry.get("distinct_physical_roots") or 0)
-        is_probe_stratum = stratum in RECOVERY_PROBE_STRATA
-        entry: dict[str, Any] = {
-            "natural_distinct_physical_roots": natural_roots,
-            "probe_distinct_physical_roots": probe_roots,
-            # Probe roots are drawn root-disjointly per stratum, so the combined
-            # figure is additive.  It is reported for training support only and
-            # never substitutes for the natural figure.
-            "combined_distinct_physical_roots": natural_roots + probe_roots,
-            "probe_eligible_stratum": is_probe_stratum,
-        }
-        if is_probe_stratum:
-            floor = RECOVERY_PROBE_ROOT_FLOORS[stratum]
-            entry["probe_minimum_distinct_physical_roots"] = floor
-            entry["combined_minimum_distinct_physical_roots"] = floor
-            entry["natural_floor_is_report_only"] = True
-            entry["passed"] = (natural_roots + probe_roots) >= floor
-        else:
-            entry["natural_floor_is_report_only"] = False
-            entry["passed"] = bool(natural_entry.get("passed"))
-        combined[stratum] = entry
-    return {
-        "contract": RECOVERY_PROBE_CONTRACT,
-        "natural_on_policy_support": dict(natural_support),
-        "observable_probe_support": dict(probe_support),
-        "combined_training_support": combined,
-        "passed": bool(combined) and all(e["passed"] for e in combined.values()),
-    }
+    return audit_dagger1_training_support(natural_rows, probe_rows)
+
+#: Grouping fields the offline audit reads for identity, mirroring the natural
+#: collector's export allowlist.  These are not projected into PolicyObservation.
+_AUDIT_GROUPING_FIELDS = (
+    "physical_root_fingerprint",
+    "scenario_family",
+    "error_cardinality",
+    "network_case",
+    "source_tier",
+    "dataset_split",
+    "parameter_scans_available",
+)
+
+
+def probe_audit_scenario(envelope: Mapping[str, Any]) -> dict[str, Any]:
+    """Compose the offline-audit scenario: runtime fields plus private truth.
+
+    The envelope handed to ``env.reset`` is truth-free by construction, so the
+    private teacher-target audit must receive the audit truth ledger explicitly.
+    Auditing against the runtime object judges the target on an incomplete
+    ledger, which would silently pass any probe whose recovery target is itself
+    a correction.
+    """
+
+    runtime = envelope.get("execution")
+    scenario = dict(runtime) if isinstance(runtime, Mapping) else dict(envelope)
+    audit = envelope.get("audit")
+    truth = audit.get("truth") if isinstance(audit, Mapping) else None
+    if isinstance(truth, Mapping):
+        scenario.update(copy.deepcopy(dict(truth)))
+    grouping = envelope.get("grouping")
+    if isinstance(grouping, Mapping):
+        for key in _AUDIT_GROUPING_FIELDS:
+            if key in grouping:
+                scenario.setdefault(key, copy.deepcopy(grouping[key]))
+    return scenario
 
 
 def _default_rank_one_proof(
@@ -593,6 +595,7 @@ def _default_teacher_audit(
     env: Any,
     history: Sequence[Any],
     scenario: Mapping[str, Any],
+    observable_evidence_passed: bool,
 ) -> dict[str, Any]:
     """The same private truth audit a natural DAgger target must survive."""
 
@@ -602,7 +605,7 @@ def _default_teacher_audit(
         policy_observation=observation,
         scenario=scenario,
         env=env,
-        observable_evidence_passed=True,
+        observable_evidence_passed=observable_evidence_passed,
     )
 
 
@@ -745,6 +748,22 @@ def generate_recovery_probes(
             # trust it: the observable proof must rank it first on
             # policy-visible evidence, and private truth must then find the
             # already-fixed target safe.
+            # Training-decision evidence is verified, never asserted.  The
+            # natural collector runs this environment check and only then sets
+            # its flag; stamping a caller-supplied boolean would let a probe row
+            # claim an admission step it never passed.
+            training_decision_evidence_verified = False
+            assertion = getattr(env, "assert_training_decision_evidence", None)
+            if assertion is None:
+                training_decision_evidence_verified = True
+            else:
+                try:
+                    assertion(preferred_action)
+                except ValueError:
+                    skipped[f"{stratum}:training_decision_evidence_failed"] += 1
+                    continue
+                training_decision_evidence_verified = True
+
             prove_rank_one = rank_one_proof_for or _default_rank_one_proof
             audit_target = teacher_target_audit_for or _default_teacher_audit
             rank_one_proof = prove_rank_one(
@@ -760,7 +779,11 @@ def generate_recovery_probes(
                 preferred_action=preferred_action,
                 env=env,
                 history=history,
-                scenario=runtime if isinstance(runtime, Mapping) else scenario,
+                # Private truth must reach the audit.  The runtime envelope is
+                # truth-free by construction, so auditing against it would judge
+                # the target on an incomplete ledger.
+                scenario=probe_audit_scenario(scenario),
+                observable_evidence_passed=training_decision_evidence_verified,
             )
             if teacher_audit.get("passed") is not True:
                 skipped[f"{stratum}:teacher_target_quarantined"] += 1
