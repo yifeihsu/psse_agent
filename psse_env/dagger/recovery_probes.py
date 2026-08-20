@@ -50,6 +50,10 @@ from psse_env.actions import (
 from psse_env.dagger.offline_teacher_target_audit import (
     offline_teacher_target_audit,
 )
+from psse_env.dagger.release_factories import select_observable_expert_actions
+from psse_env.oracle.process_validity import (
+    POST_CORRECTION_CONFIRMATION_SIGNATURE,
+)
 from psse_env.dagger.rollout_collector import (
     classify_dagger1_recovery_stratum,
     observable_rank_one_target_proof,
@@ -286,10 +290,88 @@ def probe_setup_action(
 
 
 #: Frozen dispatch from target stratum to its intervention rule.
+def post_correction_confirmation_pending(observation: Mapping[str, Any]) -> bool:
+    """The exact policy-visible state the confirmation guard fires on.
+
+    Mirrors the controller's own condition: an accepted correction exists and
+    the confirmation signature is the *only* unresolved signature.  Testing a
+    weaker version -- "an accepted correction with no open candidate" -- fires
+    before the guard exists and produces ``missing_precondition`` instead, which
+    is a different stratum and must not be counted here.
+    """
+
+    if not observation.get("accepted_corrections"):
+        return False
+    signatures = {
+        str(item) for item in (observation.get("unresolved_signatures") or [])
+    }
+    return signatures == {POST_CORRECTION_CONFIRMATION_SIGNATURE}
+
+
+def confirmation_violation_intervention(
+    observation: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Repeat an accepted correction instead of honouring the confirmation.
+
+    Built only from the observable accepted-correction record: an existing
+    source action rebound to the current active state.  No new target and no new
+    physical value is introduced, so this cannot manufacture a fault -- it models
+    a learner opening another autonomous transaction when the protocol requires
+    confirmation and handoff.
+    """
+
+    if not post_correction_confirmation_pending(observation):
+        return None
+    active_state_id = str(observation.get("active_state_id") or "").strip()
+    if not active_state_id:
+        return None
+    accepted = observation.get("accepted_corrections") or []
+    sources = [
+        entry.get("source_action")
+        for entry in accepted
+        if isinstance(entry, Mapping)
+        and isinstance(entry.get("source_action"), Mapping)
+        and str(entry["source_action"].get("tool") or "") == CORRECT_MEASUREMENTS
+    ]
+    if not sources:
+        return None
+    # Frozen deterministic rule: the most recently accepted correction.
+    source = sources[-1]
+    arguments = dict(source.get("arguments") or {})
+    arguments["state_id"] = active_state_id
+    return {"tool": CORRECT_MEASUREMENTS, "arguments": arguments}
+
+
 RECOVERY_PROBE_INTERVENTIONS = {
     "post_failure_no_candidate": post_failure_no_candidate_intervention,
-    "unsupported_correction_recovery": unsupported_correction_intervention,
+    "unsupported_correction_recovery": confirmation_violation_intervention,
 }
+
+#: Preconditions the observable prefix must reach before an intervention may
+#: fire.  Firing early is how the previous unsupported probe produced
+#: missing_precondition rows instead of the intended stratum.
+RECOVERY_PROBE_PRECONDITIONS = {
+    "post_failure_no_candidate": lambda observation: bool(
+        observation.get("active_state_id")
+        and not observation.get("has_open_candidate")
+        and not observation.get("candidate_state_id")
+    ),
+    "unsupported_correction_recovery": post_correction_confirmation_pending,
+}
+
+#: Bound on the observable-expert prefix driven before an intervention.
+RECOVERY_PROBE_MAX_PREFIX_STEPS = 24
+
+
+def probe_intervention_precondition(
+    observation: Mapping[str, Any], *, stratum: str
+) -> bool:
+    """Whether this observation is the exact state the intervention targets."""
+
+    rule = RECOVERY_PROBE_PRECONDITIONS.get(str(stratum))
+    if rule is None:
+        raise ValueError(f"no recovery-probe precondition for stratum {stratum!r}")
+    return bool(rule(observation))
 
 
 def probe_intervention(
@@ -678,33 +760,40 @@ def generate_recovery_probes(
                 else dict(observation)
             )
 
-            # Prime whatever policy-visible evidence the intervention reads.
-            # Re-observe between steps: a solve republishes the active state, so
-            # a precomputed sequence would bind to a stale id.
+            # Drive a legal observable-expert prefix until the intervention's
+            # precondition holds.  The previous priming loop fired the
+            # intervention wherever an accepted correction existed with no open
+            # candidate, which precedes the confirmation guard and yields
+            # missing_precondition -- a different stratum entirely.
             setup_actions: list[dict[str, Any]] = []
-            for setup_step in range(RECOVERY_PROBE_MAX_SETUP_STEPS):
-                setup = probe_setup_action(
-                    observation, stratum=stratum, step=setup_step
-                )
-                if setup is None:
+            for _prefix_step in range(RECOVERY_PROBE_MAX_PREFIX_STEPS):
+                if probe_intervention_precondition(observation, stratum=stratum):
                     break
-                setup_result = env.step(setup)
-                setup_output = (
-                    setup_result[1]
-                    if isinstance(setup_result, tuple) and len(setup_result) > 1
-                    else setup_result
+                prefix_selection = select_observable_expert_actions(
+                    policy_observation=observation, expert_oracle=expert_oracle
                 )
-                setup_actions.append(setup)
-                # The real tool output must reach the history: context freshness
-                # is derived from it, and a null entry leaves the primed
-                # evidence invisible to the very rule that needs it.
-                history.append({"action": setup, "tool_output": setup_output})
+                prefix_action = prefix_selection.preferred_action
+                if prefix_action is None:
+                    break
+                prefix_result = env.step(prefix_action)
+                prefix_output = (
+                    prefix_result[1]
+                    if isinstance(prefix_result, tuple) and len(prefix_result) > 1
+                    else prefix_result
+                )
+                setup_actions.append(prefix_action)
+                history.append(
+                    {"action": prefix_action, "tool_output": prefix_output}
+                )
                 observation = env.get_policy_observation(history)
                 observation = (
                     observation.as_dict()
                     if hasattr(observation, "as_dict")
                     else dict(observation)
                 )
+            if not probe_intervention_precondition(observation, stratum=stratum):
+                skipped[f"{stratum}:precondition_never_reached"] += 1
+                continue
 
             intervention = probe_intervention(observation, stratum=stratum)
             if intervention is None:
@@ -716,8 +805,14 @@ def generate_recovery_probes(
             post = env.get_policy_observation(history)
             post = post.as_dict() if hasattr(post, "as_dict") else dict(post)
 
-            expert_actions = list(expert_oracle.next_actions(post, history))
-            preferred_action = expert_actions[0] if expert_actions else None
+            # The shared observable path, identical to natural collection.
+            # Calling the rule expert directly returns nothing at a verified
+            # candidate and reads an unbounded history the learner cannot see.
+            selection = select_observable_expert_actions(
+                policy_observation=post, expert_oracle=expert_oracle
+            )
+            expert_actions = list(selection.actions)
+            preferred_action = selection.preferred_action
             if preferred_action is None:
                 skipped[f"{stratum}:no_expert_target"] += 1
                 continue

@@ -1380,38 +1380,20 @@ class DaggerRolloutCollector:
             # transition history into either teacher path: transition labels
             # are produced after an OracleState exists and may contain fields
             # outside the bounded PolicyObservation history window.
-            observation_payload = policy_observation.as_dict()
-            raw_history_window = observation_payload.get("history_window")
-            if not isinstance(raw_history_window, list) or any(
-                not isinstance(item, Mapping) for item in raw_history_window
-            ):
-                raise ValueError(
-                    "DAgger-1 PolicyObservation history_window must be a list "
-                    "of mappings"
-                )
-            observable_history = [
-                copy.deepcopy(dict(item)) for item in raw_history_window
-            ]
-            # Reuse the reviewed deployment reconstruction for verified
-            # candidate commit/rollback/handoff decisions, then fall back to
-            # the rule expert with PolicyObservation itself.  The lazy import
-            # avoids changing the frozen release-factory source.
+            # One shared selector serves the release policy wrapper, this
+            # collector, and the recovery-probe generator.  Keeping three
+            # copies let the probe path drift onto the raw rule expert with an
+            # unbounded history, which stalled at verified candidates and gave
+            # the expert evidence the learner could not see.
             from psse_env.dagger.release_factories import (
-                _observable_candidate_disposition_action,
+                select_observable_expert_actions,
             )
 
-            observable_action = _observable_candidate_disposition_action(
-                copy.deepcopy(observation_payload),
-                copy.deepcopy(observable_history),
+            selection = select_observable_expert_actions(
+                policy_observation=policy_observation.as_dict(),
+                expert_oracle=self.expert_oracle,
             )
-            raw_actions = (
-                [observable_action]
-                if observable_action is not None
-                else self.expert_oracle.next_actions(
-                    policy_observation,
-                    copy.deepcopy(observable_history),
-                )
-            )
+            return [copy.deepcopy(action) for action in selection.actions]
         else:
             if oracle_state is None:
                 raise RuntimeError("non-D1 expert selection requires oracle state")

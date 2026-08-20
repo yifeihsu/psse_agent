@@ -179,32 +179,92 @@ class ObservableExpertPolicy:
         }
 
     def act(self, observation: Mapping[str, Any]) -> dict[str, Any]:
-        if not isinstance(observation, Mapping):
-            raise TypeError("observable expert requires a policy-observation mapping")
-        policy_observation = copy.deepcopy(dict(observation))
-        # Reject, rather than merely strip, a caller that crosses the policy /
-        # oracle boundary.  The evaluator already performs the same check, but
-        # the factory's product must remain safe when invoked independently.
-        validate_policy_payload(policy_observation)
-        raw_history = policy_observation.get("history_window") or []
-        if not isinstance(raw_history, list) or any(
-            not isinstance(item, Mapping) for item in raw_history
-        ):
-            raise ValueError("policy observation history_window must contain mappings")
-        disposition_action = _observable_candidate_disposition_action(
-            policy_observation, raw_history
-        )
-        if disposition_action is not None:
-            return disposition_action
-        actions = self._expert.next_actions(
-            policy_observation,
-            [copy.deepcopy(dict(item)) for item in raw_history],
+        selection = select_observable_expert_actions(
+            policy_observation=observation, expert_oracle=self._expert
         )
         return (
-            copy.deepcopy(actions[0])
-            if actions
+            copy.deepcopy(selection.preferred_action)
+            if selection.preferred_action is not None
             else invalid_action("observable_expert_returned_no_action")
         )
+
+
+@dataclass(frozen=True)
+class ObservableExpertSelection:
+    """One observable expert decision, with the evidence it was made from."""
+
+    actions: tuple[dict[str, Any], ...]
+    preferred_action: dict[str, Any] | None
+    bounded_history: tuple[dict[str, Any], ...]
+    #: "candidate_disposition_reconstruction" or "rule_expert".
+    selection_basis: str
+
+
+def select_observable_expert_actions(
+    *,
+    policy_observation: Mapping[str, Any],
+    expert_oracle: Any,
+) -> ObservableExpertSelection:
+    """The single observable expert-selection path for DAgger-1.
+
+    Three callers previously reimplemented this: the release policy wrapper, the
+    natural rollout collector, and the recovery-probe generator.  The probe
+    generator's copy called the rule expert directly with the driver's full
+    history, which diverged in two ways that mattered.  The rule expert cannot
+    decide commit or rollback from a policy observation alone, so a probe
+    episode stalled at a verified candidate; and the unbounded history gave the
+    expert evidence the learner could not see.
+
+    The whole ordered list is returned, not just the first action: the rank-one
+    proof needs the remainder to establish that the target is observably first.
+
+    History is read only from ``history_window``.  A caller's longer private
+    history is never substituted, and a malformed window fails closed rather
+    than silently falling back to it.
+    """
+
+    if not isinstance(policy_observation, Mapping):
+        raise TypeError("observable expert requires a policy-observation mapping")
+    observation = copy.deepcopy(dict(policy_observation))
+    # Reject, rather than strip, a caller that crosses the policy/oracle
+    # boundary, so an OracleState or hidden truth can never reach the expert.
+    validate_policy_payload(observation)
+    raw_history = observation.get("history_window") or []
+    if not isinstance(raw_history, list) or any(
+        not isinstance(item, Mapping) for item in raw_history
+    ):
+        raise ValueError("policy observation history_window must contain mappings")
+    bounded_history = [copy.deepcopy(dict(item)) for item in raw_history]
+
+    disposition_action = _observable_candidate_disposition_action(
+        observation, bounded_history
+    )
+    if disposition_action is not None:
+        action = safe_normalize_action(disposition_action)
+        actions = (
+            () if action["tool"] == "__invalid_action__" else (copy.deepcopy(action),)
+        )
+        return ObservableExpertSelection(
+            actions=actions,
+            preferred_action=copy.deepcopy(actions[0]) if actions else None,
+            bounded_history=tuple(bounded_history),
+            selection_basis="candidate_disposition_reconstruction",
+        )
+
+    raw_actions = expert_oracle.next_actions(
+        observation, [copy.deepcopy(dict(item)) for item in bounded_history]
+    )
+    normalized = tuple(
+        action
+        for action in (safe_normalize_action(item) for item in raw_actions)
+        if action["tool"] != "__invalid_action__"
+    )
+    return ObservableExpertSelection(
+        actions=normalized,
+        preferred_action=copy.deepcopy(normalized[0]) if normalized else None,
+        bounded_history=tuple(bounded_history),
+        selection_basis="rule_expert",
+    )
 
 
 def _finite_float(value: Any) -> float | None:

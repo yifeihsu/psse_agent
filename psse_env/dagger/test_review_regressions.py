@@ -5,6 +5,7 @@ import inspect
 import json
 import random
 import unittest
+from collections.abc import Mapping
 
 from psse_env.actions import (
     FINALIZE_DIAGNOSIS,
@@ -105,8 +106,14 @@ class _LearnerRecoveryOracle:
             if isinstance(state, OracleState)
             else state
         )
-        if observation.candidate_lifecycle == "VERIFIED_REJECT":
-            candidate = observation.candidate_state_id
+
+        def field(name):
+            if isinstance(observation, Mapping):
+                return observation.get(name)
+            return getattr(observation, name, None)
+
+        if field("candidate_lifecycle") == "VERIFIED_REJECT":
+            candidate = field("candidate_state_id")
             return [
                 {
                     "tool": "rollback_state",
@@ -116,7 +123,7 @@ class _LearnerRecoveryOracle:
         return [
             {
                 "tool": RUN_WLS,
-                "arguments": {"state_id": observation.active_state_id},
+                "arguments": {"state_id": field("active_state_id")},
             }
         ]
 
@@ -174,7 +181,7 @@ class _HistorySensitiveRecoveryOracle(_LearnerRecoveryOracle):
             return [
                 {
                     "tool": "get_parameter_context",
-                    "arguments": {"state_id": observation.active_state_id},
+                    "arguments": {"state_id": field("active_state_id")},
                 }
             ]
         return super().next_actions(state, history)
@@ -678,7 +685,14 @@ class DaggerExecutionRegressionTests(unittest.TestCase):
         for oracle in (plain_oracle, changed_oracle):
             self.assertEqual(oracle.private_teacher_selection_calls, 0)
             self.assertTrue(oracle.teacher_state_types)
-            self.assertEqual(set(oracle.teacher_state_types), {PolicyObservation})
+            self.assertNotIn(OracleState, set(oracle.teacher_state_types))
+            self.assertTrue(
+                all(
+                    issubclass(seen, (PolicyObservation, dict))
+                    for seen in oracle.teacher_state_types
+                ),
+                oracle.teacher_state_types,
+            )
         self.assertEqual(
             [row["preferred_action"]["tool"] for row in plain_rows],
             [RUN_WLS, "rollback_state"],

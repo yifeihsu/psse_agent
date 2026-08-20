@@ -427,10 +427,16 @@ class CombinedRecoverySupportTests(unittest.TestCase):
 class _FakeEnv:
     """Minimal environment: the intervention always fails as designed."""
 
-    def __init__(self, error_code: str = "unknown_state_id"):
+    def __init__(
+        self, error_code: str = "unknown_state_id", *, confirmation_pending=False
+    ):
         self.error_code = error_code
         self.scenario: Any = None
         self.resets = 0
+        # The confirmation-violation intervention fires only when an accepted
+        # correction exists and the confirmation signature is the sole
+        # unresolved signature -- the controller's exact guard condition.
+        self.confirmation_pending = confirmation_pending
 
     def reset(self, scenario):
         self.scenario = scenario
@@ -438,6 +444,27 @@ class _FakeEnv:
 
     def get_policy_observation(self, history):
         observation = _observation()
+        if self.confirmation_pending:
+            from psse_env.actions import POST_CORRECTION_CONFIRMATION_SIGNATURE
+
+            observation.update(
+                {
+                    "accepted_corrections": [
+                        {
+                            "source_action": {
+                                "tool": "correct_measurements",
+                                "arguments": {
+                                    "state_id": observation["active_state_id"],
+                                    "suspect_group": [11],
+                                },
+                            }
+                        }
+                    ],
+                    "unresolved_signatures": [
+                        POST_CORRECTION_CONFIRMATION_SIGNATURE
+                    ],
+                }
+            )
         if history:
             action = history[-1]["action"]
             observation.update(
@@ -539,7 +566,9 @@ class RecoveryProbeGeneratorTests(unittest.TestCase):
 
         rows, report = generate_recovery_probes(
             _scenarios(5),
-            env=_FakeEnv("correction_not_supported_by_current_context"),
+            env=_FakeEnv(
+                "post_correction_confirmation_required", confirmation_pending=True
+            ),
             expert_oracle=_FakeOracle(),
             rank_one_proof_for=_PASS_PROOF,
             teacher_target_audit_for=_PASS_AUDIT,
