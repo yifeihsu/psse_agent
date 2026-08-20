@@ -211,6 +211,38 @@ class NativeToolExportTests(unittest.TestCase):
         )
         self.assertEqual(len(rows), 1)
 
+    def test_recovery_probe_identity_survives_auxiliary_export(self) -> None:
+        example = _example()
+        provenance_id = "a" * 64
+        probe_fields = {
+            "dataset_mode": "production",
+            "dataset_source": "observable_recovery_probe",
+            "collector_contract": "dagger1_observable_recovery_probe_v1",
+            "state_origin": "observable_recovery_probe",
+            "collection_role": "auxiliary_training",
+            "state_visited_by": "observable_recovery_probe",
+            "replay_source": "observable_recovery_probe",
+            "auxiliary_training_eligible": True,
+            "production_label_eligible": False,
+            "natural_on_policy_support_eligible": False,
+            "training_decision_evidence_verified": True,
+            "recovery_stratum": "post_failure_no_candidate",
+            "generation_provenance_id": provenance_id,
+        }
+        example.update(probe_fields)
+
+        exported = examples_to_chat_sft(
+            [example], allow_ineligible_auxiliary=True
+        )[0]
+
+        for key, value in probe_fields.items():
+            with self.subTest(key=key):
+                self.assertEqual(exported[key], value)
+                self.assertEqual(exported["metadata"][key], value)
+        visible = json.dumps(exported["messages"], sort_keys=True)
+        self.assertNotIn("observable_recovery_probe", visible)
+        self.assertNotIn(provenance_id, visible)
+
     def test_measurement_update_keys_round_trip_as_strict_json_strings(self) -> None:
         example = _example()
         example["preferred_action"] = {

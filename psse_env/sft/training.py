@@ -22,7 +22,11 @@ from .gates import (
     processor_token_type_input_names,
     validate_grouped_pilot,
 )
-from .provenance import git_source_state, validate_generation_provenance
+from .provenance import (
+    git_source_state,
+    stable_json_sha256,
+    validate_generation_provenance,
+)
 from .smoke import (
     TARGETED_MIN_RELATIVE_LOSS_REDUCTION,
     TARGETED_RECOVERY_CASES,
@@ -86,6 +90,9 @@ class TrainerSettings:
     run_name: str | None = None
     initial_adapter_path: str | None = None
     initial_adapter_revision: str | None = None
+    round1_provenance_path: str | None = None
+    round1_preflight_path: str | None = None
+    reviewed_source_commit: str | None = None
 
     def validate(self) -> None:
         if "gemma-4" not in self.model_name.lower():
@@ -137,6 +144,30 @@ class TrainerSettings:
             ):
                 raise GateError(
                     "output_dir and initial_adapter_path must not overlap."
+                )
+        round1_binding = (
+            str(self.round1_provenance_path or "").strip(),
+            str(self.round1_preflight_path or "").strip(),
+            str(self.reviewed_source_commit or "").strip(),
+        )
+        if any(round1_binding) != all(round1_binding):
+            raise GateError(
+                "round1_provenance_path, round1_preflight_path, and "
+                "reviewed_source_commit must be supplied together."
+            )
+        if initial_path and not all(round1_binding):
+            raise GateError(
+                "Warm-start training or smoke requires the complete Round-1 "
+                "source binding."
+            )
+        if all(round1_binding):
+            if not initial_path or not initial_revision:
+                raise GateError(
+                    "Round-1 source binding requires an immutable initial adapter."
+                )
+            if re.fullmatch(r"[0-9a-fA-F]{40}", round1_binding[2]) is None:
+                raise GateError(
+                    "reviewed_source_commit must be a 40-character commit hash."
                 )
 
     def to_dict(self) -> dict[str, Any]:
@@ -342,6 +373,80 @@ def _load_model(settings: TrainerSettings) -> tuple[Any, dict[str, Any]]:
     return model, attestation
 
 
+def _validated_round1_generation_provenance_id(
+    *,
+    settings: TrainerSettings,
+    train_rows: Sequence[Mapping[str, Any]],
+    validation_rows: Sequence[Mapping[str, Any]],
+    train_file: str | Path,
+    validation_file: str | Path,
+) -> str | None:
+    """Authenticate the sole auxiliary SFT source before grouped ingestion."""
+
+    has_ineligible_rows = any(
+        row.get("production_label_eligible") is not True
+        for row in [*train_rows, *validation_rows]
+    )
+    # Import only after this module is fully initialized.  The source gate
+    # imports the aggregate builder, whose reviewed release factory imports
+    # training helpers from this module.
+    from .round1_source_gate import (
+        round1_source_binding_required,
+        validate_round1_source_mix_gate,
+    )
+
+    path_requires_binding = round1_source_binding_required(
+        train_file,
+        validation_file,
+    )
+    configured = all(
+        (
+            settings.round1_provenance_path,
+            settings.round1_preflight_path,
+            settings.reviewed_source_commit,
+            settings.initial_adapter_revision,
+        )
+    )
+    if not configured:
+        if has_ineligible_rows or path_requires_binding:
+            raise GateError(
+                "Round-1 or non-production-label SFT rows require provenance, "
+                "preflight, reviewed source commit, and initial-adapter revision "
+                "validated through the Round-1 source gate."
+            )
+        return None
+
+    report = validate_round1_source_mix_gate(
+        settings.round1_provenance_path,
+        settings.round1_preflight_path,
+        reviewed_source_commit=str(settings.reviewed_source_commit).lower(),
+        initial_adapter_revision=str(settings.initial_adapter_revision).lower(),
+        train_path=train_file,
+        validation_path=validation_file,
+    )
+    provenance_id = report.get("generation_provenance_id")
+    if report.get("passed") is not True or not isinstance(
+        provenance_id, str
+    ) or re.fullmatch(r"[0-9a-f]{64}", provenance_id) is None:
+        raise GateError(
+            "Round-1 source gate did not return a valid generation provenance ID."
+        )
+    expected_content = report.get("canonical_dataset_content_sha256")
+    actual_content = {
+        "train": stable_json_sha256(list(train_rows)),
+        "validation": stable_json_sha256(list(validation_rows)),
+    }
+    if not isinstance(expected_content, Mapping) or any(
+        expected_content.get(split) != digest
+        for split, digest in actual_content.items()
+    ):
+        raise GateError(
+            "Round-1 source gate authenticated dataset bytes different from "
+            "the rows already loaded for training."
+        )
+    return provenance_id
+
+
 def _prepare_pilot(
     *,
     train_file: str | Path,
@@ -353,12 +458,20 @@ def _prepare_pilot(
     settings.validate()
     train_rows = load_jsonl(train_file)
     validation_rows = load_jsonl(validation_file)
+    validated_round1_id = _validated_round1_generation_provenance_id(
+        settings=settings,
+        train_rows=train_rows,
+        validation_rows=validation_rows,
+        train_file=train_file,
+        validation_file=validation_file,
+    )
     grouped = validate_grouped_pilot(
         {"train": train_rows, "validation": validation_rows},
         group_key="physical_root_fingerprint",
         required_protocol="canonical",
         minimum_rows=pilot_minimum_rows,
         maximum_rows=pilot_maximum_rows,
+        validated_round1_generation_provenance_id=validated_round1_id,
     )
     if not grouped.passed:
         raise GateError("Grouped pilot gate failed: " + " | ".join(grouped.failures))

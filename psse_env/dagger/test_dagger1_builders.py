@@ -710,6 +710,42 @@ class Dagger1ScenarioBuilderTests(unittest.TestCase):
 
 
 class Dagger1AggregateBuilderTests(unittest.TestCase):
+    def test_jsonl_snapshot_rejects_swap_after_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "immutable.jsonl"
+            _write_jsonl(path, [{"example_id": "validated"}])
+            validated_sha256 = file_sha256(path)
+            _write_jsonl(path, [{"example_id": "swapped"}])
+            with self.assertRaisesRegex(ValueError, "changed before"):
+                aggregate_module._load_jsonl_snapshot(
+                    path,
+                    expected_sha256=validated_sha256,
+                    label="test input",
+                )
+
+    def test_release_cli_requires_probe_and_exposes_no_allocation_overrides(self):
+        import contextlib
+        import io
+
+        output = io.StringIO()
+        with self.assertRaises(SystemExit) as raised, contextlib.redirect_stdout(output):
+            aggregate_module.main(["--help"])
+        self.assertEqual(raised.exception.code, 0)
+        help_text = output.getvalue()
+        self.assertIn("--d1-manifest D1_MANIFEST", help_text)
+        self.assertIn("--probe PROBE", help_text)
+        self.assertIn("--probe-manifest PROBE_MANIFEST", help_text)
+        self.assertIn("--reviewed-source-commit", help_text)
+        signature = inspect.signature(aggregate_module.build_round1_aggregate)
+        for name in (
+            "probe_path",
+            "probe_manifest_path",
+            "reviewed_source_commit",
+        ):
+            self.assertIs(signature.parameters[name].default, inspect.Parameter.empty)
+        for removed in ("--size", "--d1-share", "--max-rows-per-root"):
+            self.assertNotIn(removed, help_text)
+
     def _write_d1_inputs(self, root: Path) -> tuple[Path, Path]:
         d1_path = root / "d1.jsonl"
         _write_jsonl(
@@ -738,6 +774,11 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
         )
         scenario_manifest = root / "scenarios.json.manifest.json"
         scenario_manifest.write_text("{}\n", encoding="utf-8")
+        scenario_generator_report = root / "scenario_generator_report.json"
+        scenario_generator_report.write_text(
+            json.dumps({"source_partition": "train"}) + "\n",
+            encoding="utf-8",
+        )
         d0_dir = root / "d0"
         if not (d0_dir / "aggregate.generation_provenance.json").is_file():
             d0_dir = _write_d0_inputs(root)
@@ -884,6 +925,12 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
             "input_sha256": file_sha256(scenario_input),
             "scenario_manifest": str(scenario_manifest),
             "scenario_manifest_sha256": file_sha256(scenario_manifest),
+            "scenario_generator_report": str(
+                scenario_generator_report.resolve()
+            ),
+            "scenario_generator_report_sha256": file_sha256(
+                scenario_generator_report
+            ),
             "d0_manifest_sha256": file_sha256(d0_manifest_path),
             "development_holdout": str(development_path),
             "development_holdout_sha256": file_sha256(development_path),
@@ -1194,6 +1241,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                     d0_aggregate_dir=d0_dir,
                     d1_path=d1_path,
                     d1_manifest_path=manifest_path,
+                    probe_path=d1_path.parent / "recovery_probes.jsonl",
+                    probe_manifest_path=d1_path.parent / "recovery_probes.manifest.json",
+                    reviewed_source_commit=SOURCE_STATE["source_commit"],
                     output_dir=root / "missing-development-report",
                     seed=20260719,
                     size=None,
@@ -1224,6 +1274,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                     d0_aggregate_dir=d0_dir,
                     d1_path=d1_path,
                     d1_manifest_path=manifest_path,
+                    probe_path=d1_path.parent / "recovery_probes.jsonl",
+                    probe_manifest_path=d1_path.parent / "recovery_probes.manifest.json",
+                    reviewed_source_commit=SOURCE_STATE["source_commit"],
                     output_dir=root / output_name,
                     seed=20260719,
                     size=None,
@@ -1277,23 +1330,45 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                     DAGGER1_DEVELOPMENT_SUITE_NAME
                 ]
             )
+            probe_path = root / "recovery_probes.jsonl"
+            _write_jsonl(
+                probe_path,
+                [
+                    {
+                        "example_id": "probe-row",
+                        "physical_root_fingerprint": "probe-root",
+                        "recovery_stratum": "post_failure_no_candidate",
+                        "generation_provenance_id": "f" * 64,
+                    }
+                ],
+            )
+            (root / "recovery_probes.manifest.json").write_text(
+                "{}\n", encoding="utf-8"
+            )
 
-            def fake_view(d0_rows, d1_rows, **kwargs):
-                del kwargs
+            def fake_view(*, d0_rows, natural_d1_rows, probe_rows, policy):
                 self.assertEqual(
                     {row["physical_root_fingerprint"] for row in d0_rows},
                     {"d0-root"},
                 )
                 self.assertEqual(
-                    {row["physical_root_fingerprint"] for row in d1_rows},
+                    {row["physical_root_fingerprint"] for row in natural_d1_rows},
                     {"d1-root"},
                 )
-                return [*copy.deepcopy(d0_rows), *copy.deepcopy(d1_rows)], {
-                    "release_ready": True,
-                    "source_allocation": {"passed": True},
+                self.assertEqual(len(probe_rows), 1)
+                return [
+                    *copy.deepcopy(d0_rows),
+                    *copy.deepcopy(natural_d1_rows),
+                    *copy.deepcopy(probe_rows),
+                ], {
+                    "contract": aggregate_module.THREE_SOURCE_VIEW_CONTRACT,
+                    "policy_digest": aggregate_module.round1_view_policy_digest(),
+                    "placed": dict(policy["allocation"]),
+                    "passed": True,
                 }
 
-            def fake_chat(rows, *, protocol):
+            def fake_chat(rows, *, protocol, **kwargs):
+                del kwargs
                 self.assertEqual(protocol, "canonical")
                 return [
                     {
@@ -1314,8 +1389,23 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                 ),
                 patch.object(
                     aggregate_module,
-                    "build_dagger1_training_view",
+                    "build_dagger1_three_source_view",
                     side_effect=fake_view,
+                ),
+                patch.object(
+                    aggregate_module,
+                    "validate_recovery_probe_suite_binding",
+                    return_value={
+                        "passed": True,
+                        "generation_provenance_id": "f" * 64,
+                        "rows_sha256": file_sha256(probe_path),
+                        "manifest_sha256": file_sha256(
+                            root / "recovery_probes.manifest.json"
+                        ),
+                        "view_policy_digest": (
+                            aggregate_module.round1_view_policy_digest()
+                        ),
+                    },
                 ),
                 patch.object(
                     aggregate_module,
@@ -1349,6 +1439,14 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                 ),
                 patch.object(
                     aggregate_module,
+                    "audit_dagger1_training_support",
+                    return_value={
+                        "passed": True,
+                        "natural_on_policy_support": {"passed": True},
+                    },
+                ),
+                patch.object(
+                    aggregate_module,
                     "audit_dagger1_union_realizability",
                     return_value={"passed": True, "failures": []},
                 ),
@@ -1365,6 +1463,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                     d0_aggregate_dir=d0_dir,
                     d1_path=d1_path,
                     d1_manifest_path=d1_manifest_path,
+                    probe_path=d1_path.parent / "recovery_probes.jsonl",
+                    probe_manifest_path=d1_path.parent / "recovery_probes.manifest.json",
+                    reviewed_source_commit=SOURCE_STATE["source_commit"],
                     output_dir=output_dir,
                     seed=20260719,
                     size=None,
@@ -1443,6 +1544,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                     d0_aggregate_dir=d0_dir,
                     d1_path=d1_path,
                     d1_manifest_path=d1_manifest_path,
+                    probe_path=d1_path.parent / "recovery_probes.jsonl",
+                    probe_manifest_path=d1_path.parent / "recovery_probes.manifest.json",
+                    reviewed_source_commit=SOURCE_STATE["source_commit"],
                     output_dir=empty_output_dir,
                     seed=20260719,
                     size=None,
@@ -1480,6 +1584,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                         d0_aggregate_dir=d0_dir,
                         d1_path=d1_path,
                         d1_manifest_path=d1_manifest_path,
+                        probe_path=d1_path.parent / "recovery_probes.jsonl",
+                        probe_manifest_path=d1_path.parent / "recovery_probes.manifest.json",
+                        reviewed_source_commit=SOURCE_STATE["source_commit"],
                         output_dir=root / "d0-not-clean",
                         seed=20260719,
                         size=None,
@@ -1502,6 +1609,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                         d0_aggregate_dir=d0_dir,
                         d1_path=d1_path,
                         d1_manifest_path=d1_manifest_path,
+                        probe_path=d1_path.parent / "recovery_probes.jsonl",
+                        probe_manifest_path=d1_path.parent / "recovery_probes.manifest.json",
+                        reviewed_source_commit=SOURCE_STATE["source_commit"],
                         output_dir=root / "d0-bad-provenance-id",
                         seed=20260719,
                         size=None,
@@ -1523,6 +1633,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                         d0_aggregate_dir=d0_dir,
                         d1_path=d1_path,
                         d1_manifest_path=d1_manifest_path,
+                        probe_path=d1_path.parent / "recovery_probes.jsonl",
+                        probe_manifest_path=d1_path.parent / "recovery_probes.manifest.json",
+                        reviewed_source_commit=SOURCE_STATE["source_commit"],
                         output_dir=root / "d0-bad-manifest",
                         seed=20260719,
                         size=None,
@@ -1549,6 +1662,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                         d0_aggregate_dir=d0_dir,
                         d1_path=d1_path,
                         d1_manifest_path=d1_manifest_path,
+                        probe_path=d1_path.parent / "recovery_probes.jsonl",
+                        probe_manifest_path=d1_path.parent / "recovery_probes.manifest.json",
+                        reviewed_source_commit=SOURCE_STATE["source_commit"],
                         output_dir=root / "d1-wrong-d0-manifest",
                         seed=20260719,
                         size=None,
@@ -1577,6 +1693,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                         d0_aggregate_dir=d0_dir,
                         d1_path=d1_path,
                         d1_manifest_path=d1_manifest_path,
+                        probe_path=d1_path.parent / "recovery_probes.jsonl",
+                        probe_manifest_path=d1_path.parent / "recovery_probes.manifest.json",
+                        reviewed_source_commit=SOURCE_STATE["source_commit"],
                         output_dir=root / "tampered-development",
                         seed=20260719,
                         size=None,
@@ -1595,6 +1714,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                         d0_aggregate_dir=d0_dir,
                         d1_path=d1_path,
                         d1_manifest_path=d1_manifest_path,
+                        probe_path=d1_path.parent / "recovery_probes.jsonl",
+                        probe_manifest_path=d1_path.parent / "recovery_probes.manifest.json",
+                        reviewed_source_commit=SOURCE_STATE["source_commit"],
                         output_dir=root / "tampered-all-output",
                         seed=20260719,
                         size=None,
@@ -1624,6 +1746,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                         d0_aggregate_dir=d0_dir,
                         d1_path=d1_path,
                         d1_manifest_path=d1_manifest_path,
+                        probe_path=d1_path.parent / "recovery_probes.jsonl",
+                        probe_manifest_path=d1_path.parent / "recovery_probes.manifest.json",
+                        reviewed_source_commit=SOURCE_STATE["source_commit"],
                         output_dir=root / "tampered-summary",
                         seed=20260719,
                         size=None,
@@ -1642,6 +1767,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                         d0_aggregate_dir=d0_dir,
                         d1_path=d1_path,
                         d1_manifest_path=d1_manifest_path,
+                        probe_path=d1_path.parent / "recovery_probes.jsonl",
+                        probe_manifest_path=d1_path.parent / "recovery_probes.manifest.json",
+                        reviewed_source_commit=SOURCE_STATE["source_commit"],
                         output_dir=root / "tampered",
                         seed=20260719,
                         size=None,
@@ -1674,6 +1802,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                         d0_aggregate_dir=d0_dir,
                         d1_path=d1_path,
                         d1_manifest_path=d1_manifest_path,
+                        probe_path=d1_path.parent / "recovery_probes.jsonl",
+                        probe_manifest_path=d1_path.parent / "recovery_probes.manifest.json",
+                        reviewed_source_commit=SOURCE_STATE["source_commit"],
                         output_dir=root / "forged-development",
                         seed=20260719,
                         size=None,
@@ -1705,6 +1836,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                         d0_aggregate_dir=d0_dir,
                         d1_path=d1_path,
                         d1_manifest_path=d1_manifest_path,
+                        probe_path=d1_path.parent / "recovery_probes.jsonl",
+                        probe_manifest_path=d1_path.parent / "recovery_probes.manifest.json",
+                        reviewed_source_commit=SOURCE_STATE["source_commit"],
                         output_dir=root / "forged-frozen",
                         seed=20260719,
                         size=None,
@@ -1736,6 +1870,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                         d0_aggregate_dir=d0_dir,
                         d1_path=d1_path,
                         d1_manifest_path=d1_manifest_path,
+                        probe_path=d1_path.parent / "recovery_probes.jsonl",
+                        probe_manifest_path=d1_path.parent / "recovery_probes.manifest.json",
+                        reviewed_source_commit=SOURCE_STATE["source_commit"],
                         output_dir=root / "forged-truth",
                         seed=20260719,
                         size=None,
@@ -1765,6 +1902,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                         d0_aggregate_dir=d0_dir,
                         d1_path=d1_path,
                         d1_manifest_path=d1_manifest_path,
+                        probe_path=d1_path.parent / "recovery_probes.jsonl",
+                        probe_manifest_path=d1_path.parent / "recovery_probes.manifest.json",
+                        reviewed_source_commit=SOURCE_STATE["source_commit"],
                         output_dir=root / "forged-audit-metadata",
                         seed=20260719,
                         size=None,
@@ -1801,6 +1941,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                                 d0_aggregate_dir=d0_dir,
                                 d1_path=d1_path,
                                 d1_manifest_path=d1_manifest_path,
+                                probe_path=d1_path.parent / "recovery_probes.jsonl",
+                                probe_manifest_path=d1_path.parent / "recovery_probes.manifest.json",
+                                reviewed_source_commit=SOURCE_STATE["source_commit"],
                                 output_dir=occupied_dir,
                                 seed=20260719,
                                 size=None,
@@ -1836,6 +1979,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                         d0_aggregate_dir=d0_dir,
                         d1_path=d1_path,
                         d1_manifest_path=d1_manifest_path,
+                        probe_path=d1_path.parent / "recovery_probes.jsonl",
+                        probe_manifest_path=d1_path.parent / "recovery_probes.manifest.json",
+                        reviewed_source_commit=SOURCE_STATE["source_commit"],
                         output_dir=late_failure_dir,
                         seed=20260719,
                         size=None,

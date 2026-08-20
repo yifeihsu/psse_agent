@@ -38,8 +38,22 @@ class TestWarmStartSettings(unittest.TestCase):
                 output_dir=str(root / "output"),
                 initial_adapter_path=str(root / "input"),
                 initial_adapter_revision=PINNED_ADAPTER_REVISION,
+                round1_provenance_path=str(
+                    root / "aggregate.generation_provenance.json"
+                ),
+                round1_preflight_path=str(root / "aggregate.preflight.json"),
+                reviewed_source_commit="c" * 40,
             )
             valid.validate()
+
+            warm_start_without_source = TrainerSettings(
+                revision=PINNED_MODEL_REVISION,
+                output_dir=str(root / "output-without-source"),
+                initial_adapter_path=str(root / "input"),
+                initial_adapter_revision=PINNED_ADAPTER_REVISION,
+            )
+            with self.assertRaisesRegex(GateError, "complete Round-1 source"):
+                warm_start_without_source.validate()
 
             invalid = (
                 TrainerSettings(
@@ -88,6 +102,34 @@ class TestWarmStartSettings(unittest.TestCase):
                     )
                     with self.assertRaisesRegex(GateError, "must not overlap"):
                         settings.validate()
+
+    def test_round1_source_binding_is_complete_and_requires_warm_start(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            common = {
+                "revision": PINNED_MODEL_REVISION,
+                "output_dir": str(root / "output"),
+                "round1_provenance_path": str(root / "provenance.json"),
+                "round1_preflight_path": str(root / "preflight.json"),
+                "reviewed_source_commit": "c" * 40,
+            }
+            valid = TrainerSettings(
+                **common,
+                initial_adapter_path=str(root / "adapter"),
+                initial_adapter_revision=PINNED_ADAPTER_REVISION,
+            )
+            valid.validate()
+
+            missing_adapter = TrainerSettings(**common)
+            with self.assertRaisesRegex(GateError, "requires an immutable initial adapter"):
+                missing_adapter.validate()
+
+            partial = TrainerSettings(
+                revision=PINNED_MODEL_REVISION,
+                round1_provenance_path=str(root / "provenance.json"),
+            )
+            with self.assertRaisesRegex(GateError, "must be supplied together"):
+                partial.validate()
 
     def test_tree_digest_mismatch_fails_preflight(self) -> None:
         settings = TrainerSettings(
@@ -177,7 +219,7 @@ class TestWarmStartLoadAndRestore(unittest.TestCase):
                 inspection,
             )
 
-        self.assertEqual(captured["path"], "/private/adapter")
+        self.assertEqual(captured["path"], str(Path("/private/adapter")))
         self.assertEqual(
             captured["kwargs"],
             {"is_trainable": True, "local_files_only": True},
@@ -267,6 +309,12 @@ class TestWarmStartCliAndLauncher(unittest.TestCase):
                     "/scratch/input/lora",
                     "--initial-adapter-revision",
                     PINNED_ADAPTER_REVISION,
+                    "--round1-provenance",
+                    "aggregate.generation_provenance.json",
+                    "--round1-preflight",
+                    "aggregate.preflight.json",
+                    "--reviewed-source-commit",
+                    "c" * 40,
                     "--report-to",
                     "wandb",
                     "--run-name",
@@ -276,13 +324,21 @@ class TestWarmStartCliAndLauncher(unittest.TestCase):
 
         self.assertEqual(result, 0)
         settings = run_training.call_args.kwargs["settings"]
-        self.assertEqual(settings.initial_adapter_path, "/scratch/input/lora")
+        self.assertEqual(
+            settings.initial_adapter_path, str(Path("/scratch/input/lora"))
+        )
         self.assertEqual(
             settings.initial_adapter_revision,
             PINNED_ADAPTER_REVISION,
         )
         self.assertEqual(settings.report_to, "wandb")
         self.assertEqual(settings.run_name, "bc0-round1")
+        self.assertEqual(
+            settings.round1_provenance_path,
+            "aggregate.generation_provenance.json",
+        )
+        self.assertEqual(settings.round1_preflight_path, "aggregate.preflight.json")
+        self.assertEqual(settings.reviewed_source_commit, "c" * 40)
 
     def test_smoke_cli_optionally_forwards_initial_adapter_identity(self) -> None:
         smoke_result = SimpleNamespace(to_dict=lambda: {"passed": True})
@@ -310,7 +366,9 @@ class TestWarmStartCliAndLauncher(unittest.TestCase):
 
         self.assertEqual(result, 0)
         settings = run_smoke.call_args.kwargs["settings"]
-        self.assertEqual(settings.initial_adapter_path, "/scratch/input/lora")
+        self.assertEqual(
+            settings.initial_adapter_path, str(Path("/scratch/input/lora"))
+        )
         self.assertEqual(
             settings.initial_adapter_revision,
             PINNED_ADAPTER_REVISION,
@@ -328,6 +386,8 @@ class TestWarmStartCliAndLauncher(unittest.TestCase):
             "INITIAL_ADAPTER_REVISION=${INITIAL_ADAPTER_REVISION:-}",
             '--initial-adapter-path "$INITIAL_ADAPTER_PATH"',
             '--initial-adapter-revision "$INITIAL_ADAPTER_REVISION"',
+            '--round1-provenance "$ROUND1_PROVENANCE"',
+            '--round1-preflight "$ROUND1_PREFLIGHT"',
             '--learning-rate "$ROUND1_LR"',
             '--epochs "$ROUND1_EPOCHS"',
             "OUTPUT_DIR and INITIAL_ADAPTER_PATH must not overlap",
@@ -336,7 +396,10 @@ class TestWarmStartCliAndLauncher(unittest.TestCase):
             '--initial-adapter-revision "$INITIAL_ADAPTER_REVISION"',
             "ROUND1_SEED_COUPLING_REQUIRED=0",
             'if [[ "$ROUND1_SEED_COUPLING_REQUIRED" == "1" ]]',
+            "gate|one-batch|targeted-tiny-overfit|tiny-overfit)",
             "one-batch|targeted-tiny-overfit|tiny-overfit",
+            "ROUND1_GATE_SOURCE_ARGS=()",
+            '"${ROUND1_GATE_SOURCE_ARGS[@]}" --test "$TEST_FILE"',
         ):
             self.assertIn(contract, launcher)
 
@@ -350,6 +413,8 @@ class TestWarmStartCliAndLauncher(unittest.TestCase):
             '--preflight "$ROUND1_PREFLIGHT"',
             '--reviewed-source-commit "$REVIEWED_SOURCE_COMMIT"',
             '--initial-adapter-revision "$INITIAL_ADAPTER_REVISION"',
+            '--round1-provenance "$ROUND1_PROVENANCE"',
+            '--round1-preflight "$ROUND1_PREFLIGHT"',
         ):
             self.assertIn(contract, launcher)
 

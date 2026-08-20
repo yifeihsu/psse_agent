@@ -31,11 +31,16 @@ test -z "$(git status --porcelain)"
 set +e
 "$PY" scripts/build_recovery_probe_suite.py \
   --scenarios "$D1_DIR/scenarios.json" \
+  --scenario-manifest "$D1_DIR/scenarios.json.manifest.json" \
+  --scenario-generator-report "$D1_DIR/scenario_generator_report.json" \
   --output "$OUTPUT" \
   --manifest "$MANIFEST" \
-  --source-commit "$COMMIT" \
+  --reviewed-source-commit "$COMMIT" \
   --forbidden-suite "${FORBIDDEN_SUITE:-psse_env/dagger/suites/bc0_eval_suite_v1.json}" \
+  --evaluation-policy "${EVALUATION_POLICY:-psse_env/dagger/bc0_evaluation_policy.json}" \
   --development-holdout "$D1_DIR/development_holdout.json" \
+  --development-holdout-manifest "$D1_DIR/development_holdout.json.manifest.json" \
+  --development-holdout-generator-report "$D1_DIR/development_holdout.generator.json" \
   --d0-aggregate-dir "$D0_DIR"
 PROBE_RC=$?
 set -e

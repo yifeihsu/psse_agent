@@ -10,7 +10,9 @@ from typing import Any, Mapping, Sequence
 
 
 AGGREGATE_MANIFEST_FILENAME = "aggregate.manifest.json"
-ROUND1_AGGREGATE_BUILDER_CONTRACT = "deterministic_d0_d1_balanced_union_v1"
+ROUND1_AGGREGATE_BUILDER_CONTRACT = (
+    "deterministic_d0_d1_probe_balanced_union_v2"
+)
 
 
 def stable_json_sha256(value: Any) -> str:

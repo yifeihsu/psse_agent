@@ -10,6 +10,7 @@ from psse_env.actions import (
     ASK_FOR_MORE_EVIDENCE,
     CORRECT_MEASUREMENTS,
     GET_MEASUREMENT_CONTEXT,
+    POST_CORRECTION_CONFIRMATION_SIGNATURE,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     RUN_WLS,
 )
@@ -20,12 +21,18 @@ from psse_env.dagger.recovery_probes import (
     RECOVERY_PROBE_STATE_ORIGIN,
     audit_recovery_probe_support,
     combined_recovery_support,
+    post_correction_confirmation_pending,
+    prepare_scenario_envelope,
     probe_audit_scenario,
     post_failure_no_candidate_intervention,
     probe_intervention,
     recovery_probe_manifest,
     stamp_recovery_probe_row,
     verify_probe_stratum,
+)
+from psse_env.oracle.process_validity import (
+    ProcessValidityOracle,
+    post_correction_confirmation_required,
 )
 
 STATE = "r0_probe_episode1:s2"
@@ -107,6 +114,78 @@ class RecoveryProbeInterventionTests(unittest.TestCase):
     def test_unknown_stratum_is_refused(self):
         with self.assertRaises(ValueError):
             probe_intervention(_observation(), stratum="loop_escape")
+
+
+class PostCorrectionConfirmationBoundaryTests(unittest.TestCase):
+    @staticmethod
+    def _state(**updates: Any) -> dict[str, Any]:
+        state: dict[str, Any] = {
+            "active_state_id": STATE,
+            "accepted_corrections": [{"source_action": {"tool": CORRECT_MEASUREMENTS}}],
+            "unresolved_signatures": [POST_CORRECTION_CONFIRMATION_SIGNATURE],
+            "has_open_candidate": False,
+            "has_unverified_candidate": False,
+            "has_verified_candidate": False,
+        }
+        state.update(updates)
+        return state
+
+    def test_exact_singleton_signature_after_acceptance_requires_confirmation(self):
+        self.assertTrue(post_correction_confirmation_required(self._state()))
+
+    def test_an_extra_signature_does_not_match_the_confirmation_boundary(self):
+        self.assertFalse(
+            post_correction_confirmation_required(
+                self._state(
+                    unresolved_signatures=[
+                        POST_CORRECTION_CONFIRMATION_SIGNATURE,
+                        "another_unresolved_signature",
+                    ]
+                )
+            )
+        )
+
+    def test_every_open_candidate_flag_precedes_the_confirmation_boundary(self):
+        for flag in (
+            "has_open_candidate",
+            "has_unverified_candidate",
+            "has_verified_candidate",
+        ):
+            with self.subTest(flag=flag):
+                self.assertFalse(
+                    post_correction_confirmation_required(self._state(**{flag: True}))
+                )
+
+    def test_controller_and_probe_share_the_exact_boundary(self):
+        oracle = ProcessValidityOracle(executor_hydrated_corrections=True)
+        action = {
+            "tool": CORRECT_MEASUREMENTS,
+            "arguments": {"state_id": STATE, "suspect_group": [11]},
+        }
+        cases = (
+            self._state(),
+            self._state(accepted_corrections=[]),
+            self._state(
+                unresolved_signatures=[
+                    POST_CORRECTION_CONFIRMATION_SIGNATURE,
+                    "another_unresolved_signature",
+                ]
+            ),
+            self._state(has_open_candidate=True),
+            self._state(has_unverified_candidate=True),
+            self._state(has_verified_candidate=True),
+        )
+        for state in cases:
+            with self.subTest(state=state):
+                canonical = post_correction_confirmation_required(state)
+                probe = post_correction_confirmation_pending(state)
+                controller = oracle.check(state, action)
+                self.assertEqual(probe, canonical)
+                self.assertEqual(
+                    controller.get("error_code")
+                    == "post_correction_confirmation_required",
+                    canonical,
+                )
 
 
 class RecoveryProbeStratumVerificationTests(unittest.TestCase):
@@ -506,6 +585,32 @@ class RecoveryProbeGeneratorTests(unittest.TestCase):
             self.assertEqual(row["state_origin"], RECOVERY_PROBE_STATE_ORIGIN)
             self.assertEqual(row["recovery_stratum"], "post_failure_no_candidate")
 
+    def test_generator_preserves_grouping_for_a_bare_scenario(self):
+        from psse_env.dagger.recovery_probes import generate_recovery_probes
+
+        scenario = {
+            "physical_root_fingerprint": "probe-root-bare",
+            "scenario_family": "measurement",
+            "error_cardinality": 1,
+            "scenario_id": "scenario-bare",
+        }
+        env = _FakeEnv()
+        rows, report = generate_recovery_probes(
+            [scenario],
+            env=env,
+            expert_oracle=_FakeOracle(),
+            rank_one_proof_for=_PASS_PROOF,
+            teacher_target_audit_for=_PASS_AUDIT,
+            state_class_for=self._state_class,
+            quotas={"post_failure_no_candidate": 1},
+        )
+
+        self.assertEqual(len(rows), 1, report["skipped"])
+        self.assertEqual(rows[0]["physical_root_fingerprint"], "probe-root-bare")
+        self.assertEqual(rows[0]["scenario_family"], "measurement")
+        self.assertEqual(rows[0]["scenario_id"], "scenario-bare")
+        self.assertEqual(env.scenario, scenario)
+
     def test_rows_landing_in_a_neighbouring_stratum_are_discarded(self):
         from psse_env.dagger.recovery_probes import generate_recovery_probes
 
@@ -645,6 +750,22 @@ class ProbeAuditScenarioTests(unittest.TestCase):
         self.assertEqual(
             scenario["physical_root_fingerprint"], "physical_v3_root-a"
         )
+
+    def test_bare_scenario_is_reused_for_runtime_audit_and_grouping(self):
+        bare = {
+            "scenario_id": "bare-s1",
+            "physical_root_fingerprint": "physical_v3_root-bare",
+            "scenario_family": "measurement",
+            "error_cardinality": 1,
+        }
+
+        prepared = prepare_scenario_envelope(bare)
+
+        self.assertEqual(prepared["runtime"], bare)
+        self.assertEqual(prepared["audit"], bare)
+        self.assertEqual(prepared["grouping"], bare)
+        self.assertIsNot(prepared["runtime"], bare)
+        self.assertIsNot(prepared["grouping"], bare)
 
 
 class _VerifiedCandidateEnv:

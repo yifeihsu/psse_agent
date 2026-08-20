@@ -20,6 +20,20 @@ from typing import Any, Iterable, Mapping, Sequence
 
 TOKEN_TYPE_INPUT_NAMES = ("token_type_ids", "mm_token_type_ids")
 
+# Deliberately duplicated as an ingestion contract instead of importing
+# recovery_probes here: recovery_probes imports the release factory, which in
+# turn imports this module and the training module.  Keeping this small fixed
+# vocabulary local avoids a module cycle while still failing closed on drift.
+_ROUND1_RECOVERY_PROBE_CONTRACT = "dagger1_observable_recovery_probe_v1"
+_ROUND1_RECOVERY_PROBE_SOURCE = "observable_recovery_probe"
+_ROUND1_RECOVERY_PROBE_ROLE = "auxiliary_training"
+_ROUND1_RECOVERY_PROBE_STRATA = frozenset(
+    {
+        "post_failure_no_candidate",
+        "unsupported_correction_recovery",
+    }
+)
+
 
 def processor_token_type_input_names(processor: Any) -> tuple[str, ...]:
     """Return token-type side inputs advertised by a processor or tokenizer."""
@@ -929,6 +943,71 @@ def audit_dataset(
     )
 
 
+def _round1_auxiliary_probe_failures(
+    row: Mapping[str, Any],
+    *,
+    generation_provenance_id: str,
+) -> tuple[str, ...]:
+    """Return why one row is not the exact authenticated probe shape.
+
+    This check does not authenticate provenance by itself.  Its caller may
+    supply only the generation ID returned by the immutable Round-1 source
+    gate; the training entrypoint enforces that ordering before calling the
+    grouped-pilot gate.
+    """
+
+    metadata = row.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return ("metadata is missing",)
+
+    expected = {
+        "dataset_mode": "production",
+        "dataset_source": _ROUND1_RECOVERY_PROBE_SOURCE,
+        "collector_contract": _ROUND1_RECOVERY_PROBE_CONTRACT,
+        "state_origin": _ROUND1_RECOVERY_PROBE_SOURCE,
+        "collection_role": _ROUND1_RECOVERY_PROBE_ROLE,
+        "state_visited_by": _ROUND1_RECOVERY_PROBE_SOURCE,
+        "replay_source": _ROUND1_RECOVERY_PROBE_SOURCE,
+        "auxiliary_training_eligible": True,
+        "production_label_eligible": False,
+        "natural_on_policy_support_eligible": False,
+        "training_decision_evidence_verified": True,
+        "generation_provenance_id": generation_provenance_id,
+    }
+    failures: list[str] = []
+    for key, wanted in expected.items():
+        for container_name, container in (("row", row), ("metadata", metadata)):
+            actual = container.get(key)
+            matches = actual is wanted if isinstance(wanted, bool) else actual == wanted
+            if not matches:
+                failures.append(
+                    f"{container_name}.{key} must be {wanted!r}, got {actual!r}"
+                )
+    recovery_stratum = row.get("recovery_stratum")
+    if recovery_stratum not in _ROUND1_RECOVERY_PROBE_STRATA:
+        failures.append(
+            "row.recovery_stratum is not a reviewed recovery-probe stratum"
+        )
+    if metadata.get("recovery_stratum") != recovery_stratum:
+        failures.append("metadata.recovery_stratum does not mirror the row")
+    return tuple(failures)
+
+
+def _has_round1_recovery_probe_marker(row: Mapping[str, Any]) -> bool:
+    metadata = row.get("metadata")
+    containers = (row, metadata if isinstance(metadata, Mapping) else {})
+    return any(
+        container.get("dataset_source") == _ROUND1_RECOVERY_PROBE_SOURCE
+        or container.get("collector_contract") == _ROUND1_RECOVERY_PROBE_CONTRACT
+        or container.get("state_origin") == _ROUND1_RECOVERY_PROBE_SOURCE
+        or container.get("collection_role") == _ROUND1_RECOVERY_PROBE_ROLE
+        or container.get("state_visited_by") == _ROUND1_RECOVERY_PROBE_SOURCE
+        or container.get("replay_source") == _ROUND1_RECOVERY_PROBE_SOURCE
+        or container.get("auxiliary_training_eligible") is True
+        for container in containers
+    )
+
+
 def validate_grouped_pilot(
     splits: Mapping[str, Sequence[Mapping[str, Any]]],
     *,
@@ -939,8 +1018,17 @@ def validate_grouped_pilot(
     require_production_dataset_mode: bool = True,
     require_production_label_eligible: bool = True,
     required_protocol: str | None = None,
+    validated_round1_generation_provenance_id: str | None = None,
 ) -> GroupedPilotReport:
     failures: list[str] = []
+    trusted_round1_id = validated_round1_generation_provenance_id
+    if trusted_round1_id is not None and re.fullmatch(
+        r"[0-9a-f]{64}", trusted_round1_id
+    ) is None:
+        failures.append(
+            "validated Round-1 generation provenance ID must be lowercase 64-hex."
+        )
+        trusted_round1_id = None
     total = sum(len(rows) for rows in splits.values())
     if total < minimum_rows or total > maximum_rows:
         failures.append(f"Pilot size must be in [{minimum_rows}, {maximum_rows}], got {total} rows.")
@@ -958,13 +1046,26 @@ def validate_grouped_pilot(
         actions: Counter[str] = Counter()
         classes: Counter[str] = Counter()
         for index, row in enumerate(rows):
-            if (
-                require_production_label_eligible
-                and row.get("production_label_eligible") is not True
+            probe_marked = _has_round1_recovery_probe_marker(row)
+            if require_production_label_eligible and (
+                row.get("production_label_eligible") is not True or probe_marked
             ):
-                failures.append(
-                    f"{split_name}[{index}] is not explicitly production-label eligible."
+                auxiliary_failures = (
+                    _round1_auxiliary_probe_failures(
+                        row,
+                        generation_provenance_id=trusted_round1_id,
+                    )
+                    if trusted_round1_id is not None
+                    else ("no validated Round-1 source binding was supplied",)
                 )
+                if auxiliary_failures:
+                    failures.append(
+                        f"{split_name}[{index}] is not explicitly production-label "
+                        "eligible as a non-probe row and is not an authenticated "
+                        "Round-1 recovery probe: "
+                        + "; ".join(auxiliary_failures)
+                        + "."
+                    )
             metadata = row.get("metadata")
             protocol = metadata.get("protocol") if isinstance(metadata, Mapping) else None
             if required_protocol is not None and protocol != required_protocol:

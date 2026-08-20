@@ -1331,6 +1331,25 @@ def examples_to_chat_sft(
             "physical_root_fingerprint": example.get("physical_root_fingerprint"),
             "dataset_mode": dataset_mode,
             "dataset_source": example.get("dataset_source"),
+            # Keep the recovery-probe identity outside the model-visible
+            # messages.  The SFT grouped-pilot gate consumes these mirrored
+            # fields only after the immutable Round-1 source gate has bound
+            # the row to the aggregate generation-provenance ID.
+            "collector_contract": example.get("collector_contract"),
+            "state_origin": example.get("state_origin"),
+            "collection_role": example.get("collection_role"),
+            "state_visited_by": example.get("state_visited_by"),
+            "replay_source": example.get("replay_source"),
+            "auxiliary_training_eligible": example.get(
+                "auxiliary_training_eligible"
+            ),
+            "natural_on_policy_support_eligible": example.get(
+                "natural_on_policy_support_eligible"
+            ),
+            "training_decision_evidence_verified": example.get(
+                "training_decision_evidence_verified"
+            ),
+            "recovery_stratum": example.get("recovery_stratum"),
             "production_label_eligible": example.get(
                 "production_label_eligible", True
             ),
@@ -1351,6 +1370,21 @@ def examples_to_chat_sft(
                 "step": example.get("step"),
                 "dataset_mode": dataset_mode,
                 "dataset_source": example.get("dataset_source"),
+                "collector_contract": example.get("collector_contract"),
+                "state_origin": example.get("state_origin"),
+                "collection_role": example.get("collection_role"),
+                "state_visited_by": example.get("state_visited_by"),
+                "replay_source": example.get("replay_source"),
+                "auxiliary_training_eligible": example.get(
+                    "auxiliary_training_eligible"
+                ),
+                "natural_on_policy_support_eligible": example.get(
+                    "natural_on_policy_support_eligible"
+                ),
+                "training_decision_evidence_verified": example.get(
+                    "training_decision_evidence_verified"
+                ),
+                "recovery_stratum": example.get("recovery_stratum"),
                 "production_label_eligible": example.get(
                     "production_label_eligible", True
                 ),

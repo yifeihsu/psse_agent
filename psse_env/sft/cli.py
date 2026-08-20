@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from .provenance import (
     build_gate_provenance,
     file_sha256,
     git_source_state,
+    stable_json_sha256,
     validate_generation_provenance,
 )
 from .training import (
@@ -93,14 +95,50 @@ def _initial_adapter_options(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _round1_source_options(
+    parser: argparse.ArgumentParser,
+    *,
+    include_initial_adapter_revision: bool = False,
+) -> None:
+    parser.add_argument(
+        "--round1-provenance",
+        type=Path,
+        help=(
+            "Immutable aggregate.generation_provenance.json authenticated before "
+            "any auxiliary recovery-probe row may enter SFT."
+        ),
+    )
+    parser.add_argument(
+        "--round1-preflight",
+        type=Path,
+        help=(
+            "Immutable aggregate.preflight.json paired with --round1-provenance."
+        ),
+    )
+    parser.add_argument(
+        "--reviewed-source-commit",
+        help="Externally reviewed 40-hex source commit for the Round-1 source gate.",
+    )
+    if include_initial_adapter_revision:
+        parser.add_argument(
+            "--initial-adapter-revision",
+            help=(
+                "Immutable 64-hex learner-seed adapter revision required to "
+                "validate a Round-1 aggregate."
+            ),
+        )
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="Pinned Gemma 4 tool-SFT go/no-go gates")
     commands = result.add_subparsers(dest="command", required=True)
     gate = commands.add_parser("gate", help="Run exact processor/template/mask/grouped-pilot gates.")
     _common(gate)
+    _round1_source_options(gate, include_initial_adapter_revision=True)
     train = commands.add_parser("train", help="Gate, smoke, then run pilot LoRA/TRL SFT.")
     _common(train)
     _initial_adapter_options(train)
+    _round1_source_options(train)
     train.add_argument("--output-dir", default="outputs/dagger_gemma4_pilot")
     train.add_argument("--batch-size", type=int, default=1)
     train.add_argument("--gradient-accumulation-steps", type=int, default=4)
@@ -167,6 +205,7 @@ def parser() -> argparse.ArgumentParser:
     smoke = commands.add_parser("smoke", help="Gate and run LoRA optimizer smoke only; never starts TRL training.")
     _common(smoke)
     _initial_adapter_options(smoke)
+    _round1_source_options(smoke)
     smoke.add_argument("--mode", choices=("one-batch", "tiny-overfit"), required=True)
     smoke.add_argument("--tiny-overfit-steps", type=int, default=20)
     smoke.add_argument(
@@ -197,6 +236,78 @@ def parser() -> argparse.ArgumentParser:
     return result
 
 
+def _round1_source_report_for_gate(
+    args: argparse.Namespace,
+    train_rows: list[dict[str, Any]],
+    validation_rows: list[dict[str, Any]],
+    test_rows: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    rows = [*train_rows, *validation_rows, *test_rows]
+    has_ineligible_rows = any(
+        row.get("production_label_eligible") is not True for row in rows
+    )
+    from .round1_source_gate import (
+        round1_source_binding_required,
+        validate_round1_source_mix_gate,
+    )
+
+    dataset_paths = [args.train, args.validation]
+    if args.test is not None:
+        dataset_paths.append(args.test)
+    path_requires_binding = round1_source_binding_required(*dataset_paths)
+    values = (
+        getattr(args, "round1_provenance", None),
+        getattr(args, "round1_preflight", None),
+        getattr(args, "reviewed_source_commit", None),
+        getattr(args, "initial_adapter_revision", None),
+    )
+    if any(values) != all(values):
+        raise GateError(
+            "Round-1 data gate requires --round1-provenance, --round1-preflight, "
+            "--reviewed-source-commit, and --initial-adapter-revision together."
+        )
+    if not all(values):
+        if has_ineligible_rows or path_requires_binding:
+            raise GateError(
+                "Round-1 or non-production-label SFT rows require the complete "
+                "Round-1 source-gate arguments."
+            )
+        return None
+    if args.test is None:
+        raise GateError(
+            "Round-1 SFT data gate requires the canonical aggregate test split."
+        )
+
+    report = validate_round1_source_mix_gate(
+        args.round1_provenance,
+        args.round1_preflight,
+        reviewed_source_commit=str(args.reviewed_source_commit).lower(),
+        initial_adapter_revision=str(args.initial_adapter_revision).lower(),
+        train_path=args.train,
+        validation_path=args.validation,
+        test_path=args.test,
+    )
+    provenance_id = report.get("generation_provenance_id")
+    if report.get("passed") is not True or not isinstance(
+        provenance_id, str
+    ) or re.fullmatch(r"[0-9a-f]{64}", provenance_id) is None:
+        raise GateError(
+            "Round-1 source gate did not return a valid generation provenance ID."
+        )
+    expected_content = report.get("canonical_dataset_content_sha256")
+    actual_content = {
+        "train": stable_json_sha256(train_rows),
+        "validation": stable_json_sha256(validation_rows),
+        "test": stable_json_sha256(test_rows),
+    }
+    if not isinstance(expected_content, dict) or expected_content != actual_content:
+        raise GateError(
+            "Round-1 source gate authenticated dataset bytes different from "
+            "the rows already loaded by the SFT data gate."
+        )
+    return dict(report)
+
+
 def _gate_payload(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
     train_rows = load_jsonl(args.train)
     validation_rows = load_jsonl(args.validation)
@@ -205,12 +316,23 @@ def _gate_payload(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
     if test_rows:
         splits["test"] = test_rows
     all_rows = train_rows + validation_rows + test_rows
+    round1_source_report = _round1_source_report_for_gate(
+        args,
+        train_rows,
+        validation_rows,
+        test_rows,
+    )
     grouped = validate_grouped_pilot(
         splits,
         group_key="physical_root_fingerprint",
         required_protocol="canonical",
         minimum_rows=args.pilot_min_rows,
         maximum_rows=args.pilot_max_rows,
+        validated_round1_generation_provenance_id=(
+            round1_source_report.get("generation_provenance_id")
+            if round1_source_report is not None
+            else None
+        ),
     )
     processor, loader = load_exact_processor(
         args.model,
@@ -290,6 +412,7 @@ def _gate_payload(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
         "max_length": args.max_length,
         "provenance": provenance,
         "generation_provenance": generation,
+        "round1_source_gate": round1_source_report,
         "grouped_pilot": grouped.to_dict(),
         "train": train_gate.to_dict(),
         "validation": validation_gate.to_dict(),
@@ -459,6 +582,21 @@ def main(argv: list[str] | None = None) -> int:
             initial_adapter_revision=getattr(
                 args,
                 "initial_adapter_revision",
+                None,
+            ),
+            round1_provenance_path=(
+                str(args.round1_provenance)
+                if getattr(args, "round1_provenance", None) is not None
+                else None
+            ),
+            round1_preflight_path=(
+                str(args.round1_preflight)
+                if getattr(args, "round1_preflight", None) is not None
+                else None
+            ),
+            reviewed_source_commit=getattr(
+                args,
+                "reviewed_source_commit",
                 None,
             ),
         )

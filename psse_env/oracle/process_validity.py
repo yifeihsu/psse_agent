@@ -44,6 +44,28 @@ _CONTEXT_TOOL_FOR_FAMILY = {
 _CORRECTION_TOOL_FOR_FAMILY = {
     family: tool for tool, family in _CORRECTION_CONTEXT_FAMILY.items()
 }
+
+
+def post_correction_confirmation_required(state: Mapping[str, Any]) -> bool:
+    """Whether an autonomous correction would hit the confirmation guard.
+
+    This is the canonical, policy-visible boundary shared by the production
+    process gate and the recovery-probe generator.  Keep candidate lifecycle in
+    the predicate: an open transaction is handled by the earlier lifecycle
+    guard and is not evidence that the post-correction boundary was reached.
+    """
+
+    has_open_candidate = bool(
+        state.get("has_open_candidate")
+        or state.get("has_unverified_candidate")
+        or state.get("has_verified_candidate")
+    )
+    if has_open_candidate or not state.get("accepted_corrections"):
+        return False
+    signatures = {
+        str(item) for item in (state.get("unresolved_signatures") or [])
+    }
+    return signatures == {POST_CORRECTION_CONFIRMATION_SIGNATURE}
 _RECOVERY_FAMILY_ORDER = {
     "measurement": ("parameter", "topology"),
     "parameter": ("topology", "measurement"),
@@ -98,15 +120,7 @@ class ProcessValidityOracle:
             error_code, error_detail = "unknown_tool", str(tool)
         elif tool in CORRECTION_TOOLS:
             requested = args.get("state_id") or active_id
-            confirmation_required = (
-                bool(state.get("accepted_corrections"))
-                and POST_CORRECTION_CONFIRMATION_SIGNATURE
-                in (signatures := {
-                    str(item)
-                    for item in state.get("unresolved_signatures") or []
-                })
-                and signatures == {POST_CORRECTION_CONFIRMATION_SIGNATURE}
-            )
+            confirmation_required = post_correction_confirmation_required(state)
             if has_open_candidate:
                 error_code, error_detail = "candidate_lifecycle_violation", "correction_with_open_candidate"
             elif not self._known_current_state(store, requested):

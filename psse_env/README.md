@@ -693,12 +693,31 @@ python scripts/collect_dagger1_recovery.py \
   --failed-collection-dir "$D1_DIR/training_beta025.failed-collection" \
   --require-recommended-target
 
+# Build the separately provenance-bound observable recovery probes.  This
+# command revalidates the scenario, D0, development-holdout, frozen-suite,
+# policy, source, factory, and generator bindings before publishing anything.
+python scripts/build_recovery_probe_suite.py \
+  --scenarios "$D1_DIR/scenarios.json" \
+  --scenario-manifest "$D1_DIR/scenarios.json.manifest.json" \
+  --scenario-generator-report "$D1_DIR/scenario_generator_report.json" \
+  --development-holdout "$D1_DIR/development_holdout.json" \
+  --development-holdout-manifest "$D1_DIR/development_holdout.json.manifest.json" \
+  --development-holdout-generator-report "$D1_DIR/development_holdout.generator.json" \
+  --d0-aggregate-dir "$D0_DIR" \
+  --forbidden-suite psse_env/dagger/suites/bc0_eval_suite_v1.json \
+  --evaluation-policy psse_env/dagger/bc0_evaluation_policy.json \
+  --reviewed-source-commit "$FREEZE_COMMIT" \
+  --output "$D1_DIR/recovery_probes.jsonl" \
+  --manifest "$D1_DIR/recovery_probes.manifest.json"
+
 python scripts/build_dagger1_training_aggregate.py \
   --d0-aggregate-dir "$D0_DIR" \
   --d1 "$D1_DIR/training_beta025.jsonl" \
   --d1-manifest "$D1_DIR/training_beta025.jsonl.manifest.json" \
-  --output-dir data/round1_aggregate_release \
-  --d1-share 0.25
+  --probe "$D1_DIR/recovery_probes.jsonl" \
+  --probe-manifest "$D1_DIR/recovery_probes.manifest.json" \
+  --reviewed-source-commit "$FREEZE_COMMIT" \
+  --output-dir data/round1_aggregate_release
 ```
 
 On strict GO, the complete visited ledger retains every visited row, including
@@ -719,11 +738,12 @@ failure; never pass it to the Round-1 aggregate builder. Both successful
 production outputs and failed diagnostic bundles are write-once, so choose a
 new attempt path for each rerun.
 
-The collection manifest reports the default Round-1 replay capacity and the
-largest feasible total view under the duplicate and per-root caps. Replay
-capacity is strict: if the requested view is infeasible, collect more D1 roots
-or choose an explicitly reviewed smaller `--size`; never relax the 20--30%
-source-share band or the replay caps silently. The final builder independently
+The final Round-1 view is preregistered at exactly 1,880 rows: 1,317 D0 rows,
+525 natural D1 rows, and 38 observable recovery-probe rows. The aggregate CLI
+does not expose allocation, share, seed, or cap overrides. Replay capacity is
+strict: if this frozen view is infeasible, collect more source roots or review
+a new policy in code; never relax the source allocation or replay caps silently.
+The final builder independently
 recomputes the deterministic bounded D1 selection from the complete ledger,
 reruns the D1 row/root/replay audits and exact/approximate
 teacher-realizability gates, preserves `aggregate.raw.jsonl`,

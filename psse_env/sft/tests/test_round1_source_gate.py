@@ -10,8 +10,12 @@ import unittest
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from psse_env.dagger.collect_dagger1 import DAGGER1_SCENARIO_BUILDER_CONTRACT
+from psse_env.dagger.dataset_builder import examples_to_chat_sft
+from psse_env.dagger.round1_view_policy import round1_view_policy_digest
+from psse_env.dagger.three_source_view import build_dagger1_three_source_view
 from psse_env.dagger.rollout_collector import (
     OFFLINE_TEACHER_TARGET_QUARANTINE_SUMMARY_CONTRACT,
 )
@@ -34,15 +38,136 @@ DEVELOPMENT_HOLDOUT_GENERATOR_REPORT_SHA256 = "4" * 64
 DEVELOPMENT_HOLDOUT_ROOT_SET_SHA256 = "3" * 64
 DEVELOPMENT_HOLDOUT_ROOT_COUNT = 30
 D0_MANIFEST_SHA256 = "0" * 64
+PROBE_PROVENANCE_ID = "f" * 64
+TEST_VIEW_POLICY = {
+    "contract": "dagger1_round1_three_source_view_v1",
+    "schema_version": 1,
+    "total_rows": 4,
+    "allocation": {
+        "d0_bc0_rows": 1,
+        "natural_d1_rows": 1,
+        "observable_recovery_probe_rows": 2,
+    },
+    "shares_for_provenance_only": {
+        "probe_share": 0.5,
+        "natural_share": 0.5,
+        "natural_d1_share_of_natural_rows": 0.5,
+    },
+    "probe_bucket": {
+        "post_failure_no_candidate": 1,
+        "unsupported_correction_recovery": 1,
+        "distinct_roots_retained_per_stratum": 1,
+        "duplicate_placements_per_stratum": 0,
+    },
+    "global_caps": {
+        "max_duplicate_count": 2,
+        "max_rows_per_root": 8,
+        "applies_across_sources": True,
+    },
+    "incidence_dependent_recovery_strata": [
+        "post_failure_no_candidate",
+        "unsupported_correction_recovery",
+    ],
+    "probe_floor_distinct_roots": 1,
+    "combined_floor_distinct_roots": 1,
+}
 
 
 class Round1SourceMixGateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        support = {"contract": "test_support", "passed": True}
+        self.support = support
+        patchers = (
+            mock.patch(
+                "psse_env.sft.round1_source_gate.ROUND1_THREE_SOURCE_VIEW_POLICY",
+                TEST_VIEW_POLICY,
+            ),
+            mock.patch(
+                "psse_env.sft.round1_source_gate.round1_view_policy_digest",
+                side_effect=lambda: round1_view_policy_digest(TEST_VIEW_POLICY),
+            ),
+            mock.patch(
+                "psse_env.sft.round1_source_gate.audit_dagger1_training_support",
+                return_value=support,
+            ),
+        )
+        for patcher in patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def _source_row(name: str, root: str, **updates: Any) -> dict[str, Any]:
+        state_id = f"{name}:s0"
+        row = {
+            "example_id": name,
+            "scenario_id": name,
+            "root_scenario_id": name,
+            "physical_root_fingerprint": root,
+            "dataset_mode": "production",
+            "production_label_eligible": True,
+            "policy_observation": {
+                "active_state_id": state_id,
+                "candidate_state_id": None,
+                "candidate_parent_id": None,
+                "episode_id": name,
+                "remaining_budget": 6,
+                "history_window": [],
+                "unresolved_signatures": [],
+                "remaining_anomaly_score": None,
+                "no_material_anomaly_remaining": False,
+            },
+            "history_window": [],
+            "preferred_action": {
+                "tool": "run_wls",
+                "arguments": {"state_id": state_id},
+            },
+            "labels": {"dataset_mode": "production"},
+        }
+        row.update(updates)
+        return row
+
     def _write_valid_artifacts(self, root: Path) -> tuple[Path, Path]:
-        for index, name in enumerate(ROUND1_IMMUTABLE_VIEW_NAMES):
-            (root / name).write_text(
-                json.dumps({"view": name, "index": index}) + "\n",
-                encoding="utf-8",
+        d0_rows = [self._source_row("d0", "root-d0", replay_source="d0_bc0")]
+        d1_rows = [
+            self._source_row(
+                "d1", "root-d1", replay_source="natural_dagger1"
             )
+        ]
+        probe_identity = {
+            "dataset_source": "observable_recovery_probe",
+            "replay_source": "observable_recovery_probe",
+            "collector_contract": "dagger1_observable_recovery_probe_v1",
+            "state_origin": "observable_recovery_probe",
+            "collection_role": "auxiliary_training",
+            "state_visited_by": "observable_recovery_probe",
+            "auxiliary_training_eligible": True,
+            "production_label_eligible": False,
+            "natural_on_policy_support_eligible": False,
+            "training_decision_evidence_verified": True,
+            "generation_provenance_id": PROBE_PROVENANCE_ID,
+        }
+        probe_rows = [
+            self._source_row(
+                "probe-a",
+                "root-probe-a",
+                recovery_stratum="post_failure_no_candidate",
+                **probe_identity,
+            ),
+            self._source_row(
+                "probe-b",
+                "root-probe-b",
+                recovery_stratum="unsupported_correction_recovery",
+                **probe_identity,
+            ),
+        ]
+        raw_view, training_view = build_dagger1_three_source_view(
+            d0_rows=d0_rows,
+            natural_d1_rows=d1_rows,
+            probe_rows=probe_rows,
+            policy=TEST_VIEW_POLICY,
+        )
+        validation_rows = [self._source_row("validation", "root-validation")]
+        test_rows = [self._source_row("test", "root-test")]
 
         learner_seed = {
             "role": "learner_seed_only",
@@ -101,6 +226,8 @@ class Round1SourceMixGateTests(unittest.TestCase):
             "recovery_label_audit": {"passed": True},
             "target_aware_state_class_audit": {"passed": True},
             "independent_root_support": {"passed": True},
+            "deterministic_collection_selection_binding": {"passed": True},
+            "three_source_training_support": self.support,
         }
         semantic = {
             "passed": True,
@@ -120,14 +247,6 @@ class Round1SourceMixGateTests(unittest.TestCase):
                 "stratum": {"release_gate_passed": True}
             },
         }
-        training_view = {
-            "builder_contract": ROUND1_AGGREGATE_BUILDER_CONTRACT,
-            "source_allocation": {
-                "passed": True,
-                "observed_d1_share": 0.25,
-                "d1_recovery_rows": 25,
-            },
-        }
         audit_reports = {
             "d1_offline_teacher_target_quarantine_summary": quarantine_summary,
             "d1_recovery_label_audit": recomputed_d1["recovery_label_audit"],
@@ -137,6 +256,10 @@ class Round1SourceMixGateTests(unittest.TestCase):
             "d1_independent_root_support": recomputed_d1[
                 "independent_root_support"
             ],
+            "d1_deterministic_collection_selection_binding": recomputed_d1[
+                "deterministic_collection_selection_binding"
+            ],
+            "d1_three_source_training_support": self.support,
             "union_realizability": semantic,
         }
         for key in (
@@ -160,11 +283,29 @@ class Round1SourceMixGateTests(unittest.TestCase):
                 "release_eligible_source": True,
             },
             "training_view_report_sha256": stable_json_sha256(training_view),
+            "training_support_report_sha256": stable_json_sha256(self.support),
+            "round1_view_policy": TEST_VIEW_POLICY,
+            "round1_view_policy_digest": round1_view_policy_digest(
+                TEST_VIEW_POLICY
+            ),
             "audit_report_sha256": audit_hashes,
             "input_artifacts": {
                 "d0_manifest_sha256": D0_MANIFEST_SHA256,
                 "d1_rows_sha256": "e" * 64,
                 "d1_manifest_sha256": COLLECTION_MANIFEST_SHA256,
+                "d1_manifest_content_sha256": stable_json_sha256(d1_manifest),
+                "probe_rows_sha256": "6" * 64,
+                "probe_manifest_sha256": "7" * 64,
+                "probe_generation_provenance_id": PROBE_PROVENANCE_ID,
+                "immutable_source_view_content_sha256": {
+                    "d0_bc0": stable_json_sha256(d0_rows),
+                    "natural_dagger1": stable_json_sha256(d1_rows),
+                    "observable_recovery_probe": stable_json_sha256(probe_rows),
+                },
+                "immutable_holdout_content_sha256": {
+                    "validation": stable_json_sha256(validation_rows),
+                    "test": stable_json_sha256(test_rows),
+                },
                 "d1_development_holdout": {
                     "holdout_sha256": DEVELOPMENT_HOLDOUT_SHA256,
                     "manifest_sha256": DEVELOPMENT_HOLDOUT_MANIFEST_SHA256,
@@ -177,7 +318,46 @@ class Round1SourceMixGateTests(unittest.TestCase):
             },
             "learner_seed": learner_seed,
         }
+        probe_binding = {
+            "contract": "dagger1_recovery_probe_binding_v1",
+            "passed": True,
+            "generation_provenance_id": PROBE_PROVENANCE_ID,
+            "probe_rows": len(probe_rows),
+            "probe_roots": len(probe_rows),
+            "probe_root_set_sha256": "8" * 64,
+            "rows_sha256": "6" * 64,
+            "manifest_sha256": "7" * 64,
+            "view_policy_digest": round1_view_policy_digest(TEST_VIEW_POLICY),
+            "support": {"passed": True},
+        }
+        descriptor["input_artifacts"]["probe_binding_report_sha256"] = (
+            stable_json_sha256(probe_binding)
+        )
         provenance_id = stable_json_sha256(descriptor)
+        for row in raw_view:
+            row["generation_provenance_id"] = provenance_id
+        for row in [*validation_rows, *test_rows]:
+            row["generation_provenance_id"] = provenance_id
+        train_rows = examples_to_chat_sft(
+            raw_view,
+            protocol="canonical",
+            allow_ineligible_auxiliary=True,
+        )
+
+        def write_rows(name: str, rows: list[dict[str, Any]]) -> None:
+            (root / name).write_text(
+                "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+
+        write_rows("aggregate.d0.raw.jsonl", d0_rows)
+        write_rows("aggregate.d1.raw.jsonl", d1_rows)
+        write_rows("aggregate.probe.raw.jsonl", probe_rows)
+        write_rows("aggregate.raw.jsonl", [*d0_rows, *d1_rows, *probe_rows])
+        write_rows("aggregate.train_view.raw.jsonl", raw_view)
+        write_rows("aggregate.train_view.jsonl", train_rows)
+        write_rows("aggregate.validation.jsonl", validation_rows)
+        write_rows("aggregate.test.jsonl", test_rows)
         provenance = {
             "release_eligible": True,
             "generation_descriptor": descriptor,
@@ -186,6 +366,7 @@ class Round1SourceMixGateTests(unittest.TestCase):
                 name: file_sha256(root / name)
                 for name in ROUND1_IMMUTABLE_VIEW_NAMES
             },
+            "probe_binding": probe_binding,
         }
         preflight = {
             "generation_provenance_id": provenance_id,
@@ -197,6 +378,8 @@ class Round1SourceMixGateTests(unittest.TestCase):
             "d1_development_holdout": descriptor["input_artifacts"][
                 "d1_development_holdout"
             ],
+            "probe_binding": probe_binding,
+            "three_source_training_support": self.support,
         }
         provenance_path = root / "aggregate.generation_provenance.json"
         preflight_path = root / "aggregate.preflight.json"
@@ -244,7 +427,7 @@ class Round1SourceMixGateTests(unittest.TestCase):
             provenance, preflight = self._write_valid_artifacts(Path(temp_dir))
             report = self._validate(provenance, preflight)
             self.assertTrue(report["passed"])
-            self.assertEqual(report["d1_recovery_rows"], 25)
+            self.assertEqual(report["d1_recovery_rows"], 1)
 
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
@@ -261,7 +444,63 @@ class Round1SourceMixGateTests(unittest.TestCase):
                     ]
                 )
             self.assertEqual(result, 0)
-            self.assertIn("source-mix gate passed", output.getvalue())
+            self.assertIn("source gate passed", output.getvalue())
+
+    def test_source_gate_requires_canonical_sibling_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            provenance, preflight = self._write_valid_artifacts(root)
+            renamed = root / "renamed-provenance.json"
+            renamed.write_bytes(provenance.read_bytes())
+            with self.assertRaisesRegex(GateError, "canonical sibling"):
+                self._validate(renamed, preflight)
+
+            with self.assertRaisesRegex(GateError, "canonical dataset path"):
+                validate_round1_source_mix_gate(
+                    provenance,
+                    preflight,
+                    reviewed_source_commit=SOURCE_COMMIT,
+                    initial_adapter_revision=ADAPTER_REVISION,
+                    train_path=root / "alternate.jsonl",
+                    validation_path=root / "aggregate.validation.jsonl",
+                )
+
+    def test_rehashed_holdout_tamper_still_fails_descriptor_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            provenance_path, preflight = self._write_valid_artifacts(root)
+            validation_path = root / "aggregate.validation.jsonl"
+            row = json.loads(validation_path.read_text(encoding="utf-8"))
+            row["forged"] = True
+            validation_path.write_text(
+                json.dumps(row, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            provenance = json.loads(
+                provenance_path.read_text(encoding="utf-8")
+            )
+            provenance["dataset_hashes"][validation_path.name] = file_sha256(
+                validation_path
+            )
+            provenance_path.write_text(
+                json.dumps(provenance, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(GateError, "descriptor-bound holdouts"):
+                self._validate(provenance_path, preflight)
+
+    def test_embedded_d1_manifest_content_is_descriptor_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            provenance, preflight_path = self._write_valid_artifacts(root)
+            preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
+            preflight["d1_collection_manifest"]["unreviewed_claim"] = True
+            preflight_path.write_text(
+                json.dumps(preflight, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(GateError, "bind D1 rows and manifest"):
+                self._validate(provenance, preflight_path)
 
     def test_missing_immutable_view_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -280,6 +519,23 @@ class Round1SourceMixGateTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(GateError, "source view hash mismatch"):
+                self._validate(provenance, preflight)
+
+    def test_rehashed_forged_training_view_still_fails_reconstruction(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            provenance, preflight = self._write_valid_artifacts(root)
+            view = root / "aggregate.train_view.raw.jsonl"
+            view.write_text(json.dumps({"forged": "wrong allocation"}) + "\n")
+            payload = json.loads(provenance.read_text(encoding="utf-8"))
+            payload["dataset_hashes"][view.name] = file_sha256(view)
+            provenance.write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                GateError, "exact deterministic three-source reconstruction"
+            ):
                 self._validate(provenance, preflight)
 
     def test_mismatched_provenance_and_preflight_ids_fail(self) -> None:

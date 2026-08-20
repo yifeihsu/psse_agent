@@ -53,6 +53,7 @@ from psse_env.dagger.offline_teacher_target_audit import (
 from psse_env.dagger.release_factories import select_observable_expert_actions
 from psse_env.oracle.process_validity import (
     POST_CORRECTION_CONFIRMATION_SIGNATURE,
+    post_correction_confirmation_required,
 )
 from psse_env.dagger.rollout_collector import (
     classify_dagger1_recovery_stratum,
@@ -174,27 +175,10 @@ def post_failure_no_candidate_intervention(
 #: it first, with ordinary legal actions and no reference to hidden truth.
 
 
-def post_correction_confirmation_pending(observation: Mapping[str, Any]) -> bool:
-    """The exact policy-visible state the confirmation guard fires on.
-
-    Mirrors the controller's own condition: an accepted correction exists and
-    the confirmation signature is the *only* unresolved signature.  Testing a
-    weaker version -- "an accepted correction with no open candidate" -- fires
-    before the guard exists and produces ``missing_precondition`` instead, which
-    is a different stratum and must not be counted here.
-    """
-
-    if not observation.get("accepted_corrections"):
-        return False
-    # An open candidate means the previous transaction has not closed, so the
-    # confirmation boundary is not the state under test.  The controller guard
-    # does not read this, but firing here would probe a different situation.
-    if observation.get("has_open_candidate") or observation.get("candidate_state_id"):
-        return False
-    signatures = {
-        str(item) for item in (observation.get("unresolved_signatures") or [])
-    }
-    return signatures == {POST_CORRECTION_CONFIRMATION_SIGNATURE}
+# Backwards-compatible name for callers/tests; the predicate itself is owned by
+# the production process gate so a probe cannot drift from the guard it claims
+# to exercise.
+post_correction_confirmation_pending = post_correction_confirmation_required
 
 
 def confirmation_violation_intervention(
@@ -351,8 +335,10 @@ def stamp_recovery_probe_row(
     stamped.update(
         {
             "collector_contract": RECOVERY_PROBE_CONTRACT,
+            "dataset_mode": "production",
             "state_origin": RECOVERY_PROBE_STATE_ORIGIN,
             "dataset_source": RECOVERY_PROBE_DATASET_SOURCE,
+            "replay_source": RECOVERY_PROBE_DATASET_SOURCE,
             "collection_role": RECOVERY_PROBE_COLLECTION_ROLE,
             "state_visited_by": RECOVERY_PROBE_STATE_ORIGIN,
             "recovery_stratum": str(expected_stratum),
@@ -536,7 +522,9 @@ def prepare_scenario_envelope(envelope: Mapping[str, Any]) -> dict[str, Any]:
     runtime = envelope.get("execution")
     runtime = dict(runtime) if isinstance(runtime, Mapping) else dict(envelope)
     grouping = envelope.get("grouping")
-    grouping = dict(grouping) if isinstance(grouping, Mapping) else {}
+    grouping = (
+        dict(grouping) if isinstance(grouping, Mapping) else dict(envelope)
+    )
     return {
         "runtime": runtime,
         "audit": probe_audit_scenario(envelope),
@@ -649,8 +637,8 @@ def generate_recovery_probes(
         ]
         if not remaining:
             break
-        grouping = scenario.get("grouping")
-        grouping = grouping if isinstance(grouping, Mapping) else scenario
+        prepared = prepare_scenario_envelope(scenario)
+        grouping = prepared["grouping"]
         root = str(grouping.get("physical_root_fingerprint") or "")
         family = str(grouping.get("scenario_family") or "")
         cardinality = int(grouping.get("error_cardinality") or 0)
@@ -661,10 +649,7 @@ def generate_recovery_probes(
         for stratum in remaining:
             if root in used_roots[stratum]:
                 continue
-            # Scenario envelopes carry the runtime payload under "execution";
-            # a bare scenario is accepted unchanged so fakes stay simple.
-            runtime = scenario.get("execution")
-            env.reset(runtime if isinstance(runtime, Mapping) else scenario)
+            env.reset(prepared["runtime"])
             history: list[Any] = []
             observation = env.get_policy_observation(history)
             observation = (
@@ -794,7 +779,7 @@ def generate_recovery_probes(
                 # Private truth must reach the audit.  The runtime envelope is
                 # truth-free by construction, so auditing against it would judge
                 # the target on an incomplete ledger.
-                scenario=probe_audit_scenario(scenario),
+                scenario=prepared["audit"],
                 observable_evidence_passed=training_decision_evidence_verified,
             )
             if teacher_audit.get("passed") is not True:
@@ -840,4 +825,8 @@ def generate_recovery_probes(
         "attempts": attempts,
         "probe_support": audit_recovery_probe_support(rows),
     }
+    report["passed"] = bool(
+        report["probe_support"]["passed"]
+        and all(report["quota_met"].values())
+    )
     return rows, report

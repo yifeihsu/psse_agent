@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import copy
+import hashlib
 import importlib
 import inspect
 import json
@@ -8,7 +10,7 @@ import os
 import re
 import shutil
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
 import psse_env.dagger.dataset_builder as dataset_builder_module
@@ -17,7 +19,12 @@ import psse_env.dagger.collect_dagger1 as collect_dagger1_module
 import psse_env.dagger.offline_teacher_target_audit as offline_audit_module
 import psse_env.dagger.replay_buffer as replay_buffer_module
 import psse_env.dagger.rollout_collector as rollout_collector_module
-from psse_env.dagger.dataset_builder import examples_to_chat_sft, load_jsonl, write_jsonl
+import psse_env.dagger.three_source_view as three_source_view_module
+import psse_env.dagger.build_recovery_probe_suite as recovery_probe_builder_module
+from psse_env.dagger.build_recovery_probe_suite import (
+    validate_recovery_probe_suite_binding,
+)
+from psse_env.dagger.dataset_builder import examples_to_chat_sft, write_jsonl
 from psse_env.dagger.dagger1_semantic_audit import (
     audit_dagger1_union_realizability,
 )
@@ -41,7 +48,15 @@ from psse_env.dagger.replay_buffer import (
     DEFAULT_MINIMUM_TOOL_CATEGORY_DISTINCT_ROOTS,
     DEFAULT_MINIMUM_TOOL_CATEGORY_NATURAL_ROWS,
     audit_dagger1_independent_root_support,
-    build_dagger1_training_view,
+    audit_dagger1_training_support,
+)
+from psse_env.dagger.round1_view_policy import (
+    ROUND1_THREE_SOURCE_VIEW_POLICY,
+    round1_view_policy_digest,
+)
+from psse_env.dagger.three_source_view import (
+    THREE_SOURCE_VIEW_CONTRACT,
+    build_dagger1_three_source_view,
 )
 from psse_env.dagger.rollout_collector import (
     OFFLINE_TEACHER_TARGET_QUARANTINE_SUMMARY_CONTRACT,
@@ -57,6 +72,7 @@ from psse_env.examples.generate_round0_aggregate import (
 )
 from psse_env.sft.provenance import (
     AGGREGATE_MANIFEST_FILENAME,
+    ROUND1_AGGREGATE_BUILDER_CONTRACT,
     file_sha256,
     git_source_state,
     stable_json_sha256,
@@ -75,6 +91,7 @@ _ROUND1_OUTPUT_FILENAMES = (
     "aggregate.raw.jsonl",
     "aggregate.d0.raw.jsonl",
     "aggregate.d1.raw.jsonl",
+    "aggregate.probe.raw.jsonl",
     "aggregate.train_view.raw.jsonl",
     "aggregate.train_view.jsonl",
     "aggregate.validation.jsonl",
@@ -125,6 +142,36 @@ def _verify_recorded_hash(
     expected = hashes.get(path.name)
     if not expected or expected != file_sha256(path):
         raise ValueError(f"{label} hash does not match its D0 provenance")
+
+
+def _load_jsonl_snapshot(
+    path: Path,
+    *,
+    expected_sha256: str,
+    label: str,
+) -> tuple[list[dict[str, Any]], str]:
+    """Read, hash, and parse one immutable JSONL input from the same bytes."""
+
+    payload = Path(path).read_bytes()
+    observed = hashlib.sha256(payload).hexdigest()
+    if observed != str(expected_sha256).strip().lower():
+        raise ValueError(f"{label} changed before its validated snapshot")
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{label} is not UTF-8 JSONL") from exc
+    rows: list[dict[str, Any]] = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{label}:{number} is invalid JSON") from exc
+        if not isinstance(value, Mapping):
+            raise ValueError(f"{label}:{number} must be a JSON object")
+        rows.append(dict(value))
+    return rows, observed
 
 
 def validate_offline_teacher_target_quarantine_summary(
@@ -351,6 +398,30 @@ def _bind_generation_id(row: Mapping[str, Any], provenance_id: str) -> dict[str,
     return bound
 
 
+def generation_id_independent_rows(
+    rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return canonical row content with aggregate generation IDs removed.
+
+    Round-1 holdout rows inherit a D0 generation identity and are rebound to
+    the new aggregate identity after the Round-1 descriptor is hashed.  This
+    projection lets that otherwise-circular content remain descriptor-bound:
+    the source gate verifies the projected content and the exact rebound ID.
+    """
+
+    projected: list[dict[str, Any]] = []
+    for row in rows:
+        item = copy.deepcopy(dict(row))
+        item.pop("generation_provenance_id", None)
+        metadata = item.get("metadata")
+        if isinstance(metadata, Mapping):
+            metadata = dict(metadata)
+            metadata.pop("generation_provenance_id", None)
+            item["metadata"] = metadata
+        projected.append(item)
+    return projected
+
+
 def _source_hash_for_import_spec(spec: str) -> str:
     module_name, separator, attribute_path = spec.partition(":")
     if not separator:
@@ -405,7 +476,10 @@ def validate_round1_learner_seed(
         )
     if (
         not collection_model_id
-        or not Path(collection_model_id).is_absolute()
+        or not (
+            Path(collection_model_id).is_absolute()
+            or PurePosixPath(collection_model_id).is_absolute()
+        )
         or top_level_model_id != collection_model_id
     ):
         raise ValueError(
@@ -454,19 +528,42 @@ def build_round1_aggregate(
     d0_aggregate_dir: Path,
     d1_path: Path,
     d1_manifest_path: Path,
+    probe_path: Path,
+    probe_manifest_path: Path,
+    reviewed_source_commit: str,
     output_dir: Path,
-    seed: int,
-    size: int | None,
-    d1_share: float,
-    minimum_d1_share: float,
-    maximum_d1_share: float,
-    max_duplicate_count: int,
-    max_rows_per_root: int,
+    seed: int = 20260719,
+    size: int | None = None,
+    d1_share: float = 0.25,
+    minimum_d1_share: float = 0.20,
+    maximum_d1_share: float = 0.30,
+    max_duplicate_count: int = 2,
+    max_rows_per_root: int = 8,
 ) -> dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[2]
     source_state = git_source_state(repo_root)
     if source_state.get("release_eligible_source") is not True:
         raise RuntimeError("Round-1 aggregate requires a clean committed source tree")
+    reviewed = str(reviewed_source_commit).strip().lower()
+    if not reviewed or reviewed != source_state.get("source_commit"):
+        raise RuntimeError(
+            "Round-1 aggregate reviewed source commit differs from clean HEAD"
+        )
+    legacy_defaults = {
+        "seed": seed == 20260719,
+        "size": size is None,
+        "d1_share": d1_share == 0.25,
+        "minimum_d1_share": minimum_d1_share == 0.20,
+        "maximum_d1_share": maximum_d1_share == 0.30,
+        "max_duplicate_count": max_duplicate_count == 2,
+        "max_rows_per_root": max_rows_per_root == 8,
+    }
+    if not all(legacy_defaults.values()):
+        changed = sorted(name for name, valid in legacy_defaults.items() if not valid)
+        raise ValueError(
+            "Round-1 release view allocation is frozen; unsupported legacy "
+            "override(s): " + ", ".join(changed)
+        )
     _preflight_round1_output_directory(output_dir)
 
     d0_raw_path = d0_aggregate_dir / "aggregate.raw.jsonl"
@@ -564,6 +661,21 @@ def build_round1_aggregate(
         or d1_manifest.get("input_sha256") != file_sha256(scenario_input_path)
     ):
         raise ValueError("D1 scenario input hash is unavailable or changed")
+    scenario_report_value = str(
+        d1_manifest.get("scenario_generator_report") or ""
+    ).strip()
+    scenario_report_path = Path(scenario_report_value)
+    if not scenario_report_path.is_absolute():
+        scenario_report_path = repo_root / scenario_report_path
+    if (
+        not scenario_report_value
+        or not scenario_report_path.is_file()
+        or d1_manifest.get("scenario_generator_report_sha256")
+        != file_sha256(scenario_report_path)
+    ):
+        raise ValueError(
+            "D1 scenario generator-report hash is unavailable or changed"
+        )
     d1_source = d1_manifest.get("source_state")
     d1_source = d1_source if isinstance(d1_source, Mapping) else {}
     if (
@@ -717,14 +829,26 @@ def build_round1_aggregate(
     ):
         raise ValueError("D1 frozen-suite holdout binding is not pinned/current")
 
-    raw_d0 = load_jsonl(d0_raw_path)
+    d0_dataset_hashes = d0_provenance.get("dataset_hashes")
+    d0_dataset_hashes = (
+        d0_dataset_hashes if isinstance(d0_dataset_hashes, Mapping) else {}
+    )
+    raw_d0, d0_raw_snapshot_sha256 = _load_jsonl_snapshot(
+        d0_raw_path,
+        expected_sha256=str(d0_dataset_hashes.get(d0_raw_path.name) or ""),
+        label="D0 raw aggregate",
+    )
     d0_train = [
         row
         for row in raw_d0
         if row.get("dataset_split") == "train"
         and row.get("production_label_eligible") is True
     ]
-    d1 = load_jsonl(d1_path)
+    d1, d1_snapshot_sha256 = _load_jsonl_snapshot(
+        d1_path,
+        expected_sha256=str(d1_manifest.get("output_sha256") or ""),
+        label="D1 selected rows",
+    )
     # Treat the collection manifest as an integrity binding, not as authority
     # for safety properties that are cheap to recompute.  A forged manifest
     # must not be able to reintroduce oracle truth or a frozen evaluation root
@@ -756,7 +880,11 @@ def build_round1_aggregate(
         raise FileNotFoundError(all_output_path)
     if d1_manifest.get("all_output_sha256") != file_sha256(all_output_path):
         raise ValueError("D1 all-output ledger hash does not match its manifest")
-    all_d1_rows = load_jsonl(all_output_path)
+    all_d1_rows, all_output_snapshot_sha256 = _load_jsonl_snapshot(
+        all_output_path,
+        expected_sha256=str(d1_manifest.get("all_output_sha256") or ""),
+        label="D1 all-output ledger",
+    )
     all_output_row_count = d1_manifest.get("all_output_row_count")
     if (
         isinstance(all_output_row_count, bool)
@@ -855,12 +983,54 @@ def build_round1_aggregate(
             + ", ".join(development_leaked)
         )
 
+    probe_path = Path(probe_path)
+    probe_manifest_path = Path(probe_manifest_path)
+    if not probe_path.is_file():
+        raise FileNotFoundError(probe_path)
+    if not probe_manifest_path.is_file():
+        raise FileNotFoundError(probe_manifest_path)
+    probe_binding = validate_recovery_probe_suite_binding(
+        rows_path=probe_path,
+        manifest_path=probe_manifest_path,
+        scenarios_path=scenario_input_path,
+        scenario_manifest_path=scenario_manifest_path,
+        scenario_generator_report_path=scenario_report_path,
+        development_holdout=development_holdout_path,
+        development_holdout_manifest=development_manifest_path,
+        development_holdout_generator_report=development_generator_report_path,
+        d0_aggregate_dir=d0_aggregate_dir,
+        forbidden_suite=DEFAULT_FORBIDDEN_SUITE,
+        evaluation_policy=DEFAULT_EVALUATION_POLICY,
+        reviewed_source_commit=reviewed,
+    )
+    probes, probe_snapshot_sha256 = _load_jsonl_snapshot(
+        probe_path,
+        expected_sha256=str(probe_binding.get("rows_sha256") or ""),
+        label="recovery probe rows",
+    )
+    probe_roots = {
+        str(row.get("physical_root_fingerprint") or "").strip()
+        for row in probes
+        if str(row.get("physical_root_fingerprint") or "").strip()
+    }
+    actual_natural_probe_overlap = sorted(d1_roots & probe_roots)
+
+    # Source identity is explicit in the materialized immutable views.  These
+    # markers are recomputed here rather than trusted from D0/D1 inputs.
+    d0_train = [
+        {**dict(row), "replay_source": "d0_bc0"} for row in d0_train
+    ]
+    d1 = [
+        {**dict(row), "replay_source": "natural_dagger1"} for row in d1
+    ]
+
     # Recompute semantic eligibility from immutable D1 rows.  The manifest
     # binds bytes and collection identity, but it is never authority for
     # properties that the final builder can independently verify.
     d1_recovery_audit = audit_dagger1_recovery_labels(d1)
     d1_class_audit = audit_target_aware_state_classes(d1)
-    d1_root_support = audit_dagger1_independent_root_support(d1)
+    training_support = audit_dagger1_training_support(d1, probes)
+    d1_root_support = training_support["natural_on_policy_support"]
     recomputed_d1_audits = {
         "offline_teacher_target_quarantine_summary": (
             recomputed_quarantine_summary
@@ -868,6 +1038,7 @@ def build_round1_aggregate(
         "recovery_label_audit": d1_recovery_audit,
         "target_aware_state_class_audit": d1_class_audit,
         "independent_root_support": d1_root_support,
+        "three_source_training_support": training_support,
         "deterministic_collection_selection_binding": d1_selection_binding,
     }
     failed_d1_audits = [
@@ -881,48 +1052,26 @@ def build_round1_aggregate(
             + ", ".join(failed_d1_audits)
         )
 
-    raw_view, training_view_report = build_dagger1_training_view(
-        d0_train,
-        d1,
-        size=size,
-        seed=seed,
-        d1_share=d1_share,
-        minimum_d1_share=minimum_d1_share,
-        maximum_d1_share=maximum_d1_share,
-        max_duplicate_count=max_duplicate_count,
-        max_rows_per_root=max_rows_per_root,
-        d0_training_view_kwargs={
-            "minimum_tool_category_natural_rows": (
-                DEFAULT_MINIMUM_TOOL_CATEGORY_NATURAL_ROWS
-            ),
-            "minimum_tool_category_distinct_roots": (
-                DEFAULT_MINIMUM_TOOL_CATEGORY_DISTINCT_ROOTS
-            ),
-            "target_tool_minimum_distinct_roots": (
-                BC0_CRITICAL_TARGET_TOOL_MINIMUM_DISTINCT_ROOTS
-            ),
-            "target_tool_state_class_minimum_distinct_roots": (
-                BC0_CRITICAL_TARGET_TOOL_STATE_CLASS_MINIMUM_DISTINCT_ROOTS
-            ),
-            "target_tool_scenario_family_minimum_distinct_roots": (
-                BC0_CRITICAL_TARGET_TOOL_SCENARIO_FAMILY_MINIMUM_DISTINCT_ROOTS
-            ),
-            "same_root_prerequisite_rules": BC0_SAME_ROOT_PREREQUISITE_RULES,
-        },
+    raw_view, training_view_report = build_dagger1_three_source_view(
+        d0_rows=d0_train,
+        natural_d1_rows=d1,
+        probe_rows=probes,
+        policy=ROUND1_THREE_SOURCE_VIEW_POLICY,
     )
-    if training_view_report.get("release_ready") is not True:
+    if training_view_report.get("passed") is not True:
         raise RuntimeError(
-            f"D0 union D1 training-view gate failed: {training_view_report}"
+            "D0/D1/probe three-source training-view gate failed: "
+            f"{training_view_report}"
         )
 
-    natural_rows = [*d0_train, *d1]
+    natural_rows = [*d0_train, *d1, *probes]
     semantic_realizability = audit_dagger1_union_realizability(
         natural_rows,
         raw_view,
     )
     if semantic_realizability.get("passed") is not True:
         raise RuntimeError(
-            "D0 union D1 semantic realizability failed: "
+            "D0/D1/probe semantic realizability failed: "
             + "; ".join(semantic_realizability.get("failures") or [])
         )
 
@@ -936,6 +1085,7 @@ def build_round1_aggregate(
         "d1_deterministic_collection_selection_binding": (
             d1_selection_binding
         ),
+        "d1_three_source_training_support": training_support,
         "union_realizability": semantic_realizability,
     }
     for key in (
@@ -955,14 +1105,28 @@ def build_round1_aggregate(
         for name, report in sorted(audit_reports.items())
     }
 
-    validation_rows = load_jsonl(validation_path)
-    test_rows = load_jsonl(test_path)
-    tentative_train = examples_to_chat_sft(raw_view, protocol="canonical")
+    validation_rows, validation_snapshot_sha256 = _load_jsonl_snapshot(
+        validation_path,
+        expected_sha256=str(
+            d0_dataset_hashes.get(validation_path.name) or ""
+        ),
+        label="D0 validation split",
+    )
+    test_rows, test_snapshot_sha256 = _load_jsonl_snapshot(
+        test_path,
+        expected_sha256=str(d0_dataset_hashes.get(test_path.name) or ""),
+        label="D0 test split",
+    )
+    tentative_train = examples_to_chat_sft(
+        raw_view,
+        protocol="canonical",
+        allow_ineligible_auxiliary=True,
+    )
     schema_hashes = tool_schema_hashes(
         [*tentative_train, *validation_rows, *test_rows]
     )
     if len(schema_hashes) != 1:
-        raise ValueError(f"D0/D1 tool schema mismatch: {schema_hashes}")
+        raise ValueError(f"D0/D1/probe tool schema mismatch: {schema_hashes}")
 
     source_files = (
         Path(__file__),
@@ -972,15 +1136,17 @@ def build_round1_aggregate(
         Path(offline_audit_module.__file__),
         Path(replay_buffer_module.__file__),
         Path(rollout_collector_module.__file__),
+        Path(three_source_view_module.__file__),
+        Path(recovery_probe_builder_module.__file__),
     )
     generation_descriptor = {
         "generation_provenance_version": 1,
-        "builder_contract": "deterministic_d0_d1_balanced_union_v1",
+        "builder_contract": ROUND1_AGGREGATE_BUILDER_CONTRACT,
         "source_state": source_state,
         "protocol": "canonical",
         "schema_registry_hash": schema_hashes[0],
         "generator_hashes": {
-            str(path.resolve().relative_to(repo_root)): file_sha256(path)
+            path.resolve().relative_to(repo_root).as_posix(): file_sha256(path)
             for path in source_files
         },
         "input_artifacts": {
@@ -989,11 +1155,11 @@ def build_round1_aggregate(
             ),
             "d0_generation_provenance_sha256": file_sha256(d0_provenance_path),
             "d0_manifest_sha256": file_sha256(d0_manifest_path),
-            "d0_raw_sha256": file_sha256(d0_raw_path),
-            "d0_validation_sha256": file_sha256(validation_path),
-            "d0_test_sha256": file_sha256(test_path),
-            "d1_rows_sha256": file_sha256(d1_path),
-            "d1_all_output_sha256": file_sha256(all_output_path),
+            "d0_raw_sha256": d0_raw_snapshot_sha256,
+            "d0_validation_sha256": validation_snapshot_sha256,
+            "d0_test_sha256": test_snapshot_sha256,
+            "d1_rows_sha256": d1_snapshot_sha256,
+            "d1_all_output_sha256": all_output_snapshot_sha256,
             "d1_all_output_row_count": len(all_d1_rows),
             "d1_safe_candidate_row_count": d1_selection_binding[
                 "candidate_rows"
@@ -1006,25 +1172,49 @@ def build_round1_aggregate(
                 d1_selection_binding
             ),
             "d1_manifest_sha256": d1_manifest_sha256,
+            "d1_manifest_content_sha256": stable_json_sha256(d1_manifest),
             "d1_development_holdout": development_holdout_binding,
+            "probe_rows_sha256": probe_snapshot_sha256,
+            "probe_manifest_sha256": probe_binding["manifest_sha256"],
+            "probe_generation_provenance_id": probe_binding[
+                "generation_provenance_id"
+            ],
+            "probe_binding_report_sha256": stable_json_sha256(probe_binding),
+            "immutable_source_view_content_sha256": {
+                "d0_bc0": stable_json_sha256(d0_train),
+                "natural_dagger1": stable_json_sha256(d1),
+                "observable_recovery_probe": stable_json_sha256(probes),
+            },
+            "immutable_holdout_content_sha256": {
+                "validation": stable_json_sha256(
+                    generation_id_independent_rows(validation_rows)
+                ),
+                "test": stable_json_sha256(
+                    generation_id_independent_rows(test_rows)
+                ),
+            },
         },
         "learner_seed": learner_seed_binding,
+        "training_view_contract": THREE_SOURCE_VIEW_CONTRACT,
+        "round1_view_policy_digest": round1_view_policy_digest(),
+        "round1_view_policy": ROUND1_THREE_SOURCE_VIEW_POLICY,
         "training_view_report_sha256": stable_json_sha256(training_view_report),
+        "training_support_report_sha256": stable_json_sha256(training_support),
         "audit_report_sha256": audit_report_sha256,
         "generation_config": {
-            "seed": int(seed),
-            "requested_size": size,
-            "d1_share": float(d1_share),
-            "minimum_d1_share": float(minimum_d1_share),
-            "maximum_d1_share": float(maximum_d1_share),
-            "max_duplicate_count": int(max_duplicate_count),
-            "max_rows_per_root": int(max_rows_per_root),
+            "policy_digest": round1_view_policy_digest(),
+            "allocation": dict(ROUND1_THREE_SOURCE_VIEW_POLICY["allocation"]),
+            "global_caps": dict(ROUND1_THREE_SOURCE_VIEW_POLICY["global_caps"]),
         },
     }
     provenance_id = stable_json_sha256(generation_descriptor)
     for row in raw_view:
         row["generation_provenance_id"] = provenance_id
-    train_rows = examples_to_chat_sft(raw_view, protocol="canonical")
+    train_rows = examples_to_chat_sft(
+        raw_view,
+        protocol="canonical",
+        allow_ineligible_auxiliary=True,
+    )
     validation_rows = [
         _bind_generation_id(row, provenance_id) for row in validation_rows
     ]
@@ -1051,12 +1241,13 @@ def build_round1_aggregate(
         "d1_deterministic_selection_recomputed": (
             d1_selection_binding.get("passed") is True
         ),
-        "training_view_release_ready": training_view_report.get("release_ready")
-        is True,
-        "source_mix_passed": training_view_report.get("source_allocation", {}).get(
-            "passed"
-        )
-        is True,
+        "training_view_release_ready": training_view_report.get("passed") is True,
+        "source_mix_passed": training_view_report.get("placed")
+        == ROUND1_THREE_SOURCE_VIEW_POLICY["allocation"],
+        "round1_view_policy_bound": training_view_report.get("policy_digest")
+        == round1_view_policy_digest(),
+        "probe_binding_verified": probe_binding.get("passed") is True,
+        "three_source_training_support": training_support.get("passed") is True,
         "d1_recovery_labels_recomputed": d1_recovery_audit.get("passed") is True,
         "d1_state_classes_recomputed": d1_class_audit.get("passed") is True,
         "d1_independent_root_support": d1_root_support.get("passed") is True,
@@ -1071,6 +1262,10 @@ def build_round1_aggregate(
         "release_checks": release_checks,
         "generation_provenance_id": provenance_id,
         "training_view": training_view_report,
+        "round1_view_policy": ROUND1_THREE_SOURCE_VIEW_POLICY,
+        "probe_binding": probe_binding,
+        "actual_natural_probe_root_overlap": actual_natural_probe_overlap,
+        "three_source_training_support": training_support,
         "recomputed_d1_audits": recomputed_d1_audits,
         "d1_collection_selection_binding": d1_selection_binding,
         "semantic_realizability": semantic_realizability,
@@ -1102,6 +1297,7 @@ def build_round1_aggregate(
         write_jsonl(output_paths["aggregate.raw.jsonl"], natural_rows)
         write_jsonl(output_paths["aggregate.d0.raw.jsonl"], d0_train)
         write_jsonl(output_paths["aggregate.d1.raw.jsonl"], d1)
+        write_jsonl(output_paths["aggregate.probe.raw.jsonl"], probes)
         write_jsonl(output_paths["aggregate.train_view.raw.jsonl"], raw_view)
         write_jsonl(output_paths["aggregate.train_view.jsonl"], train_rows)
         write_jsonl(output_paths["aggregate.validation.jsonl"], validation_rows)
@@ -1117,6 +1313,8 @@ def build_round1_aggregate(
             "generation_provenance_id": provenance_id,
             "dataset_hashes": dataset_hashes,
             "d1_collection_selection_binding": d1_selection_binding,
+            "probe_binding": probe_binding,
+            "three_source_training_support": training_support,
             "release_checks": release_checks,
             "release_eligible": release_eligible,
             "release_failures": [],
@@ -1144,6 +1342,12 @@ def build_round1_aggregate(
         # If a concurrent writer populated the destination, os.replace refuses
         # to replace that non-empty directory and the staged bundle is removed.
         _preflight_round1_output_directory(output_dir)
+        if output_dir.is_dir():
+            # Windows cannot atomically replace even an empty directory.  The
+            # preflight above proves this exact destination is empty; remove
+            # only that leaf so the same one-step publication works on both
+            # platforms.  A racing writer makes os.replace fail closed.
+            output_dir.rmdir()
         os.replace(staging_dir, output_dir)
     finally:
         if staging_dir.exists():
@@ -1153,35 +1357,27 @@ def build_round1_aggregate(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Build a provenance-valid D0 union D1 round-1 SFT aggregate"
+        description=(
+            "Build the provenance-valid frozen D0/natural-D1/probe Round-1 "
+            "SFT aggregate"
+        )
     )
     parser.add_argument("--d0-aggregate-dir", type=Path, required=True)
     parser.add_argument("--d1", type=Path, required=True)
-    parser.add_argument("--d1-manifest", type=Path)
+    parser.add_argument("--d1-manifest", type=Path, required=True)
+    parser.add_argument("--probe", type=Path, required=True)
+    parser.add_argument("--probe-manifest", type=Path, required=True)
+    parser.add_argument("--reviewed-source-commit", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--seed", type=int, default=20260719)
-    parser.add_argument("--size", type=int)
-    parser.add_argument("--d1-share", type=float, default=0.25)
-    parser.add_argument("--minimum-d1-share", type=float, default=0.20)
-    parser.add_argument("--maximum-d1-share", type=float, default=0.30)
-    parser.add_argument("--max-duplicate-count", type=int, default=2)
-    parser.add_argument("--max-rows-per-root", type=int, default=8)
     args = parser.parse_args(list(argv) if argv is not None else None)
-    d1_manifest = args.d1_manifest or args.d1.with_suffix(
-        args.d1.suffix + ".manifest.json"
-    )
     report = build_round1_aggregate(
         d0_aggregate_dir=args.d0_aggregate_dir,
         d1_path=args.d1,
-        d1_manifest_path=d1_manifest,
+        d1_manifest_path=args.d1_manifest,
+        probe_path=args.probe,
+        probe_manifest_path=args.probe_manifest,
+        reviewed_source_commit=args.reviewed_source_commit,
         output_dir=args.output_dir,
-        seed=args.seed,
-        size=args.size,
-        d1_share=args.d1_share,
-        minimum_d1_share=args.minimum_d1_share,
-        maximum_d1_share=args.maximum_d1_share,
-        max_duplicate_count=args.max_duplicate_count,
-        max_rows_per_root=args.max_rows_per_root,
     )
     print(json.dumps(report, sort_keys=True))
     return 0

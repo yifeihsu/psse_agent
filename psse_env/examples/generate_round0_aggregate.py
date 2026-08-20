@@ -1879,7 +1879,7 @@ def _generation_descriptor(
         "protocol": args.protocol,
         "schema_registry_hash": stable_json_sha256(schemas),
         "generator_hashes": {
-            str(path.resolve().relative_to(repo_root)): file_sha256(path)
+            path.resolve().relative_to(repo_root).as_posix(): file_sha256(path)
             for path in source_files
         },
         "input_corpora": input_corpora,

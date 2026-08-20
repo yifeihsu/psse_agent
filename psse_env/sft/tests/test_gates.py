@@ -89,6 +89,30 @@ def row(group: str = "g0", state: str = "active") -> dict:
     }
 
 
+def recovery_probe_row(
+    group: str = "probe0", *, provenance_id: str = "f" * 64
+) -> dict:
+    candidate = row(group)
+    identity = {
+        "dataset_mode": "production",
+        "dataset_source": "observable_recovery_probe",
+        "collector_contract": "dagger1_observable_recovery_probe_v1",
+        "state_origin": "observable_recovery_probe",
+        "collection_role": "auxiliary_training",
+        "state_visited_by": "observable_recovery_probe",
+        "replay_source": "observable_recovery_probe",
+        "auxiliary_training_eligible": True,
+        "production_label_eligible": False,
+        "natural_on_policy_support_eligible": False,
+        "training_decision_evidence_verified": True,
+        "generation_provenance_id": provenance_id,
+        "recovery_stratum": "post_failure_no_candidate",
+    }
+    candidate.update(identity)
+    candidate["metadata"].update(identity)
+    return candidate
+
+
 class FakeProcessor:
     pad_token_id = 0
     eos_token_id = 3
@@ -399,6 +423,56 @@ class TestGroupedPilot(unittest.TestCase):
             any("not explicitly production-label eligible" in item for item in report.failures)
         )
 
+    def test_exact_probe_shape_requires_and_accepts_validated_round1_id(self) -> None:
+        provenance_id = "f" * 64
+        probe = recovery_probe_row(provenance_id=provenance_id)
+
+        without_binding = validate_grouped_pilot(
+            {"train": [probe], "validation": [row("valid0")]},
+            minimum_rows=2,
+            maximum_rows=2,
+        )
+        with_binding = validate_grouped_pilot(
+            {"train": [probe], "validation": [row("valid0")]},
+            minimum_rows=2,
+            maximum_rows=2,
+            validated_round1_generation_provenance_id=provenance_id,
+        )
+
+        self.assertFalse(without_binding.passed)
+        self.assertTrue(with_binding.passed, with_binding.failures)
+
+    def test_validated_id_does_not_admit_generic_or_tampered_auxiliary(self) -> None:
+        provenance_id = "f" * 64
+        generic = row("generic")
+        generic["production_label_eligible"] = False
+        generic["metadata"]["production_label_eligible"] = False
+        tampered = recovery_probe_row("tampered", provenance_id=provenance_id)
+        tampered["metadata"]["replay_source"] = "natural_d1"
+        wrong_id = recovery_probe_row("wrong-id", provenance_id="e" * 64)
+        laundered = recovery_probe_row("laundered", provenance_id=provenance_id)
+        laundered["production_label_eligible"] = True
+        laundered["metadata"]["production_label_eligible"] = True
+
+        for candidate, expected in (
+            (generic, "collector_contract"),
+            (tampered, "metadata.replay_source"),
+            (wrong_id, "generation_provenance_id"),
+            (laundered, "production_label_eligible"),
+        ):
+            with self.subTest(expected=expected):
+                report = validate_grouped_pilot(
+                    {"train": [candidate], "validation": [row("valid0")]},
+                    minimum_rows=2,
+                    maximum_rows=2,
+                    validated_round1_generation_provenance_id=provenance_id,
+                )
+                self.assertFalse(report.passed)
+                self.assertTrue(
+                    any(expected in item for item in report.failures),
+                    report.failures,
+                )
+
 
 class TestGenerationProvenance(unittest.TestCase):
     def _fixture(self, root: Path) -> tuple[dict, dict[str, Path], dict]:
@@ -594,6 +668,178 @@ class TestGenerationProvenance(unittest.TestCase):
                     rows=[source_row, source_row],
                 )
         self.assertTrue(result["passed"], result["failures"])
+
+    def test_training_prepare_rejects_auxiliary_without_round1_source_gate(
+        self,
+    ) -> None:
+        source_rows = [recovery_probe_row()]
+        validation_rows = [row("validation")]
+        with mock.patch(
+            "psse_env.sft.training.load_jsonl",
+            side_effect=[source_rows, validation_rows],
+        ):
+            with self.assertRaisesRegex(GateError, "Round-1 source gate"):
+                training_module._prepare_pilot(
+                    train_file="train.jsonl",
+                    validation_file="validation.jsonl",
+                    settings=TrainerSettings(revision="a" * 40),
+                    pilot_minimum_rows=2,
+                    pilot_maximum_rows=2,
+                )
+
+    def test_training_prepare_passes_only_source_gate_returned_id_to_grouped_gate(
+        self,
+    ) -> None:
+        provenance_id = "f" * 64
+        source_rows = [recovery_probe_row(provenance_id=provenance_id)]
+        validation_rows = [row("validation")]
+        grouped = SimpleNamespace(passed=True, failures=[])
+        gate = SimpleNamespace(failures=[], prepared=[])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = TrainerSettings(
+                revision="a" * 40,
+                output_dir=str(root / "output"),
+                initial_adapter_path=str(root / "adapter"),
+                initial_adapter_revision="b" * 64,
+                round1_provenance_path=str(root / "aggregate.generation_provenance.json"),
+                round1_preflight_path=str(root / "aggregate.preflight.json"),
+                reviewed_source_commit="c" * 40,
+            )
+            with (
+                mock.patch(
+                    "psse_env.sft.training.load_jsonl",
+                    side_effect=[source_rows, validation_rows],
+                ),
+                mock.patch(
+                    "psse_env.sft.round1_source_gate.validate_round1_source_mix_gate",
+                    return_value={
+                        "passed": True,
+                        "generation_provenance_id": provenance_id,
+                        "canonical_dataset_content_sha256": {
+                            "train": stable_json_sha256(source_rows),
+                            "validation": stable_json_sha256(validation_rows),
+                            "test": stable_json_sha256([]),
+                        },
+                    },
+                ) as source_gate,
+                mock.patch(
+                    "psse_env.sft.training.validate_grouped_pilot",
+                    return_value=grouped,
+                ) as grouped_gate,
+                mock.patch(
+                    "psse_env.sft.training.validate_generation_provenance",
+                    return_value={"passed": True, "failures": []},
+                ),
+                mock.patch(
+                    "psse_env.sft.training.load_exact_processor",
+                    return_value=(FakeProcessor(), "AutoProcessor"),
+                ),
+                mock.patch(
+                    "psse_env.sft.training.audit_dataset", return_value=gate
+                ),
+            ):
+                training_module._prepare_pilot(
+                    train_file="train.jsonl",
+                    validation_file="validation.jsonl",
+                    settings=settings,
+                    pilot_minimum_rows=2,
+                    pilot_maximum_rows=2,
+                )
+
+        source_gate.assert_called_once_with(
+            settings.round1_provenance_path,
+            settings.round1_preflight_path,
+            reviewed_source_commit="c" * 40,
+            initial_adapter_revision="b" * 64,
+            train_path="train.jsonl",
+            validation_path="validation.jsonl",
+        )
+        self.assertEqual(
+            grouped_gate.call_args.kwargs[
+                "validated_round1_generation_provenance_id"
+            ],
+            provenance_id,
+        )
+
+    def test_round1_sibling_provenance_forces_gate_after_probe_relabeling(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            train_path = root / "aggregate.train_view.jsonl"
+            validation_path = root / "aggregate.validation.jsonl"
+            train_path.write_text(
+                json.dumps(row("laundered-train")) + "\n",
+                encoding="utf-8",
+            )
+            validation_path.write_text(
+                json.dumps(row("laundered-validation")) + "\n",
+                encoding="utf-8",
+            )
+            (root / "aggregate.generation_provenance.json").write_text(
+                json.dumps(
+                    {
+                        "generation_descriptor": {
+                            "builder_contract": ROUND1_AGGREGATE_BUILDER_CONTRACT
+                        }
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(GateError, "Round-1 source gate"):
+                training_module._prepare_pilot(
+                    train_file=train_path,
+                    validation_file=validation_path,
+                    settings=TrainerSettings(revision="a" * 40),
+                    pilot_minimum_rows=2,
+                    pilot_maximum_rows=2,
+                )
+
+    def test_training_rejects_gate_content_different_from_loaded_rows(self) -> None:
+        provenance_id = "f" * 64
+        source_rows = [recovery_probe_row(provenance_id=provenance_id)]
+        validation_rows = [row("validation")]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = TrainerSettings(
+                revision="a" * 40,
+                output_dir=str(root / "output"),
+                initial_adapter_path=str(root / "adapter"),
+                initial_adapter_revision="b" * 64,
+                round1_provenance_path=str(
+                    root / "aggregate.generation_provenance.json"
+                ),
+                round1_preflight_path=str(root / "aggregate.preflight.json"),
+                reviewed_source_commit="c" * 40,
+            )
+            with (
+                mock.patch(
+                    "psse_env.sft.training.load_jsonl",
+                    side_effect=[source_rows, validation_rows],
+                ),
+                mock.patch(
+                    "psse_env.sft.round1_source_gate.validate_round1_source_mix_gate",
+                    return_value={
+                        "passed": True,
+                        "generation_provenance_id": provenance_id,
+                        "canonical_dataset_content_sha256": {
+                            "train": "0" * 64,
+                            "validation": stable_json_sha256(validation_rows),
+                            "test": stable_json_sha256([]),
+                        },
+                    },
+                ),
+                self.assertRaisesRegex(GateError, "rows already loaded"),
+            ):
+                training_module._prepare_pilot(
+                    train_file="train.jsonl",
+                    validation_file="validation.jsonl",
+                    settings=settings,
+                    pilot_minimum_rows=2,
+                    pilot_maximum_rows=2,
+                )
 
     def test_training_prepare_requires_explicit_nonrelease_override(self) -> None:
         source_rows = [row("g0", "a"), row("g1", "b")]
@@ -1196,6 +1442,146 @@ class TestExactLoader(unittest.TestCase):
             report["processor_loader_requirement"], "AutoProcessor"
         )
         self.assertFalse(report["processor_loader_passed"])
+
+    def test_cli_data_gate_authenticates_round1_probe_before_grouped_gate(
+        self,
+    ) -> None:
+        provenance_id = "f" * 64
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            train = root / "train.jsonl"
+            validation = root / "validation.jsonl"
+            test = root / "test.jsonl"
+            probe = recovery_probe_row(provenance_id=provenance_id)
+            probe["metadata"]["protocol"] = "canonical"
+            valid = row("validation")
+            valid["metadata"]["protocol"] = "canonical"
+            test_row = row("test")
+            test_row["metadata"]["protocol"] = "canonical"
+            train.write_text(json.dumps(probe) + "\n", encoding="utf-8")
+            validation.write_text(json.dumps(valid) + "\n", encoding="utf-8")
+            test.write_text(json.dumps(test_row) + "\n", encoding="utf-8")
+            common = [
+                "gate",
+                "--revision",
+                "a" * 40,
+                "--train",
+                str(train),
+                "--validation",
+                str(validation),
+                "--test",
+                str(test),
+                "--pilot-min-rows",
+                "3",
+                "--pilot-max-rows",
+                "3",
+            ]
+
+            without_source = cli_main(common)
+            self.assertEqual(without_source, 2)
+
+            gate = SimpleNamespace(
+                passed=True,
+                to_dict=lambda: {
+                    "passed": True,
+                    "length_audit": {
+                        "prompt_truncated_rows": 0,
+                        "target_truncated_rows": 0,
+                    },
+                },
+            )
+            provenance = {
+                "release_eligible_source": True,
+                "source_commit": "a" * 40,
+            }
+            with (
+                mock.patch(
+                    "psse_env.sft.round1_source_gate.validate_round1_source_mix_gate",
+                    return_value={
+                        "passed": True,
+                        "generation_provenance_id": provenance_id,
+                        "canonical_dataset_content_sha256": {
+                            "train": stable_json_sha256([probe]),
+                            "validation": stable_json_sha256([valid]),
+                            "test": stable_json_sha256([test_row]),
+                        },
+                    },
+                ) as source_gate,
+                mock.patch(
+                    "psse_env.sft.cli.load_exact_processor",
+                    return_value=(FakeProcessor(), "AutoProcessor"),
+                ),
+                mock.patch("psse_env.sft.cli.audit_dataset", return_value=gate),
+                mock.patch(
+                    "psse_env.sft.cli.build_gate_provenance",
+                    return_value=provenance,
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.validate_generation_provenance",
+                    return_value={"passed": True},
+                ),
+            ):
+                with_source = cli_main(
+                    [
+                        *common,
+                        "--round1-provenance",
+                        str(root / "aggregate.generation_provenance.json"),
+                        "--round1-preflight",
+                        str(root / "aggregate.preflight.json"),
+                        "--reviewed-source-commit",
+                        "c" * 40,
+                        "--initial-adapter-revision",
+                        "b" * 64,
+                    ]
+                )
+
+        self.assertEqual(with_source, 0)
+        source_gate.assert_called_once_with(
+            root / "aggregate.generation_provenance.json",
+            root / "aggregate.preflight.json",
+            reviewed_source_commit="c" * 40,
+            initial_adapter_revision="b" * 64,
+            train_path=root / "train.jsonl",
+            validation_path=root / "validation.jsonl",
+            test_path=root / "test.jsonl",
+        )
+
+    def test_cli_round1_provenance_forces_source_args_after_relabeling(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            train = root / "aggregate.train_view.jsonl"
+            validation = root / "aggregate.validation.jsonl"
+            train.write_text(json.dumps(row("train")) + "\n", encoding="utf-8")
+            validation.write_text(
+                json.dumps(row("validation")) + "\n", encoding="utf-8"
+            )
+            (root / "aggregate.generation_provenance.json").write_text(
+                json.dumps(
+                    {
+                        "generation_descriptor": {
+                            "builder_contract": ROUND1_AGGREGATE_BUILDER_CONTRACT
+                        }
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            result = cli_main(
+                [
+                    "gate",
+                    "--revision",
+                    "a" * 40,
+                    "--train",
+                    str(train),
+                    "--validation",
+                    str(validation),
+                    "--pilot-min-rows",
+                    "2",
+                    "--pilot-max-rows",
+                    "2",
+                ]
+            )
+        self.assertEqual(result, 2)
 
     def test_cli_train_wires_auto_processor_requirement(self) -> None:
         result_object = SimpleNamespace(metrics={"train_loss": 1.0})

@@ -124,8 +124,8 @@ if [[ "$STAGE" == "round1" && -z "$INITIAL_ADAPTER_PATH" ]]; then
     echo "ERROR: STAGE=round1 requires INITIAL_ADAPTER_PATH and INITIAL_ADAPTER_REVISION." >&2
     exit 2
 fi
-if [[ ( "$STAGE" == "gate" || "$STAGE" == "round0" || "$STAGE" == "checkpoint-gate" ) && -n "$INITIAL_ADAPTER_PATH" ]]; then
-    echo "ERROR: initial adapter identity is valid only for warm-start smoke stages or STAGE=round1." >&2
+if [[ ( "$STAGE" == "round0" || "$STAGE" == "checkpoint-gate" ) && -n "$INITIAL_ADAPTER_PATH" ]]; then
+    echo "ERROR: initial adapter identity is valid only for the Round-1 data gate, warm-start smoke stages, or STAGE=round1." >&2
     exit 2
 fi
 ROUND1_SEED_COUPLING_REQUIRED=0
@@ -133,7 +133,7 @@ if [[ "$STAGE" == "round1" ]]; then
     ROUND1_SEED_COUPLING_REQUIRED=1
 elif [[ -n "$INITIAL_ADAPTER_PATH" ]]; then
     case "$STAGE" in
-        one-batch|targeted-tiny-overfit|tiny-overfit)
+        gate|one-batch|targeted-tiny-overfit|tiny-overfit)
             ROUND1_SEED_COUPLING_REQUIRED=1
             ;;
     esac
@@ -520,9 +520,20 @@ if [[ "$WANDB_ACTIVE" == "1" ]]; then
     COMMON_ARGS+=(--report-to wandb --run-name "$WANDB_NAME")
 fi
 INITIAL_ADAPTER_ARGS=()
+ROUND1_SOURCE_ARGS=()
+ROUND1_GATE_SOURCE_ARGS=()
 if [[ -n "$INITIAL_ADAPTER_PATH" ]]; then
     INITIAL_ADAPTER_ARGS+=(
         --initial-adapter-path "$INITIAL_ADAPTER_PATH"
+        --initial-adapter-revision "$INITIAL_ADAPTER_REVISION"
+    )
+    ROUND1_SOURCE_ARGS+=(
+        --round1-provenance "$ROUND1_PROVENANCE"
+        --round1-preflight "$ROUND1_PREFLIGHT"
+        --reviewed-source-commit "$REVIEWED_SOURCE_COMMIT"
+    )
+    ROUND1_GATE_SOURCE_ARGS+=(
+        "${ROUND1_SOURCE_ARGS[@]}"
         --initial-adapter-revision "$INITIAL_ADAPTER_REVISION"
     )
 fi
@@ -548,22 +559,22 @@ case "$STAGE" in
         TEST_ROWS=$(awk 'NF { count += 1 } END { print count + 0 }' "$TEST_FILE")
         GATE_ROWS_MIN=$((ROWS_MIN + TEST_ROWS))
         GATE_ROWS_MAX=$((ROWS_MAX + TEST_ROWS))
-        COMMAND=("$PYTHON" -m psse_env.sft gate "${COMMON_ARGS[@]}" --test "$TEST_FILE" --pilot-min-rows "$GATE_ROWS_MIN" --pilot-max-rows "$GATE_ROWS_MAX" --report-output "$PROCESSOR_GATE_REPORT")
+        COMMAND=("$PYTHON" -m psse_env.sft gate "${COMMON_ARGS[@]}" "${ROUND1_GATE_SOURCE_ARGS[@]}" --test "$TEST_FILE" --pilot-min-rows "$GATE_ROWS_MIN" --pilot-max-rows "$GATE_ROWS_MAX" --report-output "$PROCESSOR_GATE_REPORT")
         ;;
     one-batch)
-        COMMAND=("$PYTHON" -m psse_env.sft smoke "${COMMON_ARGS[@]}" "${INITIAL_ADAPTER_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --mode one-batch --load-in-4bit)
+        COMMAND=("$PYTHON" -m psse_env.sft smoke "${COMMON_ARGS[@]}" "${INITIAL_ADAPTER_ARGS[@]}" "${ROUND1_SOURCE_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --mode one-batch --load-in-4bit)
         ;;
     targeted-tiny-overfit)
-        COMMAND=("$PYTHON" -m psse_env.sft smoke "${COMMON_ARGS[@]}" "${INITIAL_ADAPTER_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --mode tiny-overfit --tiny-overfit-steps "$TINY_OVERFIT_STEPS" --targeted-recovery-sweep --targeted-min-relative-loss-reduction "$TARGETED_TINY_OVERFIT_MIN_RELATIVE_LOSS_REDUCTION" --report-output "$TARGETED_TINY_OVERFIT_REPORT" --load-in-4bit)
+        COMMAND=("$PYTHON" -m psse_env.sft smoke "${COMMON_ARGS[@]}" "${INITIAL_ADAPTER_ARGS[@]}" "${ROUND1_SOURCE_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --mode tiny-overfit --tiny-overfit-steps "$TINY_OVERFIT_STEPS" --targeted-recovery-sweep --targeted-min-relative-loss-reduction "$TARGETED_TINY_OVERFIT_MIN_RELATIVE_LOSS_REDUCTION" --report-output "$TARGETED_TINY_OVERFIT_REPORT" --load-in-4bit)
         ;;
     tiny-overfit)
-        COMMAND=("$PYTHON" -m psse_env.sft smoke "${COMMON_ARGS[@]}" "${INITIAL_ADAPTER_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --mode tiny-overfit --tiny-overfit-steps "$TINY_OVERFIT_STEPS" --learning-rate "$TINY_OVERFIT_LR" --load-in-4bit)
+        COMMAND=("$PYTHON" -m psse_env.sft smoke "${COMMON_ARGS[@]}" "${INITIAL_ADAPTER_ARGS[@]}" "${ROUND1_SOURCE_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --mode tiny-overfit --tiny-overfit-steps "$TINY_OVERFIT_STEPS" --learning-rate "$TINY_OVERFIT_LR" --load-in-4bit)
         ;;
     round0)
         COMMAND=("$PYTHON" -m psse_env.sft train "${COMMON_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --output-dir "$OUTPUT_DIR" --batch-size 1 --gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS" --learning-rate "$TRAIN_LR" --epochs "$TRAIN_EPOCHS" --smoke-steps 1 --load-in-4bit --evaluation-suite "$EVALUATION_SUITE" --evaluation-policy "$EVALUATION_POLICY" --expert-baseline-evaluation "$EXPERT_BASELINE_EVALUATION" --base-baseline-evaluation "$BASE_GEMMA_EVALUATION" --expert-policy-identity "$EXPERT_POLICY_IDENTITY" --baseline-evaluation-report-output "$BASELINE_EVALUATION_REPORT")
         ;;
     round1)
-        COMMAND=("$PYTHON" -m psse_env.sft train "${COMMON_ARGS[@]}" "${INITIAL_ADAPTER_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --output-dir "$OUTPUT_DIR" --batch-size 1 --gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS" --learning-rate "$ROUND1_LR" --epochs "$ROUND1_EPOCHS" --smoke-steps 1 --load-in-4bit --evaluation-suite "$EVALUATION_SUITE" --evaluation-policy "$EVALUATION_POLICY" --expert-baseline-evaluation "$EXPERT_BASELINE_EVALUATION" --base-baseline-evaluation "$BASE_GEMMA_EVALUATION" --expert-policy-identity "$EXPERT_POLICY_IDENTITY" --baseline-evaluation-report-output "$BASELINE_EVALUATION_REPORT")
+        COMMAND=("$PYTHON" -m psse_env.sft train "${COMMON_ARGS[@]}" "${INITIAL_ADAPTER_ARGS[@]}" "${ROUND1_SOURCE_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --output-dir "$OUTPUT_DIR" --batch-size 1 --gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS" --learning-rate "$ROUND1_LR" --epochs "$ROUND1_EPOCHS" --smoke-steps 1 --load-in-4bit --evaluation-suite "$EVALUATION_SUITE" --evaluation-policy "$EVALUATION_POLICY" --expert-baseline-evaluation "$EXPERT_BASELINE_EVALUATION" --base-baseline-evaluation "$BASE_GEMMA_EVALUATION" --expert-policy-identity "$EXPERT_POLICY_IDENTITY" --baseline-evaluation-report-output "$BASELINE_EVALUATION_REPORT")
         ;;
     checkpoint-gate)
         COMMAND=("$PYTHON" -m psse_env.dagger.validate_evaluation --role checkpoint-promotion --artifact "$CHECKPOINT_EVALUATION" --policy "$EVALUATION_POLICY" --expected-source-commit "$REVIEWED_SOURCE_COMMIT" --expected-suite "$EVALUATION_SUITE" --expected-protocol canonical --expected-model-id "$CHECKPOINT_MODEL_ID" --expected-model-revision "$CHECKPOINT_MODEL_REVISION" --reference-artifact "$BASE_GEMMA_EVALUATION" --reference-model-id "$MODEL_NAME" --reference-model-revision "$MODEL_REVISION" --report-output "$CHECKPOINT_GATE_REPORT")
