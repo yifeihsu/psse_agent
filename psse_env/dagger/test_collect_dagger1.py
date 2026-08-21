@@ -52,6 +52,15 @@ from psse_env.dagger.build_dagger1_development_holdout import (
     DEFAULT_DAGGER1_DEVELOPMENT_ROOT_PLAN,
 )
 from psse_env.dagger.rollout_collector import RECOMMENDED_DAGGER1_RECOVERY_STRATA
+from psse_env.dagger.replay_buffer import (
+    DAGGER1_ROUND1_SOURCE_CAPACITY_CONTRACT,
+    dagger1_replay_capacity_report,
+    dagger1_round1_source_capacity_report,
+)
+from psse_env.dagger.round1_view_policy import (
+    ROUND1_THREE_SOURCE_VIEW_POLICY,
+    round1_view_policy_digest,
+)
 from psse_env.dagger.offline_teacher_target_audit import (
     OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT,
 )
@@ -2300,8 +2309,8 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
         self.assertIn(pcr, report["gated_root_group_floors"])
         self.assertLessEqual(len(selected), 28)
 
-    def test_strict_checkpoint_includes_round1_replay_capacity(self):
-        rows = self._strict_coverage_rows(extra_rows=70)
+    def test_strict_checkpoint_includes_frozen_round1_source_capacity(self):
+        rows = self._strict_coverage_rows(extra_rows=245)
 
         def d0_rows(count):
             return [
@@ -2315,25 +2324,234 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
 
         passing = evaluate_dagger1_collection_checkpoint(
             rows,
-            d0_training_rows=d0_rows(100),
-            target_min_rows=90,
-            target_max_rows=100,
+            d0_training_rows=d0_rows(659),
+            target_min_rows=300,
+            target_max_rows=300,
             rollout_matrix={"passed": True},
         )
         self.assertTrue(passing["passed"], passing["failed_gate_names"])
-        self.assertTrue(passing["round1_replay_capacity"]["passed"])
+        capacity = passing["round1_replay_capacity"]
+        self.assertTrue(capacity["passed"])
+        self.assertEqual(
+            capacity["contract"], DAGGER1_ROUND1_SOURCE_CAPACITY_CONTRACT
+        )
+        self.assertEqual(
+            capacity["required_allocation"],
+            {
+                "total_rows": 1880,
+                "natural_rows": 1842,
+                "d0_bc0_rows": 1317,
+                "natural_d1_rows": 525,
+                "observable_recovery_probe_rows": 38,
+            },
+        )
+        self.assertEqual(
+            capacity["policy_digest"],
+            round1_view_policy_digest(ROUND1_THREE_SOURCE_VIEW_POLICY),
+        )
+        self.assertFalse(
+            capacity["probe_artifact_capacity"][
+                "applicable_at_strict_collection"
+            ]
+        )
+        self.assertEqual(
+            capacity["probe_policy_arithmetic"],
+            {
+                "applicable_at_strict_collection": False,
+                "unique_source_rows_required": 24,
+                "requested_rows": 38,
+                "theoretical_upper_bound_replay_rows": 48,
+                "theoretical_margin_rows": 10,
+                "status": "non_evidentiary_policy_arithmetic_only",
+            },
+        )
+        self.assertEqual(
+            capacity["combined_natural_probe_root_capacity"]["status"],
+            "deferred_until_probe_rows_exist",
+        )
 
         capacity_failure = evaluate_dagger1_collection_checkpoint(
             rows,
-            d0_training_rows=d0_rows(5000),
-            target_min_rows=90,
-            target_max_rows=100,
+            d0_training_rows=d0_rows(658),
+            target_min_rows=300,
+            target_max_rows=300,
             rollout_matrix={"passed": True},
         )
         self.assertFalse(capacity_failure["passed"])
         self.assertIn(
             "round1_replay_capacity",
             capacity_failure["failed_gate_names"],
+        )
+        self.assertEqual(
+            capacity_failure["round1_replay_capacity"]["sources"]["d0_bc0"][
+                "capacity_shortfall"
+            ],
+            1,
+        )
+
+    def test_frozen_capacity_rejects_legacy_length_derived_false_go_and_no_go(
+        self,
+    ):
+        def repeated_source(prefix, *, row_count, distinct_examples):
+            return [
+                {
+                    "example_id": f"{prefix}-{index % distinct_examples}",
+                    "physical_root_fingerprint": (
+                        f"{prefix}-root-{index % distinct_examples}"
+                    ),
+                    "production_label_eligible": True,
+                }
+                for index in range(row_count)
+            ]
+
+        # Current-run shape: the legacy 25% split asks D0 for 1,410 rows and
+        # fails by 62 even though the frozen policy asks for only 1,317.
+        d0 = repeated_source("d0", row_count=1280, distinct_examples=674)
+        d1 = repeated_source("d1", row_count=600, distinct_examples=579)
+        legacy_no_go = dagger1_replay_capacity_report(d0, d1)
+        self.assertFalse(legacy_no_go["passed"])
+        self.assertEqual(legacy_no_go["requested"]["d0_bc0_rows"], 1410)
+        self.assertEqual(legacy_no_go["requested"]["d0_capacity_shortfall"], 62)
+        exact = dagger1_round1_source_capacity_report(d0, d1)
+        self.assertTrue(exact["passed"])
+        self.assertEqual(exact["sources"]["d0_bc0"]["capacity_margin"], 31)
+        self.assertEqual(
+            exact["sources"]["natural_d1"]["capacity_margin"], 633
+        )
+
+        # A shorter source can make the same legacy helper false-GO by asking
+        # for fewer than the policy's immutable 525 natural D1 rows.
+        short_d1 = repeated_source(
+            "short-d1", row_count=300, distinct_examples=200
+        )
+        legacy_false_go = dagger1_replay_capacity_report(d0, short_d1)
+        self.assertTrue(legacy_false_go["passed"])
+        self.assertEqual(
+            legacy_false_go["requested"]["d1_recovery_rows"], 395
+        )
+        exact_short = dagger1_round1_source_capacity_report(d0, short_d1)
+        self.assertFalse(exact_short["passed"])
+        self.assertEqual(
+            exact_short["sources"]["natural_d1"]["capacity_shortfall"], 125
+        )
+        self.assertEqual(
+            exact_short["required_allocation"], exact["required_allocation"]
+        )
+
+    def test_frozen_capacity_fails_closed_on_malformed_or_cross_root_identity(
+        self,
+    ):
+        d0 = [
+            {
+                "example_id": f"d0-{index}",
+                "physical_root_fingerprint": f"d0-root-{index}",
+            }
+            for index in range(659)
+        ]
+        d1 = [
+            {
+                "example_id": f"d1-{index}",
+                "physical_root_fingerprint": f"d1-root-{index}",
+            }
+            for index in range(263)
+        ]
+        passing = dagger1_round1_source_capacity_report(d0, d1)
+        self.assertTrue(passing["passed"])
+        # The collector requires the exact 525 natural rows, not a synthetic
+        # 525+38 worst-case reserve for probe rows it does not possess.
+        self.assertEqual(
+            passing["sources"]["natural_d1"]["maximum_replay_rows"], 526
+        )
+        self.assertEqual(
+            passing["sources"]["natural_d1"]["capacity_margin"], 1
+        )
+
+        malformed = copy.deepcopy(d1)
+        malformed.append({"example_id": "missing-root"})
+        malformed_report = dagger1_round1_source_capacity_report(d0, malformed)
+        self.assertFalse(malformed_report["passed"])
+        self.assertEqual(
+            malformed_report["sources"]["natural_d1"][
+                "missing_physical_root_rows"
+            ],
+            1,
+        )
+
+        cross_root = copy.deepcopy(d1)
+        cross_root.append(
+            {
+                "example_id": "d1-0",
+                "physical_root_fingerprint": "different-root",
+            }
+        )
+        cross_root_report = dagger1_round1_source_capacity_report(d0, cross_root)
+        self.assertFalse(cross_root_report["passed"])
+        self.assertEqual(
+            cross_root_report["sources"]["natural_d1"][
+                "example_ids_spanning_multiple_roots"
+            ],
+            ["d1-0"],
+        )
+
+    def test_frozen_capacity_rejects_unapproved_policy_identity_or_caps(self):
+        d0 = [
+            {
+                "example_id": f"d0-{index}",
+                "physical_root_fingerprint": f"d0-root-{index}",
+            }
+            for index in range(659)
+        ]
+        d1 = [
+            {
+                "example_id": f"d1-{index}",
+                "physical_root_fingerprint": f"d1-root-{index}",
+            }
+            for index in range(263)
+        ]
+
+        wrong_contract = copy.deepcopy(ROUND1_THREE_SOURCE_VIEW_POLICY)
+        wrong_contract["contract"] = "unreviewed_round1_policy"
+        with self.assertRaisesRegex(ValueError, "contract is not approved"):
+            dagger1_round1_source_capacity_report(
+                d0, d1, policy=wrong_contract
+            )
+
+        unshared_caps = copy.deepcopy(ROUND1_THREE_SOURCE_VIEW_POLICY)
+        unshared_caps["global_caps"]["applies_across_sources"] = False
+        with self.assertRaisesRegex(ValueError, "not enabled"):
+            dagger1_round1_source_capacity_report(
+                d0, d1, policy=unshared_caps
+            )
+
+        inconsistent = copy.deepcopy(ROUND1_THREE_SOURCE_VIEW_POLICY)
+        inconsistent["allocation"]["natural_d1_rows"] = 524
+        with self.assertRaisesRegex(ValueError, "does not sum"):
+            dagger1_round1_source_capacity_report(
+                d0, d1, policy=inconsistent
+            )
+
+    def test_empty_strict_checkpoint_uses_new_inapplicable_capacity_contract(
+        self,
+    ):
+        report = evaluate_dagger1_collection_checkpoint(
+            [],
+            d0_training_rows=[
+                {
+                    "example_id": "d0-0",
+                    "physical_root_fingerprint": "d0-root-0",
+                }
+            ],
+            rollout_matrix={"passed": True},
+        )
+        capacity = report["round1_replay_capacity"]
+        self.assertEqual(
+            capacity["contract"], DAGGER1_ROUND1_SOURCE_CAPACITY_CONTRACT
+        )
+        self.assertFalse(capacity["applicable"])
+        self.assertFalse(capacity["passed"])
+        self.assertEqual(
+            capacity["combined_natural_probe_root_capacity"]["status"],
+            "deferred_until_probe_rows_exist",
         )
 
     def test_truth_audit_quarantine_counts_only_pre_audit_training_candidates(self):

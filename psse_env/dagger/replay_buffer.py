@@ -7,6 +7,13 @@ import random
 from collections import Counter, defaultdict
 from typing import Any, Iterable, Mapping
 
+from psse_env.dagger.round1_view_policy import (
+    ROUND1_THREE_SOURCE_VIEW_POLICY,
+    ROUND1_VIEW_POLICY_CONTRACT,
+    round1_view_policy_digest,
+    validate_round1_view_policy,
+)
+
 
 DEFAULT_REPLAY_WEIGHTS: dict[str, float] = {
     "clean_successful": 0.30,
@@ -994,6 +1001,60 @@ def dagger1_probe_replay_quota(
     }
 
 
+def _dagger1_source_capacity(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    max_duplicate_count: int,
+    max_rows_per_root: int,
+) -> dict[str, Any]:
+    """Compute one source's identity-safe duplicate/root-limited capacity."""
+
+    materialized = list(rows)
+    examples_by_root: dict[str, set[str]] = defaultdict(set)
+    roots_by_example: dict[str, set[str]] = defaultdict(set)
+    missing_root_rows = 0
+    missing_example_id_rows = 0
+    for row in materialized:
+        root = _physical_root(row)
+        example_id = str(row.get("example_id") or "").strip()
+        if root is None or not str(root).strip():
+            missing_root_rows += 1
+            continue
+        if not example_id:
+            missing_example_id_rows += 1
+            continue
+        normalized_root = str(root).strip()
+        examples_by_root[normalized_root].add(example_id)
+        roots_by_example[example_id].add(normalized_root)
+    cross_root_example_ids = sorted(
+        example_id
+        for example_id, roots in roots_by_example.items()
+        if len(roots) > 1
+    )
+    capacity_by_root = {
+        root: min(
+            int(max_rows_per_root),
+            len(example_ids) * int(max_duplicate_count),
+        )
+        for root, example_ids in sorted(examples_by_root.items())
+    }
+    return {
+        "natural_rows": len(materialized),
+        "distinct_examples": len(roots_by_example),
+        "distinct_physical_roots": len(examples_by_root),
+        "missing_physical_root_rows": missing_root_rows,
+        "missing_example_id_rows": missing_example_id_rows,
+        "example_ids_spanning_multiple_roots": cross_root_example_ids,
+        "capacity_by_physical_root": capacity_by_root,
+        "maximum_replay_rows": sum(capacity_by_root.values()),
+        "passed": not (
+            missing_root_rows
+            or missing_example_id_rows
+            or cross_root_example_ids
+        ),
+    }
+
+
 def dagger1_replay_capacity_report(
     d0_rows: Iterable[Mapping[str, Any]],
     d1_rows: Iterable[Mapping[str, Any]],
@@ -1037,50 +1098,16 @@ def dagger1_replay_capacity_report(
     duplicate_cap = int(max_duplicate_count)
     root_cap = int(max_rows_per_root)
 
-    def source_capacity(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
-        examples_by_root: dict[str, set[str]] = defaultdict(set)
-        roots_by_example: dict[str, set[str]] = defaultdict(set)
-        missing_root_rows = 0
-        missing_example_id_rows = 0
-        for row in rows:
-            root = _physical_root(row)
-            example_id = str(row.get("example_id") or "").strip()
-            if root is None or not str(root).strip():
-                missing_root_rows += 1
-                continue
-            if not example_id:
-                missing_example_id_rows += 1
-                continue
-            normalized_root = str(root).strip()
-            examples_by_root[normalized_root].add(example_id)
-            roots_by_example[example_id].add(normalized_root)
-        cross_root_example_ids = sorted(
-            example_id
-            for example_id, roots in roots_by_example.items()
-            if len(roots) > 1
-        )
-        capacity_by_root = {
-            root: min(root_cap, len(example_ids) * duplicate_cap)
-            for root, example_ids in sorted(examples_by_root.items())
-        }
-        return {
-            "natural_rows": len(rows),
-            "distinct_examples": len(roots_by_example),
-            "distinct_physical_roots": len(examples_by_root),
-            "missing_physical_root_rows": missing_root_rows,
-            "missing_example_id_rows": missing_example_id_rows,
-            "example_ids_spanning_multiple_roots": cross_root_example_ids,
-            "capacity_by_physical_root": capacity_by_root,
-            "maximum_replay_rows": sum(capacity_by_root.values()),
-            "passed": not (
-                missing_root_rows
-                or missing_example_id_rows
-                or cross_root_example_ids
-            ),
-        }
-
-    d0_capacity = source_capacity(d0)
-    d1_capacity = source_capacity(d1)
+    d0_capacity = _dagger1_source_capacity(
+        d0,
+        max_duplicate_count=duplicate_cap,
+        max_rows_per_root=root_cap,
+    )
+    d1_capacity = _dagger1_source_capacity(
+        d1,
+        max_duplicate_count=duplicate_cap,
+        max_rows_per_root=root_cap,
+    )
     requested_size = len(d0) + len(d1) if size is None else size
     if (
         isinstance(requested_size, bool)
@@ -1154,6 +1181,168 @@ def dagger1_replay_capacity_report(
             "observed_d1_share": largest_allocation[2],
         },
         "passed": requested_passed,
+    }
+
+
+DAGGER1_ROUND1_SOURCE_CAPACITY_CONTRACT = (
+    "dagger1_round1_three_source_source_capacity_v1"
+)
+
+
+def dagger1_round1_source_capacity_report(
+    d0_rows: Iterable[Mapping[str, Any]],
+    natural_d1_rows: Iterable[Mapping[str, Any]],
+    *,
+    policy: Mapping[str, Any] = ROUND1_THREE_SOURCE_VIEW_POLICY,
+) -> dict[str, Any]:
+    """Audit the strict collector's sources against the frozen allocation.
+
+    The strict collector owns D0 and natural D1 rows, so it can prove their
+    duplicate/root-limited capacity directly.  It does not own the recovery
+    probe artifact.  Probe capacity and the cap shared by natural D1 and probe
+    rows therefore remain explicit downstream obligations rather than being
+    guessed from a source-length-derived two-source share.
+
+    Exact policy counts are authoritative.  In particular, this function must
+    never re-derive 1,317/525/38 from a rounded share or from the number of
+    selected natural rows available at a collection checkpoint.
+    """
+
+    frozen_policy = copy.deepcopy(dict(policy))
+    policy_validation = validate_round1_view_policy(frozen_policy)
+    if frozen_policy.get("contract") != ROUND1_VIEW_POLICY_CONTRACT:
+        raise ValueError("Round-1 source capacity policy contract is not approved")
+    if frozen_policy.get("schema_version") != 1:
+        raise ValueError("Round-1 source capacity policy schema is not approved")
+
+    allocation = frozen_policy.get("allocation")
+    allocation = allocation if isinstance(allocation, Mapping) else {}
+    d0_required = int(allocation.get("d0_bc0_rows") or 0)
+    natural_d1_required = int(allocation.get("natural_d1_rows") or 0)
+    probe_required = int(
+        allocation.get("observable_recovery_probe_rows") or 0
+    )
+    total_required = int(frozen_policy.get("total_rows") or 0)
+    natural_total = d0_required + natural_d1_required
+
+    caps = frozen_policy.get("global_caps")
+    if not isinstance(caps, Mapping):
+        raise ValueError("Round-1 source capacity policy is missing global caps")
+    duplicate_cap = caps.get("max_duplicate_count")
+    root_cap = caps.get("max_rows_per_root")
+    if caps.get("applies_across_sources") is not True:
+        raise ValueError("Round-1 shared-source capacity policy is not enabled")
+
+    if (
+        isinstance(duplicate_cap, bool)
+        or not isinstance(duplicate_cap, int)
+        or duplicate_cap < 1
+    ):
+        raise ValueError("Round-1 max_duplicate_count must be a positive integer")
+    if (
+        isinstance(root_cap, bool)
+        or not isinstance(root_cap, int)
+        or root_cap < 1
+    ):
+        raise ValueError("Round-1 max_rows_per_root must be a positive integer")
+    d0 = list(d0_rows)
+    natural_d1 = list(natural_d1_rows)
+    if not d0 or not natural_d1:
+        raise ValueError("D0 and natural D1 capacity inputs must both be non-empty")
+    d0_source = _dagger1_source_capacity(
+        d0,
+        max_duplicate_count=int(duplicate_cap),
+        max_rows_per_root=int(root_cap),
+    )
+    natural_d1_source = _dagger1_source_capacity(
+        natural_d1,
+        max_duplicate_count=int(duplicate_cap),
+        max_rows_per_root=int(root_cap),
+    )
+
+    def bind_source(
+        source: Mapping[str, Any] | None,
+        *,
+        required_rows: int,
+    ) -> dict[str, Any]:
+        report = copy.deepcopy(dict(source or {}))
+        available = int(report.get("maximum_replay_rows") or 0)
+        identity_passed = report.get("passed") is True
+        shortfall = max(required_rows - available, 0)
+        report.update(
+            {
+                "identity_contract_passed": identity_passed,
+                "required_rows": required_rows,
+                "capacity_shortfall": shortfall,
+                "capacity_margin": max(available - required_rows, 0),
+                "passed": bool(identity_passed and shortfall == 0),
+            }
+        )
+        return report
+
+    d0_capacity = bind_source(d0_source, required_rows=d0_required)
+    natural_d1_capacity = bind_source(
+        natural_d1_source,
+        required_rows=natural_d1_required,
+    )
+    bucket = frozen_policy.get("probe_bucket")
+    bucket = bucket if isinstance(bucket, Mapping) else {}
+    strata = frozen_policy.get("incidence_dependent_recovery_strata")
+    strata = list(strata) if isinstance(strata, (list, tuple)) else []
+    unique_probe_source_rows = int(
+        bucket.get("distinct_roots_retained_per_stratum") or 0
+    ) * len(strata)
+    theoretical_probe_capacity = unique_probe_source_rows * int(duplicate_cap)
+    passed = bool(
+        policy_validation.get("passed") is True
+        and d0_capacity.get("passed") is True
+        and natural_d1_capacity.get("passed") is True
+    )
+    return {
+        "schema_version": 1,
+        "contract": DAGGER1_ROUND1_SOURCE_CAPACITY_CONTRACT,
+        "scope": "strict_collection_d0_and_natural_d1_sources",
+        "policy_contract": ROUND1_VIEW_POLICY_CONTRACT,
+        "policy_digest": round1_view_policy_digest(frozen_policy),
+        "policy_validation": policy_validation,
+        "required_allocation": {
+            "total_rows": total_required,
+            "natural_rows": natural_total,
+            "d0_bc0_rows": d0_required,
+            "natural_d1_rows": natural_d1_required,
+            "observable_recovery_probe_rows": probe_required,
+        },
+        "global_caps": {
+            "max_duplicate_count": int(duplicate_cap),
+            "max_rows_per_root": int(root_cap),
+            "applies_across_sources": True,
+        },
+        "sources": {
+            "d0_bc0": d0_capacity,
+            "natural_d1": natural_d1_capacity,
+        },
+        "probe_policy_arithmetic": {
+            "applicable_at_strict_collection": False,
+            "unique_source_rows_required": unique_probe_source_rows,
+            "requested_rows": probe_required,
+            "theoretical_upper_bound_replay_rows": theoretical_probe_capacity,
+            "theoretical_margin_rows": max(
+                theoretical_probe_capacity - probe_required, 0
+            ),
+            "status": "non_evidentiary_policy_arithmetic_only",
+        },
+        "probe_artifact_capacity": {
+            "applicable_at_strict_collection": False,
+            "required_rows": probe_required,
+            "status": "deferred_until_probe_artifact_is_validated",
+            "verification_stage": "probe_suite_then_three_source_aggregate",
+        },
+        "combined_natural_probe_root_capacity": {
+            "applicable_at_strict_collection": False,
+            "status": "deferred_until_probe_rows_exist",
+            "verification_stage": "three_source_aggregate",
+        },
+        "passed": passed,
     }
 
 

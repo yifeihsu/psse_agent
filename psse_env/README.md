@@ -656,7 +656,16 @@ physical-truth target audit, at least five distinct roots in every targeted
 state cell, the 10-root central / 5-root remaining recovery-stratum floors,
 and sufficient Round-1 replay capacity under the duplicate and per-root caps.
 The selector preserves the rare-root floors and never uses row duplication as
-independent support:
+independent support.
+
+The capacity checkpoint uses the frozen three-source policy's integer demands,
+not a share recomputed from the number of rows collected so far.  It requires
+duplicate/root-limited capacity for exactly 1,317 D0 rows and 525 selected
+natural-D1 rows.  It records the separate 38-row probe demand, but defers the
+actual probe artifact and the shared natural-D1/probe root-cap check to the
+probe validator and three-source aggregate, which possess those realized
+rows.  A strict collection must neither reserve a speculative 38 natural rows
+nor fall back to the legacy two-source 25% allocator.
 
 For D1, both the current teacher target and the stored next-action inventory
 are functions of `PolicyObservation` only. `OracleState` is constructed after

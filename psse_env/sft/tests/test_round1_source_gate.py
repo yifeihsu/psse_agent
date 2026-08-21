@@ -14,6 +14,10 @@ from unittest import mock
 
 from psse_env.dagger.collect_dagger1 import DAGGER1_SCENARIO_BUILDER_CONTRACT
 from psse_env.dagger.dataset_builder import examples_to_chat_sft
+from psse_env.dagger.replay_buffer import (
+    DAGGER1_ROUND1_SOURCE_CAPACITY_CONTRACT,
+    dagger1_round1_source_capacity_report,
+)
 from psse_env.dagger.round1_view_policy import round1_view_policy_digest
 from psse_env.dagger.three_source_view import (
     FINAL_VIEW_SUPPORT_CONTRACT,
@@ -154,6 +158,11 @@ class Round1SourceMixGateTests(unittest.TestCase):
                 "d1", "root-d1", replay_source="natural_dagger1"
             )
         ]
+        round1_source_capacity = dagger1_round1_source_capacity_report(
+            d0_rows,
+            d1_rows,
+            policy=TEST_VIEW_POLICY,
+        )
         probe_identity = {
             "dataset_source": "observable_recovery_probe",
             "replay_source": "observable_recovery_probe",
@@ -226,6 +235,7 @@ class Round1SourceMixGateTests(unittest.TestCase):
                 for key, value in learner_seed.items()
                 if key != "collection_manifest_sha256"
             },
+            "round1_replay_capacity": round1_source_capacity,
         }
         quarantine_summary = {
             "contract": OFFLINE_TEACHER_TARGET_QUARANTINE_SUMMARY_CONTRACT,
@@ -243,6 +253,7 @@ class Round1SourceMixGateTests(unittest.TestCase):
             "passed": True,
         }
         recomputed_d1 = {
+            "round1_source_capacity": round1_source_capacity,
             "offline_teacher_target_quarantine_summary": quarantine_summary,
             "recovery_label_audit": {"passed": True},
             "target_aware_state_class_audit": {"passed": True},
@@ -282,6 +293,7 @@ class Round1SourceMixGateTests(unittest.TestCase):
             ],
             "d1_three_source_training_support": self.support,
             "final_view_support": self.final_support,
+            "round1_source_capacity": round1_source_capacity,
             "union_realizability": semantic,
         }
         for key in (
@@ -308,6 +320,9 @@ class Round1SourceMixGateTests(unittest.TestCase):
             "training_support_report_sha256": stable_json_sha256(self.support),
             "final_view_support_report_sha256": stable_json_sha256(
                 self.final_support
+            ),
+            "round1_source_capacity_report_sha256": stable_json_sha256(
+                round1_source_capacity
             ),
             "round1_view_policy": TEST_VIEW_POLICY,
             "round1_view_policy_digest": round1_view_policy_digest(
@@ -393,7 +408,14 @@ class Round1SourceMixGateTests(unittest.TestCase):
             },
             "probe_binding": probe_binding,
             "final_view_support": self.final_support,
-            "release_checks": {"final_view_support": True},
+            "round1_source_capacity": round1_source_capacity,
+            "round1_source_capacity_report_sha256": stable_json_sha256(
+                round1_source_capacity
+            ),
+            "release_checks": {
+                "final_view_support": True,
+                "round1_source_capacity": True,
+            },
         }
         preflight = {
             "generation_provenance_id": provenance_id,
@@ -408,7 +430,14 @@ class Round1SourceMixGateTests(unittest.TestCase):
             "probe_binding": probe_binding,
             "three_source_training_support": self.support,
             "final_view_support": self.final_support,
-            "release_checks": {"final_view_support": True},
+            "round1_source_capacity": round1_source_capacity,
+            "round1_source_capacity_report_sha256": stable_json_sha256(
+                round1_source_capacity
+            ),
+            "release_checks": {
+                "final_view_support": True,
+                "round1_source_capacity": True,
+            },
         }
         provenance_path = root / "aggregate.generation_provenance.json"
         preflight_path = root / "aggregate.preflight.json"
@@ -513,6 +542,165 @@ class Round1SourceMixGateTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def _forge_all_source_capacity_records(
+        self,
+        provenance_path: Path,
+        preflight_path: Path,
+        forged: dict[str, Any],
+    ) -> None:
+        """Rebind every recorded copy/hash without changing source ledgers."""
+
+        root = provenance_path.parent
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
+        preflight["round1_source_capacity"] = forged
+        preflight["d1_collection_manifest"][
+            "round1_replay_capacity"
+        ] = forged
+        preflight["recomputed_d1_audits"][
+            "round1_source_capacity"
+        ] = forged
+        report_hash = stable_json_sha256(forged)
+        preflight["audit_report_sha256"]["round1_source_capacity"] = (
+            report_hash
+        )
+        preflight["release_checks"]["round1_source_capacity"] = True
+        preflight["round1_source_capacity_report_sha256"] = report_hash
+
+        descriptor = provenance["generation_descriptor"]
+        descriptor["round1_source_capacity_report_sha256"] = report_hash
+        descriptor["audit_report_sha256"] = preflight["audit_report_sha256"]
+        descriptor["input_artifacts"]["d1_manifest_content_sha256"] = (
+            stable_json_sha256(preflight["d1_collection_manifest"])
+        )
+        provenance["round1_source_capacity"] = forged
+        provenance["round1_source_capacity_report_sha256"] = report_hash
+        provenance["release_checks"]["round1_source_capacity"] = True
+        provenance_id = stable_json_sha256(descriptor)
+        provenance["generation_provenance_id"] = provenance_id
+        preflight["generation_provenance_id"] = provenance_id
+
+        def load_rows(name: str) -> list[dict[str, Any]]:
+            return [
+                json.loads(line)
+                for line in (root / name).read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+
+        def write_rows(name: str, rows: list[dict[str, Any]]) -> None:
+            (root / name).write_text(
+                "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+
+        raw_rows = load_rows("aggregate.train_view.raw.jsonl")
+        for row in raw_rows:
+            row["generation_provenance_id"] = provenance_id
+        write_rows("aggregate.train_view.raw.jsonl", raw_rows)
+        write_rows(
+            "aggregate.train_view.jsonl",
+            examples_to_chat_sft(
+                raw_rows,
+                protocol="canonical",
+                allow_ineligible_auxiliary=True,
+            ),
+        )
+        for name in ("aggregate.validation.jsonl", "aggregate.test.jsonl"):
+            rows = load_rows(name)
+            for row in rows:
+                row["generation_provenance_id"] = provenance_id
+            write_rows(name, rows)
+        provenance["dataset_hashes"] = {
+            name: file_sha256(root / name)
+            for name in ROUND1_IMMUTABLE_VIEW_NAMES
+        }
+        provenance_path.write_text(
+            json.dumps(provenance, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        preflight_path.write_text(
+            json.dumps(preflight, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    def _rebind_d0_root_without_capacity_report(
+        self,
+        provenance_path: Path,
+        preflight_path: Path,
+    ) -> None:
+        """Rebind changed source content while retaining the stale report."""
+
+        root = provenance_path.parent
+
+        def load_rows(name: str) -> list[dict[str, Any]]:
+            return [
+                json.loads(line)
+                for line in (root / name).read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+
+        def write_rows(name: str, rows: list[dict[str, Any]]) -> None:
+            (root / name).write_text(
+                "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+
+        d0_rows = load_rows("aggregate.d0.raw.jsonl")
+        d1_rows = load_rows("aggregate.d1.raw.jsonl")
+        probe_rows = load_rows("aggregate.probe.raw.jsonl")
+        d0_rows[0]["physical_root_fingerprint"] = "root-d0-rebound"
+        raw_view, training_view = build_dagger1_three_source_view(
+            d0_rows=d0_rows,
+            natural_d1_rows=d1_rows,
+            probe_rows=probe_rows,
+            policy=TEST_VIEW_POLICY,
+        )
+
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
+        descriptor = provenance["generation_descriptor"]
+        descriptor["input_artifacts"]["immutable_source_view_content_sha256"][
+            "d0_bc0"
+        ] = stable_json_sha256(d0_rows)
+        descriptor["training_view_report_sha256"] = stable_json_sha256(
+            training_view
+        )
+        preflight["training_view"] = training_view
+        provenance_id = stable_json_sha256(descriptor)
+        provenance["generation_provenance_id"] = provenance_id
+        preflight["generation_provenance_id"] = provenance_id
+        for row in raw_view:
+            row["generation_provenance_id"] = provenance_id
+
+        write_rows("aggregate.d0.raw.jsonl", d0_rows)
+        write_rows("aggregate.raw.jsonl", [*d0_rows, *d1_rows, *probe_rows])
+        write_rows("aggregate.train_view.raw.jsonl", raw_view)
+        write_rows(
+            "aggregate.train_view.jsonl",
+            examples_to_chat_sft(
+                raw_view,
+                protocol="canonical",
+                allow_ineligible_auxiliary=True,
+            ),
+        )
+        for name in ("aggregate.validation.jsonl", "aggregate.test.jsonl"):
+            rows = load_rows(name)
+            for row in rows:
+                row["generation_provenance_id"] = provenance_id
+            write_rows(name, rows)
+        provenance["dataset_hashes"] = {
+            name: file_sha256(root / name)
+            for name in ROUND1_IMMUTABLE_VIEW_NAMES
+        }
+        provenance_path.write_text(
+            json.dumps(provenance, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        preflight_path.write_text(
+            json.dumps(preflight, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
     def _validate(self, provenance: Path, preflight: Path) -> dict[str, object]:
         return validate_round1_source_mix_gate(
             provenance,
@@ -527,6 +715,19 @@ class Round1SourceMixGateTests(unittest.TestCase):
             report = self._validate(provenance, preflight)
             self.assertTrue(report["passed"])
             self.assertEqual(report["d1_recovery_rows"], 1)
+            preflight_payload = json.loads(
+                preflight.read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                preflight_payload["round1_source_capacity"]["contract"],
+                DAGGER1_ROUND1_SOURCE_CAPACITY_CONTRACT,
+            )
+            self.assertEqual(
+                report["round1_source_capacity_report_sha256"],
+                stable_json_sha256(
+                    preflight_payload["round1_source_capacity"]
+                ),
+            )
 
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
@@ -544,6 +745,72 @@ class Round1SourceMixGateTests(unittest.TestCase):
                 )
             self.assertEqual(result, 0)
             self.assertIn("source gate passed", output.getvalue())
+
+    def test_missing_source_capacity_report_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provenance, preflight_path = self._write_valid_artifacts(
+                Path(temp_dir)
+            )
+            preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
+            preflight.pop("round1_source_capacity")
+            preflight_path.write_text(
+                json.dumps(preflight, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                GateError,
+                "source capacity does not independently recompute",
+            ):
+                self._validate(provenance, preflight_path)
+
+    def test_legacy_source_capacity_contract_cannot_be_rebound(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provenance, preflight = self._write_valid_artifacts(Path(temp_dir))
+            payload = json.loads(preflight.read_text(encoding="utf-8"))
+            forged = {
+                **payload["round1_source_capacity"],
+                "contract": "dagger1_replay_capacity_v1",
+            }
+            self._forge_all_source_capacity_records(
+                provenance,
+                preflight,
+                forged,
+            )
+            with self.assertRaisesRegex(
+                GateError,
+                "source capacity does not independently recompute",
+            ):
+                self._validate(provenance, preflight)
+
+    def test_rehashed_source_capacity_tamper_cannot_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provenance, preflight = self._write_valid_artifacts(Path(temp_dir))
+            payload = json.loads(preflight.read_text(encoding="utf-8"))
+            forged = payload["round1_source_capacity"]
+            forged["sources"]["d0_bc0"]["capacity_margin"] += 1
+            self._forge_all_source_capacity_records(
+                provenance,
+                preflight,
+                forged,
+            )
+            with self.assertRaisesRegex(
+                GateError,
+                "source capacity does not independently recompute",
+            ):
+                self._validate(provenance, preflight)
+
+    def test_rebound_source_content_requires_recomputed_capacity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provenance, preflight = self._write_valid_artifacts(Path(temp_dir))
+            self._rebind_d0_root_without_capacity_report(
+                provenance,
+                preflight,
+            )
+            with self.assertRaisesRegex(
+                GateError,
+                "source capacity does not independently recompute",
+            ):
+                self._validate(provenance, preflight)
 
     def test_source_gate_requires_canonical_sibling_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

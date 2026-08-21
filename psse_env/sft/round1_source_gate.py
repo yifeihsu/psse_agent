@@ -22,7 +22,11 @@ from psse_env.dagger.build_dagger1_aggregate import (
 )
 from psse_env.dagger.collect_dagger1 import DAGGER1_SCENARIO_BUILDER_CONTRACT
 from psse_env.dagger.dataset_builder import examples_to_chat_sft, load_jsonl
-from psse_env.dagger.replay_buffer import audit_dagger1_training_support
+from psse_env.dagger.replay_buffer import (
+    DAGGER1_ROUND1_SOURCE_CAPACITY_CONTRACT,
+    audit_dagger1_training_support,
+    dagger1_round1_source_capacity_report,
+)
 from psse_env.dagger.round1_view_policy import (
     ROUND1_THREE_SOURCE_VIEW_POLICY,
     round1_view_policy_digest,
@@ -56,6 +60,7 @@ ROUND1_CANONICAL_TRAIN_NAME = "aggregate.train_view.jsonl"
 ROUND1_CANONICAL_VALIDATION_NAME = "aggregate.validation.jsonl"
 ROUND1_CANONICAL_TEST_NAME = "aggregate.test.jsonl"
 _REQUIRED_D1_REPORTS = (
+    "round1_source_capacity",
     "offline_teacher_target_quarantine_summary",
     "recovery_label_audit",
     "target_aware_state_class_audit",
@@ -142,6 +147,7 @@ def _audit_report_hashes(
     recomputed_d1: Mapping[str, Any],
     semantic: Mapping[str, Any],
     final_view_support: Mapping[str, Any],
+    round1_source_capacity: Mapping[str, Any],
 ) -> dict[str, str]:
     reports: dict[str, Mapping[str, Any]] = {
         "d1_offline_teacher_target_quarantine_summary": _mapping(
@@ -163,6 +169,7 @@ def _audit_report_hashes(
             recomputed_d1.get("three_source_training_support")
         ),
         "final_view_support": final_view_support,
+        "round1_source_capacity": round1_source_capacity,
         "union_realizability": semantic,
     }
     for key in (
@@ -242,6 +249,9 @@ def validate_round1_source_mix_gate(
     recorded_final_view_support = _mapping(
         preflight.get("final_view_support")
     )
+    recorded_round1_source_capacity = _mapping(
+        preflight.get("round1_source_capacity")
+    )
     preflight_audit_hashes = _mapping(preflight.get("audit_report_sha256"))
     descriptor_audit_hashes = _mapping(descriptor.get("audit_report_sha256"))
     failures: list[str] = []
@@ -277,6 +287,7 @@ def validate_round1_source_mix_gate(
         recomputed_d1=recomputed_d1,
         semantic=semantic,
         final_view_support=recorded_final_view_support,
+        round1_source_capacity=recorded_round1_source_capacity,
     )
     if (
         not descriptor_audit_hashes
@@ -540,6 +551,64 @@ def validate_round1_source_mix_gate(
             failures.append(
                 "Round-1 immutable source ledgers differ from descriptor-bound content"
             )
+        recomputed_round1_source_capacity = (
+            dagger1_round1_source_capacity_report(
+                d0_rows,
+                d1_rows,
+                policy=ROUND1_THREE_SOURCE_VIEW_POLICY,
+            )
+        )
+        round1_source_capacity_sha256 = stable_json_sha256(
+            recomputed_round1_source_capacity
+        )
+        provenance_round1_source_capacity = _mapping(
+            provenance.get("round1_source_capacity")
+        )
+        manifest_round1_source_capacity = _mapping(
+            d1_manifest.get("round1_replay_capacity")
+        )
+        recomputed_d1_round1_source_capacity = _mapping(
+            recomputed_d1.get("round1_source_capacity")
+        )
+        source_capacity_release_checks = _mapping(
+            preflight.get("release_checks")
+        )
+        provenance_source_capacity_release_checks = _mapping(
+            provenance.get("release_checks")
+        )
+        if (
+            recomputed_round1_source_capacity.get("contract")
+            != DAGGER1_ROUND1_SOURCE_CAPACITY_CONTRACT
+            or recomputed_round1_source_capacity.get("passed") is not True
+            or recomputed_round1_source_capacity
+            != recorded_round1_source_capacity
+            or recomputed_round1_source_capacity
+            != provenance_round1_source_capacity
+            or recomputed_round1_source_capacity
+            != manifest_round1_source_capacity
+            or recomputed_round1_source_capacity
+            != recomputed_d1_round1_source_capacity
+            or descriptor.get("round1_source_capacity_report_sha256")
+            != round1_source_capacity_sha256
+            or preflight.get("round1_source_capacity_report_sha256")
+            != round1_source_capacity_sha256
+            or provenance.get("round1_source_capacity_report_sha256")
+            != round1_source_capacity_sha256
+            or preflight_audit_hashes.get("round1_source_capacity")
+            != round1_source_capacity_sha256
+            or descriptor_audit_hashes.get("round1_source_capacity")
+            != round1_source_capacity_sha256
+            or source_capacity_release_checks.get("round1_source_capacity")
+            is not True
+            or provenance_source_capacity_release_checks.get(
+                "round1_source_capacity"
+            )
+            is not True
+        ):
+            failures.append(
+                "Round-1 source capacity does not independently recompute "
+                "under the reviewed contract"
+            )
         rebuilt_raw, rebuilt_report = build_dagger1_three_source_view(
             d0_rows=d0_rows,
             natural_d1_rows=d1_rows,
@@ -722,6 +791,9 @@ def validate_round1_source_mix_gate(
         "round1_view_policy_digest": round1_view_policy_digest(),
         "final_view_support_report_sha256": stable_json_sha256(
             recomputed_final_view_support
+        ),
+        "round1_source_capacity_report_sha256": (
+            round1_source_capacity_sha256
         ),
         "aggregate_dir": str(aggregate_dir),
         "canonical_dataset_paths": {

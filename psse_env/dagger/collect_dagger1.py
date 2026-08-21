@@ -32,12 +32,13 @@ from psse_env.dagger.release_factories import (
     inspect_release_checkpoint,
 )
 from psse_env.dagger.replay_buffer import (
+    DAGGER1_ROUND1_SOURCE_CAPACITY_CONTRACT,
     DAGGER1_INCIDENCE_DEPENDENT_RECOVERY_STRATA,
     DAGGER1_NATURAL_RECOVERY_STRATUM_MINIMUM_DISTINCT_ROOTS,
     DAGGER1_RECOVERY_STRATUM_MINIMUM_DISTINCT_ROOTS,
     DAGGER1_TARGETED_STATE_CELL_MINIMUM_DISTINCT_ROOTS,
     audit_dagger1_independent_root_support,
-    dagger1_replay_capacity_report,
+    dagger1_round1_source_capacity_report,
     dagger1_targeted_state_cells,
 )
 from psse_env.dagger.rollout_collector import (
@@ -2626,16 +2627,25 @@ def evaluate_dagger1_collection_checkpoint(
         summarize_dagger1_offline_teacher_target_quarantine(all_rows)
     )
     if selected_rows:
-        replay_capacity = dagger1_replay_capacity_report(
+        replay_capacity = dagger1_round1_source_capacity_report(
             d0_training_rows,
             selected_rows,
         )
     else:
         replay_capacity = {
             "schema_version": 1,
-            "contract": "dagger1_duplicate_and_root_limited_capacity_v1",
+            "contract": DAGGER1_ROUND1_SOURCE_CAPACITY_CONTRACT,
             "applicable": False,
+            "scope": "strict_collection_d0_and_natural_d1_sources",
             "reason": "no_selected_d1_recovery_rows",
+            "probe_artifact_capacity": {
+                "applicable_at_strict_collection": False,
+                "status": "deferred_until_probe_artifact_is_validated",
+            },
+            "combined_natural_probe_root_capacity": {
+                "applicable_at_strict_collection": False,
+                "status": "deferred_until_probe_rows_exist",
+            },
             "passed": False,
         }
     matrix = dict(rollout_matrix or {"passed": True})

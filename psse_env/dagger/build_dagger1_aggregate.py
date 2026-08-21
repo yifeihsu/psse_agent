@@ -45,10 +45,9 @@ from psse_env.dagger.release_factories import (
     BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD,
 )
 from psse_env.dagger.replay_buffer import (
-    DEFAULT_MINIMUM_TOOL_CATEGORY_DISTINCT_ROOTS,
-    DEFAULT_MINIMUM_TOOL_CATEGORY_NATURAL_ROWS,
-    audit_dagger1_independent_root_support,
+    DAGGER1_ROUND1_SOURCE_CAPACITY_CONTRACT,
     audit_dagger1_training_support,
+    dagger1_round1_source_capacity_report,
 )
 from psse_env.dagger.round1_view_policy import (
     ROUND1_THREE_SOURCE_VIEW_POLICY,
@@ -65,12 +64,6 @@ from psse_env.dagger.rollout_collector import (
     audit_dagger1_recovery_labels,
     audit_target_aware_state_classes,
     summarize_dagger1_offline_teacher_target_quarantine,
-)
-from psse_env.examples.generate_round0_aggregate import (
-    BC0_CRITICAL_TARGET_TOOL_MINIMUM_DISTINCT_ROOTS,
-    BC0_CRITICAL_TARGET_TOOL_SCENARIO_FAMILY_MINIMUM_DISTINCT_ROOTS,
-    BC0_CRITICAL_TARGET_TOOL_STATE_CLASS_MINIMUM_DISTINCT_ROOTS,
-    BC0_SAME_ROOT_PREREQUISITE_RULES,
 )
 from psse_env.sft.provenance import (
     AGGREGATE_MANIFEST_FILENAME,
@@ -174,6 +167,48 @@ def _load_jsonl_snapshot(
             raise ValueError(f"{label}:{number} must be a JSON object")
         rows.append(dict(value))
     return rows, observed
+
+
+def _validate_round1_source_capacity_binding(
+    collection_manifest: Mapping[str, Any],
+    recomputed_report: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Require the strict-collection capacity claim to match immutable rows."""
+
+    recomputed = copy.deepcopy(dict(recomputed_report))
+    if (
+        recomputed.get("contract")
+        != DAGGER1_ROUND1_SOURCE_CAPACITY_CONTRACT
+        or recomputed.get("passed") is not True
+    ):
+        raise ValueError(
+            "Recomputed Round-1 source capacity lacks the approved contract "
+            "or did not pass"
+        )
+    recorded_value = collection_manifest.get("round1_replay_capacity")
+    if not isinstance(recorded_value, Mapping):
+        raise ValueError(
+            "D1 collection manifest lacks round1_replay_capacity"
+        )
+    recorded = copy.deepcopy(dict(recorded_value))
+    if recorded.get("contract") != DAGGER1_ROUND1_SOURCE_CAPACITY_CONTRACT:
+        raise ValueError(
+            "D1 collection manifest round1_replay_capacity uses a legacy or "
+            "unapproved contract"
+        )
+    if recorded.get("passed") is not True:
+        raise ValueError(
+            "D1 collection manifest round1_replay_capacity did not pass"
+        )
+    if (
+        recorded != recomputed
+        or stable_json_sha256(recorded) != stable_json_sha256(recomputed)
+    ):
+        raise ValueError(
+            "D1 collection manifest round1_replay_capacity differs from the "
+            "immutable D0/natural-D1 source-capacity audit"
+        )
+    return recomputed
 
 
 def validate_offline_teacher_target_quarantine_summary(
@@ -899,6 +934,17 @@ def build_round1_aggregate(
         expected_sha256=str(d1_manifest.get("output_sha256") or ""),
         label="D1 selected rows",
     )
+    round1_source_capacity = _validate_round1_source_capacity_binding(
+        d1_manifest,
+        dagger1_round1_source_capacity_report(
+            d0_train,
+            d1,
+            policy=ROUND1_THREE_SOURCE_VIEW_POLICY,
+        ),
+    )
+    round1_source_capacity_sha256 = stable_json_sha256(
+        round1_source_capacity
+    )
     # Treat the collection manifest as an integrity binding, not as authority
     # for safety properties that are cheap to recompute.  A forged manifest
     # must not be able to reintroduce oracle truth or a frozen evaluation root
@@ -1082,6 +1128,7 @@ def build_round1_aggregate(
     training_support = audit_dagger1_training_support(d1, probes)
     d1_root_support = training_support["natural_on_policy_support"]
     recomputed_d1_audits = {
+        "round1_source_capacity": round1_source_capacity,
         "offline_teacher_target_quarantine_summary": (
             recomputed_quarantine_summary
         ),
@@ -1131,6 +1178,7 @@ def build_round1_aggregate(
         )
 
     audit_reports: dict[str, Mapping[str, Any]] = {
+        "round1_source_capacity": round1_source_capacity,
         "d1_offline_teacher_target_quarantine_summary": (
             recomputed_quarantine_summary
         ),
@@ -1259,6 +1307,9 @@ def build_round1_aggregate(
         "final_view_support_report_sha256": stable_json_sha256(
             final_view_support
         ),
+        "round1_source_capacity_report_sha256": (
+            round1_source_capacity_sha256
+        ),
         "audit_report_sha256": audit_report_sha256,
         "generation_config": {
             "policy_digest": round1_view_policy_digest(),
@@ -1294,6 +1345,13 @@ def build_round1_aggregate(
             development_roots & observed_d1_roots
         ),
         "d1_training_eligible": d1_manifest.get("training_eligible") is True,
+        "round1_source_capacity": (
+            round1_source_capacity.get("contract")
+            == DAGGER1_ROUND1_SOURCE_CAPACITY_CONTRACT
+            and round1_source_capacity.get("passed") is True
+            and stable_json_sha256(d1_manifest.get("round1_replay_capacity"))
+            == round1_source_capacity_sha256
+        ),
         "d1_zero_truth_audit_quarantine": (
             recomputed_quarantine_summary.get("passed") is True
         ),
@@ -1327,6 +1385,10 @@ def build_round1_aggregate(
         "actual_natural_probe_root_overlap": actual_natural_probe_overlap,
         "three_source_training_support": training_support,
         "final_view_support": final_view_support,
+        "round1_source_capacity": round1_source_capacity,
+        "round1_source_capacity_report_sha256": (
+            round1_source_capacity_sha256
+        ),
         "recomputed_d1_audits": recomputed_d1_audits,
         "d1_collection_selection_binding": d1_selection_binding,
         "semantic_realizability": semantic_realizability,
@@ -1377,6 +1439,10 @@ def build_round1_aggregate(
             "probe_binding": probe_binding,
             "three_source_training_support": training_support,
             "final_view_support": final_view_support,
+            "round1_source_capacity": round1_source_capacity,
+            "round1_source_capacity_report_sha256": (
+                round1_source_capacity_sha256
+            ),
             "release_checks": release_checks,
             "release_eligible": release_eligible,
             "release_failures": [],

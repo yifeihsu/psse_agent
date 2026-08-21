@@ -111,6 +111,26 @@ def _mock_production_selection_report(rows: list[dict]) -> dict:
     }
 
 
+def _mock_round1_source_capacity_report() -> dict:
+    return {
+        "schema_version": 1,
+        "contract": aggregate_module.DAGGER1_ROUND1_SOURCE_CAPACITY_CONTRACT,
+        "scope": "strict_collection_d0_and_natural_d1_sources",
+        "policy_digest": aggregate_module.round1_view_policy_digest(),
+        "required_allocation": {
+            "total_rows": 1880,
+            "d0_bc0_rows": 1317,
+            "natural_d1_rows": 525,
+            "observable_recovery_probe_rows": 38,
+        },
+        "sources": {
+            "d0_bc0": {"passed": True},
+            "natural_d1": {"passed": True},
+        },
+        "passed": True,
+    }
+
+
 def _write_d0_inputs(root: Path) -> Path:
     aggregate_dir = root / "d0"
     raw_path = aggregate_dir / "aggregate.raw.jsonl"
@@ -723,6 +743,60 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                     label="test input",
                 )
 
+    def test_round1_source_capacity_binding_rejects_missing_legacy_and_tamper(
+        self,
+    ) -> None:
+        report = _mock_round1_source_capacity_report()
+        self.assertEqual(
+            aggregate_module._validate_round1_source_capacity_binding(
+                {"round1_replay_capacity": copy.deepcopy(report)},
+                report,
+            ),
+            report,
+        )
+
+        with self.assertRaisesRegex(ValueError, "lacks round1_replay_capacity"):
+            aggregate_module._validate_round1_source_capacity_binding({}, report)
+
+        legacy = copy.deepcopy(report)
+        legacy["contract"] = "dagger1_duplicate_and_root_limited_capacity_v1"
+        with self.assertRaisesRegex(ValueError, "legacy or unapproved"):
+            aggregate_module._validate_round1_source_capacity_binding(
+                {"round1_replay_capacity": legacy},
+                report,
+            )
+
+        failed = copy.deepcopy(report)
+        failed["passed"] = False
+        with self.assertRaisesRegex(ValueError, "did not pass"):
+            aggregate_module._validate_round1_source_capacity_binding(
+                {"round1_replay_capacity": failed},
+                report,
+            )
+
+        tampered = copy.deepcopy(report)
+        tampered["sources"]["d0_bc0"]["capacity_margin"] = 999
+        with self.assertRaisesRegex(ValueError, "differs from the immutable"):
+            aggregate_module._validate_round1_source_capacity_binding(
+                {"round1_replay_capacity": tampered},
+                report,
+            )
+
+        type_tampered = copy.deepcopy(report)
+        type_tampered["required_allocation"]["total_rows"] = 1880.0
+        self.assertEqual(type_tampered, report)
+        with self.assertRaisesRegex(ValueError, "differs from the immutable"):
+            aggregate_module._validate_round1_source_capacity_binding(
+                {"round1_replay_capacity": type_tampered},
+                report,
+            )
+
+        with self.assertRaisesRegex(ValueError, "approved contract"):
+            aggregate_module._validate_round1_source_capacity_binding(
+                {"round1_replay_capacity": copy.deepcopy(report)},
+                legacy,
+            )
+
     def test_final_view_support_is_recomputed_from_placed_source_rows(self) -> None:
         natural = {
             "example_id": "natural-placed",
@@ -1056,6 +1130,7 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
             },
             "forbidden_suite_sha256": file_sha256(DEFAULT_FORBIDDEN_SUITE),
             "evaluation_policy_sha256": file_sha256(DEFAULT_EVALUATION_POLICY),
+            "round1_replay_capacity": _mock_round1_source_capacity_report(),
         }
         manifest_path = d1_path.with_suffix(d1_path.suffix + ".manifest.json")
         manifest_path.write_text(
@@ -1482,6 +1557,11 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                 ),
                 patch.object(
                     aggregate_module,
+                    "dagger1_round1_source_capacity_report",
+                    return_value=_mock_round1_source_capacity_report(),
+                ),
+                patch.object(
+                    aggregate_module,
                     "validate_recovery_probe_suite_binding",
                     return_value={
                         "passed": True,
@@ -1518,11 +1598,6 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                 patch.object(
                     aggregate_module,
                     "audit_target_aware_state_classes",
-                    return_value={"passed": True},
-                ),
-                patch.object(
-                    aggregate_module,
-                    "audit_dagger1_independent_root_support",
                     return_value={"passed": True},
                 ),
                 patch.object(
@@ -1596,6 +1671,41 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                         "final_view_support"
                     ],
                     stable_json_sha256(fake_final_view_support),
+                )
+                expected_capacity = _mock_round1_source_capacity_report()
+                expected_capacity_sha256 = stable_json_sha256(expected_capacity)
+                self.assertEqual(
+                    provenance["round1_source_capacity"], expected_capacity
+                )
+                self.assertEqual(
+                    provenance["round1_source_capacity_report_sha256"],
+                    expected_capacity_sha256,
+                )
+                self.assertEqual(
+                    provenance["generation_descriptor"][
+                        "round1_source_capacity_report_sha256"
+                    ],
+                    expected_capacity_sha256,
+                )
+                self.assertEqual(
+                    provenance["generation_descriptor"]["audit_report_sha256"][
+                        "round1_source_capacity"
+                    ],
+                    expected_capacity_sha256,
+                )
+                self.assertEqual(
+                    report["round1_source_capacity"], expected_capacity
+                )
+                self.assertEqual(
+                    report["round1_source_capacity_report_sha256"],
+                    expected_capacity_sha256,
+                )
+                self.assertTrue(
+                    report["release_checks"]["round1_source_capacity"]
+                )
+                self.assertEqual(
+                    report["recomputed_d1_audits"]["round1_source_capacity"],
+                    expected_capacity,
                 )
                 self.assertEqual(
                     report["final_view_support"], fake_final_view_support
