@@ -9,6 +9,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+import gpt_oss_power_sft_revised_v3 as sft_script
+
 from gpt_oss_power_sft_revised_v3 import (
     assistant_tool_name,
     assistant_turn_trainable,
@@ -16,6 +18,7 @@ from gpt_oss_power_sft_revised_v3 import (
     audit_hardening_recovery_targets,
     explode_conversation,
     is_false_marker,
+    make_sft_config_kwargs,
     normalize_messages,
     parse_args,
     records_to_dataset,
@@ -133,6 +136,22 @@ class FakeDataset:
 
 
 class SFTHardeningMaskTests(unittest.TestCase):
+    def test_loss_only_evaluation_option_is_forwarded_when_supported(self) -> None:
+        original = sft_script.SFTConfig
+
+        class FakeSFTConfig:
+            def __init__(self, prediction_loss_only=False):
+                del prediction_loss_only
+
+        try:
+            sft_script.SFTConfig = FakeSFTConfig
+            self.assertEqual(
+                make_sft_config_kwargs(prediction_loss_only=True),
+                {"prediction_loss_only": True},
+            )
+        finally:
+            sft_script.SFTConfig = original
+
     def test_resume_default_is_fresh_and_init_adapter_auto_resume_is_guarded(self) -> None:
         self.assertEqual(parse_args([]).resume_from_checkpoint, "")
 

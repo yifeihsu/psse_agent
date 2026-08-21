@@ -2862,6 +2862,10 @@ def main(argv: list[str] | None = None) -> int:
         logging_steps=args.logging_steps,
         eval_strategy="steps" if eval_dataset is not None else "no",
         eval_steps=args.eval_steps if eval_dataset is not None else None,
+        # Validation is used only for held-out loss. Retaining full
+        # sequence-by-vocabulary logits grows across the evaluation loop and
+        # can exhaust even a large GPU without producing any metric we use.
+        prediction_loss_only=True,
         save_steps=args.save_steps,
         save_total_limit=args.save_total_limit,
         optim="adamw_8bit",
