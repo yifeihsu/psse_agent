@@ -23,6 +23,7 @@ from psse_env.dagger.collect_dagger1 import (
     DEFAULT_EVALUATION_POLICY,
     DEFAULT_FORBIDDEN_SUITE,
     DEFAULT_POLICY_FACTORY_SPEC,
+    dagger1_execution_pipeline_contract,
     dagger1_production_row_target_contract,
     frozen_physical_roots,
 )
@@ -730,6 +731,45 @@ class Dagger1ScenarioBuilderTests(unittest.TestCase):
 
 
 class Dagger1AggregateBuilderTests(unittest.TestCase):
+    def test_release_aggregate_requires_exact_overlap_execution_pipeline(self) -> None:
+        approved = dagger1_execution_pipeline_contract(overlap_policy_audit=True)
+        self.assertEqual(
+            aggregate_module.validate_dagger1_execution_pipeline_contract(
+                {"execution_pipeline_contract": copy.deepcopy(approved)}
+            ),
+            approved,
+        )
+
+        missing_or_wrong = [
+            {},
+            {
+                "execution_pipeline_contract": (
+                    dagger1_execution_pipeline_contract(
+                        overlap_policy_audit=False
+                    )
+                )
+            },
+            {
+                "execution_pipeline_contract": {
+                    **copy.deepcopy(approved),
+                    "join_barrier": "after_beta_rng_draw",
+                }
+            },
+            {
+                "execution_pipeline_contract": {
+                    **copy.deepcopy(approved),
+                    "overlap_policy_audit": 1,
+                }
+            },
+        ]
+        for manifest in missing_or_wrong:
+            with self.subTest(manifest=manifest), self.assertRaisesRegex(
+                ValueError, "execution-pipeline contract"
+            ):
+                aggregate_module.validate_dagger1_execution_pipeline_contract(
+                    manifest
+                )
+
     def test_jsonl_snapshot_rejects_swap_after_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "immutable.jsonl"
@@ -1046,6 +1086,9 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
             "all_output_sha256": file_sha256(all_output),
             "all_output_row_count": len(all_rows),
             "collection_pass": "training",
+            "execution_pipeline_contract": dagger1_execution_pipeline_contract(
+                overlap_policy_audit=True
+            ),
             "visited_rows": len(all_rows),
             "output_rows": 1,
             "selected_recovery_row_count": 1,

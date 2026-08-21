@@ -20,7 +20,10 @@ from psse_env.dagger.build_dagger1_aggregate import (
     validate_offline_teacher_target_quarantine_summary,
     validate_round1_learner_seed,
 )
-from psse_env.dagger.collect_dagger1 import DAGGER1_SCENARIO_BUILDER_CONTRACT
+from psse_env.dagger.collect_dagger1 import (
+    DAGGER1_SCENARIO_BUILDER_CONTRACT,
+    dagger1_execution_pipeline_contract,
+)
 from psse_env.dagger.dataset_builder import examples_to_chat_sft, load_jsonl
 from psse_env.dagger.replay_buffer import (
     DAGGER1_ROUND1_SOURCE_CAPACITY_CONTRACT,
@@ -392,6 +395,61 @@ def validate_round1_source_mix_gate(
         failures.append("D1 collection lacks the reviewed fresh-root scenario binding")
 
     inputs = _mapping(descriptor.get("input_artifacts"))
+    expected_execution_pipeline = dagger1_execution_pipeline_contract(
+        overlap_policy_audit=True
+    )
+    expected_execution_pipeline_sha256 = stable_json_sha256(
+        expected_execution_pipeline
+    )
+    manifest_execution_pipeline_value = d1_manifest.get(
+        "execution_pipeline_contract"
+    )
+    manifest_execution_pipeline = _mapping(manifest_execution_pipeline_value)
+    if (
+        not isinstance(manifest_execution_pipeline_value, Mapping)
+        or stable_json_sha256(manifest_execution_pipeline)
+        != expected_execution_pipeline_sha256
+    ):
+        failures.append(
+            "D1 collection execution-pipeline contract is not the reviewed "
+            "policy/audit overlap"
+        )
+    descriptor_execution_pipeline_value = inputs.get(
+        "d1_execution_pipeline_contract"
+    )
+    descriptor_execution_pipeline = _mapping(
+        descriptor_execution_pipeline_value
+    )
+    if (
+        not isinstance(descriptor_execution_pipeline_value, Mapping)
+        or stable_json_sha256(descriptor_execution_pipeline)
+        != expected_execution_pipeline_sha256
+        or inputs.get("d1_execution_pipeline_contract_sha256")
+        != expected_execution_pipeline_sha256
+    ):
+        failures.append(
+            "round-1 provenance does not bind the reviewed D1 "
+            "execution-pipeline contract"
+        )
+    pipeline_preflight_release_checks = _mapping(
+        preflight.get("release_checks")
+    )
+    pipeline_provenance_release_checks = _mapping(
+        provenance.get("release_checks")
+    )
+    if (
+        pipeline_preflight_release_checks.get(
+            "d1_execution_pipeline_approved"
+        )
+        is not True
+        or pipeline_provenance_release_checks.get(
+            "d1_execution_pipeline_approved"
+        )
+        is not True
+    ):
+        failures.append(
+            "round-1 execution-pipeline release checks are not both passing"
+        )
     d0_manifest_sha256 = inputs.get("d0_manifest_sha256")
     if not _is_sha256(d0_manifest_sha256):
         failures.append(
@@ -794,6 +852,9 @@ def validate_round1_source_mix_gate(
         ),
         "round1_source_capacity_report_sha256": (
             round1_source_capacity_sha256
+        ),
+        "execution_pipeline_contract_sha256": (
+            expected_execution_pipeline_sha256
         ),
         "aggregate_dir": str(aggregate_dir),
         "canonical_dataset_paths": {

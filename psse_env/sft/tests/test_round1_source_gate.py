@@ -12,7 +12,10 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from psse_env.dagger.collect_dagger1 import DAGGER1_SCENARIO_BUILDER_CONTRACT
+from psse_env.dagger.collect_dagger1 import (
+    DAGGER1_SCENARIO_BUILDER_CONTRACT,
+    dagger1_execution_pipeline_contract,
+)
 from psse_env.dagger.dataset_builder import examples_to_chat_sft
 from psse_env.dagger.replay_buffer import (
     DAGGER1_ROUND1_SOURCE_CAPACITY_CONTRACT,
@@ -152,6 +155,9 @@ class Round1SourceMixGateTests(unittest.TestCase):
         return row
 
     def _write_valid_artifacts(self, root: Path) -> tuple[Path, Path]:
+        execution_pipeline = dagger1_execution_pipeline_contract(
+            overlap_policy_audit=True
+        )
         d0_rows = [self._source_row("d0", "root-d0", replay_source="d0_bc0")]
         d1_rows = [
             self._source_row(
@@ -235,6 +241,7 @@ class Round1SourceMixGateTests(unittest.TestCase):
                 for key, value in learner_seed.items()
                 if key != "collection_manifest_sha256"
             },
+            "execution_pipeline_contract": execution_pipeline,
             "round1_replay_capacity": round1_source_capacity,
         }
         quarantine_summary = {
@@ -334,6 +341,10 @@ class Round1SourceMixGateTests(unittest.TestCase):
                 "d1_rows_sha256": "e" * 64,
                 "d1_manifest_sha256": COLLECTION_MANIFEST_SHA256,
                 "d1_manifest_content_sha256": stable_json_sha256(d1_manifest),
+                "d1_execution_pipeline_contract": execution_pipeline,
+                "d1_execution_pipeline_contract_sha256": stable_json_sha256(
+                    execution_pipeline
+                ),
                 "probe_rows_sha256": "6" * 64,
                 "probe_manifest_sha256": "7" * 64,
                 "probe_generation_provenance_id": PROBE_PROVENANCE_ID,
@@ -413,6 +424,7 @@ class Round1SourceMixGateTests(unittest.TestCase):
                 round1_source_capacity
             ),
             "release_checks": {
+                "d1_execution_pipeline_approved": True,
                 "final_view_support": True,
                 "round1_source_capacity": True,
             },
@@ -435,6 +447,7 @@ class Round1SourceMixGateTests(unittest.TestCase):
                 round1_source_capacity
             ),
             "release_checks": {
+                "d1_execution_pipeline_approved": True,
                 "final_view_support": True,
                 "round1_source_capacity": True,
             },
@@ -463,6 +476,76 @@ class Round1SourceMixGateTests(unittest.TestCase):
         provenance_id = stable_json_sha256(provenance["generation_descriptor"])
         provenance["generation_provenance_id"] = provenance_id
         preflight["generation_provenance_id"] = provenance_id
+        provenance_path.write_text(
+            json.dumps(provenance, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        preflight_path.write_text(
+            json.dumps(preflight, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    def _forge_all_execution_pipeline_records(
+        self,
+        provenance_path: Path,
+        preflight_path: Path,
+        forged: dict[str, Any],
+    ) -> None:
+        """Rebind every execution claim while leaving collection rows intact."""
+
+        root = provenance_path.parent
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
+        d1_manifest = preflight["d1_collection_manifest"]
+        d1_manifest["execution_pipeline_contract"] = forged
+        preflight["release_checks"]["d1_execution_pipeline_approved"] = True
+
+        descriptor = provenance["generation_descriptor"]
+        inputs = descriptor["input_artifacts"]
+        inputs["d1_manifest_content_sha256"] = stable_json_sha256(d1_manifest)
+        inputs["d1_execution_pipeline_contract"] = forged
+        inputs["d1_execution_pipeline_contract_sha256"] = stable_json_sha256(
+            forged
+        )
+        provenance["release_checks"]["d1_execution_pipeline_approved"] = True
+        provenance_id = stable_json_sha256(descriptor)
+        provenance["generation_provenance_id"] = provenance_id
+        preflight["generation_provenance_id"] = provenance_id
+
+        def load_rows(name: str) -> list[dict[str, Any]]:
+            return [
+                json.loads(line)
+                for line in (root / name).read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+
+        def write_rows(name: str, rows: list[dict[str, Any]]) -> None:
+            (root / name).write_text(
+                "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+
+        raw_rows = load_rows("aggregate.train_view.raw.jsonl")
+        for row in raw_rows:
+            row["generation_provenance_id"] = provenance_id
+        write_rows("aggregate.train_view.raw.jsonl", raw_rows)
+        write_rows(
+            "aggregate.train_view.jsonl",
+            examples_to_chat_sft(
+                raw_rows,
+                protocol="canonical",
+                allow_ineligible_auxiliary=True,
+            ),
+        )
+        for name in ("aggregate.validation.jsonl", "aggregate.test.jsonl"):
+            rows = load_rows(name)
+            for row in rows:
+                row["generation_provenance_id"] = provenance_id
+            write_rows(name, rows)
+        provenance["dataset_hashes"] = {
+            name: file_sha256(root / name)
+            for name in ROUND1_IMMUTABLE_VIEW_NAMES
+        }
         provenance_path.write_text(
             json.dumps(provenance, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -728,6 +811,14 @@ class Round1SourceMixGateTests(unittest.TestCase):
                     preflight_payload["round1_source_capacity"]
                 ),
             )
+            self.assertEqual(
+                report["execution_pipeline_contract_sha256"],
+                stable_json_sha256(
+                    dagger1_execution_pipeline_contract(
+                        overlap_policy_audit=True
+                    )
+                ),
+            )
 
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
@@ -745,6 +836,95 @@ class Round1SourceMixGateTests(unittest.TestCase):
                 )
             self.assertEqual(result, 0)
             self.assertIn("source gate passed", output.getvalue())
+
+    def test_missing_execution_pipeline_contract_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provenance, preflight_path = self._write_valid_artifacts(
+                Path(temp_dir)
+            )
+            preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
+            preflight["d1_collection_manifest"].pop(
+                "execution_pipeline_contract"
+            )
+            preflight_path.write_text(
+                json.dumps(preflight, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(GateError, "execution-pipeline"):
+                self._validate(provenance, preflight_path)
+
+    def test_serial_execution_pipeline_contract_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provenance, preflight_path = self._write_valid_artifacts(
+                Path(temp_dir)
+            )
+            preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
+            preflight["d1_collection_manifest"][
+                "execution_pipeline_contract"
+            ] = dagger1_execution_pipeline_contract(
+                overlap_policy_audit=False
+            )
+            preflight_path.write_text(
+                json.dumps(preflight, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(GateError, "execution-pipeline"):
+                self._validate(provenance, preflight_path)
+
+    def test_execution_pipeline_descriptor_binding_is_required(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provenance, preflight = self._write_valid_artifacts(Path(temp_dir))
+            self._rewrite_descriptor(
+                provenance,
+                preflight,
+                lambda descriptor: descriptor["input_artifacts"].update(
+                    {
+                        "d1_execution_pipeline_contract_sha256": "0" * 64,
+                    }
+                ),
+            )
+            with self.assertRaisesRegex(
+                GateError, "provenance does not bind.*execution-pipeline"
+            ):
+                self._validate(provenance, preflight)
+
+    def test_execution_pipeline_release_checks_are_required(self) -> None:
+        for artifact in ("preflight", "provenance"):
+            with (
+                self.subTest(artifact=artifact),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                provenance_path, preflight_path = self._write_valid_artifacts(
+                    Path(temp_dir)
+                )
+                target_path = (
+                    preflight_path if artifact == "preflight" else provenance_path
+                )
+                payload = json.loads(target_path.read_text(encoding="utf-8"))
+                payload["release_checks"].pop(
+                    "d1_execution_pipeline_approved"
+                )
+                target_path.write_text(
+                    json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(
+                    GateError, "release checks are not both passing"
+                ):
+                    self._validate(provenance_path, preflight_path)
+
+    def test_fully_rehashed_serial_execution_pipeline_cannot_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provenance, preflight = self._write_valid_artifacts(Path(temp_dir))
+            self._forge_all_execution_pipeline_records(
+                provenance,
+                preflight,
+                dagger1_execution_pipeline_contract(
+                    overlap_policy_audit=False
+                ),
+            )
+            with self.assertRaisesRegex(GateError, "execution-pipeline"):
+                self._validate(provenance, preflight)
 
     def test_missing_source_capacity_report_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

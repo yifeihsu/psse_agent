@@ -104,6 +104,26 @@ def _load_mapping(path: Path) -> dict[str, Any]:
     return dict(value)
 
 
+def validate_dagger1_execution_pipeline_contract(
+    manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Require the approved overlap/barrier contract at release ingestion."""
+
+    expected = collect_dagger1_module.dagger1_execution_pipeline_contract(
+        overlap_policy_audit=True
+    )
+    observed = manifest.get("execution_pipeline_contract")
+    if (
+        not isinstance(observed, Mapping)
+        or stable_json_sha256(observed) != stable_json_sha256(expected)
+    ):
+        raise ValueError(
+            "D1 release-strict collection lacks the approved policy/audit "
+            "execution-pipeline contract"
+        )
+    return copy.deepcopy(expected)
+
+
 def _preflight_round1_output_directory(output_dir: Path) -> None:
     """Require an absent or genuinely empty final publication directory."""
 
@@ -711,6 +731,9 @@ def build_round1_aggregate(
         raise ValueError("D1 manifest must explicitly reject promotion-evidence use")
     if d1_manifest.get("training_eligible") is not True:
         raise ValueError("D1 collection manifest is not training eligible")
+    expected_execution_pipeline = validate_dagger1_execution_pipeline_contract(
+        d1_manifest
+    )
     if d1_manifest.get("output_sha256") != file_sha256(d1_path):
         raise ValueError("D1 rows do not match the collection manifest hash")
     learner_seed_binding = validate_round1_learner_seed(
@@ -1277,6 +1300,10 @@ def build_round1_aggregate(
             ),
             "d1_manifest_sha256": d1_manifest_sha256,
             "d1_manifest_content_sha256": stable_json_sha256(d1_manifest),
+            "d1_execution_pipeline_contract": expected_execution_pipeline,
+            "d1_execution_pipeline_contract_sha256": stable_json_sha256(
+                expected_execution_pipeline
+            ),
             "d1_development_holdout": development_holdout_binding,
             "probe_rows_sha256": probe_snapshot_sha256,
             "probe_manifest_sha256": probe_binding["manifest_sha256"],
@@ -1345,6 +1372,10 @@ def build_round1_aggregate(
             development_roots & observed_d1_roots
         ),
         "d1_training_eligible": d1_manifest.get("training_eligible") is True,
+        "d1_execution_pipeline_approved": (
+            d1_manifest.get("execution_pipeline_contract")
+            == expected_execution_pipeline
+        ),
         "round1_source_capacity": (
             round1_source_capacity.get("contract")
             == DAGGER1_ROUND1_SOURCE_CAPACITY_CONTRACT

@@ -5,6 +5,7 @@ import math
 import random
 from collections import Counter
 from collections.abc import Callable, Iterable
+from concurrent.futures import Executor
 from typing import Any, Mapping
 
 from psse_env.actions import (
@@ -787,7 +788,12 @@ def summarize_dagger1_offline_teacher_target_quarantine(
 
 
 class DaggerRolloutCollector:
-    """Collect expert labels at every state visited by the mixture policy."""
+    """Collect expert labels at every state visited by the mixture policy.
+
+    ``policy_executor`` is caller-owned and, when supplied, must be one
+    persistent single-worker executor.  The collector never shuts it down so a
+    top-level collection schedule can reuse the same worker across episodes.
+    """
 
     def __init__(
         self,
@@ -798,6 +804,7 @@ class DaggerRolloutCollector:
         rng: random.Random | None = None,
         supervision_policy: str = ALL_ADMISSIBLE_SUPERVISION,
         forbidden_physical_roots: Iterable[str] | None = None,
+        policy_executor: Executor | None = None,
     ) -> None:
         if supervision_policy not in SUPPORTED_SUPERVISION_POLICIES:
             raise ValueError(
@@ -822,6 +829,7 @@ class DaggerRolloutCollector:
         self.expert_oracle = expert_oracle
         self.rng = rng or random.Random()
         self.supervision_policy = supervision_policy
+        self.policy_executor = policy_executor
         self.forbidden_physical_roots = frozenset(
             str(root).strip()
             for root in (forbidden_physical_roots or [])
@@ -995,6 +1003,16 @@ class DaggerRolloutCollector:
                 policy_observation = self._policy_observation(history)
                 observation_dict = policy_observation.as_dict()
                 validate_policy_payload(observation_dict)
+                policy_action_future = None
+                if self.policy_executor is not None:
+                    # The overlap boundary is deliberately narrow.  Submit one
+                    # policy call only after the immutable learner payload has
+                    # passed validation, and isolate the worker from every
+                    # object the main-thread audits below.
+                    policy_action_future = self.policy_executor.submit(
+                        self._policy_action,
+                        copy.deepcopy(observation_dict),
+                    )
                 oracle_state: OracleState | Mapping[str, Any] | None = None
                 if (
                     self.supervision_policy
@@ -1091,7 +1109,17 @@ class DaggerRolloutCollector:
                             training_decision_evidence_verified
                         ),
                     )
-                model_action = self._policy_action(observation_dict)
+                # This is the concurrency barrier.  Policy completion (or its
+                # normalized policy-exception action) is observed before the
+                # beta RNG advances and before the transition boundary
+                # (current_state/step) can proceed.  Read-only oracle/audit
+                # state access is permitted inside the overlap.  With no
+                # executor, preserve the original sequential path byte-for-byte.
+                model_action = (
+                    self._policy_action(observation_dict)
+                    if policy_action_future is None
+                    else policy_action_future.result()
+                )
 
                 if preferred_action is not None and self.rng.random() < float(beta):
                     # Ordinary DAgger labels the visited state with the

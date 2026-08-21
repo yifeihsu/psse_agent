@@ -63,6 +63,7 @@ set +e
   --all-output "$ALL_OUTPUT" \
   --model-id "$LEARNER" --model-revision "$REV" \
   --collection-pass training --beta "$BETA" \
+  --overlap-policy-audit \
   --failed-collection-dir "$FAILED_DIR" \
   "${EXTRA[@]}"
 COLLECT_RC=$?

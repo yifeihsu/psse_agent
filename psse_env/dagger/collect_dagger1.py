@@ -14,6 +14,7 @@ import sys
 import tempfile
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -89,6 +90,9 @@ DAGGER1_PRODUCTION_ROW_TARGET_CONTRACT = (
     "dagger1_reviewed_production_row_target_v1"
 )
 DAGGER1_ROLLOUT_MATRIX_CONTRACT = "dagger1_rollout_disposition_matrix_v1"
+DAGGER1_EXECUTION_PIPELINE_CONTRACT = (
+    "dagger1_policy_audit_execution_pipeline_v1"
+)
 DAGGER1_MAXIMUM_ROLLOUT_REPLICAS_BY_FAMILY = {
     "measurement+parameter": 2,
     "multi_measurement": 3,
@@ -99,6 +103,57 @@ DAGGER1_RESERVE_FAMILY_PRIORITY = (
     "measurement+parameter",
     "parameter",
 )
+
+
+def dagger1_execution_pipeline_contract(
+    *, overlap_policy_audit: bool
+) -> dict[str, Any]:
+    """Describe the policy/audit ordering that produced a collection artifact."""
+
+    enabled = bool(overlap_policy_audit)
+    if enabled:
+        submission = {
+            "count_per_validated_observation": 1,
+            "position": (
+                "immediately_after_immutable_observation_validation"
+            ),
+            "observation_handoff": "deep_copy",
+        }
+        overlapped_main_thread_work = [
+            "expert_action_selection",
+            "observable_rank_one_target_proof",
+            "private_oracle_state_construction",
+            "supervision_action_materialization",
+            "training_decision_evidence_assertion",
+            "private_teacher_target_audit",
+        ]
+        join_barrier = "before_beta_rng_draw_or_environment_mutation"
+    else:
+        submission = {
+            "count_per_validated_observation": 1,
+            "position": "after_private_teacher_target_audit",
+            "observation_handoff": "direct_sequential_call",
+        }
+        overlapped_main_thread_work = []
+        join_barrier = "not_applicable_sequential_execution"
+    return {
+        "contract": DAGGER1_EXECUTION_PIPELINE_CONTRACT,
+        "overlap_policy_audit": enabled,
+        "policy_executor": {
+            "kind": "persistent_single_worker_thread" if enabled else "none",
+            "max_workers": 1 if enabled else 0,
+            "scope": (
+                "top_level_collection_run" if enabled else "sequential_call_site"
+            ),
+        },
+        "policy_submission": submission,
+        "main_thread_work_overlapped_with_policy": (
+            overlapped_main_thread_work
+        ),
+        "join_barrier": join_barrier,
+    }
+
+
 DAGGER1_PRIMARY_PLAN = {
     "measurement+parameter": 48,
     "multi_measurement": 48,
@@ -2996,9 +3051,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             "training-ineligible and rejected by aggregate ingestion."
         ),
     )
+    parser.add_argument(
+        "--overlap-policy-audit",
+        action="store_true",
+        help=(
+            "Use one persistent policy worker while expert, rank-one, and "
+            "private audit work runs on the main thread; joins before beta RNG "
+            "or environment mutation"
+        ),
+    )
     parser.add_argument("--max-steps", type=int, default=24)
     parser.add_argument("--seed", type=int, default=20260719)
     args = parser.parse_args(list(argv) if argv is not None else None)
+    execution_pipeline_contract = dagger1_execution_pipeline_contract(
+        overlap_policy_audit=args.overlap_policy_audit
+    )
     production_row_target = dagger1_production_row_target_contract(
         target_min_rows=args.target_min_rows,
         target_max_rows=args.target_max_rows,
@@ -3257,6 +3324,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if row.get("dataset_split") == "train"
         and row.get("production_label_eligible") is True
     ]
+    policy_executor = (
+        ThreadPoolExecutor(max_workers=1, thread_name_prefix="dagger1-policy")
+        if args.overlap_policy_audit
+        else None
+    )
 
     def collect_episode(
         scenario: Mapping[str, Any],
@@ -3273,6 +3345,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             rng=random.Random(rollout_seed),
             supervision_policy=DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
             forbidden_physical_roots=forbidden_roots,
+            policy_executor=policy_executor,
         ).collect_iteration(
             scenarios=[scenario],
             iteration=args.iteration,
@@ -3293,21 +3366,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             rollout_matrix=rollout_matrix,
         )
 
-    rows, rollout_matrix, stopping_report, collection_checkpoint = (
-        collect_dagger1_rollout_schedule(
-            scenarios,
-            collection_pass=args.collection_pass,
-            seed=args.seed,
-            max_steps=args.max_steps,
-            collect_episode=collect_episode,
-            checkpoint=(
-                checkpoint if args.collection_pass == "training" else None
-            ),
-            analysis_only_complete_schedule=(
-                args.analysis_only_complete_schedule
-            ),
+    try:
+        rows, rollout_matrix, stopping_report, collection_checkpoint = (
+            collect_dagger1_rollout_schedule(
+                scenarios,
+                collection_pass=args.collection_pass,
+                seed=args.seed,
+                max_steps=args.max_steps,
+                collect_episode=collect_episode,
+                checkpoint=(
+                    checkpoint if args.collection_pass == "training" else None
+                ),
+                analysis_only_complete_schedule=(
+                    args.analysis_only_complete_schedule
+                ),
+            )
         )
-    )
+    finally:
+        if policy_executor is not None:
+            policy_executor.shutdown(wait=True, cancel_futures=False)
     validate_export_rows_truth_free(rows)
     class_audit = audit_target_aware_state_classes(rows)
     if not class_audit["passed"]:
@@ -3365,6 +3442,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "manifest": str(output_manifest_path.resolve()),
                 },
                 "collector_contract": DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
+                "execution_pipeline_contract": execution_pipeline_contract,
                 "recovery_label_contract": (
                     "observable_rank_one_learner_state_v1"
                 ),
@@ -3621,6 +3699,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "all_output_sha256": all_output_sha256,
         "all_output_row_count": all_output_row_count,
         "collector_contract": DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
+        "execution_pipeline_contract": execution_pipeline_contract,
         "recovery_label_contract": "observable_rank_one_learner_state_v1",
         "input": str(args.input),
         "input_sha256": _file_sha256(args.input),
