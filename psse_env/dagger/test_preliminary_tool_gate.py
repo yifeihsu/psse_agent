@@ -6,6 +6,7 @@ import json
 import pytest
 
 from psse_env.dagger.dataset_builder import CANONICAL_DAGGER_SYSTEM_PROMPT
+from psse_env.dagger.preliminary_e2b_eval import canonical_prompt_tool_schemas
 from psse_env.dagger.preliminary_tool_gate import (
     MINIMUM_BC0_TARGET_TOOL_RATE,
     MINIMUM_DAGGER_TARGET_TOOL_RATE,
@@ -16,6 +17,7 @@ from psse_env.dagger.preliminary_tool_gate import (
     summarize_results,
 )
 from psse_env.dagger.protocol_bridge import unified_tool_schemas
+from gpt_oss_power_sft_revised_v3 import sanitize_tool_schemas
 
 
 TARGETS = (
@@ -79,6 +81,13 @@ def _row(index: int) -> dict:
 
 def _text(tool: str, arguments: dict) -> str:
     return json.dumps({"name": tool, "arguments": arguments}, sort_keys=True)
+
+
+def test_inference_reuses_exact_training_tool_schema_sanitizer() -> None:
+    assert canonical_prompt_tool_schemas() == sanitize_tool_schemas(
+        unified_tool_schemas()
+    )
+    assert canonical_prompt_tool_schemas() != unified_tool_schemas()
 
 
 def test_selection_is_deterministic_and_covers_roots_tools_and_references() -> None:

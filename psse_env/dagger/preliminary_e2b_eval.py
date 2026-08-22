@@ -25,6 +25,7 @@ from eval_sft_agent_gemma_v4 import (
     resolve_pad_token_id,
     tokenize_rendered_text,
 )
+from gpt_oss_power_sft_revised_v3 import sanitize_tool_schemas
 from psse_env.dagger.dataset_builder import (
     CANONICAL_DAGGER_SYSTEM_PROMPT,
     validate_policy_payload,
@@ -44,6 +45,12 @@ BASE_MODEL_REVISION = "f0c5915f17ad6c66dbeb577fb06ff8925bf8d7ae"
 BASE_MODEL_ID = "unsloth/gemma-4-E2B-it"
 MAX_INPUT_TOKENS = 8192
 MAX_NEW_TOKENS = 64
+
+
+def canonical_prompt_tool_schemas() -> list[dict[str, Any]]:
+    """Return the exact sanitized registry rendered during SFT preprocessing."""
+
+    return sanitize_tool_schemas(unified_tool_schemas())
 
 
 @dataclass(frozen=True)
@@ -160,7 +167,7 @@ class _CanonicalE2BPolicy:
 
     def __init__(self, bundle: _E2BBundle) -> None:
         self._bundle = bundle
-        self._tools = unified_tool_schemas()
+        self._tools = canonical_prompt_tool_schemas()
         self._parameter_schemas = {
             str(row["function"]["name"]): row["function"]["parameters"]
             for row in self._tools
@@ -304,5 +311,6 @@ __all__ = [
     "MAX_INPUT_TOKENS",
     "MAX_NEW_TOKENS",
     "PreliminaryE2BPolicy",
+    "canonical_prompt_tool_schemas",
     "preliminary_e2b_policy_factory",
 ]
