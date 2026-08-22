@@ -6,7 +6,10 @@ import json
 import pytest
 
 from psse_env.dagger.dataset_builder import CANONICAL_DAGGER_SYSTEM_PROMPT
-from psse_env.dagger.preliminary_e2b_eval import canonical_prompt_tool_schemas
+from psse_env.dagger.preliminary_e2b_eval import (
+    canonical_prompt_tool_schemas,
+    normalize_episode_state_reference,
+)
 from psse_env.dagger.preliminary_tool_gate import (
     MINIMUM_BC0_TARGET_TOOL_RATE,
     MINIMUM_DAGGER_TARGET_TOOL_RATE,
@@ -88,6 +91,31 @@ def test_inference_reuses_exact_training_tool_schema_sanitizer() -> None:
         unified_tool_schemas()
     )
     assert canonical_prompt_tool_schemas() != unified_tool_schemas()
+
+
+def test_episode_reference_rewrite_is_narrow_and_state_derived() -> None:
+    action = {
+        "tool": "get_measurement_context",
+        "arguments": {"case_path": "episode"},
+    }
+    observation = {
+        "episode_id": "episode",
+        "active_state_id": "active",
+        "candidate_state_id": "candidate",
+    }
+    normalized, rewrites = normalize_episode_state_reference(action, observation)
+    assert normalized["arguments"]["case_path"] == "active"
+    assert rewrites == [
+        {"argument": "case_path", "from": "episode", "to": "active"}
+    ]
+    assert action["arguments"]["case_path"] == "episode"
+
+    unrelated, unrelated_rewrites = normalize_episode_state_reference(
+        {"tool": "wls_from_path", "arguments": {"case_path": "unknown"}},
+        observation,
+    )
+    assert unrelated["arguments"]["case_path"] == "unknown"
+    assert unrelated_rewrites == []
 
 
 def test_selection_is_deterministic_and_covers_roots_tools_and_references() -> None:

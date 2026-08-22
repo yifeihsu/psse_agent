@@ -54,6 +54,33 @@ def canonical_prompt_tool_schemas() -> list[dict[str, Any]]:
     return sanitize_tool_schemas(unified_tool_schemas())
 
 
+def normalize_episode_state_reference(
+    action: Mapping[str, Any],
+    observation: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Rewrite only the visible episode id to the canonical active alias."""
+
+    normalized = copy.deepcopy(dict(action))
+    arguments = normalized.get("arguments")
+    if not isinstance(arguments, Mapping):
+        return normalized, []
+    normalized_arguments = copy.deepcopy(dict(arguments))
+    normalized["arguments"] = normalized_arguments
+    episode_id = observation.get("episode_id")
+    active_alias = observation.get("active_state_id")
+    if not isinstance(episode_id, str) or not isinstance(active_alias, str):
+        return normalized, []
+    if not episode_id or not active_alias or episode_id == active_alias:
+        return normalized, []
+    rewrites: list[dict[str, str]] = []
+    for field in ("case_path", "scan_window_path"):
+        if normalized_arguments.get(field) != episode_id:
+            continue
+        normalized_arguments[field] = active_alias
+        rewrites.append({"argument": field, "from": episode_id, "to": active_alias})
+    return normalized, rewrites
+
+
 @dataclass(frozen=True)
 class _E2BBundle:
     model: Any
@@ -282,7 +309,18 @@ class _CanonicalE2BPolicy:
             "forced_tool_prefix_tokens": len(forced_prefix_ids),
             "trimmed_trailing_pad_tokens": int(trimmed_pad_tokens),
         }
-        return text
+        try:
+            action = _validated_generated_action(text, self._parameter_schemas)
+        except GateError:
+            return text
+        normalized, rewrites = normalize_episode_state_reference(action, observation)
+        self._last_action_metrics["state_reference_rewrites"] = rewrites
+        return json.dumps(
+            {"name": normalized["tool"], "arguments": normalized["arguments"]},
+            sort_keys=True,
+            ensure_ascii=False,
+            allow_nan=False,
+        )
 
     def act(self, observation: Mapping[str, Any]) -> dict[str, Any]:
         return _validated_generated_action(
@@ -340,5 +378,6 @@ __all__ = [
     "MAX_NEW_TOKENS",
     "PreliminaryE2BPolicy",
     "canonical_prompt_tool_schemas",
+    "normalize_episode_state_reference",
     "preliminary_e2b_policy_factory",
 ]
