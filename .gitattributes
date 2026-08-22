@@ -4,6 +4,7 @@ psse_env/dagger/bc0_evaluation_policy.json text eol=lf
 psse_env/dagger/release_factories.py text eol=lf
 psse_env/dagger/suites/bc0_eval_suite_v1.json text eol=lf
 psse_env/dagger/studies/dagger_multiseed_study_v1.json text eol=lf
+psse_env/requirements-sft.txt text eol=lf
 submit_dagger1_collection.sh text eol=lf
 submit_dagger_release_eval.sh text eol=lf
 submit_dagger_sft_round0.sh text eol=lf

@@ -1,5 +1,6 @@
 # Versions frozen for the current reviewed Gemma 4 release path. They are
 # informed by, but do not exactly reproduce, the earlier H200 pilot stack.
+# This file is content-addressed and forced to LF on every checkout.
 # Install the CUDA-appropriate PyTorch wheel for the target node.
 torch==2.10.0
 torchvision==0.25.0

@@ -25,10 +25,10 @@ DEFAULT_STUDY_MANIFEST = (
 # Updated only through explicit protocol review.  This pins the raw LF-normalized
 # bytes; .gitattributes preserves that representation on Windows and Linux.
 EXPECTED_STUDY_MANIFEST_SHA256 = (
-    "e6b989aa73fdf8ba610e0451f0fc9679085500ca23d1acd2285de017dd7cff56"
+    "b07939b3bac394cd5368b35ba4c54eadc6fe9820f5a7ad4d3aec2db71d7ca747"
 )
 EXPECTED_STUDY_MANIFEST_CONTENT_SHA256 = (
-    "b5859f19190367341529c27dae570966b502999b382c4b2555b586a3406c6884"
+    "59f1abaec8ff41ce13f80a7f1a04e35b7e50d496fb5b58ccd6e2b7c3f7288fc4"
 )
 EXPECTED_COMPARISON_POLICY_SHA256 = (
     "9763dc426de33e328a06cd5abfb4f5788a05ef91fac6cb4113e30680f8c2c550"
@@ -46,7 +46,7 @@ TRAINING_PROTOCOL_CONTRACT = "dagger_study_training_protocol_v1"
 TRAINING_RNG_CONTRACT = "dagger_training_rng_attestation_v1"
 TRAINING_DEPENDENCY_LOCK_PATH = "psse_env/requirements-sft.txt"
 TRAINING_DEPENDENCY_LOCK_SHA256 = (
-    "4118e4bb6c7b7e4fa806afb33aa0689a594ff276fcb203c8aba015bb70246fea"
+    "58c1f4690803b0109d47ac81ae613e07d883a1cd5a14cbde0409f310d2dd4df5"
 )
 TRAINING_RNG_ENGINES = (
     "python_random",

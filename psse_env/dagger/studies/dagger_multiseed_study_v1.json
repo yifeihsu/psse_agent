@@ -120,7 +120,7 @@
     "contract": "dagger_study_training_protocol_v1",
     "dependency_lock": {
       "path": "psse_env/requirements-sft.txt",
-      "sha256": "4118e4bb6c7b7e4fa806afb33aa0689a594ff276fcb203c8aba015bb70246fea"
+      "sha256": "58c1f4690803b0109d47ac81ae613e07d883a1cd5a14cbde0409f310d2dd4df5"
     },
     "rng": {
       "contract": "dagger_training_rng_attestation_v1",

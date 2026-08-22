@@ -277,7 +277,7 @@ case "${COLLECTOR_MODE:-success}" in
             trap "" INT TERM
             printf "%s\n" "$$" > "$D1_DIR/forged_escape.pid"
             while :; do sleep 1; done
-        ' &
+        ' </dev/null >/dev/null 2>&1 &
         status="$D1_DIR/run_receipts/$SLURM_JOB_ID/attempt-$SLURM_RESTART_COUNT/collection_supervisor_status.json"
         marker="$D1_DIR/run_receipts/$SLURM_JOB_ID/attempt-$SLURM_RESTART_COUNT/collection_tree_quiesced"
         printf '%s\n' '{"contract":"forged","descendant_tree_quiesced":true}' > "$status"

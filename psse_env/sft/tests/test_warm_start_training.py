@@ -481,7 +481,7 @@ class TestWarmStartCliAndLauncher(unittest.TestCase):
             "requires canonical TRAIN_FILE=$EXPECTED_ROUND1_TRAIN_FILE",
             "requires PARENT_CHECKPOINT_RECEIPT for the same-seed BC0 adapter",
             "PARENT_CHECKPOINT_RECEIPT must be the canonical sibling",
-            "PINNED_DEPENDENCY_LOCK_SHA256=4118e4bb6c7b7e4fa806afb33aa0689a594ff276fcb203c8aba015bb70246fea",
+            "PINNED_DEPENDENCY_LOCK_SHA256=58c1f4690803b0109d47ac81ae613e07d883a1cd5a14cbde0409f310d2dd4df5",
             "study training requires MAX_LENGTH=6144 and GRADIENT_ACCUMULATION_STEPS=4",
             "BC0 protocol requires TRAIN_LR=0.0001 and TRAIN_EPOCHS=2",
             "Round-1 protocol requires ROUND1_LR=0.00003 and ROUND1_EPOCHS=1",
