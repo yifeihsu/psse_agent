@@ -25,7 +25,7 @@ from eval_sft_agent_gemma_v4 import (
     resolve_pad_token_id,
     tokenize_rendered_text,
 )
-from gpt_oss_power_sft_revised_v3 import sanitize_tool_schemas
+from gpt_oss_power_sft_revised_v3 import encode_text, sanitize_tool_schemas
 from psse_env.dagger.dataset_builder import (
     CANONICAL_DAGGER_SYSTEM_PROMPT,
     validate_policy_payload,
@@ -45,6 +45,7 @@ BASE_MODEL_REVISION = "f0c5915f17ad6c66dbeb577fb06ff8925bf8d7ae"
 BASE_MODEL_ID = "unsloth/gemma-4-E2B-it"
 MAX_INPUT_TOKENS = 8192
 MAX_NEW_TOKENS = 64
+FORCED_TOOL_PREFIX = "<|tool_call>call:"
 
 
 def canonical_prompt_tool_schemas() -> list[dict[str, Any]]:
@@ -228,13 +229,36 @@ class _CanonicalE2BPolicy:
         for name in required:
             model_inputs.setdefault(name, torch.zeros_like(model_inputs["input_ids"]))
 
+        forced_prefix_ids = encode_text(
+            self._bundle.processor,
+            FORCED_TOOL_PREFIX,
+        )["input_ids"]
+        if not forced_prefix_ids or len(forced_prefix_ids) >= MAX_NEW_TOKENS:
+            raise GateError("E2B native tool-call prefix tokenization is invalid")
+        forced_prefix = torch.tensor(
+            [forced_prefix_ids],
+            dtype=model_inputs["input_ids"].dtype,
+            device=device,
+        )
+        for name, value in tuple(model_inputs.items()):
+            if not hasattr(value, "shape") or int(value.shape[-1]) != prompt_length:
+                continue
+            if name == "input_ids":
+                suffix = forced_prefix
+            elif name == "attention_mask":
+                suffix = torch.ones_like(forced_prefix, dtype=value.dtype)
+            else:
+                suffix = torch.zeros_like(forced_prefix, dtype=value.dtype)
+            model_inputs[name] = torch.cat((value, suffix), dim=-1)
+        conditioned_length = prompt_length + len(forced_prefix_ids)
+
         stop_ids = get_stop_token_ids(self._bundle.processor)
         pad_token_id = resolve_pad_token_id(self._bundle.processor)
         started = time.perf_counter()
         with torch.inference_mode():
             generated = self._bundle.model.generate(
                 **model_inputs,
-                max_new_tokens=MAX_NEW_TOKENS,
+                max_new_tokens=MAX_NEW_TOKENS - len(forced_prefix_ids),
                 do_sample=False,
                 temperature=0.0,
                 use_cache=True,
@@ -242,7 +266,8 @@ class _CanonicalE2BPolicy:
                 pad_token_id=pad_token_id,
             )
         generation_seconds = time.perf_counter() - started
-        output_ids = generated[0][prompt_length:].detach().cpu()
+        sampled_ids = generated[0][conditioned_length:].detach().cpu()
+        output_ids = torch.cat((forced_prefix.detach().cpu()[0], sampled_ids))
         text, generated_tokens, trimmed_pad_tokens = decode_generated_response(
             self._bundle.processor,
             output_ids,
@@ -253,6 +278,8 @@ class _CanonicalE2BPolicy:
             "generated_tokens": int(generated_tokens),
             "generation_seconds": float(generation_seconds),
             "hit_max_new_tokens": int(generated_tokens) >= MAX_NEW_TOKENS,
+            "forced_tool_prefix": FORCED_TOOL_PREFIX,
+            "forced_tool_prefix_tokens": len(forced_prefix_ids),
             "trimmed_trailing_pad_tokens": int(trimmed_pad_tokens),
         }
         return text
@@ -308,6 +335,7 @@ def preliminary_e2b_policy_factory(
 
 __all__ = [
     "BASE_MODEL_REVISION",
+    "FORCED_TOOL_PREFIX",
     "MAX_INPUT_TOKENS",
     "MAX_NEW_TOKENS",
     "PreliminaryE2BPolicy",
