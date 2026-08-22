@@ -22,8 +22,9 @@
 # registry/source provenance and must fail the release gate.
 # Submit STAGE=gate, one-batch, targeted-tiny-overfit, tiny-overfit, and round0
 # in that order on a
-# pinned high-memory H200/H100/RTX 6000 constraint above. RTX 6000 is accepted
-# only when runtime attestation reports at least 90,000 MiB. STAGE=round0
+# pinned H200/H100/RTX Pro 6000 constraint above. RTX Pro 6000 is accepted only
+# when runtime attestation confirms the Pro name and at least 90,000 MiB.
+# STAGE=round0
 # refuses to train until the observable
 # expert passes the full content-pinned fixed-suite gate and the exact pinned
 # base model supplies complete, reproducible identity/evaluation evidence. Base
@@ -32,8 +33,17 @@
 # STAGE=checkpoint-gate validates one exact checkpoint artifact and its paired
 # per-root non-regression against the persisted base artifact before promotion;
 # full production SFT remains refused here. STAGE=round1 is the bounded
-# warm-start continuation: it requires one immutable round-0 LoRA tree identity
-# and defaults to one epoch at 3e-5 without changing the cold round-0 defaults.
+# warm-start continuation: it requires one immutable round-0 LoRA tree identity,
+# an explicit full or natural-only immutable view, and defaults to one epoch at
+# 3e-5 without changing the cold round-0 defaults.
+# For NYU's preemptible RTX Pro 6000 route, override the CPU request at submit
+# time so CPU packing does not strand free GPUs:
+#
+#   sbatch --constraint=rtx6000 --cpus-per-task=4 --mem=128G \
+#     --export="ALL,EXPECTED_ACCELERATOR_CLASS=rtx6000,..." \
+#     submit_dagger_sft_round0.sh
+#
+# The runtime gate still requires an actual RTX Pro 6000 with >=90,000 MiB.
 #
 # MAX_LENGTH=6144 is a conservative starting envelope.  The exact pinned
 # processor gate for the newly generated release aggregate remains decisive.
@@ -47,11 +57,17 @@ STAGE=${STAGE:-gate}
 ALLOW_DOWNLOAD=${ALLOW_DOWNLOAD:-0}
 REVIEWED_SOURCE_COMMIT=${REVIEWED_SOURCE_COMMIT:-}
 ENABLE_WANDB=${ENABLE_WANDB:-0}
+EXPECTED_ACCELERATOR_CLASS=${EXPECTED_ACCELERATOR_CLASS:-auto}
 
 MODEL_NAME=${MODEL_NAME:-unsloth/gemma-4-31B-it}
 MODEL_REVISION=${MODEL_REVISION:-8a796db4df380b178065ed910849477ff0e99c87}
+PINNED_DEPENDENCY_LOCK_SHA256=4118e4bb6c7b7e4fa806afb33aa0689a594ff276fcb203c8aba015bb70246fea
 AGGREGATE_DIR=${AGGREGATE_DIR:-data/round0_aggregate_release}
-TRAIN_FILE=${TRAIN_FILE:-$AGGREGATE_DIR/aggregate.train_view.jsonl}
+TRAIN_FILE_EXPLICIT=0
+if [[ -n "${TRAIN_FILE+x}" ]]; then
+    TRAIN_FILE_EXPLICIT=1
+fi
+TRAIN_FILE=${TRAIN_FILE:-}
 VALIDATION_FILE=${VALIDATION_FILE:-$AGGREGATE_DIR/aggregate.validation.jsonl}
 TEST_FILE=${TEST_FILE:-$AGGREGATE_DIR/aggregate.test.jsonl}
 OUTPUT_DIR=${OUTPUT_DIR:-/scratch/yx3882/psse_agent/outputs/bc0_gemma4_31b_round0}
@@ -67,8 +83,13 @@ TRAIN_EPOCHS=${TRAIN_EPOCHS:-2}
 ROUND1_LR=${ROUND1_LR:-0.00003}
 ROUND1_EPOCHS=${ROUND1_EPOCHS:-1}
 GRADIENT_ACCUMULATION_STEPS=${GRADIENT_ACCUMULATION_STEPS:-4}
+TRAIN_SEED=${TRAIN_SEED:-}
+STUDY_MANIFEST=${STUDY_MANIFEST:-psse_env/dagger/studies/dagger_multiseed_study_v1.json}
+STUDY_VARIANT=${STUDY_VARIANT:-}
+ROUND1_VIEW=${ROUND1_VIEW:-}
 INITIAL_ADAPTER_PATH=${INITIAL_ADAPTER_PATH:-}
 INITIAL_ADAPTER_REVISION=${INITIAL_ADAPTER_REVISION:-}
+PARENT_CHECKPOINT_RECEIPT=${PARENT_CHECKPOINT_RECEIPT:-}
 EVALUATION_SUITE=${EVALUATION_SUITE:-psse_env/dagger/suites/bc0_eval_suite_v1.json}
 EVALUATION_POLICY=${EVALUATION_POLICY:-psse_env/dagger/bc0_evaluation_policy.json}
 EXPERT_BASELINE_EVALUATION=${EXPERT_BASELINE_EVALUATION:-artifacts/evaluations/expert_baseline_evaluation.json}
@@ -101,6 +122,68 @@ case "$ENABLE_WANDB" in
         exit 2
         ;;
 esac
+case "$EXPECTED_ACCELERATOR_CLASS" in
+    auto|h100|h200|rtx6000)
+        ;;
+    *)
+        echo "ERROR: EXPECTED_ACCELERATOR_CLASS must be auto, h100, h200, or rtx6000." >&2
+        exit 2
+        ;;
+esac
+TRAINING_STAGE=0
+case "$STAGE" in
+    round0)
+        TRAINING_STAGE=1
+        EXPECTED_STUDY_VARIANT=bc0
+        ;;
+    round1)
+        TRAINING_STAGE=1
+        ;;
+esac
+if [[ "$TRAINING_STAGE" == "1" && -z "$TRAIN_SEED" ]]; then
+    echo "ERROR: STAGE=$STAGE requires an explicit TRAIN_SEED." >&2
+    exit 2
+fi
+if [[ -n "$TRAIN_SEED" ]] && { [[ ! "$TRAIN_SEED" =~ ^(0|[1-9][0-9]{0,9})$ ]] || (( 10#$TRAIN_SEED > 4294967295 )); }; then
+    echo "ERROR: TRAIN_SEED must be a canonical integer between 0 and 4294967295; got '$TRAIN_SEED'." >&2
+    exit 2
+fi
+if [[ "$STAGE" == "round0" ]]; then
+    if [[ -z "$STUDY_VARIANT" ]]; then
+        STUDY_VARIANT=bc0
+    elif [[ "$STUDY_VARIANT" != "bc0" ]]; then
+        echo "ERROR: STAGE=round0 requires STUDY_VARIANT=bc0; got '$STUDY_VARIANT'." >&2
+        exit 2
+    fi
+elif [[ "$STAGE" == "round1" ]]; then
+    case "$STUDY_VARIANT" in
+        natural_dagger|natural_dagger_probes)
+            ;;
+        *)
+            echo "ERROR: STAGE=round1 requires explicit STUDY_VARIANT=natural_dagger or natural_dagger_probes; got '$STUDY_VARIANT'." >&2
+            exit 2
+            ;;
+    esac
+fi
+if [[ "$TRAINING_STAGE" == "1" ]]; then
+    if [[ "$MODEL_NAME" != "unsloth/gemma-4-31B-it" || "$MODEL_REVISION" != "8a796db4df380b178065ed910849477ff0e99c87" ]]; then
+        echo "ERROR: study training forbids MODEL_NAME or MODEL_REVISION drift." >&2
+        exit 2
+    fi
+    if [[ "$MAX_LENGTH" != "6144" || "$GRADIENT_ACCUMULATION_STEPS" != "4" ]]; then
+        echo "ERROR: study training requires MAX_LENGTH=6144 and GRADIENT_ACCUMULATION_STEPS=4." >&2
+        exit 2
+    fi
+    if [[ "$STAGE" == "round0" && ( "$TRAIN_LR" != "0.0001" || "$TRAIN_EPOCHS" != "2" ) ]]; then
+        echo "ERROR: BC0 protocol requires TRAIN_LR=0.0001 and TRAIN_EPOCHS=2." >&2
+        exit 2
+    fi
+    if [[ "$STAGE" == "round1" && ( "$ROUND1_LR" != "0.00003" || "$ROUND1_EPOCHS" != "1" ) ]]; then
+        echo "ERROR: Round-1 protocol requires ROUND1_LR=0.00003 and ROUND1_EPOCHS=1." >&2
+        exit 2
+    fi
+fi
+
 WANDB_ACTIVE=0
 if [[ "$ENABLE_WANDB" == "1" && ( "$STAGE" == "round0" || "$STAGE" == "round1" ) ]]; then
     WANDB_ACTIVE=1
@@ -124,6 +207,19 @@ if [[ "$STAGE" == "round1" && -z "$INITIAL_ADAPTER_PATH" ]]; then
     echo "ERROR: STAGE=round1 requires INITIAL_ADAPTER_PATH and INITIAL_ADAPTER_REVISION." >&2
     exit 2
 fi
+if [[ "$STAGE" == "round1" ]]; then
+    if [[ -z "$PARENT_CHECKPOINT_RECEIPT" ]]; then
+        echo "ERROR: STAGE=round1 requires PARENT_CHECKPOINT_RECEIPT for the same-seed BC0 adapter." >&2
+        exit 2
+    fi
+    if [[ "$PARENT_CHECKPOINT_RECEIPT" != /* || -L "$PARENT_CHECKPOINT_RECEIPT" || ! -f "$PARENT_CHECKPOINT_RECEIPT" ]]; then
+        echo "ERROR: PARENT_CHECKPOINT_RECEIPT must be an absolute existing regular file, not a symlink." >&2
+        exit 2
+    fi
+elif [[ "$TRAINING_STAGE" == "1" && -n "$PARENT_CHECKPOINT_RECEIPT" ]]; then
+    echo "ERROR: only STAGE=round1 may bind PARENT_CHECKPOINT_RECEIPT." >&2
+    exit 2
+fi
 if [[ ( "$STAGE" == "round0" || "$STAGE" == "checkpoint-gate" ) && -n "$INITIAL_ADAPTER_PATH" ]]; then
     echo "ERROR: initial adapter identity is valid only for the Round-1 data gate, warm-start smoke stages, or STAGE=round1." >&2
     exit 2
@@ -137,6 +233,41 @@ elif [[ -n "$INITIAL_ADAPTER_PATH" ]]; then
             ROUND1_SEED_COUPLING_REQUIRED=1
             ;;
     esac
+fi
+
+if [[ "$ROUND1_SEED_COUPLING_REQUIRED" == "1" ]]; then
+    case "$ROUND1_VIEW" in
+        full)
+            EXPECTED_ROUND1_TRAIN_FILE=$AGGREGATE_DIR/aggregate.train_view.jsonl
+            ;;
+        natural-only)
+            EXPECTED_ROUND1_TRAIN_FILE=$AGGREGATE_DIR/aggregate.natural_only.train_view.jsonl
+            ;;
+        *)
+            echo "ERROR: Round-1 warm-start stages require explicit ROUND1_VIEW=full or natural-only; got '$ROUND1_VIEW'." >&2
+            exit 2
+            ;;
+    esac
+    if [[ "$STUDY_VARIANT" == "natural_dagger" && "$ROUND1_VIEW" != "natural-only" ]]; then
+        echo "ERROR: STUDY_VARIANT=natural_dagger requires ROUND1_VIEW=natural-only." >&2
+        exit 2
+    fi
+    if [[ "$STUDY_VARIANT" == "natural_dagger_probes" && "$ROUND1_VIEW" != "full" ]]; then
+        echo "ERROR: STUDY_VARIANT=natural_dagger_probes requires ROUND1_VIEW=full." >&2
+        exit 2
+    fi
+    if [[ "$TRAIN_FILE_EXPLICIT" == "0" ]]; then
+        TRAIN_FILE=$EXPECTED_ROUND1_TRAIN_FILE
+    elif [[ "$(realpath -m -- "$TRAIN_FILE")" != "$(realpath -m -- "$EXPECTED_ROUND1_TRAIN_FILE")" ]]; then
+        echo "ERROR: ROUND1_VIEW=$ROUND1_VIEW requires canonical TRAIN_FILE=$EXPECTED_ROUND1_TRAIN_FILE; got '$TRAIN_FILE'." >&2
+        exit 2
+    fi
+else
+    if [[ -n "$ROUND1_VIEW" ]]; then
+        echo "ERROR: ROUND1_VIEW is valid only for a Round-1 warm-start stage." >&2
+        exit 2
+    fi
+    TRAIN_FILE=${TRAIN_FILE:-$AGGREGATE_DIR/aggregate.train_view.jsonl}
 fi
 
 if [[ ! "$MODEL_REVISION" =~ ^[0-9a-fA-F]{40}$ ]]; then
@@ -170,6 +301,14 @@ if [[ -n "$INITIAL_ADAPTER_PATH" ]]; then
     if [[ "$OUTPUT_DIR_RESOLVED" == "$INITIAL_ADAPTER_RESOLVED" || "$OUTPUT_DIR_RESOLVED" == "$INITIAL_ADAPTER_RESOLVED"/* || "$INITIAL_ADAPTER_RESOLVED" == "$OUTPUT_DIR_RESOLVED"/* ]]; then
         echo "ERROR: OUTPUT_DIR and INITIAL_ADAPTER_PATH must not overlap." >&2
         exit 2
+    fi
+    if [[ -n "$PARENT_CHECKPOINT_RECEIPT" ]]; then
+        PARENT_RECEIPT_RESOLVED=$(realpath -e -- "$PARENT_CHECKPOINT_RECEIPT")
+        EXPECTED_PARENT_RECEIPT=$(realpath -m -- "$(dirname -- "$INITIAL_ADAPTER_RESOLVED")/checkpoint_receipt.json")
+        if [[ "$PARENT_RECEIPT_RESOLVED" != "$EXPECTED_PARENT_RECEIPT" ]]; then
+            echo "ERROR: PARENT_CHECKPOINT_RECEIPT must be the canonical sibling of INITIAL_ADAPTER_PATH." >&2
+            exit 2
+        fi
     fi
 fi
 mkdir -p artifacts/logs "$OUTPUT_DIR"
@@ -217,14 +356,18 @@ if [[ "$WANDB_ACTIVE" == "1" ]]; then
     if [[ "$STAGE" == "round1" ]]; then
         WANDB_ROUND_NAME=round1
         WANDB_ROUND_SHORT=r1
+        WANDB_VARIANT_SUFFIX=-$STUDY_VARIANT-$ROUND1_VIEW
+        WANDB_VARIANT_TAGS=,variant-$STUDY_VARIANT,round1-view-$ROUND1_VIEW
     else
         WANDB_ROUND_NAME=round0
         WANDB_ROUND_SHORT=r0
+        WANDB_VARIANT_SUFFIX=-bc0
+        WANDB_VARIANT_TAGS=,variant-bc0
     fi
-    export WANDB_RUN_GROUP=${WANDB_RUN_GROUP:-bc0-$WANDB_ROUND_NAME-$WANDB_SOURCE_SHORT}
-    export WANDB_TAGS=${WANDB_TAGS:-bc0,$WANDB_ROUND_NAME,gemma4-31b,source-$WANDB_SOURCE_SHORT}
+    export WANDB_RUN_GROUP=${WANDB_RUN_GROUP:-bc0-$WANDB_ROUND_NAME$WANDB_VARIANT_SUFFIX-$WANDB_SOURCE_SHORT}
+    export WANDB_TAGS=${WANDB_TAGS:-bc0,$WANDB_ROUND_NAME,gemma4-31b,source-$WANDB_SOURCE_SHORT,train-seed-$TRAIN_SEED$WANDB_VARIANT_TAGS}
     export WANDB_JOB_TYPE=${WANDB_JOB_TYPE:-bc0-$WANDB_ROUND_NAME-sft}
-    WANDB_RUN_ID_DEFAULT=bc0-$WANDB_ROUND_SHORT-$WANDB_SOURCE_SHORT-$WANDB_SLURM_JOB_ID
+    WANDB_RUN_ID_DEFAULT=bc0-$WANDB_ROUND_SHORT$WANDB_VARIANT_SUFFIX-seed$TRAIN_SEED-$WANDB_SOURCE_SHORT-$WANDB_SLURM_JOB_ID
     export WANDB_RUN_ID=${WANDB_RUN_ID:-$WANDB_RUN_ID_DEFAULT}
     export WANDB_NAME=${WANDB_NAME:-$WANDB_RUN_ID}
     export WANDB_RESUME=allow
@@ -316,7 +459,8 @@ if [[ "$ROUND1_SEED_COUPLING_REQUIRED" == "1" ]]; then
         --provenance "$ROUND1_PROVENANCE" \
         --preflight "$ROUND1_PREFLIGHT" \
         --reviewed-source-commit "$REVIEWED_SOURCE_COMMIT" \
-        --initial-adapter-revision "$INITIAL_ADAPTER_REVISION"
+        --initial-adapter-revision "$INITIAL_ADAPTER_REVISION" \
+        --round1-view "$ROUND1_VIEW"
 fi
 if [[ "$STAGE" == "round0" || "$STAGE" == "round1" || "$STAGE" == "checkpoint-gate" ]]; then
     for path in "$EVALUATION_SUITE" "$EVALUATION_POLICY"; do
@@ -363,6 +507,14 @@ echo "revision:  $MODEL_REVISION"
 echo "source:    $REVIEWED_SOURCE_COMMIT"
 echo "train:     $TRAIN_FILE"
 echo "output:    $OUTPUT_DIR"
+echo "GPU class: $EXPECTED_ACCELERATOR_CLASS"
+if [[ "$TRAINING_STAGE" == "1" ]]; then
+    echo "train seed: $TRAIN_SEED"
+    echo "study:      $STUDY_VARIANT ($STUDY_MANIFEST)"
+fi
+if [[ "$ROUND1_SEED_COUPLING_REQUIRED" == "1" ]]; then
+    echo "R1 view:    $ROUND1_VIEW"
+fi
 echo "downloads: $ALLOW_DOWNLOAD"
 if [[ "$WANDB_ACTIVE" == "1" ]]; then
     echo "wandb:     enabled ($WANDB_MODE; project=$WANDB_PROJECT; run=$WANDB_RUN_ID)"
@@ -383,6 +535,9 @@ if [[ "$STAGE" == "round0" || "$STAGE" == "round1" || "$STAGE" == "checkpoint-ga
 fi
 if [[ -n "$INITIAL_ADAPTER_PATH" ]]; then
     echo "initial adapter: $INITIAL_ADAPTER_PATH@$INITIAL_ADAPTER_REVISION"
+    if [[ -n "$PARENT_CHECKPOINT_RECEIPT" ]]; then
+        echo "parent receipt:  $PARENT_CHECKPOINT_RECEIPT"
+    fi
 fi
 GPU_INVENTORY=$(nvidia-smi \
     --query-gpu=name,memory.total,driver_version \
@@ -392,7 +547,7 @@ echo "GPU inventory: $GPU_INVENTORY"
 # Fail-closed runtime identity: the same interpreter, Torch CUDA build, and
 # GPU class the release evaluator attests.  A mismatched runtime here would
 # produce training evidence the paired checkpoint gate cannot vouch for.
-"$PYTHON" - <<'PY'
+"$PYTHON" - "$EXPECTED_ACCELERATOR_CLASS" <<'PY'
 import json
 import sys
 
@@ -406,7 +561,11 @@ import torch
 if torch.__version__ != "2.10.0+cu128":
     failures.append(f"torch: installed {torch.__version__}, requires 2.10.0+cu128")
 try:
-    accelerator = validate_torch_release_accelerator(torch)
+    required_class = None if sys.argv[1] == "auto" else sys.argv[1]
+    accelerator = validate_torch_release_accelerator(
+        torch,
+        required_class=required_class,
+    )
 except RuntimeError as exc:
     failures.append(str(exc))
 if failures:
@@ -416,12 +575,13 @@ if failures:
     )
 print(
     "SFT runtime matches the release evaluation contract "
-    "(py3.12, torch 2.10.0+cu128, H100/H200/high-memory RTX 6000): "
+    "(py3.12, torch 2.10.0+cu128, H100/H200/RTX Pro 6000 >=90,000 MiB): "
     + json.dumps(accelerator, sort_keys=True)
 )
 PY
 "$PYTHON" -m pip check
-"$PYTHON" - "$REPO_ROOT/psse_env/requirements-sft.txt" <<'PY'
+"$PYTHON" - "$REPO_ROOT/psse_env/requirements-sft.txt" "$PINNED_DEPENDENCY_LOCK_SHA256" <<'PY'
+import hashlib
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 import sys
@@ -429,7 +589,15 @@ import sys
 from packaging.requirements import Requirement
 
 failures = []
-for raw_line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+lock_path = Path(sys.argv[1])
+expected_lock_sha256 = sys.argv[2]
+actual_lock_sha256 = hashlib.sha256(lock_path.read_bytes()).hexdigest()
+if actual_lock_sha256 != expected_lock_sha256:
+    failures.append(
+        "dependency lock SHA-256: "
+        f"expected {expected_lock_sha256}, got {actual_lock_sha256}"
+    )
+for raw_line in lock_path.read_text(encoding="utf-8").splitlines():
     line = raw_line.strip()
     if not line or line.startswith("#"):
         continue
@@ -522,15 +690,41 @@ fi
 INITIAL_ADAPTER_ARGS=()
 ROUND1_SOURCE_ARGS=()
 ROUND1_GATE_SOURCE_ARGS=()
+TRAIN_ARGS=()
+TRAIN_PROTOCOL_ARGS=()
+if [[ "$TRAINING_STAGE" == "1" ]]; then
+    TRAIN_ARGS+=(
+        --seed "$TRAIN_SEED"
+        --study-variant "$STUDY_VARIANT"
+        --study-manifest "$STUDY_MANIFEST"
+    )
+    TRAIN_PROTOCOL_ARGS+=(
+        --batch-size 1
+        --gradient-accumulation-steps 4
+        --max-steps -1
+        --optimizer adamw_torch
+        --lr-scheduler-type linear
+        --lora-rank 16
+        --lora-alpha 16
+        --lora-dropout 0.0
+        --load-in-4bit
+    )
+fi
 if [[ -n "$INITIAL_ADAPTER_PATH" ]]; then
     INITIAL_ADAPTER_ARGS+=(
         --initial-adapter-path "$INITIAL_ADAPTER_PATH"
         --initial-adapter-revision "$INITIAL_ADAPTER_REVISION"
     )
+    if [[ -n "$PARENT_CHECKPOINT_RECEIPT" ]]; then
+        INITIAL_ADAPTER_ARGS+=(
+            --parent-checkpoint-receipt "$PARENT_CHECKPOINT_RECEIPT"
+        )
+    fi
     ROUND1_SOURCE_ARGS+=(
         --round1-provenance "$ROUND1_PROVENANCE"
         --round1-preflight "$ROUND1_PREFLIGHT"
         --reviewed-source-commit "$REVIEWED_SOURCE_COMMIT"
+        --round1-view "$ROUND1_VIEW"
     )
     ROUND1_GATE_SOURCE_ARGS+=(
         "${ROUND1_SOURCE_ARGS[@]}"
@@ -571,10 +765,10 @@ case "$STAGE" in
         COMMAND=("$PYTHON" -m psse_env.sft smoke "${COMMON_ARGS[@]}" "${INITIAL_ADAPTER_ARGS[@]}" "${ROUND1_SOURCE_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --mode tiny-overfit --tiny-overfit-steps "$TINY_OVERFIT_STEPS" --learning-rate "$TINY_OVERFIT_LR" --load-in-4bit)
         ;;
     round0)
-        COMMAND=("$PYTHON" -m psse_env.sft train "${COMMON_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --output-dir "$OUTPUT_DIR" --batch-size 1 --gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS" --learning-rate "$TRAIN_LR" --epochs "$TRAIN_EPOCHS" --smoke-steps 1 --load-in-4bit --evaluation-suite "$EVALUATION_SUITE" --evaluation-policy "$EVALUATION_POLICY" --expert-baseline-evaluation "$EXPERT_BASELINE_EVALUATION" --base-baseline-evaluation "$BASE_GEMMA_EVALUATION" --expert-policy-identity "$EXPERT_POLICY_IDENTITY" --baseline-evaluation-report-output "$BASELINE_EVALUATION_REPORT")
+        COMMAND=("$PYTHON" -m psse_env.sft train "${COMMON_ARGS[@]}" "${TRAIN_ARGS[@]}" "${TRAIN_PROTOCOL_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --output-dir "$OUTPUT_DIR" --learning-rate "$TRAIN_LR" --epochs "$TRAIN_EPOCHS" --smoke-steps 1 --evaluation-suite "$EVALUATION_SUITE" --evaluation-policy "$EVALUATION_POLICY" --expert-baseline-evaluation "$EXPERT_BASELINE_EVALUATION" --base-baseline-evaluation "$BASE_GEMMA_EVALUATION" --expert-policy-identity "$EXPERT_POLICY_IDENTITY" --baseline-evaluation-report-output "$BASELINE_EVALUATION_REPORT")
         ;;
     round1)
-        COMMAND=("$PYTHON" -m psse_env.sft train "${COMMON_ARGS[@]}" "${INITIAL_ADAPTER_ARGS[@]}" "${ROUND1_SOURCE_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --output-dir "$OUTPUT_DIR" --batch-size 1 --gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS" --learning-rate "$ROUND1_LR" --epochs "$ROUND1_EPOCHS" --smoke-steps 1 --load-in-4bit --evaluation-suite "$EVALUATION_SUITE" --evaluation-policy "$EVALUATION_POLICY" --expert-baseline-evaluation "$EXPERT_BASELINE_EVALUATION" --base-baseline-evaluation "$BASE_GEMMA_EVALUATION" --expert-policy-identity "$EXPERT_POLICY_IDENTITY" --baseline-evaluation-report-output "$BASELINE_EVALUATION_REPORT")
+        COMMAND=("$PYTHON" -m psse_env.sft train "${COMMON_ARGS[@]}" "${TRAIN_ARGS[@]}" "${TRAIN_PROTOCOL_ARGS[@]}" "${INITIAL_ADAPTER_ARGS[@]}" "${ROUND1_SOURCE_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --output-dir "$OUTPUT_DIR" --learning-rate "$ROUND1_LR" --epochs "$ROUND1_EPOCHS" --smoke-steps 1 --evaluation-suite "$EVALUATION_SUITE" --evaluation-policy "$EVALUATION_POLICY" --expert-baseline-evaluation "$EXPERT_BASELINE_EVALUATION" --base-baseline-evaluation "$BASE_GEMMA_EVALUATION" --expert-policy-identity "$EXPERT_POLICY_IDENTITY" --baseline-evaluation-report-output "$BASELINE_EVALUATION_REPORT")
         ;;
     checkpoint-gate)
         COMMAND=("$PYTHON" -m psse_env.dagger.validate_evaluation --role checkpoint-promotion --artifact "$CHECKPOINT_EVALUATION" --policy "$EVALUATION_POLICY" --expected-source-commit "$REVIEWED_SOURCE_COMMIT" --expected-suite "$EVALUATION_SUITE" --expected-protocol canonical --expected-model-id "$CHECKPOINT_MODEL_ID" --expected-model-revision "$CHECKPOINT_MODEL_REVISION" --reference-artifact "$BASE_GEMMA_EVALUATION" --reference-model-id "$MODEL_NAME" --reference-model-revision "$MODEL_REVISION" --report-output "$CHECKPOINT_GATE_REPORT")

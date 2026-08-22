@@ -40,8 +40,34 @@ FORBIDDEN_POLICY_KEYS = frozenset(
         "oracle_terminal_eligible",
         SYNTHETIC_TERMINAL_COMPATIBILITY_KEY,
         "hidden_truth",
+        "ground_truth",
+        "truth",
+        "expected_final_state",
+        "recommended_action",
     }
 )
+
+
+def _canonical_policy_key(key: Any) -> str:
+    """Normalize aliases before applying the policy-boundary denylist.
+
+    Policy payloads can originate in custom environments, so exact spelling is
+    not a security boundary.  Removing separators and case-folding makes
+    ``TrueMeasurementErrors``, ``TRUE_MEASUREMENT_ERRORS``, and
+    ``true-measurement-errors`` the same key without relying on a growing list
+    of presentation-only aliases.
+    """
+
+    return re.sub(r"[^a-z0-9]+", "", str(key).casefold())
+
+
+_CANONICAL_FORBIDDEN_POLICY_KEYS = frozenset(
+    _canonical_policy_key(key) for key in FORBIDDEN_POLICY_KEYS
+)
+
+
+def _is_forbidden_policy_key(key: Any) -> bool:
+    return _canonical_policy_key(key) in _CANONICAL_FORBIDDEN_POLICY_KEYS
 
 
 class StateStoreError(RuntimeError):
@@ -74,7 +100,7 @@ def policy_safe_copy(value: Any) -> Any:
         return {
             str(key): policy_safe_copy(item)
             for key, item in value.items()
-            if str(key) not in FORBIDDEN_POLICY_KEYS
+            if not _is_forbidden_policy_key(key)
         }
     if isinstance(value, list):
         return [policy_safe_copy(item) for item in value]
@@ -90,7 +116,7 @@ def find_forbidden_policy_paths(value: Any, prefix: str = "$") -> list[str]:
         for key, item in value.items():
             key_text = str(key)
             path = f"{prefix}.{key_text}"
-            if key_text in FORBIDDEN_POLICY_KEYS:
+            if _is_forbidden_policy_key(key_text):
                 paths.append(path)
             paths.extend(find_forbidden_policy_paths(item, path))
     elif isinstance(value, (list, tuple)):

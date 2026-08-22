@@ -43,6 +43,7 @@ class TestWarmStartSettings(unittest.TestCase):
                 ),
                 round1_preflight_path=str(root / "aggregate.preflight.json"),
                 reviewed_source_commit="c" * 40,
+                round1_view="full",
             )
             valid.validate()
 
@@ -112,6 +113,7 @@ class TestWarmStartSettings(unittest.TestCase):
                 "round1_provenance_path": str(root / "provenance.json"),
                 "round1_preflight_path": str(root / "preflight.json"),
                 "reviewed_source_commit": "c" * 40,
+                "round1_view": "full",
             }
             valid = TrainerSettings(
                 **common,
@@ -130,6 +132,62 @@ class TestWarmStartSettings(unittest.TestCase):
             )
             with self.assertRaisesRegex(GateError, "must be supplied together"):
                 partial.validate()
+
+    def test_study_variant_and_round1_view_must_match(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            common = {
+                "revision": PINNED_MODEL_REVISION,
+                "output_dir": str(root / "output"),
+                "initial_adapter_path": str(root / "adapter"),
+                "initial_adapter_revision": PINNED_ADAPTER_REVISION,
+                "parent_checkpoint_receipt_path": str(
+                    root / "checkpoint_receipt.json"
+                ),
+                "round1_provenance_path": str(root / "provenance.json"),
+                "round1_preflight_path": str(root / "preflight.json"),
+                "reviewed_source_commit": "c" * 40,
+            }
+            for variant, approved, mismatched in (
+                ("natural_dagger", "natural-only", "full"),
+                ("natural_dagger_probes", "full", "natural-only"),
+            ):
+                with self.subTest(variant=variant, view=approved):
+                    TrainerSettings(
+                        **common,
+                        study_variant=variant,
+                        round1_view=approved,
+                    ).validate()
+                with self.subTest(variant=variant, view=mismatched):
+                    with self.assertRaisesRegex(
+                        GateError,
+                        f"requires round1_view={approved}",
+                    ):
+                        TrainerSettings(
+                            **common,
+                            study_variant=variant,
+                            round1_view=mismatched,
+                        ).validate()
+
+    def test_round1_study_variant_requires_parent_receipt_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = TrainerSettings(
+                revision=PINNED_MODEL_REVISION,
+                output_dir=str(root / "output"),
+                initial_adapter_path=str(root / "adapter"),
+                initial_adapter_revision=PINNED_ADAPTER_REVISION,
+                round1_provenance_path=str(root / "provenance.json"),
+                round1_preflight_path=str(root / "preflight.json"),
+                reviewed_source_commit="c" * 40,
+                round1_view="natural-only",
+                study_variant="natural_dagger",
+            )
+            with self.assertRaisesRegex(
+                GateError,
+                "same-seed BC0 parent checkpoint receipt",
+            ):
+                settings.validate()
 
     def test_tree_digest_mismatch_fails_preflight(self) -> None:
         settings = TrainerSettings(
@@ -305,16 +363,24 @@ class TestWarmStartCliAndLauncher(unittest.TestCase):
                     "train.jsonl",
                     "--validation",
                     "validation.jsonl",
+                    "--seed",
+                    "3407",
+                    "--study-variant",
+                    "natural_dagger_probes",
                     "--initial-adapter-path",
                     "/scratch/input/lora",
                     "--initial-adapter-revision",
                     PINNED_ADAPTER_REVISION,
+                    "--parent-checkpoint-receipt",
+                    "/scratch/input/checkpoint_receipt.json",
                     "--round1-provenance",
                     "aggregate.generation_provenance.json",
                     "--round1-preflight",
                     "aggregate.preflight.json",
                     "--reviewed-source-commit",
                     "c" * 40,
+                    "--round1-view",
+                    "full",
                     "--report-to",
                     "wandb",
                     "--run-name",
@@ -331,6 +397,10 @@ class TestWarmStartCliAndLauncher(unittest.TestCase):
             settings.initial_adapter_revision,
             PINNED_ADAPTER_REVISION,
         )
+        self.assertEqual(
+            settings.parent_checkpoint_receipt_path,
+            str(Path("/scratch/input/checkpoint_receipt.json")),
+        )
         self.assertEqual(settings.report_to, "wandb")
         self.assertEqual(settings.run_name, "bc0-round1")
         self.assertEqual(
@@ -339,6 +409,7 @@ class TestWarmStartCliAndLauncher(unittest.TestCase):
         )
         self.assertEqual(settings.round1_preflight_path, "aggregate.preflight.json")
         self.assertEqual(settings.reviewed_source_commit, "c" * 40)
+        self.assertEqual(settings.round1_view, "full")
 
     def test_smoke_cli_optionally_forwards_initial_adapter_identity(self) -> None:
         smoke_result = SimpleNamespace(to_dict=lambda: {"passed": True})
@@ -384,10 +455,13 @@ class TestWarmStartCliAndLauncher(unittest.TestCase):
             "TRAIN_EPOCHS=${TRAIN_EPOCHS:-2}",
             "INITIAL_ADAPTER_PATH=${INITIAL_ADAPTER_PATH:-}",
             "INITIAL_ADAPTER_REVISION=${INITIAL_ADAPTER_REVISION:-}",
+            "PARENT_CHECKPOINT_RECEIPT=${PARENT_CHECKPOINT_RECEIPT:-}",
             '--initial-adapter-path "$INITIAL_ADAPTER_PATH"',
             '--initial-adapter-revision "$INITIAL_ADAPTER_REVISION"',
+            '--parent-checkpoint-receipt "$PARENT_CHECKPOINT_RECEIPT"',
             '--round1-provenance "$ROUND1_PROVENANCE"',
             '--round1-preflight "$ROUND1_PREFLIGHT"',
+            '--round1-view "$ROUND1_VIEW"',
             '--learning-rate "$ROUND1_LR"',
             '--epochs "$ROUND1_EPOCHS"',
             "OUTPUT_DIR and INITIAL_ADAPTER_PATH must not overlap",
@@ -400,6 +474,23 @@ class TestWarmStartCliAndLauncher(unittest.TestCase):
             "one-batch|targeted-tiny-overfit|tiny-overfit",
             "ROUND1_GATE_SOURCE_ARGS=()",
             '"${ROUND1_GATE_SOURCE_ARGS[@]}" --test "$TEST_FILE"',
+            "ROUND1_VIEW=${ROUND1_VIEW:-}",
+            "aggregate.natural_only.train_view.jsonl",
+            "STUDY_VARIANT=natural_dagger requires ROUND1_VIEW=natural-only",
+            "STUDY_VARIANT=natural_dagger_probes requires ROUND1_VIEW=full",
+            "requires canonical TRAIN_FILE=$EXPECTED_ROUND1_TRAIN_FILE",
+            "requires PARENT_CHECKPOINT_RECEIPT for the same-seed BC0 adapter",
+            "PARENT_CHECKPOINT_RECEIPT must be the canonical sibling",
+            "PINNED_DEPENDENCY_LOCK_SHA256=4118e4bb6c7b7e4fa806afb33aa0689a594ff276fcb203c8aba015bb70246fea",
+            "study training requires MAX_LENGTH=6144 and GRADIENT_ACCUMULATION_STEPS=4",
+            "BC0 protocol requires TRAIN_LR=0.0001 and TRAIN_EPOCHS=2",
+            "Round-1 protocol requires ROUND1_LR=0.00003 and ROUND1_EPOCHS=1",
+            "--optimizer adamw_torch",
+            "--lr-scheduler-type linear",
+            "--lora-rank 16",
+            "--lora-alpha 16",
+            "--lora-dropout 0.0",
+            "--max-steps -1",
         ):
             self.assertIn(contract, launcher)
 
@@ -413,6 +504,7 @@ class TestWarmStartCliAndLauncher(unittest.TestCase):
             '--preflight "$ROUND1_PREFLIGHT"',
             '--reviewed-source-commit "$REVIEWED_SOURCE_COMMIT"',
             '--initial-adapter-revision "$INITIAL_ADAPTER_REVISION"',
+            '--round1-view "$ROUND1_VIEW"',
             '--round1-provenance "$ROUND1_PROVENANCE"',
             '--round1-preflight "$ROUND1_PREFLIGHT"',
         ):

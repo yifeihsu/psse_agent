@@ -19,10 +19,11 @@
 # GPU selection is intentionally left configurable at submission time.
 # Examples:
 #   sbatch --constraint='a100|h100|h200' submit_sft_gemma4.sh
-#   sbatch --gres=gpu:rtx_pro_6000:1 submit_sft_gemma4.sh
-# If your cluster exposes RTX PRO 6000 as a feature label instead of a GRES
-# label, you can also use:
-#   sbatch --constraint=rtx_pro_6000 submit_sft_gemma4.sh
+#   sbatch --constraint=rtx6000 --cpus-per-task=4 --mem=128G submit_sft_gemma4.sh
+# ``rtx6000`` is NYU Torch's feature spelling. The high-memory profile below
+# accepts that route only when runtime inventory begins with the exact NVIDIA
+# RTX PRO 6000 model token and reports at least 90,000 MiB, excluding the 48-GB
+# RTX 6000 Ada card.
 
 set -euo pipefail
 
@@ -109,7 +110,8 @@ GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -n1 | sed 's
 GPU_MEM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n1 | tr -d ' ')
 GPU_PROFILE_SELECTED=$GPU_PROFILE
 if [[ "$GPU_PROFILE" == "auto" ]]; then
-    if [[ ( "$GPU_NAME" == *"A100"* || "$GPU_NAME" == *"H100"* || "$GPU_NAME" == *"H200"* || "$GPU_NAME" == *"RTX PRO 6000"* ) && "${GPU_MEM_MB:-0}" -ge 70000 ]]; then
+    if [[ ( "$GPU_NAME" == *"A100"* || "$GPU_NAME" == *"H100"* || "$GPU_NAME" == *"H200"* ) && "${GPU_MEM_MB:-0}" -ge 70000 ]] || \
+       [[ "$GPU_NAME" =~ ^NVIDIA[[:space:]]+RTX[[:space:]]+PRO[[:space:]]+6000([^[:alnum:]]|$) && "${GPU_MEM_MB:-0}" -ge 90000 ]]; then
         GPU_PROFILE_SELECTED="highmem-accelerator"
         set_default_if_unset MAX_SEQ_LENGTH 6144
         set_default_if_unset PER_DEVICE_TRAIN_BATCH_SIZE 2

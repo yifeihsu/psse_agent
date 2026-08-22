@@ -127,8 +127,13 @@ export MAX_SEQ_LENGTH=6144
 export PER_DEVICE_TRAIN_BATCH_SIZE=2
 export GRADIENT_ACCUMULATION_STEPS=8
 export WANDB_PROJECT=psse-agent-sft
-sbatch --gres=gpu:rtx_pro_6000:1 submit_sft_gemma4.sh
+sbatch --constraint=rtx6000 --cpus-per-task=4 --mem=128G submit_sft_gemma4.sh
 ```
+
+On NYU Torch, `rtx6000` is the live Slurm feature for the RTX Pro 6000 nodes.
+The launcher's high-memory profile requires the runtime device name to begin
+with the exact `NVIDIA RTX PRO 6000` model token and report at least 90,000
+MiB, excluding the 48-GB RTX 6000 Ada card.
 
 Direct Python launch is also possible if your local environment already matches the needed dependencies:
 

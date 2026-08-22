@@ -895,8 +895,8 @@ class OfflineTeacherTargetAuditTests(unittest.TestCase):
                     validate_offline_teacher_target_audit_metadata(forged)
 
     def test_each_contract_validates_only_its_own_escalation_check_set(self):
-        # Artifacts collected before v2 must stay readable, and neither
-        # contract may borrow the other's check set to claim a pass.
+        # Artifacts collected before v2 stay readable for archival diagnosis,
+        # but only the current contract can pass release admission.
         v1 = sorted(LEGACY_OFFLINE_TEACHER_TARGET_AUDIT_CONTRACTS)[0]
         v1_checks = {
             "accepted_state_nonregressive_and_healthy": True,
@@ -918,18 +918,19 @@ class OfflineTeacherTargetAuditTests(unittest.TestCase):
                 "reason_codes": [],
             }
 
-        for contract, checks in (
-            (v1, v1_checks),
-            (OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT, v2_checks),
-        ):
-            with self.subTest(contract=contract):
-                valid = record(contract, checks)
-                self.assertEqual(
-                    validate_offline_teacher_target_audit_metadata(
-                        valid, require_passed=True
-                    ),
-                    valid,
-                )
+        legacy = record(v1, v1_checks)
+        self.assertEqual(validate_offline_teacher_target_audit_metadata(legacy), legacy)
+        with self.assertRaisesRegex(ValueError, "current.*contract"):
+            validate_offline_teacher_target_audit_metadata(
+                legacy, require_passed=True
+            )
+        current = record(OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT, v2_checks)
+        self.assertEqual(
+            validate_offline_teacher_target_audit_metadata(
+                current, require_passed=True
+            ),
+            current,
+        )
         for contract, checks in (
             (v1, v2_checks),
             (OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT, v1_checks),
@@ -967,6 +968,60 @@ class OfflineTeacherTargetAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "contract mismatch"):
             validate_offline_teacher_target_audit_metadata(
                 record("dagger1_offline_teacher_target_truth_audit_v0", v2_checks)
+            )
+
+    def test_v3_reason_vocabulary_is_preserved_without_accepting_v4_codes(self):
+        checks = {
+            "candidate_exists": True,
+            "candidate_verified": True,
+            "candidate_source_truth_evidence_complete": True,
+            "candidate_truth_safe_to_commit": False,
+            "observable_evidence_gate_passed": True,
+        }
+        legacy = {
+            "contract": "dagger1_offline_teacher_target_truth_audit_v3",
+            "passed": False,
+            "action_class": "commit",
+            "checks": checks,
+            "reason_codes": ["closure_attestation_malformed"],
+        }
+        self.assertEqual(
+            validate_offline_teacher_target_audit_metadata(legacy),
+            legacy,
+        )
+        widened = copy.deepcopy(legacy)
+        widened["reason_codes"] = ["closure_attestation_invalid"]
+        with self.assertRaisesRegex(ValueError, "reason code"):
+            validate_offline_teacher_target_audit_metadata(widened)
+
+        current = copy.deepcopy(widened)
+        current["contract"] = OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT
+        self.assertEqual(
+            validate_offline_teacher_target_audit_metadata(current),
+            current,
+        )
+
+    def test_passed_v3_record_is_archival_only_not_release_admissible(self):
+        legacy = {
+            "contract": "dagger1_offline_teacher_target_truth_audit_v3",
+            "passed": True,
+            "action_class": "commit",
+            "checks": {
+                "candidate_exists": True,
+                "candidate_verified": True,
+                "candidate_source_truth_evidence_complete": True,
+                "candidate_truth_safe_to_commit": True,
+                "observable_evidence_gate_passed": True,
+            },
+            "reason_codes": [],
+        }
+        self.assertEqual(
+            validate_offline_teacher_target_audit_metadata(legacy),
+            legacy,
+        )
+        with self.assertRaisesRegex(ValueError, "current.*contract"):
+            validate_offline_teacher_target_audit_metadata(
+                legacy, require_passed=True
             )
 
 
@@ -1014,18 +1069,28 @@ class VerifiedTerminalMeasurementClosureTests(unittest.TestCase):
                     "state_hash": "8508673903d4887d",
                     "verified_terminal_measurement_closure_targets": [88, 92, 97],
                     "verified_terminal_measurement_closure_evidence": {
+                        "eligible": True,
+                        "state_id": self.STATE,
+                        "state_hash": "8508673903d4887d",
+                        "screening_method": (
+                            "singleton_then_grouped_deployment_candidate_quality"
+                        ),
+                        "new_target": 88,
+                        "closure_targets": [88, 92, 97],
                         "attempts": [
                             {
                                 "stage": "new_target_singleton",
                                 "targets": [88],
-                                "disposition": "ACCEPT_FINAL",
+                                "disposition": "ACCEPT_PARTIAL",
                                 "target_test_passed": True,
                                 "physical_constraints_ok": True,
                             },
                             {
-                                "stage": "grouped",
+                                "stage": "accepted_targets_plus_singleton",
                                 "targets": [88, 92, 97],
                                 "disposition": "ACCEPT_FINAL",
+                                "target_test_passed": True,
+                                "globally_resolved": True,
                                 "physical_constraints_ok": True,
                             },
                         ]
@@ -1057,7 +1122,16 @@ class VerifiedTerminalMeasurementClosureTests(unittest.TestCase):
             "true_measurement_errors": [{"index": i} for i in indices],
         }
 
-    def _check(self, *, action=None, observation=None, scenario=None, truth=None):
+    def _check(
+        self,
+        *,
+        action=None,
+        observation=None,
+        scenario=None,
+        truth=None,
+        active_state_id=STATE,
+        active_state_hash="8508673903d4887d",
+    ):
         return _verified_terminal_measurement_closure_check(
             action if action is not None else self._action([88, 92, 97]),
             observation=(
@@ -1065,6 +1139,8 @@ class VerifiedTerminalMeasurementClosureTests(unittest.TestCase):
             ),
             scenario=scenario if scenario is not None else self._faults([88, 92, 97]),
             truth=truth if truth is not None else self._faults([88]),
+            active_state_id=active_state_id,
+            active_state_hash=active_state_hash,
         )
 
     def _assert_rejected(self, code: str, **kwargs):
@@ -1088,15 +1164,49 @@ class VerifiedTerminalMeasurementClosureTests(unittest.TestCase):
     def test_missing_state_hash_is_rejected(self):
         observation = self._observation()
         observation["fresh_context_evidence"]["measurement"]["state_hash"] = ""
+        observation["fresh_context_evidence"]["measurement"][
+            "verified_terminal_measurement_closure_evidence"
+        ]["state_hash"] = ""
         self._assert_rejected(
-            "closure_context_not_state_bound", observation=observation
+            "closure_attestation_invalid", observation=observation
         )
 
     def test_context_bound_to_a_different_state_is_rejected(self):
         observation = self._observation()
         observation["active_state_id"] = "some_other_state:s9"
         self._assert_rejected(
-            "closure_context_not_state_bound", observation=observation
+            "closure_attestation_invalid", observation=observation
+        )
+
+    def test_context_hash_must_match_the_actual_active_state(self):
+        self._assert_rejected(
+            "closure_attestation_invalid",
+            active_state_hash="different-active-state-hash",
+        )
+
+    def test_context_id_must_match_actual_state_even_when_hash_is_equal(self):
+        self._assert_rejected(
+            "closure_attestation_invalid",
+            active_state_id="same-physical-bytes:different-state-id",
+        )
+
+    def test_accepted_target_aliases_cannot_diverge_from_production_parser(self):
+        observation = self._observation()
+        observation["accepted_corrections"] = [
+            {
+                "source_action": {
+                    "tool": CORRECT_MEASUREMENTS,
+                    "arguments": {
+                        "state_id": self.STATE,
+                        "measurement_index": target,
+                    },
+                }
+            }
+            for target in (92, 97)
+        ]
+        self._assert_rejected(
+            "closure_attestation_invalid",
+            observation=observation,
         )
 
     def test_action_absent_from_supported_inventory_is_rejected(self):
@@ -1105,7 +1215,7 @@ class VerifiedTerminalMeasurementClosureTests(unittest.TestCase):
             "supported_corrections"
         ] = [self._action([88])]
         self._assert_rejected(
-            "closure_action_not_in_supported_inventory", observation=observation
+            "closure_attestation_invalid", observation=observation
         )
 
     def test_more_than_one_new_target_is_rejected(self):
@@ -1117,9 +1227,12 @@ class VerifiedTerminalMeasurementClosureTests(unittest.TestCase):
             92,
             97,
         ]
+        evidence = measurement["verified_terminal_measurement_closure_evidence"]
+        evidence["closure_targets"] = [88, 89, 92, 97]
+        evidence["attempts"][1]["targets"] = [88, 89, 92, 97]
         measurement["supported_corrections"] = [self._action([88, 89, 92, 97])]
         self._assert_rejected(
-            "closure_new_target_count_not_one",
+            "closure_attestation_invalid",
             action=self._action([88, 89, 92, 97]),
             observation=observation,
             scenario=self._faults([88, 89, 92, 97]),
@@ -1147,9 +1260,12 @@ class VerifiedTerminalMeasurementClosureTests(unittest.TestCase):
         observation = self._observation()
         measurement = observation["fresh_context_evidence"]["measurement"]
         measurement["verified_terminal_measurement_closure_targets"] = [88, 92]
+        evidence = measurement["verified_terminal_measurement_closure_evidence"]
+        evidence["closure_targets"] = [88, 92]
+        evidence["attempts"][1]["targets"] = [88, 92]
         measurement["supported_corrections"] = [self._action([88, 92])]
         self._assert_rejected(
-            "closure_does_not_reuse_entire_accepted_set",
+            "closure_attestation_invalid",
             action=self._action([88, 92]),
             observation=observation,
         )
@@ -1160,7 +1276,7 @@ class VerifiedTerminalMeasurementClosureTests(unittest.TestCase):
             "verified_terminal_measurement_closure_evidence"
         ]["attempts"].reverse()
         self._assert_rejected(
-            "closure_screening_incomplete", observation=observation
+            "closure_attestation_invalid", observation=observation
         )
 
     def test_grouped_stage_not_accept_final_is_rejected(self):
@@ -1169,7 +1285,7 @@ class VerifiedTerminalMeasurementClosureTests(unittest.TestCase):
             "verified_terminal_measurement_closure_evidence"
         ]["attempts"][1]["disposition"] = "ACCEPT_PARTIAL"
         self._assert_rejected(
-            "closure_screening_incomplete", observation=observation
+            "closure_attestation_invalid", observation=observation
         )
 
     def test_singleton_stage_with_failed_constraints_is_rejected(self):
@@ -1178,5 +1294,5 @@ class VerifiedTerminalMeasurementClosureTests(unittest.TestCase):
             "verified_terminal_measurement_closure_evidence"
         ]["attempts"][0]["physical_constraints_ok"] = False
         self._assert_rejected(
-            "closure_screening_incomplete", observation=observation
+            "closure_attestation_invalid", observation=observation
         )

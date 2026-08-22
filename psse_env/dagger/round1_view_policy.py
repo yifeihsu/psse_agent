@@ -30,6 +30,9 @@ import json
 from typing import Any
 
 ROUND1_VIEW_POLICY_CONTRACT = "dagger1_round1_three_source_view_v1"
+ROUND1_NATURAL_ONLY_VIEW_POLICY_CONTRACT = (
+    "dagger1_round1_natural_d1_only_derived_view_v1"
+)
 
 ROUND1_THREE_SOURCE_VIEW_POLICY: dict[str, Any] = {
     "contract": ROUND1_VIEW_POLICY_CONTRACT,
@@ -78,6 +81,110 @@ def round1_view_policy_digest(policy: dict[str, Any] | None = None) -> str:
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+
+
+# This ablation is deliberately specified as a projection of the already
+# placed three-source view.  It is not a second replay-buffer selection policy:
+# the D0 and natural-D1 rows (including their multiplicity and order) must be
+# identical to those in the canonical 1,880-row view.
+ROUND1_NATURAL_ONLY_VIEW_POLICY: dict[str, Any] = {
+    "contract": ROUND1_NATURAL_ONLY_VIEW_POLICY_CONTRACT,
+    "schema_version": 1,
+    "view_id": "natural-only",
+    "parent_view_contract": ROUND1_VIEW_POLICY_CONTRACT,
+    "parent_view_policy_digest": round1_view_policy_digest(),
+    "derivation": "ordered_filter_of_canonical_full_placement_v1",
+    "retained_replay_sources": ["d0_bc0", "natural_dagger1"],
+    "excluded_replay_sources": ["observable_recovery_probe"],
+    "total_rows": 1842,
+    "allocation": {
+        "d0_bc0_rows": 1317,
+        "natural_d1_rows": 525,
+        "observable_recovery_probe_rows": 0,
+    },
+    "parent_allocation": dict(ROUND1_THREE_SOURCE_VIEW_POLICY["allocation"]),
+    "require_identical_parent_row_objects": True,
+    "require_identical_parent_order": True,
+    "permit_reselection": False,
+}
+
+
+def round1_natural_only_view_policy_digest(
+    policy: dict[str, Any] | None = None,
+) -> str:
+    """Stable digest for the preregistered probe-ablation projection."""
+
+    payload = ROUND1_NATURAL_ONLY_VIEW_POLICY if policy is None else policy
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def validate_round1_natural_only_view_policy(
+    policy: dict[str, Any],
+    *,
+    parent_policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Require the ablation to be the exact probe-free parent projection."""
+
+    if policy.get("contract") != ROUND1_NATURAL_ONLY_VIEW_POLICY_CONTRACT:
+        raise ValueError("Round-1 natural-only view policy contract mismatch")
+    if policy.get("schema_version") != 1:
+        raise ValueError("Round-1 natural-only view policy schema mismatch")
+    if policy.get("view_id") != "natural-only":
+        raise ValueError("Round-1 natural-only view policy has the wrong view_id")
+    parent_view = (
+        ROUND1_THREE_SOURCE_VIEW_POLICY
+        if parent_policy is None
+        else parent_policy
+    )
+    validate_round1_view_policy(parent_view)
+    if policy.get("parent_view_contract") != parent_view.get("contract"):
+        raise ValueError("Round-1 natural-only view has the wrong parent contract")
+    if policy.get("parent_view_policy_digest") != round1_view_policy_digest(
+        parent_view
+    ):
+        raise ValueError("Round-1 natural-only view has the wrong parent digest")
+    if policy.get("derivation") != "ordered_filter_of_canonical_full_placement_v1":
+        raise ValueError("Round-1 natural-only derivation is not approved")
+    if policy.get("retained_replay_sources") != [
+        "d0_bc0",
+        "natural_dagger1",
+    ]:
+        raise ValueError("Round-1 natural-only retained sources are not exact")
+    if policy.get("excluded_replay_sources") != [
+        "observable_recovery_probe"
+    ]:
+        raise ValueError("Round-1 natural-only excluded source is not exact")
+    if policy.get("permit_reselection") is not False:
+        raise ValueError("Round-1 natural-only policy must forbid reselection")
+    if policy.get("require_identical_parent_row_objects") is not True:
+        raise ValueError("Round-1 natural-only policy must preserve row objects")
+    if policy.get("require_identical_parent_order") is not True:
+        raise ValueError("Round-1 natural-only policy must preserve row order")
+
+    parent = policy.get("parent_allocation")
+    allocation = policy.get("allocation")
+    if parent != parent_view["allocation"]:
+        raise ValueError("Round-1 natural-only parent allocation is not frozen")
+    expected = {
+        "d0_bc0_rows": int(parent["d0_bc0_rows"]),
+        "natural_d1_rows": int(parent["natural_d1_rows"]),
+        "observable_recovery_probe_rows": 0,
+    }
+    if allocation != expected:
+        raise ValueError("Round-1 natural-only allocation is not the exact projection")
+    total = sum(expected.values())
+    if policy.get("total_rows") != total:
+        raise ValueError("Round-1 natural-only total does not match its allocation")
+    return {
+        "contract": ROUND1_NATURAL_ONLY_VIEW_POLICY_CONTRACT,
+        "digest": round1_natural_only_view_policy_digest(policy),
+        "parent_policy_digest": round1_view_policy_digest(parent_view),
+        "total_rows": total,
+        "allocation": expected,
+        "passed": True,
+    }
 
 
 def validate_round1_view_policy(policy: dict[str, Any]) -> dict[str, Any]:

@@ -47,8 +47,28 @@ def stratified_approximate_realizability(
     field: str,
     *,
     required_values: Iterable[str] = (),
+    neighbor_gate_minimum_distinct_roots: int | None = 1,
 ) -> dict[str, dict[str, Any]]:
-    """Audit each observable semantic stratum with nonzero pair coverage."""
+    """Audit each observable semantic stratum without inventing pair evidence.
+
+    Safety properties remain binding for every non-empty stratum.  Neighbor
+    stability is binding only once the stratum has the declared independent
+    root support; otherwise its absence is recorded as underpowered rather
+    than misreported as a semantic conflict.  This is the same distinction
+    used by the release-grade Round-0 stratified audit.
+    """
+
+    if (
+        neighbor_gate_minimum_distinct_roots is not None
+        and (
+            isinstance(neighbor_gate_minimum_distinct_roots, bool)
+            or neighbor_gate_minimum_distinct_roots < 1
+        )
+    ):
+        raise ValueError(
+            "neighbor_gate_minimum_distinct_roots must be None or a "
+            "positive integer"
+        )
 
     grouped: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -82,17 +102,59 @@ def stratified_approximate_realizability(
             and float(report.get("local_perturbation_comparison_coverage", 0.0))
             > 0.0
         )
-        release_gate_passed = bool(
+        local_tolerance = report.get("local_perturbation_tolerance")
+        safety_passed = bool(
             group
             and not missing_roots
-            and comparison_coverage_passed
-            and report.get("passed") is True
+            and not report.get("invalid_examples")
+            and float(report.get("approximate_conflict_rate", 1.0))
+            <= float(report.get("conflict_tolerance", 0.0))
+            and float(
+                report.get("nearest_neighbor_action_disagreement_rate", 1.0)
+            )
+            <= float(report.get("nearest_neighbor_tolerance", 0.0))
+            and (
+                local_tolerance is None
+                or float(
+                    report.get(
+                        "local_perturbation_action_disagreement_rate", 1.0
+                    )
+                )
+                <= float(local_tolerance)
+            )
+            and float(report.get("multi_action_cost_margin_coverage", 0.0))
+            >= 1.0
         )
+        neighbor_applicable = bool(
+            neighbor_gate_minimum_distinct_roots is not None
+            and len(roots) >= neighbor_gate_minimum_distinct_roots
+        )
+        if not safety_passed:
+            release_gate_status = "failed_safety"
+            release_gate_passed = False
+        elif neighbor_gate_minimum_distinct_roots is None:
+            release_gate_status = "safety_passed_neighbor_diagnostic_only"
+            release_gate_passed = True
+        elif not neighbor_applicable:
+            release_gate_status = "safety_passed_neighbor_underpowered"
+            release_gate_passed = True
+        elif report.get("passed") is True:
+            release_gate_status = "passed"
+            release_gate_passed = True
+        else:
+            release_gate_status = "failed_neighbor_stability"
+            release_gate_passed = False
         report.update(
             {
                 "distinct_physical_roots": len(roots),
                 "missing_physical_root_rows": missing_roots,
                 "comparison_coverage_passed": comparison_coverage_passed,
+                "stratified_safety_passed": safety_passed,
+                "neighbor_stability_gate_applicable": neighbor_applicable,
+                "neighbor_stability_minimum_distinct_roots": (
+                    neighbor_gate_minimum_distinct_roots
+                ),
+                "release_gate_status": release_gate_status,
                 "release_gate_passed": release_gate_passed,
             }
         )
@@ -158,7 +220,13 @@ def audit_dagger1_union_realizability(
         natural, "scenario_family"
     )
     approximate_by_state_class = stratified_approximate_realizability(
-        natural, "state_class"
+        natural,
+        "state_class",
+        # State classes partition unlike action structures and can therefore
+        # contain many roots without any meaningful same-structure pair.  As
+        # in Round 0, their conflict/disagreement safety checks are binding
+        # while neighbor coverage remains diagnostic.
+        neighbor_gate_minimum_distinct_roots=None,
     )
     # Recovery strata are a D1 concept.  D0 rows have no such label, so
     # coercing the complete D0 population into a synthetic ``unknown`` stratum
@@ -169,7 +237,13 @@ def audit_dagger1_union_realizability(
         if _row_value(row, "recovery_stratum") not in (None, "")
     ]
     approximate_by_recovery_stratum = stratified_approximate_realizability(
-        natural_recovery_rows, "recovery_stratum"
+        natural_recovery_rows,
+        "recovery_stratum",
+        # Binding recovery strata are independently required to have at least
+        # five roots (and usually ten) by the support gate.  A rarer incidental
+        # stratum must still be semantically safe, but cannot manufacture a
+        # neighbor comparison from a singleton observation.
+        neighbor_gate_minimum_distinct_roots=5,
     )
 
     failures: list[str] = []

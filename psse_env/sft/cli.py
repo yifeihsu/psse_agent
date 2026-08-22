@@ -31,7 +31,24 @@ from .training import (
     run_lora_smoke,
     run_lora_training,
     run_targeted_lora_smoke_sweep,
+    validate_training_seed,
 )
+from psse_env.dagger.study_manifest import (
+    DEFAULT_STUDY_MANIFEST,
+    TRAINED_VARIANT_IDS,
+    load_study_manifest,
+)
+
+
+def _training_seed(value: str) -> int:
+    """Parse a training seed before any expensive pretraining gate runs."""
+
+    try:
+        seed = int(value)
+        validate_training_seed(seed)
+    except (ValueError, GateError) as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+    return seed
 
 
 def _common(parser: argparse.ArgumentParser) -> None:
@@ -109,6 +126,14 @@ def _round1_source_options(
         ),
     )
     parser.add_argument(
+        "--parent-checkpoint-receipt",
+        type=Path,
+        help=(
+            "Canonical checkpoint_receipt.json for the same-seed BC0 adapter. "
+            "Required for Round-1 training and validated before model allocation."
+        ),
+    )
+    parser.add_argument(
         "--round1-preflight",
         type=Path,
         help=(
@@ -118,6 +143,14 @@ def _round1_source_options(
     parser.add_argument(
         "--reviewed-source-commit",
         help="Externally reviewed 40-hex source commit for the Round-1 source gate.",
+    )
+    parser.add_argument(
+        "--round1-view",
+        choices=("full", "natural-only"),
+        help=(
+            "Explicit immutable Round-1 training view. Use full for "
+            "natural_dagger_probes and natural-only for natural_dagger."
+        ),
     )
     if include_initial_adapter_revision:
         parser.add_argument(
@@ -145,6 +178,39 @@ def parser() -> argparse.ArgumentParser:
     train.add_argument("--learning-rate", type=float, default=1e-4)
     train.add_argument("--epochs", type=float, default=1.0)
     train.add_argument("--max-steps", type=int, default=-1)
+    train.add_argument(
+        "--optimizer",
+        choices=("adamw_torch",),
+        default="adamw_torch",
+    )
+    train.add_argument(
+        "--lr-scheduler-type",
+        choices=("linear",),
+        default="linear",
+    )
+    train.add_argument(
+        "--seed",
+        type=_training_seed,
+        required=True,
+        help=(
+            "Explicit deterministic training seed (0..4294967295). "
+            "Preregister a distinct value for each replicated training run."
+        ),
+    )
+    train.add_argument(
+        "--study-variant",
+        choices=TRAINED_VARIANT_IDS,
+        help=(
+            "Preregistered trained variant. If omitted, cold-start D0 is BC0; "
+            "warm-start variants are inferred only from an exact source set."
+        ),
+    )
+    train.add_argument(
+        "--study-manifest",
+        type=Path,
+        default=DEFAULT_STUDY_MANIFEST,
+        help="Byte-pinned four-variant study manifest bound into the checkpoint receipt.",
+    )
     train.add_argument(
         "--eval-strategy", choices=("epoch", "steps"), default="epoch"
     )
@@ -260,11 +326,13 @@ def _round1_source_report_for_gate(
         getattr(args, "round1_preflight", None),
         getattr(args, "reviewed_source_commit", None),
         getattr(args, "initial_adapter_revision", None),
+        getattr(args, "round1_view", None),
     )
     if any(values) != all(values):
         raise GateError(
             "Round-1 data gate requires --round1-provenance, --round1-preflight, "
-            "--reviewed-source-commit, and --initial-adapter-revision together."
+            "--reviewed-source-commit, --initial-adapter-revision, and "
+            "--round1-view together."
         )
     if not all(values):
         if has_ineligible_rows or path_requires_binding:
@@ -283,6 +351,7 @@ def _round1_source_report_for_gate(
         args.round1_preflight,
         reviewed_source_commit=str(args.reviewed_source_commit).lower(),
         initial_adapter_revision=str(args.initial_adapter_revision).lower(),
+        round1_view=str(args.round1_view),
         train_path=args.train,
         validation_path=args.validation,
         test_path=args.test,
@@ -544,6 +613,10 @@ def main(argv: list[str] | None = None) -> int:
                 args.report_output.write_text(rendered, encoding="utf-8")
             print(rendered, end="")
             return 0 if passed else 2
+        if args.command == "train":
+            # Reject protocol drift before baseline artifact validation or any
+            # model/runtime initialization.
+            load_study_manifest(args.study_manifest)
         baseline_evaluation_gate = (
             _baseline_evaluation_gate(args) if args.command == "train" else None
         )
@@ -557,9 +630,12 @@ def main(argv: list[str] | None = None) -> int:
             learning_rate=args.learning_rate,
             epochs=getattr(args, "epochs", 1.0),
             max_steps=getattr(args, "max_steps", -1),
+            optimizer=getattr(args, "optimizer", "adamw_torch"),
+            lr_scheduler_type=getattr(args, "lr_scheduler_type", "linear"),
             eval_strategy=getattr(args, "eval_strategy", "epoch"),
             save_strategy=getattr(args, "save_strategy", "epoch"),
             eval_steps=getattr(args, "eval_steps", 25),
+            seed=getattr(args, "seed", 3407),
             bf16=not args.no_bf16 and not args.fp16,
             fp16=args.fp16,
             load_in_4bit=args.load_in_4bit,
@@ -584,6 +660,11 @@ def main(argv: list[str] | None = None) -> int:
                 "initial_adapter_revision",
                 None,
             ),
+            parent_checkpoint_receipt_path=(
+                str(args.parent_checkpoint_receipt)
+                if getattr(args, "parent_checkpoint_receipt", None) is not None
+                else None
+            ),
             round1_provenance_path=(
                 str(args.round1_provenance)
                 if getattr(args, "round1_provenance", None) is not None
@@ -598,6 +679,13 @@ def main(argv: list[str] | None = None) -> int:
                 args,
                 "reviewed_source_commit",
                 None,
+            ),
+            round1_view=getattr(args, "round1_view", None),
+            study_variant=getattr(args, "study_variant", None),
+            study_manifest_path=(
+                str(args.study_manifest)
+                if getattr(args, "study_manifest", None) is not None
+                else None
             ),
         )
         lora = LoraSettings(rank=args.lora_rank, alpha=args.lora_alpha, dropout=args.lora_dropout)

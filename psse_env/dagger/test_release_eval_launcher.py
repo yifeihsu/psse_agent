@@ -25,6 +25,9 @@ class ReleaseEvaluationLauncherTests(unittest.TestCase):
             '#SBATCH --comment="preemption=yes;requeue=true"',
             "--query-gpu=name,memory.total,driver_version",
             "psse_env.sft.release_hardware",
+            "EXPECTED_ACCELERATOR_CLASS=${EXPECTED_ACCELERATOR_CLASS:-auto}",
+            '--require-class "$EXPECTED_ACCELERATOR_CLASS"',
+            "sbatch --constraint=rtx6000 --cpus-per-task=4 --mem=128G",
             'echo "gpu:       $GPU_INVENTORY"',
             "sys.version_info[:2] != (3, 12)",
             'torch.__version__ != "2.10.0+cu128"',
@@ -48,6 +51,11 @@ class ReleaseEvaluationLauncherTests(unittest.TestCase):
             "--minimum-suites 5",
             "--minimum-roots-per-suite 20",
             "--expected-source-commit \"$SOURCE_COMMIT\"",
+            "EVALUATION_SCOPE=${EVALUATION_SCOPE:-frozen_suite}",
+            "--seed 20260721",
+            "--required-suite dagger1_development",
+            "--minimum-roots-per-suite 30",
+            "--diagnostic-only",
         ):
             self.assertIn(contract, self.launcher)
 
@@ -64,9 +72,15 @@ class ReleaseEvaluationLauncherTests(unittest.TestCase):
             "^[0-9a-fA-F]{64}$",
             "REVIEWED_SOURCE_COMMIT",
             'SOURCE_COMMIT\" != \"$REVIEWED_SOURCE_COMMIT',
-            "--reference-artifact \"$BASE_EVALUATION_ARTIFACT\"",
+            "--reference-artifact \"$REFERENCE_ARTIFACT\"",
             "--reference-model-id \"$BASE_MODEL_ID\"",
             "--reference-model-revision \"$BASE_MODEL_REVISION\"",
+            "--study-manifest \"$STUDY_MANIFEST\"",
+            "--study-variant \"$STUDY_VARIANT\"",
+            "--reviewed-source-commit \"$SOURCE_COMMIT\"",
+            "--training-seed \"$TRAIN_SEED\"",
+            "--checkpoint-receipt \"$CHECKPOINT_RECEIPT\"",
+            "extract_artifact_metrics",
         ):
             self.assertIn(contract, self.launcher)
         self.assertIn(
@@ -76,34 +90,99 @@ class ReleaseEvaluationLauncherTests(unittest.TestCase):
         self.assertNotIn("BASE_EVALUATION_ARTIFACT=${", self.launcher)
         self.assertNotIn("EVALUATION_ARTIFACT=${", self.launcher)
 
+    def test_study_identity_is_fail_closed_before_hpc_setup(self) -> None:
+        launcher_path = Path(__file__).resolve().parents[2] / "submit_dagger_release_eval.sh"
+        base_with_seed = subprocess.run(
+            ["bash", "-s"],
+            cwd=launcher_path.parent,
+            env=os.environ,
+            input=(
+                "EVALUATION_MODE=base\nTRAIN_SEED=3407\n"
+                f"REVIEWED_SOURCE_COMMIT={'a' * 40}\n"
+                + self.launcher
+            ).encode("utf-8"),
+            check=False,
+            capture_output=True,
+        )
+        self.assertEqual(base_with_seed.returncode, 2)
+        self.assertIn("canonical null seed", base_with_seed.stderr.decode("utf-8"))
+
+        missing_receipt = subprocess.run(
+            ["bash", "-s"],
+            cwd=launcher_path.parent,
+            env=os.environ,
+            input=(
+                "EVALUATION_MODE=checkpoint\n"
+                "CHECKPOINT_PATH=/tmp/checkpoint/lora\n"
+                "STUDY_VARIANT=bc0\nTRAIN_SEED=3407\n"
+                "CHECKPOINT_RECEIPT=\n"
+                f"REVIEWED_SOURCE_COMMIT={'a' * 40}\n"
+                + self.launcher
+            ).encode("utf-8"),
+            check=False,
+            capture_output=True,
+        )
+        self.assertEqual(missing_receipt.returncode, 2)
+        self.assertIn(
+            "absolute CHECKPOINT_RECEIPT", missing_receipt.stderr.decode("utf-8")
+        )
+
+        missing_development_inputs = subprocess.run(
+            ["bash", "-s"],
+            cwd=launcher_path.parent,
+            env=os.environ,
+            input=(
+                "EVALUATION_MODE=base\n"
+                "EVALUATION_SCOPE=development_holdout\n"
+                f"REVIEWED_SOURCE_COMMIT={'a' * 40}\n"
+                + self.launcher
+            ).encode("utf-8"),
+            check=False,
+            capture_output=True,
+        )
+        self.assertEqual(missing_development_inputs.returncode, 2)
+        self.assertIn(
+            "development scope requires",
+            missing_development_inputs.stderr.decode("utf-8"),
+        )
+
     def test_invalid_mode_and_missing_reviewed_commit_fail_before_hpc_setup(self) -> None:
         launcher_path = Path(__file__).resolve().parents[2] / "submit_dagger_release_eval.sh"
         base_environment = {**os.environ, "EVALUATION_MODE": "invalid"}
         invalid = subprocess.run(
-            ["bash", str(launcher_path)],
+            ["bash", "-s"],
             cwd=launcher_path.parent,
             env=base_environment,
+            input=("EVALUATION_MODE=invalid\n" + self.launcher).encode("utf-8"),
             check=False,
             capture_output=True,
-            text=True,
         )
         self.assertEqual(invalid.returncode, 2)
-        self.assertIn("must be expert, base, or checkpoint", invalid.stderr)
+        self.assertIn(
+            "must be expert, base, or checkpoint",
+            invalid.stderr.decode("utf-8"),
+        )
 
         missing_review = subprocess.run(
-            ["bash", str(launcher_path)],
+            ["bash", "-s"],
             cwd=launcher_path.parent,
             env={
                 **os.environ,
                 "EVALUATION_MODE": "base",
                 "REVIEWED_SOURCE_COMMIT": "",
             },
+            input=(
+                "EVALUATION_MODE=base\nREVIEWED_SOURCE_COMMIT=\n"
+                + self.launcher
+            ).encode("utf-8"),
             check=False,
             capture_output=True,
-            text=True,
         )
         self.assertEqual(missing_review.returncode, 2)
-        self.assertIn("externally reviewed", missing_review.stderr)
+        self.assertIn(
+            "externally reviewed",
+            missing_review.stderr.decode("utf-8"),
+        )
 
 
 class ReleaseEvaluationPathTests(unittest.TestCase):

@@ -1,9 +1,11 @@
-"""Executable Round-1 aggregate, learner-seed, and provenance gate.
+"""Executable Round-1 aggregate, learner-seed, and selected-view gate.
 
 The Slurm launcher delegates its release-critical D0/D1/probe source checks to
 this module so the same validation can be imported and exercised directly in
-unit tests.  The gate validates only immutable artifacts; it does not mutate
-the aggregate or adapter tree.
+unit tests.  Both the full three-source placement and its natural-only ordered
+projection are reconstructed on every invocation; the explicit view selector
+only chooses which authenticated chat artifact may enter SFT.  The gate
+validates immutable artifacts and never mutates the aggregate or adapter tree.
 """
 
 from __future__ import annotations
@@ -31,8 +33,15 @@ from psse_env.dagger.replay_buffer import (
     dagger1_round1_source_capacity_report,
 )
 from psse_env.dagger.round1_view_policy import (
+    ROUND1_NATURAL_ONLY_VIEW_POLICY,
     ROUND1_THREE_SOURCE_VIEW_POLICY,
+    round1_natural_only_view_policy_digest,
     round1_view_policy_digest,
+    validate_round1_natural_only_view_policy,
+)
+from psse_env.dagger.natural_only_view import (
+    NATURAL_ONLY_VIEW_BUILD_CONTRACT,
+    build_round1_natural_only_view,
 )
 from psse_env.dagger.three_source_view import (
     THREE_SOURCE_VIEW_CONTRACT,
@@ -54,14 +63,21 @@ ROUND1_IMMUTABLE_VIEW_NAMES = (
     "aggregate.probe.raw.jsonl",
     "aggregate.train_view.raw.jsonl",
     "aggregate.train_view.jsonl",
+    "aggregate.natural_only.train_view.raw.jsonl",
+    "aggregate.natural_only.train_view.jsonl",
     "aggregate.validation.jsonl",
     "aggregate.test.jsonl",
 )
 ROUND1_CANONICAL_PROVENANCE_NAME = "aggregate.generation_provenance.json"
 ROUND1_CANONICAL_PREFLIGHT_NAME = "aggregate.preflight.json"
 ROUND1_CANONICAL_TRAIN_NAME = "aggregate.train_view.jsonl"
+ROUND1_NATURAL_ONLY_TRAIN_NAME = "aggregate.natural_only.train_view.jsonl"
+ROUND1_NATURAL_ONLY_RAW_NAME = "aggregate.natural_only.train_view.raw.jsonl"
 ROUND1_CANONICAL_VALIDATION_NAME = "aggregate.validation.jsonl"
 ROUND1_CANONICAL_TEST_NAME = "aggregate.test.jsonl"
+ROUND1_VIEW_FULL = "full"
+ROUND1_VIEW_NATURAL_ONLY = "natural-only"
+ROUND1_VIEW_CHOICES = (ROUND1_VIEW_FULL, ROUND1_VIEW_NATURAL_ONLY)
 _REQUIRED_D1_REPORTS = (
     "round1_source_capacity",
     "offline_teacher_target_quarantine_summary",
@@ -151,6 +167,7 @@ def _audit_report_hashes(
     semantic: Mapping[str, Any],
     final_view_support: Mapping[str, Any],
     round1_source_capacity: Mapping[str, Any],
+    natural_only_view: Mapping[str, Any],
 ) -> dict[str, str]:
     reports: dict[str, Mapping[str, Any]] = {
         "d1_offline_teacher_target_quarantine_summary": _mapping(
@@ -173,6 +190,7 @@ def _audit_report_hashes(
         ),
         "final_view_support": final_view_support,
         "round1_source_capacity": round1_source_capacity,
+        "natural_only_view": natural_only_view,
         "union_realizability": semantic,
     }
     for key in (
@@ -188,6 +206,29 @@ def _audit_report_hashes(
     }
 
 
+def _is_canonical_jsonl_bytes(
+    path: Path,
+    rows: Sequence[Mapping[str, Any]],
+) -> bool:
+    """Require the exact deterministic writer representation.
+
+    The aggregate builder uses Python text mode, which emits LF on Linux and
+    CRLF on Windows.  Accept those two platform encodings, but no alternate
+    JSON spacing, key order, blank lines, or trailing material.  This turns
+    parsed-row equality into a byte-level reconstruction check.
+    """
+
+    actual = path.read_bytes()
+    lines = [
+        json.dumps(row, sort_keys=True, allow_nan=False).encode("utf-8")
+        for row in rows
+    ]
+    return actual in {
+        b"\n".join(lines) + (b"\n" if lines else b""),
+        b"\r\n".join(lines) + (b"\r\n" if lines else b""),
+    }
+
+
 def validate_round1_source_mix_gate(
     provenance_path: str | Path,
     preflight_path: str | Path,
@@ -197,12 +238,19 @@ def validate_round1_source_mix_gate(
     train_path: str | Path | None = None,
     validation_path: str | Path | None = None,
     test_path: str | Path | None = None,
+    round1_view: str,
 ) -> dict[str, Any]:
     """Validate one immutable Round-1 aggregate and its exact learner seed.
 
     ``GateError`` contains all independently detectable failures so an HPC job
     exits before loading the model or importing the GPU stack.
     """
+
+    if round1_view not in ROUND1_VIEW_CHOICES:
+        raise GateError(
+            "Round-1 view must be selected explicitly as one of: "
+            + ", ".join(ROUND1_VIEW_CHOICES)
+        )
 
     provenance_file = Path(provenance_path).resolve()
     preflight_file = Path(preflight_path).resolve()
@@ -216,7 +264,12 @@ def validate_round1_source_mix_gate(
             "preflight paths."
         )
     expected_data_paths = {
-        "train": aggregate_dir / ROUND1_CANONICAL_TRAIN_NAME,
+        "train": aggregate_dir
+        / (
+            ROUND1_CANONICAL_TRAIN_NAME
+            if round1_view == ROUND1_VIEW_FULL
+            else ROUND1_NATURAL_ONLY_TRAIN_NAME
+        ),
         "validation": aggregate_dir / ROUND1_CANONICAL_VALIDATION_NAME,
         "test": aggregate_dir / ROUND1_CANONICAL_TEST_NAME,
     }
@@ -255,6 +308,9 @@ def validate_round1_source_mix_gate(
     recorded_round1_source_capacity = _mapping(
         preflight.get("round1_source_capacity")
     )
+    recorded_natural_only_view = _mapping(
+        preflight.get("natural_only_view")
+    )
     preflight_audit_hashes = _mapping(preflight.get("audit_report_sha256"))
     descriptor_audit_hashes = _mapping(descriptor.get("audit_report_sha256"))
     failures: list[str] = []
@@ -291,6 +347,7 @@ def validate_round1_source_mix_gate(
         semantic=semantic,
         final_view_support=recorded_final_view_support,
         round1_source_capacity=recorded_round1_source_capacity,
+        natural_only_view=recorded_natural_only_view,
     )
     if (
         not descriptor_audit_hashes
@@ -372,6 +429,53 @@ def validate_round1_source_mix_gate(
         or training_view.get("policy_digest") != round1_view_policy_digest()
     ):
         failures.append("Round-1 view policy or digest is not provenance bound")
+    try:
+        validate_round1_natural_only_view_policy(
+            dict(ROUND1_NATURAL_ONLY_VIEW_POLICY),
+            parent_policy=dict(ROUND1_THREE_SOURCE_VIEW_POLICY),
+        )
+    except ValueError as exc:
+        failures.append(str(exc))
+    provenance_natural_only_view = _mapping(
+        provenance.get("natural_only_view")
+    )
+    natural_only_preflight_release_checks = _mapping(
+        preflight.get("release_checks")
+    )
+    natural_only_provenance_release_checks = _mapping(
+        provenance.get("release_checks")
+    )
+    if (
+        descriptor.get("natural_only_view_contract")
+        != NATURAL_ONLY_VIEW_BUILD_CONTRACT
+        or descriptor.get("natural_only_view_policy")
+        != ROUND1_NATURAL_ONLY_VIEW_POLICY
+        or descriptor.get("natural_only_view_policy_digest")
+        != round1_natural_only_view_policy_digest()
+        or descriptor.get("natural_only_view_report_sha256")
+        != stable_json_sha256(recorded_natural_only_view)
+        or preflight.get("natural_only_view_policy")
+        != ROUND1_NATURAL_ONLY_VIEW_POLICY
+        or provenance_natural_only_view != recorded_natural_only_view
+        or recorded_natural_only_view.get("contract")
+        != NATURAL_ONLY_VIEW_BUILD_CONTRACT
+        or recorded_natural_only_view.get("passed") is not True
+        or recorded_natural_only_view.get("reselection_performed") is not False
+        or recorded_natural_only_view.get("retained_allocation")
+        != ROUND1_NATURAL_ONLY_VIEW_POLICY["allocation"]
+        or natural_only_preflight_release_checks.get(
+            "natural_only_view_release_ready"
+        )
+        is not True
+        or natural_only_provenance_release_checks.get(
+            "natural_only_view_release_ready"
+        )
+        is not True
+    ):
+        failures.append(
+            "Round-1 natural-only ordered-projection policy/report is not "
+            "provenance bound"
+        )
     d1_recovery_rows = int(allocation.get("natural_d1_rows") or 0)
     probe_rows_count = int(
         allocation.get("observable_recovery_probe_rows") or 0
@@ -590,6 +694,12 @@ def validate_round1_source_mix_gate(
         materialized_chat = load_jsonl(
             aggregate_dir / "aggregate.train_view.jsonl"
         )
+        materialized_natural_only_raw = load_jsonl(
+            aggregate_dir / ROUND1_NATURAL_ONLY_RAW_NAME
+        )
+        materialized_natural_only_chat = load_jsonl(
+            aggregate_dir / ROUND1_NATURAL_ONLY_TRAIN_NAME
+        )
         materialized_union = load_jsonl(aggregate_dir / "aggregate.raw.jsonl")
         materialized_validation = load_jsonl(
             aggregate_dir / ROUND1_CANONICAL_VALIDATION_NAME
@@ -677,6 +787,21 @@ def validate_round1_source_mix_gate(
             failures.append(
                 "Round-1 three-source placement report does not recompute exactly"
             )
+        rebuilt_natural_only_raw, rebuilt_natural_only_report = (
+            build_round1_natural_only_view(
+                rebuilt_raw,
+                full_policy=ROUND1_THREE_SOURCE_VIEW_POLICY,
+                natural_only_policy=ROUND1_NATURAL_ONLY_VIEW_POLICY,
+            )
+        )
+        if (
+            rebuilt_natural_only_report != recorded_natural_only_view
+            or rebuilt_natural_only_report.get("passed") is not True
+        ):
+            failures.append(
+                "Round-1 natural-only ordered-projection report does not "
+                "recompute exactly"
+            )
         placed_natural_d1 = [
             row
             for row in rebuilt_raw
@@ -720,10 +845,44 @@ def validate_round1_source_mix_gate(
             )
         for row in rebuilt_raw:
             row["generation_provenance_id"] = provenance_id
+        for row in rebuilt_natural_only_raw:
+            row["generation_provenance_id"] = provenance_id
         if rebuilt_raw != materialized_raw:
             failures.append(
                 "Round-1 train_view.raw is not the exact deterministic "
                 "three-source reconstruction"
+            )
+        if not _is_canonical_jsonl_bytes(
+            aggregate_dir / "aggregate.train_view.raw.jsonl",
+            rebuilt_raw,
+        ):
+            failures.append(
+                "Round-1 full raw view does not byte-reconstruct under the "
+                "deterministic JSONL writer"
+            )
+        if rebuilt_natural_only_raw != materialized_natural_only_raw:
+            failures.append(
+                "Round-1 natural-only raw view is not the exact ordered "
+                "projection of the canonical full placement"
+            )
+        if not _is_canonical_jsonl_bytes(
+            aggregate_dir / ROUND1_NATURAL_ONLY_RAW_NAME,
+            rebuilt_natural_only_raw,
+        ):
+            failures.append(
+                "Round-1 natural-only raw view does not byte-reconstruct "
+                "under the deterministic JSONL writer"
+            )
+        materialized_parent_projection = [
+            row
+            for row in materialized_raw
+            if row.get("replay_source")
+            in {"d0_bc0", "natural_dagger1"}
+        ]
+        if materialized_natural_only_raw != materialized_parent_projection:
+            failures.append(
+                "Round-1 natural-only raw view differs from the retained "
+                "rows of the materialized full view"
             )
         rebuilt_chat = examples_to_chat_sft(
             rebuilt_raw,
@@ -733,6 +892,47 @@ def validate_round1_source_mix_gate(
         if rebuilt_chat != materialized_chat:
             failures.append(
                 "Round-1 chat training view is not the exact canonical export"
+            )
+        if not _is_canonical_jsonl_bytes(
+            aggregate_dir / ROUND1_CANONICAL_TRAIN_NAME,
+            rebuilt_chat,
+        ):
+            failures.append(
+                "Round-1 full chat view does not byte-reconstruct under the "
+                "deterministic JSONL writer"
+            )
+        rebuilt_natural_only_chat = examples_to_chat_sft(
+            rebuilt_natural_only_raw,
+            protocol="canonical",
+        )
+        if rebuilt_natural_only_chat != materialized_natural_only_chat:
+            failures.append(
+                "Round-1 natural-only chat view is not the exact canonical "
+                "export of its raw ordered projection"
+            )
+        if not _is_canonical_jsonl_bytes(
+            aggregate_dir / ROUND1_NATURAL_ONLY_TRAIN_NAME,
+            rebuilt_natural_only_chat,
+        ):
+            failures.append(
+                "Round-1 natural-only chat view does not byte-reconstruct "
+                "under the deterministic JSONL writer"
+            )
+        expected_derived_hashes = _mapping(
+            inputs.get("immutable_derived_view_content_sha256")
+        )
+        actual_derived_hashes = {
+            "natural_only_raw": stable_json_sha256(
+                generation_id_independent_rows(materialized_natural_only_raw)
+            ),
+            "natural_only_chat": stable_json_sha256(
+                generation_id_independent_rows(materialized_natural_only_chat)
+            ),
+        }
+        if expected_derived_hashes != actual_derived_hashes:
+            failures.append(
+                "Round-1 natural-only immutable raw/chat content differs "
+                "from the descriptor binding"
             )
         if materialized_union != [*d0_rows, *d1_rows, *probe_rows]:
             failures.append(
@@ -840,13 +1040,58 @@ def validate_round1_source_mix_gate(
         raise GateError(
             "Round-1 source-mix gate is NO-GO:\n- " + "\n- ".join(failures)
         )
+    selected_train_rows = (
+        materialized_chat
+        if round1_view == ROUND1_VIEW_FULL
+        else materialized_natural_only_chat
+    )
+    selected_allocation = (
+        dict(expected_allocation)
+        if round1_view == ROUND1_VIEW_FULL
+        else dict(ROUND1_NATURAL_ONLY_VIEW_POLICY["allocation"])
+    )
+    # This is the exact recomputed report whose digest was compared with both
+    # the preflight and generation descriptor above.  Carry the complete
+    # evidence forward so a checkpoint receipt need not reduce it to an
+    # unauthenticated boolean or count.
+    from psse_env.dagger.study_manifest import (
+        build_production_d1_quarantine_binding,
+    )
+
+    production_d1_quarantine_binding = build_production_d1_quarantine_binding(
+        variant_id=(
+            "natural_dagger_probes"
+            if round1_view == ROUND1_VIEW_FULL
+            else "natural_dagger"
+        ),
+        generation_provenance_id=str(provenance_id),
+        generation_descriptor=descriptor,
+        summary=_mapping(
+            recomputed_d1.get("offline_teacher_target_quarantine_summary")
+        ),
+        audit_report_sha256=computed_audit_hashes[
+            "d1_offline_teacher_target_quarantine_summary"
+        ],
+    )
     return {
         "passed": True,
+        "selected_view": round1_view,
         "generation_provenance_id": provenance_id,
         "d1_recovery_rows": d1_recovery_rows,
         "probe_rows": probe_rows_count,
-        "source_allocation": dict(expected_allocation),
+        "selected_train_rows": len(selected_train_rows),
+        "selected_d1_recovery_rows": int(
+            selected_allocation["natural_d1_rows"]
+        ),
+        "selected_probe_rows": int(
+            selected_allocation["observable_recovery_probe_rows"]
+        ),
+        "source_allocation": selected_allocation,
+        "full_source_allocation": dict(expected_allocation),
         "round1_view_policy_digest": round1_view_policy_digest(),
+        "natural_only_view_policy_digest": (
+            round1_natural_only_view_policy_digest()
+        ),
         "final_view_support_report_sha256": stable_json_sha256(
             recomputed_final_view_support
         ),
@@ -861,10 +1106,13 @@ def validate_round1_source_mix_gate(
             role: str(path) for role, path in expected_data_paths.items()
         },
         "canonical_dataset_content_sha256": {
-            "train": stable_json_sha256(materialized_chat),
+            "train": stable_json_sha256(selected_train_rows),
             "validation": stable_json_sha256(materialized_validation),
             "test": stable_json_sha256(materialized_test),
         },
+        "production_d1_quarantine_binding": (
+            production_d1_quarantine_binding
+        ),
     }
 
 
@@ -876,6 +1124,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--preflight", type=Path, required=True)
     parser.add_argument("--reviewed-source-commit", required=True)
     parser.add_argument("--initial-adapter-revision", required=True)
+    parser.add_argument(
+        "--round1-view",
+        required=True,
+        choices=ROUND1_VIEW_CHOICES,
+        help="Explicitly authenticate the full or natural-only Round-1 view.",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
     try:
         report = validate_round1_source_mix_gate(
@@ -883,12 +1137,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.preflight,
             reviewed_source_commit=args.reviewed_source_commit,
             initial_adapter_revision=args.initial_adapter_revision,
+            round1_view=args.round1_view,
         )
     except GateError as exc:
         print(str(exc), file=sys.stderr)
         return 2
     print(
-        "Round-1 D0/D1/probe source gate passed: "
+        "Round-1 source gate passed: "
+        f"view={report['selected_view']} "
         f"allocation={report['source_allocation']}"
     )
     return 0

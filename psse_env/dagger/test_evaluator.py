@@ -26,9 +26,11 @@ from psse_env.actions import (
     ROLLBACK_STATE,
     RUN_HSE_FROM_PATH,
     RUN_WLS,
+    VERIFY_CANDIDATE,
 )
 from psse_env.dagger.evaluator import (
     ClosedLoopRolloutEvaluator,
+    STUDY_EVALUATION_SCHEMA_VERSION,
     _runtime_environment_descriptor,
     build_evaluation_provenance,
     evaluate_rollout_suites,
@@ -216,11 +218,22 @@ class _ScriptEnv:
         if row.get("terminal_outcome"):
             self.terminal = True
             self.terminal_outcome = row["terminal_outcome"]
+        tool_metrics: dict[str, Any] = {}
+        if action.get("tool") in {RUN_WLS, VERIFY_CANDIDATE} and status == "success":
+            state_id = str(action.get("arguments", {}).get("state_id") or "")
+            tool_metrics = {
+                "state_id": state_id,
+                "state_hash": hashlib.sha256(
+                    f"{self.scenario.get('scenario_id')}:{self.cursor}:{state_id}".encode(
+                        "utf-8"
+                    )
+                ).hexdigest(),
+            }
         return self.current_state(), {
             "execution_status": status,
             "error_code": row.get("error_code"),
             "state_mutated": status == "success" and action.get("tool") == COMMIT_STATE,
-            "tool_metrics": {},
+            "tool_metrics": tool_metrics,
         }
 
     def current_state(self) -> dict[str, Any]:
@@ -743,7 +756,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             [row["advanced"] for row in episode["trace"][:4]],
             [False, True, False, True],
         )
-        self.assertEqual(len(observations[0]["history_window"]), 2)
+        self.assertEqual(len(observations[0]["history_window"]), 4)
         self.assertEqual(
             observations[0]["history_window"][-1]["action"]["tool"], COMMIT_STATE
         )
@@ -886,13 +899,16 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                         }
 
                 if raised is not None:
+
                     class RaisingPolicy:
                         def act(self, _observation: Mapping[str, Any]) -> Any:
                             raise raised("same schema failure")
 
                     policy_factory = RaisingPolicy
                 else:
-                    policy_factory = lambda: _ScriptPolicy([])
+
+                    def policy_factory() -> _ScriptPolicy:
+                        return _ScriptPolicy([])
 
                 scenario = _resolved_scenario()
                 scenario["script"] = [
@@ -1404,7 +1420,10 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         )
 
         overall = result.suite_metrics["overall"]
-        self.assertEqual(result.suite_metrics["schema_version"], 3)
+        self.assertEqual(
+            result.suite_metrics["schema_version"],
+            STUDY_EVALUATION_SCHEMA_VERSION,
+        )
         self.assertEqual(overall["episodes"], 2)
         self.assertEqual(overall["terminal_rate"], 1.0)
         self.assertEqual(overall["resolution_rate"], 0.5)
@@ -2467,20 +2486,27 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         self.assertNotEqual(first_episode["audit"], second_episode["audit"])
 
     def test_rejects_privileged_custom_policy_observation(self) -> None:
-        class LeakyEnv(_ScriptEnv):
-            def get_policy_observation(
-                self, history: list[Mapping[str, Any]]
-            ) -> dict[str, Any]:
-                observation = super().get_policy_observation(history)
-                observation["hidden_truth"] = {"true_measurement_errors": [1]}
-                return observation
+        for leaked_key in (
+            "hidden_truth",
+            "HiddenTruth",
+            "GROUND_TRUTH",
+            "TrueMeasurementErrors",
+        ):
+            with self.subTest(leaked_key=leaked_key):
+                class LeakyEnv(_ScriptEnv):
+                    def get_policy_observation(
+                        self, history: list[Mapping[str, Any]]
+                    ) -> dict[str, Any]:
+                        observation = super().get_policy_observation(history)
+                        observation[leaked_key] = ["private"]
+                        return observation
 
-        with self.assertRaisesRegex(ValueError, "Privileged fields"):
-            evaluate_rollout_suites(
-                [_resolved_scenario()],
-                env_factory=LeakyEnv,
-                policy_factory=lambda: _ScriptPolicy([]),
-            )
+                with self.assertRaisesRegex(ValueError, "Privileged fields"):
+                    evaluate_rollout_suites(
+                        [_resolved_scenario()],
+                        env_factory=LeakyEnv,
+                        policy_factory=lambda: _ScriptPolicy([]),
+                    )
 
     def test_grouped_correction_touching_one_healthy_meter_fails_preservation(self) -> None:
         scenario = _resolved_scenario()
@@ -2913,9 +2939,13 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             self.assertEqual(
                 artifact["artifact_type"], "closed_loop_release_evaluation"
             )
-            self.assertEqual(artifact["artifact_schema_version"], 3)
             self.assertEqual(
-                artifact["evaluation"]["suite_metrics"]["schema_version"], 3
+                artifact["artifact_schema_version"],
+                STUDY_EVALUATION_SCHEMA_VERSION,
+            )
+            self.assertEqual(
+                artifact["evaluation"]["suite_metrics"]["schema_version"],
+                STUDY_EVALUATION_SCHEMA_VERSION,
             )
             self.assertTrue(artifact["release_eligible"])
             self.assertEqual(artifact["release_failures"], [])

@@ -486,6 +486,23 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
             )
         self.assertEqual(evidence["execution_pipeline_contract"], approved)
 
+    def test_directory_fsync_is_portable_only_on_windows(self):
+        denied = PermissionError("directory handles are not fsyncable")
+        with patch.object(collect_module.os, "name", "nt"), patch.object(
+            collect_module.os,
+            "open",
+            side_effect=denied,
+        ):
+            collect_module._fsync_directory(Path("unused"))
+
+        with patch.object(collect_module.os, "name", "posix"), patch.object(
+            collect_module.os,
+            "open",
+            side_effect=denied,
+        ):
+            with self.assertRaises(PermissionError):
+                collect_module._fsync_directory(Path("unused"))
+
     def test_round1_publication_contract_is_symmetric_and_fail_closed(self):
         expected_go = {
             "strict_gate_passed": True,

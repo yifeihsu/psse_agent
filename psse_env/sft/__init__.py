@@ -20,7 +20,7 @@ from .gates import (
     validate_current_tool_registry,
 )
 from .provenance import validate_release_gate_report
-from .training import LoraSettings, TrainerSettings
+from .training import LoraSettings, TrainerSettings, validate_training_seed
 
 __all__ = [
     "DatasetGateReport",
@@ -37,5 +37,6 @@ __all__ = [
     "prepare_example",
     "validate_grouped_pilot",
     "validate_release_gate_report",
+    "validate_training_seed",
     "validate_current_tool_registry",
 ]

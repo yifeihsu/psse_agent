@@ -33,10 +33,12 @@ from psse_env.actions import (
 )
 from psse_env.dagger.dataset_builder import TOOL_JSON_SCHEMAS
 from psse_env.dagger.evaluator import (
-    evaluation_intervention_contract,
+    STUDY_EVALUATION_SCHEMA_VERSION,
     fingerprint_evaluation_suites,
     load_evaluation_suites,
+    study_objective_episode_evidence_marker,
     trace_progress_advanced,
+    validate_study_objective_episode_evidence,
     validate_release_scenario_suites,
 )
 from psse_env.dagger.protocol_bridge import (
@@ -1258,7 +1260,10 @@ def _strict_episode_audit_failures(
 
 
 def _intervention_failures(
-    episode: Mapping[str, Any], expected_contract: Any
+    episode: Mapping[str, Any],
+    expected_contract: Any,
+    *,
+    require_objective_evidence: bool = False,
 ) -> tuple[list[str], list[str]]:
     """Validate policy-hidden intervention evidence and suite-local outcomes."""
 
@@ -1388,6 +1393,44 @@ def _intervention_failures(
         "terminal_outcome",
         *_TRACE_PROGRESS_FIELDS,
     }
+    objective_evidence = episode.get("objective_evidence")
+    expected_objective_evidence = study_objective_episode_evidence_marker()
+    schema_v4_objective_evidence = bool(
+        require_objective_evidence
+        or objective_evidence == expected_objective_evidence
+    )
+    if require_objective_evidence and objective_evidence != expected_objective_evidence:
+        evidence_failures.append(
+            "episode objective evidence does not satisfy schema v4"
+        )
+    if schema_v4_objective_evidence:
+        try:
+            canonical_objective = validate_study_objective_episode_evidence(
+                episode,
+                label="episode",
+            )
+        except ValueError as exc:
+            evidence_failures.append(
+                f"schema-v4 objective evidence is invalid: {exc}"
+            )
+        else:
+            leakage_paths = canonical_objective.get(
+                "hidden_truth_leakage_paths"
+            )
+            if leakage_paths:
+                evidence_failures.append(
+                    "schema-v4 policy evidence contains privileged fields: "
+                    + ", ".join(str(path) for path in leakage_paths)
+                )
+    if schema_v4_objective_evidence:
+        trace_fields.update(
+            {
+                "policy_observation",
+                "objective_action_assessment",
+                "objective_tool_evidence",
+                "policy_tool_output",
+            }
+        )
     policy_rows: list[tuple[int, Mapping[str, Any], str, str, bool]] = []
     previous_state_after: Mapping[str, Any] | None = None
     previous_state_after_sha256: str | None = None
@@ -1408,6 +1451,20 @@ def _intervention_failures(
             evidence_failures.append(
                 f"episode trace[{index}] intervention marker is inconsistent"
             )
+        if schema_v4_objective_evidence:
+            if expected_intervention:
+                if raw_row.get("policy_observation") is not None or raw_row.get(
+                    "objective_action_assessment"
+                ) is not None:
+                    evidence_failures.append(
+                        f"episode trace[{index}] intervention carries a policy assessment"
+                    )
+            elif not isinstance(raw_row.get("policy_observation"), Mapping) or not isinstance(
+                raw_row.get("objective_action_assessment"), Mapping
+            ):
+                evidence_failures.append(
+                    f"episode trace[{index}] lacks schema-v4 policy evidence"
+                )
         reported_advanced = raw_row.get("advanced")
         if not isinstance(reported_advanced, bool):
             evidence_failures.append(
@@ -1939,9 +1996,13 @@ def validate_evaluation_artifact(
         failures.append("artifact_type is not closed_loop_release_evaluation")
     if (
         type(payload.get("artifact_schema_version")) is not int
-        or payload.get("artifact_schema_version") != 3
+        or payload.get("artifact_schema_version")
+        != STUDY_EVALUATION_SCHEMA_VERSION
     ):
-        failures.append("artifact_schema_version is not 3")
+        failures.append(
+            "artifact_schema_version is not "
+            f"{STUDY_EVALUATION_SCHEMA_VERSION}"
+        )
     if payload.get("release_eligible") is not True or payload.get("release_failures") != []:
         failures.append("evaluator artifact is not release eligible")
     recorded_content_hash = payload.get("content_sha256")
@@ -2067,9 +2128,13 @@ def validate_evaluation_artifact(
     suite_metrics = _mapping(evaluation.get("suite_metrics"))
     if (
         type(suite_metrics.get("schema_version")) is not int
-        or suite_metrics.get("schema_version") != 3
+        or suite_metrics.get("schema_version")
+        != STUDY_EVALUATION_SCHEMA_VERSION
     ):
-        failures.append("evaluation suite report schema_version is not 3")
+        failures.append(
+            "evaluation suite report schema_version is not "
+            f"{STUDY_EVALUATION_SCHEMA_VERSION}"
+        )
     configuration = _mapping(suite_metrics.get("configuration"))
     coverage = _mapping(configuration.get("suite_coverage_validation"))
     if coverage.get("passed") is not True:
@@ -2332,6 +2397,7 @@ def validate_evaluation_artifact(
         intervention_evidence, intervention_performance = _intervention_failures(
             episode,
             _mapping(expected_episode).get("evaluation_intervention"),
+            require_objective_evidence=True,
         )
         failures.extend(
             f"episode {key!r} intervention evidence: {failure}"

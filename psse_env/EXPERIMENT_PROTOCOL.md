@@ -181,8 +181,16 @@ approximate realizability overall and by family, state class, and explicit D1
 recovery stratum with nonzero comparison coverage. Persist the complete reports
 in preflight and bind their hashes in generation provenance. Run a
 deterministic targeted tiny-overfit before the full job. The primary Round-1
-run warm-starts from the exact BC0 learner-seed adapter for approximately one
-epoch at `2e-5` through `5e-5`.
+study run warm-starts from the exact same-seed BC0 learner adapter and its
+canonical sibling checkpoint receipt for exactly one epoch at `3e-5`. The
+receipt is authenticated against the same manifest, reviewed source, seed,
+adapter path, and tree before model allocation. BC0 is fixed at two epochs at
+`1e-4`. Both stages use the manifest-pinned processor, max length, QLoRA,
+precision, batching, optimizer, scheduler, and dependency lock. Python, NumPy,
+Torch CPU, and all Torch CUDA generators are seeded before model construction;
+BC0 repeats that reset immediately before cold LoRA attachment. Each checkpoint
+receipt records the exact protocol, RNG contract, and canonical null or BC0
+parent-receipt binding.
 
 The 120 primary D1 training roots contain 48 measurement-plus-parameter, 48
 multi-measurement, and 24 parameter roots. The deterministic 30-root
@@ -204,10 +212,10 @@ replace full evaluation. After any source or DAgger-data change, regenerate
 the aggregate and source-bound expert/base evidence before promotion. Keep the
 frozen suite and all safety/performance thresholds unchanged.
 
-Model artifacts may be evaluated on any one approved H200, H100, or
-high-memory RTX 6000. Candidate and base artifacts are each hardware-attested
-independently; their paired comparison does not require the same approved
-accelerator class because cluster availability is constrained.
+Model artifacts may be evaluated on any one approved H200, H100, or RTX Pro
+6000 with at least 90,000 MiB. Candidate and base artifacts are each
+hardware-attested independently; their paired comparison does not require the
+same approved accelerator class because cluster availability is constrained.
 
 ## Gemma 4 SFT launch gate
 

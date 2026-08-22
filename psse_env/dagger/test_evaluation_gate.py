@@ -8,6 +8,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 from psse_env.actions import (
@@ -28,12 +29,17 @@ from psse_env.dagger.release_audit import (
 )
 from psse_env.dagger.evaluator import (
     EVALUATION_SUITES,
+    STUDY_EVALUATION_SCHEMA_VERSION,
     fingerprint_evaluation_suites,
     load_evaluation_suites,
+    objective_recovery_action_assessment,
+    objective_tool_evidence,
+    study_objective_episode_evidence_marker,
     trace_progress_evidence,
 )
 from psse_env.sft.provenance import file_sha256, stable_json_sha256
 from psse_env.sft.release_hardware import normalize_accelerator_class
+from psse_env.state_store import policy_safe_copy
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -50,6 +56,79 @@ SUITE_MANIFEST_FIELDS = (
     "suite_content_sha256",
     "root_set_sha256",
 )
+
+
+def _replace_exact_state_identity(
+    value: Any, *, original: str, replacement: str
+) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _replace_exact_state_identity(
+                item,
+                original=original,
+                replacement=replacement,
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _replace_exact_state_identity(
+                item,
+                original=original,
+                replacement=replacement,
+            )
+            for item in value
+        ]
+    return replacement if value == original else value
+
+
+def _coordinated_trace_state_substitution(
+    episode: dict, *, replacement: str
+) -> tuple[str, str]:
+    """Rewrite every trace copy and every reproducible trace certificate."""
+
+    original = episode["audit"]["initial_active_state_id"]
+    first_before_hash = episode["trace"][0]["state_before_sha256"]
+    episode["trace"] = _replace_exact_state_identity(
+        episode["trace"],
+        original=original,
+        replacement=replacement,
+    )
+    partial_opportunities = episode["evaluation_intervention"][
+        "retention_opportunity_count"
+    ]
+    policy_ordinal = 0
+    for row in episode["trace"]:
+        row["state_before_sha256"] = stable_json_sha256(row["state_before"])
+        row["state_after_sha256"] = stable_json_sha256(row["state_after"])
+        row["objective_tool_evidence"] = objective_tool_evidence(
+            row["action"], row["policy_tool_output"]
+        )
+        if row["intervention"] is not True:
+            row["observation_hash"] = stable_json_sha256(
+                row["policy_observation"]
+            )
+            row["objective_action_assessment"] = (
+                objective_recovery_action_assessment(
+                    row["policy_observation"],
+                    scenario_family=episode["family"],
+                    error_cardinality=episode["cardinality"],
+                    partial_success_opportunity=bool(
+                        partial_opportunities and policy_ordinal == 0
+                    ),
+                )
+            )
+            policy_ordinal += 1
+    handoff = episode["audit"].get("post_correction_handoff_assessment")
+    if isinstance(handoff, dict):
+        episode["audit"]["post_correction_handoff_assessment"] = (
+            _replace_exact_state_identity(
+                handoff,
+                original=original,
+                replacement=replacement,
+            )
+        )
+    return original, first_before_hash
 
 
 def _intervention(suite: str) -> dict:
@@ -335,20 +414,80 @@ def _canonical_policy_trace_row(
         output={"state_mutated": bool(advanced and not terminal)},
         terminal=terminal,
     )
+    action = {
+        "tool": tool,
+        "arguments": default_arguments if arguments is None else arguments,
+    }
+    tool_output = {
+        "execution_status": "success",
+        "error_code": None,
+        "state_mutated": bool(advanced and not terminal),
+    }
+    if tool == "run_wls":
+        state_hash = stable_json_sha256(["runtime-state", index])
+        tool_output["tool_metrics"] = {
+            "state_id": action["arguments"]["state_id"],
+            "state_hash": state_hash,
+        }
+    prior_history = []
+    for prior_index in range(index):
+        prior_action = copy.deepcopy(action)
+        prior_output = copy.deepcopy(tool_output)
+        prior_output["state_mutated"] = bool(advanced)
+        if tool == "run_wls":
+            prior_hash = stable_json_sha256(["runtime-state", prior_index])
+            prior_output["tool_metrics"]["state_hash"] = prior_hash
+        prior_history.append(
+            {
+                "state_id": "fixture-active",
+                "candidate_state_id": None,
+                "action": prior_action,
+                "tool_output": prior_output,
+            }
+        )
+    observation = {
+        "active_state_id": "fixture-active",
+        "candidate_state_id": None,
+        "remaining_budget": max(MAX_STEPS - index, 0),
+        "history_window": prior_history[-4:],
+        "last_tool": (
+            prior_history[-1]["action"]["tool"] if prior_history else None
+        ),
+        "last_tool_status": (
+            prior_history[-1]["tool_output"]["execution_status"]
+            if prior_history
+            else None
+        ),
+        "last_tool_output": (
+            copy.deepcopy(prior_history[-1]["tool_output"])
+            if prior_history
+            else {}
+        ),
+    }
+    runtime_hash = (
+        tool_output.get("tool_metrics", {}).get("state_hash")
+        if tool == "run_wls"
+        else None
+    )
     return {
         "step": index,
         "intervention": False,
-        "observation_hash": stable_json_sha256(["policy-observation", index]),
-        "action": {
-            "tool": tool,
-            "arguments": default_arguments if arguments is None else arguments,
-        },
+        "observation_hash": stable_json_sha256(observation),
+        "policy_observation": observation,
+        "objective_action_assessment": objective_recovery_action_assessment(
+            observation,
+            scenario_family="no_error",
+            error_cardinality=0,
+        ),
+        "policy_tool_output": tool_output,
+        "objective_tool_evidence": objective_tool_evidence(action, tool_output),
+        "action": action,
         "execution_status": "success",
         "advanced": advanced,
         "error_code": None,
         "candidate_disposition_offline": None,
         "tool_regret": None,
-        "runtime_state_hash": None,
+        "runtime_state_hash": runtime_hash,
         "terminal_outcome": terminal_outcome,
         **progress,
     }
@@ -539,6 +678,76 @@ def _episode(
         },
         "counterfactual_completion_audit": None,
     }
+    trace = [*pre_trace, *policy_trace]
+    history: list[dict] = []
+    policy_ordinal = 0
+    for row in trace:
+        output = {
+            "execution_status": row["execution_status"],
+            "error_code": row["error_code"],
+            "state_mutated": row["state_mutated"],
+        }
+        action = row["action"]
+        if (
+            action["tool"] in {"run_wls", "verify_candidate"}
+            and row["execution_status"] == "success"
+        ):
+            state_hash = stable_json_sha256(
+                [manifest_row["episode_key"], "runtime-state", row["step"]]
+            )
+            output["tool_metrics"] = {
+                "state_id": action["arguments"]["state_id"],
+                "state_hash": state_hash,
+            }
+            row["runtime_state_hash"] = state_hash
+        else:
+            row["runtime_state_hash"] = None
+        row["policy_tool_output"] = copy.deepcopy(output)
+        row["objective_tool_evidence"] = objective_tool_evidence(action, output)
+        if row["intervention"] is True:
+            row["policy_observation"] = None
+            row["objective_action_assessment"] = None
+        else:
+            observation = {
+                "active_state_id": row["state_before"]["active_state_id"],
+                "candidate_state_id": row["state_before"]["candidate_state_id"],
+                "remaining_budget": max(2 - policy_ordinal, 0),
+                "history_window": policy_safe_copy(history[-4:]),
+                "last_tool": (
+                    history[-1]["action"]["tool"] if history else None
+                ),
+                "last_tool_status": (
+                    history[-1]["tool_output"]["execution_status"]
+                    if history
+                    else None
+                ),
+                "last_tool_output": (
+                    copy.deepcopy(history[-1]["tool_output"])
+                    if history
+                    else {}
+                ),
+            }
+            row["policy_observation"] = observation
+            row["observation_hash"] = stable_json_sha256(observation)
+            row["objective_action_assessment"] = (
+                objective_recovery_action_assessment(
+                    observation,
+                    scenario_family=manifest_row["family"],
+                    error_cardinality=manifest_row["cardinality"],
+                    partial_success_opportunity=bool(
+                        retention_opportunities and policy_ordinal == 0
+                    ),
+                )
+            )
+            policy_ordinal += 1
+        history.append(
+            {
+                "state_id": row["state_before"]["active_state_id"],
+                "candidate_state_id": row["state_before"]["candidate_state_id"],
+                "action": copy.deepcopy(action),
+                "tool_output": copy.deepcopy(output),
+            }
+        )
     return {
         "episode_key": manifest_row["episode_key"],
         "scenario_id": manifest_row["scenario_id"],
@@ -586,7 +795,7 @@ def _episode(
             "retention_opportunity_count": retention_opportunities,
             "retained_opportunity_count": retention_opportunities,
         },
-        "trace": [*pre_trace, *policy_trace],
+        "trace": trace,
         "evaluator_error": None,
         "release_environment_attestation": {
             "passed": True,
@@ -600,10 +809,13 @@ def _episode(
             "actual": copy.deepcopy(identity),
             "failures": [],
         },
+        "objective_evidence": study_objective_episode_evidence_marker(),
         "audit": {
             "audit_mode": "strict_release_audit",
             "evidence_complete": True,
             "quarantined": False,
+            "initial_active_state_id": active_state_id,
+            "final_active_state_id": str(current_state["active_state_id"]),
             "post_correction_handoff_assessment": handoff_assessment,
             "strict_release_audit": {
                 "audit_version": "strict_offline_episode_truth_v3",
@@ -838,6 +1050,7 @@ def _insert_nonadvancing_repeat(episode: dict) -> None:
     repeated["state_before_sha256"] = source["state_after_sha256"]
     repeated["state_after_sha256"] = source["state_after_sha256"]
     repeated["state_mutated"] = False
+    repeated["policy_tool_output"]["state_mutated"] = False
     repeated["terminal_after"] = False
     episode["trace"].insert(first_policy_index + 1, repeated)
     for index, row in enumerate(episode["trace"]):
@@ -847,6 +1060,65 @@ def _insert_nonadvancing_repeat(episode: dict) -> None:
     if repeated["action"]["tool"] in {"run_wls", "verify_candidate"}:
         episode["wls_calls"] += 1
     episode["loop_detected"] = True
+    history: list[dict] = []
+    policy_ordinal = 0
+    partial_opportunity = int(
+        episode["evaluation_intervention"]["retention_opportunity_count"]
+    )
+    for row in episode["trace"]:
+        output = row["policy_tool_output"]
+        row["objective_tool_evidence"] = objective_tool_evidence(
+            row["action"], output
+        )
+        metrics = output.get("tool_metrics")
+        row["runtime_state_hash"] = (
+            metrics.get("state_hash") if isinstance(metrics, dict) else None
+        )
+        if not row["intervention"]:
+            observation = copy.deepcopy(row["policy_observation"])
+            observation.update(
+                {
+                    "active_state_id": row["state_before"]["active_state_id"],
+                    "candidate_state_id": row["state_before"][
+                        "candidate_state_id"
+                    ],
+                    "history_window": policy_safe_copy(history[-4:]),
+                    "last_tool": (
+                        history[-1]["action"]["tool"] if history else None
+                    ),
+                    "last_tool_status": (
+                        history[-1]["tool_output"]["execution_status"]
+                        if history
+                        else None
+                    ),
+                    "last_tool_output": (
+                        copy.deepcopy(history[-1]["tool_output"])
+                        if history
+                        else {}
+                    ),
+                }
+            )
+            row["policy_observation"] = observation
+            row["observation_hash"] = stable_json_sha256(observation)
+            row["objective_action_assessment"] = (
+                objective_recovery_action_assessment(
+                    observation,
+                    scenario_family=episode["family"],
+                    error_cardinality=episode["cardinality"],
+                    partial_success_opportunity=bool(
+                        partial_opportunity and policy_ordinal == 0
+                    ),
+                )
+            )
+            policy_ordinal += 1
+        history.append(
+            {
+                "state_id": row["state_before"]["active_state_id"],
+                "candidate_state_id": row["state_before"]["candidate_state_id"],
+                "action": copy.deepcopy(row["action"]),
+                "tool_output": copy.deepcopy(output),
+            }
+        )
 
 
 def _artifact(
@@ -951,7 +1223,7 @@ def _artifact(
     core["identity_sha256"] = stable_json_sha256(core)
     provenance = {**core, "release_eligible": True, "release_failures": []}
     artifact = {
-        "artifact_schema_version": 3,
+        "artifact_schema_version": STUDY_EVALUATION_SCHEMA_VERSION,
         "artifact_type": "closed_loop_release_evaluation",
         "release_eligible": True,
         "release_failures": [],
@@ -960,7 +1232,7 @@ def _artifact(
             "score": -1.0e12,
             "metrics": {},
             "suite_metrics": {
-                "schema_version": 3,
+                "schema_version": STUDY_EVALUATION_SCHEMA_VERSION,
                 "configuration": configuration,
                 "overall": _overall(episodes),
                 "episodes": episodes,
@@ -1569,6 +1841,12 @@ class EvaluationGateV3Tests(unittest.TestCase):
             )
             for index in range(MAX_STEPS + 1)
         ]
+        episode["audit"]["initial_active_state_id"] = episode["trace"][0][
+            "state_before"
+        ]["active_state_id"]
+        episode["audit"]["final_active_state_id"] = episode["trace"][-1][
+            "state_after"
+        ]["active_state_id"]
         _rehash(artifact)
 
         result = _validate(
@@ -1606,6 +1884,12 @@ class EvaluationGateV3Tests(unittest.TestCase):
             )
             for index in range(5)
         ]
+        episode["audit"]["initial_active_state_id"] = episode["trace"][0][
+            "state_before"
+        ]["active_state_id"]
+        episode["audit"]["final_active_state_id"] = episode["trace"][-1][
+            "state_after"
+        ]["active_state_id"]
         _rehash(artifact)
 
         result = _validate(
@@ -1811,8 +2095,12 @@ class EvaluationGateV3Tests(unittest.TestCase):
 
     def test_schema_versions_require_exact_integers(self) -> None:
         artifact = _artifact(self.suite_path, self.contract)
-        artifact["artifact_schema_version"] = 3.0
-        artifact["evaluation"]["suite_metrics"]["schema_version"] = 3.0
+        artifact["artifact_schema_version"] = float(
+            STUDY_EVALUATION_SCHEMA_VERSION
+        )
+        artifact["evaluation"]["suite_metrics"]["schema_version"] = float(
+            STUDY_EVALUATION_SCHEMA_VERSION
+        )
         artifact["provenance"]["provenance_schema_version"] = 1.0
         _rehash_provenance(artifact)
         _rehash(artifact)
@@ -1834,6 +2122,181 @@ class EvaluationGateV3Tests(unittest.TestCase):
         self.assertTrue(
             any("suite report schema_version" in failure for failure in result.failures),
             result.failures,
+        )
+
+    def test_schema4_objective_episode_evidence_is_mandatory(self) -> None:
+        artifact = _artifact(self.suite_path, self.contract)
+        episode = artifact["evaluation"]["suite_metrics"]["episodes"][0]
+        episode.pop("objective_evidence")
+        _rehash(artifact)
+
+        result = _validate(
+            artifact,
+            role="expert-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
+        )
+
+        self.assertFalse(result.evidence_passed)
+        self.assertTrue(
+            any("objective evidence" in failure for failure in result.failures),
+            result.failures,
+        )
+
+    def test_schema4_release_gate_recomputes_canonical_objective_evidence(
+        self,
+    ) -> None:
+        mutations = ("leakage", "assessment", "tool_evidence")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                artifact = _artifact(self.suite_path, self.contract)
+                episode = artifact["evaluation"]["suite_metrics"]["episodes"][0]
+                row = next(
+                    item for item in episode["trace"] if not item["intervention"]
+                )
+                if mutation == "leakage":
+                    row["policy_observation"]["HiddenTruth"] = ["private"]
+                    row["observation_hash"] = stable_json_sha256(
+                        row["policy_observation"]
+                    )
+                    row["objective_action_assessment"] = (
+                        objective_recovery_action_assessment(
+                            row["policy_observation"],
+                            scenario_family=episode["family"],
+                            error_cardinality=episode["cardinality"],
+                        )
+                    )
+                elif mutation == "assessment":
+                    row["objective_action_assessment"]["expected_action"] = {
+                        "tool": "finalize_diagnosis",
+                        "arguments": {},
+                    }
+                else:
+                    row["objective_tool_evidence"][
+                        "chi_square_statistic"
+                    ] = 0.1
+                _rehash(artifact)
+
+                result = _validate(
+                    artifact,
+                    role="expert-baseline",
+                    policy=self.policy,
+                    suite_path=self.suite_path,
+                )
+                self.assertFalse(result.evidence_passed)
+                expected = (
+                    "privileged fields"
+                    if mutation == "leakage"
+                    else "not reproducible"
+                )
+                self.assertTrue(
+                    any(expected in failure for failure in result.evidence_failures),
+                    result.evidence_failures,
+                )
+
+    def test_schema4_release_gate_rejects_coordinated_observation_swaps(
+        self,
+    ) -> None:
+        for mutation in ("state", "history"):
+            with self.subTest(mutation=mutation):
+                artifact = _artifact(self.suite_path, self.contract)
+                episode = artifact["evaluation"]["suite_metrics"]["episodes"][0]
+                row = next(
+                    item for item in episode["trace"] if not item["intervention"]
+                )
+                if mutation == "state":
+                    row["policy_observation"]["active_state_id"] = "forged-active"
+                else:
+                    forged_output = {
+                        "execution_status": "failure",
+                        "error_code": "fabricated_failure",
+                        "state_mutated": False,
+                    }
+                    row["policy_observation"].update(
+                        {
+                            "history_window": [
+                                {
+                                    "state_id": row["state_before"][
+                                        "active_state_id"
+                                    ],
+                                    "candidate_state_id": None,
+                                    "action": {
+                                        "tool": "run_wls",
+                                        "arguments": {
+                                            "state_id": row["state_before"][
+                                                "active_state_id"
+                                            ]
+                                        },
+                                    },
+                                    "tool_output": forged_output,
+                                }
+                            ],
+                            "last_tool": "run_wls",
+                            "last_tool_status": "failure",
+                            "last_tool_output": forged_output,
+                        }
+                    )
+                row["observation_hash"] = stable_json_sha256(
+                    row["policy_observation"]
+                )
+                row["objective_action_assessment"] = (
+                    objective_recovery_action_assessment(
+                        row["policy_observation"],
+                        scenario_family=episode["family"],
+                        error_cardinality=episode["cardinality"],
+                    )
+                )
+                _rehash(artifact)
+                result = _validate(
+                    artifact,
+                    role="expert-baseline",
+                    policy=self.policy,
+                    suite_path=self.suite_path,
+                )
+                self.assertFalse(result.evidence_passed)
+                expected = (
+                    "contradicts state_before"
+                    if mutation == "state"
+                    else "history is not derived from trace"
+                )
+                self.assertTrue(
+                    any(expected in failure for failure in result.evidence_failures),
+                    result.evidence_failures,
+                )
+
+    def test_schema4_release_gate_rejects_rehashed_trace_state_substitution(
+        self,
+    ) -> None:
+        artifact = _artifact(self.suite_path, self.contract)
+        episode = next(
+            item
+            for item in artifact["evaluation"]["suite_metrics"]["episodes"]
+            if item["suite"] == "standard_success"
+        )
+        original, old_snapshot_hash = _coordinated_trace_state_substitution(
+            episode,
+            replacement="coordinated-forged-active",
+        )
+        self.assertEqual(episode["audit"]["initial_active_state_id"], original)
+        self.assertNotEqual(
+            episode["trace"][0]["state_before_sha256"], old_snapshot_hash
+        )
+        _rehash(artifact)
+
+        result = _validate(
+            artifact,
+            role="expert-baseline",
+            policy=self.policy,
+            suite_path=self.suite_path,
+        )
+
+        self.assertFalse(result.evidence_passed)
+        self.assertTrue(
+            any(
+                "evaluator-owned initial state identity" in failure
+                for failure in result.evidence_failures
+            ),
+            result.evidence_failures,
         )
 
     def test_artifact_provenance_and_factory_integrity_remain_fail_closed(

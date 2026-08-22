@@ -36,6 +36,8 @@ class TestWandbTrainingConfiguration(unittest.TestCase):
             "train.jsonl",
             "--validation",
             "validation.jsonl",
+            "--seed",
+            "3407",
         ]
 
         defaults = parser().parse_args(common)
@@ -80,6 +82,8 @@ class TestWandbTrainingConfiguration(unittest.TestCase):
                     "train.jsonl",
                     "--validation",
                     "validation.jsonl",
+                    "--seed",
+                    "3407",
                     "--report-to",
                     "wandb",
                     "--run-name",

@@ -28,6 +28,7 @@ from psse_env.dagger import (
 from psse_env.dagger.error_injectors import InjectedAction
 from psse_env.oracle import CandidateDisposition, CandidateQualityOracle, ExpertPolicyOracle, ProcessValidityOracle
 from psse_env.oracle.candidate_quality import CandidateAssessment
+from psse_env.state_store import find_forbidden_policy_paths, policy_safe_copy
 from psse_env.verifier import RuleBasedVerifier, build_verifier_dataset, evaluate_predictions
 
 
@@ -159,6 +160,41 @@ class ObservationBoundaryTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             observation.as_dict()
+
+    def test_policy_boundary_normalizes_privileged_key_aliases(self):
+        aliases = (
+            "HiddenTruth",
+            "GROUND_TRUTH",
+            "TrueMeasurementErrors",
+            "true-parameter-errors",
+            "TRUE TOPOLOGY ERRORS",
+            "truth",
+            "ExpectedFinalState",
+            "recommended-action",
+        )
+        for alias in aliases:
+            with self.subTest(alias=alias):
+                payload = {"nested": [{alias: ["private"]}]}
+                self.assertEqual(
+                    find_forbidden_policy_paths(payload),
+                    [f"$.nested[0].{alias}"],
+                )
+                self.assertEqual(policy_safe_copy(payload), {"nested": [{}]})
+
+    def test_policy_observation_rejects_case_variant_private_truth(self):
+        for alias in (
+            "HiddenTruth",
+            "GROUND_TRUTH",
+            "TrueMeasurementErrors",
+        ):
+            with self.subTest(alias=alias):
+                observation = PolicyObservation(
+                    active_state_id="e:s0",
+                    remaining_budget=1,
+                    last_tool_output={alias: []},
+                )
+                with self.assertRaisesRegex(ValueError, alias):
+                    observation.as_dict()
 
     def test_hidden_truth_is_not_in_policy_history_after_verification(self):
         state = self.env.current_state()

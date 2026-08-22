@@ -669,6 +669,40 @@ class TestGenerationProvenance(unittest.TestCase):
                 )
         self.assertTrue(result["passed"], result["failures"])
 
+    def test_caller_held_snapshot_hashes_are_authoritative_over_live_paths(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_row, datasets, source_state = self._fixture(Path(temp_dir))
+            snapshot_hashes = {
+                split: file_sha256(path) for split, path in datasets.items()
+            }
+            with mock.patch(
+                "psse_env.sft.provenance.git_source_state",
+                return_value=source_state,
+            ):
+                matching = validate_generation_provenance(
+                    repo_root=Path(__file__).resolve().parents[3],
+                    datasets=datasets,
+                    rows=[source_row, source_row],
+                    dataset_sha256=snapshot_hashes,
+                )
+                transient_swap = validate_generation_provenance(
+                    repo_root=Path(__file__).resolve().parents[3],
+                    datasets=datasets,
+                    rows=[source_row, source_row],
+                    dataset_sha256={
+                        **snapshot_hashes,
+                        "train": "f" * 64,
+                    },
+                )
+        self.assertTrue(matching["passed"], matching["failures"])
+        self.assertFalse(transient_swap["passed"])
+        self.assertTrue(
+            any("hash mismatch" in item for item in transient_swap["failures"]),
+            transient_swap["failures"],
+        )
+
     def test_training_prepare_rejects_auxiliary_without_round1_source_gate(
         self,
     ) -> None:
@@ -705,6 +739,7 @@ class TestGenerationProvenance(unittest.TestCase):
                 round1_provenance_path=str(root / "aggregate.generation_provenance.json"),
                 round1_preflight_path=str(root / "aggregate.preflight.json"),
                 reviewed_source_commit="c" * 40,
+                round1_view="full",
             )
             with (
                 mock.patch(
@@ -752,6 +787,7 @@ class TestGenerationProvenance(unittest.TestCase):
             settings.round1_preflight_path,
             reviewed_source_commit="c" * 40,
             initial_adapter_revision="b" * 64,
+            round1_view="full",
             train_path="train.jsonl",
             validation_path="validation.jsonl",
         )
@@ -813,6 +849,7 @@ class TestGenerationProvenance(unittest.TestCase):
                 ),
                 round1_preflight_path=str(root / "aggregate.preflight.json"),
                 reviewed_source_commit="c" * 40,
+                round1_view="full",
             )
             with (
                 mock.patch(
@@ -952,7 +989,16 @@ class TestGenerationProvenance(unittest.TestCase):
             captured["settings"] = kwargs["settings"]
             raise GateError("stop after processor contract")
 
+        input_snapshot = SimpleNamespace(assert_current=lambda: None)
         with (
+            mock.patch(
+                "psse_env.sft.training._snapshot_training_inputs",
+                return_value=input_snapshot,
+            ),
+            mock.patch(
+                "psse_env.sft.training._prepare_checkpoint_receipt_binding",
+                return_value={"variant_id": "bc0"},
+            ),
             mock.patch(
                 "psse_env.sft.training._prepare_pilot",
                 side_effect=stop_after_settings,
@@ -1532,6 +1578,8 @@ class TestExactLoader(unittest.TestCase):
                         "c" * 40,
                         "--initial-adapter-revision",
                         "b" * 64,
+                        "--round1-view",
+                        "full",
                     ]
                 )
 
@@ -1541,6 +1589,7 @@ class TestExactLoader(unittest.TestCase):
             root / "aggregate.preflight.json",
             reviewed_source_commit="c" * 40,
             initial_adapter_revision="b" * 64,
+            round1_view="full",
             train_path=root / "train.jsonl",
             validation_path=root / "validation.jsonl",
             test_path=root / "test.jsonl",
@@ -1604,6 +1653,8 @@ class TestExactLoader(unittest.TestCase):
                     "train.jsonl",
                     "--validation",
                     "validation.jsonl",
+                    "--seed",
+                    "3407",
                 ]
             )
 

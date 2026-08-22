@@ -1,0 +1,557 @@
+{
+  "schema_version": 1,
+  "contract": "dagger_multiseed_four_variant_study_v1",
+  "study_id": "dagger_multi_error_comparison_v1",
+  "status": "preregistered",
+  "training_seeds": [
+    3407,
+    3408,
+    3409
+  ],
+  "bindings": {
+    "source": {
+      "contract": "externally_reviewed_clean_git_commit_v1",
+      "commit_format": "lowercase_40_hex",
+      "dirty_source_allowed": false,
+      "must_match_across_all_checkpoints_and_evaluations": true
+    },
+    "base_model": {
+      "model_id": "unsloth/gemma-4-31B-it",
+      "model_revision": "8a796db4df380b178065ed910849477ff0e99c87",
+      "must_match_across_all_variants": true
+    },
+    "evaluation": {
+      "suite_path": "psse_env/dagger/suites/bc0_eval_suite_v1.json",
+      "suite_sha256": "195cc7acfcffafbcbf8fc6a52a5eed5111f42eec586187ab051f62b0a7892081",
+      "policy_path": "psse_env/dagger/bc0_evaluation_policy.json",
+      "policy_sha256": "7cc2c94ba0c326d245d147d82fd03d547e7242b98b9c43b86b0a5c2e52c1f0bb",
+      "policy_id": "bc0_closed_loop_hard_gate_v3",
+      "evaluator_seed": 20260719,
+      "max_steps": 24,
+      "same_physical_roots_and_protocol_for_every_variant": true
+    },
+    "development_evaluation": {
+      "contract": "dagger_development_evaluation_protocol_v1",
+      "evaluation_protocol": "diagnostic_model_selection_only",
+      "diagnostic_only": true,
+      "input_suite_name": "dagger1_development",
+      "evaluator_seed": 20260721,
+      "max_steps": 24,
+      "required_suites": [
+        "dagger1_development"
+      ],
+      "minimum_suites": 1,
+      "minimum_episodes_per_suite": 1,
+      "minimum_roots_per_suite": 30,
+      "exact_physical_roots": 30,
+      "protocol": "canonical",
+      "release_qualification_allowed": false
+    }
+  },
+  "variants": [
+    {
+      "variant_id": "base",
+      "display_name": "Base Gemma model",
+      "initialization": "pinned_base_model",
+      "training_seed_policy": "not_applicable",
+      "training_sources": [],
+      "required_artifact_roles": [
+        "development_evaluation",
+        "evaluation"
+      ]
+    },
+    {
+      "variant_id": "bc0",
+      "display_name": "BC0 behavioral cloning",
+      "initialization": "pinned_base_model",
+      "training_seed_policy": "all_preregistered_training_seeds",
+      "training_sources": [
+        "d0_bc0"
+      ],
+      "required_artifact_roles": [
+        "checkpoint",
+        "development_evaluation",
+        "evaluation"
+      ]
+    },
+    {
+      "variant_id": "natural_dagger",
+      "display_name": "BC0 plus natural DAgger",
+      "initialization": "bc0_same_seed_checkpoint",
+      "training_seed_policy": "all_preregistered_training_seeds",
+      "training_sources": [
+        "d0_bc0",
+        "natural_dagger1"
+      ],
+      "required_artifact_roles": [
+        "checkpoint",
+        "development_evaluation",
+        "evaluation"
+      ]
+    },
+    {
+      "variant_id": "natural_dagger_probes",
+      "display_name": "BC0 plus natural DAgger plus recovery probes",
+      "initialization": "bc0_same_seed_checkpoint",
+      "training_seed_policy": "all_preregistered_training_seeds",
+      "training_sources": [
+        "d0_bc0",
+        "natural_dagger1",
+        "observable_recovery_probe"
+      ],
+      "required_artifact_roles": [
+        "checkpoint",
+        "development_evaluation",
+        "evaluation"
+      ]
+    }
+  ],
+  "replication_policy": {
+    "trained_variants": [
+      "bc0",
+      "natural_dagger",
+      "natural_dagger_probes"
+    ],
+    "require_every_training_seed_for_every_trained_variant": true,
+    "pair_comparisons_by_training_seed": true,
+    "base_variant_is_untrained_reference": true
+  },
+  "training_protocol_policy": {
+    "contract": "dagger_study_training_protocol_v1",
+    "dependency_lock": {
+      "path": "psse_env/requirements-sft.txt",
+      "sha256": "4118e4bb6c7b7e4fa806afb33aa0689a594ff276fcb203c8aba015bb70246fea"
+    },
+    "rng": {
+      "contract": "dagger_training_rng_attestation_v1",
+      "engines": [
+        "python_random",
+        "numpy_random",
+        "torch_cpu",
+        "torch_cuda_all"
+      ],
+      "seed_before_model_construction": true,
+      "reset_before_cold_adapter_attachment": true,
+      "warm_adapter_reset_policy": "not_applicable_existing_adapter"
+    },
+    "variant_protocols": {
+      "bc0": {
+        "model": {
+          "model_id": "unsloth/gemma-4-31B-it",
+          "model_revision": "8a796db4df380b178065ed910849477ff0e99c87",
+          "loader": "AutoModelForImageTextToText",
+          "local_files_only": true,
+          "trust_remote_code": false,
+          "device_map": "auto"
+        },
+        "processor": {
+          "model_id": "unsloth/gemma-4-31B-it",
+          "model_revision": "8a796db4df380b178065ed910849477ff0e99c87",
+          "loader": "AutoProcessor",
+          "local_files_only": true,
+          "trust_remote_code": false
+        },
+        "max_length": 6144,
+        "allow_prompt_truncation": false,
+        "lora": {
+          "rank": 16,
+          "alpha": 16,
+          "dropout": 0.0,
+          "target_module_suffixes": [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj"
+          ],
+          "bias": "none",
+          "task_type": "CAUSAL_LM"
+        },
+        "quantization": {
+          "load_in_4bit": true,
+          "quant_type": "nf4",
+          "use_double_quant": true,
+          "compute_dtype": "bfloat16"
+        },
+        "precision": {
+          "bf16": true,
+          "fp16": false
+        },
+        "trainer": {
+          "batch_size": 1,
+          "gradient_accumulation_steps": 4,
+          "learning_rate": 0.0001,
+          "epochs": 2.0,
+          "max_steps": -1,
+          "optimizer": "adamw_torch",
+          "lr_scheduler_type": "linear",
+          "packing": false,
+          "completion_only_loss": false,
+          "remove_unused_columns": false,
+          "skip_prepare_dataset": true
+        }
+      },
+      "natural_dagger": {
+        "model": {
+          "model_id": "unsloth/gemma-4-31B-it",
+          "model_revision": "8a796db4df380b178065ed910849477ff0e99c87",
+          "loader": "AutoModelForImageTextToText",
+          "local_files_only": true,
+          "trust_remote_code": false,
+          "device_map": "auto"
+        },
+        "processor": {
+          "model_id": "unsloth/gemma-4-31B-it",
+          "model_revision": "8a796db4df380b178065ed910849477ff0e99c87",
+          "loader": "AutoProcessor",
+          "local_files_only": true,
+          "trust_remote_code": false
+        },
+        "max_length": 6144,
+        "allow_prompt_truncation": false,
+        "lora": {
+          "rank": 16,
+          "alpha": 16,
+          "dropout": 0.0,
+          "target_module_suffixes": [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj"
+          ],
+          "bias": "none",
+          "task_type": "CAUSAL_LM"
+        },
+        "quantization": {
+          "load_in_4bit": true,
+          "quant_type": "nf4",
+          "use_double_quant": true,
+          "compute_dtype": "bfloat16"
+        },
+        "precision": {
+          "bf16": true,
+          "fp16": false
+        },
+        "trainer": {
+          "batch_size": 1,
+          "gradient_accumulation_steps": 4,
+          "learning_rate": 0.00003,
+          "epochs": 1.0,
+          "max_steps": -1,
+          "optimizer": "adamw_torch",
+          "lr_scheduler_type": "linear",
+          "packing": false,
+          "completion_only_loss": false,
+          "remove_unused_columns": false,
+          "skip_prepare_dataset": true
+        }
+      },
+      "natural_dagger_probes": {
+        "model": {
+          "model_id": "unsloth/gemma-4-31B-it",
+          "model_revision": "8a796db4df380b178065ed910849477ff0e99c87",
+          "loader": "AutoModelForImageTextToText",
+          "local_files_only": true,
+          "trust_remote_code": false,
+          "device_map": "auto"
+        },
+        "processor": {
+          "model_id": "unsloth/gemma-4-31B-it",
+          "model_revision": "8a796db4df380b178065ed910849477ff0e99c87",
+          "loader": "AutoProcessor",
+          "local_files_only": true,
+          "trust_remote_code": false
+        },
+        "max_length": 6144,
+        "allow_prompt_truncation": false,
+        "lora": {
+          "rank": 16,
+          "alpha": 16,
+          "dropout": 0.0,
+          "target_module_suffixes": [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj"
+          ],
+          "bias": "none",
+          "task_type": "CAUSAL_LM"
+        },
+        "quantization": {
+          "load_in_4bit": true,
+          "quant_type": "nf4",
+          "use_double_quant": true,
+          "compute_dtype": "bfloat16"
+        },
+        "precision": {
+          "bf16": true,
+          "fp16": false
+        },
+        "trainer": {
+          "batch_size": 1,
+          "gradient_accumulation_steps": 4,
+          "learning_rate": 0.00003,
+          "epochs": 1.0,
+          "max_steps": -1,
+          "optimizer": "adamw_torch",
+          "lr_scheduler_type": "linear",
+          "packing": false,
+          "completion_only_loss": false,
+          "remove_unused_columns": false,
+          "skip_prepare_dataset": true
+        }
+      }
+    }
+  },
+  "artifact_binding_policy": {
+    "checkpoint_required_fields": [
+      "artifact_schema_version",
+      "artifact_role",
+      "variant_id",
+      "study_manifest_sha256",
+      "reviewed_source_commit",
+      "base_model_id",
+      "base_model_revision",
+      "base_snapshot_attestation_sha256",
+      "training_seed",
+      "training_view_provenance_id",
+      "training_protocol",
+      "training_configuration",
+      "training_rng_attestation",
+      "parent_checkpoint_receipt_id",
+      "training_sources",
+      "round1_view",
+      "production_d1_quarantine_binding",
+      "training_dataset_sha256",
+      "parent_model_revision",
+      "adapter_path",
+      "adapter_tree_sha256",
+      "runtime_accelerator_attestation",
+      "checkpoint_receipt_id"
+    ],
+    "evaluation_required_fields": [
+      "artifact_role",
+      "variant_id",
+      "study_manifest_sha256",
+      "reviewed_source_commit",
+      "model_id",
+      "model_revision",
+      "checkpoint_receipt_id",
+      "checkpoint_adapter_tree_sha256",
+      "training_seed",
+      "frozen_suite_sha256",
+      "evaluation_policy_sha256"
+    ],
+    "development_evaluation_required_fields": [
+      "artifact_role",
+      "variant_id",
+      "study_manifest_sha256",
+      "reviewed_source_commit",
+      "model_id",
+      "model_revision",
+      "checkpoint_receipt_id",
+      "checkpoint_adapter_tree_sha256",
+      "training_seed",
+      "development_holdout_sha256",
+      "development_holdout_provenance_id",
+      "development_holdout_root_set_sha256",
+      "development_holdout_physical_roots",
+      "development_evaluation_contract_sha256",
+      "evaluation_protocol"
+    ],
+    "base_evaluation_training_seed_must_be_null": true,
+    "base_evaluation_checkpoint_binding_must_be_null": true
+  },
+  "stability_scope_policy": {
+    "required_scopes": [
+      "development_holdout",
+      "frozen_suite"
+    ],
+    "development_holdout": {
+      "artifact_role": "development_evaluation",
+      "evaluation_protocol": "diagnostic_model_selection_only",
+      "exact_physical_roots": 30,
+      "content_sha256_required": true,
+      "provenance_id_required": true,
+      "root_set_sha256_required": true,
+      "same_bound_holdout_across_all_variants_and_seeds": true,
+      "release_qualification_allowed": false
+    },
+    "frozen_suite": {
+      "artifact_role": "evaluation",
+      "suite_sha256": "195cc7acfcffafbcbf8fc6a52a5eed5111f42eec586187ab051f62b0a7892081",
+      "release_qualification_allowed": true
+    },
+    "require_both_scopes_for_stability_decision": true,
+    "frozen_suite_cannot_substitute_for_development_holdout": true,
+    "missing_or_mismatched_scope_policy": "fail_closed"
+  },
+  "comparison_policy": {
+    "primary_metric": "multi_error_episode_recovery_rate",
+    "primary_contrast": [
+      "natural_dagger_probes",
+      "bc0"
+    ],
+    "required_ablation_contrast": [
+      "natural_dagger_probes",
+      "natural_dagger"
+    ],
+    "probe_ablation_policy": {
+      "pairing": "same_training_seed",
+      "targeted_metrics": [
+        "post_failure_no_candidate_action_accuracy",
+        "unsupported_correction_recovery_action_accuracy"
+      ],
+      "targeted_improvement_operator": ">",
+      "minimum_targeted_absolute_improvement_each": 0.0,
+      "unrelated_metric_scope": "explicit_preregistered_normalized_outcome_rate_registry",
+      "unrelated_metric_scale": "unit_interval",
+      "unrelated_metric_direction": "higher_is_better",
+      "unrelated_metric_registry": [
+        "multi_error_episode_recovery_rate",
+        "diagnostic.multi_error_exact_fault_set_identification_rate",
+        "diagnostic.measurement_parameter_family_macro_f1",
+        "diagnostic.multi_error_correct_error_cardinality_rate",
+        "diagnostic.mixed_measurement_parameter_sequential_resolution_rate",
+        "physical.physically_valid_recovery_among_resolved_rate",
+        "physical.healthy_measurement_preservation_rate",
+        "physical.healthy_branch_parameter_preservation_rate",
+        "physical.final_residual_chi_square_acceptance_rate",
+        "physical.post_commit_powerflow_topology_feasibility_rate",
+        "recovery_action_accuracy.premature_commit_recovery",
+        "recovery_action_accuracy.premature_escalation_recovery",
+        "recovery_action_accuracy.rejected_candidate_rollback",
+        "recovery_action_accuracy.safe_continuation_after_partial_success",
+        "recovery_action_accuracy.measurement_parameter_sequential_handoff"
+      ],
+      "excluded_numeric_scopes": [
+        "evidence_counts_numerators_denominators_and_support",
+        "safety_counts_governed_by_zero_tolerance_rules",
+        "action_quality_efficiency_metrics_governed_by_objective_thresholds",
+        "hashes_identifiers_and_threshold_constants"
+      ],
+      "maximum_unrelated_absolute_degradation": 0.02,
+      "unsupported_or_empty_metric_policy": "fail_closed"
+    },
+    "minimum_complete_variant_recovery_rate": 0.9,
+    "minimum_mean_primary_improvement": 0.1,
+    "minimum_training_seed_count": 3,
+    "required_stability_scopes": [
+      "development_holdout",
+      "frozen_suite"
+    ],
+    "missing_stability_scope_policy": "fail_closed",
+    "require_every_seed_non_degrading_vs_bc0": true,
+    "require_bootstrap_95ci_excludes_zero": true,
+    "maximum_complete_variant_seed_spread": 0.05,
+    "maximum_single_error_degradation": 0.02,
+    "family_metric": "multi_error_episode_recovery_rate",
+    "family_scope": "all_preregistered_error_families",
+    "family_reference_variant": "bc0",
+    "family_pairing": "same_training_seed",
+    "unsupported_or_empty_family_policy": "fail_closed",
+    "require_no_material_family_regression": true,
+    "maximum_material_family_regression": 0.02,
+    "maximum_false_commit_count": 0,
+    "maximum_false_finalization_count": 0,
+    "maximum_false_rollback_count": 0,
+    "maximum_teacher_targets_quarantined_in_production_d1": 0,
+    "maximum_finalize_with_unresolved_private_fault_count": 0,
+    "maximum_physically_unsafe_commit_count": 0,
+    "maximum_truth_safe_accepted_candidate_rollback_count": 0,
+    "maximum_hidden_truth_leakage_count": 0,
+    "maximum_healthy_component_corruption_episodes": 0,
+    "maximum_healthy_target_corruption_episodes": 0,
+    "maximum_unknown_healthy_preservation_episodes": 0,
+    "maximum_evaluator_error_episodes": 0
+  },
+  "objective_thresholds": {
+    "evidence_policy": "required_fail_closed_if_unavailable",
+    "diagnostic": {
+      "multi_error_exact_fault_set_identification_rate": {
+        "operator": ">=",
+        "value": 0.9
+      },
+      "measurement_parameter_family_macro_f1": {
+        "operator": ">=",
+        "value": 0.95
+      },
+      "multi_error_correct_error_cardinality_rate": {
+        "operator": ">=",
+        "value": 0.9
+      },
+      "mixed_measurement_parameter_sequential_resolution_rate": {
+        "operator": ">=",
+        "value": 0.9
+      }
+    },
+    "physical": {
+      "physically_valid_recovery_among_resolved_rate": {
+        "operator": ">=",
+        "value": 0.95
+      },
+      "healthy_measurement_preservation_rate": {
+        "operator": "==",
+        "value": 1.0
+      },
+      "healthy_branch_parameter_preservation_rate": {
+        "operator": "==",
+        "value": 1.0
+      },
+      "final_residual_chi_square_acceptance_rate": {
+        "operator": ">=",
+        "value": 0.95
+      },
+      "post_commit_powerflow_topology_feasibility_rate": {
+        "operator": "==",
+        "value": 1.0
+      }
+    },
+    "recovery_action_accuracy": {
+      "post_failure_no_candidate": 0.9,
+      "unsupported_correction_recovery": 0.9,
+      "premature_commit_recovery": 0.95,
+      "premature_escalation_recovery": 0.9,
+      "rejected_candidate_rollback": 0.95,
+      "safe_continuation_after_partial_success": 0.9,
+      "measurement_parameter_sequential_handoff": 0.9
+    },
+    "action_quality_efficiency": {
+      "schema_valid_tool_call_rate": {
+        "operator": ">=",
+        "value": 0.99
+      },
+      "state_bound_action_rate": {
+        "operator": ">=",
+        "value": 0.98
+      },
+      "horizon_without_disposition_rate": {
+        "operator": "<",
+        "value": 0.02
+      },
+      "repeated_action_loop_rate": {
+        "operator": "<",
+        "value": 0.02
+      },
+      "median_tool_calls_successful_multi_error": {
+        "operator": "<=paired_bc0"
+      },
+      "mean_invalid_redundant_actions": {
+        "operator": "<=paired_bc0_ratio",
+        "value": 0.5
+      },
+      "correct_operator_handoff_rate": {
+        "operator": ">=",
+        "value": 0.95
+      }
+    }
+  }
+}

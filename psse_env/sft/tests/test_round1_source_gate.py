@@ -16,12 +16,19 @@ from psse_env.dagger.collect_dagger1 import (
     DAGGER1_SCENARIO_BUILDER_CONTRACT,
     dagger1_execution_pipeline_contract,
 )
+from psse_env.dagger.build_dagger1_aggregate import (
+    generation_id_independent_rows,
+)
 from psse_env.dagger.dataset_builder import examples_to_chat_sft
 from psse_env.dagger.replay_buffer import (
     DAGGER1_ROUND1_SOURCE_CAPACITY_CONTRACT,
     dagger1_round1_source_capacity_report,
 )
 from psse_env.dagger.round1_view_policy import round1_view_policy_digest
+from psse_env.dagger.round1_view_policy import (
+    round1_natural_only_view_policy_digest,
+)
+from psse_env.dagger.natural_only_view import build_round1_natural_only_view
 from psse_env.dagger.three_source_view import (
     FINAL_VIEW_SUPPORT_CONTRACT,
     build_dagger1_three_source_view,
@@ -81,6 +88,26 @@ TEST_VIEW_POLICY = {
     "probe_floor_distinct_roots": 1,
     "combined_floor_distinct_roots": 1,
 }
+TEST_NATURAL_ONLY_VIEW_POLICY = {
+    "contract": "dagger1_round1_natural_d1_only_derived_view_v1",
+    "schema_version": 1,
+    "view_id": "natural-only",
+    "parent_view_contract": TEST_VIEW_POLICY["contract"],
+    "parent_view_policy_digest": round1_view_policy_digest(TEST_VIEW_POLICY),
+    "derivation": "ordered_filter_of_canonical_full_placement_v1",
+    "retained_replay_sources": ["d0_bc0", "natural_dagger1"],
+    "excluded_replay_sources": ["observable_recovery_probe"],
+    "total_rows": 2,
+    "allocation": {
+        "d0_bc0_rows": 1,
+        "natural_d1_rows": 1,
+        "observable_recovery_probe_rows": 0,
+    },
+    "parent_allocation": dict(TEST_VIEW_POLICY["allocation"]),
+    "require_identical_parent_row_objects": True,
+    "require_identical_parent_order": True,
+    "permit_reselection": False,
+}
 
 
 class Round1SourceMixGateTests(unittest.TestCase):
@@ -103,6 +130,17 @@ class Round1SourceMixGateTests(unittest.TestCase):
             mock.patch(
                 "psse_env.sft.round1_source_gate.round1_view_policy_digest",
                 side_effect=lambda: round1_view_policy_digest(TEST_VIEW_POLICY),
+            ),
+            mock.patch(
+                "psse_env.sft.round1_source_gate.ROUND1_NATURAL_ONLY_VIEW_POLICY",
+                TEST_NATURAL_ONLY_VIEW_POLICY,
+            ),
+            mock.patch(
+                "psse_env.sft.round1_source_gate."
+                "round1_natural_only_view_policy_digest",
+                side_effect=lambda: round1_natural_only_view_policy_digest(
+                    TEST_NATURAL_ONLY_VIEW_POLICY
+                ),
             ),
             mock.patch(
                 "psse_env.sft.round1_source_gate.audit_dagger1_training_support",
@@ -202,6 +240,11 @@ class Round1SourceMixGateTests(unittest.TestCase):
             probe_rows=probe_rows,
             policy=TEST_VIEW_POLICY,
         )
+        natural_only_raw, natural_only_view = build_round1_natural_only_view(
+            raw_view,
+            full_policy=TEST_VIEW_POLICY,
+            natural_only_policy=TEST_NATURAL_ONLY_VIEW_POLICY,
+        )
         validation_rows = [self._source_row("validation", "root-validation")]
         test_rows = [self._source_row("test", "root-test")]
 
@@ -300,6 +343,7 @@ class Round1SourceMixGateTests(unittest.TestCase):
             ],
             "d1_three_source_training_support": self.support,
             "final_view_support": self.final_support,
+            "natural_only_view": natural_only_view,
             "round1_source_capacity": round1_source_capacity,
             "union_realizability": semantic,
         }
@@ -335,6 +379,16 @@ class Round1SourceMixGateTests(unittest.TestCase):
             "round1_view_policy_digest": round1_view_policy_digest(
                 TEST_VIEW_POLICY
             ),
+            "natural_only_view_contract": natural_only_view["contract"],
+            "natural_only_view_policy": TEST_NATURAL_ONLY_VIEW_POLICY,
+            "natural_only_view_policy_digest": (
+                round1_natural_only_view_policy_digest(
+                    TEST_NATURAL_ONLY_VIEW_POLICY
+                )
+            ),
+            "natural_only_view_report_sha256": stable_json_sha256(
+                natural_only_view
+            ),
             "audit_report_sha256": audit_hashes,
             "input_artifacts": {
                 "d0_manifest_sha256": D0_MANIFEST_SHA256,
@@ -356,6 +410,19 @@ class Round1SourceMixGateTests(unittest.TestCase):
                 "immutable_holdout_content_sha256": {
                     "validation": stable_json_sha256(validation_rows),
                     "test": stable_json_sha256(test_rows),
+                },
+                "immutable_derived_view_content_sha256": {
+                    "natural_only_raw": stable_json_sha256(
+                        generation_id_independent_rows(natural_only_raw)
+                    ),
+                    "natural_only_chat": stable_json_sha256(
+                        generation_id_independent_rows(
+                            examples_to_chat_sft(
+                                natural_only_raw,
+                                protocol="canonical",
+                            )
+                        )
+                    ),
                 },
                 "d1_development_holdout": {
                     "holdout_sha256": DEVELOPMENT_HOLDOUT_SHA256,
@@ -387,12 +454,18 @@ class Round1SourceMixGateTests(unittest.TestCase):
         provenance_id = stable_json_sha256(descriptor)
         for row in raw_view:
             row["generation_provenance_id"] = provenance_id
+        for row in natural_only_raw:
+            row["generation_provenance_id"] = provenance_id
         for row in [*validation_rows, *test_rows]:
             row["generation_provenance_id"] = provenance_id
         train_rows = examples_to_chat_sft(
             raw_view,
             protocol="canonical",
             allow_ineligible_auxiliary=True,
+        )
+        natural_only_train_rows = examples_to_chat_sft(
+            natural_only_raw,
+            protocol="canonical",
         )
 
         def write_rows(name: str, rows: list[dict[str, Any]]) -> None:
@@ -407,6 +480,14 @@ class Round1SourceMixGateTests(unittest.TestCase):
         write_rows("aggregate.raw.jsonl", [*d0_rows, *d1_rows, *probe_rows])
         write_rows("aggregate.train_view.raw.jsonl", raw_view)
         write_rows("aggregate.train_view.jsonl", train_rows)
+        write_rows(
+            "aggregate.natural_only.train_view.raw.jsonl",
+            natural_only_raw,
+        )
+        write_rows(
+            "aggregate.natural_only.train_view.jsonl",
+            natural_only_train_rows,
+        )
         write_rows("aggregate.validation.jsonl", validation_rows)
         write_rows("aggregate.test.jsonl", test_rows)
         provenance = {
@@ -419,6 +500,7 @@ class Round1SourceMixGateTests(unittest.TestCase):
             },
             "probe_binding": probe_binding,
             "final_view_support": self.final_support,
+            "natural_only_view": natural_only_view,
             "round1_source_capacity": round1_source_capacity,
             "round1_source_capacity_report_sha256": stable_json_sha256(
                 round1_source_capacity
@@ -427,11 +509,14 @@ class Round1SourceMixGateTests(unittest.TestCase):
                 "d1_execution_pipeline_approved": True,
                 "final_view_support": True,
                 "round1_source_capacity": True,
+                "natural_only_view_release_ready": True,
             },
         }
         preflight = {
             "generation_provenance_id": provenance_id,
             "training_view": training_view,
+            "natural_only_view": natural_only_view,
+            "natural_only_view_policy": TEST_NATURAL_ONLY_VIEW_POLICY,
             "recomputed_d1_audits": recomputed_d1,
             "semantic_realizability": semantic,
             "audit_report_sha256": audit_hashes,
@@ -450,6 +535,7 @@ class Round1SourceMixGateTests(unittest.TestCase):
                 "d1_execution_pipeline_approved": True,
                 "final_view_support": True,
                 "round1_source_capacity": True,
+                "natural_only_view_release_ready": True,
             },
         }
         provenance_path = root / "aggregate.generation_provenance.json"
@@ -790,6 +876,18 @@ class Round1SourceMixGateTests(unittest.TestCase):
             preflight,
             reviewed_source_commit=SOURCE_COMMIT,
             initial_adapter_revision=ADAPTER_REVISION,
+            round1_view="full",
+        )
+
+    @staticmethod
+    def _rebind_file_hash(provenance_path: Path, filename: str) -> None:
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        provenance["dataset_hashes"][filename] = file_sha256(
+            provenance_path.parent / filename
+        )
+        provenance_path.write_text(
+            json.dumps(provenance, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
         )
 
     def test_valid_artifacts_pass_function_and_cli(self) -> None:
@@ -819,6 +917,22 @@ class Round1SourceMixGateTests(unittest.TestCase):
                     )
                 ),
             )
+            quarantine = report["production_d1_quarantine_binding"]
+            expected_summary = preflight_payload["recomputed_d1_audits"][
+                "offline_teacher_target_quarantine_summary"
+            ]
+            self.assertEqual(quarantine["status"], "applicable")
+            self.assertEqual(quarantine["quarantined_rows"], 0)
+            self.assertEqual(quarantine["candidate_rows"], 25)
+            self.assertEqual(quarantine["summary"], expected_summary)
+            self.assertEqual(
+                quarantine["audit_report_sha256"],
+                stable_json_sha256(expected_summary),
+            )
+            self.assertEqual(
+                quarantine["generation_provenance_id"],
+                report["generation_provenance_id"],
+            )
 
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
@@ -832,10 +946,143 @@ class Round1SourceMixGateTests(unittest.TestCase):
                         SOURCE_COMMIT,
                         "--initial-adapter-revision",
                         ADAPTER_REVISION,
+                        "--round1-view",
+                        "full",
                     ]
                 )
             self.assertEqual(result, 0)
             self.assertIn("source gate passed", output.getvalue())
+
+    def test_natural_only_view_is_explicit_and_byte_reconstructed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            provenance, preflight = self._write_valid_artifacts(root)
+            report = validate_round1_source_mix_gate(
+                provenance,
+                preflight,
+                reviewed_source_commit=SOURCE_COMMIT,
+                initial_adapter_revision=ADAPTER_REVISION,
+                round1_view="natural-only",
+                train_path=root / "aggregate.natural_only.train_view.jsonl",
+                validation_path=root / "aggregate.validation.jsonl",
+                test_path=root / "aggregate.test.jsonl",
+            )
+            self.assertTrue(report["passed"])
+            self.assertEqual(report["selected_view"], "natural-only")
+            self.assertEqual(
+                report["source_allocation"],
+                TEST_NATURAL_ONLY_VIEW_POLICY["allocation"],
+            )
+            self.assertEqual(report["selected_train_rows"], 2)
+            self.assertEqual(report["selected_d1_recovery_rows"], 1)
+            self.assertEqual(report["selected_probe_rows"], 0)
+            self.assertEqual(
+                report["production_d1_quarantine_binding"][
+                    "audit_report_sha256"
+                ],
+                stable_json_sha256(
+                    json.loads(preflight.read_text(encoding="utf-8"))[
+                        "recomputed_d1_audits"
+                    ]["offline_teacher_target_quarantine_summary"]
+                ),
+            )
+
+    def test_mismatched_view_selection_rejects_the_other_train_artifact(self) -> None:
+        for selected_view, wrong_name in (
+            ("natural-only", "aggregate.train_view.jsonl"),
+            ("full", "aggregate.natural_only.train_view.jsonl"),
+        ):
+            with (
+                self.subTest(selected_view=selected_view),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                provenance, preflight = self._write_valid_artifacts(root)
+                with self.assertRaisesRegex(GateError, "canonical dataset path"):
+                    validate_round1_source_mix_gate(
+                        provenance,
+                        preflight,
+                        reviewed_source_commit=SOURCE_COMMIT,
+                        initial_adapter_revision=ADAPTER_REVISION,
+                        round1_view=selected_view,
+                        train_path=root / wrong_name,
+                    )
+
+    def test_forged_natural_row_cannot_be_rehashed_into_acceptance(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            provenance, preflight = self._write_valid_artifacts(root)
+            filename = "aggregate.natural_only.train_view.raw.jsonl"
+            path = root / filename
+            rows = [json.loads(line) for line in path.read_text().splitlines()]
+            rows[0]["example_id"] = "forged-natural-placement"
+            path.write_text(
+                "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+            self._rebind_file_hash(provenance, filename)
+            with self.assertRaisesRegex(GateError, "natural-only raw view"):
+                self._validate(provenance, preflight)
+
+    def test_reformatted_natural_chat_cannot_be_rehashed_into_acceptance(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            provenance, preflight = self._write_valid_artifacts(root)
+            filename = "aggregate.natural_only.train_view.jsonl"
+            path = root / filename
+            rows = [json.loads(line) for line in path.read_text().splitlines()]
+            path.write_text(
+                "".join(
+                    json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n"
+                    for row in rows
+                ),
+                encoding="utf-8",
+            )
+            self._rebind_file_hash(provenance, filename)
+            with self.assertRaisesRegex(GateError, "byte-reconstruct"):
+                self._validate(provenance, preflight)
+
+    def test_extra_probe_or_missing_natural_in_derived_view_is_rejected(self) -> None:
+        for mutation in ("extra-probe", "missing-natural"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                provenance, preflight = self._write_valid_artifacts(root)
+                filename = "aggregate.natural_only.train_view.raw.jsonl"
+                path = root / filename
+                rows = [json.loads(line) for line in path.read_text().splitlines()]
+                if mutation == "extra-probe":
+                    probe_rows = [
+                        json.loads(line)
+                        for line in (root / "aggregate.train_view.raw.jsonl")
+                        .read_text()
+                        .splitlines()
+                        if line.strip()
+                    ]
+                    rows.append(
+                        next(
+                            row
+                            for row in probe_rows
+                            if row.get("replay_source")
+                            == "observable_recovery_probe"
+                        )
+                    )
+                else:
+                    del rows[
+                        next(
+                            index
+                            for index, row in enumerate(rows)
+                            if row.get("replay_source") == "natural_dagger1"
+                        )
+                    ]
+                path.write_text(
+                    "".join(
+                        json.dumps(row, sort_keys=True) + "\n" for row in rows
+                    ),
+                    encoding="utf-8",
+                )
+                self._rebind_file_hash(provenance, filename)
+                with self.assertRaisesRegex(GateError, "natural-only raw view"):
+                    self._validate(provenance, preflight)
 
     def test_missing_execution_pipeline_contract_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1007,6 +1254,7 @@ class Round1SourceMixGateTests(unittest.TestCase):
                     preflight,
                     reviewed_source_commit=SOURCE_COMMIT,
                     initial_adapter_revision=ADAPTER_REVISION,
+                    round1_view="full",
                     train_path=root / "alternate.jsonl",
                     validation_path=root / "aggregate.validation.jsonl",
                 )
@@ -1225,6 +1473,7 @@ class Round1SourceMixGateTests(unittest.TestCase):
                     preflight,
                     reviewed_source_commit=SOURCE_COMMIT,
                     initial_adapter_revision="f" * 64,
+                    round1_view="full",
                 )
 
     def test_aggregate_source_must_be_release_eligible(self) -> None:

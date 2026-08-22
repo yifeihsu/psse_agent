@@ -14,6 +14,10 @@ from psse_env.actions import (
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     RUN_WLS,
 )
+from psse_env.dagger.offline_teacher_target_audit import (
+    OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT,
+    validate_offline_teacher_target_audit_metadata,
+)
 from psse_env.dagger.recovery_probes import (
     RECOVERY_PROBE_COLLECTION_ROLE,
     RECOVERY_PROBE_DATASET_SOURCE,
@@ -79,16 +83,50 @@ def _after_failure(tool: str, error_code: str, **overrides: Any) -> dict[str, An
 
 
 
-_PASS_PROOF = lambda observation, *, preferred_action, expert_actions: {
-    "contract": "observable_rank_one_target_v1",
-    "passed": True,
-    "basis": "test_stub",
-}
-_PASS_AUDIT = lambda observation, *, preferred_action, env, history, scenario, observable_evidence_passed: {
-    "contract": "dagger1_offline_teacher_target_truth_audit_v3",
-    "passed": True,
-    "action_class": "correct_measurements",
-}
+def _passed_rank_one_proof(
+    observation, *, preferred_action, expert_actions
+):
+    del observation, preferred_action, expert_actions
+    return {
+        "contract": "observable_rank_one_target_v1",
+        "passed": True,
+        "basis": "test_stub",
+    }
+
+
+_PASS_PROOF = _passed_rank_one_proof
+
+
+def _passed_current_audit(
+    observation,
+    *,
+    preferred_action,
+    env,
+    history,
+    scenario,
+    observable_evidence_passed,
+):
+    del (
+        observation,
+        preferred_action,
+        env,
+        history,
+        scenario,
+        observable_evidence_passed,
+    )
+    return validate_offline_teacher_target_audit_metadata(
+        {
+            "contract": OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT,
+            "passed": True,
+            "action_class": "read_only",
+            "checks": {"observable_evidence_gate_passed": True},
+            "reason_codes": [],
+        },
+        require_passed=True,
+    )
+
+
+_PASS_AUDIT = _passed_current_audit
 
 class RecoveryProbeInterventionTests(unittest.TestCase):
     def test_post_failure_probe_declines_when_a_candidate_is_open(self):

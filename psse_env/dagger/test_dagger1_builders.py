@@ -1586,6 +1586,48 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                     for row in rows
                 ]
 
+            def fake_natural_only(rows, **kwargs):
+                del kwargs
+                retained = [
+                    copy.deepcopy(row)
+                    for row in rows
+                    if row.get("replay_source")
+                    in {"d0_bc0", "natural_dagger1"}
+                ]
+                return retained, {
+                    "contract": aggregate_module.NATURAL_ONLY_VIEW_BUILD_CONTRACT,
+                    "schema_version": 1,
+                    "view_id": "natural-only",
+                    "derivation": "ordered_filter_of_canonical_full_placement_v1",
+                    "full_view_policy_digest": (
+                        aggregate_module.round1_view_policy_digest()
+                    ),
+                    "natural_only_view_policy_digest": (
+                        aggregate_module.round1_natural_only_view_policy_digest()
+                    ),
+                    "parent_rows": len(rows),
+                    "parent_allocation": dict(
+                        aggregate_module.ROUND1_THREE_SOURCE_VIEW_POLICY[
+                            "allocation"
+                        ]
+                    ),
+                    "parent_content_sha256": stable_json_sha256(rows),
+                    "retained_parent_indices_sha256": "1" * 64,
+                    "excluded_parent_indices_sha256": "2" * 64,
+                    "retained_rows": len(retained),
+                    "retained_allocation": dict(
+                        aggregate_module.ROUND1_NATURAL_ONLY_VIEW_POLICY[
+                            "allocation"
+                        ]
+                    ),
+                    "retained_content_sha256": stable_json_sha256(retained),
+                    "excluded_probe_rows": 1,
+                    "identical_parent_row_objects": True,
+                    "identical_parent_order": True,
+                    "reselection_performed": False,
+                    "passed": True,
+                }
+
             output_dir = root / "round1"
             with (
                 patch.object(
@@ -1597,6 +1639,11 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                     aggregate_module,
                     "build_dagger1_three_source_view",
                     side_effect=fake_view,
+                ),
+                patch.object(
+                    aggregate_module,
+                    "build_round1_natural_only_view",
+                    side_effect=fake_natural_only,
                 ),
                 patch.object(
                     aggregate_module,
@@ -1804,8 +1851,77 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                     "aggregate.raw.jsonl",
                     "aggregate.d0.raw.jsonl",
                     "aggregate.d1.raw.jsonl",
+                    "aggregate.natural_only.train_view.raw.jsonl",
+                    "aggregate.natural_only.train_view.jsonl",
                 ):
                     self.assertTrue((output_dir / immutable_name).is_file())
+                full_view_rows = [
+                    json.loads(line)
+                    for line in (output_dir / "aggregate.train_view.raw.jsonl")
+                    .read_text(encoding="utf-8")
+                    .splitlines()
+                    if line.strip()
+                ]
+                natural_only_rows = [
+                    json.loads(line)
+                    for line in (
+                        output_dir
+                        / "aggregate.natural_only.train_view.raw.jsonl"
+                    )
+                    .read_text(encoding="utf-8")
+                    .splitlines()
+                    if line.strip()
+                ]
+                self.assertEqual(
+                    natural_only_rows,
+                    [
+                        row
+                        for row in full_view_rows
+                        if row.get("replay_source")
+                        in {"d0_bc0", "natural_dagger1"}
+                    ],
+                )
+                full_chat_rows = [
+                    json.loads(line)
+                    for line in (output_dir / "aggregate.train_view.jsonl")
+                    .read_text(encoding="utf-8")
+                    .splitlines()
+                    if line.strip()
+                ]
+                natural_only_chat_rows = [
+                    json.loads(line)
+                    for line in (
+                        output_dir
+                        / "aggregate.natural_only.train_view.jsonl"
+                    )
+                    .read_text(encoding="utf-8")
+                    .splitlines()
+                    if line.strip()
+                ]
+                self.assertEqual(
+                    natural_only_chat_rows,
+                    [
+                        row
+                        for row in full_chat_rows
+                        if row.get("example_id")
+                        in {
+                            retained.get("example_id")
+                            for retained in natural_only_rows
+                        }
+                    ],
+                )
+                self.assertTrue(
+                    report["release_checks"]["natural_only_view_release_ready"]
+                )
+                self.assertEqual(
+                    provenance["natural_only_view"],
+                    report["natural_only_view"],
+                )
+                self.assertEqual(
+                    provenance["generation_descriptor"]
+                    ["natural_only_view_report_sha256"],
+                    stable_json_sha256(report["natural_only_view"]),
+                )
 
                 empty_output_dir = root / "round1-existing-empty"
                 empty_output_dir.mkdir()

@@ -48,6 +48,53 @@ class Dagger1SemanticAuditTests(unittest.TestCase):
         self.assertFalse(singleton["comparison_coverage_passed"])
         self.assertFalse(singleton["release_gate_passed"])
 
+    def test_underpowered_stratum_keeps_safety_binding(self) -> None:
+        singleton = stratified_approximate_realizability(
+            _rows(1),
+            "recovery_stratum",
+            neighbor_gate_minimum_distinct_roots=5,
+        )["post_failure_no_candidate"]
+        self.assertTrue(singleton["stratified_safety_passed"], singleton)
+        self.assertFalse(singleton["comparison_coverage_passed"], singleton)
+        self.assertFalse(
+            singleton["neighbor_stability_gate_applicable"], singleton
+        )
+        self.assertEqual(
+            singleton["release_gate_status"],
+            "safety_passed_neighbor_underpowered",
+        )
+        self.assertTrue(singleton["release_gate_passed"], singleton)
+
+        rows = _rows(1)
+        bad = copy.deepcopy(rows[0])
+        bad["example_id"] = "conflict"
+        bad["preferred_action"] = {
+            "tool": "get_measurement_context",
+            "arguments": {"state_id": "active"},
+        }
+        unsafe = stratified_approximate_realizability(
+            [*rows, bad],
+            "recovery_stratum",
+            neighbor_gate_minimum_distinct_roots=5,
+        )["post_failure_no_candidate"]
+        self.assertFalse(unsafe["stratified_safety_passed"], unsafe)
+        self.assertEqual(unsafe["release_gate_status"], "failed_safety")
+        self.assertFalse(unsafe["release_gate_passed"], unsafe)
+
+    def test_union_treats_singleton_incidental_recovery_as_underpowered(self) -> None:
+        natural = _rows()
+        natural[0]["recovery_stratum"] = "invalid_precondition_repair"
+        report = audit_dagger1_union_realizability(natural, natural)
+        singleton = report[
+            "approximate_teacher_realizability_by_recovery_stratum"
+        ]["invalid_precondition_repair"]
+        self.assertEqual(singleton["distinct_physical_roots"], 1)
+        self.assertEqual(
+            singleton["release_gate_status"],
+            "safety_passed_neighbor_underpowered",
+        )
+        self.assertTrue(singleton["release_gate_passed"], singleton)
+
     def test_union_gate_detects_exact_conflict_in_natural_population(self) -> None:
         natural = _rows()
         conflicting = copy.deepcopy(natural[0])

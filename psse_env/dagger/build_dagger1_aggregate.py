@@ -20,6 +20,7 @@ import psse_env.dagger.offline_teacher_target_audit as offline_audit_module
 import psse_env.dagger.replay_buffer as replay_buffer_module
 import psse_env.dagger.rollout_collector as rollout_collector_module
 import psse_env.dagger.three_source_view as three_source_view_module
+import psse_env.dagger.natural_only_view as natural_only_view_module
 import psse_env.dagger.build_recovery_probe_suite as recovery_probe_builder_module
 from psse_env.dagger.build_recovery_probe_suite import (
     validate_recovery_probe_suite_binding,
@@ -50,8 +51,14 @@ from psse_env.dagger.replay_buffer import (
     dagger1_round1_source_capacity_report,
 )
 from psse_env.dagger.round1_view_policy import (
+    ROUND1_NATURAL_ONLY_VIEW_POLICY,
     ROUND1_THREE_SOURCE_VIEW_POLICY,
+    round1_natural_only_view_policy_digest,
     round1_view_policy_digest,
+)
+from psse_env.dagger.natural_only_view import (
+    NATURAL_ONLY_VIEW_BUILD_CONTRACT,
+    build_round1_natural_only_view,
 )
 from psse_env.dagger.three_source_view import (
     FINAL_VIEW_SUPPORT_CONTRACT,
@@ -89,6 +96,8 @@ _ROUND1_OUTPUT_FILENAMES = (
     "aggregate.probe.raw.jsonl",
     "aggregate.train_view.raw.jsonl",
     "aggregate.train_view.jsonl",
+    "aggregate.natural_only.train_view.raw.jsonl",
+    "aggregate.natural_only.train_view.jsonl",
     "aggregate.validation.jsonl",
     "aggregate.test.jsonl",
     "aggregate.generation_provenance.json",
@@ -1188,6 +1197,14 @@ def build_round1_aggregate(
         source_probe_rows=probes,
         training_view_report=training_view_report,
     )
+    natural_only_raw_view, natural_only_view_report = (
+        build_round1_natural_only_view(raw_view)
+    )
+    if natural_only_view_report.get("passed") is not True:
+        raise RuntimeError(
+            "Natural-D1-only ordered projection failed: "
+            f"{natural_only_view_report}"
+        )
 
     natural_rows = [*d0_train, *d1, *probes]
     semantic_realizability = audit_dagger1_union_realizability(
@@ -1213,6 +1230,7 @@ def build_round1_aggregate(
         ),
         "d1_three_source_training_support": training_support,
         "final_view_support": final_view_support,
+        "natural_only_view": natural_only_view_report,
         "union_realizability": semantic_realizability,
     }
     for key in (
@@ -1249,8 +1267,17 @@ def build_round1_aggregate(
         protocol="canonical",
         allow_ineligible_auxiliary=True,
     )
+    tentative_natural_only_train = examples_to_chat_sft(
+        natural_only_raw_view,
+        protocol="canonical",
+    )
     schema_hashes = tool_schema_hashes(
-        [*tentative_train, *validation_rows, *test_rows]
+        [
+            *tentative_train,
+            *tentative_natural_only_train,
+            *validation_rows,
+            *test_rows,
+        ]
     )
     if len(schema_hashes) != 1:
         raise ValueError(f"D0/D1/probe tool schema mismatch: {schema_hashes}")
@@ -1264,6 +1291,7 @@ def build_round1_aggregate(
         Path(replay_buffer_module.__file__),
         Path(rollout_collector_module.__file__),
         Path(three_source_view_module.__file__),
+        Path(natural_only_view_module.__file__),
         Path(recovery_probe_builder_module.__file__),
     )
     generation_descriptor = {
@@ -1324,11 +1352,29 @@ def build_round1_aggregate(
                     generation_id_independent_rows(test_rows)
                 ),
             },
+            "immutable_derived_view_content_sha256": {
+                "natural_only_raw": stable_json_sha256(
+                    generation_id_independent_rows(natural_only_raw_view)
+                ),
+                "natural_only_chat": stable_json_sha256(
+                    generation_id_independent_rows(
+                        tentative_natural_only_train
+                    )
+                ),
+            },
         },
         "learner_seed": learner_seed_binding,
         "training_view_contract": THREE_SOURCE_VIEW_CONTRACT,
         "round1_view_policy_digest": round1_view_policy_digest(),
         "round1_view_policy": ROUND1_THREE_SOURCE_VIEW_POLICY,
+        "natural_only_view_contract": NATURAL_ONLY_VIEW_BUILD_CONTRACT,
+        "natural_only_view_policy_digest": (
+            round1_natural_only_view_policy_digest()
+        ),
+        "natural_only_view_policy": ROUND1_NATURAL_ONLY_VIEW_POLICY,
+        "natural_only_view_report_sha256": stable_json_sha256(
+            natural_only_view_report
+        ),
         "training_view_report_sha256": stable_json_sha256(training_view_report),
         "training_support_report_sha256": stable_json_sha256(training_support),
         "final_view_support_report_sha256": stable_json_sha256(
@@ -1342,15 +1388,27 @@ def build_round1_aggregate(
             "policy_digest": round1_view_policy_digest(),
             "allocation": dict(ROUND1_THREE_SOURCE_VIEW_POLICY["allocation"]),
             "global_caps": dict(ROUND1_THREE_SOURCE_VIEW_POLICY["global_caps"]),
+            "natural_only_policy_digest": (
+                round1_natural_only_view_policy_digest()
+            ),
+            "natural_only_allocation": dict(
+                ROUND1_NATURAL_ONLY_VIEW_POLICY["allocation"]
+            ),
         },
     }
     provenance_id = stable_json_sha256(generation_descriptor)
     for row in raw_view:
         row["generation_provenance_id"] = provenance_id
+    for row in natural_only_raw_view:
+        row["generation_provenance_id"] = provenance_id
     train_rows = examples_to_chat_sft(
         raw_view,
         protocol="canonical",
         allow_ineligible_auxiliary=True,
+    )
+    natural_only_train_rows = examples_to_chat_sft(
+        natural_only_raw_view,
+        protocol="canonical",
     )
     validation_rows = [
         _bind_generation_id(row, provenance_id) for row in validation_rows
@@ -1390,6 +1448,12 @@ def build_round1_aggregate(
             d1_selection_binding.get("passed") is True
         ),
         "training_view_release_ready": training_view_report.get("passed") is True,
+        "natural_only_view_release_ready": (
+            natural_only_view_report.get("passed") is True
+            and natural_only_view_report.get("reselection_performed") is False
+            and natural_only_view_report.get("retained_allocation")
+            == ROUND1_NATURAL_ONLY_VIEW_POLICY["allocation"]
+        ),
         "source_mix_passed": training_view_report.get("placed")
         == ROUND1_THREE_SOURCE_VIEW_POLICY["allocation"],
         "round1_view_policy_bound": training_view_report.get("policy_digest")
@@ -1411,6 +1475,8 @@ def build_round1_aggregate(
         "release_checks": release_checks,
         "generation_provenance_id": provenance_id,
         "training_view": training_view_report,
+        "natural_only_view": natural_only_view_report,
+        "natural_only_view_policy": ROUND1_NATURAL_ONLY_VIEW_POLICY,
         "round1_view_policy": ROUND1_THREE_SOURCE_VIEW_POLICY,
         "probe_binding": probe_binding,
         "actual_natural_probe_root_overlap": actual_natural_probe_overlap,
@@ -1426,6 +1492,7 @@ def build_round1_aggregate(
         "audit_report_sha256": audit_report_sha256,
         "split_rows": {
             "train_view": len(train_rows),
+            "natural_only_train_view": len(natural_only_train_rows),
             "validation": len(validation_rows),
             "test": len(test_rows),
         },
@@ -1454,6 +1521,14 @@ def build_round1_aggregate(
         write_jsonl(output_paths["aggregate.probe.raw.jsonl"], probes)
         write_jsonl(output_paths["aggregate.train_view.raw.jsonl"], raw_view)
         write_jsonl(output_paths["aggregate.train_view.jsonl"], train_rows)
+        write_jsonl(
+            output_paths["aggregate.natural_only.train_view.raw.jsonl"],
+            natural_only_raw_view,
+        )
+        write_jsonl(
+            output_paths["aggregate.natural_only.train_view.jsonl"],
+            natural_only_train_rows,
+        )
         write_jsonl(output_paths["aggregate.validation.jsonl"], validation_rows)
         write_jsonl(output_paths["aggregate.test.jsonl"], test_rows)
 
@@ -1470,6 +1545,7 @@ def build_round1_aggregate(
             "probe_binding": probe_binding,
             "three_source_training_support": training_support,
             "final_view_support": final_view_support,
+            "natural_only_view": natural_only_view_report,
             "round1_source_capacity": round1_source_capacity,
             "round1_source_capacity_report_sha256": (
                 round1_source_capacity_sha256

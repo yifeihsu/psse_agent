@@ -140,11 +140,13 @@ accepted correction retain their existing finalization routes.
 
 The post-correction confirmation *boundary* has one canonical policy-visible
 predicate, owned by `oracle/process_validity.py` and reused by the recovery
-probe generator. This is distinct from the verified terminal measurement-
-closure attestation in `dagger/offline_teacher_target_audit.py`: that private,
-fail-closed audit retains its own parser and screening logic. The repository
-therefore claims shared confirmation-boundary semantics, not a single shared
-terminal-closure attestation parser.
+probe generator. The verified terminal measurement-closure attestation also
+has one canonical observable parser,
+`oracle/measurement_recovery_evidence.py:verified_terminal_measurement_closure_action`.
+The environment, expert, and private post-target audit reuse that parser. The
+private audit adds only truth-ledger membership and physical-safety checks after
+the observable attestation has been accepted; it cannot reinterpret or widen
+the observable closure contract.
 
 This changed finality behavior is explicitly versioned as supervision policy
 `bc0_observable_sequential_handoff_v2` and expert identity
@@ -492,12 +494,18 @@ processor/template/mask and optimizer gates, and its own paired closed-loop
 promotion gate. No expert-only `β=1.0` corpus, failed-promotion learner seed,
 or diagnostic replay should be labeled as promoted DAgger evidence.
 
-HPC release prerequisites are H200, H100, or a high-memory RTX 6000, Python
-3.12, the exact `requirements-sft.txt` versions, a passing `pip check` and
+HPC release prerequisites are H200, H100, or an RTX Pro 6000 with at least
+90,000 MiB, Python 3.12, the exact `requirements-sft.txt` versions, a passing
+`pip check` and
 launcher version audit, and a complete local pinned Gemma snapshot. The Slurm
 feature permits `rtx6000`, but the runtime gate accepts that family only when
 exactly one GPU is visible, BF16 is supported, and total memory is at least
-90,000 MiB; this excludes 48-GB variants from the 31B release path. Release
+90,000 MiB and the device name contains `RTX PRO 6000`; this excludes the
+48-GB RTX 6000 Ada card from the 31B release path. On NYU's eight-GPU RTX Pro
+6000 nodes, CPU packing can leave GPUs idle while a 16-CPU request remains
+pending. Use the tested submission override
+`--constraint=rtx6000 --cpus-per-task=4 --mem=128G`; runtime attestation
+remains decisive. Release
 evaluation cannot download or fall back to another revision. SFT training loads
 through the same byte-verified snapshot path as release evaluation: the trainer
 refuses any model identity other than the pinned base, verifies the snapshot
@@ -517,6 +525,17 @@ upper bound, raise `ROWS_MAX` rather than trimming rows. Those bounds apply to
 optimizer-visible train plus validation rows; the gate still audits the
 held-out test split and offsets its total-row check by the test count so every
 stage enforces the same training-corpus size.
+
+From Windows, keep NYU authentication in one WSL OpenSSH control master rather
+than starting unrelated native-Windows SSH processes. Run
+`./scripts/start_torch_ssh_master.ps1` from PowerShell (equivalent to
+`wsl -- ssh -MNf torch`), check it with `wsl -- ssh -O check torch`, and reuse
+it with `wsl -- ssh torch '<command>'`. The `torch` entry in WSL's
+`~/.ssh/config` must define `ControlMaster`, `ControlPath`, and
+`ControlPersist`. Repeated Microsoft device codes mean the command did not
+reuse that WSL Unix control socket or the master expired; they are not required
+once per remote command. Stop the master explicitly with
+`./scripts/start_torch_ssh_master.ps1 -Stop`.
 
 Both HPC launchers require the reviewed freeze commit as an external input;
 they never bless the checkout's current `HEAD` on their own.  The release
@@ -560,20 +579,37 @@ seed remains release-ineligible; its role here is only initialization. The launc
 validates the adapter contents and its 64-hex tree identity, loads it through
 PEFT with `is_trainable=True`, restores its exact pre-smoke trainable weights
 before TRL starts, and writes `initial_adapter_attestation.json`.
+It also requires the canonical sibling BC0 `checkpoint_receipt.json` and,
+before model allocation, validates the same study manifest, reviewed source,
+training seed, adapter path, and adapter tree. The Round-1 receipt binds that
+BC0 `parent_checkpoint_receipt_id`; BC0 itself records a null parent ID.
 `STAGE=round1` also refuses any revision that differs from both the D1
 collection manifest and the aggregate's learner-seed provenance. Round 1
-defaults to one epoch at `3e-5`; override those values only as an explicit
-experiment change:
+is pinned to one epoch at `3e-5`; the preregistered launcher rejects overrides.
+BC0 is similarly pinned to two epochs at `1e-4`. Both use max length 6144,
+batch size 1, accumulation 4, bf16 NF4 double-quantized QLoRA, LoRA rank/alpha
+16 with zero dropout and the registered language targets, `adamw_torch`, and a
+linear schedule. The manifest also verifies the exact dependency-lock SHA-256:
 
 ```bash
 export INITIAL_ADAPTER_PATH=/absolute/round0/output/lora
 export INITIAL_ADAPTER_REVISION=<64-hex-checkpoint-tree-sha256>
+export PARENT_CHECKPOINT_RECEIPT=/absolute/round0/output/checkpoint_receipt.json
 export OUTPUT_DIR=/absolute/fresh/round1/output
+export TRAIN_SEED=3407
+export STUDY_VARIANT=natural_dagger_probes
+export ROUND1_VIEW=full
 
 sbatch \
   --export="ALL,STAGE=round1,REVIEWED_SOURCE_COMMIT=$FREEZE_COMMIT" \
   submit_dagger_sft_round0.sh
 ```
+
+For the preregistered probe ablation, set
+`STUDY_VARIANT=natural_dagger` and `ROUND1_VIEW=natural-only` instead. The
+launcher maps `full` only to `aggregate.train_view.jsonl` and `natural-only`
+only to `aggregate.natural_only.train_view.jsonl`; an explicit mismatched
+`TRAIN_FILE`, study variant, or view fails before GPU startup.
 
 ### Targeted DAgger-1 recovery flow
 
@@ -766,7 +802,12 @@ reruns the D1 row/root/replay audits and exact/approximate
 teacher-realizability gates, preserves `aggregate.raw.jsonl`,
 `aggregate.d0.raw.jsonl`, `aggregate.d1.raw.jsonl`, and
 `aggregate.train_view.raw.jsonl`, and hashes every semantic report into
-generation provenance. After the 525 natural-D1 rows and 38 probe replay rows
+generation provenance. It additionally publishes
+`aggregate.natural_only.train_view.raw.jsonl` and
+`aggregate.natural_only.train_view.jsonl` as the exact order-preserving
+projection of the canonical placement: the identical 1,317 D0 and 525 natural
+D1 placements are retained and all 38 probe placements are removed, with no
+second selection or rebalancing. After the 525 natural-D1 rows and 38 probe replay rows
 are actually placed, it also reruns the independent-root and targeted-state-
 cell floors on that final natural subset, proves all 24 unique probe source
 rows are retained, and recomputes probe and combined support from deduplicated
@@ -776,19 +817,33 @@ preflight, generation provenance, and the independently reconstructed Round-1
 SFT source gate. Passing support on the larger immutable source ledgers cannot
 substitute for support in the rows SFT will consume.
 
+The multi-seed outcome study is separately preregistered by
+`psse_env/dagger/studies/dagger_multiseed_study_v1.json`; its validator and
+artifact-binding API live in `psse_env.dagger.study_manifest`. The manifest
+permits exactly four variants (`base`, `bc0`, `natural_dagger`, and
+`natural_dagger_probes`) and freezes training seeds 3407, 3408, and 3409. See
+`docs/dagger_multiseed_study.md` and
+`docs/dagger_natural_only_ablation.md` before materializing checkpoints or
+comparison artifacts. Publishing the immutable natural-only input view does
+not itself claim that either ablation training or replicated runs completed.
+
 Regenerate the expert and base artifacts at `FREEZE_COMMIT`, then run the
 Round-1 chain against `data/round1_aggregate_release` in this order:
 `gate -> one-batch -> targeted-tiny-overfit -> round1 -> checkpoint evaluation
 -> checkpoint-gate`. Submit every Round-1 stage, including the data-only
-`gate`, with the exact `INITIAL_ADAPTER_PATH`/`INITIAL_ADAPTER_REVISION` pair.
+`gate`, with the exact `INITIAL_ADAPTER_PATH`/`INITIAL_ADAPTER_REVISION` pair
+and an explicit `ROUND1_VIEW`. `STAGE=round1` additionally requires the
+canonical sibling `PARENT_CHECKPOINT_RECEIPT`; data-only and smoke stages may
+validate the view without producing a checkpoint receipt. Use the same view
+and matching study variant for every stage in one arm.
 The gate validates that learner-seed identity against the D1 manifest and
 aggregate provenance without loading the adapter or allocating the base model;
 `one-batch`, `targeted-tiny-overfit`, and `round1` additionally warm-start from
 it. The targeted
 stage selects five distinct recovery cases,
 sweeps diagnostic learning rates `1e-4`, `3e-4`, and `1e-3`, and requires exact
-generated tools and arguments. These sweep rates do not alter the Round-1
-training default of `3e-5` for one epoch.
+generated tools and arguments. These sweep rates do not alter the pinned
+Round-1 training protocol of `3e-5` for one epoch.
 
 After each candidate training configuration, evaluate its adapter on
 `$D1_DIR/development_holdout.json` with the diagnostic-only evaluator before
@@ -803,12 +858,33 @@ python scripts/evaluate_checkpoint_diagnostic.py \
   --case-loader psse_env.dagger.release_factories:deterministic_case_loader \
   --model-id "$CANDIDATE_ADAPTER" \
   --model-revision "$CANDIDATE_REVISION" \
+  --study-manifest psse_env/dagger/studies/dagger_multiseed_study_v1.json \
+  --study-variant "$STUDY_VARIANT" \
+  --reviewed-source-commit "$FREEZE_COMMIT" \
+  --training-seed "$TRAIN_SEED" \
+  --checkpoint-receipt "$CANDIDATE_OUTPUT/checkpoint_receipt.json" \
+  --development-holdout-manifest "$D1_DIR/development_holdout.json.manifest.json" \
+  --development-holdout-generator-report "$D1_DIR/development_holdout.generator.json" \
+  --required-suite dagger1_development \
+  --minimum-suites 1 --minimum-episodes-per-suite 1 \
   --minimum-roots-per-suite 30 --max-steps 24 --seed 20260721
 ```
 
+The equivalent Slurm path is `submit_dagger_release_eval.sh` with
+`EVALUATION_SCOPE=development_holdout`, the same `STUDY_VARIANT` and
+`TRAIN_SEED`, `CHECKPOINT_PATH`/`CHECKPOINT_RECEIPT`, and all three
+`DEVELOPMENT_HOLDOUT*` inputs. The launcher writes the bound diagnostic
+artifact once and immediately sends it through the study-metrics ingestion
+validator; the resulting `.study.json` is validation evidence, not release
+qualification. Base development evaluation uses `STUDY_VARIANT=base` with no
+training seed or receipt. The evaluator derives all manifest-required hashes
+and checkpoint IDs itself; there are no CLI options for supplying those
+digests as assertions.
+
 The relaxed accelerator policy remains unchanged: each artifact may use any
-approved H200, H100, or high-memory RTX 6000. Same-class reruns are useful for
-the cleanest causal comparison when capacity permits, but are not a hard gate.
+approved H200, H100, or RTX Pro 6000 with at least 90,000 MiB. Same-class
+reruns are useful for the cleanest causal comparison when capacity permits,
+but are not a hard gate.
 
 The current diagnostic evaluator binds the exact holdout roots and reports
 closed-loop outcomes, but its persisted trace retains only an observation hash
@@ -846,7 +922,8 @@ python scripts/validate_checkpoint_diagnostic.py \
 ```
 
 Diagnostic artifacts use a distinct artifact type and are irreversibly marked
-release- and training-ineligible. Approved H200, H100, and high-memory RTX 6000
+release- and training-ineligible. Approved H200, H100, and RTX Pro 6000 with
+at least 90,000 MiB
 evaluations remain independently hardware-attested; base and checkpoint jobs
 do not need to land on the same approved accelerator class.
 
@@ -876,7 +953,8 @@ comma-delimited `--export` argument:
 export WANDB_PROJECT=psse-agent-bc0
 export WANDB_ENTITY=your-wandb-user-or-team
 export WANDB_RUN_GROUP=bc0-round0
-export WANDB_TAGS=bc0,round0,gemma4-31b
+export TRAIN_SEED=3407
+export WANDB_TAGS=bc0,round0,gemma4-31b,train-seed-$TRAIN_SEED
 export WANDB_JOB_TYPE=bc0-round0-sft
 
 sbatch \
@@ -885,15 +963,38 @@ sbatch \
 ```
 
 The same opt-in works for Round 1; stage-specific default group, tags, job type,
-run ID, and name use `round1`/`r1` unless explicitly overridden.
+run ID, and name use `round1`/`r1` unless explicitly overridden. Round-1
+defaults additionally include the study variant and selected view so the full
+and natural-only arms cannot collide in W&B.
 
-The launcher defaults to a stable run ID and name from the reviewed commit plus
-the Slurm job ID, sets `WANDB_RESUME=allow` for a requeued job, and disables
+`TRAIN_SEED` is forwarded as the SFT CLI `--seed` for both Round 0 and Round 1
+and must be supplied explicitly as a canonical integer from 0 through
+4294967295; neither the CLI nor a training stage silently chooses a seed. The launcher rejects
+negative, oversized, nonnumeric, and leading-zero values before model startup.
+When tags are not overridden, the seed is included as `train-seed-N`; the
+default run ID and name include `seedN`, the reviewed commit, and the Slurm job
+ID. The launcher sets `WANDB_RESUME=allow` for a requeued job and disables
 model uploads and parameter watching. Set the same `WANDB_RUN_ID` explicitly
 when a newly submitted replacement job should resume an earlier run; a custom
 `WANDB_NAME` is also preserved. W&B run, cache, data, configuration, and
 artifact directories default below `/scratch/$USER/wandb`; override
 `WANDB_SCRATCH_ROOT` if a different scratch allocation is required.
+
+Before allocating the model, training refuses an existing or symbolic-link
+`lora/`, base or warm-start attestation, receipt, or checkpoint-owned staging
+file in `OUTPUT_DIR`; an interrupted/requeued job therefore requires a fresh
+output directory and cannot overwrite a partial checkpoint. On successful
+training, `base_snapshot_attestation.json` and
+`checkpoint_receipt.json` are atomically published write-once after the final
+`lora/` tree is saved and normalized. The receipt records the
+explicit seed, study variant/manifest, clean reviewed source, immutable
+training-view provenance and selected view, parent model, split hashes, final
+adapter tree digest, and base-snapshot-attestation SHA-256, plus the actual
+approved accelerator class and hardware attestation.
+Portable study training accepts H100, H200, or a qualifying RTX Pro 6000 with
+at least 90,000 MiB; exact-class requirements remain a canary option, not a
+production-study default. Treat a missing receipt or a nonzero post-save exit
+as a failed checkpoint publication even if weight files are present.
 
 For a compute node without outbound network access, set
 `WANDB_MODE=offline` before submitting with `--export=ALL`. The complete run

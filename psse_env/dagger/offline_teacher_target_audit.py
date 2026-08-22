@@ -36,6 +36,10 @@ from psse_env.dagger.release_audit import (
     HEALTHY_MEASUREMENTS_CHECK,
     audit_episode_against_truth,
 )
+from psse_env.oracle.measurement_recovery_evidence import (
+    accepted_measurement_indices,
+    verified_terminal_measurement_closure_action,
+)
 from psse_env.state_store import OracleState, PolicyObservation
 from psse_env.private_target_matching import (
     canonical_branch_target,
@@ -46,17 +50,20 @@ from psse_env.private_target_matching import (
 
 _V1_AUDIT_CONTRACT = "dagger1_offline_teacher_target_truth_audit_v1"
 _V2_AUDIT_CONTRACT = "dagger1_offline_teacher_target_truth_audit_v2"
+_V3_AUDIT_CONTRACT = "dagger1_offline_teacher_target_truth_audit_v3"
 OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT = (
-    "dagger1_offline_teacher_target_truth_audit_v3"
+    "dagger1_offline_teacher_target_truth_audit_v4"
 )
 # v2 replaced the operator-escalation check set.  v3 adds the verified terminal
 # measurement closure as a narrow alternative to remaining-target membership,
 # which widens the commit reason vocabulary; broadening v2 in place would have
-# let a v2 reader silently accept codes it cannot interpret.  Records written by
-# v1 and v2 remain readable so already-collected artifacts keep validating under
-# their own contract; only newly produced records use the current vocabulary.
+# let a v2 reader silently accept codes it cannot interpret. v4 replaces v3's
+# independent observable closure parser with the production canonical parser;
+# its stricter structure and ACCEPT_PARTIAL singleton semantics are a contract
+# change, not an in-place reinterpretation. Records written by v1-v3 remain
+# readable under their own vocabularies; only new records use v4.
 LEGACY_OFFLINE_TEACHER_TARGET_AUDIT_CONTRACTS = frozenset(
-    {_V1_AUDIT_CONTRACT, _V2_AUDIT_CONTRACT}
+    {_V1_AUDIT_CONTRACT, _V2_AUDIT_CONTRACT, _V3_AUDIT_CONTRACT}
 )
 _ESCALATION_REQUESTS = frozenset(
     {
@@ -177,11 +184,11 @@ _V1_ACTION_CLASS_CHECKS = {
     ),
 }
 _ACTION_CLASS_CHECKS_BY_CONTRACT = {
-    # v3 keeps v2's check vocabulary: the closure contract changes which
-    # commits pass, not which checks are reported.  Map each legacy contract
-    # explicitly -- a blanket comprehension over the legacy set would bind v2
-    # to v1's operator-escalation checks.
+    # v2-v4 share the top-level check vocabulary. Map each legacy contract
+    # explicitly: a blanket comprehension would bind v2/v3 to v1's retired
+    # operator-escalation checks.
     OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT: _ACTION_CLASS_CHECKS,
+    _V3_AUDIT_CONTRACT: _ACTION_CLASS_CHECKS,
     _V2_AUDIT_CONTRACT: _ACTION_CLASS_CHECKS,
     _V1_AUDIT_CONTRACT: _V1_ACTION_CLASS_CHECKS,
 }
@@ -223,7 +230,7 @@ _V1_REASON_CODES = _COMMON_REASON_CODES | {
 }
 #: A rejected closure attempt reports the clause that failed, so a quarantine
 #: can be triaged from the bundle without re-running collection.
-_CLOSURE_REASON_CODES = frozenset(
+_V3_CLOSURE_REASON_CODES = frozenset(
     {
         "closure_attestation_malformed",
         "closure_ledger_unreadable",
@@ -239,9 +246,11 @@ _CLOSURE_REASON_CODES = frozenset(
         "closure_screening_incomplete",
     }
 )
-_V3_REASON_CODES = _V2_REASON_CODES | _CLOSURE_REASON_CODES
+_V3_REASON_CODES = _V2_REASON_CODES | _V3_CLOSURE_REASON_CODES
+_V4_REASON_CODES = _V3_REASON_CODES | {"closure_attestation_invalid"}
 _REASON_CODES_BY_CONTRACT = {
-    OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT: _V3_REASON_CODES,
+    OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT: _V4_REASON_CODES,
+    _V3_AUDIT_CONTRACT: _V3_REASON_CODES,
     _V2_AUDIT_CONTRACT: _V2_REASON_CODES,
     _V1_AUDIT_CONTRACT: _V1_REASON_CODES,
 }
@@ -322,6 +331,11 @@ def validate_offline_teacher_target_audit_metadata(
     if value["passed"] is True and action_class in _FAILURE_ONLY_ACTION_CLASSES:
         raise ValueError(
             "offline teacher-target audit failure-only action class cannot pass"
+        )
+    if require_passed and contract != OFFLINE_TEACHER_TARGET_AUDIT_CONTRACT:
+        raise ValueError(
+            "release admission requires the current offline teacher-target "
+            "audit contract"
         )
     if require_passed and value["passed"] is not True:
         raise ValueError("offline teacher-target audit did not pass")
@@ -482,11 +496,6 @@ def _correction_target_check(
     return checks, reasons
 
 
-VERIFIED_TERMINAL_MEASUREMENT_CLOSURE_CONTRACT = (
-    "dagger1_verified_terminal_measurement_closure_v1"
-)
-
-
 def _original_measurement_truth_targets(
     scenario: Mapping[str, Any],
 ) -> set[int] | None:
@@ -506,85 +515,14 @@ def _original_measurement_truth_targets(
     return targets
 
 
-def _accepted_measurement_targets(
-    observation: Mapping[str, Any],
-) -> set[int] | None:
-    """Measurement targets already accepted on the observable ledger."""
-
-    accepted = observation.get("accepted_corrections")
-    if not isinstance(accepted, Sequence) or isinstance(accepted, (str, bytes)):
-        return None
-    targets: set[int] = set()
-    for entry in accepted:
-        if not isinstance(entry, Mapping):
-            return None
-        source = entry.get("source_action")
-        if not isinstance(source, Mapping):
-            return None
-        if str(source.get("tool") or "") != CORRECT_MEASUREMENTS:
-            continue
-        arguments = source.get("arguments")
-        proposed = _measurement_targets(
-            arguments if isinstance(arguments, Mapping) else {}
-        )
-        if proposed is None:
-            return None
-        targets |= proposed
-    return targets
-
-
-def _closure_screening_ordered(
-    evidence: Mapping[str, Any], *, new_target: int, closure_targets: set[int]
-) -> bool:
-    """Require the singleton screen for the new target, then the grouped final.
-
-    Both stages must be ``ACCEPT_FINAL`` with passing physical constraints, and
-    the singleton must precede the group: a grouped acceptance recorded before
-    its new target was screened alone is not a closure.
-    """
-
-    attempts = evidence.get("attempts")
-    if not isinstance(attempts, Sequence) or isinstance(attempts, (str, bytes)):
-        return False
-    singleton_index: int | None = None
-    grouped_index: int | None = None
-    for index, attempt in enumerate(attempts):
-        if not isinstance(attempt, Mapping):
-            return False
-        if str(attempt.get("disposition") or "") != "ACCEPT_FINAL":
-            continue
-        if attempt.get("physical_constraints_ok") is not True:
-            continue
-        raw_targets = attempt.get("targets")
-        if not isinstance(raw_targets, Sequence) or isinstance(
-            raw_targets, (str, bytes)
-        ):
-            continue
-        try:
-            attempt_targets = {int(item) for item in raw_targets}
-        except (TypeError, ValueError):
-            return False
-        if (
-            attempt_targets == {new_target}
-            and attempt.get("target_test_passed") is True
-            and singleton_index is None
-        ):
-            singleton_index = index
-        elif attempt_targets == closure_targets and grouped_index is None:
-            grouped_index = index
-    return (
-        singleton_index is not None
-        and grouped_index is not None
-        and singleton_index < grouped_index
-    )
-
-
 def _verified_terminal_measurement_closure_check(
     action: Mapping[str, Any],
     *,
     observation: Mapping[str, Any],
     scenario: Mapping[str, Any],
     truth: Mapping[str, Any],
+    active_state_id: Any,
+    active_state_hash: Any,
 ) -> tuple[dict[str, bool], list[str]]:
     """Narrow alternative to remaining-target membership for a terminal closure.
 
@@ -620,91 +558,54 @@ def _verified_terminal_measurement_closure_check(
             reasons.append(reason)
         return bool(ok)
 
-    if not record(
-        "closure_attestation_well_formed",
-        isinstance(raw_closure, Sequence)
-        and not isinstance(raw_closure, (str, bytes))
-        and isinstance(evidence, Mapping),
-        "closure_attestation_malformed",
-    ):
-        return checks, reasons
-
-    try:
-        closure_targets = {int(item) for item in raw_closure}
-    except (TypeError, ValueError):
-        record("closure_attestation_well_formed", False, "closure_attestation_malformed")
-        return checks, reasons
-
     arguments = action.get("arguments")
     proposed = _measurement_targets(
         arguments if isinstance(arguments, Mapping) else {}
     )
-    accepted = _accepted_measurement_targets(observation)
+    # Reuse the production ledger parser exactly.  Accepted-correction records
+    # have legacy observable aliases that the old private parser rejected or
+    # interpreted differently.
+    accepted = accepted_measurement_indices(observation)
     remaining = _truth_measurement_targets(truth)
     original = _original_measurement_truth_targets(scenario)
-    if proposed is None or accepted is None or remaining is None or original is None:
+    if proposed is None or remaining is None or original is None:
         record("closure_ledger_readable", False, "closure_ledger_unreadable")
         return checks, reasons
     checks["closure_ledger_readable"] = True
 
-    # Clause 1: the audited action is exactly the attested closure action, and
-    # that action is present in the same-state supported-correction inventory.
-    record(
-        "closure_action_matches_attestation",
-        proposed == closure_targets,
-        "closure_action_does_not_match_attestation",
-    )
-    state_id = str(measurement.get("state_id") or "")
-    supported = measurement.get("supported_corrections")
-    supported_match = False
-    if isinstance(supported, Sequence) and not isinstance(supported, (str, bytes)):
-        for entry in supported:
-            if not isinstance(entry, Mapping):
-                continue
-            if str(entry.get("tool") or "") != CORRECT_MEASUREMENTS:
-                continue
-            entry_arguments = entry.get("arguments")
-            entry_arguments = (
-                entry_arguments if isinstance(entry_arguments, Mapping) else {}
-            )
-            entry_targets = _measurement_targets(entry_arguments)
-            if (
-                entry_targets == closure_targets
-                and str(entry_arguments.get("state_id") or "") == state_id
-            ):
-                supported_match = True
-                break
-    record(
-        "closure_action_in_supported_inventory",
-        supported_match,
-        "closure_action_not_in_supported_inventory",
-    )
+    if (
+        not str(active_state_id or "")
+        or str(observation.get("active_state_id") or "") != str(active_state_id)
+        or not str(active_state_hash or "")
+    ):
+        record(
+            "closure_canonical_attestation_valid",
+            False,
+            "closure_attestation_invalid",
+        )
+        return checks, reasons
 
-    # Clause 2: the context evidence is bound to the current active state.
-    record(
-        "closure_context_state_bound",
-        bool(state_id)
-        and state_id == str(observation.get("active_state_id") or "")
-        and bool(str(measurement.get("state_hash") or "")),
-        "closure_context_not_state_bound",
+    # Observable semantics have exactly one owner.  The same canonical parser
+    # used by the environment and expert validates state binding, target shape,
+    # supported-action membership, accepted-target reuse, and ordered candidate
+    # screening.  The private audit only adds truth-ledger checks below.
+    canonical_action = verified_terminal_measurement_closure_action(
+        measurement,
+        active_id=active_state_id,
+        active_state_hash=active_state_hash,
+        accepted_targets=accepted,
     )
+    record(
+        "closure_canonical_attestation_valid",
+        canonical_action == safe_normalize_action(action),
+        "closure_attestation_invalid",
+    )
+    if canonical_action is None or reasons:
+        return checks, reasons
 
-    # Clauses 3, 4: a non-empty accepted set, entirely reused, plus exactly one
-    # new target.
-    record("closure_accepted_set_nonempty", bool(accepted), "closure_accepted_set_empty")
     new_targets = proposed - accepted
-    record(
-        "closure_exactly_one_new_target",
-        len(new_targets) == 1,
-        "closure_new_target_count_not_one",
-    )
-    record(
-        "closure_reuses_entire_accepted_set",
-        bool(accepted) and accepted.issubset(proposed),
-        "closure_does_not_reuse_entire_accepted_set",
-    )
 
-    # Clause 5: every reused target was an original truth target.  Read from the
+    # Private clause 1: every reused target was an original truth target. Read from the
     # same private scenario truth the release ledger already uses, so this adds
     # no hidden-data channel.
     record(
@@ -713,7 +614,8 @@ def _verified_terminal_measurement_closure_check(
         "closure_accepted_target_not_original_truth",
     )
 
-    # Clauses 6, 7: the new target is still owed, the reused ones are retired.
+    # Private clauses 2 and 3: the new target is still owed and reused targets
+    # are already retired.
     record(
         "closure_new_target_in_remaining_truth",
         len(new_targets) == 1 and new_targets.issubset(remaining),
@@ -725,20 +627,8 @@ def _verified_terminal_measurement_closure_check(
         "closure_accepted_target_still_in_remaining_truth",
     )
 
-    # Clause 8: two-stage screening, singleton before group, both ACCEPT_FINAL.
-    # Clause 9 (non-regression, healthy-state) is enforced by the existing
-    # physical-safety audit and is deliberately not duplicated here.
-    record(
-        "closure_screening_two_stage_accept_final",
-        len(new_targets) == 1
-        and isinstance(evidence, Mapping)
-        and _closure_screening_ordered(
-            evidence,
-            new_target=next(iter(new_targets)),
-            closure_targets=closure_targets,
-        ),
-        "closure_screening_incomplete",
-    )
+    # Non-regression and healthy-state preservation remain enforced by the
+    # existing private physical-safety audit and are not duplicated here.
     return checks, reasons
 
 
@@ -1130,6 +1020,14 @@ def offline_teacher_target_audit(
                     observation=observation,
                     scenario=commit_scenario,
                     truth=truth,
+                    active_state_id=getattr(
+                        getattr(env, "store", None), "active_state_id", None
+                    ),
+                    active_state_hash=(
+                        parent_state.get("state_hash")
+                        if isinstance(parent_state, Mapping)
+                        else None
+                    ),
                 )
             )
             if (

@@ -82,9 +82,12 @@ def test_launcher_sets_bounded_nonsecret_wandb_contract() -> None:
     assert "WANDB_ROUND_NAME=round0" in launcher
     assert "WANDB_ROUND_SHORT=r0" in launcher
     assert (
-        "WANDB_RUN_ID_DEFAULT=bc0-$WANDB_ROUND_SHORT-$WANDB_SOURCE_SHORT-$WANDB_SLURM_JOB_ID"
+        "WANDB_RUN_ID_DEFAULT=bc0-$WANDB_ROUND_SHORT$WANDB_VARIANT_SUFFIX-seed$TRAIN_SEED-$WANDB_SOURCE_SHORT-$WANDB_SLURM_JOB_ID"
         in launcher
     )
+    assert "WANDB_VARIANT_SUFFIX=-$STUDY_VARIANT-$ROUND1_VIEW" in launcher
+    assert "round1-view-$ROUND1_VIEW" in launcher
+    assert "train-seed-$TRAIN_SEED" in launcher
     assert "WANDB_RUN_ID=${WANDB_RUN_ID:-$WANDB_RUN_ID_DEFAULT}" in launcher
     assert "WANDB_NAME=${WANDB_NAME:-$WANDB_RUN_ID}" in launcher
     assert "WANDB_SOURCE_SHORT=${REVIEWED_SOURCE_COMMIT:0:12}" in launcher
@@ -93,6 +96,27 @@ def test_launcher_sets_bounded_nonsecret_wandb_contract() -> None:
     assert "requirements-wandb.txt" in launcher
     assert "import wandb" in launcher
     assert "WANDB_API_KEY" not in launcher
+
+
+def test_launcher_binds_one_fail_closed_training_seed() -> None:
+    launcher = LAUNCHER.read_text(encoding="utf-8")
+    assert "TRAIN_SEED=${TRAIN_SEED:-}" in launcher
+    assert "requires an explicit TRAIN_SEED" in launcher
+    assert "TRAIN_SEED must be a canonical integer between 0 and 4294967295" in launcher
+    assert '--seed "$TRAIN_SEED"' in launcher
+    assert '--study-variant "$STUDY_VARIANT"' in launcher
+    assert '--study-manifest "$STUDY_MANIFEST"' in launcher
+    assert launcher.count('"${TRAIN_ARGS[@]}"') == 2
+    assert 'echo "train seed: $TRAIN_SEED"' in launcher
+
+
+def test_launcher_can_require_the_exact_requested_accelerator_class() -> None:
+    launcher = LAUNCHER.read_text(encoding="utf-8")
+    assert "EXPECTED_ACCELERATOR_CLASS=${EXPECTED_ACCELERATOR_CLASS:-auto}" in launcher
+    assert "auto|h100|h200|rtx6000" in launcher
+    assert '"$PYTHON" - "$EXPECTED_ACCELERATOR_CLASS"' in launcher
+    assert "required_class=required_class" in launcher
+    assert "sbatch --constraint=rtx6000 --cpus-per-task=4 --mem=128G" in launcher
 
 
 def test_documentation_covers_login_submission_and_offline_sync() -> None:
@@ -115,8 +139,9 @@ def test_documentation_covers_login_submission_and_offline_sync() -> None:
 def test_modified_shell_scripts_parse() -> None:
     for script in (LAUNCHER, SETUP):
         subprocess.run(
-            ["bash", "-n", str(script)],
+            ["bash", "-n"],
+            cwd=script.parent,
+            input=script.read_bytes().replace(b"\r\n", b"\n"),
             check=True,
             capture_output=True,
-            text=True,
         )

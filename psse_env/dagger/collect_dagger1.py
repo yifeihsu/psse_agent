@@ -352,11 +352,21 @@ def _write_fsynced_jsonl(
 
 
 def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
+    descriptor: int | None = None
     try:
+        descriptor = os.open(path, os.O_RDONLY)
         os.fsync(descriptor)
+    except OSError:
+        # Windows does not expose a portable directory handle that can be
+        # opened and fsynced through these POSIX calls.  File contents are
+        # still individually fsynced before the atomic rename.  Linux is the
+        # release platform, so any directory durability failure there remains
+        # fatal rather than being silently downgraded.
+        if os.name != "nt":
+            raise
     finally:
-        os.close(descriptor)
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _failed_collection_rows(
