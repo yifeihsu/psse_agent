@@ -151,7 +151,7 @@
           "local_files_only": true,
           "trust_remote_code": false
         },
-        "max_length": 6144,
+        "max_length": 8192,
         "allow_prompt_truncation": false,
         "lora": {
           "rank": 16,
@@ -209,7 +209,7 @@
           "local_files_only": true,
           "trust_remote_code": false
         },
-        "max_length": 6144,
+        "max_length": 8192,
         "allow_prompt_truncation": false,
         "lora": {
           "rank": 16,
@@ -267,7 +267,7 @@
           "local_files_only": true,
           "trust_remote_code": false
         },
-        "max_length": 6144,
+        "max_length": 8192,
         "allow_prompt_truncation": false,
         "lora": {
           "rank": 16,

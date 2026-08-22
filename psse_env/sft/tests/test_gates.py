@@ -1042,7 +1042,7 @@ class TestReleaseGateReport(unittest.TestCase):
             "processor_loader_passed": True,
             "model": "unsloth/gemma-4-31B-it",
             "revision": revision,
-            "max_length": 6144,
+            "max_length": 8192,
             "provenance": {
                 "release_eligible_source": True,
                 "source_commit": source_commit,
@@ -1072,7 +1072,7 @@ class TestReleaseGateReport(unittest.TestCase):
             revision="b" * 40,
             source_commit="a" * 40,
             datasets=datasets,
-            max_length=6144,
+            max_length=8192,
         )
 
     def test_exact_auto_processor_report_passes(self) -> None:

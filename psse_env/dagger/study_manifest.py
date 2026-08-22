@@ -25,10 +25,10 @@ DEFAULT_STUDY_MANIFEST = (
 # Updated only through explicit protocol review.  This pins the raw LF-normalized
 # bytes; .gitattributes preserves that representation on Windows and Linux.
 EXPECTED_STUDY_MANIFEST_SHA256 = (
-    "b07939b3bac394cd5368b35ba4c54eadc6fe9820f5a7ad4d3aec2db71d7ca747"
+    "1e5447f3b857fee07aed251bd85b99cec06068dea1b40945c6e3567b5ba55e4c"
 )
 EXPECTED_STUDY_MANIFEST_CONTENT_SHA256 = (
-    "59f1abaec8ff41ce13f80a7f1a04e35b7e50d496fb5b58ccd6e2b7c3f7288fc4"
+    "91cfbeb2e245f6d3b1b3ebd85efba28fdae896c54ed20e10099609a6fb570f41"
 )
 EXPECTED_COMPARISON_POLICY_SHA256 = (
     "9763dc426de33e328a06cd5abfb4f5788a05ef91fac6cb4113e30680f8c2c550"
@@ -149,7 +149,7 @@ def _training_configuration(*, learning_rate: float, epochs: float) -> dict[str,
             "local_files_only": True,
             "trust_remote_code": False,
         },
-        "max_length": 6144,
+        "max_length": 8192,
         "allow_prompt_truncation": False,
         "lora": {
             "rank": 16,

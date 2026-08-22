@@ -196,7 +196,7 @@ def test_prepare_binding_authenticates_variant_source_and_seed_parent(
     settings = TrainerSettings(
         revision=MODEL_REVISION,
         output_dir=str(tmp_path / "output"),
-        max_length=6144,
+        max_length=8192,
         learning_rate=0.00003,
         epochs=1.0,
         load_in_4bit=True,
@@ -422,7 +422,7 @@ def test_prepare_binding_rejects_every_material_protocol_drift(
     values = {
         "revision": MODEL_REVISION,
         "output_dir": str(tmp_path / "output"),
-        "max_length": 6144,
+        "max_length": 8192,
         "batch_size": 1,
         "gradient_accumulation_steps": 4,
         "learning_rate": 0.0001,
@@ -486,7 +486,7 @@ def test_prepare_binding_infers_full_variant_from_exact_sources(
     settings = TrainerSettings(
         revision=MODEL_REVISION,
         output_dir=str(tmp_path / "output"),
-        max_length=6144,
+        max_length=8192,
         learning_rate=0.00003,
         epochs=1.0,
         load_in_4bit=True,
@@ -541,7 +541,7 @@ def test_checkpoint_receipt_is_write_once_and_binds_final_tree(tmp_path: Path) -
     settings = TrainerSettings(
         revision=MODEL_REVISION,
         output_dir=str(output),
-        max_length=6144,
+        max_length=8192,
         epochs=2.0,
         load_in_4bit=True,
         required_processor_loader="AutoProcessor",

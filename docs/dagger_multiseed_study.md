@@ -153,7 +153,7 @@ objectives and safety gates remain explicitly unevaluable and cannot pass.
 ## Training invocation
 
 The manifest pins the complete material SFT protocol. Both stages use the
-reviewed Gemma/processor revision, `AutoProcessor`, `max_length=6144`, QLoRA
+reviewed Gemma/processor revision, `AutoProcessor`, `max_length=8192`, QLoRA
 NF4 with double quantization and bf16 compute, batch size 1, gradient
 accumulation 4, LoRA rank/alpha 16, dropout 0, the seven registered language
 projection suffixes, `bias=none`, `task_type=CAUSAL_LM`, `adamw_torch`, the
@@ -163,6 +163,12 @@ SHA-256 of `psse_env/requirements-sft.txt`. The study launcher rejects an
 environment override that changes any exposed value; the training preflight
 reconstructs the complete configuration and compares it to the manifest before
 allocating the model.
+
+The 8,192-token value is a reviewed training-resource envelope, not the Gemma
+4 architecture limit. The pinned tokenizer advertises 262,144 tokens and the
+current D0 aggregate peaks at 6,926. Prompt truncation remains disabled: a
+future row above 8,192 must trigger an explicit protocol and memory review, not
+silent data loss or an assertion that the row is semantically unqualified.
 
 The SFT CLI accepts one explicit unsigned 32-bit seed:
 

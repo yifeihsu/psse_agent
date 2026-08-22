@@ -45,8 +45,10 @@
 #
 # The runtime gate still requires an actual RTX Pro 6000 with >=90,000 MiB.
 #
-# MAX_LENGTH=6144 is a conservative starting envelope.  The exact pinned
-# processor gate for the newly generated release aggregate remains decisive.
+# MAX_LENGTH=8192 is the reviewed training envelope.  The pinned Gemma 4
+# tokenizer advertises a 262,144-token context and the current D0 audit peaks
+# at 6,926 tokens.  The exact processor gate remains decisive so future DAgger
+# rows trigger an explicit protocol review instead of being silently truncated.
 
 set -euo pipefail
 
@@ -71,7 +73,7 @@ TRAIN_FILE=${TRAIN_FILE:-}
 VALIDATION_FILE=${VALIDATION_FILE:-$AGGREGATE_DIR/aggregate.validation.jsonl}
 TEST_FILE=${TEST_FILE:-$AGGREGATE_DIR/aggregate.test.jsonl}
 OUTPUT_DIR=${OUTPUT_DIR:-/scratch/yx3882/psse_agent/outputs/bc0_gemma4_31b_round0}
-MAX_LENGTH=${MAX_LENGTH:-6144}
+MAX_LENGTH=${MAX_LENGTH:-8192}
 ROWS_MIN=${ROWS_MIN:-1024}
 ROWS_MAX=${ROWS_MAX:-4096}
 TINY_OVERFIT_STEPS=${TINY_OVERFIT_STEPS:-20}
@@ -170,8 +172,8 @@ if [[ "$TRAINING_STAGE" == "1" ]]; then
         echo "ERROR: study training forbids MODEL_NAME or MODEL_REVISION drift." >&2
         exit 2
     fi
-    if [[ "$MAX_LENGTH" != "6144" || "$GRADIENT_ACCUMULATION_STEPS" != "4" ]]; then
-        echo "ERROR: study training requires MAX_LENGTH=6144 and GRADIENT_ACCUMULATION_STEPS=4." >&2
+    if [[ "$MAX_LENGTH" != "8192" || "$GRADIENT_ACCUMULATION_STEPS" != "4" ]]; then
+        echo "ERROR: study training requires MAX_LENGTH=8192 and GRADIENT_ACCUMULATION_STEPS=4." >&2
         exit 2
     fi
     if [[ "$STAGE" == "round0" && ( "$TRAIN_LR" != "0.0001" || "$TRAIN_EPOCHS" != "2" ) ]]; then

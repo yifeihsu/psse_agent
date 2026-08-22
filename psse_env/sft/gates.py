@@ -904,8 +904,9 @@ def audit_dataset(
     prompt_truncated = sum(example.prompt_truncated for example in prepared)
     if prompt_truncated and not allow_prompt_truncation:
         failures.append(
-            f"{prompt_truncated} row(s) require prompt truncation at max_length={max_length}; "
-            "shorten history or explicitly approve prompt truncation."
+            f"{prompt_truncated} row(s) exceed the reviewed training max_length={max_length}; "
+            "raise the reviewed sequence envelope, shorten history, or explicitly approve "
+            "prompt truncation."
         )
     if tool_rows == 0 and prepared:
         warnings.append("No tool-call target rows were present; native tool-call round trip was not exercised.")
