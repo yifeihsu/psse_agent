@@ -447,13 +447,12 @@ run_bc0_stage() {
 }
 
 run_dagger_stage() {
-    ensure_stage_plan \
-        bc0 "$BC0_TRAIN_FILE" "$D1_VALIDATION_FILE" "$BC0_OUTPUT" \
-        "$BC0_MAX_TRAIN_ROWS" "$BC0_MAX_STEPS"
-    if ! stage_complete bc0 "$BC0_TRAIN_FILE" "$D1_VALIDATION_FILE" "$BC0_OUTPUT"; then
-        echo "ERROR: DAgger continuation requires the valid local BC0 stage receipt." >&2
+    if [[ ! -e "$BC0_OUTPUT/preliminary_stage_receipt.json" && \
+          ! -L "$BC0_OUTPUT/preliminary_stage_receipt.json" ]]; then
+        echo "ERROR: DAgger continuation requires a local BC0 stage receipt." >&2
         exit 2
     fi
+    stage_complete bc0 "$BC0_TRAIN_FILE" "$D1_VALIDATION_FILE" "$BC0_OUTPUT"
     local -a pinned_init_args=(
         --source-adapter "$BC0_OUTPUT/lora"
         --destination "$PINNED_INIT_ADAPTER"

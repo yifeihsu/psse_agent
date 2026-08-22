@@ -885,6 +885,15 @@ def test_launcher_passes_recovery_compatible_prompt_contract_to_both_stages() ->
     assert '--valid-file "$D1_TEST_FILE"' not in launcher
 
 
+def test_dagger_resume_validates_existing_bc0_receipt_without_replanning_it() -> None:
+    launcher = LAUNCHER.read_text(encoding="utf-8")
+    dagger_body = launcher.split("run_dagger_stage() {", 1)[1].split(
+        '\n}\n\ncase "$PIPELINE_STAGE"', 1
+    )[0]
+    assert 'stage_complete bc0 "$BC0_TRAIN_FILE"' in dagger_body
+    assert "ensure_stage_plan \\\n+        bc0 " not in dagger_body
+
+
 def test_launcher_has_write_once_stage_receipts_and_explicit_checkpoint_resume() -> None:
     launcher = LAUNCHER.read_text(encoding="utf-8")
     for contract in (
