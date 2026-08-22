@@ -103,6 +103,41 @@ def _is_pinned_base_reference(value: Any) -> bool:
     )
 
 
+def _resolve_pinned_snapshot(
+    base_reference: Any, *, allow_download: bool
+) -> Path:
+    """Resolve the exact base snapshot without re-querying Hub for a local path."""
+
+    if isinstance(base_reference, str) and base_reference != PINNED_MODEL_NAME:
+        snapshot = Path(base_reference).resolve(strict=True)
+        if snapshot.name.lower() != PINNED_MODEL_REVISION or not (
+            snapshot / "config.json"
+        ).is_file():
+            raise PreliminaryAdapterError(
+                "local BC0 base reference is not the exact pinned E2B snapshot"
+            )
+        return snapshot
+
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:  # pragma: no cover - exercised in the HPC env
+        raise PreliminaryAdapterError("huggingface_hub is required") from exc
+    snapshot = Path(
+        snapshot_download(
+            repo_id=PINNED_MODEL_NAME,
+            revision=PINNED_MODEL_REVISION,
+            local_files_only=not allow_download,
+        )
+    ).resolve(strict=True)
+    if snapshot.name.lower() != PINNED_MODEL_REVISION or not (
+        snapshot / "config.json"
+    ).is_file():
+        raise PreliminaryAdapterError(
+            "Hugging Face did not resolve the exact pinned E2B snapshot"
+        )
+    return snapshot
+
+
 def _validate_existing(
     *,
     source: Path,
@@ -168,23 +203,10 @@ def prepare_pinned_initial_adapter(
         )
     _tree_hash(source)
 
-    try:
-        from huggingface_hub import snapshot_download
-    except ImportError as exc:  # pragma: no cover - exercised in the HPC env
-        raise PreliminaryAdapterError("huggingface_hub is required") from exc
-    snapshot = Path(
-        snapshot_download(
-            repo_id=PINNED_MODEL_NAME,
-            revision=PINNED_MODEL_REVISION,
-            local_files_only=not allow_download,
-        )
-    ).resolve(strict=True)
-    if snapshot.name.lower() != PINNED_MODEL_REVISION or not (
-        snapshot / "config.json"
-    ).is_file():
-        raise PreliminaryAdapterError(
-            "Hugging Face did not resolve the exact pinned E2B snapshot"
-        )
+    snapshot = _resolve_pinned_snapshot(
+        source_config.get("base_model_name_or_path"),
+        allow_download=allow_download,
+    )
 
     binding_path = _binding_path(target)
     if target.exists() or target.is_symlink() or binding_path.exists() or binding_path.is_symlink():

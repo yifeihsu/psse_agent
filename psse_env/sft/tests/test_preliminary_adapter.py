@@ -107,3 +107,36 @@ def test_rejects_adapter_for_a_different_base(
             source_adapter=source,
             destination=tmp_path / "pinned_init",
         )
+
+
+def test_reuses_exact_local_snapshot_without_hub_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snapshot = tmp_path / "hub" / "snapshots" / PINNED_MODEL_REVISION
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text("{}\n", encoding="utf-8")
+    source = _source_adapter(tmp_path)
+    config_path = source / "adapter_config.json"
+    config_path.write_text(
+        json.dumps({"base_model_name_or_path": str(snapshot)}),
+        encoding="utf-8",
+    )
+
+    def reject_hub_import(name: str, *args: object, **kwargs: object) -> object:
+        if name == "huggingface_hub":
+            raise AssertionError("an exact local snapshot must not query the Hub")
+        return original_import(name, *args, **kwargs)
+
+    original_import = __import__
+    monkeypatch.setattr("builtins.__import__", reject_hub_import)
+    destination = tmp_path / "pinned_init"
+    result = prepare_pinned_initial_adapter(
+        source_adapter=source,
+        destination=destination,
+    )
+
+    assert result["snapshot_path"] == str(snapshot.resolve())
+    config = json.loads(
+        (destination / "adapter_config.json").read_text(encoding="utf-8")
+    )
+    assert config["base_model_name_or_path"] == str(snapshot.resolve())
