@@ -226,7 +226,21 @@ class _CanonicalE2BPolicy:
             messages,
             self._tools,
             enable_thinking=False,
-            inject_empty_thought_channel=True,
+            # The injection exists to mirror SFT formatting, but this pipeline's
+            # rows are rendered by apply_chat_template with no thought channel,
+            # so injecting one makes the model generate from four tokens it
+            # never saw after <|turn>model.  Measured on a locally trained E2B
+            # LoRA over 12 held-out D0 rows, greedy, identical adapter:
+            #
+            #     canonical      12/12 valid format, 11/12 correct tool
+            #     +injection      0/12 valid format,  0/12 correct tool
+            #
+            # With the injection the model emits free-form prose to the token
+            # limit -- the exact failure the preliminary study recorded as
+            # 0/5 resolved with zero usable tool calls.  The global CLI default
+            # stays True: adapters trained through a rendering that does include
+            # the channel still need it.
+            inject_empty_thought_channel=False,
         )
         encoded = tokenize_rendered_text(self._bundle.processor, rendered)
         input_ids = encoded.get("input_ids")
