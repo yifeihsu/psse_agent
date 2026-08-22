@@ -38,6 +38,7 @@ TRAINING_SOURCE_ATTESTATION_CONTRACT = (
 )
 PINNED_MODEL_NAME = "unsloth/gemma-4-E2B-it"
 PINNED_MODEL_REVISION = "f0c5915f17ad6c66dbeb577fb06ff8925bf8d7ae"
+PINNED_MAX_SEQ_LENGTH = 8192
 
 EXPECTED_SPLITS = {
     "bc0_train": "preliminary.bc0_train.jsonl",
@@ -59,7 +60,9 @@ _TRAINING_SOURCE_PATHS = {
     "gemma_adapter_loader.py",
     "gpt_oss_power_sft_revised_v3.py",
     "hif_search_limits.py",
+    "psse_env/dagger/preliminary_e2b_eval.py",
     "psse_env/dagger/preliminary_receipt.py",
+    "psse_env/dagger/preliminary_tool_gate.py",
     "psse_env/sft/preliminary_adapter.py",
     "psse_env/sft/preliminary_hardware.py",
     "psse_env/sft/release_hardware.py",
@@ -70,6 +73,22 @@ _TRAINING_SOURCE_PATHS = {
 
 class PreliminaryReceiptError(ValueError):
     """The explicitly non-release preliminary evidence failed closed."""
+
+
+def _is_pinned_model_reference(value: Any) -> bool:
+    """Accept the canonical Hub id or its exact, locally cached revision."""
+
+    if value == PINNED_MODEL_NAME:
+        return True
+    if not isinstance(value, str) or not value:
+        return False
+    snapshot = Path(value)
+    return bool(
+        snapshot.is_absolute()
+        and snapshot.name.lower() == PINNED_MODEL_REVISION
+        and snapshot.is_dir()
+        and (snapshot / "config.json").is_file()
+    )
 
 
 def _stable_json_sha256(value: Any) -> str:
@@ -759,6 +778,11 @@ def _stage_plan_payload(
         )
     if report_to not in {"none", "wandb"}:
         raise PreliminaryReceiptError("stage plan report_to must be none or wandb")
+    if max_seq_length != PINNED_MAX_SEQ_LENGTH:
+        raise PreliminaryReceiptError(
+            "preliminary E2B stages must use the pinned 8192-token context so "
+            "reviewed prompts cannot be silently left-truncated"
+        )
     if max_valid_rows < len(validation_rows):
         raise PreliminaryReceiptError(
             "stage plan must evaluate every held-out D1 validation row"
@@ -797,6 +821,8 @@ def _stage_plan_payload(
         initial_tree = _tree_sha256(initial)
     run_name = f"prelim-e2b-{stage}-seed{training_seed}"
     training_source = _training_source_attestation(repo_root)
+    from psse_env.dagger.preliminary_tool_gate import gate_plan_contract
+
     return {
         "contract": STAGE_PLAN_CONTRACT,
         "artifact_type": "preliminary_dagger_nonrelease_training_plan",
@@ -842,8 +868,10 @@ def _stage_plan_payload(
             "repeat_first_tool_call": 1,
             "repeat_later_tool_call": 1,
             "repeat_final": 1,
+            "fail_on_prompt_truncation": True,
             "sanity_check_samples": 0,
         },
+        "generation_gate": gate_plan_contract(stage),
         "optimizer_visible_train_rows": len(optimizer_rows),
         "optimizer_visible_d1_row_count": len(optimizer_d1_rows),
         "optimizer_visible_d1_root_count": len(optimizer_d1_roots),
@@ -992,8 +1020,12 @@ def _validate_run_config(
     config = _json_object(path, label="Trainer run config")
     training = _mapping(plan.get("training_arguments"), field="plan.training_arguments")
     prompt = _mapping(plan.get("prompt_arguments"), field="plan.prompt_arguments")
+    requested_model_name = config.get("requested_model_name")
+    if not _is_pinned_model_reference(requested_model_name):
+        raise PreliminaryReceiptError(
+            "Trainer run config requested_model_name differs from the pinned model"
+        )
     expected_top = {
-        "requested_model_name": PINNED_MODEL_NAME,
         "requested_model_revision": PINNED_MODEL_REVISION,
         "output_dir": str(output_dir),
         "train_file": plan.get("train_file"),
@@ -1089,12 +1121,10 @@ def _validate_run_config(
         )
     base_reference = config.get("adapter_base_model_name_or_path")
     if plan.get("stage") == "bc0":
-        if base_reference != PINNED_MODEL_NAME:
-            snapshot = Path(str(base_reference or ""))
-            if snapshot.name.lower() != PINNED_MODEL_REVISION:
-                raise PreliminaryReceiptError(
-                    "BC0 run config lacks the pinned base model"
-                )
+        if not _is_pinned_model_reference(base_reference):
+            raise PreliminaryReceiptError(
+                "BC0 run config lacks the pinned base model"
+            )
     else:
         initial_config = _json_object(
             Path(str(plan["initial_adapter"])) / "adapter_config.json",
@@ -1200,16 +1230,10 @@ def _stage_payload(
     base_reference = adapter_config.get("base_model_name_or_path")
     if not isinstance(base_reference, str) or not base_reference:
         raise PreliminaryReceiptError("adapter config lacks its base model reference")
-    if stage == "bc0" and base_reference != PINNED_MODEL_NAME:
-        snapshot = Path(base_reference)
-        if (
-            snapshot.name.lower() != PINNED_MODEL_REVISION
-            or not snapshot.is_dir()
-            or not (snapshot / "config.json").is_file()
-        ):
-            raise PreliminaryReceiptError(
-                "BC0 adapter does not bind the pinned E2B model or snapshot"
-            )
+    if stage == "bc0" and not _is_pinned_model_reference(base_reference):
+        raise PreliminaryReceiptError(
+            "BC0 adapter does not bind the pinned E2B model or snapshot"
+        )
     if stage == "dagger":
         snapshot = Path(base_reference)
         if (
@@ -1241,6 +1265,25 @@ def _stage_payload(
         raise PreliminaryReceiptError(
             "completed stage lacks finite full-validation eval_loss at final max step"
         )
+    from psse_env.dagger.preliminary_tool_gate import (
+        GATE_FILENAME,
+        PreliminaryToolGateError,
+        validate_gate_report,
+    )
+
+    gate_path = output_dir / GATE_FILENAME
+    try:
+        generation_gate = validate_gate_report(
+            report_path=gate_path,
+            stage_plan_path=plan_path,
+            adapter_path=adapter_dir,
+            validation_path=validation_file.resolve(strict=True),
+            require_passed=True,
+        )
+    except PreliminaryToolGateError as exc:
+        raise PreliminaryReceiptError(
+            f"completed stage lacks a passing tool generation gate: {exc}"
+        ) from exc
     return {
         "contract": STAGE_RECEIPT_CONTRACT,
         "artifact_type": "preliminary_dagger_nonrelease_checkpoint",
@@ -1268,6 +1311,8 @@ def _stage_payload(
         "run_config_sha256": _file_sha256(run_config_path),
         "full_validation_row_count": plan["evaluated_validation_rows"],
         "latest_trainer_metrics": metrics,
+        "generation_gate_report_sha256": _file_sha256(gate_path),
+        "generation_gate_summary": generation_gate["summary"],
     }
 
 

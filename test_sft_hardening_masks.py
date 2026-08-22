@@ -154,6 +154,10 @@ class SFTHardeningMaskTests(unittest.TestCase):
 
     def test_resume_default_is_fresh_and_init_adapter_auto_resume_is_guarded(self) -> None:
         self.assertEqual(parse_args([]).resume_from_checkpoint, "")
+        self.assertFalse(parse_args([]).fail_on_prompt_truncation)
+        self.assertTrue(
+            parse_args(["--fail-on-prompt-truncation"]).fail_on_prompt_truncation
+        )
 
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "checkpoint-25").mkdir()

@@ -24,6 +24,15 @@ from psse_env.dagger.preliminary_receipt import (
     validate_preliminary_stage_receipt,
     write_preliminary_stage_receipt,
 )
+from psse_env.dagger.preliminary_tool_gate import (
+    GATE_ARTIFACT_TYPE,
+    GATE_CONTRACT,
+    GATE_FILENAME,
+    SAMPLE_COUNT,
+    gate_plan_contract,
+    summarize_results,
+)
+from psse_env.dagger.release_factories import checkpoint_tree_sha256
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -295,7 +304,9 @@ def _write_training_source_repo(root: Path) -> Path:
         "gemma_adapter_loader.py",
         "gpt_oss_power_sft_revised_v3.py",
         "hif_search_limits.py",
+        "psse_env/dagger/preliminary_e2b_eval.py",
         "psse_env/dagger/preliminary_receipt.py",
+        "psse_env/dagger/preliminary_tool_gate.py",
         "psse_env/sft/preliminary_adapter.py",
         "psse_env/sft/preliminary_hardware.py",
         "psse_env/sft/release_hardware.py",
@@ -368,7 +379,7 @@ def _make_stage_plan(
         ),
         max_valid_rows=128,
         max_steps=8,
-        max_seq_length=4096,
+        max_seq_length=8192,
         batch_size=2,
         gradient_accumulation_steps=8,
         learning_rate=0.0001,
@@ -417,6 +428,45 @@ def _write_completed_stage(
         base_model = PINNED_MODEL_NAME
     (adapter / "adapter_config.json").write_text(
         json.dumps({"base_model_name_or_path": base_model}), encoding="utf-8"
+    )
+    plan_payload = json.loads(plan.read_text(encoding="utf-8"))
+    results = [
+        {
+            "physical_root_fingerprint": f"gate-root-{index % 16:02d}",
+            "schema_valid": True,
+            "state_bound": True,
+            "target_tool_match": True,
+            "exact_target_match": True,
+            "hit_max_new_tokens": False,
+        }
+        for index in range(SAMPLE_COUNT)
+    ]
+    summary = summarize_results(
+        results,
+        minimum_target_tool_rate=gate_plan_contract(stage)[
+            "minimum_target_tool_match_rate"
+        ],
+    )
+    gate_report = {
+        "contract": GATE_CONTRACT,
+        "artifact_type": GATE_ARTIFACT_TYPE,
+        "release_eligible": False,
+        "stage": stage,
+        "model": plan_payload["model"],
+        "model_revision": plan_payload["model_revision"],
+        "adapter_path": str(adapter.resolve()),
+        "adapter_tree_sha256": checkpoint_tree_sha256(adapter.resolve()),
+        "stage_plan_sha256": hashlib.sha256(plan.read_bytes()).hexdigest(),
+        "validation_file": str(validation.resolve()),
+        "validation_file_sha256": hashlib.sha256(validation.read_bytes()).hexdigest(),
+        "thresholds": gate_plan_contract(stage),
+        "summary": summary,
+        "results": results,
+        "passed": True,
+    }
+    (output / GATE_FILENAME).write_text(
+        json.dumps(gate_report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
     )
     hardware = _write_hardware_attestation(output)
     return plan, train, validation, hardware
@@ -576,6 +626,33 @@ def test_resume_rejects_run_config_that_differs_from_stage_plan(
         )
 
 
+def test_resume_accepts_exact_local_snapshot_as_pinned_model(
+    tmp_path: Path,
+) -> None:
+    dataset_receipt = _write_dataset(tmp_path / "dataset")
+    output = tmp_path / "output"
+    plan, _, _, _ = _make_stage_plan(dataset_receipt, output, stage="bc0")
+    snapshot = tmp_path / "hub" / "snapshots" / PINNED_MODEL_REVISION
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text("{}\n", encoding="utf-8")
+    _write_run_config_from_plan(
+        plan,
+        override={
+            "requested_model_name": str(snapshot.resolve()),
+            "adapter_base_model_name_or_path": str(snapshot.resolve()),
+        },
+    )
+    checkpoint = output / "checkpoint-8"
+    checkpoint.mkdir()
+    (checkpoint / "trainer_state.json").write_text(
+        json.dumps({"global_step": 8}), encoding="utf-8"
+    )
+    result = validate_preliminary_resume_checkpoint(
+        stage_plan=plan, checkpoint=checkpoint
+    )
+    assert result["checkpoint_step"] == 8
+
+
 def test_stage_receipt_requires_finite_final_step_eval_loss(tmp_path: Path) -> None:
     dataset_receipt = _write_dataset(tmp_path / "dataset")
     output = tmp_path / "output"
@@ -587,6 +664,25 @@ def test_stage_receipt_requires_finite_final_step_eval_loss(tmp_path: Path) -> N
     state["log_history"][0]["step"] = 7
     state_path.write_text(json.dumps(state), encoding="utf-8")
     with pytest.raises(PreliminaryReceiptError, match="final max step"):
+        write_preliminary_stage_receipt(
+            stage="bc0",
+            dataset_receipt=dataset_receipt,
+            train_file=train,
+            validation_file=validation,
+            output_dir=output,
+            hardware_attestation=hardware,
+            stage_plan=plan,
+        )
+
+
+def test_stage_receipt_requires_passing_generation_gate(tmp_path: Path) -> None:
+    dataset_receipt = _write_dataset(tmp_path / "dataset")
+    output = tmp_path / "output"
+    plan, train, validation, hardware = _write_completed_stage(
+        dataset_receipt, output, stage="bc0"
+    )
+    (output / GATE_FILENAME).unlink()
+    with pytest.raises(PreliminaryReceiptError, match="tool generation gate"):
         write_preliminary_stage_receipt(
             stage="bc0",
             dataset_receipt=dataset_receipt,
@@ -645,7 +741,7 @@ def test_stage_plan_rejects_bc0_validation_instead_of_common_d1_validation(
             max_train_rows=256,
             max_valid_rows=128,
             max_steps=8,
-            max_seq_length=4096,
+            max_seq_length=8192,
             batch_size=2,
             gradient_accumulation_steps=8,
             learning_rate=0.0001,
@@ -737,7 +833,9 @@ def test_stage_receipt_rejects_post_completion_adapter_tampering(
 def test_launcher_is_pinned_bounded_hardware_attested_and_nonrelease() -> None:
     launcher = LAUNCHER.read_text(encoding="utf-8")
     for contract in (
-        'readonly MODEL_NAME="unsloth/gemma-4-E2B-it"',
+        "MODEL_NAME=${MODEL_NAME:-unsloth/gemma-4-E2B-it}",
+        'if [[ "$MODEL_NAME" != "unsloth/gemma-4-E2B-it" ]]',
+        '"$(basename -- "$MODEL_NAME")" != "$MODEL_REVISION"',
         'readonly MODEL_REVISION="f0c5915f17ad6c66dbeb577fb06ff8925bf8d7ae"',
         '#SBATCH --constraint="h200|h100|rtx6000|l40s"',
         "psse_env.sft.preliminary_hardware",
@@ -745,17 +843,21 @@ def test_launcher_is_pinned_bounded_hardware_attested_and_nonrelease() -> None:
         'if [[ "$ACTUAL_ACCELERATOR_CLASS" == "l40s" ]]',
         "PER_DEVICE_TRAIN_BATCH_SIZE=${PER_DEVICE_TRAIN_BATCH_SIZE:-2}",
         "GRADIENT_ACCUMULATION_STEPS=${GRADIENT_ACCUMULATION_STEPS:-8}",
-        "BC0_MAX_STEPS=${BC0_MAX_STEPS:-24}",
-        "DAGGER_MAX_STEPS=${DAGGER_MAX_STEPS:-40}",
+        "BC0_MAX_STEPS=${BC0_MAX_STEPS:-64}",
+        "DAGGER_MAX_STEPS=${DAGGER_MAX_STEPS:-96}",
+        "MAX_SEQ_LENGTH=${MAX_SEQ_LENGTH:-8192}",
         "bounded_uint BC0_MAX_STEPS \"$BC0_MAX_STEPS\" 1 64",
         "bounded_uint DAGGER_MAX_STEPS \"$DAGGER_MAX_STEPS\" 1 128",
         "preliminary.dataset_receipt.json",
+        'export HF_HUB_CACHE=${HF_HUB_CACHE:-$HF_HOME/hub}',
         "preliminary.bc0_train.jsonl",
         "preliminary.mixed_train.jsonl",
         "preliminary.d1_validation.jsonl",
         "preliminary.d1_test.jsonl",
         "psse_env.sft.preliminary_adapter",
         "pinned_bc0_init_adapter",
+        "psse_env.dagger.preliminary_tool_gate",
+        "run_tool_generation_gate",
     ):
         assert contract in launcher
     assert "unsloth/gemma-4-31B-it" not in launcher
@@ -768,6 +870,7 @@ def test_launcher_passes_recovery_compatible_prompt_contract_to_both_stages() ->
         "--preserve-system-text",
         "--no-phase-gated-prompt",
         "--sanity-check-samples 0",
+        "--fail-on-prompt-truncation",
     ):
         assert argument in launcher
         assert launcher.count(argument) == 1

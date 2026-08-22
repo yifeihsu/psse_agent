@@ -363,6 +363,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--dataloader-num-workers", type=int, default=4)
     parser.add_argument("--drop-too-long-targets", action="store_true", default=True)
     parser.add_argument("--keep-too-long-targets", dest="drop_too_long_targets", action="store_false")
+    parser.add_argument(
+        "--fail-on-prompt-truncation",
+        action="store_true",
+        default=False,
+        help=(
+            "Fail before training if any rendered prompt plus its assistant target "
+            "exceeds --max-seq-length. This prevents left-truncated rows from "
+            "silently losing their system prompt or tool registry."
+        ),
+    )
     parser.add_argument("--include-tool-schemas", action="store_true", default=True)
     parser.add_argument("--no-include-tool-schemas", dest="include_tool_schemas", action="store_false")
     parser.add_argument("--tools-file", type=str, default="")
@@ -607,6 +617,7 @@ def write_run_config(
             "repeat_first_tool_call": args.repeat_first_tool_call,
             "repeat_later_tool_call": args.repeat_later_tool_call,
             "repeat_final": args.repeat_final,
+            "fail_on_prompt_truncation": args.fail_on_prompt_truncation,
         },
     }
     run_config_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1631,6 +1642,7 @@ def build_processed_split(
     phase_gated_prompt: bool,
     phase_role: str,
     inject_empty_thought_channel: bool,
+    fail_on_prompt_truncation: bool = False,
 ):
     records: list[dict[str, Any]] = []
 
@@ -1705,6 +1717,12 @@ def build_processed_split(
             truncated = False
 
             if orig_length > max_seq_length:
+                if fail_on_prompt_truncation:
+                    raise ValueError(
+                        f"Prompt truncation is forbidden for {split_name} row "
+                        f"{row_debug_id(row, row_index)}: rendered length "
+                        f"{orig_length} exceeds --max-seq-length={max_seq_length}."
+                    )
                 if completion_len > max_seq_length:
                     if row_is_hardening:
                         stats.hardening_too_long_target += 1
@@ -2809,6 +2827,7 @@ def main(argv: list[str] | None = None) -> int:
         phase_gated_prompt=args.phase_gated_prompt,
         phase_role=phase_role,
         inject_empty_thought_channel=args.inject_empty_thought_channel,
+        fail_on_prompt_truncation=args.fail_on_prompt_truncation,
     )
     run_mask_alignment_sanity_check(train_records, tokenizer, args.mask_sanity_samples)
     report_dataset(train_records, "train", train_stats, args.max_seq_length)
@@ -2839,6 +2858,7 @@ def main(argv: list[str] | None = None) -> int:
             phase_gated_prompt=args.phase_gated_prompt,
             phase_role=phase_role,
             inject_empty_thought_channel=args.inject_empty_thought_channel,
+            fail_on_prompt_truncation=args.fail_on_prompt_truncation,
         )
         eval_dataset = records_to_dataset(eval_records, keep_debug_text=args.keep_debug_text)
         report_dataset(eval_records, "validation", eval_stats, args.max_seq_length)

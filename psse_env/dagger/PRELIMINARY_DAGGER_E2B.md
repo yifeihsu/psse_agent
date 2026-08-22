@@ -19,15 +19,22 @@ receipt records their commit, Git blob IDs, SHA-256 hashes, and sizes; the
 launcher validator requires that source attestation before accepting any data.
 
 The fixed model is `unsloth/gemma-4-E2B-it` at Hugging Face revision
-`f0c5915f17ad6c66dbeb577fb06ff8925bf8d7ae`. The first stage runs 24 bounded
-BC0 steps. The second stage loads that BC0 LoRA and runs 40 bounded steps on the
-mixed BC0+D1 view. Both stages pass `--preserve-system-text`,
+`f0c5915f17ad6c66dbeb577fb06ff8925bf8d7ae`. The first stage runs 64 bounded
+BC0 steps. The second stage loads that BC0 LoRA and runs 96 bounded steps on the
+mixed BC0+D1 view. Both stages use an 8,192-token context and pass
+`--fail-on-prompt-truncation`, `--preserve-system-text`,
 `--no-phase-gated-prompt`, and `--sanity-check-samples 0`, because recovery
 targets are not universally first-turn WLS targets. Before warm-start loading,
 the job copies BC0 into a bound initialization adapter whose
 `base_model_name_or_path` is the local snapshot directory for that exact E2B
 commit. This closes the legacy trainer's behavior of not forwarding
 `--model-revision` when it loads a local adapter.
+
+On an offline compute node, `MODEL_NAME` may point to the absolute local Hub
+snapshot directory only when its basename is that exact pinned revision and it
+contains `config.json`. The launcher rejects every other override, and stage
+receipt validation treats the canonical Hub ID and that exact local snapshot
+as the same pinned model identity.
 
 Both stages evaluate on the identical root-held-out
 `preliminary.d1_validation.jsonl`. Their recorded `eval_loss` values therefore
@@ -45,8 +52,14 @@ only when its numeric step, `trainer_state.json`, and existing `run_config.json`
 match that plan. A stale checkpoint without a matching plan is rejected. Stage
 completion additionally requires a finite `eval_loss` at the planned final
 step, over every D1 validation row (the default cap of 128 covers the current
-63-row validation file). Step overrides must remain divisible by both the save
-and evaluation cadence so this final-step evidence exists.
+63-row validation file). It then greedily decodes a deterministic 32-row,
+root-spread validation sample. Both stages require schema-valid tool calls on
+at least 99% of rows, controller-bound state references on at least 98%, and no
+64-token-limit hits. DAgger also requires at least 50% target-tool agreement;
+BC0 records that metric without gating it so a weak baseline remains a valid
+comparator. The generation report is bound into the stage receipt. Step
+overrides must remain divisible by both the save and evaluation cadence so the
+final-step evidence exists.
 
 The plan also attests the clean committed bytes of the preliminary launcher,
 receipt/hardware/adapter helpers, legacy Trainer, and its direct local adapter,
@@ -113,7 +126,9 @@ skips a valid completed stage, resumes an incomplete stage only from a concrete
 Trainer checkpoint, and refuses an ambiguous unreceipted LoRA tree.
 
 Useful bounded overrides are `BC0_MAX_STEPS` (maximum 64),
-`DAGGER_MAX_STEPS` (maximum 128), and `PIPELINE_STAGE=bc0|dagger|all`. The stage
+`DAGGER_MAX_STEPS` (maximum 128), and `PIPELINE_STAGE=bc0|dagger|all`. The
+sequence length is pinned to 8,192 because the measured canonical prompts do
+not safely fit the old 4,096-token setting. The stage
 receipts expose the latest recorded training/evaluation losses for quick
 inspection, but those losses are diagnostic—not a preliminary closed-loop
 success claim. Use the held-out D1 files in a separate evaluation for that

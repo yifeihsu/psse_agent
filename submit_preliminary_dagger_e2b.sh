@@ -24,7 +24,7 @@
 
 set -euo pipefail
 
-readonly MODEL_NAME="unsloth/gemma-4-E2B-it"
+MODEL_NAME=${MODEL_NAME:-unsloth/gemma-4-E2B-it}
 readonly MODEL_REVISION="f0c5915f17ad6c66dbeb577fb06ff8925bf8d7ae"
 
 REPO_ROOT=${REPO_ROOT:-/scratch/yx3882/psse_agent}
@@ -39,15 +39,15 @@ REPORT_TO=${REPORT_TO:-none}
 TRAIN_SEED=${TRAIN_SEED:-3407}
 
 # Hard step/row ceilings keep this a preliminary run even when overridden.
-BC0_MAX_STEPS=${BC0_MAX_STEPS:-24}
-DAGGER_MAX_STEPS=${DAGGER_MAX_STEPS:-40}
+BC0_MAX_STEPS=${BC0_MAX_STEPS:-64}
+DAGGER_MAX_STEPS=${DAGGER_MAX_STEPS:-96}
 BC0_MAX_TRAIN_ROWS=${BC0_MAX_TRAIN_ROWS:-256}
 D1_MAX_VALID_ROWS=${D1_MAX_VALID_ROWS:-128}
 DAGGER_MAX_TRAIN_ROWS=${DAGGER_MAX_TRAIN_ROWS:-512}
-MAX_SEQ_LENGTH=${MAX_SEQ_LENGTH:-4096}
+MAX_SEQ_LENGTH=${MAX_SEQ_LENGTH:-8192}
 PER_DEVICE_TRAIN_BATCH_SIZE=${PER_DEVICE_TRAIN_BATCH_SIZE:-}
 GRADIENT_ACCUMULATION_STEPS=${GRADIENT_ACCUMULATION_STEPS:-}
-LEARNING_RATE=${LEARNING_RATE:-0.0001}
+LEARNING_RATE=${LEARNING_RATE:-0.00005}
 LORA_R=${LORA_R:-16}
 LORA_ALPHA=${LORA_ALPHA:-16}
 SAVE_STEPS=${SAVE_STEPS:-8}
@@ -85,6 +85,20 @@ case "$REPORT_TO" in
         ;;
 esac
 
+# Offline compute nodes may load the exact pinned Hub snapshot by absolute
+# path.  Keep the canonical repo id as the default and reject every other
+# override before allocating optimizer state.
+if [[ "$MODEL_NAME" != "unsloth/gemma-4-E2B-it" ]]; then
+    if [[ "$MODEL_NAME" != /* \
+        || "$(basename -- "$MODEL_NAME")" != "$MODEL_REVISION" \
+        || ! -f "$MODEL_NAME/config.json" ]]; then
+        echo "ERROR: MODEL_NAME must be the pinned repo id or its exact local snapshot." >&2
+        exit 2
+    fi
+    MODEL_NAME=$(realpath -e -- "$MODEL_NAME")
+fi
+readonly MODEL_NAME
+
 bounded_uint() {
     local name=$1
     local value=$2
@@ -101,7 +115,7 @@ bounded_uint DAGGER_MAX_STEPS "$DAGGER_MAX_STEPS" 1 128
 bounded_uint BC0_MAX_TRAIN_ROWS "$BC0_MAX_TRAIN_ROWS" 1 1024
 bounded_uint D1_MAX_VALID_ROWS "$D1_MAX_VALID_ROWS" 1 512
 bounded_uint DAGGER_MAX_TRAIN_ROWS "$DAGGER_MAX_TRAIN_ROWS" 1 2048
-bounded_uint MAX_SEQ_LENGTH "$MAX_SEQ_LENGTH" 1024 6144
+bounded_uint MAX_SEQ_LENGTH "$MAX_SEQ_LENGTH" 1024 8192
 bounded_uint LORA_R "$LORA_R" 1 64
 bounded_uint LORA_ALPHA "$LORA_ALPHA" 1 128
 bounded_uint SAVE_STEPS "$SAVE_STEPS" 1 64
@@ -148,6 +162,7 @@ mkdir -p "$BC0_OUTPUT" "$DAGGER_OUTPUT" artifacts/logs
 mkdir -p /scratch/yx3882/.cache/huggingface /scratch/yx3882/.cache/torch
 
 export HF_HOME=${HF_HOME:-/scratch/yx3882/.cache/huggingface}
+export HF_HUB_CACHE=${HF_HUB_CACHE:-$HF_HOME/hub}
 export HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-$HF_HOME/datasets}
 export TORCH_HOME=${TORCH_HOME:-/scratch/yx3882/.cache/torch}
 export TOKENIZERS_PARALLELISM=false
@@ -223,6 +238,7 @@ COMMON_ARGS=(
     --sanity-check-samples 0
     --include-tool-schemas
     --inject-empty-thought-channel
+    --fail-on-prompt-truncation
     --repeat-first-tool-call 1
     --repeat-later-tool-call 1
     --repeat-final 1
@@ -310,6 +326,12 @@ publish_stage_receipt() {
         --validation-file "$validation_file" \
         --output-dir "$output_dir" \
         --hardware-attestation "$output_dir/preliminary_hardware_attestation.json" \
+        --stage-plan "$output_dir/preliminary_stage_plan.json"
+}
+
+run_tool_generation_gate() {
+    local output_dir=$1
+    "$PYTHON" -m psse_env.dagger.preliminary_tool_gate \
         --stage-plan "$output_dir/preliminary_stage_plan.json"
 }
 
@@ -420,6 +442,7 @@ run_bc0_stage() {
     local status=$?
     set -e
     handle_trainer_status "$status"
+    run_tool_generation_gate "$BC0_OUTPUT"
     publish_stage_receipt bc0 "$BC0_TRAIN_FILE" "$D1_VALIDATION_FILE" "$BC0_OUTPUT"
 }
 
@@ -476,6 +499,7 @@ run_dagger_stage() {
     local status=$?
     set -e
     handle_trainer_status "$status"
+    run_tool_generation_gate "$DAGGER_OUTPUT"
     publish_stage_receipt dagger "$MIXED_TRAIN_FILE" "$D1_VALIDATION_FILE" "$DAGGER_OUTPUT"
 }
 
