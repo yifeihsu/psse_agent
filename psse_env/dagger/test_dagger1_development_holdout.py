@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import psse_env.dagger.build_dagger1_development_holdout as holdout_module
+from psse_env.dagger.evaluator import validate_release_scenario_suites
 from psse_env.sft.provenance import file_sha256, stable_json_sha256
 
 
@@ -400,6 +401,16 @@ class Dagger1DevelopmentHoldoutTests(unittest.TestCase):
             )
             payload = json.loads(first_output.read_text(encoding="utf-8"))
             rows = payload[holdout_module.DAGGER1_DEVELOPMENT_SUITE_NAME]
+            self.assertTrue(
+                all(
+                    "parameter_scans_available" not in row["grouping"]
+                    for row in rows
+                )
+            )
+            validate_release_scenario_suites(
+                {holdout_module.DAGGER1_DEVELOPMENT_SUITE_NAME: rows},
+                allow_diagnostic_development=True,
+            )
             self.assertEqual(
                 {row["grouping"]["physical_root_fingerprint"] for row in rows},
                 {"mixed-extra", "multi-fresh", "parameter-extra"},

@@ -29,7 +29,7 @@ from psse_env.sft.provenance import (
 
 
 DAGGER1_DEVELOPMENT_HOLDOUT_CONTRACT = (
-    "fresh_train_partition_dagger1_development_holdout_v2"
+    "fresh_train_partition_dagger1_development_holdout_v3"
 )
 DAGGER1_DEVELOPMENT_SUITE_NAME = "dagger1_development"
 DAGGER1_DEVELOPMENT_SPLIT = "dagger_development"
@@ -501,7 +501,10 @@ def build_dagger1_development_holdout(
             and not isinstance(z_scans, (str, bytes))
             and len(z_scans) > 0
         )
-        grouping["parameter_scans_available"] = scans_available
+        # This is a builder-only selection predicate.  The partition helper
+        # has already produced and validated the strict release-evaluation
+        # envelope, so do not mutate its grouping schema with this derived
+        # inventory field after validation.
         if root in protected_roots:
             filtered_protected.add(root)
             continue
@@ -605,6 +608,16 @@ def build_dagger1_development_holdout(
         )
     )
     output_payload = {DAGGER1_DEVELOPMENT_SUITE_NAME: selected}
+    # The holdout is consumed directly by the diagnostic release evaluator.
+    # Enforce that integration boundary before any bytes are published instead
+    # of relying on the earlier per-row partition validation followed by local
+    # selection logic.
+    from psse_env.dagger.evaluator import validate_release_scenario_suites
+
+    validate_release_scenario_suites(
+        output_payload,
+        allow_diagnostic_development=True,
+    )
     report = generator.report()
     source_partition = report.get("source_partition")
     parameter_admission = report.get("parameter_ranking_admission")
