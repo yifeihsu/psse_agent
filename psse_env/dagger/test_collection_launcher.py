@@ -239,6 +239,14 @@ case "${COLLECTOR_MODE:-success}" in
         sleep 0.2
         ;;
     slow)
+        # The lock-race test needs the winning launcher to remain alive long
+        # enough to hold the mode lock, but it should not also depend on the
+        # fake monitor winning an unrelated scheduling race on a loaded Linux
+        # runner.  Synchronize with the same ready marker as the fast stub.
+        for _ in $(seq 1 200); do
+            [[ -e "$D1_DIR/nvml_stub_ready" ]] && break
+            sleep 0.01
+        done
         sleep 1
         ;;
     term|int)
