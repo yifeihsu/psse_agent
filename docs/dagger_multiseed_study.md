@@ -255,6 +255,10 @@ source commit, and training seed. Its recorded adapter path and tree SHA-256
 must exactly match the warm-start arguments. Validation finishes before model
 allocation, and the new Round-1 receipt binds the authenticated
 `parent_checkpoint_receipt_id`. BC0 records the canonical null parent ID.
+The canonical D1 aggregate independently retains the adapter-tree identity
+used for learner-in-the-loop collection. That collector identity authenticates
+the shared dataset; it does not override the same-seed BC0 parent identity for
+replicated Round-1 training.
 
 Use a distinct output directory and artifact identity for every variant/seed.
 When W&B is enabled, the default run ID/name and tags include `TRAIN_SEED`, so

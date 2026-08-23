@@ -578,19 +578,22 @@ that it used `AutoProcessor`. The checkpoint evaluation is followed by
 `STAGE=checkpoint-gate`; it is not part of the baseline submission group.
 
 For a reviewed Round-1 aggregate, warm-start from the exact content-addressed
-BC0 learner-seed LoRA tree into a fresh, non-overlapping output directory. The
-seed remains release-ineligible; its role here is only initialization. The launcher independently
-validates the adapter contents and its 64-hex tree identity, loads it through
-PEFT with `is_trainable=True`, restores its exact pre-smoke trainable weights
-before TRL starts, and writes `initial_adapter_attestation.json`.
+same-seed BC0 LoRA tree into a fresh, non-overlapping output directory. The
+checkpoint may remain release-ineligible; its role here is only initialization.
+The launcher independently validates the adapter contents and its 64-hex tree
+identity, loads it through PEFT with `is_trainable=True`, restores its exact
+pre-smoke trainable weights before TRL starts, and writes
+`initial_adapter_attestation.json`.
 It also requires the canonical sibling BC0 `checkpoint_receipt.json` and,
 before model allocation, validates the same study manifest, reviewed source,
 training seed, adapter path, and adapter tree. The Round-1 receipt binds that
-BC0 `parent_checkpoint_receipt_id`; BC0 itself records a null parent ID.
-`STAGE=round1` also refuses any revision that differs from both the D1
-collection manifest and the aggregate's learner-seed provenance. Round 1
-is pinned to one epoch at `3e-5`; the preregistered launcher rejects overrides.
-BC0 is similarly pinned to two epochs at `1e-4`. Both use max length 6144,
+BC0 `parent_checkpoint_receipt_id`; BC0 itself records a null parent ID. The
+D1 collection manifest and aggregate separately retain the exact adapter tree
+that generated learner-visited collection states; that data-provenance identity
+does not replace the same-seed BC0 parent required for each replicated Round-1
+run. Round 1 is pinned to one epoch at `3e-5`; the preregistered launcher
+rejects overrides.
+BC0 is similarly pinned to two epochs at `1e-4`. Both use max length 8192,
 batch size 1, accumulation 4, bf16 NF4 double-quantized QLoRA, LoRA rank/alpha
 16 with zero dropout and the registered language targets, `adamw_torch`, and a
 linear schedule. The manifest also verifies the exact dependency-lock SHA-256:
@@ -840,10 +843,13 @@ and an explicit `ROUND1_VIEW`. `STAGE=round1` additionally requires the
 canonical sibling `PARENT_CHECKPOINT_RECEIPT`; data-only and smoke stages may
 validate the view without producing a checkpoint receipt. Use the same view
 and matching study variant for every stage in one arm.
-The gate validates that learner-seed identity against the D1 manifest and
-aggregate provenance without loading the adapter or allocating the base model;
-`one-batch`, `targeted-tiny-overfit`, and `round1` additionally warm-start from
-it. The targeted
+The gate independently authenticates the collector learner-seed identity from
+the D1 manifest and aggregate provenance, while recording the supplied exact
+64-hex `INITIAL_ADAPTER_REVISION` as the claimed, distinct BC0 warm-start tree.
+It does this without loading the adapter or allocating the base model.
+`one-batch`, `targeted-tiny-overfit`, and `round1` verify and warm-start from
+the supplied BC0 adapter; `STAGE=round1` additionally authenticates its
+same-seed receipt, path, and tree before model allocation. The targeted
 stage selects five distinct recovery cases,
 sweeps diagnostic learning rates `1e-4`, `3e-4`, and `1e-3`, and requires exact
 generated tools and arguments. These sweep rates do not alter the pinned

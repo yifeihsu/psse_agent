@@ -554,9 +554,14 @@ def validate_round1_learner_seed(
     *,
     collection_manifest_sha256: str,
     aggregate_learner_seed: Mapping[str, Any] | None = None,
-    initial_adapter_revision: str | None = None,
 ) -> dict[str, str]:
-    """Bind collection, aggregate, and warm-start to one adapter tree."""
+    """Bind collection and aggregate provenance to one collector adapter tree.
+
+    The adapter that generated learner-visited D1 states is an immutable data
+    provenance input.  It is deliberately distinct from the same-seed BC0
+    checkpoint used to initialize each replicated Round-1 training run; that
+    warm-start identity is authenticated by its checkpoint receipt.
+    """
 
     manifest_hash = str(collection_manifest_sha256).strip().lower()
     if _ADAPTER_TREE_REVISION.fullmatch(manifest_hash) is None:
@@ -624,16 +629,6 @@ def validate_round1_learner_seed(
                 "collection manifest"
             )
 
-    if initial_adapter_revision is not None:
-        initial_revision = str(initial_adapter_revision).strip().lower()
-        if (
-            _ADAPTER_TREE_REVISION.fullmatch(initial_revision) is None
-            or initial_revision != adapter_revision
-        ):
-            raise ValueError(
-                "INITIAL_ADAPTER_REVISION differs from the D1 learner_seed "
-                "adapter tree revision"
-            )
     return binding
 
 

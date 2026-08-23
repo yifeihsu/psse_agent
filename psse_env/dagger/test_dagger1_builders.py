@@ -1215,7 +1215,7 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def test_round1_learner_seed_must_match_collection_aggregate_and_warm_start(
+    def test_round1_learner_seed_must_match_collection_and_aggregate(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1226,24 +1226,13 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
             binding = aggregate_module.validate_round1_learner_seed(
                 manifest,
                 collection_manifest_sha256=manifest_hash,
-                initial_adapter_revision=LEARNER_REVISION.upper(),
             )
             aggregate_module.validate_round1_learner_seed(
                 manifest,
                 collection_manifest_sha256=manifest_hash,
                 aggregate_learner_seed=binding,
-                initial_adapter_revision=LEARNER_REVISION,
             )
 
-            with self.assertRaisesRegex(
-                ValueError, "INITIAL_ADAPTER_REVISION differs"
-            ):
-                aggregate_module.validate_round1_learner_seed(
-                    manifest,
-                    collection_manifest_sha256=manifest_hash,
-                    aggregate_learner_seed=binding,
-                    initial_adapter_revision="c" * 64,
-                )
             with self.assertRaisesRegex(
                 ValueError, "aggregate learner_seed differs"
             ):
@@ -1254,7 +1243,6 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                         **binding,
                         "adapter_tree_sha256": "c" * 64,
                     },
-                    initial_adapter_revision=LEARNER_REVISION,
                 )
 
             forged = copy.deepcopy(manifest)

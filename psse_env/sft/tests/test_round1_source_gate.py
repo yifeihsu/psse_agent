@@ -1461,18 +1461,35 @@ class Round1SourceMixGateTests(unittest.TestCase):
             ):
                 self._validate(provenance, preflight)
 
-    def test_initial_adapter_seed_mismatch_fails(self) -> None:
+    def test_distinct_same_seed_warm_start_revision_is_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provenance, preflight = self._write_valid_artifacts(Path(temp_dir))
+            report = validate_round1_source_mix_gate(
+                provenance,
+                preflight,
+                reviewed_source_commit=SOURCE_COMMIT,
+                initial_adapter_revision="f" * 64,
+                round1_view="full",
+            )
+            self.assertTrue(report["passed"])
+            self.assertEqual(
+                report["collection_learner_seed"]["adapter_tree_sha256"],
+                ADAPTER_REVISION,
+            )
+            self.assertEqual(report["round1_warm_start_revision"], "f" * 64)
+
+    def test_initial_adapter_revision_must_be_exact_sha256(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             provenance, preflight = self._write_valid_artifacts(Path(temp_dir))
             with self.assertRaisesRegex(
                 GateError,
-                "INITIAL_ADAPTER_REVISION differs",
+                "initial adapter revision must be an exact 64-hex",
             ):
                 validate_round1_source_mix_gate(
                     provenance,
                     preflight,
                     reviewed_source_commit=SOURCE_COMMIT,
-                    initial_adapter_revision="f" * 64,
+                    initial_adapter_revision="not-a-tree-hash",
                     round1_view="full",
                 )
 
