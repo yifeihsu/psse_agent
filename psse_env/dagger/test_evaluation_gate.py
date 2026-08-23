@@ -3,6 +3,8 @@ from __future__ import annotations
 import copy
 import io
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -16,8 +18,12 @@ from psse_env.actions import (
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
 )
 from psse_env.dagger.evaluation_gate import (
+    DUAL_SOURCE_VALIDATOR_CONTRACT,
     EvaluationGateResult,
     _audited_post_correction_handoff,
+    _dual_validator_source_attestation,
+    _load_artifact_snapshot,
+    _read_json_file_snapshot,
     _trace_action_schema_failure,
     current_registry_sha256,
     main as gate_main,
@@ -56,6 +62,44 @@ SUITE_MANIFEST_FIELDS = (
     "suite_content_sha256",
     "root_set_sha256",
 )
+
+
+def _dual_attestation_fixture(validator_commit: str) -> dict[str, Any]:
+    gate_path = "psse_env/dagger/evaluation_gate.py"
+    gate_sha256 = file_sha256(REPO_ROOT / gate_path)
+    return {
+        "schema_version": 1,
+        "contract": DUAL_SOURCE_VALIDATOR_CONTRACT,
+        "artifact_source_commit": COMMIT,
+        "validator_source_commit": validator_commit,
+        "artifact_is_ancestor": True,
+        "history_commits": [validator_commit],
+        "merge_commits": [],
+        "history_paths": [
+            gate_path,
+            "psse_env/dagger/test_evaluation_gate.py",
+        ],
+        "history_path_hex": [],
+        "tree_delta": [],
+        "gate_tree_sources": {
+            gate_path: {
+                "artifact": {
+                    "path": gate_path,
+                    "mode": "100644",
+                    "git_blob_id": "c" * 40,
+                    "sha256": "d" * 64,
+                },
+                "validator": {
+                    "path": gate_path,
+                    "mode": "100644",
+                    "git_blob_id": "e" * 40,
+                    "sha256": gate_sha256,
+                },
+            }
+        },
+        "protected_blob_ids": {},
+        "protected_sources": {},
+    }
 
 
 def _replace_exact_state_identity(
@@ -1319,6 +1363,373 @@ class EvaluationGateV3Tests(unittest.TestCase):
         self.assertTrue(result.performance_enforced)
         self.assertEqual(result.validation_role, "expert-baseline")
         self.assertEqual(result.frozen_suite_sha256, file_sha256(self.suite_path))
+        self.assertEqual(
+            result.validator_source_attestation["contract"],
+            "single_source_exact_commit_v1",
+        )
+
+    def test_dual_source_records_artifact_and_validator_commits(self) -> None:
+        validator_commit = "b" * 40
+        dual_attestation = _dual_attestation_fixture(validator_commit)
+        clean_source = {
+            "source_commit": validator_commit,
+            "release_eligible_source": True,
+            "source_worktree_dirty": False,
+        }
+        with mock.patch(
+            "psse_env.dagger.evaluation_gate.git_source_state",
+            return_value=clean_source,
+        ), mock.patch(
+            "psse_env.dagger.evaluation_gate._dual_validator_source_attestation",
+            return_value=(dual_attestation, []),
+        ) as dual_validator:
+            result = validate_evaluation_artifact(
+                _artifact(self.suite_path, self.contract),
+                role="expert-baseline",
+                policy=self.policy,
+                expected_source_commit=COMMIT,
+                expected_suite_path=self.suite_path,
+                expected_protocol="canonical",
+                expected_registry_sha256=current_registry_sha256("canonical"),
+                expected_policy_identity="expert-v1",
+                required_gate_policy_id=TEST_POLICY_ID,
+                repo_root=REPO_ROOT,
+                validator_source_commit=validator_commit,
+                validator_source_contract=DUAL_SOURCE_VALIDATOR_CONTRACT,
+            )
+
+        self.assertTrue(result.passed, result.failures)
+        self.assertEqual(result.source_commit, COMMIT)
+        self.assertEqual(
+            result.validator_source_attestation["validator_source_commit"],
+            validator_commit,
+        )
+        self.assertTrue(result.validator_source_attestation["passed"])
+        self.assertEqual(dual_validator.call_count, 2)
+        dual_validator.assert_called_with(
+            repo_root=REPO_ROOT,
+            artifact_source_commit=COMMIT,
+            validator_source_commit=validator_commit,
+        )
+
+    def test_dual_source_argument_contract_is_fail_closed(self) -> None:
+        common = {
+            "artifact": _artifact(self.suite_path, self.contract),
+            "role": "expert-baseline",
+            "policy": self.policy,
+            "expected_source_commit": COMMIT,
+            "expected_suite_path": self.suite_path,
+            "expected_policy_identity": "expert-v1",
+            "required_gate_policy_id": TEST_POLICY_ID,
+            "repo_root": REPO_ROOT,
+        }
+        with self.assertRaisesRegex(ValueError, "must be supplied together"):
+            validate_evaluation_artifact(
+                **common,
+                validator_source_commit="b" * 40,
+            )
+        with self.assertRaisesRegex(ValueError, "current clean-source"):
+            validate_evaluation_artifact(
+                **common,
+                require_current_clean_source=False,
+                validator_source_commit="b" * 40,
+                validator_source_contract=DUAL_SOURCE_VALIDATOR_CONTRACT,
+            )
+        with self.assertRaisesRegex(ValueError, "distinct artifact"):
+            validate_evaluation_artifact(
+                **common,
+                validator_source_commit=COMMIT,
+                validator_source_contract=DUAL_SOURCE_VALIDATOR_CONTRACT,
+            )
+
+    def test_dual_source_rejects_wrong_head_and_source_change(self) -> None:
+        validator_commit = "b" * 40
+        arguments = {
+            "artifact": _artifact(self.suite_path, self.contract),
+            "role": "expert-baseline",
+            "policy": self.policy,
+            "expected_source_commit": COMMIT,
+            "expected_suite_path": self.suite_path,
+            "expected_policy_identity": "expert-v1",
+            "required_gate_policy_id": TEST_POLICY_ID,
+            "repo_root": REPO_ROOT,
+            "validator_source_commit": validator_commit,
+            "validator_source_contract": DUAL_SOURCE_VALIDATOR_CONTRACT,
+        }
+        wrong_source = {
+            "source_commit": "c" * 40,
+            "release_eligible_source": True,
+            "source_worktree_dirty": False,
+        }
+        with mock.patch(
+            "psse_env.dagger.evaluation_gate.git_source_state",
+            return_value=wrong_source,
+        ), mock.patch(
+            "psse_env.dagger.evaluation_gate._dual_validator_source_attestation",
+            return_value=(_dual_attestation_fixture(validator_commit), []),
+        ):
+            wrong_head = validate_evaluation_artifact(**arguments)
+        self.assertFalse(wrong_head.evidence_passed)
+        self.assertTrue(
+            any("required validator commit" in row for row in wrong_head.failures),
+            wrong_head.failures,
+        )
+
+        clean_source = {
+            "source_commit": validator_commit,
+            "release_eligible_source": True,
+            "source_worktree_dirty": False,
+        }
+        changed_source = {**clean_source, "source_worktree_dirty": True}
+        with mock.patch(
+            "psse_env.dagger.evaluation_gate.git_source_state",
+            side_effect=(clean_source, changed_source),
+        ), mock.patch(
+            "psse_env.dagger.evaluation_gate._dual_validator_source_attestation",
+            return_value=(_dual_attestation_fixture(validator_commit), []),
+        ):
+            changed = validate_evaluation_artifact(**arguments)
+        self.assertFalse(changed.evidence_passed)
+        self.assertIn(
+            "current evaluation-gate source changed during validation",
+            changed.failures,
+        )
+
+    def test_dual_source_binds_executing_gate_and_rechecks_metadata(self) -> None:
+        validator_commit = "b" * 40
+        arguments = {
+            "artifact": _artifact(self.suite_path, self.contract),
+            "role": "expert-baseline",
+            "policy": self.policy,
+            "expected_source_commit": COMMIT,
+            "expected_suite_path": self.suite_path,
+            "expected_policy_identity": "expert-v1",
+            "required_gate_policy_id": TEST_POLICY_ID,
+            "repo_root": REPO_ROOT,
+            "validator_source_commit": validator_commit,
+            "validator_source_contract": DUAL_SOURCE_VALIDATOR_CONTRACT,
+        }
+        clean_source = {
+            "source_commit": validator_commit,
+            "release_eligible_source": True,
+            "source_worktree_dirty": False,
+        }
+        wrong_gate = _dual_attestation_fixture(validator_commit)
+        wrong_gate["gate_tree_sources"]["psse_env/dagger/evaluation_gate.py"][
+            "validator"
+        ]["sha256"] = "0" * 64
+        with mock.patch(
+            "psse_env.dagger.evaluation_gate.git_source_state",
+            return_value=clean_source,
+        ), mock.patch(
+            "psse_env.dagger.evaluation_gate._dual_validator_source_attestation",
+            return_value=(wrong_gate, []),
+        ):
+            gate_mismatch = validate_evaluation_artifact(**arguments)
+        self.assertFalse(gate_mismatch.evidence_passed)
+        self.assertTrue(
+            any("executing evaluation gate" in row for row in gate_mismatch.failures),
+            gate_mismatch.failures,
+        )
+
+        initial = _dual_attestation_fixture(validator_commit)
+        final = copy.deepcopy(initial)
+        final["replace_refs"] = ["refs/replace/" + COMMIT]
+        with mock.patch(
+            "psse_env.dagger.evaluation_gate.git_source_state",
+            return_value=clean_source,
+        ), mock.patch(
+            "psse_env.dagger.evaluation_gate._dual_validator_source_attestation",
+            side_effect=((initial, []), (final, ["replacement refs"])),
+        ):
+            metadata_change = validate_evaluation_artifact(**arguments)
+        self.assertFalse(metadata_change.evidence_passed)
+        self.assertIn(
+            "dual-source repository metadata or source changed during validation",
+            metadata_change.failures,
+        )
+
+    def test_checkpoint_rejects_dual_source_reference_attestation_failure(
+        self,
+    ) -> None:
+        validator_commit = "b" * 40
+        candidate = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="checkpoint/bc0",
+            model_revision=MODEL_REVISION,
+        )
+        reference = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="base/gemma",
+            model_revision=MODEL_REVISION,
+        )
+        clean_source = {
+            "source_commit": validator_commit,
+            "release_eligible_source": True,
+            "source_worktree_dirty": False,
+        }
+        fixture = _dual_attestation_fixture(validator_commit)
+        with mock.patch(
+            "psse_env.dagger.evaluation_gate.git_source_state",
+            return_value=clean_source,
+        ), mock.patch(
+            "psse_env.dagger.evaluation_gate._dual_validator_source_attestation",
+            side_effect=(
+                (copy.deepcopy(fixture), []),
+                (copy.deepcopy(fixture), ["reference attestation rejected"]),
+                (copy.deepcopy(fixture), []),
+                (copy.deepcopy(fixture), []),
+            ),
+        ):
+            result = validate_evaluation_artifact(
+                candidate,
+                role="checkpoint-promotion",
+                policy=self.policy,
+                expected_source_commit=COMMIT,
+                expected_suite_path=self.suite_path,
+                expected_model_id="checkpoint/bc0",
+                expected_model_revision=MODEL_REVISION,
+                reference_artifact=reference,
+                reference_model_id="base/gemma",
+                reference_model_revision=MODEL_REVISION,
+                required_gate_policy_id=TEST_POLICY_ID,
+                repo_root=REPO_ROOT,
+                validator_source_commit=validator_commit,
+                validator_source_contract=DUAL_SOURCE_VALIDATOR_CONTRACT,
+            )
+        self.assertFalse(result.evidence_passed)
+        self.assertTrue(
+            any(
+                "comparison reference" in failure
+                for failure in result.evidence_failures
+            ),
+            result.evidence_failures,
+        )
+
+    def test_checkpoint_dual_source_contract_propagates_to_reference(self) -> None:
+        validator_commit = "b" * 40
+        candidate = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="checkpoint/bc0",
+            model_revision=MODEL_REVISION,
+        )
+        reference = _artifact(
+            self.suite_path,
+            self.contract,
+            explicit_identity=None,
+            model_id="base/gemma",
+            model_revision=MODEL_REVISION,
+        )
+        clean_source = {
+            "source_commit": validator_commit,
+            "release_eligible_source": True,
+            "source_worktree_dirty": False,
+        }
+
+        def dual_attestation(**_kwargs: Any) -> tuple[dict, list]:
+            return (_dual_attestation_fixture(validator_commit), [])
+
+        with mock.patch(
+            "psse_env.dagger.evaluation_gate.git_source_state",
+            return_value=clean_source,
+        ), mock.patch(
+            "psse_env.dagger.evaluation_gate._dual_validator_source_attestation",
+            side_effect=dual_attestation,
+        ) as dual_validator, mock.patch(
+            "psse_env.dagger.evaluation_gate._load_artifact_snapshot",
+            wraps=_load_artifact_snapshot,
+        ) as artifact_loader:
+            result = validate_evaluation_artifact(
+                candidate,
+                role="checkpoint-promotion",
+                policy=self.policy,
+                expected_source_commit=COMMIT,
+                expected_suite_path=self.suite_path,
+                expected_protocol="canonical",
+                expected_registry_sha256=current_registry_sha256("canonical"),
+                expected_model_id="checkpoint/bc0",
+                expected_model_revision=MODEL_REVISION,
+                reference_artifact=reference,
+                reference_model_id="base/gemma",
+                reference_model_revision=MODEL_REVISION,
+                required_gate_policy_id=TEST_POLICY_ID,
+                repo_root=REPO_ROOT,
+                validator_source_commit=validator_commit,
+                validator_source_contract=DUAL_SOURCE_VALIDATOR_CONTRACT,
+            )
+
+        self.assertTrue(result.passed, result.failures)
+        self.assertEqual(dual_validator.call_count, 4)
+        self.assertEqual(artifact_loader.call_count, 1)
+        paired = result.observed["paired_nonregression"]
+        self.assertEqual(paired["reference_source_commit"], COMMIT)
+        self.assertEqual(
+            paired["reference_validator_source_attestation"][
+                "validator_source_commit"
+            ],
+            validator_commit,
+        )
+
+    def test_path_artifacts_and_suite_are_each_snapshotted_once(self) -> None:
+        candidate_path = self.root / "candidate.json"
+        reference_path = self.root / "reference.json"
+        _write_json(
+            candidate_path,
+            _artifact(
+                self.suite_path,
+                self.contract,
+                explicit_identity=None,
+                model_id="checkpoint/bc0",
+                model_revision=MODEL_REVISION,
+            ),
+        )
+        _write_json(
+            reference_path,
+            _artifact(
+                self.suite_path,
+                self.contract,
+                explicit_identity=None,
+                model_id="base/gemma",
+                model_revision=MODEL_REVISION,
+            ),
+        )
+        with mock.patch(
+            "psse_env.dagger.evaluation_gate._read_json_file_snapshot",
+            wraps=_read_json_file_snapshot,
+        ) as snapshot_reader:
+            result = validate_evaluation_artifact(
+                candidate_path,
+                role="checkpoint-promotion",
+                policy=self.policy,
+                expected_source_commit=COMMIT,
+                expected_suite_path=self.suite_path,
+                expected_protocol="canonical",
+                expected_registry_sha256=current_registry_sha256("canonical"),
+                expected_model_id="checkpoint/bc0",
+                expected_model_revision=MODEL_REVISION,
+                reference_artifact=reference_path,
+                reference_model_id="base/gemma",
+                reference_model_revision=MODEL_REVISION,
+                required_gate_policy_id=TEST_POLICY_ID,
+                repo_root=REPO_ROOT,
+                require_current_clean_source=False,
+            )
+
+        self.assertTrue(result.passed, result.failures)
+        observed_paths = [
+            Path(call.args[0]).expanduser().resolve()
+            for call in snapshot_reader.call_args_list
+        ]
+        self.assertEqual(observed_paths.count(candidate_path.resolve()), 1)
+        self.assertEqual(observed_paths.count(reference_path.resolve()), 1)
+        self.assertEqual(observed_paths.count(self.suite_path.resolve()), 1)
+        self.assertEqual(len(observed_paths), 3)
 
     def test_exact_pinned_suite_survives_json_key_normalization(self) -> None:
         suite_path, _contract, policy, artifact = self._fixture_for_suite(
@@ -3256,6 +3667,192 @@ class EvaluationGateV3Tests(unittest.TestCase):
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             gate_main(hash_only)
 
+    def test_cli_dual_source_requires_pair_and_serializes_attestation(self) -> None:
+        artifact_path = self.root / "dual-source-expert-evaluation.json"
+        policy_path = self.root / "dual-source-policy.json"
+        report_path = self.root / "dual-source-gate-report.json"
+        validator_commit = "b" * 40
+        _write_json(artifact_path, _artifact(self.suite_path, self.contract))
+        _write_json(policy_path, self.policy)
+        arguments = [
+            "--artifact",
+            str(artifact_path),
+            "--role",
+            "expert-baseline",
+            "--policy",
+            str(policy_path),
+            "--required-gate-policy-id",
+            TEST_POLICY_ID,
+            "--expected-source-commit",
+            COMMIT,
+            "--validator-source-commit",
+            validator_commit,
+            "--expected-suite",
+            str(self.suite_path),
+            "--expected-policy-identity",
+            "expert-v1",
+            "--report-output",
+            str(report_path),
+        ]
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            gate_main(arguments)
+
+        clean_source = {
+            "source_commit": validator_commit,
+            "release_eligible_source": True,
+            "source_worktree_dirty": False,
+        }
+        dual_attestation = _dual_attestation_fixture(validator_commit)
+        with mock.patch(
+            "psse_env.dagger.evaluation_gate.git_source_state",
+            return_value=clean_source,
+        ), mock.patch(
+            "psse_env.dagger.evaluation_gate._dual_validator_source_attestation",
+            return_value=(dual_attestation, []),
+        ), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(
+                gate_main(
+                    [
+                        *arguments,
+                        "--validator-source-contract",
+                        DUAL_SOURCE_VALIDATOR_CONTRACT,
+                    ]
+                ),
+                0,
+            )
+
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        self.assertEqual(report["source_commit"], COMMIT)
+        self.assertEqual(
+            report["validator_source_attestation"]["validator_source_commit"],
+            validator_commit,
+        )
+        self.assertTrue(report["validator_source_attestation"]["passed"])
+
+    def test_cli_report_output_is_outside_repo_and_never_clobbered(self) -> None:
+        artifact_path = self.root / "report-safety-artifact.json"
+        policy_path = self.root / "report-safety-policy.json"
+        _write_json(artifact_path, _artifact(self.suite_path, self.contract))
+        _write_json(policy_path, self.policy)
+        arguments = [
+            "--artifact",
+            str(artifact_path),
+            "--role",
+            "expert-baseline",
+            "--policy",
+            str(policy_path),
+            "--required-gate-policy-id",
+            TEST_POLICY_ID,
+            "--expected-source-commit",
+            COMMIT,
+            "--expected-suite",
+            str(self.suite_path),
+            "--expected-policy-identity",
+            "expert-v1",
+        ]
+        clean_source = {
+            "source_commit": COMMIT,
+            "release_eligible_source": True,
+            "source_worktree_dirty": False,
+        }
+
+        existing = self.root / "existing-report.json"
+        existing.write_text("sentinel\n", encoding="utf-8")
+        with mock.patch(
+            "psse_env.dagger.evaluation_gate.git_source_state",
+            return_value=clean_source,
+        ), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(
+                gate_main([*arguments, "--report-output", str(existing)]),
+                2,
+            )
+        self.assertEqual(existing.read_text(encoding="utf-8"), "sentinel\n")
+
+        raced = self.root / "raced-report.json"
+
+        def create_raced_target(*call_args: Any, **call_kwargs: Any) -> Any:
+            result = validate_evaluation_artifact(*call_args, **call_kwargs)
+            raced.write_text("raced-sentinel\n", encoding="utf-8")
+            return result
+
+        with mock.patch(
+            "psse_env.dagger.evaluation_gate.git_source_state",
+            return_value=clean_source,
+        ), mock.patch(
+            "psse_env.dagger.evaluation_gate.validate_evaluation_artifact",
+            side_effect=create_raced_target,
+        ), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(
+                gate_main([*arguments, "--report-output", str(raced)]),
+                2,
+            )
+        self.assertEqual(raced.read_text(encoding="utf-8"), "raced-sentinel\n")
+
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(
+                gate_main(
+                    [*arguments, "--report-output", str(artifact_path)]
+                ),
+                2,
+            )
+        self.assertTrue(json.loads(artifact_path.read_text(encoding="utf-8")))
+
+        forbidden_repo_report = (
+            REPO_ROOT / ".evaluation-gate-forbidden-test-report.json"
+        )
+        self.assertFalse(os.path.lexists(forbidden_repo_report))
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(
+                gate_main(
+                    [
+                        *arguments,
+                        "--report-output",
+                        str(forbidden_repo_report),
+                    ]
+                ),
+                2,
+            )
+        self.assertFalse(os.path.lexists(forbidden_repo_report))
+
+    def test_cli_removes_new_report_when_source_changes_after_publication(
+        self,
+    ) -> None:
+        artifact_path = self.root / "postwrite-artifact.json"
+        policy_path = self.root / "postwrite-policy.json"
+        report_path = self.root / "postwrite-report.json"
+        _write_json(artifact_path, _artifact(self.suite_path, self.contract))
+        _write_json(policy_path, self.policy)
+        clean_source = {
+            "source_commit": COMMIT,
+            "release_eligible_source": True,
+            "source_worktree_dirty": False,
+        }
+        changed_source = {**clean_source, "source_worktree_dirty": True}
+        arguments = [
+            "--artifact",
+            str(artifact_path),
+            "--role",
+            "expert-baseline",
+            "--policy",
+            str(policy_path),
+            "--required-gate-policy-id",
+            TEST_POLICY_ID,
+            "--expected-source-commit",
+            COMMIT,
+            "--expected-suite",
+            str(self.suite_path),
+            "--expected-policy-identity",
+            "expert-v1",
+            "--report-output",
+            str(report_path),
+        ]
+        with mock.patch(
+            "psse_env.dagger.evaluation_gate.git_source_state",
+            side_effect=(clean_source, clean_source, changed_source),
+        ), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(gate_main(arguments), 2)
+        self.assertFalse(report_path.exists())
+
     def test_checkpoint_cli_requires_and_accepts_reference_identity(self) -> None:
         checkpoint_path = self.root / "checkpoint-evaluation.json"
         reference_path = self.root / "reference-evaluation.json"
@@ -3325,6 +3922,260 @@ class EvaluationGateV3Tests(unittest.TestCase):
                 ),
                 0,
             )
+
+
+class DualValidatorSourceAttestationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary_directory.name)
+        self._git("init", "--quiet")
+        self._git("config", "user.email", "gate-test@example.invalid")
+        self._git("config", "user.name", "Gate Test")
+        paths = {
+            "psse_env/dagger/evaluation_gate.py": "gate-v1\n",
+            "psse_env/dagger/test_evaluation_gate.py": "test-v1\n",
+            "psse_env/dagger/evaluator.py": "evaluator-v1\n",
+            "psse_env/dagger/release_factories.py": "factories-v1\n",
+            "psse_env/dagger/bc0_evaluation_policy.json": "{}\n",
+            "psse_env/dagger/suites/bc0_eval_suite_v1.json": "{}\n",
+        }
+        for relative, content in paths.items():
+            target = self.root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        self._git("add", "--all")
+        self._git("commit", "--quiet", "-m", "artifact source")
+        self.artifact_commit = self._git("rev-parse", "HEAD").stdout.strip()
+
+        (self.root / "psse_env/dagger/evaluation_gate.py").write_text(
+            "gate-v2\n", encoding="utf-8"
+        )
+        (self.root / "psse_env/dagger/test_evaluation_gate.py").write_text(
+            "test-v2\n", encoding="utf-8"
+        )
+        self._git("add", "--all")
+        self._git("commit", "--quiet", "-m", "validator-only fix")
+        self.validator_commit = self._git("rev-parse", "HEAD").stdout.strip()
+
+    def tearDown(self) -> None:
+        self.temporary_directory.cleanup()
+
+    def _git(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_exact_gate_test_delta_and_protected_blobs_pass(self) -> None:
+        attestation, failures = _dual_validator_source_attestation(
+            repo_root=self.root,
+            artifact_source_commit=self.artifact_commit,
+            validator_source_commit=self.validator_commit,
+        )
+
+        self.assertEqual(failures, [])
+        self.assertEqual(
+            attestation["contract"], DUAL_SOURCE_VALIDATOR_CONTRACT
+        )
+        self.assertTrue(attestation["artifact_is_ancestor"])
+        self.assertEqual(
+            {row["path"] for row in attestation["tree_delta"]},
+            {
+                "psse_env/dagger/evaluation_gate.py",
+                "psse_env/dagger/test_evaluation_gate.py",
+            },
+        )
+        self.assertEqual(
+            set(attestation["protected_blob_ids"]),
+            {
+                "psse_env/dagger/evaluator.py",
+                "psse_env/dagger/release_factories.py",
+                "psse_env/dagger/bc0_evaluation_policy.json",
+                "psse_env/dagger/suites/bc0_eval_suite_v1.json",
+            },
+        )
+        self.assertEqual(
+            set(attestation["history_path_hex"]),
+            {path.encode("utf-8").hex() for path in attestation["history_paths"]},
+        )
+        self.assertEqual(
+            set(attestation["protected_sources"]),
+            set(attestation["protected_blob_ids"]),
+        )
+        for descriptors in attestation["protected_sources"].values():
+            self.assertEqual(set(descriptors), {"artifact", "validator"})
+            self.assertEqual(
+                descriptors["artifact"]["git_blob_id"],
+                descriptors["validator"]["git_blob_id"],
+            )
+            self.assertEqual(descriptors["artifact"]["mode"], "100644")
+            self.assertEqual(len(descriptors["artifact"]["sha256"]), 64)
+
+    def test_nonapproved_history_and_protected_change_fail_closed(self) -> None:
+        (self.root / "psse_env/dagger/evaluator.py").write_text(
+            "evaluator-v2\n", encoding="utf-8"
+        )
+        self._git("add", "--all")
+        self._git("commit", "--quiet", "-m", "forbidden evaluator change")
+        forbidden_commit = self._git("rev-parse", "HEAD").stdout.strip()
+
+        attestation, failures = _dual_validator_source_attestation(
+            repo_root=self.root,
+            artifact_source_commit=self.artifact_commit,
+            validator_source_commit=forbidden_commit,
+        )
+
+        self.assertFalse(attestation["protected_blob_ids"].get(
+            "psse_env/dagger/evaluator.py"
+        ))
+        self.assertTrue(
+            any("non-approved path" in failure for failure in failures),
+            failures,
+        )
+        self.assertTrue(
+            any("protected path changed" in failure for failure in failures),
+            failures,
+        )
+        self.assertTrue(
+            any("exact approved" in failure for failure in failures),
+            failures,
+        )
+
+    def test_one_file_delta_and_unknown_commit_fail_closed(self) -> None:
+        self._git("checkout", "--quiet", "--detach", self.artifact_commit)
+        (self.root / "psse_env/dagger/evaluation_gate.py").write_text(
+            "gate-only-v2\n", encoding="utf-8"
+        )
+        self._git("add", "--all")
+        self._git("commit", "--quiet", "-m", "incomplete validator fix")
+        one_file_commit = self._git("rev-parse", "HEAD").stdout.strip()
+
+        _attestation, failures = _dual_validator_source_attestation(
+            repo_root=self.root,
+            artifact_source_commit=self.artifact_commit,
+            validator_source_commit=one_file_commit,
+        )
+        self.assertTrue(
+            any("exact approved" in failure for failure in failures),
+            failures,
+        )
+
+        _attestation, failures = _dual_validator_source_attestation(
+            repo_root=self.root,
+            artifact_source_commit=self.artifact_commit,
+            validator_source_commit="f" * 40,
+        )
+        self.assertTrue(
+            any("missing or is not a commit" in failure for failure in failures),
+            failures,
+        )
+
+    def test_reverted_forbidden_history_still_fails_closed(self) -> None:
+        protected = self.root / "psse_env/dagger/evaluator.py"
+        protected.write_text("temporary-forbidden-change\n", encoding="utf-8")
+        self._git("add", "--", "psse_env/dagger/evaluator.py")
+        self._git("commit", "--quiet", "-m", "temporary forbidden change")
+        protected.write_text("evaluator-v1\n", encoding="utf-8")
+        self._git("add", "--", "psse_env/dagger/evaluator.py")
+        self._git("commit", "--quiet", "-m", "restore protected source")
+        reverted_commit = self._git("rev-parse", "HEAD").stdout.strip()
+
+        attestation, failures = _dual_validator_source_attestation(
+            repo_root=self.root,
+            artifact_source_commit=self.artifact_commit,
+            validator_source_commit=reverted_commit,
+        )
+
+        self.assertEqual(
+            attestation["protected_blob_ids"]["psse_env/dagger/evaluator.py"],
+            attestation["protected_sources"]["psse_env/dagger/evaluator.py"][
+                "artifact"
+            ]["git_blob_id"],
+        )
+        self.assertTrue(
+            any("history touched a non-approved path" in row for row in failures),
+            failures,
+        )
+
+    def test_nonregular_protected_mode_fails_closed(self) -> None:
+        self._git("update-index", "--chmod=+x", "psse_env/dagger/evaluator.py")
+        self._git("commit", "--quiet", "-m", "forbidden protected mode")
+        mode_commit = self._git("rev-parse", "HEAD").stdout.strip()
+
+        _attestation, failures = _dual_validator_source_attestation(
+            repo_root=self.root,
+            artifact_source_commit=self.artifact_commit,
+            validator_source_commit=mode_commit,
+        )
+
+        self.assertTrue(
+            any("not a mode-100644 blob" in row for row in failures),
+            failures,
+        )
+
+    def test_nonancestor_and_merge_validator_commits_fail_closed(self) -> None:
+        validator_tree = self._git(
+            "rev-parse", f"{self.validator_commit}^{{tree}}"
+        ).stdout.strip()
+        unrelated_commit = self._git(
+            "commit-tree", validator_tree, "-m", "unrelated validator"
+        ).stdout.strip()
+        _attestation, unrelated_failures = _dual_validator_source_attestation(
+            repo_root=self.root,
+            artifact_source_commit=self.artifact_commit,
+            validator_source_commit=unrelated_commit,
+        )
+        self.assertTrue(
+            any("not an ancestor" in row for row in unrelated_failures),
+            unrelated_failures,
+        )
+
+        merge_commit = self._git(
+            "commit-tree",
+            validator_tree,
+            "-p",
+            self.validator_commit,
+            "-p",
+            self.artifact_commit,
+            "-m",
+            "synthetic merge",
+        ).stdout.strip()
+        _attestation, merge_failures = _dual_validator_source_attestation(
+            repo_root=self.root,
+            artifact_source_commit=self.artifact_commit,
+            validator_source_commit=merge_commit,
+        )
+        self.assertTrue(
+            any("contains a merge commit" in row for row in merge_failures),
+            merge_failures,
+        )
+
+    def test_replacement_ref_and_dirty_tracked_tree_fail_closed(self) -> None:
+        self._git("replace", self.artifact_commit, self.validator_commit)
+        (self.root / "psse_env/dagger/evaluation_gate.py").write_text(
+            "uncommitted-gate\n", encoding="utf-8"
+        )
+
+        attestation, failures = _dual_validator_source_attestation(
+            repo_root=self.root,
+            artifact_source_commit=self.artifact_commit,
+            validator_source_commit=self.validator_commit,
+        )
+
+        self.assertTrue(attestation["git_replacements_disabled"])
+        self.assertTrue(attestation["replace_refs"])
+        self.assertFalse(attestation["tracked_tree_matches_validator"])
+        self.assertTrue(
+            any("replacement refs" in failure for failure in failures),
+            failures,
+        )
+        self.assertTrue(
+            any("tracked worktree" in failure for failure in failures),
+            failures,
+        )
 
 
 if __name__ == "__main__":

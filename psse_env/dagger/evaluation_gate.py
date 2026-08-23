@@ -13,7 +13,9 @@ import copy
 import hashlib
 import json
 import math
+import os
 import re
+import stat
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
@@ -35,7 +37,6 @@ from psse_env.dagger.dataset_builder import TOOL_JSON_SCHEMAS
 from psse_env.dagger.evaluator import (
     STUDY_EVALUATION_SCHEMA_VERSION,
     fingerprint_evaluation_suites,
-    load_evaluation_suites,
     study_objective_episode_evidence_marker,
     trace_progress_advanced,
     validate_study_objective_episode_evidence,
@@ -56,6 +57,8 @@ from psse_env.sft.release_hardware import normalize_accelerator_class
 
 DEFAULT_POLICY_PATH = Path(__file__).with_name("bc0_evaluation_policy.json")
 DEFAULT_POLICY_ID = "bc0_closed_loop_hard_gate_v3"
+SINGLE_SOURCE_VALIDATOR_CONTRACT = "single_source_exact_commit_v1"
+DUAL_SOURCE_VALIDATOR_CONTRACT = "gate_only_json_domain_revalidation_v1"
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _COMMIT = re.compile(r"[0-9a-fA-F]{40}\Z")
 _REVISION = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})\Z")
@@ -78,11 +81,30 @@ _FACTORY_APPROVAL_ROLES = frozenset(
 _VALIDATION_ROLES = frozenset(
     {"expert-baseline", "base-baseline", "checkpoint-promotion"}
 )
+_DUAL_SOURCE_EXACT_DELTA = (
+    ("M", "psse_env/dagger/evaluation_gate.py"),
+    ("M", "psse_env/dagger/test_evaluation_gate.py"),
+)
+_DUAL_SOURCE_PROTECTED_PATHS = (
+    "psse_env/dagger/evaluator.py",
+    "psse_env/dagger/release_factories.py",
+    "psse_env/dagger/bc0_evaluation_policy.json",
+    "psse_env/dagger/suites/bc0_eval_suite_v1.json",
+)
 _ROLE_POLICY = {
     "expert-baseline": "teacher_release",
     "base-baseline": "identity_and_measurement_only",
     "checkpoint-promotion": "bc0_promotion",
 }
+
+
+@dataclass(frozen=True)
+class _JsonFileSnapshot:
+    """One-read binding between a path, its bytes, and decoded JSON."""
+
+    path: Path
+    sha256: str
+    decoded: Any
 _SUITE_POLICY_FIELDS = frozenset(
     {
         "status",
@@ -200,6 +222,7 @@ class EvaluationGateResult:
     artifact_sha256: str | None
     artifact_content_sha256: str | None
     source_commit: str | None
+    validator_source_attestation: dict[str, Any]
     frozen_suite_sha256: str | None
     protocol: str | None
     registry_sha256: str | None
@@ -695,16 +718,37 @@ def _model_accelerator_attestation(
     return tuple(sorted(classes)), failures
 
 
+def _read_json_file_snapshot(path: str | Path) -> _JsonFileSnapshot:
+    """Read a JSON file once so its digest and decoded value cannot diverge."""
+
+    resolved = Path(path).expanduser().resolve(strict=True)
+    raw = resolved.read_bytes()
+    return _JsonFileSnapshot(
+        path=resolved,
+        sha256=hashlib.sha256(raw).hexdigest(),
+        decoded=json.loads(raw),
+    )
+
+
+def _load_artifact_snapshot(
+    artifact: str | Path | Mapping[str, Any],
+) -> tuple[_JsonFileSnapshot | None, dict[str, Any]]:
+    if isinstance(artifact, Mapping):
+        return None, copy.deepcopy(dict(artifact))
+    snapshot = _read_json_file_snapshot(artifact)
+    if not isinstance(snapshot.decoded, Mapping):
+        raise ValueError(
+            f"evaluation artifact must be a JSON object: {snapshot.path}"
+        )
+    return snapshot, copy.deepcopy(dict(snapshot.decoded))
+
+
 def _load_artifact_payload(
     artifact: str | Path | Mapping[str, Any],
 ) -> dict[str, Any]:
-    if isinstance(artifact, Mapping):
-        return copy.deepcopy(dict(artifact))
-    path = Path(artifact).expanduser().resolve(strict=True)
-    decoded = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(decoded, Mapping):
-        raise ValueError(f"evaluation artifact must be a JSON object: {path}")
-    return copy.deepcopy(dict(decoded))
+    """Load one immutable artifact payload (compatibility wrapper for tests)."""
+
+    return _load_artifact_snapshot(artifact)[1]
 
 
 def _artifact_episode_map(payload: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
@@ -1827,6 +1871,401 @@ def _intervention_failures(
     return evidence_failures, performance_failures
 
 
+def _dual_validator_source_attestation(
+    *,
+    repo_root: Path,
+    artifact_source_commit: str,
+    validator_source_commit: str,
+) -> tuple[dict[str, Any], list[str]]:
+    """Bind a historical artifact to one narrowly changed validator commit."""
+
+    failures: list[str] = []
+
+    def git(arguments: Sequence[str], *, label: str) -> subprocess.CompletedProcess[str] | None:
+        try:
+            return subprocess.run(
+                ["git", "--no-replace-objects", *arguments],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError as exc:
+            failures.append(
+                f"dual-source validator could not {label}: {type(exc).__name__}: {exc}"
+            )
+            return None
+
+    def git_bytes(
+        arguments: Sequence[str], *, label: str
+    ) -> subprocess.CompletedProcess[bytes] | None:
+        try:
+            return subprocess.run(
+                ["git", "--no-replace-objects", *arguments],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+            )
+        except OSError as exc:
+            failures.append(
+                f"dual-source validator could not {label}: {type(exc).__name__}: {exc}"
+            )
+            return None
+
+    commits_exist = True
+    replace_refs: list[str] = []
+    replacement_refs = git(
+        ["for-each-ref", "--format=%(refname)", "refs/replace"],
+        label="inspect replacement refs",
+    )
+    if replacement_refs is None or replacement_refs.returncode != 0:
+        failures.append("dual-source replacement-ref state is unreadable")
+    else:
+        replace_refs = [
+            line.strip()
+            for line in replacement_refs.stdout.splitlines()
+            if line.strip()
+        ]
+        if replace_refs:
+            failures.append("dual-source repository contains replacement refs")
+
+    grafts_present = False
+    graft_path_process = git(
+        ["rev-parse", "--git-path", "info/grafts"],
+        label="resolve the grafts file",
+    )
+    if graft_path_process is None or graft_path_process.returncode != 0:
+        failures.append("dual-source graft state is unreadable")
+    else:
+        graft_path = Path(graft_path_process.stdout.strip())
+        if not graft_path.is_absolute():
+            graft_path = repo_root / graft_path
+        try:
+            grafts_present = graft_path.is_file() and graft_path.stat().st_size > 0
+        except OSError as exc:
+            failures.append(
+                f"dual-source graft state is unreadable: {type(exc).__name__}: {exc}"
+            )
+        if grafts_present:
+            failures.append("dual-source repository contains active grafts")
+
+    for label, commit in (
+        ("artifact", artifact_source_commit),
+        ("validator", validator_source_commit),
+    ):
+        process = git(
+            ["cat-file", "-e", f"{commit}^{{commit}}"],
+            label=f"resolve the {label} commit",
+        )
+        if process is None or process.returncode != 0:
+            commits_exist = False
+            failures.append(
+                f"dual-source {label} commit is missing or is not a commit"
+            )
+
+    artifact_is_ancestor = False
+    history_commits: list[str] = []
+    merge_commits: list[str] = []
+    history_paths: list[str] = []
+    history_path_hex: list[str] = []
+    observed_delta: list[dict[str, str]] = []
+    gate_tree_sources: dict[str, dict[str, dict[str, str]]] = {}
+    protected_blob_ids: dict[str, str] = {}
+    protected_sources: dict[str, dict[str, dict[str, str]]] = {}
+    tracked_tree_matches_validator = False
+    if commits_exist:
+        tracked_tree = git(
+            [
+                "diff",
+                "--quiet",
+                "--no-ext-diff",
+                validator_source_commit,
+                "--",
+            ],
+            label="compare the tracked worktree to the validator commit",
+        )
+        tracked_tree_matches_validator = bool(
+            tracked_tree is not None and tracked_tree.returncode == 0
+        )
+        if not tracked_tree_matches_validator:
+            failures.append(
+                "dual-source tracked worktree does not match the validator commit"
+            )
+
+        ancestry = git(
+            [
+                "merge-base",
+                "--is-ancestor",
+                artifact_source_commit,
+                validator_source_commit,
+            ],
+            label="verify validator ancestry",
+        )
+        artifact_is_ancestor = bool(ancestry is not None and ancestry.returncode == 0)
+        if not artifact_is_ancestor:
+            failures.append(
+                "dual-source artifact commit is not an ancestor of the validator commit"
+            )
+
+        revision_range = f"{artifact_source_commit}..{validator_source_commit}"
+        history = git(
+            ["rev-list", "--reverse", revision_range],
+            label="enumerate validator commits",
+        )
+        if history is None or history.returncode != 0:
+            failures.append("dual-source validator commit history is unreadable")
+        else:
+            history_commits = [
+                line.strip()
+                for line in history.stdout.splitlines()
+                if line.strip()
+            ]
+            if not history_commits:
+                failures.append("dual-source validator commit range is empty")
+
+        merges = git(
+            ["rev-list", "--merges", revision_range],
+            label="inspect validator merges",
+        )
+        if merges is None or merges.returncode != 0:
+            failures.append("dual-source validator merge history is unreadable")
+        else:
+            merge_commits = [
+                line.strip()
+                for line in merges.stdout.splitlines()
+                if line.strip()
+            ]
+            if merge_commits:
+                failures.append("dual-source validator history contains a merge commit")
+
+        touched = git_bytes(
+            ["log", "--format=", "--name-only", "-z", revision_range, "--"],
+            label="inspect validator history paths",
+        )
+        if touched is None or touched.returncode != 0:
+            failures.append("dual-source validator history paths are unreadable")
+        else:
+            path_tokens = touched.stdout.split(b"\0")
+            if path_tokens and path_tokens[-1] == b"":
+                path_tokens.pop()
+            exact_history_paths = sorted(set(path_tokens))
+            history_paths = [
+                path.decode("utf-8", errors="backslashreplace")
+                for path in exact_history_paths
+            ]
+            history_path_hex = [path.hex() for path in exact_history_paths]
+            approved_paths = {
+                path.encode("utf-8") for _status, path in _DUAL_SOURCE_EXACT_DELTA
+            }
+            if set(exact_history_paths) - approved_paths:
+                failures.append(
+                    "dual-source validator history touched a non-approved path"
+                )
+
+        delta = git_bytes(
+            [
+                "diff",
+                "--raw",
+                "--abbrev=64",
+                "--no-renames",
+                "-z",
+                artifact_source_commit,
+                validator_source_commit,
+                "--",
+            ],
+            label="inspect validator tree delta",
+        )
+        malformed_delta = False
+        if delta is None or delta.returncode != 0:
+            failures.append("dual-source validator tree delta is unreadable")
+        else:
+            fields = delta.stdout.split(b"\0")
+            if fields and fields[-1] == b"":
+                fields.pop()
+            if len(fields) % 2:
+                malformed_delta = True
+            raw_header = re.compile(
+                rb":([0-7]{6}) ([0-7]{6}) "
+                rb"([0-9a-f]{40}|[0-9a-f]{64}) "
+                rb"([0-9a-f]{40}|[0-9a-f]{64}) ([A-Z])\Z"
+            )
+            observed_identity_exact: list[tuple[str, bytes]] = []
+            for index in range(0, len(fields) - 1, 2):
+                header, raw_path = fields[index : index + 2]
+                match = raw_header.fullmatch(header)
+                if match is None:
+                    malformed_delta = True
+                    continue
+                old_mode_raw, new_mode_raw, old_blob_raw, new_blob_raw, status_raw = (
+                    match.groups()
+                )
+                old_mode = old_mode_raw.decode("ascii")
+                new_mode = new_mode_raw.decode("ascii")
+                old_blob = old_blob_raw.decode("ascii")
+                new_blob = new_blob_raw.decode("ascii")
+                status = status_raw.decode("ascii")
+                path = raw_path.decode("utf-8", errors="backslashreplace")
+                observed_identity_exact.append((status, raw_path))
+                row = {
+                    "status": status,
+                    "path": path,
+                    "path_hex": raw_path.hex(),
+                    "old_mode": old_mode,
+                    "new_mode": new_mode,
+                    "old_blob_id": old_blob,
+                    "new_blob_id": new_blob,
+                }
+                observed_delta.append(row)
+                if (
+                    status != "M"
+                    or old_mode != "100644"
+                    or new_mode != "100644"
+                    or old_blob == new_blob
+                ):
+                    malformed_delta = True
+                    continue
+                descriptors: dict[str, dict[str, str]] = {}
+                for label, blob_id, mode in (
+                    ("artifact", old_blob, old_mode),
+                    ("validator", new_blob, new_mode),
+                ):
+                    blob = git_bytes(
+                        ["cat-file", "blob", blob_id],
+                        label=f"read the {label} gate blob for {path}",
+                    )
+                    if blob is None or blob.returncode != 0:
+                        malformed_delta = True
+                        continue
+                    descriptors[label] = {
+                        "path": path,
+                        "mode": mode,
+                        "git_blob_id": blob_id,
+                        "sha256": hashlib.sha256(blob.stdout).hexdigest(),
+                    }
+                if set(descriptors) == {"artifact", "validator"}:
+                    gate_tree_sources[path] = descriptors
+            observed_delta.sort(key=lambda row: (row["path_hex"], row["status"]))
+            observed_identity_exact.sort(key=lambda row: (row[1], row[0]))
+            expected_identity_exact = sorted(
+                (
+                    (status, path.encode("utf-8"))
+                    for status, path in _DUAL_SOURCE_EXACT_DELTA
+                ),
+                key=lambda row: (row[1], row[0]),
+            )
+            if (
+                malformed_delta
+                or observed_identity_exact != expected_identity_exact
+            ):
+                failures.append(
+                    "dual-source validator tree delta is not the exact approved gate/test modification"
+                )
+
+        for path in _DUAL_SOURCE_PROTECTED_PATHS:
+            descriptors: dict[str, dict[str, str]] = {}
+            expected_path = path.encode("utf-8")
+            for label, commit in (
+                ("artifact", artifact_source_commit),
+                ("validator", validator_source_commit),
+            ):
+                tree = git_bytes(
+                    ["ls-tree", "-z", "--full-name", commit, "--", path],
+                    label=f"inspect the {label} tree entry for {path}",
+                )
+                if tree is None or tree.returncode != 0:
+                    failures.append(
+                        f"dual-source protected path is unreadable at the {label} commit: {path}"
+                    )
+                    continue
+                records = tree.stdout.split(b"\0")
+                if not records or records[-1] != b"" or len(records) != 2:
+                    failures.append(
+                        f"dual-source protected path has a noncanonical tree entry at the {label} commit: {path}"
+                    )
+                    continue
+                header, separator, raw_path = records[0].partition(b"\t")
+                fields = header.split(b" ")
+                if (
+                    separator != b"\t"
+                    or raw_path != expected_path
+                    or len(fields) != 3
+                ):
+                    failures.append(
+                        f"dual-source protected path has a noncanonical tree entry at the {label} commit: {path}"
+                    )
+                    continue
+                mode_raw, object_type_raw, blob_id_raw = fields
+                if (
+                    mode_raw != b"100644"
+                    or object_type_raw != b"blob"
+                    or re.fullmatch(
+                        rb"[0-9a-f]{40}|[0-9a-f]{64}", blob_id_raw
+                    )
+                    is None
+                ):
+                    failures.append(
+                        f"dual-source protected path is not a mode-100644 blob at the {label} commit: {path}"
+                    )
+                    continue
+                blob_id = blob_id_raw.decode("ascii")
+                blob = git_bytes(
+                    ["cat-file", "blob", blob_id],
+                    label=f"read the {label} protected blob for {path}",
+                )
+                if blob is None or blob.returncode != 0:
+                    failures.append(
+                        f"dual-source protected path blob is unreadable at the {label} commit: {path}"
+                    )
+                    continue
+                descriptors[label] = {
+                    "path": path,
+                    "mode": "100644",
+                    "git_blob_id": blob_id,
+                    "sha256": hashlib.sha256(blob.stdout).hexdigest(),
+                }
+            if descriptors:
+                protected_sources[path] = descriptors
+            if set(descriptors) == {"artifact", "validator"}:
+                artifact_descriptor = descriptors["artifact"]
+                validator_descriptor = descriptors["validator"]
+                if (
+                    artifact_descriptor["git_blob_id"]
+                    == validator_descriptor["git_blob_id"]
+                    and artifact_descriptor["sha256"]
+                    == validator_descriptor["sha256"]
+                ):
+                    protected_blob_ids[path] = artifact_descriptor["git_blob_id"]
+                else:
+                    failures.append(
+                        f"dual-source protected path changed between commits: {path}"
+                    )
+            elif descriptors:
+                failures.append(
+                    f"dual-source protected path is not proven at both commits: {path}"
+                )
+
+    attestation = {
+        "schema_version": 1,
+        "contract": DUAL_SOURCE_VALIDATOR_CONTRACT,
+        "artifact_source_commit": artifact_source_commit,
+        "validator_source_commit": validator_source_commit,
+        "artifact_is_ancestor": artifact_is_ancestor,
+        "git_replacements_disabled": True,
+        "replace_refs": replace_refs,
+        "grafts_present": grafts_present,
+        "tracked_tree_matches_validator": tracked_tree_matches_validator,
+        "history_commits": history_commits,
+        "merge_commits": merge_commits,
+        "history_paths": history_paths,
+        "history_path_hex": history_path_hex,
+        "tree_delta": observed_delta,
+        "gate_tree_sources": gate_tree_sources,
+        "protected_blob_ids": protected_blob_ids,
+        "protected_sources": protected_sources,
+    }
+    return attestation, failures
+
+
 def validate_evaluation_artifact(
     artifact: str | Path | Mapping[str, Any],
     *,
@@ -1845,6 +2284,10 @@ def validate_evaluation_artifact(
     required_gate_policy_id: str = DEFAULT_POLICY_ID,
     repo_root: str | Path | None = None,
     require_current_clean_source: bool = True,
+    validator_source_commit: str | None = None,
+    validator_source_contract: str | None = None,
+    _artifact_snapshot: _JsonFileSnapshot | None = None,
+    _suite_snapshot: _JsonFileSnapshot | None = None,
 ) -> EvaluationGateResult:
     """Validate one evaluator artifact without consulting its scalar score."""
 
@@ -1887,7 +2330,18 @@ def validate_evaluation_artifact(
     failures = evidence_failures
     artifact_path: Path | None = None
     artifact_file_hash: str | None = None
-    if isinstance(artifact, Mapping):
+    if _artifact_snapshot is not None:
+        if not isinstance(artifact, Mapping):
+            raise ValueError("an internal artifact snapshot requires a mapping payload")
+        if not isinstance(_artifact_snapshot.decoded, Mapping):
+            raise ValueError("internal artifact snapshot is not a JSON object")
+        snapshot_payload = dict(_artifact_snapshot.decoded)
+        if dict(artifact) != snapshot_payload:
+            raise ValueError("artifact payload does not match its immutable snapshot")
+        artifact_path = _artifact_snapshot.path
+        artifact_file_hash = _artifact_snapshot.sha256
+        payload = copy.deepcopy(snapshot_payload)
+    elif isinstance(artifact, Mapping):
         payload = copy.deepcopy(dict(artifact))
     else:
         artifact_path = Path(artifact).expanduser().resolve()
@@ -1895,13 +2349,22 @@ def validate_evaluation_artifact(
             payload = {}
             failures.append(f"evaluation artifact is missing: {artifact_path}")
         else:
-            artifact_file_hash = file_sha256(artifact_path)
             try:
-                decoded = json.loads(artifact_path.read_text(encoding="utf-8"))
-                payload = dict(decoded) if isinstance(decoded, Mapping) else {}
-                if not isinstance(decoded, Mapping):
+                artifact_snapshot, payload = _load_artifact_snapshot(artifact_path)
+                assert artifact_snapshot is not None
+                artifact_path = artifact_snapshot.path
+                artifact_file_hash = artifact_snapshot.sha256
+                if not isinstance(artifact_snapshot.decoded, Mapping):
                     failures.append("evaluation artifact must be a JSON object")
-            except (OSError, json.JSONDecodeError) as exc:
+            except json.JSONDecodeError as exc:
+                payload = {}
+                failures.append(
+                    f"evaluation artifact is unreadable: {type(exc).__name__}: {exc}"
+                )
+            except ValueError as exc:
+                payload = {}
+                failures.append(str(exc))
+            except OSError as exc:
                 payload = {}
                 failures.append(
                     f"evaluation artifact is unreadable: {type(exc).__name__}: {exc}"
@@ -1932,11 +2395,52 @@ def validate_evaluation_artifact(
 
     repository_root = Path(repo_root or Path(__file__).resolve().parents[2]).resolve()
     normalized_commit = str(expected_source_commit).strip().lower()
-    suite_path = Path(expected_suite_path).expanduser().resolve(strict=True)
-    normalized_suite_hash = file_sha256(suite_path)
+    if _COMMIT.fullmatch(normalized_commit) is None:
+        raise ValueError("expected_source_commit must be a 40-character commit")
+    requested_validator_commit = (
+        str(validator_source_commit or "").strip().lower() or None
+    )
+    requested_validator_contract = (
+        str(validator_source_contract or "").strip() or None
+    )
+    if bool(requested_validator_commit) != bool(requested_validator_contract):
+        raise ValueError(
+            "validator_source_commit and validator_source_contract must be supplied together"
+        )
+    dual_source_validation = requested_validator_commit is not None
+    if dual_source_validation:
+        assert requested_validator_commit is not None
+        assert requested_validator_contract is not None
+        if _COMMIT.fullmatch(requested_validator_commit) is None:
+            raise ValueError("validator_source_commit must be a 40-character commit")
+        if requested_validator_contract != DUAL_SOURCE_VALIDATOR_CONTRACT:
+            raise ValueError("validator_source_contract is not approved")
+        if requested_validator_commit == normalized_commit:
+            raise ValueError(
+                "dual-source validation requires distinct artifact and validator commits"
+            )
+        if not require_current_clean_source:
+            raise ValueError(
+                "dual-source validation requires current clean-source enforcement"
+            )
+        normalized_validator_commit = requested_validator_commit
+        normalized_validator_contract = requested_validator_contract
+    else:
+        normalized_validator_commit = normalized_commit
+        normalized_validator_contract = SINGLE_SOURCE_VALIDATOR_CONTRACT
+    requested_suite_path = Path(expected_suite_path).expanduser().resolve()
+    if _suite_snapshot is None:
+        suite_snapshot = _read_json_file_snapshot(requested_suite_path)
+    else:
+        suite_snapshot = _suite_snapshot
+        if requested_suite_path != suite_snapshot.path:
+            raise ValueError("expected suite path does not match its immutable snapshot")
+    suite_path = suite_snapshot.path
+    normalized_suite_hash = suite_snapshot.sha256
     required_suites = [str(name) for name in suite_policy.get("required_suites") or []]
-    expected_suites = load_evaluation_suites(suite_path)
-    validate_release_scenario_suites(expected_suites)
+    expected_suites = validate_release_scenario_suites(
+        copy.deepcopy(suite_snapshot.decoded)
+    )
     expected_suite_contract = fingerprint_evaluation_suites(
         expected_suites,
         seed=int(suite_policy.get("evaluator_seed", 0)),
@@ -1984,8 +2488,6 @@ def validate_evaluation_artifact(
         if expected_registry_sha256 is not None
         else current_registry_sha256(normalized_protocol)
     )
-    if _COMMIT.fullmatch(normalized_commit) is None:
-        raise ValueError("expected_source_commit must be a 40-character commit")
     if _SHA256.fullmatch(registry_hash) is None:
         raise ValueError("expected_registry_sha256 must be a lowercase SHA-256")
     explicit_identity = str(expected_policy_identity or "").strip() or None
@@ -2010,12 +2512,87 @@ def validate_evaluation_artifact(
         raise ValueError(
             "checkpoint-promotion candidate and reference model identities must differ"
         )
+    validator_source_failures: list[str] = []
+    current_source: dict[str, Any] = {}
     if require_current_clean_source:
         current_source = git_source_state(repository_root)
         if current_source.get("release_eligible_source") is not True:
-            failures.append("current evaluation-gate source is not a clean tracked commit")
-        if str(current_source.get("source_commit") or "").lower() != normalized_commit:
-            failures.append("current evaluation-gate commit does not match the required commit")
+            validator_source_failures.append(
+                "current evaluation-gate source is not a clean tracked commit"
+            )
+        if (
+            str(current_source.get("source_commit") or "").lower()
+            != normalized_validator_commit
+        ):
+            validator_source_failures.append(
+                "current evaluation-gate commit does not match the required validator commit"
+            )
+    if dual_source_validation:
+        validator_source_attestation, dual_source_failures = (
+            _dual_validator_source_attestation(
+                repo_root=repository_root,
+                artifact_source_commit=normalized_commit,
+                validator_source_commit=normalized_validator_commit,
+            )
+        )
+        validator_source_attestation = copy.deepcopy(
+            validator_source_attestation
+        )
+        validator_source_failures.extend(dual_source_failures)
+        initial_dual_source_attestation = copy.deepcopy(
+            validator_source_attestation
+        )
+    else:
+        validator_source_attestation = {
+            "schema_version": 1,
+            "contract": normalized_validator_contract,
+            "artifact_source_commit": normalized_commit,
+            "validator_source_commit": normalized_validator_commit,
+            "artifact_is_ancestor": True,
+            "history_commits": [],
+            "merge_commits": [],
+            "history_paths": [],
+            "history_path_hex": [],
+            "tree_delta": [],
+            "gate_tree_sources": {},
+            "protected_blob_ids": {},
+            "protected_sources": {},
+        }
+        initial_dual_source_attestation = {}
+    validator_gate_source = _current_source_descriptor(
+        Path(__file__), repo_root=repository_root
+    )
+    if dual_source_validation:
+        expected_validator_gate_source = _mapping(
+            _mapping(
+                _mapping(validator_source_attestation.get("gate_tree_sources")).get(
+                    "psse_env/dagger/evaluation_gate.py"
+                )
+            ).get("validator")
+        )
+        if (
+            expected_validator_gate_source.get("path")
+            != "psse_env/dagger/evaluation_gate.py"
+            or expected_validator_gate_source.get("mode") != "100644"
+            or str(validator_gate_source.get("path") or "").replace("\\", "/")
+            != "psse_env/dagger/evaluation_gate.py"
+            or validator_gate_source.get("location") != "repository"
+            or expected_validator_gate_source.get("sha256")
+            != validator_gate_source.get("sha256")
+        ):
+            validator_source_failures.append(
+                "executing evaluation gate does not match the validator commit blob"
+            )
+    validator_source_attestation.update(
+        {
+            "current_source_enforced": require_current_clean_source,
+            "current_source_state": copy.deepcopy(current_source),
+            "validator_gate_source": validator_gate_source,
+            "passed": not validator_source_failures,
+            "failures": list(validator_source_failures),
+        }
+    )
+    failures.extend(validator_source_failures)
 
     if payload.get("artifact_type") != "closed_loop_release_evaluation":
         failures.append("artifact_type is not closed_loop_release_evaluation")
@@ -2693,8 +3270,15 @@ def validate_evaluation_artifact(
         assert reference_artifact is not None
         assert normalized_reference_model_id is not None
         assert normalized_reference_revision is not None
+        # Snapshot a path-backed reference exactly once.  The recursive gate
+        # receives the immutable decoded snapshot, file digest, and suite
+        # snapshot, while the paired comparison consumes that same object.
+        # A path swap therefore cannot substitute evidence after validation.
+        reference_snapshot, reference_payload = _load_artifact_snapshot(
+            reference_artifact
+        )
         reference_result = validate_evaluation_artifact(
-            reference_artifact,
+            reference_payload,
             role="base-baseline",
             policy=policy_payload,
             expected_source_commit=normalized_commit,
@@ -2706,8 +3290,15 @@ def validate_evaluation_artifact(
             required_gate_policy_id=required_gate_policy_id,
             repo_root=repository_root,
             require_current_clean_source=require_current_clean_source,
+            validator_source_commit=(
+                normalized_validator_commit if dual_source_validation else None
+            ),
+            validator_source_contract=(
+                normalized_validator_contract if dual_source_validation else None
+            ),
+            _artifact_snapshot=reference_snapshot,
+            _suite_snapshot=suite_snapshot,
         )
-        reference_payload = _load_artifact_payload(reference_artifact)
         reference_provenance = _mapping(reference_payload.get("provenance"))
         reference_accelerator_classes, _ = _model_accelerator_attestation(
             reference_provenance
@@ -2809,6 +3400,10 @@ def validate_evaluation_artifact(
             "candidate_artifact_sha256": candidate_artifact_identity_hash,
             "reference_artifact_sha256": reference_artifact_identity_hash,
             "reference_validation_role": reference_result.validation_role,
+            "reference_source_commit": reference_result.source_commit,
+            "reference_validator_source_attestation": copy.deepcopy(
+                reference_result.validator_source_attestation
+            ),
             "reference_model_id": normalized_reference_model_id,
             "reference_model_revision": normalized_reference_revision,
             "reference_evidence_passed": reference_result.evidence_passed,
@@ -2882,6 +3477,56 @@ def validate_evaluation_artifact(
         },
         "paired_nonregression": comparison_observed,
     }
+    if require_current_clean_source:
+        final_current_source = git_source_state(repository_root)
+        validator_source_attestation["final_source_state"] = copy.deepcopy(
+            final_current_source
+        )
+        final_source_failures: list[str] = []
+        if final_current_source != current_source:
+            final_source_failures.append(
+                "current evaluation-gate source changed during validation"
+            )
+        if dual_source_validation:
+            final_dual_attestation, final_dual_failures = (
+                _dual_validator_source_attestation(
+                    repo_root=repository_root,
+                    artifact_source_commit=normalized_commit,
+                    validator_source_commit=normalized_validator_commit,
+                )
+            )
+            final_dual_attestation = copy.deepcopy(final_dual_attestation)
+            validator_source_attestation["final_dual_source_attestation"] = (
+                copy.deepcopy(final_dual_attestation)
+            )
+            validator_source_attestation["final_dual_source_failures"] = list(
+                final_dual_failures
+            )
+            if (
+                final_dual_failures
+                or final_dual_attestation != initial_dual_source_attestation
+            ):
+                final_source_failures.append(
+                    "dual-source repository metadata or source changed during validation"
+                )
+        else:
+            validator_source_attestation["final_dual_source_attestation"] = {}
+            validator_source_attestation["final_dual_source_failures"] = []
+        if final_source_failures:
+            evidence_failures.extend(final_source_failures)
+            validator_source_attestation["passed"] = False
+            validator_source_attestation["failures"] = list(
+                dict.fromkeys(
+                    [
+                        *validator_source_attestation["failures"],
+                        *final_source_failures,
+                    ]
+                )
+            )
+    else:
+        validator_source_attestation["final_source_state"] = {}
+        validator_source_attestation["final_dual_source_attestation"] = {}
+        validator_source_attestation["final_dual_source_failures"] = []
     unique_evidence_failures = tuple(dict.fromkeys(evidence_failures))
     unique_performance_failures = tuple(dict.fromkeys(performance_failures))
     blocking_failures = list(unique_evidence_failures)
@@ -2905,6 +3550,7 @@ def validate_evaluation_artifact(
             str(recorded_content_hash) if isinstance(recorded_content_hash, str) else None
         ),
         source_commit=str(source.get("source_commit") or "") or None,
+        validator_source_attestation=validator_source_attestation,
         frozen_suite_sha256=str(suite.get("sha256") or "") or None,
         protocol=str(protocol.get("protocol") or "") or None,
         registry_sha256=str(protocol.get("registry_sha256") or "") or None,
@@ -2931,6 +3577,174 @@ def _resolve_commit(value: str, *, repo_root: Path) -> str:
         raise ValueError("could not resolve HEAD for evaluation gate") from exc
 
 
+def _path_is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def _prepare_report_output(
+    path: str | Path,
+    *,
+    repo_root: Path,
+    protected_inputs: Sequence[str | Path | None],
+) -> Path:
+    """Resolve a new report target without creating or aliasing anything."""
+
+    requested = Path(path).expanduser()
+    if not requested.name:
+        raise ValueError("report output must name a new file")
+    parent = requested.parent.resolve(strict=True)
+    if not parent.is_dir():
+        raise ValueError("report output parent is not a directory")
+    target = parent / requested.name
+    if os.path.lexists(target):
+        raise ValueError("report output already exists; refusing to overwrite it")
+    repository = repo_root.resolve(strict=True)
+    if _path_is_within(target, repository):
+        raise ValueError("report output must be outside the source repository")
+    for raw_input in protected_inputs:
+        if raw_input is None:
+            continue
+        candidate = Path(raw_input).expanduser().resolve()
+        if target == candidate:
+            raise ValueError("report output aliases a validation input")
+    return target
+
+
+def _unlink_created_report(
+    path: Path,
+    identity: tuple[int, int],
+) -> bool:
+    """Remove only the exact regular file this process created."""
+
+    try:
+        observed = os.lstat(path)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    if (
+        not stat.S_ISREG(observed.st_mode)
+        or (observed.st_dev, observed.st_ino) != identity
+    ):
+        return False
+    try:
+        os.unlink(path)
+    except OSError:
+        return False
+    return True
+
+
+def _publish_new_report(path: Path, rendered: str) -> tuple[int, int]:
+    """Create, sync, verify, and freeze one report without clobbering."""
+
+    payload = rendered.encode("utf-8")
+    expected_sha256 = hashlib.sha256(payload).hexdigest()
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_BINARY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor: int | None = None
+    identity: tuple[int, int] | None = None
+    try:
+        descriptor = os.open(path, flags, 0o600)
+        created = os.fstat(descriptor)
+        if not stat.S_ISREG(created.st_mode):
+            raise OSError("report output is not a regular file")
+        identity = (created.st_dev, created.st_ino)
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = None
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if os.name == "posix":
+            os.chmod(path, 0o400)
+        read_flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        read_flags |= getattr(os, "O_NOFOLLOW", 0)
+        verify_descriptor = os.open(path, read_flags)
+        try:
+            verified = os.fstat(verify_descriptor)
+            if (verified.st_dev, verified.st_ino) != identity:
+                raise OSError("report output identity changed during publication")
+            digest = hashlib.sha256()
+            size = 0
+            while True:
+                chunk = os.read(verify_descriptor, 1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                size += len(chunk)
+            if size != len(payload) or digest.hexdigest() != expected_sha256:
+                raise OSError("report output failed post-write verification")
+        finally:
+            os.close(verify_descriptor)
+        if os.name == "posix":
+            directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            directory_descriptor = os.open(path.parent, directory_flags)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+        return identity
+    except Exception:
+        if descriptor is not None:
+            os.close(descriptor)
+        if identity is not None and not _unlink_created_report(path, identity):
+            raise OSError(
+                "report publication failed and the created path could not be safely removed"
+            )
+        raise
+
+
+def _postpublication_source_failures(
+    result: EvaluationGateResult,
+    *,
+    repo_root: Path,
+) -> list[str]:
+    """Re-attest source and Git metadata after report persistence."""
+
+    failures: list[str] = []
+    attestation = result.validator_source_attestation
+    expected_source = _mapping(attestation.get("final_source_state"))
+    current_source = git_source_state(repo_root)
+    if dict(current_source) != dict(expected_source):
+        failures.append("evaluation-gate source changed during report publication")
+    try:
+        current_gate_source = _current_source_descriptor(
+            Path(__file__), repo_root=repo_root
+        )
+    except OSError as exc:
+        failures.append(
+            "executing evaluation gate became unreadable during report publication: "
+            f"{type(exc).__name__}: {exc}"
+        )
+    else:
+        if current_gate_source != _mapping(
+            attestation.get("validator_gate_source")
+        ):
+            failures.append(
+                "executing evaluation gate changed during report publication"
+            )
+    if attestation.get("contract") == DUAL_SOURCE_VALIDATOR_CONTRACT:
+        artifact_commit = str(attestation.get("artifact_source_commit") or "")
+        validator_commit = str(attestation.get("validator_source_commit") or "")
+        fresh_attestation, fresh_failures = _dual_validator_source_attestation(
+            repo_root=repo_root,
+            artifact_source_commit=artifact_commit,
+            validator_source_commit=validator_commit,
+        )
+        expected_dual = _mapping(
+            attestation.get("final_dual_source_attestation")
+        )
+        if fresh_failures or fresh_attestation != dict(expected_dual):
+            failures.append(
+                "dual-source repository metadata or source changed during report publication"
+            )
+    return failures
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -2950,6 +3764,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--required-gate-policy-id", default=DEFAULT_POLICY_ID
     )
     parser.add_argument("--expected-source-commit", required=True)
+    parser.add_argument(
+        "--validator-source-commit",
+        help=(
+            "Clean commit containing a narrowly approved validator-only fix; "
+            "requires --validator-source-contract."
+        ),
+    )
+    parser.add_argument(
+        "--validator-source-contract",
+        choices=(DUAL_SOURCE_VALIDATOR_CONTRACT,),
+        help="Explicit dual-source provenance contract for historical artifacts.",
+    )
     parser.add_argument("--expected-suite", required=True, type=Path)
     parser.add_argument(
         "--expected-protocol", choices=("canonical", "controller"), default="canonical"
@@ -2972,6 +3798,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(
             "--expected-model-id and --expected-model-revision must be supplied together"
         )
+    if bool(args.validator_source_commit) != bool(args.validator_source_contract):
+        parser.error(
+            "--validator-source-commit and --validator-source-contract must be supplied together"
+        )
     if args.role == "expert-baseline" and not args.expected_policy_identity:
         parser.error("--role expert-baseline requires --expected-policy-identity")
     if args.role in {"base-baseline", "checkpoint-promotion"} and not args.expected_model_id:
@@ -2989,13 +3819,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.role != "checkpoint-promotion" and any(comparison_values):
         parser.error("--reference-* arguments are only valid for checkpoint-promotion")
     try:
+        repository_root = Path(__file__).resolve().parents[2]
+        report_target = (
+            _prepare_report_output(
+                args.report_output,
+                repo_root=repository_root,
+                protected_inputs=(
+                    args.artifact,
+                    args.policy,
+                    args.expected_suite,
+                    args.reference_artifact,
+                    Path(__file__),
+                ),
+            )
+            if args.report_output is not None
+            else None
+        )
         result = validate_evaluation_artifact(
             args.artifact,
             role=args.role,
             policy=args.policy,
             expected_source_commit=_resolve_commit(
                 args.expected_source_commit,
-                repo_root=Path(__file__).resolve().parents[2],
+                repo_root=repository_root,
             ),
             expected_suite_path=args.expected_suite,
             expected_protocol=args.expected_protocol,
@@ -3007,12 +3853,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             reference_model_id=args.reference_model_id,
             reference_model_revision=args.reference_model_revision,
             required_gate_policy_id=args.required_gate_policy_id,
+            validator_source_commit=(
+                _resolve_commit(
+                    args.validator_source_commit,
+                    repo_root=repository_root,
+                )
+                if args.validator_source_commit
+                else None
+            ),
+            validator_source_contract=args.validator_source_contract,
         )
         report = result.as_dict()
         rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
-        if args.report_output is not None:
-            args.report_output.parent.mkdir(parents=True, exist_ok=True)
-            args.report_output.write_text(rendered, encoding="utf-8")
+        if report_target is not None:
+            report_identity = _publish_new_report(report_target, rendered)
+            publication_failures = _postpublication_source_failures(
+                result,
+                repo_root=repository_root,
+            )
+            if publication_failures:
+                removed = _unlink_created_report(report_target, report_identity)
+                if not removed:
+                    publication_failures.append(
+                        "new report could not be safely removed after failed re-attestation"
+                    )
+                raise ValueError("; ".join(publication_failures))
         stream = sys.stdout if result.passed else sys.stderr
         print(rendered, end="", file=stream)
         return 0 if result.passed else 2
@@ -3027,7 +3892,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 __all__ = [
     "DEFAULT_POLICY_ID",
     "DEFAULT_POLICY_PATH",
+    "DUAL_SOURCE_VALIDATOR_CONTRACT",
     "EvaluationGateResult",
+    "SINGLE_SOURCE_VALIDATOR_CONTRACT",
     "current_registry_sha256",
     "load_evaluation_policy",
     "main",
