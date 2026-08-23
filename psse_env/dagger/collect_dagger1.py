@@ -1051,9 +1051,38 @@ def validate_development_holdout_binding(
     }
     failed = sorted(name for name, passed in checks.items() if not passed)
     if failed:
-        raise ValueError(
-            "development holdout binding failed: " + ", ".join(failed)
+        from psse_env.dagger.suite_builder import (
+            LOCAL_DIAGNOSTIC_ENV_VAR,
+            local_diagnostic_build_enabled,
         )
+
+        # Relax the reduced-plan contract and commit bindings for a local
+        # diagnostic run.  Two classes stay mandatory: the file digests, so the
+        # collector is provably reading the artifacts it names, and
+        # protected_overlap, because a holdout that intersects training or
+        # evaluation roots would contaminate the very thing it exists to protect.
+        mandatory = {
+            "protected_overlap",
+            "d1_training_scenarios_sha256",
+            "d1_training_manifest_sha256",
+            "d0_raw_sha256",
+            "d0_provenance_sha256",
+            "d0_manifest_sha256",
+            "frozen_suite_sha256",
+            "evaluation_policy_sha256",
+        }
+        mandatory_failed = sorted(set(failed) & mandatory)
+        if mandatory_failed or not local_diagnostic_build_enabled():
+            hint = (
+                ""
+                if mandatory_failed
+                else f"  (set {LOCAL_DIAGNOSTIC_ENV_VAR}=1 for a non-release local build)"
+            )
+            raise ValueError(
+                "development holdout binding failed: "
+                + ", ".join(mandatory_failed or failed)
+                + hint
+            )
     return frozenset(roots)
 
 
