@@ -201,10 +201,17 @@ roots, D0, and all 115 frozen roots. It is diagnostic model-selection evidence
 only: it never enters SFT and never counts as promotion evidence. Use it for
 closed-loop learning-rate and replay-share checks before the one-time
 frozen-suite promotion evaluation. The present evaluator can compare outcomes
-on these roots but cannot certify expert-defined recovery-stratum opportunity
-coverage because it persists only observation hashes and learner actions. The
-holdout is therefore not stratum-qualified until diagnostic-only teacher-target
-instrumentation and a binding post-evaluation coverage audit are added.
+on these roots using schema-v4 traces that retain and independently validate the
+policy-safe observation, visible tool output, lifecycle chain, and observable-
+expert assessment. Incidental recovery opportunities in this ordinary holdout
+still do not determine the preregistered recovery-action objectives. Those use
+a third, non-training recovery-stress scope: exactly 70 intervention episodes,
+ten in each of seven strata, derived from 20 development-parent roots whose
+deterministic stress states are absent from the ordinary rollout. Its roots must
+have zero overlap with D0, natural D1, observable probe training, and all 115
+frozen roots. The production environment applies each intervention before the
+learner acts, and the observable expert independently derives the expected
+canonical action from the resulting policy observation.
 
 The 13-root failure replay is diagnostic only. It must be written separately
 from the frozen suite, marked ineligible for release and training, and may not

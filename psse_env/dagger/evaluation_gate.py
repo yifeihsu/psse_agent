@@ -1307,14 +1307,25 @@ def _intervention_failures(
     expected_failures = 0
     expected_invalid = 0
     expected_opportunities = 0
-    if kind == "pre_policy_failure":
+    if kind in {"pre_policy_failure", "failed_policy_action"}:
         expected_pre_steps = 1
         expected_failures = 1
-        expected_invalid = int(expected_contract.get("failure_mode") == "malformed")
+        expected_invalid = int(
+            kind == "pre_policy_failure"
+            and expected_contract.get("failure_mode") == "malformed"
+        )
     elif kind == "committed_partial_correction":
         setup_actions = expected_contract.get("setup_actions")
         expected_pre_steps = len(setup_actions) if isinstance(setup_actions, list) else -1
         expected_opportunities = 1
+    elif kind in {
+        "committed_partial_correction_with_observable_bridge",
+        "open_rejected_candidate",
+    }:
+        setup_actions = expected_contract.get("setup_actions")
+        expected_pre_steps = (
+            len(setup_actions) if isinstance(setup_actions, list) else -1
+        )
     elif kind not in {"none", "efficiency_budget"}:
         evidence_failures.append("frozen suite intervention kind is invalid")
 

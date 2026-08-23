@@ -890,14 +890,27 @@ approved H200, H100, or RTX Pro 6000 with at least 90,000 MiB. Same-class
 reruns are useful for the cleanest causal comparison when capacity permits,
 but are not a hard gate.
 
-The current diagnostic evaluator binds the exact holdout roots and reports
-closed-loop outcomes, but its persisted trace retains only an observation hash
-and the learner action. It therefore cannot yet certify coverage of the
-expert-defined recovery strata, which require the policy-safe observation and
-the expert's fixed rank-one target. The holdout manifest marks stratum-qualified
-model selection false until a diagnostic-only teacher-opportunity trace and
-post-evaluation coverage audit are implemented; do not claim recovery-stratum
-generalization from family counts alone.
+Schema-v4 study artifacts now persist the exact policy-safe observation,
+policy-visible tool output, and canonical observable-expert assessment at each
+learner step. One pure validator reconstructs the bounded history and last-tool
+fields, rebinds lifecycle state identities, recomputes the observation hash and
+expert action, and is shared by evaluator output, release validation, and study
+ingestion. The ordinary development holdout remains model-selection-only;
+family counts or incidental opportunities there still do not establish the
+seven recovery-action objectives.
+
+Those objectives use a separate preregistered recovery-stress scope built by
+`python -m psse_env.dagger.build_dagger1_recovery_stress`. It derives
+intervention states from 20 of the protected 30 development-parent roots but
+requires zero overlap with D0, natural D1, observable probe training, and the
+frozen suite. The suite contains exactly 70 episodes: ten in each of seven
+recovery strata. Every candidate passes the real production environment and
+the observable expert independently selects the expected canonical action from
+the first post-intervention observation; expected actions are not stored in the
+policy-visible scenario. Run it through `submit_dagger_release_eval.sh` with
+`EVALUATION_SCOPE=recovery_stress`, `RECOVERY_STRESS_SUITE`, and
+`RECOVERY_STRESS_MANIFEST`. The final study gate takes the seven action targets,
+the stress safety counts, and the probe ablation only from this third scope.
 
 To cheaply replay the reviewed 13 failures after the runtime patch, first
 build a separate suite, then use the diagnostic-only evaluator and audit it:

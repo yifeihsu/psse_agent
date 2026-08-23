@@ -20,6 +20,7 @@ from psse_env.actions import (
     VERIFY_CANDIDATE,
 )
 from psse_env.dagger.evaluator import (
+    RECOVERY_STRESS_SUITES,
     STUDY_EVALUATION_SCHEMA_VERSION,
     STUDY_OBJECTIVE_TOOL_EVIDENCE_CONTRACT,
     objective_recovery_action_assessment,
@@ -27,6 +28,8 @@ from psse_env.dagger.evaluator import (
     study_objective_episode_evidence_marker,
 )
 from psse_env.dagger.study_metrics import (
+    EVALUATION_SCOPES,
+    RECOVERY_STRESS_SCOPE,
     StudyEvidenceError,
     build_study_report,
     compare_paired_runs,
@@ -34,6 +37,7 @@ from psse_env.dagger.study_metrics import (
 )
 from psse_env.dagger.study_manifest import (
     EXPECTED_DEVELOPMENT_EVALUATION_CONTRACT_SHA256,
+    EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256,
     EXPECTED_STUDY_MANIFEST_SHA256,
     build_production_d1_quarantine_binding,
     build_training_protocol_binding,
@@ -49,6 +53,8 @@ HASH = "a" * 64
 SUITE_HASH = "b" * 64
 SOURCE_COMMIT = "b" * 40
 DEVELOPMENT_SUITE_HASH = "9" * 64
+RECOVERY_STRESS_SUITE_HASH = "6" * 64
+RECOVERY_STRESS_MANIFEST_HASH = "5" * 64
 QUARANTINE_SUMMARY = {
     "contract": "dagger1_offline_teacher_target_quarantine_summary_v1",
     "candidate_definition": {},
@@ -798,7 +804,7 @@ def _artifact(
                     "suite_coverage_validation": {"passed": True},
                     "suite_content_sha256": "e" * 64,
                     "root_set_sha256": stable_json_sha256(
-                        sorted(row["physical_root"] for row in cleaned)
+                        sorted({row["physical_root"] for row in cleaned})
                     ),
                     "episode_manifest_sha256": "1" * 64,
                 },
@@ -957,9 +963,11 @@ def _bound_evaluation(
     )
     payload.update(
         {
-            "artifact_role": (
-                "evaluation" if scope == "frozen_suite" else "development_evaluation"
-            ),
+            "artifact_role": {
+                "frozen_suite": "evaluation",
+                "development_holdout": "development_evaluation",
+                RECOVERY_STRESS_SCOPE: "recovery_stress_evaluation",
+            }[scope],
             "variant_id": variant_id,
             "study_manifest_sha256": EXPECTED_STUDY_MANIFEST_SHA256,
             "reviewed_source_commit": SOURCE_COMMIT,
@@ -975,7 +983,7 @@ def _bound_evaluation(
         payload["frozen_suite_sha256"] = frozen["suite_sha256"]
         payload["evaluation_policy_sha256"] = frozen["policy_sha256"]
         payload["provenance"]["input_suite"]["sha256"] = frozen["suite_sha256"]
-    else:
+    elif scope == "development_holdout":
         diagnostic_failure = (
             "diagnostic-only evaluation artifacts are not release evidence"
         )
@@ -1019,6 +1027,46 @@ def _bound_evaluation(
                 "minimum_suites": 1,
                 "minimum_episodes_per_suite": 1,
                 "minimum_roots_per_suite": 30,
+            }
+        )
+    else:
+        payload.update(
+            {
+                "recovery_stress_suite_sha256": RECOVERY_STRESS_SUITE_HASH,
+                "recovery_stress_manifest_sha256": (
+                    RECOVERY_STRESS_MANIFEST_HASH
+                ),
+                "recovery_stress_provenance_id": "4" * 64,
+                "recovery_stress_root_set_sha256": stable_json_sha256(
+                    sorted({row["physical_root"] for row in episodes})
+                ),
+                "recovery_stress_physical_roots": 20,
+                "recovery_stress_episode_count": 70,
+                "recovery_stress_development_parent_sha256": (
+                    DEVELOPMENT_SUITE_HASH
+                ),
+                "recovery_stress_evaluation_contract_sha256": (
+                    EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256
+                ),
+                "evaluation_protocol": "preregistered_recovery_stress_test",
+            }
+        )
+        payload["provenance"]["protocol_registry"] = {
+            "protocol": "canonical",
+            "registry_sha256": "7" * 64,
+        }
+        payload["provenance"]["input_suite"]["sha256"] = (
+            RECOVERY_STRESS_SUITE_HASH
+        )
+        configuration = payload["evaluation"]["suite_metrics"]["configuration"]
+        configuration.update(
+            {
+                "seed": 20260723,
+                "suite_names": sorted(RECOVERY_STRESS_SUITES),
+                "required_suites": sorted(RECOVERY_STRESS_SUITES),
+                "minimum_suites": 7,
+                "minimum_episodes_per_suite": 10,
+                "minimum_roots_per_suite": 10,
             }
         )
     payload.pop("content_sha256")
@@ -1090,6 +1138,41 @@ def _study_inputs() -> tuple[dict[str, Any], dict[str, Any]]:
                 safe=True,
             )
         )
+    multi_stress_suites = {
+        "recovery_post_failure_no_candidate",
+        "recovery_unsupported_correction",
+        "recovery_premature_commit",
+        "recovery_premature_escalation",
+    }
+    stress_episodes: list[dict[str, Any]] = []
+    for suite in RECOVERY_STRESS_SUITES:
+        multi = suite in multi_stress_suites
+        for index in range(10):
+            root = (
+                f"stress-multi-{index:02d}"
+                if multi
+                else f"stress-mixed-{index:02d}"
+            )
+            episode = _episode(
+                root=root,
+                cardinality=2,
+                family=(
+                    "multi_measurement"
+                    if multi
+                    else "measurement+parameter"
+                ),
+                target_family="measurement",
+                safe=True,
+            )
+            episode.update(
+                {
+                    "episode_key": f"{suite}:{root}:0",
+                    "suite": suite,
+                    "split": "dagger_recovery_stress",
+                    "source_tier": "protected_development",
+                }
+            )
+            stress_episodes.append(episode)
     evaluations: dict[str, Any] = {
         "base": {
             "frozen_suite": _bound_evaluation(
@@ -1105,6 +1188,13 @@ def _study_inputs() -> tuple[dict[str, Any], dict[str, Any]]:
                 scope="development_holdout",
                 checkpoint=None,
                 episodes=development_episodes,
+            ),
+            RECOVERY_STRESS_SCOPE: _bound_evaluation(
+                variant_id="base",
+                seed=None,
+                scope=RECOVERY_STRESS_SCOPE,
+                checkpoint=None,
+                episodes=stress_episodes,
             ),
         }
     }
@@ -1123,12 +1213,16 @@ def _study_inputs() -> tuple[dict[str, Any], dict[str, Any]]:
                     episodes=(
                         frozen_episodes
                         if scope == "frozen_suite"
-                        else development_episodes
+                        else (
+                            development_episodes
+                            if scope == "development_holdout"
+                            else stress_episodes
+                        )
                     ),
                 )
                 for seed in seeds
             }
-            for scope in ("development_holdout", "frozen_suite")
+            for scope in EVALUATION_SCOPES
         }
     return evaluations, checkpoints
 
@@ -2099,7 +2193,7 @@ def test_schema4_rejects_forged_residual_and_physical_certificates() -> None:
         )
 
 
-def test_four_variant_dual_scope_report_is_bound_but_missing_metrics_block() -> None:
+def test_four_variant_three_scope_report_is_bound_but_missing_metrics_block() -> None:
     evaluations, checkpoints = _study_inputs()
 
     report = build_study_report(
@@ -2116,10 +2210,7 @@ def test_four_variant_dual_scope_report_is_bound_but_missing_metrics_block() -> 
         "natural_dagger",
         "natural_dagger_probes",
     }
-    assert set(report["scope_bindings"]) == {
-        "development_holdout",
-        "frozen_suite",
-    }
+    assert set(report["scope_bindings"]) == set(EVALUATION_SCOPES)
     assert set(report["variant_metric_summary_by_scope"]["frozen_suite"]) == {
         "base",
         "bc0",
@@ -2127,6 +2218,8 @@ def test_four_variant_dual_scope_report_is_bound_but_missing_metrics_block() -> 
         "natural_dagger_probes",
     }
     assert report["scope_bindings"]["development_holdout"]["physical_root_count"] == 30
+    assert report["scope_bindings"][RECOVERY_STRESS_SCOPE]["physical_root_count"] == 20
+    assert report["scope_bindings"][RECOVERY_STRESS_SCOPE]["episode_count"] == 70
     assert report["checkpoint_binding_decision"]["passed"] is True
     lineage = report["checkpoint_binding_decision"]["bindings"]["natural_dagger:3407"]
     assert (
@@ -2160,7 +2253,7 @@ def test_four_variant_dual_scope_report_is_bound_but_missing_metrics_block() -> 
         "passed": True,
     }
     assert report["development_stability_decision"]["passed"] is True
-    targeted = report["probe_ablation_by_scope"]["frozen_suite"]["rules"][
+    targeted = report["probe_ablation_by_scope"][RECOVERY_STRESS_SCOPE]["rules"][
         "targeted.post_failure_no_candidate_action_accuracy"
     ]
     assert targeted["evidence_available"] is False
@@ -2168,7 +2261,8 @@ def test_four_variant_dual_scope_report_is_bound_but_missing_metrics_block() -> 
     assert targeted["denominator"] is None
     assert targeted["passed"] is False
     assert report["passed"] is False
-    assert "probe_ablation_both_scopes" in report["failures"]
+    assert "recovery_stress_action_and_safety_targets" in report["failures"]
+    assert "probe_ablation_recovery_stress" in report["failures"]
     unsigned = {key: value for key, value in report.items() if key != "content_sha256"}
     assert report["content_sha256"] == stable_json_sha256(unsigned)
 
@@ -2239,7 +2333,7 @@ def test_report_rejects_cross_seed_bc0_parent_lineage_even_after_rehash(
         changed[lineage_field] = checkpoints["bc0"][other_seed]["adapter_tree_sha256"]
     changed.pop("checkpoint_receipt_id")
     changed["checkpoint_receipt_id"] = stable_json_sha256(changed)
-    for scope in ("development_holdout", "frozen_suite"):
+    for scope in EVALUATION_SCOPES:
         evaluation = evaluations[variant_id][scope][seed]
         evaluation["checkpoint_receipt_id"] = changed["checkpoint_receipt_id"]
         evaluation.pop("content_sha256")
@@ -2284,7 +2378,7 @@ def test_report_rejects_cross_receipt_quarantine_evidence_disagreement() -> None
     )
     changed.pop("checkpoint_receipt_id")
     changed["checkpoint_receipt_id"] = stable_json_sha256(changed)
-    for scope in ("development_holdout", "frozen_suite"):
+    for scope in EVALUATION_SCOPES:
         evaluation = evaluations["natural_dagger_probes"][scope][3409]
         evaluation["checkpoint_receipt_id"] = changed["checkpoint_receipt_id"]
         evaluation.pop("content_sha256")

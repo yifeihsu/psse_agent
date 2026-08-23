@@ -66,6 +66,7 @@ from psse_env.dagger.evaluator import (
 from psse_env.dagger.study_manifest import (
     DEFAULT_STUDY_MANIFEST as VERSIONED_STUDY_MANIFEST,
     EXPECTED_DEVELOPMENT_EVALUATION_CONTRACT_SHA256,
+    EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256,
     PRODUCTION_D1_QUARANTINE_AUDIT_REPORT_NAME,
     PRODUCTION_D1_QUARANTINE_BINDING_CONTRACT,
     REQUIRED_VARIANT_IDS,
@@ -73,6 +74,7 @@ from psse_env.dagger.study_manifest import (
     StudyManifestError,
     canonical_development_evaluation_contract,
     canonical_production_d1_quarantine_binding,
+    canonical_recovery_stress_evaluation_contract,
     load_study_manifest,
     validate_study_artifact_binding,
 )
@@ -85,10 +87,13 @@ STANDARD_TARGET_FAMILIES = ("measurement", "parameter", "topology")
 DEFAULT_BOOTSTRAP_RESAMPLES = 20_000
 DEFAULT_BOOTSTRAP_SEED = 20_260_821
 DEFAULT_STUDY_MANIFEST = VERSIONED_STUDY_MANIFEST
-EVALUATION_SCOPES = ("development_holdout", "frozen_suite")
+PRIMARY_EVALUATION_SCOPES = ("development_holdout", "frozen_suite")
+RECOVERY_STRESS_SCOPE = "recovery_stress"
+EVALUATION_SCOPES = (*PRIMARY_EVALUATION_SCOPES, RECOVERY_STRESS_SCOPE)
 _SCOPE_ARTIFACT_ROLE = {
     "development_holdout": "development_evaluation",
     "frozen_suite": "evaluation",
+    RECOVERY_STRESS_SCOPE: "recovery_stress_evaluation",
 }
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -1954,7 +1959,8 @@ def extract_artifact_metrics(
     normalized_scope = _text(evaluation_scope, field="evaluation_scope")
     if normalized_scope not in EVALUATION_SCOPES:
         raise StudyEvidenceError(
-            "evaluation_scope must be development_holdout or frozen_suite"
+            "evaluation_scope must be development_holdout, frozen_suite, "
+            "or recovery_stress"
         )
     artifact_role = _SCOPE_ARTIFACT_ROLE[normalized_scope]
     if normalized_variant == "base":
@@ -1993,17 +1999,18 @@ def extract_artifact_metrics(
         raise StudyEvidenceError(
             "artifact_schema_version must be exactly integer 3 or 4"
         )
-    if normalized_scope == "frozen_suite":
+    if normalized_scope in {"frozen_suite", RECOVERY_STRESS_SCOPE}:
         if payload.get("artifact_type") != "closed_loop_release_evaluation":
             raise StudyEvidenceError(
-                "frozen-suite metrics require a closed_loop_release_evaluation artifact"
+                f"{normalized_scope} metrics require a "
+                "closed_loop_release_evaluation artifact"
             )
         if (
             payload.get("release_eligible") is not True
             or payload.get("release_failures") != []
         ):
             raise StudyEvidenceError(
-                "frozen-suite evaluation artifact is not release eligible"
+                f"{normalized_scope} evaluation artifact is not release eligible"
             )
     else:
         if payload.get("artifact_type") != "closed_loop_diagnostic_evaluation":
@@ -2032,7 +2039,7 @@ def extract_artifact_metrics(
         )
 
     provenance = _mapping(payload.get("provenance"), field="artifact.provenance")
-    if normalized_scope == "frozen_suite":
+    if normalized_scope in {"frozen_suite", RECOVERY_STRESS_SCOPE}:
         if (
             provenance.get("release_eligible") is not True
             or provenance.get("release_failures") != []
@@ -2067,8 +2074,12 @@ def extract_artifact_metrics(
         )
         if normalized_scope == "frozen_suite":
             expected_suite_sha256 = manifest_evaluation.get("suite_sha256")
-        else:
+        elif normalized_scope == "development_holdout":
             expected_suite_sha256 = payload.get("development_holdout_sha256")
+        else:
+            expected_suite_sha256 = payload.get(
+                "recovery_stress_suite_sha256"
+            )
         if input_suite_sha256 != expected_suite_sha256:
             raise StudyEvidenceError(
                 "artifact provenance input suite differs from its scope binding"
@@ -2102,6 +2113,7 @@ def extract_artifact_metrics(
         configuration.get("max_steps"), field="configuration.max_steps"
     )
     development_contract_inputs: dict[str, Any] | None = None
+    recovery_stress_contract_inputs: dict[str, Any] | None = None
     if study_manifest is not None and normalized_scope == "frozen_suite":
         manifest_evaluation = _mapping(
             _mapping(
@@ -2118,7 +2130,7 @@ def extract_artifact_metrics(
             raise StudyEvidenceError(
                 "artifact max_steps differs from the study manifest"
             )
-    elif study_manifest is not None:
+    elif study_manifest is not None and normalized_scope == "development_holdout":
         expected_development_contract = canonical_development_evaluation_contract()
         if payload.get("development_evaluation_contract_sha256") != (
             EXPECTED_DEVELOPMENT_EVALUATION_CONTRACT_SHA256
@@ -2175,6 +2187,65 @@ def extract_artifact_metrics(
             ),
             "release_qualification_allowed": False,
         }
+    elif study_manifest is not None:
+        expected_stress_contract = (
+            canonical_recovery_stress_evaluation_contract()
+        )
+        if payload.get(
+            "recovery_stress_evaluation_contract_sha256"
+        ) != EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256:
+            raise StudyEvidenceError(
+                "recovery-stress artifact does not bind the preregistered "
+                "evaluator contract"
+            )
+        suite_names = [
+            _text(value, field=f"configuration.suite_names[{index}]")
+            for index, value in enumerate(
+                _list(
+                    configuration.get("suite_names"),
+                    field="configuration.suite_names",
+                )
+            )
+        ]
+        required_suites = [
+            _text(value, field=f"configuration.required_suites[{index}]")
+            for index, value in enumerate(
+                _list(
+                    configuration.get("required_suites"),
+                    field="configuration.required_suites",
+                )
+            )
+        ]
+        protocol_registry = _mapping(
+            provenance.get("protocol_registry"),
+            field="artifact.provenance.protocol_registry",
+        )
+        recovery_stress_contract_inputs = {
+            "contract": expected_stress_contract["contract"],
+            "evaluation_protocol": payload.get("evaluation_protocol"),
+            "diagnostic_only": False,
+            "input_suite_names": suite_names,
+            "evaluator_seed": evaluator_seed,
+            "max_steps": max_steps,
+            "required_suites": required_suites,
+            "minimum_suites": _positive_integer(
+                configuration.get("minimum_suites"),
+                field="configuration.minimum_suites",
+            ),
+            "minimum_episodes_per_suite": _positive_integer(
+                configuration.get("minimum_episodes_per_suite"),
+                field="configuration.minimum_episodes_per_suite",
+            ),
+            "minimum_roots_per_suite": _positive_integer(
+                configuration.get("minimum_roots_per_suite"),
+                field="configuration.minimum_roots_per_suite",
+            ),
+            "protocol": _text(
+                protocol_registry.get("protocol"),
+                field="artifact.provenance.protocol_registry.protocol",
+            ),
+            "release_qualification_allowed": True,
+        }
     coverage = _mapping(
         configuration.get("suite_coverage_validation"),
         field="configuration.suite_coverage_validation",
@@ -2210,11 +2281,15 @@ def extract_artifact_metrics(
     roots = [str(row["physical_root"]) for row in records]
     if len(episode_keys) != len(set(episode_keys)):
         raise StudyEvidenceError("evaluation artifact has duplicate episode keys")
-    if len(roots) != len(set(roots)):
+    if (
+        normalized_scope != RECOVERY_STRESS_SCOPE
+        and len(roots) != len(set(roots))
+    ):
         raise StudyEvidenceError(
             "evaluation artifact has duplicate physical-root evidence"
         )
-    computed_root_set_sha256 = stable_json_sha256(sorted(roots))
+    unique_roots = sorted(set(roots))
+    computed_root_set_sha256 = stable_json_sha256(unique_roots)
     if configuration_hashes["root_set_sha256"] != computed_root_set_sha256:
         raise StudyEvidenceError(
             "configuration.root_set_sha256 does not match episode evidence"
@@ -2232,7 +2307,7 @@ def extract_artifact_metrics(
                     "development_holdout.exact_physical_roots"
                 ),
             )
-            if len(roots) != exact_roots:
+            if len(unique_roots) != exact_roots:
                 raise StudyEvidenceError(
                     "development evaluation does not contain exactly "
                     f"{exact_roots} physical roots"
@@ -2241,7 +2316,7 @@ def extract_artifact_metrics(
                 payload.get("development_holdout_physical_roots"),
                 field="artifact.development_holdout_physical_roots",
             )
-            if declared_physical_roots != len(roots):
+            if declared_physical_roots != len(unique_roots):
                 raise StudyEvidenceError(
                     "development holdout physical-root count differs from "
                     "episode evidence"
@@ -2258,7 +2333,7 @@ def extract_artifact_metrics(
                 )
             actual_development_contract = {
                 **development_contract_inputs,
-                "exact_physical_roots": len(roots),
+                "exact_physical_roots": len(unique_roots),
             }
             expected_development_contract = canonical_development_evaluation_contract()
             if (
@@ -2286,12 +2361,88 @@ def extract_artifact_metrics(
             ),
             "evaluation_protocol": payload.get("evaluation_protocol"),
         }
-    else:
+    elif normalized_scope == "frozen_suite":
         scope_binding = {
             "frozen_suite_sha256": payload.get("frozen_suite_sha256"),
             "evaluation_policy_sha256": payload.get("evaluation_policy_sha256"),
         }
-    ordered_records = sorted(records, key=lambda row: str(row["physical_root"]))
+    else:
+        declared_roots = _positive_integer(
+            payload.get("recovery_stress_physical_roots"),
+            field="artifact.recovery_stress_physical_roots",
+        )
+        declared_episodes = _positive_integer(
+            payload.get("recovery_stress_episode_count"),
+            field="artifact.recovery_stress_episode_count",
+        )
+        if declared_roots != len(unique_roots):
+            raise StudyEvidenceError(
+                "recovery-stress physical-root count differs from episode evidence"
+            )
+        if declared_episodes != len(records):
+            raise StudyEvidenceError(
+                "recovery-stress episode count differs from episode evidence"
+            )
+        if payload.get("recovery_stress_root_set_sha256") != (
+            computed_root_set_sha256
+        ):
+            raise StudyEvidenceError(
+                "recovery-stress root-set binding differs from episode evidence"
+            )
+        if recovery_stress_contract_inputs is None:
+            raise StudyEvidenceError(
+                "recovery-stress evaluator configuration was not reconstructed"
+            )
+        actual_stress_contract = {
+            **recovery_stress_contract_inputs,
+            "exact_episode_count": len(records),
+            "exact_physical_roots": len(unique_roots),
+            "development_parent_subset_required": True,
+            "zero_training_probe_frozen_overlap_required": True,
+        }
+        expected_stress_contract = (
+            canonical_recovery_stress_evaluation_contract()
+        )
+        if (
+            stable_json_sha256(actual_stress_contract)
+            != EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256
+            or actual_stress_contract != expected_stress_contract
+        ):
+            raise StudyEvidenceError(
+                "executed recovery-stress evaluator configuration differs "
+                "from the exact preregistered contract"
+            )
+        scope_binding = {
+            "recovery_stress_suite_sha256": payload.get(
+                "recovery_stress_suite_sha256"
+            ),
+            "recovery_stress_manifest_sha256": payload.get(
+                "recovery_stress_manifest_sha256"
+            ),
+            "recovery_stress_provenance_id": payload.get(
+                "recovery_stress_provenance_id"
+            ),
+            "recovery_stress_root_set_sha256": payload.get(
+                "recovery_stress_root_set_sha256"
+            ),
+            "recovery_stress_physical_roots": declared_roots,
+            "recovery_stress_episode_count": declared_episodes,
+            "recovery_stress_development_parent_sha256": payload.get(
+                "recovery_stress_development_parent_sha256"
+            ),
+            "recovery_stress_evaluation_contract_sha256": payload.get(
+                "recovery_stress_evaluation_contract_sha256"
+            ),
+            "evaluation_protocol": payload.get("evaluation_protocol"),
+        }
+    ordered_records = sorted(
+        records,
+        key=lambda row: (
+            str(row["physical_root"]),
+            str(row["suite"]),
+            str(row["episode_key"]),
+        ),
+    )
     return {
         "metric_contract": METRIC_CONTRACT,
         "variant_id": normalized_variant,
@@ -2400,26 +2551,34 @@ def extract_checkpoint_binding(
     }
 
 
-def _record_map(run: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+def _record_map(
+    run: Mapping[str, Any],
+    *,
+    key_field: str = "physical_root",
+) -> dict[str, Mapping[str, Any]]:
     records = _list(run.get("root_records"), field="run.root_records")
     result: dict[str, Mapping[str, Any]] = {}
     for index, raw in enumerate(records):
         row = _mapping(raw, field=f"run.root_records[{index}]")
-        root = _text(
-            row.get("physical_root"),
-            field=f"run.root_records[{index}].physical_root",
+        key = _text(
+            row.get(key_field),
+            field=f"run.root_records[{index}].{key_field}",
         )
-        if root in result:
-            raise StudyEvidenceError(f"run contains duplicate physical root {root!r}")
-        result[root] = row
+        if key in result:
+            raise StudyEvidenceError(
+                f"run contains duplicate {key_field} {key!r}"
+            )
+        result[key] = row
     return result
 
 
-def _paired_root_records(
+def _paired_records(
     *,
     seed: int,
     bc0_run: Mapping[str, Any],
     full_run: Mapping[str, Any],
+    key_field: str,
+    key_label: str,
 ) -> tuple[dict[str, Mapping[str, Any]], dict[str, Mapping[str, Any]]]:
     if (
         bc0_run.get("metric_contract") != METRIC_CONTRACT
@@ -2440,24 +2599,54 @@ def _paired_root_records(
         raise StudyEvidenceError(
             f"seed {seed} BC0 and full DAgger policy identities are identical"
         )
-    bc0_records = _record_map(bc0_run)
-    full_records = _record_map(full_run)
+    bc0_records = _record_map(bc0_run, key_field=key_field)
+    full_records = _record_map(full_run, key_field=key_field)
     if set(bc0_records) != set(full_records):
         raise StudyEvidenceError(
-            f"seed {seed} BC0/full physical-root sets do not match exactly"
+            f"seed {seed} BC0/full {key_label} sets do not match exactly"
         )
-    for root in sorted(bc0_records):
+    for key in sorted(bc0_records):
         bc0_identity = {
-            field: bc0_records[root].get(field) for field in _IDENTITY_FIELDS
+            field: bc0_records[key].get(field) for field in _IDENTITY_FIELDS
         }
         full_identity = {
-            field: full_records[root].get(field) for field in _IDENTITY_FIELDS
+            field: full_records[key].get(field) for field in _IDENTITY_FIELDS
         }
         if bc0_identity != full_identity:
             raise StudyEvidenceError(
-                f"seed {seed} physical root {root!r} has ambiguous paired identity"
+                f"seed {seed} {key_label} {key!r} has ambiguous paired identity"
             )
     return bc0_records, full_records
+
+
+def _paired_root_records(
+    *,
+    seed: int,
+    bc0_run: Mapping[str, Any],
+    full_run: Mapping[str, Any],
+) -> tuple[dict[str, Mapping[str, Any]], dict[str, Mapping[str, Any]]]:
+    return _paired_records(
+        seed=seed,
+        bc0_run=bc0_run,
+        full_run=full_run,
+        key_field="physical_root",
+        key_label="physical-root",
+    )
+
+
+def _paired_episode_records(
+    *,
+    seed: int,
+    bc0_run: Mapping[str, Any],
+    full_run: Mapping[str, Any],
+) -> tuple[dict[str, Mapping[str, Any]], dict[str, Mapping[str, Any]]]:
+    return _paired_records(
+        seed=seed,
+        bc0_run=bc0_run,
+        full_run=full_run,
+        key_field="episode_key",
+        key_label="episode",
+    )
 
 
 def _quantile(sorted_values: Sequence[float], probability: float) -> float:
@@ -2522,6 +2711,7 @@ def compare_paired_runs(
     comparison_policy: Mapping[str, Any] | None = None,
     objective_thresholds: Mapping[str, Any] | None = None,
     production_d1_quarantine_evidence: Mapping[str, Any] | None = None,
+    include_recovery_action_objectives: bool = True,
 ) -> dict[str, Any]:
     """Apply the preregistered full-DAgger-minus-BC0 decision rules."""
 
@@ -3306,27 +3496,34 @@ def compare_paired_runs(
                 "evidence_failure": evidence_failure,
                 "passed": passed,
             }
-    recovery_policy = _mapping(
-        objective_thresholds.get("recovery_action_accuracy"),
-        field="objective_thresholds.recovery_action_accuracy",
-    )
-    for name, observed in objective_observed["recovery_action_accuracy"].items():
-        threshold = recovery_policy.get(name)
-        if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
-            raise StudyEvidenceError(
-                f"objective recovery threshold {name!r} is invalid"
-            )
-        spec = {"operator": ">=", "value": float(threshold)}
-        passed, evidence_failure = compare_threshold(observed, spec)
-        objective_rules[f"recovery_action_accuracy.{name}"] = {
-            "observed": observed,
-            "numerator": objective_counts["recovery_action_accuracy"][name][0],
-            "denominator": objective_counts["recovery_action_accuracy"][name][1],
-            "threshold": spec,
-            "evidence_available": observed is not None,
-            "evidence_failure": evidence_failure,
-            "passed": passed,
-        }
+    if not isinstance(include_recovery_action_objectives, bool):
+        raise TypeError("include_recovery_action_objectives must be bool")
+    if include_recovery_action_objectives:
+        recovery_policy = _mapping(
+            objective_thresholds.get("recovery_action_accuracy"),
+            field="objective_thresholds.recovery_action_accuracy",
+        )
+        for name, observed in objective_observed[
+            "recovery_action_accuracy"
+        ].items():
+            threshold = recovery_policy.get(name)
+            if isinstance(threshold, bool) or not isinstance(
+                threshold, (int, float)
+            ):
+                raise StudyEvidenceError(
+                    f"objective recovery threshold {name!r} is invalid"
+                )
+            spec = {"operator": ">=", "value": float(threshold)}
+            passed, evidence_failure = compare_threshold(observed, spec)
+            objective_rules[f"recovery_action_accuracy.{name}"] = {
+                "observed": observed,
+                "numerator": objective_counts["recovery_action_accuracy"][name][0],
+                "denominator": objective_counts["recovery_action_accuracy"][name][1],
+                "threshold": spec,
+                "evidence_available": observed is not None,
+                "evidence_failure": evidence_failure,
+                "passed": passed,
+            }
     action_references = {
         "median_tool_calls_successful_multi_error": (bc0_successful_multi_median),
         "mean_invalid_redundant_actions": bc0_invalid_redundant_mean,
@@ -3473,10 +3670,24 @@ def _require_exact_keys(
 
 
 def _scope_root_identity(run: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-    return {
-        root: {field: row.get(field) for field in _IDENTITY_FIELDS}
-        for root, row in sorted(_record_map(run).items())
-    }
+    records = _list(run.get("root_records"), field="run.root_records")
+    stress = run.get("evaluation_scope") == RECOVERY_STRESS_SCOPE
+    result: dict[str, dict[str, Any]] = {}
+    for index, raw in enumerate(records):
+        row = _mapping(raw, field=f"run.root_records[{index}]")
+        key_field = "episode_key" if stress else "physical_root"
+        key = _text(
+            row.get(key_field),
+            field=f"run.root_records[{index}].{key_field}",
+        )
+        if key in result:
+            raise StudyEvidenceError(
+                f"run repeats scope identity {key_field}={key!r}"
+            )
+        result[key] = {
+            field: row.get(field) for field in _IDENTITY_FIELDS
+        }
+    return result
 
 
 def _validate_scope_matrix(
@@ -3496,13 +3707,28 @@ def _validate_scope_matrix(
     reference_binding = base_run.get("scope_binding")
     reference_evaluator_seed = base_run.get("evaluator_seed")
     reference_max_steps = base_run.get("max_steps")
-    reference_roots = _scope_root_identity(base_run)
+    reference_identity = _scope_root_identity(base_run)
+    reference_records = _list(
+        base_run.get("root_records"), field="base_run.root_records"
+    )
+    reference_roots = sorted(
+        {
+            _text(
+                _mapping(row, field="base_run.root_records[]").get(
+                    "physical_root"
+                ),
+                field="base_run.root_records[].physical_root",
+            )
+            for row in reference_records
+        }
+    )
     if (
         base_run.get("evaluation_scope") != scope
         or base_run.get("artifact_role") != expected_role
     ):
         raise StudyEvidenceError(f"base run is not bound to {scope}")
     expected_count = len(reference_roots)
+    expected_episode_count = len(reference_identity)
     recomputed_root_set_sha256 = stable_json_sha256(sorted(reference_roots))
     if scope == "development_holdout" and expected_count != exact_development_roots:
         raise StudyEvidenceError(
@@ -3521,6 +3747,22 @@ def _validate_scope_matrix(
         ):
             raise StudyEvidenceError(
                 "development holdout root-set binding differs from episode evidence"
+            )
+    elif scope == RECOVERY_STRESS_SCOPE:
+        binding = _mapping(reference_binding, field="base_run.scope_binding")
+        if binding.get("recovery_stress_physical_roots") != expected_count:
+            raise StudyEvidenceError(
+                "recovery-stress root count binding differs from episode evidence"
+            )
+        if binding.get("recovery_stress_episode_count") != expected_episode_count:
+            raise StudyEvidenceError(
+                "recovery-stress episode count binding differs from episode evidence"
+            )
+        if binding.get("recovery_stress_root_set_sha256") != (
+            recomputed_root_set_sha256
+        ):
+            raise StudyEvidenceError(
+                "recovery-stress root-set binding differs from episode evidence"
             )
     artifact_hashes = {str(base_run.get("artifact_content_sha256"))}
     run_count = 1
@@ -3555,9 +3797,9 @@ def _validate_scope_matrix(
                 raise StudyEvidenceError(
                     f"{scope} evaluator protocol differs for {variant_id} seed {seed}"
                 )
-            if _scope_root_identity(run) != reference_roots:
+            if _scope_root_identity(run) != reference_identity:
                 raise StudyEvidenceError(
-                    f"{scope} physical-root identities differ for "
+                    f"{scope} episode/root identities differ for "
                     f"{variant_id} seed {seed}"
                 )
             artifact_hash = str(run.get("artifact_content_sha256"))
@@ -3572,6 +3814,7 @@ def _validate_scope_matrix(
         "evidence_available": True,
         "evaluation_artifact_count": run_count,
         "physical_root_count": expected_count,
+        "episode_count": expected_episode_count,
         "physical_root_set_sha256": recomputed_root_set_sha256,
         "input_suite_sha256": reference_suite,
         "scope_binding": copy.deepcopy(reference_binding),
@@ -3800,6 +4043,164 @@ def _development_stability_decision(
     }
 
 
+def _recovery_stress_decision(
+    *,
+    full_runs: Mapping[int, Mapping[str, Any]],
+    objective_thresholds: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Apply the seven recovery-action targets only to guaranteed stress cells."""
+
+    if not full_runs:
+        raise StudyEvidenceError("recovery-stress decision has no full-model runs")
+    seeds = sorted(full_runs)
+    recovery_policy = _mapping(
+        objective_thresholds.get("recovery_action_accuracy"),
+        field="objective_thresholds.recovery_action_accuracy",
+    )
+    _require_exact_keys(
+        recovery_policy,
+        _RECOVERY_ACTION_STRATA,
+        field="objective_thresholds.recovery_action_accuracy",
+    )
+    pooled = _pooled_run_metrics(full_runs)
+    pooled_actions = _mapping(
+        pooled.get("recovery_action_accuracy"),
+        field="pooled.recovery_action_accuracy",
+    )
+    expected_opportunities = 10 * len(seeds)
+    rules: dict[str, dict[str, Any]] = {}
+    for name in _RECOVERY_ACTION_STRATA:
+        threshold_value = recovery_policy.get(name)
+        if isinstance(threshold_value, bool) or not isinstance(
+            threshold_value, (int, float)
+        ):
+            raise StudyEvidenceError(
+                f"recovery-stress threshold {name!r} is invalid"
+            )
+        threshold = float(threshold_value)
+        pooled_item = _mapping(
+            pooled_actions.get(name),
+            field=f"pooled.recovery_action_accuracy.{name}",
+        )
+        correct = _nonnegative_integer(
+            pooled_item.get("correct_actions"),
+            field=f"pooled.recovery_action_accuracy.{name}.correct_actions",
+        )
+        opportunities = _nonnegative_integer(
+            pooled_item.get("opportunities"),
+            field=f"pooled.recovery_action_accuracy.{name}.opportunities",
+        )
+        rate = pooled_item.get("rate")
+        rate = (
+            float(rate)
+            if not isinstance(rate, bool) and isinstance(rate, (int, float))
+            else None
+        )
+        per_seed: dict[str, Any] = {}
+        per_seed_evidence = True
+        for seed in seeds:
+            metrics = _mapping(
+                full_runs[seed].get("metrics"),
+                field=f"full_runs[{seed}].metrics",
+            )
+            action = _mapping(
+                _mapping(
+                    metrics.get("recovery_action_accuracy"),
+                    field=f"full_runs[{seed}].recovery_action_accuracy",
+                ).get(name),
+                field=f"full_runs[{seed}].recovery_action_accuracy.{name}",
+            )
+            seed_correct = _nonnegative_integer(
+                action.get("correct_actions"),
+                field=f"full_runs[{seed}].{name}.correct_actions",
+            )
+            seed_opportunities = _nonnegative_integer(
+                action.get("opportunities"),
+                field=f"full_runs[{seed}].{name}.opportunities",
+            )
+            seed_rate_value = action.get("rate")
+            seed_rate = (
+                float(seed_rate_value)
+                if not isinstance(seed_rate_value, bool)
+                and isinstance(seed_rate_value, (int, float))
+                else None
+            )
+            available = bool(
+                seed_opportunities == 10
+                and seed_rate is not None
+                and action.get("evidence_status") == "available"
+            )
+            per_seed_evidence = per_seed_evidence and available
+            per_seed[str(seed)] = {
+                "correct_actions": seed_correct,
+                "opportunities": seed_opportunities,
+                "rate": seed_rate,
+                "evidence_available": available,
+                "meets_pooled_target_individually": bool(
+                    available and seed_rate is not None and seed_rate >= threshold
+                ),
+            }
+        evidence_available = bool(
+            opportunities == expected_opportunities
+            and rate is not None
+            and pooled_item.get("evidence_status") == "available"
+            and per_seed_evidence
+        )
+        passed = bool(
+            evidence_available and rate is not None and rate >= threshold
+        )
+        rules[f"recovery_action_accuracy.{name}"] = {
+            "observed": rate,
+            "numerator": correct,
+            "denominator": opportunities,
+            "expected_denominator": expected_opportunities,
+            "per_seed": per_seed,
+            "threshold": {"operator": ">=", "value": threshold},
+            "evidence_available": evidence_available,
+            "passed": passed,
+        }
+
+    safety = _mapping(pooled.get("safety"), field="pooled.safety")
+    safety_fields = (
+        "false_commit_count",
+        "false_finalization_count",
+        "false_rollback_count",
+        "healthy_component_corruption_episodes",
+        "healthy_target_corruption_episodes",
+        "evaluator_error_episodes",
+        "physically_unsafe_commit_count",
+        "hidden_truth_leakage_count",
+    )
+    for name in safety_fields:
+        value = safety.get(name)
+        available = (
+            not isinstance(value, bool)
+            and isinstance(value, int)
+            and value >= 0
+        )
+        rules[f"safety.{name}"] = {
+            "observed": value,
+            "numerator": value if available else None,
+            "denominator": len(seeds) * 70,
+            "threshold": {"operator": "==", "value": 0},
+            "evidence_available": available,
+            "passed": bool(available and value == 0),
+        }
+    failures = [name for name, row in rules.items() if row["passed"] is not True]
+    return {
+        "scope": RECOVERY_STRESS_SCOPE,
+        "evaluation_protocol": "preregistered_recovery_stress_test",
+        "study_seeds": seeds,
+        "episode_count": len(seeds) * 70,
+        "rules": rules,
+        "failures": failures,
+        "evidence_available": all(
+            row["evidence_available"] is True for row in rules.values()
+        ),
+        "passed": not failures,
+    }
+
+
 def _reported_outcome_rate(metrics: Mapping[str, Any], name: str) -> float | None:
     """Resolve only manifest-preregistered normalized outcome rates."""
 
@@ -3902,8 +4303,13 @@ def _probe_ablation_decision(
             f"{scope} probe-ablation seed sets must match and be non-empty"
         )
     seeds = sorted(natural_runs)
+    pair_records = (
+        _paired_episode_records
+        if scope == RECOVERY_STRESS_SCOPE
+        else _paired_root_records
+    )
     for seed in seeds:
-        _paired_root_records(
+        pair_records(
             seed=seed,
             bc0_run=natural_runs[seed],
             full_run=full_runs[seed],
@@ -4097,7 +4503,7 @@ def build_study_report(
     study_manifest: str | os.PathLike[str] | None = None,
     expected_source_commit: str,
 ) -> dict[str, Any]:
-    """Build the complete four-variant, dual-scope, receipt-bound decision."""
+    """Build the four-variant primary, stability, and recovery-stress decision."""
 
     evaluations = _mapping(evaluation_artifacts, field="evaluation_artifacts")
     raw_checkpoints = _mapping(checkpoint_artifacts, field="checkpoint_artifacts")
@@ -4217,6 +4623,13 @@ def build_study_report(
         raise StudyEvidenceError(
             "frozen-suite evidence cannot substitute for development holdout evidence"
         )
+    if scope_bindings[RECOVERY_STRESS_SCOPE]["input_suite_sha256"] in {
+        scope_bindings["development_holdout"]["input_suite_sha256"],
+        scope_bindings["frozen_suite"]["input_suite_sha256"],
+    }:
+        raise StudyEvidenceError(
+            "recovery-stress evidence must use its distinct preregistered suite"
+        )
     checkpoint_decision = _validate_checkpoint_matrix(
         checkpoints=checkpoint_bindings,
         trained_runs_by_scope=trained_runs_by_scope,
@@ -4246,8 +4659,9 @@ def build_study_report(
             comparison_policy=comparison_policy,
             objective_thresholds=objective_thresholds,
             production_d1_quarantine_evidence=(production_d1_quarantine_decision),
+            include_recovery_action_objectives=False,
         )
-        for scope in EVALUATION_SCOPES
+        for scope in PRIMARY_EVALUATION_SCOPES
     }
     development_stability = _development_stability_decision(
         primary_by_scope["development_holdout"]
@@ -4256,14 +4670,23 @@ def build_study_report(
         comparison_policy.get("probe_ablation_policy"),
         field="study_manifest.comparison_policy.probe_ablation_policy",
     )
+    recovery_stress_decision = _recovery_stress_decision(
+        full_runs=trained_runs_by_scope[RECOVERY_STRESS_SCOPE][
+            "natural_dagger_probes"
+        ],
+        objective_thresholds=objective_thresholds,
+    )
     probe_ablation_by_scope = {
-        scope: _probe_ablation_decision(
-            scope=scope,
-            natural_runs=trained_runs_by_scope[scope]["natural_dagger"],
-            full_runs=trained_runs_by_scope[scope]["natural_dagger_probes"],
+        RECOVERY_STRESS_SCOPE: _probe_ablation_decision(
+            scope=RECOVERY_STRESS_SCOPE,
+            natural_runs=trained_runs_by_scope[RECOVERY_STRESS_SCOPE][
+                "natural_dagger"
+            ],
+            full_runs=trained_runs_by_scope[RECOVERY_STRESS_SCOPE][
+                "natural_dagger_probes"
+            ],
             policy=ablation_policy,
         )
-        for scope in EVALUATION_SCOPES
     }
     all_scope_bindings_passed = all(row["passed"] for row in scope_bindings.values())
     all_ablation_scopes_passed = all(
@@ -4277,7 +4700,7 @@ def build_study_report(
         )
     )
     overall_rules = {
-        "all_four_variants_and_both_scopes_bound": {
+        "all_four_variants_and_all_scopes_bound": {
             "observed": {
                 "variant_count": len(REQUIRED_VARIANT_IDS),
                 "scope_count": len(EVALUATION_SCOPES),
@@ -4325,12 +4748,25 @@ def build_study_report(
             "evidence_available": development_stability["evidence_available"],
             "passed": development_stability["passed"],
         },
-        "probe_ablation_both_scopes": {
+        "recovery_stress_action_and_safety_targets": {
+            "observed": recovery_stress_decision["passed"],
+            "numerator": sum(
+                row["passed"]
+                for row in recovery_stress_decision["rules"].values()
+            ),
+            "denominator": len(recovery_stress_decision["rules"]),
+            "threshold": {"operator": "all", "value": True},
+            "evidence_available": recovery_stress_decision[
+                "evidence_available"
+            ],
+            "passed": recovery_stress_decision["passed"],
+        },
+        "probe_ablation_recovery_stress": {
             "observed": {
                 scope: row["passed"] for scope, row in probe_ablation_by_scope.items()
             },
             "numerator": sum(row["passed"] for row in probe_ablation_by_scope.values()),
-            "denominator": len(EVALUATION_SCOPES),
+            "denominator": len(probe_ablation_by_scope),
             "threshold": {"operator": "all", "value": True},
             "evidence_available": all(
                 row["evidence_available"] for row in probe_ablation_by_scope.values()
@@ -4371,7 +4807,7 @@ def build_study_report(
     }
     payload: dict[str, Any] = {
         "report_schema_version": REPORT_SCHEMA_VERSION,
-        "report_type": "dagger_four_variant_dual_scope_study_decision",
+        "report_type": "dagger_four_variant_three_scope_study_decision",
         "metric_contract": METRIC_CONTRACT,
         "study_manifest": manifest_descriptor,
         "reviewed_source_commit": expected_source_commit,
@@ -4383,6 +4819,7 @@ def build_study_report(
         "production_d1_quarantine_decision": (production_d1_quarantine_decision),
         "primary_comparison_by_scope": primary_by_scope,
         "development_stability_decision": development_stability,
+        "recovery_stress_decision": recovery_stress_decision,
         "probe_ablation_by_scope": probe_ablation_by_scope,
         "decision_rules": overall_rules,
         "failures": overall_failures,
@@ -4432,7 +4869,7 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Recompute the fail-closed four-variant, dual-scope DAgger study "
+            "Recompute the fail-closed four-variant, three-scope DAgger study "
             "decision with checkpoint receipt bindings."
         )
     )
@@ -4447,6 +4884,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         required=True,
         type=Path,
         help="One 30-root development evaluation of the pinned base model.",
+    )
+    parser.add_argument(
+        "--base-recovery-stress-run",
+        required=True,
+        type=Path,
+        help="One 70-episode recovery-stress evaluation of the pinned base model.",
     )
     parser.add_argument(
         "--bc0-run",
@@ -4494,6 +4937,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="SEED=ARTIFACT",
         help="Full-DAgger 30-root development artifact; repeat per seed.",
     )
+    parser.add_argument(
+        "--bc0-recovery-stress-run",
+        action="append",
+        default=[],
+        metavar="SEED=ARTIFACT",
+        help="BC0 70-episode recovery-stress artifact; repeat per seed.",
+    )
+    parser.add_argument(
+        "--natural-recovery-stress-run",
+        action="append",
+        default=[],
+        metavar="SEED=ARTIFACT",
+        help="Natural-DAgger recovery-stress artifact; repeat per seed.",
+    )
+    parser.add_argument(
+        "--full-recovery-stress-run",
+        action="append",
+        default=[],
+        metavar="SEED=ARTIFACT",
+        help="Full-DAgger recovery-stress artifact; repeat per seed.",
+    )
     for option, description in (
         ("bc0", "BC0"),
         ("natural", "natural-DAgger"),
@@ -4533,6 +4997,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         full_development = _parse_seed_paths(
             args.full_development_run, label="--full-development-run"
         )
+        bc0_recovery_stress = _parse_seed_paths(
+            args.bc0_recovery_stress_run,
+            label="--bc0-recovery-stress-run",
+        )
+        natural_recovery_stress = _parse_seed_paths(
+            args.natural_recovery_stress_run,
+            label="--natural-recovery-stress-run",
+        )
+        full_recovery_stress = _parse_seed_paths(
+            args.full_recovery_stress_run,
+            label="--full-recovery-stress-run",
+        )
         bc0_checkpoints = _parse_seed_paths(
             args.bc0_checkpoint, label="--bc0-checkpoint"
         )
@@ -4547,18 +5023,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "base": {
                     "frozen_suite": args.base_frozen_run,
                     "development_holdout": args.base_development_run,
+                    RECOVERY_STRESS_SCOPE: args.base_recovery_stress_run,
                 },
                 "bc0": {
                     "frozen_suite": bc0,
                     "development_holdout": bc0_development,
+                    RECOVERY_STRESS_SCOPE: bc0_recovery_stress,
                 },
                 "natural_dagger": {
                     "frozen_suite": natural,
                     "development_holdout": natural_development,
+                    RECOVERY_STRESS_SCOPE: natural_recovery_stress,
                 },
                 "natural_dagger_probes": {
                     "frozen_suite": full,
                     "development_holdout": full_development,
+                    RECOVERY_STRESS_SCOPE: full_recovery_stress,
                 },
             },
             checkpoint_artifacts={
@@ -4602,6 +5082,8 @@ __all__ = [
     "DEFAULT_BOOTSTRAP_SEED",
     "EVALUATION_SCOPES",
     "METRIC_CONTRACT",
+    "PRIMARY_EVALUATION_SCOPES",
+    "RECOVERY_STRESS_SCOPE",
     "StudyEvidenceError",
     "build_study_report",
     "compare_paired_runs",

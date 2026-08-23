@@ -46,6 +46,40 @@
       "exact_physical_roots": 30,
       "protocol": "canonical",
       "release_qualification_allowed": false
+    },
+    "recovery_stress_evaluation": {
+      "contract": "dagger_recovery_stress_evaluation_protocol_v1",
+      "evaluation_protocol": "preregistered_recovery_stress_test",
+      "diagnostic_only": false,
+      "input_suite_names": [
+        "recovery_measurement_parameter_sequential_handoff",
+        "recovery_post_failure_no_candidate",
+        "recovery_premature_commit",
+        "recovery_premature_escalation",
+        "recovery_rejected_candidate_rollback",
+        "recovery_safe_continuation_after_partial_success",
+        "recovery_unsupported_correction"
+      ],
+      "evaluator_seed": 20260723,
+      "max_steps": 24,
+      "required_suites": [
+        "recovery_measurement_parameter_sequential_handoff",
+        "recovery_post_failure_no_candidate",
+        "recovery_premature_commit",
+        "recovery_premature_escalation",
+        "recovery_rejected_candidate_rollback",
+        "recovery_safe_continuation_after_partial_success",
+        "recovery_unsupported_correction"
+      ],
+      "minimum_suites": 7,
+      "minimum_episodes_per_suite": 10,
+      "minimum_roots_per_suite": 10,
+      "exact_episode_count": 70,
+      "exact_physical_roots": 20,
+      "development_parent_subset_required": true,
+      "zero_training_probe_frozen_overlap_required": true,
+      "protocol": "canonical",
+      "release_qualification_allowed": true
     }
   },
   "variants": [
@@ -57,7 +91,8 @@
       "training_sources": [],
       "required_artifact_roles": [
         "development_evaluation",
-        "evaluation"
+        "evaluation",
+        "recovery_stress_evaluation"
       ]
     },
     {
@@ -71,7 +106,8 @@
       "required_artifact_roles": [
         "checkpoint",
         "development_evaluation",
-        "evaluation"
+        "evaluation",
+        "recovery_stress_evaluation"
       ]
     },
     {
@@ -86,7 +122,8 @@
       "required_artifact_roles": [
         "checkpoint",
         "development_evaluation",
-        "evaluation"
+        "evaluation",
+        "recovery_stress_evaluation"
       ]
     },
     {
@@ -102,7 +139,8 @@
       "required_artifact_roles": [
         "checkpoint",
         "development_evaluation",
-        "evaluation"
+        "evaluation",
+        "recovery_stress_evaluation"
       ]
     }
   ],
@@ -365,6 +403,26 @@
       "development_holdout_root_set_sha256",
       "development_holdout_physical_roots",
       "development_evaluation_contract_sha256",
+      "evaluation_protocol"
+    ],
+    "recovery_stress_evaluation_required_fields": [
+      "artifact_role",
+      "variant_id",
+      "study_manifest_sha256",
+      "reviewed_source_commit",
+      "model_id",
+      "model_revision",
+      "checkpoint_receipt_id",
+      "checkpoint_adapter_tree_sha256",
+      "training_seed",
+      "recovery_stress_suite_sha256",
+      "recovery_stress_manifest_sha256",
+      "recovery_stress_provenance_id",
+      "recovery_stress_root_set_sha256",
+      "recovery_stress_physical_roots",
+      "recovery_stress_episode_count",
+      "recovery_stress_development_parent_sha256",
+      "recovery_stress_evaluation_contract_sha256",
       "evaluation_protocol"
     ],
     "base_evaluation_training_seed_must_be_null": true,

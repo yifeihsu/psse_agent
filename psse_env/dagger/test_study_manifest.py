@@ -10,6 +10,7 @@ import pytest
 from psse_env.dagger.study_manifest import (
     DEFAULT_STUDY_MANIFEST,
     EXPECTED_DEVELOPMENT_EVALUATION_CONTRACT_SHA256,
+    EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256,
     EXPECTED_STUDY_MANIFEST_SHA256,
     REQUIRED_VARIANT_IDS,
     StudyManifestError,
@@ -969,6 +970,60 @@ def test_development_evaluation_binds_exact_30_root_holdout_separately() -> None
             {**development, "checkpoint_adapter_tree_sha256": "3" * 64},
             variant_id="natural_dagger",
             artifact_role="development_evaluation",
+            expected_source_commit=SOURCE_COMMIT,
+            expected_training_seed=3408,
+        )
+
+
+def test_recovery_stress_evaluation_binds_exact_70_episode_protocol() -> None:
+    manifest = _manifest()
+    stress = {
+        "artifact_role": "recovery_stress_evaluation",
+        "variant_id": "natural_dagger",
+        "study_manifest_sha256": EXPECTED_STUDY_MANIFEST_SHA256,
+        "reviewed_source_commit": SOURCE_COMMIT,
+        "model_id": "/scratch/checkpoints/natural-seed3408",
+        "model_revision": TREE_REVISION,
+        "checkpoint_receipt_id": "2" * 64,
+        "checkpoint_adapter_tree_sha256": TREE_REVISION,
+        "training_seed": 3408,
+        "recovery_stress_suite_sha256": "1" * 64,
+        "recovery_stress_manifest_sha256": "2" * 64,
+        "recovery_stress_provenance_id": "3" * 64,
+        "recovery_stress_root_set_sha256": "4" * 64,
+        "recovery_stress_physical_roots": 20,
+        "recovery_stress_episode_count": 70,
+        "recovery_stress_development_parent_sha256": "5" * 64,
+        "recovery_stress_evaluation_contract_sha256": (
+            EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256
+        ),
+        "evaluation_protocol": "preregistered_recovery_stress_test",
+    }
+
+    assert validate_study_artifact_binding(
+        manifest,
+        stress,
+        variant_id="natural_dagger",
+        artifact_role="recovery_stress_evaluation",
+        expected_source_commit=SOURCE_COMMIT,
+        expected_training_seed=3408,
+    )["passed"]
+
+    with pytest.raises(StudyManifestError, match="exactly 70"):
+        validate_study_artifact_binding(
+            manifest,
+            {**stress, "recovery_stress_episode_count": 69},
+            variant_id="natural_dagger",
+            artifact_role="recovery_stress_evaluation",
+            expected_source_commit=SOURCE_COMMIT,
+            expected_training_seed=3408,
+        )
+    with pytest.raises(StudyManifestError, match="not preregistered"):
+        validate_study_artifact_binding(
+            manifest,
+            {**stress, "evaluation_protocol": "diagnostic_model_selection_only"},
+            variant_id="natural_dagger",
+            artifact_role="recovery_stress_evaluation",
             expected_source_commit=SOURCE_COMMIT,
             expected_training_seed=3408,
         )

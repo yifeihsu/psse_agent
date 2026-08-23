@@ -56,6 +56,16 @@ class ReleaseEvaluationLauncherTests(unittest.TestCase):
             "--required-suite dagger1_development",
             "--minimum-roots-per-suite 30",
             "--diagnostic-only",
+            "RECOVERY_STRESS_SUITE=${RECOVERY_STRESS_SUITE:-}",
+            "RECOVERY_STRESS_MANIFEST=${RECOVERY_STRESS_MANIFEST:-}",
+            "--seed 20260723",
+            "--required-suite recovery_post_failure_no_candidate",
+            "--required-suite recovery_unsupported_correction",
+            "--minimum-suites 7",
+            "--minimum-episodes-per-suite 10",
+            "--minimum-roots-per-suite 10",
+            '--recovery-stress-manifest "$RECOVERY_STRESS_MANIFEST"',
+            '"recovery_stress": "recovery_stress_evaluation"',
         ):
             self.assertIn(contract, self.launcher)
 
@@ -144,6 +154,25 @@ class ReleaseEvaluationLauncherTests(unittest.TestCase):
         self.assertIn(
             "development scope requires",
             missing_development_inputs.stderr.decode("utf-8"),
+        )
+
+        missing_recovery_inputs = subprocess.run(
+            ["bash", "-s"],
+            cwd=launcher_path.parent,
+            env=os.environ,
+            input=(
+                "EVALUATION_MODE=base\n"
+                "EVALUATION_SCOPE=recovery_stress\n"
+                f"REVIEWED_SOURCE_COMMIT={'a' * 40}\n"
+                + self.launcher
+            ).encode("utf-8"),
+            check=False,
+            capture_output=True,
+        )
+        self.assertEqual(missing_recovery_inputs.returncode, 2)
+        self.assertIn(
+            "recovery-stress scope requires",
+            missing_recovery_inputs.stderr.decode("utf-8"),
         )
 
     def test_invalid_mode_and_missing_reviewed_commit_fail_before_hpc_setup(self) -> None:

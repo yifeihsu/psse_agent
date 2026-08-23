@@ -20,6 +20,7 @@ from psse_env.actions import (
     CORRECT_PARAMETERS,
     FINALIZE_DIAGNOSIS,
     GET_HARMONIC_CONTEXT,
+    GET_MEASUREMENT_CONTEXT,
     INVALID_ACTION,
     POST_CORRECTION_CONFIRMATION_SIGNATURE,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
@@ -30,6 +31,7 @@ from psse_env.actions import (
 )
 from psse_env.dagger.evaluator import (
     ClosedLoopRolloutEvaluator,
+    RECOVERY_STRESS_SUITES,
     STUDY_EVALUATION_SCHEMA_VERSION,
     _runtime_environment_descriptor,
     build_evaluation_provenance,
@@ -735,6 +737,215 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                 )
                 self.assertFalse(first_history["tool_output"]["state_mutated"])
                 self.assertNotIn("evaluation_intervention", json.dumps(observations))
+
+    def test_recovery_stress_failed_actions_create_exact_first_opportunities(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "recovery_post_failure_no_candidate",
+                "post_failure_no_candidate",
+                {"tool": RUN_WLS, "arguments": {"state_id": "$active"}},
+                "injected_transient_tool_failure",
+            ),
+            (
+                "recovery_unsupported_correction",
+                "unsupported_correction_recovery",
+                {
+                    "tool": CORRECT_MEASUREMENTS,
+                    "arguments": {
+                        "state_id": "$active",
+                        "suspect_group": [0],
+                    },
+                },
+                "correction_not_supported_by_current_context",
+            ),
+            (
+                "recovery_premature_commit",
+                "premature_commit_recovery",
+                {
+                    "tool": COMMIT_STATE,
+                    "arguments": {
+                        "candidate_state_id": "stress-missing-candidate"
+                    },
+                },
+                "candidate_lifecycle_violation",
+            ),
+            (
+                "recovery_premature_escalation",
+                "premature_escalation_recovery",
+                {
+                    "tool": ASK_FOR_MORE_EVIDENCE,
+                    "arguments": {
+                        "state_id": "$active",
+                        "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                    },
+                },
+                "operator_escalation_precondition_not_met",
+            ),
+        )
+        for suite, stratum, action, error_code in cases:
+            with self.subTest(suite=suite):
+                scenario = _partitioned_resolved_scenario()
+                scenario["execution"]["script"] = copy.deepcopy(
+                    _resolved_scenario()["script"][1:]
+                )
+                scenario["audit"]["evaluation_intervention"] = {
+                    "intervention_schema_version": 1,
+                    "kind": "failed_policy_action",
+                    "action": action,
+                    "error_code": error_code,
+                }
+                observations: list[dict[str, Any]] = []
+                result = evaluate_rollout_suites(
+                    {suite: [scenario]},
+                    env_factory=_ScriptEnv,
+                    policy_factory=lambda: _ScriptPolicy(observations),
+                    max_steps=8,
+                )
+                episode = result.suite_metrics["episodes"][0]
+                evidence = episode["evaluation_intervention"]
+                self.assertEqual(evidence["pre_policy_step_count"], 1)
+                self.assertEqual(evidence["injected_failure_count"], 1)
+                self.assertEqual(evidence["injected_invalid_action_count"], 0)
+                self.assertEqual(episode["trace"][0]["action"]["tool"], action["tool"])
+                self.assertEqual(episode["trace"][0]["error_code"], error_code)
+                self.assertEqual(
+                    episode["trace"][1]["objective_action_assessment"][
+                        "recovery_stratum"
+                    ],
+                    stratum,
+                )
+                self.assertNotIn(
+                    "evaluation_intervention", json.dumps(observations)
+                )
+                evidence_failures, _ = _intervention_failures(
+                    episode,
+                    episode["evaluation_intervention"]["contract"],
+                )
+                self.assertEqual(evidence_failures, [])
+
+    def test_recovery_stress_rejected_candidate_is_real_and_left_open(self) -> None:
+        scenario = _partitioned_resolved_scenario()
+        scenario["audit"]["evaluation_intervention"] = {
+            "intervention_schema_version": 1,
+            "kind": "open_rejected_candidate",
+            "setup_actions": [
+                {
+                    "tool": GET_MEASUREMENT_CONTEXT,
+                    "arguments": {"state_id": "$active"},
+                },
+                {
+                    "tool": CORRECT_MEASUREMENTS,
+                    "arguments": {
+                        "state_id": "$active",
+                        "measurement_updates": {"7": 20.0},
+                    },
+                },
+                {"tool": RUN_WLS, "arguments": {"state_id": "$candidate"}},
+            ],
+            "required_disposition": "REJECT",
+        }
+        scenario["execution"]["script"] = [
+            {"phase": "unused-context", "remaining": 2},
+            {"phase": "unused-correction", "remaining": 2},
+            {
+                "phase": "unused-verification",
+                "candidate_state_id": "candidate-1",
+                "disposition": "REJECT",
+                "remaining": 2,
+            },
+            {
+                "phase": "wls",
+                "candidate_state_id": "candidate-1",
+                "disposition": "REJECT",
+                "remaining": 2,
+            },
+        ]
+        observations: list[dict[str, Any]] = []
+        result = evaluate_rollout_suites(
+            {"recovery_rejected_candidate_rollback": [scenario]},
+            env_factory=_PartialSetupEnv,
+            policy_factory=lambda: _ScriptPolicy(observations),
+            max_steps=1,
+        )
+        episode = result.suite_metrics["episodes"][0]
+        self.assertEqual(
+            episode["evaluation_intervention"]["pre_policy_step_count"], 3
+        )
+        self.assertEqual(episode["policy_steps"], 1)
+        self.assertEqual(
+            [row["action"]["tool"] for row in episode["trace"][:3]],
+            [GET_MEASUREMENT_CONTEXT, CORRECT_MEASUREMENTS, RUN_WLS],
+        )
+        self.assertEqual(
+            episode["trace"][2]["candidate_disposition_offline"], "REJECT"
+        )
+        self.assertEqual(observations[0]["candidate_state_id"], "candidate-1")
+        self.assertNotIn("required_disposition", json.dumps(observations))
+        evidence_failures, _ = _intervention_failures(
+            episode,
+            episode["evaluation_intervention"]["contract"],
+        )
+        self.assertEqual(evidence_failures, [])
+
+    def test_sequential_handoff_bridge_is_not_counted_as_partial_retention(
+        self,
+    ) -> None:
+        scenario = _partial_retention_scenario()
+        scenario["audit"]["evaluation_intervention"]["kind"] = (
+            "committed_partial_correction_with_observable_bridge"
+        )
+        scenario["audit"]["evaluation_intervention"]["setup_actions"].append(
+            {
+                "tool": GET_MEASUREMENT_CONTEXT,
+                "arguments": {"state_id": "$active"},
+            }
+        )
+        scenario["execution"]["script"] = [
+            *scenario["execution"]["script"][:4],
+            {"phase": "unused-bridge", "remaining": 1},
+            {"phase": "finalize", "remaining": 0, "terminal_outcome": "resolved"},
+        ]
+        observations: list[dict[str, Any]] = []
+        result = evaluate_rollout_suites(
+            {"recovery_measurement_parameter_sequential_handoff": [scenario]},
+            env_factory=_PartialSetupEnv,
+            policy_factory=lambda: _ScriptPolicy(observations),
+            max_steps=1,
+        )
+        evidence = result.suite_metrics["episodes"][0][
+            "evaluation_intervention"
+        ]
+        self.assertEqual(evidence["pre_policy_step_count"], 5)
+        self.assertEqual(evidence["retention_opportunity_count"], 0)
+        self.assertEqual(len(observations[0]["history_window"]), 4)
+        self.assertEqual(
+            observations[0]["history_window"][-1]["action"]["tool"],
+            GET_MEASUREMENT_CONTEXT,
+        )
+        episode = result.suite_metrics["episodes"][0]
+        evidence_failures, _ = _intervention_failures(
+            episode,
+            episode["evaluation_intervention"]["contract"],
+        )
+        self.assertEqual(evidence_failures, [])
+
+    def test_recovery_stress_mode_requires_all_seven_suites(self) -> None:
+        evaluator = ClosedLoopRolloutEvaluator(
+            env_factory=_ScriptEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+            required_suites=RECOVERY_STRESS_SUITES,
+            recovery_stress_mode=True,
+        )
+        with self.assertRaisesRegex(ValueError, "seven canonical"):
+            evaluator.evaluate(
+                {
+                    "recovery_post_failure_no_candidate": [
+                        _partitioned_resolved_scenario()
+                    ]
+                }
+            )
 
     def test_partial_retention_intervention_requires_a_real_committed_setup(self) -> None:
         observations: list[dict[str, Any]] = []

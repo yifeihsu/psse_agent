@@ -19,9 +19,10 @@
 # for example --gres=gpu:0 --constraint= to skip the GPU allocation):
 #   sbatch --export=ALL,REVIEWED_SOURCE_COMMIT=<freeze-commit>,EVALUATION_MODE=expert \
 #     submit_dagger_release_eval.sh
-# Step 5 (persist the pinned base baseline; add
-# EVALUATION_SCOPE=development_holdout and the three DEVELOPMENT_HOLDOUT_*
-# inputs to materialize the diagnostic study scope instead):
+# Step 5 (persist the pinned base baseline; select development_holdout with the
+# three DEVELOPMENT_HOLDOUT_* inputs for the diagnostic scope, or select
+# recovery_stress with RECOVERY_STRESS_SUITE and RECOVERY_STRESS_MANIFEST for
+# the preregistered root-disjoint recovery scope):
 #   sbatch --constraint=rtx6000 --cpus-per-task=4 --mem=128G \
 #     --export=ALL,EXPECTED_ACCELERATOR_CLASS=rtx6000,REVIEWED_SOURCE_COMMIT=<freeze-commit>,EVALUATION_MODE=base \
 #     submit_dagger_release_eval.sh
@@ -45,6 +46,8 @@ EXPECTED_ACCELERATOR_CLASS=${EXPECTED_ACCELERATOR_CLASS:-auto}
 FROZEN_EVALUATION_SUITE=${EVALUATION_SUITE:-psse_env/dagger/suites/bc0_eval_suite_v1.json}
 EVALUATION_POLICY=${EVALUATION_POLICY:-psse_env/dagger/bc0_evaluation_policy.json}
 STUDY_MANIFEST=${STUDY_MANIFEST:-psse_env/dagger/studies/dagger_multiseed_study_v1.json}
+RECOVERY_STRESS_SUITE=${RECOVERY_STRESS_SUITE:-}
+RECOVERY_STRESS_MANIFEST=${RECOVERY_STRESS_MANIFEST:-}
 STUDY_VARIANT=${STUDY_VARIANT:-}
 TRAIN_SEED=${TRAIN_SEED:-}
 CHECKPOINT_RECEIPT=${CHECKPOINT_RECEIPT:-}
@@ -53,6 +56,7 @@ DEVELOPMENT_HOLDOUT_MANIFEST=${DEVELOPMENT_HOLDOUT_MANIFEST:-}
 DEVELOPMENT_HOLDOUT_GENERATOR_REPORT=${DEVELOPMENT_HOLDOUT_GENERATOR_REPORT:-}
 BASE_EVALUATION_ARTIFACT=artifacts/evaluations/base_gemma_evaluation.json
 BASE_DEVELOPMENT_ARTIFACT=artifacts/evaluations/development_base_gemma_evaluation.json
+BASE_RECOVERY_STRESS_ARTIFACT=artifacts/evaluations/recovery_stress_base_gemma_evaluation.json
 CHECKPOINT_PATH=${CHECKPOINT_PATH:-}
 CHECKPOINT_REVISION=${CHECKPOINT_REVISION:-}
 REVIEWED_SOURCE_COMMIT=${REVIEWED_SOURCE_COMMIT:-}
@@ -79,9 +83,9 @@ case "$EVALUATION_MODE" in
         ;;
 esac
 case "$EVALUATION_SCOPE" in
-    frozen_suite|development_holdout) ;;
+    frozen_suite|development_holdout|recovery_stress) ;;
     *)
-        echo "ERROR: EVALUATION_SCOPE must be frozen_suite or development_holdout; got '$EVALUATION_SCOPE'." >&2
+        echo "ERROR: EVALUATION_SCOPE must be frozen_suite, development_holdout, or recovery_stress; got '$EVALUATION_SCOPE'." >&2
         exit 2
         ;;
 esac
@@ -97,7 +101,7 @@ if [[ -z "$STUDY_MANIFEST" ]]; then
     exit 2
 fi
 if [[ "$EVALUATION_MODE" == "expert" && "$EVALUATION_SCOPE" != "frozen_suite" ]]; then
-    echo "ERROR: the non-model expert baseline has no development study role." >&2
+    echo "ERROR: the non-model expert baseline has no development or recovery-stress study role." >&2
     exit 2
 fi
 if [[ "$EVALUATION_MODE" != "checkpoint" && ( -n "$CHECKPOINT_PATH" || -n "$CHECKPOINT_REVISION" ) ]]; then
@@ -154,10 +158,24 @@ if [[ "$EVALUATION_SCOPE" == "development_holdout" ]]; then
         echo "ERROR: development scope requires DEVELOPMENT_HOLDOUT, DEVELOPMENT_HOLDOUT_MANIFEST, and DEVELOPMENT_HOLDOUT_GENERATOR_REPORT." >&2
         exit 2
     fi
+    if [[ -n "$RECOVERY_STRESS_SUITE" || -n "$RECOVERY_STRESS_MANIFEST" ]]; then
+        echo "ERROR: recovery-stress inputs require EVALUATION_SCOPE=recovery_stress." >&2
+        exit 2
+    fi
     EVALUATION_SUITE=$DEVELOPMENT_HOLDOUT
-else
+elif [[ "$EVALUATION_SCOPE" == "recovery_stress" ]]; then
+    if [[ -z "$RECOVERY_STRESS_SUITE" || -z "$RECOVERY_STRESS_MANIFEST" ]]; then
+        echo "ERROR: recovery-stress scope requires RECOVERY_STRESS_SUITE and RECOVERY_STRESS_MANIFEST." >&2
+        exit 2
+    fi
     if [[ -n "$DEVELOPMENT_HOLDOUT" || -n "$DEVELOPMENT_HOLDOUT_MANIFEST" || -n "$DEVELOPMENT_HOLDOUT_GENERATOR_REPORT" ]]; then
         echo "ERROR: development holdout inputs require EVALUATION_SCOPE=development_holdout." >&2
+        exit 2
+    fi
+    EVALUATION_SUITE=$RECOVERY_STRESS_SUITE
+else
+    if [[ -n "$DEVELOPMENT_HOLDOUT" || -n "$DEVELOPMENT_HOLDOUT_MANIFEST" || -n "$DEVELOPMENT_HOLDOUT_GENERATOR_REPORT" || -n "$RECOVERY_STRESS_SUITE" || -n "$RECOVERY_STRESS_MANIFEST" ]]; then
+        echo "ERROR: development/recovery inputs do not belong to frozen_suite scope." >&2
         exit 2
     fi
     EVALUATION_SUITE=$FROZEN_EVALUATION_SUITE
@@ -207,6 +225,8 @@ if [[ "$EVALUATION_SCOPE" == "development_holdout" ]]; then
         "$DEVELOPMENT_HOLDOUT_MANIFEST"
         "$DEVELOPMENT_HOLDOUT_GENERATOR_REPORT"
     )
+elif [[ "$EVALUATION_SCOPE" == "recovery_stress" ]]; then
+    REQUIRED_INPUTS+=("$RECOVERY_STRESS_MANIFEST")
 fi
 if [[ "$EVALUATION_MODE" == "checkpoint" ]]; then
     REQUIRED_INPUTS+=("$CHECKPOINT_RECEIPT")
@@ -346,6 +366,8 @@ elif [[ "$EVALUATION_MODE" == "base" ]]; then
     ROLE=base-baseline
     if [[ "$EVALUATION_SCOPE" == "development_holdout" ]]; then
         EVALUATION_ARTIFACT=$BASE_DEVELOPMENT_ARTIFACT
+    elif [[ "$EVALUATION_SCOPE" == "recovery_stress" ]]; then
+        EVALUATION_ARTIFACT=$BASE_RECOVERY_STRESS_ARTIFACT
     else
         EVALUATION_ARTIFACT=$BASE_EVALUATION_ARTIFACT
     fi
@@ -389,6 +411,9 @@ PY
     if [[ "$EVALUATION_SCOPE" == "development_holdout" ]]; then
         EVALUATION_ARTIFACT=artifacts/evaluations/development_${STUDY_VARIANT}_seed${TRAIN_SEED}_${MODEL_REVISION}.json
         BASE_REFERENCE_ARTIFACT=$BASE_DEVELOPMENT_ARTIFACT
+    elif [[ "$EVALUATION_SCOPE" == "recovery_stress" ]]; then
+        EVALUATION_ARTIFACT=artifacts/evaluations/recovery_stress_${STUDY_VARIANT}_seed${TRAIN_SEED}_${MODEL_REVISION}.json
+        BASE_REFERENCE_ARTIFACT=$BASE_RECOVERY_STRESS_ARTIFACT
     else
         EVALUATION_ARTIFACT=artifacts/evaluations/checkpoint_${MODEL_REVISION}.json
         BASE_REFERENCE_ARTIFACT=$BASE_EVALUATION_ARTIFACT
@@ -399,7 +424,7 @@ PY
     fi
 fi
 GATE_REPORT=${EVALUATION_ARTIFACT}.gate.json
-if [[ "$EVALUATION_SCOPE" == "development_holdout" ]]; then
+if [[ "$EVALUATION_SCOPE" == "development_holdout" || "$EVALUATION_SCOPE" == "recovery_stress" ]]; then
     GATE_REPORT=${EVALUATION_ARTIFACT}.study.json
 fi
 REFERENCE_ARTIFACT=${BASE_REFERENCE_ARTIFACT:-$BASE_EVALUATION_ARTIFACT}
@@ -409,7 +434,8 @@ PATH_AUDIT=(
     "$GATE_REPORT" "$EVALUATION_SUITE" "$EVALUATION_POLICY"
     psse_env/requirements-sft.txt psse_env/dagger/release_factories.py
     "$STUDY_MANIFEST" "$DEVELOPMENT_HOLDOUT_MANIFEST"
-    "$DEVELOPMENT_HOLDOUT_GENERATOR_REPORT" "$CHECKPOINT_RECEIPT"
+    "$DEVELOPMENT_HOLDOUT_GENERATOR_REPORT" "$RECOVERY_STRESS_MANIFEST"
+    "$CHECKPOINT_RECEIPT"
     "$REFERENCE_ARTIFACT" "$CHECKPOINT_PATH"
 )
 "${PATH_AUDIT[@]}" <<'PY'
@@ -429,6 +455,7 @@ from psse_env.dagger.release_launcher import validate_release_evaluation_paths
     study_manifest,
     development_manifest,
     development_generator_report,
+    recovery_stress_manifest,
     checkpoint_receipt,
     reference,
     checkpoint,
@@ -440,6 +467,7 @@ protected.extend(
         study_manifest,
         development_manifest,
         development_generator_report,
+        recovery_stress_manifest,
         checkpoint_receipt,
     )
     if value
@@ -477,6 +505,22 @@ if [[ "$EVALUATION_SCOPE" == "development_holdout" ]]; then
         --minimum-roots-per-suite 30
         --development-holdout-manifest "$DEVELOPMENT_HOLDOUT_MANIFEST"
         --development-holdout-generator-report "$DEVELOPMENT_HOLDOUT_GENERATOR_REPORT"
+    )
+elif [[ "$EVALUATION_SCOPE" == "recovery_stress" ]]; then
+    EVALUATE+=(
+        --seed 20260723
+        --max-steps 24
+        --required-suite recovery_measurement_parameter_sequential_handoff
+        --required-suite recovery_post_failure_no_candidate
+        --required-suite recovery_premature_commit
+        --required-suite recovery_premature_escalation
+        --required-suite recovery_rejected_candidate_rollback
+        --required-suite recovery_safe_continuation_after_partial_success
+        --required-suite recovery_unsupported_correction
+        --minimum-suites 7
+        --minimum-episodes-per-suite 10
+        --minimum-roots-per-suite 10
+        --recovery-stress-manifest "$RECOVERY_STRESS_MANIFEST"
     )
 else
     EVALUATE+=(
@@ -549,10 +593,11 @@ printf 'evaluate command:'
 printf ' %q' "${EVALUATE[@]}"
 printf '\n'
 "${EVALUATE[@]}"
-if [[ "$EVALUATION_SCOPE" == "development_holdout" ]]; then
+if [[ "$EVALUATION_SCOPE" == "development_holdout" || "$EVALUATION_SCOPE" == "recovery_stress" ]]; then
     STUDY_SEED=${TRAIN_SEED:-null}
     "$PYTHON" - "$EVALUATION_ARTIFACT" "$STUDY_MANIFEST" \
-        "$STUDY_VARIANT" "$STUDY_SEED" "$SOURCE_COMMIT" "$GATE_REPORT" <<'PY'
+        "$STUDY_VARIANT" "$STUDY_SEED" "$SOURCE_COMMIT" "$GATE_REPORT" \
+        "$EVALUATION_SCOPE" <<'PY'
 import json
 import os
 from pathlib import Path
@@ -566,17 +611,23 @@ artifact_path = Path(sys.argv[1])
 manifest = load_study_manifest(sys.argv[2])
 variant = sys.argv[3]
 seed = None if sys.argv[4] == "null" else int(sys.argv[4])
+scope = sys.argv[7]
+artifact_role = {
+    "development_holdout": "development_evaluation",
+    "recovery_stress": "recovery_stress_evaluation",
+}[scope]
 metrics = extract_artifact_metrics(
     artifact_path,
     variant_id=variant,
     study_seed=seed,
-    evaluation_scope="development_holdout",
+    evaluation_scope=scope,
     study_manifest=manifest,
     expected_source_commit=sys.argv[5],
 )
 report = {
     "contract": "dagger_study_evaluation_ingestion_report_v1",
-    "artifact_role": "development_evaluation",
+    "artifact_role": artifact_role,
+    "evaluation_scope": scope,
     "variant_id": variant,
     "training_seed": seed,
     "study_manifest_sha256": manifest["manifest_sha256"],

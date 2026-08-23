@@ -25,10 +25,10 @@ DEFAULT_STUDY_MANIFEST = (
 # Updated only through explicit protocol review.  This pins the raw LF-normalized
 # bytes; .gitattributes preserves that representation on Windows and Linux.
 EXPECTED_STUDY_MANIFEST_SHA256 = (
-    "1e5447f3b857fee07aed251bd85b99cec06068dea1b40945c6e3567b5ba55e4c"
+    "3b3a59b79e39544c5faa6aa20512511e69fc28b49d533101d6a2b991c9ae2696"
 )
 EXPECTED_STUDY_MANIFEST_CONTENT_SHA256 = (
-    "91cfbeb2e245f6d3b1b3ebd85efba28fdae896c54ed20e10099609a6fb570f41"
+    "5c19d2430f19d5742302b43d38d626b1f8b083493c57bc0b288cf3258fd3371f"
 )
 EXPECTED_COMPARISON_POLICY_SHA256 = (
     "9763dc426de33e328a06cd5abfb4f5788a05ef91fac6cb4113e30680f8c2c550"
@@ -82,6 +82,39 @@ _CANONICAL_DEVELOPMENT_EVALUATION_CONTRACT = {
     "exact_physical_roots": 30,
     "protocol": "canonical",
     "release_qualification_allowed": False,
+}
+RECOVERY_STRESS_EVALUATION_PROTOCOL_CONTRACT = (
+    "dagger_recovery_stress_evaluation_protocol_v1"
+)
+EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256 = (
+    "4a65b9950ef273d5ca5b4c1fc80e0b4831880bc53b327940688eb7fe3cfb9a19"
+)
+_RECOVERY_STRESS_SUITE_NAMES = (
+    "recovery_measurement_parameter_sequential_handoff",
+    "recovery_post_failure_no_candidate",
+    "recovery_premature_commit",
+    "recovery_premature_escalation",
+    "recovery_rejected_candidate_rollback",
+    "recovery_safe_continuation_after_partial_success",
+    "recovery_unsupported_correction",
+)
+_CANONICAL_RECOVERY_STRESS_EVALUATION_CONTRACT = {
+    "contract": RECOVERY_STRESS_EVALUATION_PROTOCOL_CONTRACT,
+    "evaluation_protocol": "preregistered_recovery_stress_test",
+    "diagnostic_only": False,
+    "input_suite_names": list(_RECOVERY_STRESS_SUITE_NAMES),
+    "evaluator_seed": 20260723,
+    "max_steps": 24,
+    "required_suites": list(_RECOVERY_STRESS_SUITE_NAMES),
+    "minimum_suites": 7,
+    "minimum_episodes_per_suite": 10,
+    "minimum_roots_per_suite": 10,
+    "exact_episode_count": 70,
+    "exact_physical_roots": 20,
+    "development_parent_subset_required": True,
+    "zero_training_probe_frozen_overlap_required": True,
+    "protocol": "canonical",
+    "release_qualification_allowed": True,
 }
 
 REQUIRED_VARIANT_IDS = (
@@ -236,6 +269,26 @@ def canonical_development_evaluation_contract() -> dict[str, Any]:
     if _content_sha256(contract) != EXPECTED_DEVELOPMENT_EVALUATION_CONTRACT_SHA256:
         raise StudyManifestError(
             "internal development evaluator contract digest is inconsistent"
+        )
+    return contract
+
+
+def canonical_recovery_stress_evaluation_contract() -> dict[str, Any]:
+    """Return the sole preregistered recovery-stress configuration."""
+
+    contract = json.loads(
+        json.dumps(
+            _CANONICAL_RECOVERY_STRESS_EVALUATION_CONTRACT,
+            sort_keys=True,
+            allow_nan=False,
+        )
+    )
+    if (
+        _content_sha256(contract)
+        != EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256
+    ):
+        raise StudyManifestError(
+            "internal recovery-stress evaluator contract digest is inconsistent"
         )
     return contract
 
@@ -630,9 +683,18 @@ def validate_study_manifest(
                 f"{expected_initialization!r}"
             )
         expected_roles = (
-            ("development_evaluation", "evaluation")
+            (
+                "development_evaluation",
+                "evaluation",
+                "recovery_stress_evaluation",
+            )
             if variant_id == "base"
-            else ("checkpoint", "development_evaluation", "evaluation")
+            else (
+                "checkpoint",
+                "development_evaluation",
+                "evaluation",
+                "recovery_stress_evaluation",
+            )
         )
         _require_exact_sequence(
             variant.get("required_artifact_roles"),
@@ -664,6 +726,7 @@ def validate_study_manifest(
         "base_model",
         "evaluation",
         "development_evaluation",
+        "recovery_stress_evaluation",
     }:
         raise StudyManifestError("study bindings fields are not exact")
     source = _mapping(bindings.get("source"), field="bindings.source")
@@ -772,6 +835,23 @@ def validate_study_manifest(
             "bindings.development_evaluation differs from the exact "
             "preregistered evaluator contract"
         )
+    recovery_stress_evaluation = _mapping(
+        bindings.get("recovery_stress_evaluation"),
+        field="bindings.recovery_stress_evaluation",
+    )
+    canonical_recovery_stress = (
+        canonical_recovery_stress_evaluation_contract()
+    )
+    if (
+        set(recovery_stress_evaluation) != set(canonical_recovery_stress)
+        or _content_sha256(recovery_stress_evaluation)
+        != EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256
+        or dict(recovery_stress_evaluation) != canonical_recovery_stress
+    ):
+        raise StudyManifestError(
+            "bindings.recovery_stress_evaluation differs from the exact "
+            "preregistered evaluator contract"
+        )
 
     if verify_bound_files:
         root = Path(repo_root) if repo_root is not None else _repo_root()
@@ -830,6 +910,17 @@ def validate_study_manifest(
             ),
         )
     )
+    recovery_stress_evaluation_fields = set(
+        _sequence(
+            artifact_policy.get(
+                "recovery_stress_evaluation_required_fields"
+            ),
+            field=(
+                "artifact_binding_policy."
+                "recovery_stress_evaluation_required_fields"
+            ),
+        )
+    )
     if not {
         "artifact_schema_version",
         "artifact_role",
@@ -883,6 +974,29 @@ def validate_study_manifest(
     }.issubset(development_evaluation_fields):
         raise StudyManifestError(
             "development evaluation artifact binding fields are incomplete"
+        )
+    if not {
+        "artifact_role",
+        "variant_id",
+        "study_manifest_sha256",
+        "reviewed_source_commit",
+        "model_id",
+        "model_revision",
+        "checkpoint_receipt_id",
+        "checkpoint_adapter_tree_sha256",
+        "training_seed",
+        "recovery_stress_suite_sha256",
+        "recovery_stress_manifest_sha256",
+        "recovery_stress_provenance_id",
+        "recovery_stress_root_set_sha256",
+        "recovery_stress_physical_roots",
+        "recovery_stress_episode_count",
+        "recovery_stress_development_parent_sha256",
+        "recovery_stress_evaluation_contract_sha256",
+        "evaluation_protocol",
+    }.issubset(recovery_stress_evaluation_fields):
+        raise StudyManifestError(
+            "recovery-stress evaluation artifact binding fields are incomplete"
         )
     if artifact_policy.get("base_evaluation_training_seed_must_be_null") is not True:
         raise StudyManifestError("base evaluation must not claim a training seed")
@@ -1067,6 +1181,9 @@ def validate_study_manifest(
         "development_evaluation_contract_sha256": (
             EXPECTED_DEVELOPMENT_EVALUATION_CONTRACT_SHA256
         ),
+        "recovery_stress_evaluation_contract_sha256": (
+            EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256
+        ),
     }
 
 
@@ -1131,9 +1248,11 @@ def validate_study_artifact_binding(
         "checkpoint",
         "development_evaluation",
         "evaluation",
+        "recovery_stress_evaluation",
     }:
         raise StudyManifestError(
-            "artifact_role must be checkpoint, development_evaluation, or evaluation"
+            "artifact_role must be checkpoint, development_evaluation, "
+            "evaluation, or recovery_stress_evaluation"
         )
     variants = {
         str(item["variant_id"]): item
@@ -1420,7 +1539,7 @@ def validate_study_artifact_binding(
                 )
             if artifact.get("evaluation_policy_sha256") != evaluation["policy_sha256"]:
                 raise StudyManifestError("evaluation artifact uses a different policy")
-        else:
+        elif artifact_role == "development_evaluation":
             for hash_field in (
                 "development_holdout_sha256",
                 "development_holdout_provenance_id",
@@ -1451,6 +1570,55 @@ def validate_study_artifact_binding(
                 raise StudyManifestError(
                     "development evaluation protocol is not model-selection-only"
                 )
+        else:
+            for hash_field in (
+                "recovery_stress_suite_sha256",
+                "recovery_stress_manifest_sha256",
+                "recovery_stress_provenance_id",
+                "recovery_stress_root_set_sha256",
+                "recovery_stress_development_parent_sha256",
+            ):
+                if (
+                    _SHA256_RE.fullmatch(
+                        str(artifact.get(hash_field) or "")
+                    )
+                    is None
+                ):
+                    raise StudyManifestError(
+                        f"recovery-stress evaluation {hash_field} must be "
+                        "lowercase 64-hex"
+                    )
+            recovery_contract = (
+                canonical_recovery_stress_evaluation_contract()
+            )
+            if (
+                artifact.get(
+                    "recovery_stress_evaluation_contract_sha256"
+                )
+                != EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256
+            ):
+                raise StudyManifestError(
+                    "recovery-stress evaluation does not bind the exact "
+                    "preregistered evaluator contract"
+                )
+            if artifact.get("recovery_stress_physical_roots") != (
+                recovery_contract["exact_physical_roots"]
+            ):
+                raise StudyManifestError(
+                    "recovery-stress evaluation must bind exactly 20 physical roots"
+                )
+            if artifact.get("recovery_stress_episode_count") != (
+                recovery_contract["exact_episode_count"]
+            ):
+                raise StudyManifestError(
+                    "recovery-stress evaluation must bind exactly 70 episodes"
+                )
+            if artifact.get("evaluation_protocol") != recovery_contract[
+                "evaluation_protocol"
+            ]:
+                raise StudyManifestError(
+                    "recovery-stress evaluation protocol is not preregistered"
+                )
 
     return {
         "passed": True,
@@ -1468,6 +1636,7 @@ __all__ = [
     "EXPECTED_COMPARISON_POLICY_SHA256",
     "EXPECTED_DEVELOPMENT_EVALUATION_CONTRACT_SHA256",
     "EXPECTED_OBJECTIVE_THRESHOLDS_SHA256",
+    "EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256",
     "EXPECTED_STABILITY_SCOPE_POLICY_SHA256",
     "EXPECTED_STUDY_MANIFEST_SHA256",
     "EXPECTED_STUDY_MANIFEST_CONTENT_SHA256",
@@ -1476,6 +1645,7 @@ __all__ = [
     "PRODUCTION_D1_QUARANTINE_APPLICABLE_VARIANTS",
     "PRODUCTION_D1_QUARANTINE_AUDIT_REPORT_NAME",
     "PRODUCTION_D1_QUARANTINE_BINDING_CONTRACT",
+    "RECOVERY_STRESS_EVALUATION_PROTOCOL_CONTRACT",
     "REQUIRED_VARIANT_IDS",
     "STUDY_ID",
     "STUDY_MANIFEST_CONTRACT",
@@ -1489,6 +1659,7 @@ __all__ = [
     "build_production_d1_quarantine_binding",
     "build_training_protocol_binding",
     "canonical_development_evaluation_contract",
+    "canonical_recovery_stress_evaluation_contract",
     "canonical_production_d1_quarantine_binding",
     "canonical_training_rng_attestation",
     "load_study_manifest",

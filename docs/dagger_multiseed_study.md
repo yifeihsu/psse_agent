@@ -22,8 +22,9 @@ training seed; a DAgger seed may not warm-start from a different BC0 seed.
 
 The primary contrast is `natural_dagger_probes - bc0` on multi-error episode
 recovery rate. The required probe ablation is
-`natural_dagger_probes - natural_dagger`, paired by training seed. Each of the
-two targeted recovery-action accuracies must improve by a strictly positive
+`natural_dagger_probes - natural_dagger`, paired by training seed and evaluated
+only on the guaranteed recovery-stress opportunities. Each of the two
+probe-targeted recovery-action accuracies must improve by a strictly positive
 absolute amount. The unrelated nonregression guardrail is an explicit registry
 of unit-interval, higher-is-better diagnostic, physical, and recovery outcome
 rates; each may degrade by at most 0.02. Counts and evidence support, safety
@@ -31,12 +32,15 @@ counts, action-quality/efficiency summaries, identifiers, and threshold
 constants are excluded from that registry because their separately pinned hard
 rules govern them. Missing targeted or registry-required evidence fails closed.
 
-Every variant requires two distinct evaluation roles. `development_evaluation`
+Every variant requires three distinct evaluation roles. `development_evaluation`
 binds the same exact 30-root development-holdout content hash, provenance ID,
 and root-set hash under the diagnostic model-selection-only protocol.
-`evaluation` binds the untouched frozen suite and release policy. Both scopes
-are mandatory for stability reporting; frozen-suite evidence cannot substitute
-for a missing development artifact. Adapted evaluation artifacts additionally
+`evaluation` binds the untouched frozen suite and release policy.
+`recovery_stress_evaluation` binds a 70-episode, seven-stratum intervention
+suite and its generation manifest. Development and frozen are the two primary
+recovery/stability scopes; the stress scope is the sole source for the seven
+recovery-action thresholds, stress safety counts, and probe ablation. All three
+are mandatory and none can substitute for another. Adapted evaluation artifacts additionally
 bind the checkpoint receipt ID and require their model revision to equal the
 receipt's canonical adapter-tree SHA-256. Base evaluations record both
 checkpoint fields as null.
@@ -67,7 +71,9 @@ self-reference. Each future checkpoint and evaluation must therefore record:
 - checkpoint training-view provenance;
 - the exact source-gate-authenticated production-D1 quarantine summary,
   candidate/quarantine counts, and report hash (canonical null for BC0); and
-- the frozen suite and evaluation-policy hashes.
+- the frozen suite and evaluation-policy hashes; and
+- for recovery stress, the exact suite, manifest, provenance, development-parent,
+  and root-set hashes plus the fixed episode/root counts.
 
 `validate_study_artifact_binding` enforces those fields before a later
 comparison consumes an artifact. This contract does not fabricate any trained
@@ -117,6 +123,41 @@ study/checkpoint/holdout variables on `submit_dagger_release_eval.sh`. Frozen
 evaluation uses `EVALUATION_SCOPE=frozen_suite` (the default) and the manifest's
 pinned seed, suite, policy, and 24-step budget. Existing or symbolic-link study
 artifact paths are never replaced.
+
+Recovery stress is built only from a clean committed source tree after D0,
+natural D1, the development holdout, and observable probe artifacts have been
+regenerated and byte-bound:
+
+```bash
+python -m psse_env.dagger.build_dagger1_recovery_stress \
+  --development-holdout "$D1_DIR/development_holdout.json" \
+  --development-holdout-manifest "$D1_DIR/development_holdout.json.manifest.json" \
+  --development-holdout-generator-report "$D1_DIR/development_holdout.generator.json" \
+  --d0-aggregate-dir "$D0_DIR" \
+  --d1-training-scenarios "$D1_DIR/scenarios.json" \
+  --d1-training-manifest "$D1_DIR/scenarios.json.manifest.json" \
+  --recovery-probes "$D1_DIR/recovery_probes.jsonl" \
+  --recovery-probe-manifest "$D1_DIR/recovery_probes.manifest.json" \
+  --frozen-suite psse_env/dagger/suites/bc0_eval_suite_v1.json \
+  --output "$D1_DIR/recovery_stress.json"
+```
+
+The builder derives deterministic intervention states from 20 roots in the
+protected 30-root development parent. Those states are absent from the normal
+development rollout, and their roots have zero overlap with D0, natural D1,
+probe training, and frozen evaluation. It publishes exactly ten episodes in
+each of seven strata. Each candidate is executed through the production
+environment and independently classified by the observable expert from the
+post-intervention policy observation; no expected action is embedded in the
+model-visible scenario.
+
+Evaluate it through `submit_dagger_release_eval.sh` with
+`EVALUATION_SCOPE=recovery_stress`, `RECOVERY_STRESS_SUITE`, and
+`RECOVERY_STRESS_MANIFEST`, plus the same study/checkpoint variables used for
+the other scopes. The launcher pins seed `20260723`, 24 steps, all seven suite
+names, ten episodes and roots per suite, and writes a
+`recovery_stress_evaluation` ingestion report. Recovery stress is not
+diagnostic-only and cannot be supplied through the development-holdout path.
 
 Study evaluations are emitted as closed-loop schema v4. Each learner trace row
 persists the exact policy-visible observation and tool output, its observation

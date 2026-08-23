@@ -86,6 +86,9 @@ from psse_env.sft.release_hardware import normalize_accelerator_class
 STUDY_DEVELOPMENT_HOLDOUT_PROVENANCE_CONTRACT = (
     "dagger1_development_holdout_study_provenance_v1"
 )
+STUDY_RECOVERY_STRESS_PROVENANCE_CONTRACT = (
+    "dagger1_recovery_stress_study_provenance_v1"
+)
 STUDY_OBJECTIVE_EPISODE_EVIDENCE_CONTRACT = (
     "dagger_study_objective_episode_evidence_v1"
 )
@@ -268,6 +271,27 @@ EVALUATION_SUITES = (
 )
 _DIAGNOSTIC_DEVELOPMENT_SUITE = "dagger1_development"
 
+# The recovery-stress suites are a third, root-disjoint evaluation scope.  They
+# are intentionally separate from both the immutable 115-root frozen suite and
+# the 30-root development holdout.  Each suite creates exactly one observable
+# recovery opportunity before the first policy action; the objective action is
+# still selected independently from the resulting PolicyObservation.
+RECOVERY_STRESS_SUITE_TO_STRATUM = {
+    "recovery_post_failure_no_candidate": "post_failure_no_candidate",
+    "recovery_unsupported_correction": "unsupported_correction_recovery",
+    "recovery_premature_commit": "premature_commit_recovery",
+    "recovery_premature_escalation": "premature_escalation_recovery",
+    "recovery_rejected_candidate_rollback": "rejected_candidate_rollback",
+    "recovery_safe_continuation_after_partial_success": (
+        "safe_continuation_after_partial_success"
+    ),
+    "recovery_measurement_parameter_sequential_handoff": (
+        "measurement_parameter_sequential_handoff"
+    ),
+}
+RECOVERY_STRESS_SUITES = tuple(RECOVERY_STRESS_SUITE_TO_STRATUM)
+_DIAGNOSTIC_RECOVERY_STRESS_SUITE_SET = frozenset(RECOVERY_STRESS_SUITES)
+
 
 PhysicalAudit = Callable[[Mapping[str, Any]], Mapping[str, Any] | bool]
 ToolCostResolver = Callable[[Mapping[str, Any]], Mapping[str, Any] | None]
@@ -444,6 +468,17 @@ _EXPECTED_INTERVENTION_KIND = {
     "partial_success_retention": "committed_partial_correction",
     "invalid_action_recovery": "pre_policy_failure",
     "efficiency": "efficiency_budget",
+    "recovery_post_failure_no_candidate": "failed_policy_action",
+    "recovery_unsupported_correction": "failed_policy_action",
+    "recovery_premature_commit": "failed_policy_action",
+    "recovery_premature_escalation": "failed_policy_action",
+    "recovery_rejected_candidate_rollback": "open_rejected_candidate",
+    "recovery_safe_continuation_after_partial_success": (
+        "committed_partial_correction"
+    ),
+    "recovery_measurement_parameter_sequential_handoff": (
+        "committed_partial_correction_with_observable_bridge"
+    ),
 }
 _EFFICIENCY_LIMIT_FIELDS = frozenset(
     {
@@ -1058,7 +1093,103 @@ def evaluation_intervention_contract(
             raise ValueError(
                 f"suite {normalized_suite!r} requires error_code {expected_code!r}"
             )
-    elif expected_kind == "committed_partial_correction":
+    elif expected_kind == "failed_policy_action":
+        expected_fields = {
+            "intervention_schema_version",
+            "kind",
+            "action",
+            "error_code",
+        }
+        raw_action = intervention.get("action")
+        if not isinstance(raw_action, Mapping):
+            raise ValueError("failed-action intervention action must be a mapping")
+        if set(raw_action) != {"tool", "arguments"} or not isinstance(
+            raw_action.get("arguments"), Mapping
+        ):
+            raise ValueError(
+                "failed-action intervention must use canonical tool/arguments fields"
+            )
+        action = safe_normalize_action(raw_action)
+        if action.get("tool") == INVALID_ACTION:
+            raise ValueError("failed-action intervention action must be canonical")
+        expected_failure = {
+            "recovery_post_failure_no_candidate": (
+                RUN_WLS,
+                "injected_transient_tool_failure",
+            ),
+            "recovery_unsupported_correction": (
+                CORRECT_MEASUREMENTS,
+                "correction_not_supported_by_current_context",
+            ),
+            "recovery_premature_commit": (
+                COMMIT_STATE,
+                "candidate_lifecycle_violation",
+            ),
+            "recovery_premature_escalation": (
+                ASK_FOR_MORE_EVIDENCE,
+                "operator_escalation_precondition_not_met",
+            ),
+        }.get(normalized_suite)
+        if expected_failure is None:
+            raise ValueError(
+                f"suite {normalized_suite!r} has no failed-action contract"
+            )
+        expected_tool, expected_code = expected_failure
+        if action.get("tool") != expected_tool:
+            raise ValueError(
+                f"suite {normalized_suite!r} requires failed tool {expected_tool!r}"
+            )
+        if intervention.get("error_code") != expected_code:
+            raise ValueError(
+                f"suite {normalized_suite!r} requires error_code {expected_code!r}"
+            )
+        arguments = action["arguments"]
+        if normalized_suite == "recovery_post_failure_no_candidate":
+            if arguments != {"state_id": "$active"}:
+                raise ValueError(
+                    "post-failure stress action must target exactly $active"
+                )
+        elif normalized_suite == "recovery_unsupported_correction":
+            suspect_group = arguments.get("suspect_group")
+            if (
+                arguments.get("state_id") != "$active"
+                or set(arguments) != {"state_id", "suspect_group"}
+                or not isinstance(suspect_group, list)
+                or len(suspect_group) != 1
+                or isinstance(suspect_group[0], bool)
+                or not isinstance(suspect_group[0], int)
+                or suspect_group[0] < 0
+            ):
+                raise ValueError(
+                    "unsupported-correction stress action requires one non-negative "
+                    "suspect index bound to $active"
+                )
+        elif normalized_suite == "recovery_premature_commit":
+            candidate_id = arguments.get("candidate_state_id")
+            if (
+                set(arguments) != {"candidate_state_id"}
+                or not isinstance(candidate_id, str)
+                or not candidate_id.strip()
+                or candidate_id == "$candidate"
+            ):
+                raise ValueError(
+                    "premature-commit stress action requires an explicit missing "
+                    "candidate id"
+                )
+        else:
+            if arguments != {
+                "state_id": "$active",
+                "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+            }:
+                raise ValueError(
+                    "premature-escalation stress action must use the canonical "
+                    "recovery-options-exhausted request on $active"
+                )
+        intervention["action"] = action
+    elif expected_kind in {
+        "committed_partial_correction",
+        "committed_partial_correction_with_observable_bridge",
+    }:
         expected_fields = {
             "intervention_schema_version",
             "kind",
@@ -1068,10 +1199,16 @@ def evaluation_intervention_contract(
         if intervention.get("retention_required") is not True:
             raise ValueError("partial correction intervention must require retention")
         raw_actions = intervention.get("setup_actions")
-        if not isinstance(raw_actions, list) or len(raw_actions) != 4:
+        required_action_count = (
+            5
+            if expected_kind
+            == "committed_partial_correction_with_observable_bridge"
+            else 4
+        )
+        if not isinstance(raw_actions, list) or len(raw_actions) != required_action_count:
             raise ValueError(
                 "partial correction intervention requires exactly context, correction, "
-                "verification, and commit actions"
+                "verification, commit, and any contracted bridge action"
             )
         actions: list[dict[str, Any]] = []
         for index, raw_action in enumerate(raw_actions):
@@ -1101,7 +1238,15 @@ def evaluation_intervention_contract(
         if actions[2]["tool"] not in {RUN_WLS, VERIFY_CANDIDATE}:
             raise ValueError("partial setup third action must verify the candidate")
         if actions[3]["tool"] != COMMIT_STATE:
-            raise ValueError("partial setup must end with commit_state")
+            raise ValueError("partial setup fourth action must be commit_state")
+        if (
+            expected_kind
+            == "committed_partial_correction_with_observable_bridge"
+            and actions[4]["tool"] != GET_MEASUREMENT_CONTEXT
+        ):
+            raise ValueError(
+                "sequential-handoff bridge must refresh measurement context"
+            )
         for index, action in enumerate(actions):
             arguments = action["arguments"]
             for field, value in arguments.items():
@@ -1115,7 +1260,9 @@ def evaluation_intervention_contract(
                     raise ValueError(
                         f"partial setup alias is not permitted in {field!r}"
                     )
-            expected_alias = "$active" if index < 2 else "$candidate"
+            expected_alias = (
+                "$active" if index < 2 or index == 4 else "$candidate"
+            )
             reference_field = "candidate_state_id" if index == 3 else "state_id"
             other_reference = (
                 "state_id" if reference_field == "candidate_state_id" else "candidate_state_id"
@@ -1128,7 +1275,74 @@ def evaluation_intervention_contract(
                     f"partial setup_actions[{index}] must target {expected_alias} "
                     f"only through {reference_field}"
                 )
-    else:
+        intervention["setup_actions"] = actions
+    elif expected_kind == "open_rejected_candidate":
+        expected_fields = {
+            "intervention_schema_version",
+            "kind",
+            "setup_actions",
+            "required_disposition",
+        }
+        if intervention.get("required_disposition") != "REJECT":
+            raise ValueError(
+                "rejected-candidate intervention must require REJECT disposition"
+            )
+        raw_actions = intervention.get("setup_actions")
+        if not isinstance(raw_actions, list) or len(raw_actions) != 3:
+            raise ValueError(
+                "rejected-candidate intervention requires exactly context, "
+                "correction, and verification actions"
+            )
+        actions = []
+        for index, raw_action in enumerate(raw_actions):
+            if not isinstance(raw_action, Mapping):
+                raise ValueError(
+                    f"rejected setup_actions[{index}] must be a mapping"
+                )
+            if set(raw_action) != {"tool", "arguments"} or not isinstance(
+                raw_action.get("arguments"), Mapping
+            ):
+                raise ValueError(
+                    f"rejected setup_actions[{index}] must use canonical "
+                    "tool/arguments fields"
+                )
+            normalized = safe_normalize_action(raw_action)
+            if normalized.get("tool") == INVALID_ACTION:
+                raise ValueError(
+                    f"rejected setup_actions[{index}] must be a canonical valid action"
+                )
+            actions.append(normalized)
+        if actions[0]["tool"] != GET_MEASUREMENT_CONTEXT:
+            raise ValueError(
+                "rejected-candidate setup must begin with measurement context"
+            )
+        if actions[1]["tool"] != CORRECT_MEASUREMENTS:
+            raise ValueError(
+                "rejected-candidate setup must use a measurement correction"
+            )
+        if actions[2]["tool"] not in {RUN_WLS, VERIFY_CANDIDATE}:
+            raise ValueError(
+                "rejected-candidate setup third action must verify the candidate"
+            )
+        for index, action in enumerate(actions):
+            expected_alias = "$active" if index < 2 else "$candidate"
+            arguments = action["arguments"]
+            if (
+                arguments.get("state_id") != expected_alias
+                or "candidate_state_id" in arguments
+            ):
+                raise ValueError(
+                    f"rejected setup_actions[{index}] must target "
+                    f"{expected_alias} only through state_id"
+                )
+        updates = actions[1]["arguments"].get("measurement_updates")
+        if not isinstance(updates, Mapping) or len(updates) != 1:
+            raise ValueError(
+                "rejected-candidate correction requires exactly one explicit "
+                "measurement update"
+            )
+        intervention["setup_actions"] = actions
+    elif expected_kind == "efficiency_budget":
         expected_fields = {
             "intervention_schema_version",
             "kind",
@@ -1152,6 +1366,10 @@ def evaluation_intervention_contract(
         if normalized_limits["maximum_policy_steps"] < 1:
             raise ValueError("efficiency maximum_policy_steps must be positive")
         intervention["limits"] = normalized_limits
+    else:
+        raise ValueError(
+            f"unsupported evaluation intervention kind {expected_kind!r}"
+        )
 
     if set(intervention) != expected_fields:
         raise ValueError(
@@ -1352,6 +1570,7 @@ class ClosedLoopRolloutEvaluator:
         expected_policy_identity: Mapping[str, Any] | None = None,
         require_policy_identity: bool = False,
         development_holdout_mode: bool = False,
+        recovery_stress_mode: bool = False,
         progress_callback: ProgressCallback | None = None,
     ) -> None:
         if not callable(env_factory) or not callable(policy_factory):
@@ -1402,7 +1621,13 @@ class ClosedLoopRolloutEvaluator:
         )
         self.require_policy_identity = bool(require_policy_identity)
         self.development_holdout_mode = bool(development_holdout_mode)
+        self.recovery_stress_mode = bool(recovery_stress_mode)
         self.progress_callback = progress_callback
+        if self.development_holdout_mode and self.recovery_stress_mode:
+            raise ValueError(
+                "development_holdout_mode and recovery_stress_mode are "
+                "mutually exclusive"
+            )
         if self.require_policy_identity and self.expected_policy_identity is None:
             raise ValueError(
                 "require_policy_identity needs an explicit expected policy identity"
@@ -1434,6 +1659,14 @@ class ClosedLoopRolloutEvaluator:
             raise ValueError(
                 "development_holdout_mode requires exactly the canonical "
                 "dagger1_development suite and required-suite contract"
+            )
+        if self.recovery_stress_mode and (
+            set(suites) != _DIAGNOSTIC_RECOVERY_STRESS_SUITE_SET
+            or self.required_suites != tuple(sorted(RECOVERY_STRESS_SUITES))
+        ):
+            raise ValueError(
+                "recovery_stress_mode requires exactly the seven canonical "
+                "recovery-stress suites and required-suite contract"
             )
         try:
             validate_release_scenario_suites(
@@ -1677,10 +1910,37 @@ class ClosedLoopRolloutEvaluator:
 
         if intervention_contract is not None:
             intervention_kind = intervention_contract["kind"]
-            if intervention_kind == "pre_policy_failure":
-                failure_mode = intervention_contract["failure_mode"]
+            if intervention_kind in {
+                "pre_policy_failure",
+                "failed_policy_action",
+            }:
+                failure_mode = intervention_contract.get(
+                    "failure_mode", "contracted_policy_failure"
+                )
                 injected_state = _current_state(env)
-                if failure_mode == "well_formed":
+                if intervention_kind == "failed_policy_action":
+                    injected_action = copy.deepcopy(
+                        intervention_contract["action"]
+                    )
+                    injected_arguments = injected_action["arguments"]
+                    for field, value in list(injected_arguments.items()):
+                        if value == "$active":
+                            active_id = injected_state.get("active_state_id")
+                            if active_id is None:
+                                raise ValueError(
+                                    "failed-action intervention could not resolve $active"
+                                )
+                            injected_arguments[field] = active_id
+                        elif value == "$candidate":
+                            candidate_id = injected_state.get(
+                                "candidate_state_id"
+                            )
+                            if candidate_id is None:
+                                raise ValueError(
+                                    "failed-action intervention could not resolve $candidate"
+                                )
+                            injected_arguments[field] = candidate_id
+                elif failure_mode == "well_formed":
                     active_id = str(injected_state.get("active_state_id") or "active")
                     injected_action = {
                         "tool": RUN_WLS,
@@ -1734,9 +1994,13 @@ class ClosedLoopRolloutEvaluator:
                 intervention_evidence["pre_policy_step_count"] = 1
                 intervention_evidence["injected_failure_count"] = 1
                 intervention_evidence["injected_invalid_action_count"] = int(
-                    failure_mode == "malformed"
+                    intervention_kind == "pre_policy_failure"
+                    and failure_mode == "malformed"
                 )
-            elif intervention_kind == "committed_partial_correction":
+            elif intervention_kind in {
+                "committed_partial_correction",
+                "committed_partial_correction_with_observable_bridge",
+            }:
                 setup_actions = intervention_contract["setup_actions"]
                 committed_candidate_id: str | None = None
                 committed_signature: str | None = None
@@ -1765,7 +2029,7 @@ class ClosedLoopRolloutEvaluator:
                     }
                     pre_oracle = _oracle_state(env, history)
                     disposition = _candidate_disposition(pre_oracle)
-                    if setup_index == len(setup_actions) - 1:
+                    if setup_index == 3:
                         if disposition != "ACCEPT_PARTIAL":
                             raise ValueError(
                                 "partial setup commit requires ACCEPT_PARTIAL oracle disposition: "
@@ -1883,7 +2147,163 @@ class ClosedLoopRolloutEvaluator:
                 partial_candidate_ids.append(committed_candidate_id)
                 partial_action_signatures.append(committed_signature)
                 intervention_evidence["pre_policy_step_count"] = len(setup_actions)
-                intervention_evidence["retention_opportunity_count"] = 1
+                intervention_evidence["retention_opportunity_count"] = int(
+                    intervention_kind == "committed_partial_correction"
+                )
+            elif intervention_kind == "open_rejected_candidate":
+                setup_actions = intervention_contract["setup_actions"]
+                opened_candidate_id: str | None = None
+                for setup_index, raw_setup_action in enumerate(setup_actions):
+                    current = _current_state(env)
+                    active_id = current.get("active_state_id")
+                    candidate_id = current.get("candidate_state_id")
+                    setup_action = safe_normalize_action(raw_setup_action)
+                    resolved_arguments = copy.deepcopy(setup_action["arguments"])
+                    for field, value in list(resolved_arguments.items()):
+                        if value == "$active":
+                            if active_id is None:
+                                raise ValueError(
+                                    "rejected setup could not resolve $active"
+                                )
+                            resolved_arguments[field] = active_id
+                        elif value == "$candidate":
+                            if candidate_id is None:
+                                raise ValueError(
+                                    "rejected setup could not resolve $candidate"
+                                )
+                            resolved_arguments[field] = candidate_id
+                    setup_action = {
+                        "tool": setup_action["tool"],
+                        "arguments": resolved_arguments,
+                    }
+                    pre_oracle = _oracle_state(env, history)
+                    disposition_before = _candidate_disposition(pre_oracle)
+                    try:
+                        audited_setup = getattr(
+                            env,
+                            "apply_audited_evaluation_setup_correction",
+                            None,
+                        )
+                        if (
+                            setup_action["tool"] == CORRECT_MEASUREMENTS
+                            and "measurement_updates"
+                            in setup_action["arguments"]
+                            and callable(audited_setup)
+                        ):
+                            next_state, raw_output = audited_setup(
+                                copy.deepcopy(setup_action)
+                            )
+                        else:
+                            next_state, raw_output = env.step(
+                                copy.deepcopy(setup_action)
+                            )
+                    except Exception as exc:
+                        raise ValueError(
+                            "rejected setup action raised "
+                            f"{type(exc).__name__} at index {setup_index}"
+                        ) from exc
+                    if not isinstance(raw_output, Mapping):
+                        raise ValueError(
+                            "rejected setup output must be a mapping"
+                        )
+                    output = copy.deepcopy(dict(raw_output))
+                    if output.get("execution_status") != "success":
+                        raise ValueError(
+                            "rejected setup action failed at index "
+                            f"{setup_index}: {output.get('error_code')!r}"
+                        )
+                    if (
+                        setup_index == 1
+                        and output.get("state_mutated") is not True
+                    ):
+                        raise ValueError(
+                            "rejected setup correction must report a real "
+                            "candidate mutation"
+                        )
+                    setup_terminal = _is_terminal(env, next_state)
+                    setup_advanced = _successful_action_advanced(
+                        before=current,
+                        after=next_state,
+                        output=output,
+                        terminal=setup_terminal,
+                    )
+                    transition = {
+                        "state_id": current.get("active_state_id"),
+                        "candidate_state_id": current.get("candidate_state_id"),
+                        "action": policy_safe_copy(setup_action),
+                        "tool_output": policy_safe_copy(output),
+                    }
+                    history.append(transition)
+                    disposition_after = _candidate_disposition(
+                        _oracle_state(env, history)
+                    )
+                    trace.append(
+                        {
+                            "step": len(trace),
+                            "intervention": True,
+                            "observation_hash": None,
+                            "policy_observation": None,
+                            "objective_action_assessment": None,
+                            "policy_tool_output": policy_safe_copy(output),
+                            "action": policy_safe_copy(setup_action),
+                            "execution_status": "success",
+                            "advanced": setup_advanced,
+                            "error_code": None,
+                            "candidate_disposition_offline": (
+                                disposition_after or disposition_before
+                            ),
+                            "tool_regret": None,
+                            "runtime_state_hash": _output_runtime_state_hash(
+                                output
+                            ),
+                            "objective_tool_evidence": objective_tool_evidence(
+                                setup_action, output
+                            ),
+                            "terminal_outcome": _output_terminal_outcome(output),
+                            **trace_progress_evidence(
+                                before=current,
+                                after=next_state,
+                                output=output,
+                                terminal=setup_terminal,
+                            ),
+                        }
+                    )
+                    if setup_index == 1:
+                        opened_candidate_id = str(
+                            output.get("candidate_state_id")
+                            or _current_state(env).get("candidate_state_id")
+                            or ""
+                        ) or None
+                        if opened_candidate_id is None:
+                            raise ValueError(
+                                "rejected setup correction did not create a candidate"
+                            )
+                    if setup_terminal:
+                        raise ValueError(
+                            "rejected setup terminated the episode before "
+                            "policy evaluation"
+                        )
+                final_setup_state = _current_state(env)
+                if (
+                    opened_candidate_id is None
+                    or str(final_setup_state.get("candidate_state_id") or "")
+                    != opened_candidate_id
+                ):
+                    raise ValueError(
+                        "rejected setup did not preserve the open candidate"
+                    )
+                final_disposition = _candidate_disposition(
+                    _oracle_state(env, history)
+                )
+                if final_disposition != "REJECT":
+                    raise ValueError(
+                        "rejected setup requires REJECT oracle disposition: "
+                        f"scenario={_scenario_id(audit_scenario, scenario_index)}, "
+                        f"observed={final_disposition}"
+                    )
+                intervention_evidence["pre_policy_step_count"] = len(
+                    setup_actions
+                )
 
         for policy_step in range(self.max_steps):
             step = len(trace)
@@ -2483,6 +2903,7 @@ def evaluate_rollout_suites(
     expected_policy_identity: Mapping[str, Any] | None = None,
     require_policy_identity: bool = False,
     development_holdout_mode: bool = False,
+    recovery_stress_mode: bool = False,
     progress_callback: ProgressCallback | None = None,
 ) -> EvaluationResult:
     """Functional entry point for closed-loop suite evaluation."""
@@ -2504,6 +2925,7 @@ def evaluate_rollout_suites(
         expected_policy_identity=expected_policy_identity,
         require_policy_identity=require_policy_identity,
         development_holdout_mode=development_holdout_mode,
+        recovery_stress_mode=recovery_stress_mode,
         progress_callback=progress_callback,
     ).evaluate(scenario_suites)
 
@@ -2937,6 +3359,19 @@ def _development_evaluation_contract(
     return copy.deepcopy(dict(contract))
 
 
+def _recovery_stress_evaluation_contract(
+    manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    bindings = manifest.get("bindings")
+    bindings = bindings if isinstance(bindings, Mapping) else {}
+    contract = bindings.get("recovery_stress_evaluation")
+    if not isinstance(contract, Mapping):
+        raise ValueError(
+            "study manifest does not pin bindings.recovery_stress_evaluation"
+        )
+    return copy.deepcopy(dict(contract))
+
+
 def _validate_development_holdout_for_study(
     *,
     holdout_path: str | os.PathLike[str],
@@ -3176,6 +3611,368 @@ def _validate_development_holdout_for_study(
     }
 
 
+def _validate_recovery_stress_for_study(
+    *,
+    suite_path: str | os.PathLike[str],
+    recovery_stress_manifest_path: str | os.PathLike[str],
+    study_manifest: Mapping[str, Any],
+    reviewed_source_commit: str,
+    repo_root: Path,
+) -> dict[str, Any]:
+    """Recompute the immutable 70-episode recovery-stress publication."""
+
+    from psse_env.dagger.build_dagger1_recovery_stress import (
+        RECOVERY_STRESS_ARTIFACT_TYPE,
+        RECOVERY_STRESS_CONTRACT,
+        RECOVERY_STRESS_DISTINCT_ROOT_COUNT,
+        RECOVERY_STRESS_EPISODE_COUNT,
+        RECOVERY_STRESS_EVALUATOR_SEED,
+        RECOVERY_STRESS_ROOTS_PER_STRATUM,
+        RECOVERY_STRESS_SPLIT,
+        _MIXED_SUITES,
+        _MULTI_MEASUREMENT_SUITES,
+        _source_bindings as current_recovery_stress_source_bindings,
+    )
+    from psse_env.dagger.root_sets import root_set_digest
+
+    suite_value, captured_suite_path, suite_sha256 = (
+        _load_unlinked_regular_json_value(
+            suite_path,
+            field="recovery-stress suite",
+        )
+    )
+    manifest_value, captured_manifest_path, manifest_sha256 = (
+        _load_unlinked_regular_json_value(
+            recovery_stress_manifest_path,
+            field="recovery-stress manifest",
+        )
+    )
+    if captured_suite_path == captured_manifest_path:
+        raise ValueError(
+            "recovery-stress suite and manifest must be distinct files"
+        )
+    if not isinstance(suite_value, Mapping) or not isinstance(
+        manifest_value, Mapping
+    ):
+        raise ValueError(
+            "recovery-stress suite and manifest must contain JSON objects"
+        )
+    suites = copy.deepcopy(dict(suite_value))
+    provenance = copy.deepcopy(dict(manifest_value))
+    expected_suite_names = tuple(RECOVERY_STRESS_SUITES)
+    if set(suites) != set(expected_suite_names):
+        raise ValueError(
+            "recovery-stress suite must contain exactly the seven canonical cells"
+        )
+    validate_release_scenario_suites(suites)
+
+    roots_by_suite: dict[str, set[str]] = {}
+    rows_by_suite: dict[str, int] = {}
+    episode_count = 0
+    for suite_name in expected_suite_names:
+        rows = suites.get(suite_name)
+        if not isinstance(rows, list) or len(rows) != (
+            RECOVERY_STRESS_ROOTS_PER_STRATUM
+        ):
+            raise ValueError(
+                f"recovery-stress cell {suite_name} must contain exactly "
+                f"{RECOVERY_STRESS_ROOTS_PER_STRATUM} episodes"
+            )
+        roots: set[str] = set()
+        for index, row in enumerate(rows):
+            if not isinstance(row, Mapping):
+                raise ValueError(
+                    f"recovery-stress cell {suite_name} row {index} is not an object"
+                )
+            grouping = row.get("grouping")
+            if not isinstance(grouping, Mapping):
+                raise ValueError(
+                    f"recovery-stress cell {suite_name} row {index} has no grouping"
+                )
+            if grouping.get("split") != RECOVERY_STRESS_SPLIT:
+                raise ValueError(
+                    f"recovery-stress cell {suite_name} row {index} has the wrong split"
+                )
+            root = str(
+                grouping.get("physical_root_fingerprint") or ""
+            ).strip()
+            if not root or root in roots:
+                raise ValueError(
+                    f"recovery-stress cell {suite_name} repeats or omits a root"
+                )
+            roots.add(root)
+        roots_by_suite[suite_name] = roots
+        rows_by_suite[suite_name] = len(rows)
+        episode_count += len(rows)
+
+    multi_root_sets = {
+        frozenset(roots_by_suite[suite_name])
+        for suite_name in _MULTI_MEASUREMENT_SUITES
+    }
+    mixed_root_sets = {
+        frozenset(roots_by_suite[suite_name])
+        for suite_name in _MIXED_SUITES
+    }
+    if len(multi_root_sets) != 1 or len(mixed_root_sets) != 1:
+        raise ValueError(
+            "recovery-stress family cells do not reuse their exact root allocation"
+        )
+    multi_roots = set(next(iter(multi_root_sets)))
+    mixed_roots = set(next(iter(mixed_root_sets)))
+    if multi_roots & mixed_roots:
+        raise ValueError(
+            "recovery-stress measurement and mixed root allocations overlap"
+        )
+    stress_roots = multi_roots | mixed_roots
+    if (
+        episode_count != RECOVERY_STRESS_EPISODE_COUNT
+        or len(stress_roots) != RECOVERY_STRESS_DISTINCT_ROOT_COUNT
+    ):
+        raise ValueError(
+            "recovery-stress suite does not contain exactly 70 episodes on 20 roots"
+        )
+    stress_root_sha256 = root_set_digest(stress_roots)
+
+    bindings = study_manifest.get("bindings")
+    bindings = bindings if isinstance(bindings, Mapping) else {}
+    frozen = bindings.get("evaluation")
+    frozen = frozen if isinstance(frozen, Mapping) else {}
+    source = provenance.get("source_state")
+    source = source if isinstance(source, Mapping) else {}
+    source_bindings = provenance.get("source_bindings")
+    input_bindings = provenance.get("input_bindings")
+    input_bindings = (
+        input_bindings if isinstance(input_bindings, Mapping) else {}
+    )
+    expected_input_binding_fields = {
+        "development_holdout",
+        "development_holdout_manifest",
+        "development_holdout_generator_report",
+        "d0_raw",
+        "d0_generation_provenance",
+        "d0_manifest",
+        "d1_training_scenarios",
+        "d1_training_manifest",
+        "recovery_probes",
+        "recovery_probe_manifest",
+        "frozen_suite",
+    }
+    protected_overlap = provenance.get("protected_root_overlap")
+    protected_overlap = (
+        protected_overlap if isinstance(protected_overlap, Mapping) else {}
+    )
+    expected_overlap_fields = {
+        "d0",
+        "d1_training",
+        "recovery_probes",
+        "frozen_evaluation",
+    }
+    root_hashes = provenance.get("root_set_sha256")
+    root_hashes = root_hashes if isinstance(root_hashes, Mapping) else {}
+    expected_root_hash_fields = {
+        "stress",
+        "development_parent",
+        *expected_overlap_fields,
+    }
+    declared_rows_by_suite = provenance.get("rows_by_suite")
+    declared_roots_by_suite = provenance.get("distinct_roots_by_suite")
+    exact_rows_by_suite = dict(sorted(rows_by_suite.items()))
+    exact_roots_by_suite = {
+        name: len(roots_by_suite[name]) for name in sorted(roots_by_suite)
+    }
+
+    selection = provenance.get("selection")
+    selection = selection if isinstance(selection, Mapping) else {}
+    validation_records = selection.get("validation_records")
+    if not isinstance(validation_records, list):
+        validation_records = []
+    validation_keys: set[tuple[str, str]] = set()
+    validation_records_valid = len(validation_records) == episode_count
+    expected_validation_fields = {
+        "passed",
+        "suite",
+        "recovery_stratum",
+        "physical_root_fingerprint",
+        "pre_policy_step_count",
+        "expected_action_tool",
+        "expected_action_sha256",
+    }
+    for record in validation_records:
+        if not isinstance(record, Mapping) or set(record) != expected_validation_fields:
+            validation_records_valid = False
+            continue
+        suite_name = str(record.get("suite") or "")
+        root = str(record.get("physical_root_fingerprint") or "")
+        key = (suite_name, root)
+        pre_steps = record.get("pre_policy_step_count")
+        if (
+            record.get("passed") is not True
+            or suite_name not in roots_by_suite
+            or root not in roots_by_suite.get(suite_name, set())
+            or key in validation_keys
+            or record.get("recovery_stratum")
+            != RECOVERY_STRESS_SUITE_TO_STRATUM.get(suite_name)
+            or isinstance(pre_steps, bool)
+            or not isinstance(pre_steps, int)
+            or pre_steps < 1
+            or not str(record.get("expected_action_tool") or "").strip()
+            or not _is_sha256(record.get("expected_action_sha256"))
+        ):
+            validation_records_valid = False
+        validation_keys.add(key)
+    expected_validation_keys = {
+        (suite_name, root)
+        for suite_name, roots in roots_by_suite.items()
+        for root in roots
+    }
+    validation_records_valid = (
+        validation_records_valid
+        and validation_keys == expected_validation_keys
+    )
+
+    selected_roots = selection.get("selected_roots_by_family")
+    selected_roots = (
+        selected_roots if isinstance(selected_roots, Mapping) else {}
+    )
+    fingerprint = fingerprint_evaluation_suites(
+        suites,
+        seed=RECOVERY_STRESS_EVALUATOR_SEED,
+        required_suites=RECOVERY_STRESS_SUITES,
+        minimum_suites=len(RECOVERY_STRESS_SUITES),
+        minimum_episodes_per_suite=RECOVERY_STRESS_ROOTS_PER_STRATUM,
+        minimum_roots_per_suite={
+            suite_name: RECOVERY_STRESS_ROOTS_PER_STRATUM
+            for suite_name in RECOVERY_STRESS_SUITES
+        },
+    )
+    checks = {
+        "schema_version": type(provenance.get("schema_version")) is int
+        and provenance.get("schema_version") == 1,
+        "scenario_schema_version": type(
+            provenance.get("scenario_schema_version")
+        )
+        is int
+        and provenance.get("scenario_schema_version") == 1,
+        "artifact_type": provenance.get("artifact_type")
+        == RECOVERY_STRESS_ARTIFACT_TYPE,
+        "contract": provenance.get("contract") == RECOVERY_STRESS_CONTRACT,
+        "source_commit": source.get("release_eligible_source") is True
+        and source.get("source_commit") == reviewed_source_commit,
+        "source_bindings": source_bindings
+        == current_recovery_stress_source_bindings(repo_root),
+        "suite_format": provenance.get("suite_format")
+        == "evaluation_suite_mapping_v1",
+        "suite_names": provenance.get("suite_names")
+        == list(RECOVERY_STRESS_SUITES),
+        "split": provenance.get("split") == RECOVERY_STRESS_SPLIT,
+        "evaluator_seed": type(provenance.get("evaluator_seed")) is int
+        and provenance.get("evaluator_seed") == RECOVERY_STRESS_EVALUATOR_SEED,
+        "rows": type(provenance.get("rows")) is int
+        and provenance.get("rows") == episode_count,
+        "rows_by_suite": declared_rows_by_suite == exact_rows_by_suite,
+        "distinct_physical_roots": type(
+            provenance.get("distinct_physical_roots")
+        )
+        is int
+        and provenance.get("distinct_physical_roots") == len(stress_roots),
+        "distinct_roots_by_suite": declared_roots_by_suite
+        == exact_roots_by_suite,
+        "minimum_distinct_roots_per_stratum": type(
+            provenance.get("minimum_distinct_roots_per_stratum")
+        )
+        is int
+        and provenance.get("minimum_distinct_roots_per_stratum")
+        == RECOVERY_STRESS_ROOTS_PER_STRATUM,
+        "development_parent_root_count": type(
+            provenance.get("development_parent_root_count")
+        )
+        is int
+        and provenance.get("development_parent_root_count") == 30,
+        "development_parent_subset": provenance.get(
+            "development_parent_subset"
+        )
+        is True,
+        "training_eligible": provenance.get("training_eligible") is False,
+        "model_selection_eligible": provenance.get(
+            "model_selection_eligible"
+        )
+        is False,
+        "recovery_test_evidence_eligible": provenance.get(
+            "recovery_test_evidence_eligible"
+        )
+        is True,
+        "natural_coverage_eligible": provenance.get(
+            "natural_coverage_eligible"
+        )
+        is False,
+        "probe_training_root_overlap": provenance.get(
+            "probe_training_root_overlap"
+        )
+        == [],
+        "protected_root_overlap": set(protected_overlap)
+        == expected_overlap_fields
+        and all(protected_overlap.get(name) == [] for name in expected_overlap_fields),
+        "root_hash_fields": set(root_hashes) == expected_root_hash_fields
+        and all(_is_sha256(value) for value in root_hashes.values()),
+        "stress_root_hash": root_hashes.get("stress")
+        == stress_root_sha256,
+        "input_binding_fields": set(input_bindings)
+        == expected_input_binding_fields
+        and all(_is_sha256(value) for value in input_bindings.values()),
+        "input_bindings_sha256": provenance.get("input_bindings_sha256")
+        == stable_json_sha256(input_bindings),
+        "frozen_input_binding": input_bindings.get("frozen_suite")
+        == frozen.get("suite_sha256"),
+        "selection_validation_records": validation_records_valid,
+        "selection_rejections": isinstance(
+            selection.get("rejected_candidates"), list
+        ),
+        "selection_roots": set(selected_roots)
+        == {"multi_measurement", "measurement+parameter"}
+        and selected_roots.get("multi_measurement") == sorted(multi_roots)
+        and selected_roots.get("measurement+parameter")
+        == sorted(mixed_roots),
+        "selection_fingerprint": stable_json_sha256(
+            selection.get("fingerprint")
+        )
+        == stable_json_sha256(fingerprint),
+        "output_sha256": provenance.get("output_sha256") == suite_sha256,
+    }
+    failed = sorted(name for name, passed in checks.items() if not passed)
+    if failed:
+        raise ValueError(
+            "recovery-stress study binding failed: " + ", ".join(failed)
+        )
+    development_parent_sha256 = str(
+        input_bindings["development_holdout"]
+    )
+    descriptor = {
+        "contract": STUDY_RECOVERY_STRESS_PROVENANCE_CONTRACT,
+        "suite_sha256": suite_sha256,
+        "manifest_sha256": manifest_sha256,
+        "reviewed_source_commit": reviewed_source_commit,
+        "builder_contract": RECOVERY_STRESS_CONTRACT,
+        "evaluator_seed": RECOVERY_STRESS_EVALUATOR_SEED,
+        "episode_count": episode_count,
+        "physical_roots": len(stress_roots),
+        "root_set_sha256": stress_root_sha256,
+        "development_parent_sha256": development_parent_sha256,
+    }
+    return {
+        "recovery_stress_suite_sha256": suite_sha256,
+        "recovery_stress_manifest_sha256": manifest_sha256,
+        "recovery_stress_provenance_id": stable_json_sha256(descriptor),
+        "recovery_stress_root_set_sha256": stress_root_sha256,
+        "recovery_stress_physical_roots": len(stress_roots),
+        "recovery_stress_episode_count": episode_count,
+        "recovery_stress_development_parent_sha256": (
+            development_parent_sha256
+        ),
+        "provenance_descriptor": descriptor,
+        "suite_names": sorted(RECOVERY_STRESS_SUITES),
+    }
+
+
 def build_study_evaluation_binding(
     *,
     study_manifest_path: str | os.PathLike[str],
@@ -3196,6 +3993,7 @@ def build_study_evaluation_binding(
     checkpoint_receipt_path: str | os.PathLike[str] | None = None,
     development_holdout_manifest_path: str | os.PathLike[str] | None = None,
     development_holdout_generator_report_path: str | os.PathLike[str] | None = None,
+    recovery_stress_manifest_path: str | os.PathLike[str] | None = None,
     repo_root: str | os.PathLike[str] | None = None,
 ) -> dict[str, Any]:
     """Derive every study field from pinned bytes and the live model tree.
@@ -3210,8 +4008,10 @@ def build_study_evaluation_binding(
     from psse_env.dagger.study_manifest import (
         DEVELOPMENT_EVALUATION_PROTOCOL_CONTRACT,
         EXPECTED_DEVELOPMENT_EVALUATION_CONTRACT_SHA256,
+        EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256,
         PINNED_BASE_MODEL_ID,
         PINNED_BASE_MODEL_REVISION,
+        RECOVERY_STRESS_EVALUATION_PROTOCOL_CONTRACT,
         TRAINED_VARIANT_IDS,
         load_study_manifest,
         validate_study_artifact_binding,
@@ -3300,10 +4100,23 @@ def build_study_evaluation_binding(
     else:
         raise ValueError(f"unknown study variant: {normalized_variant!r}")
 
+    recovery_stress = recovery_stress_manifest_path is not None
+    if diagnostic_only and recovery_stress:
+        raise ValueError(
+            "development and recovery-stress evaluation modes are mutually exclusive"
+        )
+    artifact_role = (
+        "development_evaluation"
+        if diagnostic_only
+        else (
+            "recovery_stress_evaluation"
+            if recovery_stress
+            else "evaluation"
+        )
+    )
+
     common: dict[str, Any] = {
-        "artifact_role": (
-            "development_evaluation" if diagnostic_only else "evaluation"
-        ),
+        "artifact_role": artifact_role,
         "variant_id": normalized_variant,
         "study_manifest_sha256": manifest["manifest_sha256"],
         "reviewed_source_commit": reviewed,
@@ -3380,13 +4193,81 @@ def build_study_evaluation_binding(
                 "evaluation_protocol": "diagnostic_model_selection_only",
             }
         )
-    else:
+    elif recovery_stress:
         if (
             development_holdout_manifest_path is not None
             or development_holdout_generator_report_path is not None
         ):
             raise ValueError(
-                "frozen-suite evaluation cannot claim development holdout inputs"
+                "recovery-stress evaluation cannot claim development holdout inputs"
+            )
+        stress = _validate_recovery_stress_for_study(
+            suite_path=input_suite_path,
+            recovery_stress_manifest_path=recovery_stress_manifest_path,
+            study_manifest=manifest,
+            reviewed_source_commit=reviewed,
+            repo_root=root,
+        )
+        expected_contract = _recovery_stress_evaluation_contract(manifest)
+        if stable_json_sha256(expected_contract) != (
+            EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256
+        ):
+            raise ValueError(
+                "study manifest recovery-stress evaluator digest is not canonical"
+            )
+        actual_contract = {
+            "contract": RECOVERY_STRESS_EVALUATION_PROTOCOL_CONTRACT,
+            "evaluation_protocol": "preregistered_recovery_stress_test",
+            "diagnostic_only": False,
+            "input_suite_names": stress["suite_names"],
+            "evaluator_seed": evaluator_seed,
+            "max_steps": max_steps,
+            "required_suites": list(required_suites),
+            "minimum_suites": minimum_suites,
+            "minimum_episodes_per_suite": minimum_episodes_per_suite,
+            "minimum_roots_per_suite": minimum_roots_per_suite,
+            "exact_episode_count": stress["recovery_stress_episode_count"],
+            "exact_physical_roots": stress[
+                "recovery_stress_physical_roots"
+            ],
+            "development_parent_subset_required": True,
+            "zero_training_probe_frozen_overlap_required": True,
+            "protocol": protocol,
+            "release_qualification_allowed": True,
+        }
+        if stable_json_sha256(actual_contract) != stable_json_sha256(
+            expected_contract
+        ):
+            raise ValueError(
+                "recovery-stress evaluator configuration differs from the exact "
+                "preregistered contract"
+            )
+        common.update(
+            {
+                key: value
+                for key, value in stress.items()
+                if key.startswith("recovery_stress_")
+            }
+        )
+        common.update(
+            {
+                "recovery_stress_evaluation_contract_sha256": (
+                    EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256
+                ),
+                "evaluation_protocol": (
+                    "preregistered_recovery_stress_test"
+                ),
+            }
+        )
+    else:
+        if (
+            development_holdout_manifest_path is not None
+            or development_holdout_generator_report_path is not None
+            or recovery_stress_manifest_path is not None
+        ):
+            raise ValueError(
+                "frozen-suite evaluation cannot claim development or "
+                "recovery-stress inputs"
             )
         if file_sha256(suite_path) != frozen.get("suite_sha256"):
             raise ValueError("frozen study evaluation suite bytes differ from manifest")
@@ -3612,8 +4493,15 @@ def write_evaluation_artifact(
                 "study binding cannot replace evaluator-owned fields: "
                 + ", ".join(overlap)
             )
+        binding_role = str(binding.get("artifact_role") or "")
         expected_role = (
-            "development_evaluation" if diagnostic_only else "evaluation"
+            "development_evaluation"
+            if diagnostic_only
+            else (
+                "recovery_stress_evaluation"
+                if binding_role == "recovery_stress_evaluation"
+                else "evaluation"
+            )
         )
         if binding.get("artifact_role") != expected_role:
             raise ValueError(
@@ -3642,11 +4530,14 @@ def write_evaluation_artifact(
                 )
         input_suite = recorded_provenance.get("input_suite")
         input_suite = input_suite if isinstance(input_suite, Mapping) else {}
-        expected_suite_hash = binding.get(
-            "development_holdout_sha256"
-            if diagnostic_only
-            else "frozen_suite_sha256"
-        )
+        suite_hash_field = {
+            "development_evaluation": "development_holdout_sha256",
+            "evaluation": "frozen_suite_sha256",
+            "recovery_stress_evaluation": (
+                "recovery_stress_suite_sha256"
+            ),
+        }[expected_role]
+        expected_suite_hash = binding.get(suite_hash_field)
         if input_suite.get("sha256") != expected_suite_hash:
             raise ValueError(
                 "study binding suite hash differs from executed input provenance"
@@ -3741,6 +4632,58 @@ def write_evaluation_artifact(
             ):
                 raise ValueError(
                     "executed development evaluator configuration differs "
+                    "from the exact preregistered contract"
+                )
+        elif expected_role == "recovery_stress_evaluation":
+            from psse_env.dagger.study_manifest import (
+                EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256,
+                canonical_recovery_stress_evaluation_contract,
+            )
+
+            canonical_stress = (
+                canonical_recovery_stress_evaluation_contract()
+            )
+            actual_stress = {
+                "contract": canonical_stress["contract"],
+                "evaluation_protocol": binding.get("evaluation_protocol"),
+                "diagnostic_only": False,
+                "input_suite_names": configuration.get("suite_names"),
+                "evaluator_seed": configuration.get("seed"),
+                "max_steps": configuration.get("max_steps"),
+                "required_suites": configuration.get("required_suites"),
+                "minimum_suites": configuration.get("minimum_suites"),
+                "minimum_episodes_per_suite": configuration.get(
+                    "minimum_episodes_per_suite"
+                ),
+                "minimum_roots_per_suite": configuration.get(
+                    "minimum_roots_per_suite"
+                ),
+                "exact_episode_count": binding.get(
+                    "recovery_stress_episode_count"
+                ),
+                "exact_physical_roots": binding.get(
+                    "recovery_stress_physical_roots"
+                ),
+                "development_parent_subset_required": True,
+                "zero_training_probe_frozen_overlap_required": True,
+                "protocol": (
+                    recorded_provenance.get("protocol_registry", {}).get(
+                        "protocol"
+                    )
+                    if isinstance(
+                        recorded_provenance.get("protocol_registry"), Mapping
+                    )
+                    else None
+                ),
+                "release_qualification_allowed": True,
+            }
+            if (
+                actual_stress != canonical_stress
+                or stable_json_sha256(actual_stress)
+                != EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256
+            ):
+                raise ValueError(
+                    "executed recovery-stress evaluator configuration differs "
                     "from the exact preregistered contract"
                 )
         variant = str(binding.get("variant_id") or "")
@@ -3913,6 +4856,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--development-holdout-generator-report",
         help="Generator report byte-bound by the development holdout manifest.",
     )
+    parser.add_argument(
+        "--recovery-stress-manifest",
+        help=(
+            "Immutable generation manifest for the preregistered "
+            "root-disjoint recovery-stress suite."
+        ),
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-steps", type=int, default=24)
     parser.add_argument("--required-suite", action="append", default=None)
@@ -3942,6 +4892,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.checkpoint_receipt,
         args.development_holdout_manifest,
         args.development_holdout_generator_report,
+        args.recovery_stress_manifest,
     )
     if args.study_manifest is None:
         if any(value is not None for value in study_values):
@@ -3972,6 +4923,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.development_holdout_manifest,
             args.development_holdout_generator_report,
         )
+        recovery_stress = args.recovery_stress_manifest is not None
+        if args.diagnostic_only and recovery_stress:
+            parser.error(
+                "--diagnostic-only and --recovery-stress-manifest are "
+                "mutually exclusive"
+            )
         if args.diagnostic_only and not all(
             value is not None for value in development_inputs
         ):
@@ -3993,11 +4950,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
     )
 
-    required_suites = (
-        tuple(args.required_suite)
-        if args.required_suite is not None
-        else EVALUATION_SUITES
-    )
+    if args.required_suite is not None:
+        required_suites = tuple(args.required_suite)
+    elif args.study_manifest is not None and args.diagnostic_only:
+        required_suites = (_DIAGNOSTIC_DEVELOPMENT_SUITE,)
+    elif args.recovery_stress_manifest is not None:
+        required_suites = tuple(sorted(RECOVERY_STRESS_SUITES))
+    else:
+        required_suites = EVALUATION_SUITES
     environment_factory = _load_import_spec(
         args.env_factory, field="env_factory"
     )
@@ -4082,11 +5042,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             development_holdout_generator_report_path=(
                 args.development_holdout_generator_report
             ),
+            recovery_stress_manifest_path=args.recovery_stress_manifest,
         )
         bound_suite_sha256 = study_binding.get(
             "development_holdout_sha256"
             if args.diagnostic_only
-            else "frozen_suite_sha256"
+            else (
+                "recovery_stress_suite_sha256"
+                if args.recovery_stress_manifest is not None
+                else "frozen_suite_sha256"
+            )
         )
         if bound_suite_sha256 != captured_study_suite_sha256:
             raise RuntimeError(
@@ -4113,6 +5078,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         require_policy_identity=True,
         development_holdout_mode=bool(
             args.study_manifest is not None and args.diagnostic_only
+        ),
+        recovery_stress_mode=bool(
+            args.study_manifest is not None
+            and args.recovery_stress_manifest is not None
         ),
         progress_callback=_stderr_progress,
     )
@@ -6587,6 +7556,8 @@ __all__ = [
     "ClosedLoopRolloutEvaluator",
     "DEFAULT_SCORE_WEIGHTS",
     "EVALUATION_SUITES",
+    "RECOVERY_STRESS_SUITES",
+    "RECOVERY_STRESS_SUITE_TO_STRATUM",
     "EpisodeEvaluation",
     "EvaluationResult",
     "RecoveryMetrics",
@@ -6595,6 +7566,7 @@ __all__ = [
     "STUDY_OBJECTIVE_EPISODE_EVIDENCE_CONTRACT",
     "STUDY_OBJECTIVE_TOOL_EVIDENCE_CONTRACT",
     "STUDY_POLICY_HISTORY_WINDOW",
+    "STUDY_RECOVERY_STRESS_PROVENANCE_CONTRACT",
     "build_evaluation_provenance",
     "build_study_evaluation_binding",
     "evaluate_closed_loop",

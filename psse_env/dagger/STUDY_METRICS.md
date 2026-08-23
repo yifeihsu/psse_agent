@@ -2,9 +2,11 @@
 
 `psse_env.dagger.study_metrics` recomputes the preregistered model-level
 metrics from schema-v3 or schema-v4 closed-loop artifacts. It does not accept
-an artifact's aggregate score as evidence. A study report requires the complete four-model
-matrix (`base`, `bc0`, `natural_dagger`, and `natural_dagger_probes`) on both
-the 30-root development holdout and the untouched frozen suite.
+an artifact's aggregate score as evidence. A study report requires the complete
+four-model matrix (`base`, `bc0`, `natural_dagger`, and
+`natural_dagger_probes`) in three distinct scopes: the 30-root development
+holdout, the untouched frozen suite, and the preregistered 70-episode
+recovery-stress suite.
 
 The comparison is paired by the exact physical-root identity within each
 training seed. The 95% interval resamples physical roots and retains every
@@ -18,24 +20,34 @@ python -m psse_env.dagger.study_metrics \
   --expected-source-commit REVIEWED_40_HEX_COMMIT \
   --base-development-run /artifacts/base-development.json \
   --base-frozen-run /artifacts/base-frozen.json \
+  --base-recovery-stress-run /artifacts/base-recovery-stress.json \
   --bc0-development-run 3407=/artifacts/bc0-3407-development.json \
   --bc0-development-run 3408=/artifacts/bc0-3408-development.json \
   --bc0-development-run 3409=/artifacts/bc0-3409-development.json \
   --bc0-run 3407=/artifacts/bc0-3407.json \
   --bc0-run 3408=/artifacts/bc0-3408.json \
   --bc0-run 3409=/artifacts/bc0-3409.json \
+  --bc0-recovery-stress-run 3407=/artifacts/bc0-3407-recovery-stress.json \
+  --bc0-recovery-stress-run 3408=/artifacts/bc0-3408-recovery-stress.json \
+  --bc0-recovery-stress-run 3409=/artifacts/bc0-3409-recovery-stress.json \
   --natural-development-run 3407=/artifacts/natural-3407-development.json \
   --natural-development-run 3408=/artifacts/natural-3408-development.json \
   --natural-development-run 3409=/artifacts/natural-3409-development.json \
   --natural-run 3407=/artifacts/natural-3407.json \
   --natural-run 3408=/artifacts/natural-3408.json \
   --natural-run 3409=/artifacts/natural-3409.json \
+  --natural-recovery-stress-run 3407=/artifacts/natural-3407-recovery-stress.json \
+  --natural-recovery-stress-run 3408=/artifacts/natural-3408-recovery-stress.json \
+  --natural-recovery-stress-run 3409=/artifacts/natural-3409-recovery-stress.json \
   --full-development-run 3407=/artifacts/full-3407-development.json \
   --full-development-run 3408=/artifacts/full-3408-development.json \
   --full-development-run 3409=/artifacts/full-3409-development.json \
   --full-run 3407=/artifacts/full-3407.json \
   --full-run 3408=/artifacts/full-3408.json \
   --full-run 3409=/artifacts/full-3409.json \
+  --full-recovery-stress-run 3407=/artifacts/full-3407-recovery-stress.json \
+  --full-recovery-stress-run 3408=/artifacts/full-3408-recovery-stress.json \
+  --full-recovery-stress-run 3409=/artifacts/full-3409-recovery-stress.json \
   --bc0-checkpoint 3407=/checkpoints/bc0-3407/checkpoint_receipt.json \
   --bc0-checkpoint 3408=/checkpoints/bc0-3408/checkpoint_receipt.json \
   --bc0-checkpoint 3409=/checkpoints/bc0-3409/checkpoint_receipt.json \
@@ -53,8 +65,8 @@ The default versioned manifest is
 that manifest, the reviewed source commit, its preregistered training seed,
 its scope-specific suite/provenance/root-set contract, and its exact checkpoint
 receipt and adapter-tree revision (null only for the base model). Natural and
-full DAgger receipts must warm-start from the same-seed BC0 tree. Frozen-suite
-evidence cannot substitute for the development holdout.
+full DAgger receipts must warm-start from the same-seed BC0 tree. No evaluation
+scope can substitute for either of the other two.
 
 Every checkpoint receipt also carries `production_d1_quarantine_binding`.
 BC0 uses the exact not-applicable/null object. Natural and full DAgger carry
@@ -65,12 +77,14 @@ summary arithmetic and report hash. Report construction then requires all six
 natural/full receipts to agree exactly and counts that one production-D1
 corpus once, not once per checkpoint.
 
-The primary frozen comparison is `natural_dagger_probes - bc0`. The report also
-computes `natural_dagger_probes - natural_dagger` for both scopes: both named
-rare-recovery action accuracies must improve strictly, and every explicitly
-registered unrelated normalized outcome rate may degrade by at most 0.02.
-Missing action-opportunity denominators or any registry-required rate fails
-closed.
+The primary frozen comparison is `natural_dagger_probes - bc0`. Development
+and frozen artifacts supply the preregistered recovery, stability, physical,
+efficiency, and non-regression comparisons. The recovery-stress scope alone
+supplies the seven exact recovery-action objectives, their zero-count safety
+gates, and the targeted `natural_dagger_probes - natural_dagger` probe
+ablation. This prevents incidental natural opportunities in either primary
+scope from determining whether a recovery action was tested. Missing action-
+opportunity denominators or any registry-required rate fails closed.
 
 ## Evidence boundary
 
@@ -92,6 +106,15 @@ opportunity that did not occur in the trace. The seven recovery-opportunity
 denominators and autonomous-exhaustion operator-handoff denominator come only
 from that reconstruction. An observed action is correct only when its full
 canonical action object exactly matches the recomputed expected action.
+
+The recovery-stress artifact is generated from deterministic states derived
+from 20 roots in the protected 30-root development parent. It contains exactly
+ten episodes in each of seven intervention strata (70 total), while its root
+set has zero overlap with D0, natural D1, observable probe training, or the
+frozen suite. The real production environment applies each pre-policy
+intervention, and the observable expert independently derives the expected
+canonical action from the resulting policy-safe observation; no target label
+is stored in the model-visible scenario.
 
 Each row's state SHA-256 is recomputed from the exact persisted canonical
 lifecycle snapshot, and adjacent before/after snapshots must form one exact
