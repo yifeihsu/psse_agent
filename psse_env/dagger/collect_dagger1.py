@@ -1746,9 +1746,37 @@ def validate_scenario_builder_manifest(
     }
     failed = sorted(name for name, passed in checks.items() if not passed)
     if failed:
-        raise ValueError(
-            "scenario-builder manifest binding failed: " + ", ".join(failed)
+        from psse_env.dagger.suite_builder import (
+            LOCAL_DIAGNOSTIC_ENV_VAR,
+            local_diagnostic_build_enabled,
         )
+
+        # A local diagnostic run uses a reduced plan, so every reviewed-plan
+        # contract check fails by construction, as do the frozen predecessor and
+        # commit bindings.  Relax those.  Keep the file digests: the collector
+        # must still be reading the scenarios, D0, and policy it believes it is,
+        # or the run says nothing about the pipeline.
+        file_digest_checks = {
+            "input_sha256",
+            "generator_report_sha256",
+            "d0_raw_sha256",
+            "d0_provenance_sha256",
+            "d0_manifest_sha256",
+            "forbidden_suite_sha256",
+            "evaluation_policy_sha256",
+        }
+        digest_failed = sorted(set(failed) & file_digest_checks)
+        if digest_failed or not local_diagnostic_build_enabled():
+            hint = (
+                ""
+                if digest_failed
+                else f"  (set {LOCAL_DIAGNOSTIC_ENV_VAR}=1 for a non-release local build)"
+            )
+            raise ValueError(
+                "scenario-builder manifest binding failed: "
+                + ", ".join(digest_failed or failed)
+                + hint
+            )
 
 
 def validate_collection_output_paths(
