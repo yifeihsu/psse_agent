@@ -44,6 +44,7 @@ from psse_env.examples.generate_round0_aggregate import (
     DEFAULT_EVALUATION_POLICY_PATH,
     DEFAULT_EVALUATION_SUITE_PATH,
     DEFAULT_PLAN,
+    ROUND0_CHECKSUM_MANIFEST_FILENAME,
     ROUND0_HANDOFF_RUNTIME_ANCHOR_CONTRACT,
     ROUND0_LIFECYCLE_SAFETY_CONTRACT,
     _apply_single_label_eligibility,
@@ -65,6 +66,7 @@ from psse_env.examples.generate_round0_aggregate import (
     _stratified_realizability_release_failures,
     _terminal_scenario_matrix,
     _truth_free_execution_scenario,
+    _write_release_checksum_manifest,
     audit_episode_against_truth,
     generate,
     main,
@@ -1128,6 +1130,37 @@ class OfflineTruthBoundaryTests(unittest.TestCase):
 
 
 class AggregateReleaseContractTests(unittest.TestCase):
+    def test_release_checksum_manifest_binds_each_artifact_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            artifact_b = output_dir / "b.json"
+            artifact_a = output_dir / "a.jsonl"
+            artifact_b.write_text("b\n", encoding="utf-8")
+            artifact_a.write_text("a\n", encoding="utf-8")
+
+            checksum_path = _write_release_checksum_manifest(
+                output_dir,
+                [artifact_b, artifact_a],
+            )
+
+            self.assertEqual(
+                checksum_path.name,
+                ROUND0_CHECKSUM_MANIFEST_FILENAME,
+            )
+            self.assertEqual(
+                checksum_path.read_text(encoding="ascii").splitlines(),
+                [
+                    f"{file_sha256(artifact_a)}  {artifact_a.name}",
+                    f"{file_sha256(artifact_b)}  {artifact_b.name}",
+                ],
+            )
+
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                _write_release_checksum_manifest(
+                    output_dir,
+                    [artifact_a, artifact_a],
+                )
+
     @staticmethod
     def _holdout_payload(
         *, scenario_id: str = "eval-root-1", physical_root: str = _EVAL_PHYSICAL_1

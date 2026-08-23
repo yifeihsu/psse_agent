@@ -221,6 +221,10 @@ python -m psse_env.examples.generate_round0_aggregate \
   --output-dir data/round0_aggregate_release
 ```
 
+The generator publishes `SHA256SUMS` last, covering every JSON/JSONL release
+artifact in that directory. The SFT launcher verifies this manifest before
+loading a processor or allocating model memory.
+
 That plan has 263 roots.  It expands the mixed measurement-plus-parameter
 population to preserve five independent parameter-continuation training roots
 after the fixed validation/test family floors, while keeping the expected
@@ -641,7 +645,7 @@ python scripts/build_dagger1_development_holdout.py \
 ```
 
 Rebuild both artifacts after upgrading: collection accepts only the v4
-training-scenario manifest and v2 development-holdout manifest, and requires
+training-scenario manifest and v3 development-holdout manifest, and requires
 the development generator report alongside the holdout and its manifest.
 
 The second command freezes 30 additional diagnostic development roots in a

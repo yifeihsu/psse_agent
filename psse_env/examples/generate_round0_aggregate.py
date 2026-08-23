@@ -108,6 +108,7 @@ from psse_env.transactional_env import TransactionalPSSEEnv
 
 DEFAULT_SEED = 20260719
 BC0_AGGREGATE_SOURCE_PARTITION = "train"
+ROUND0_CHECKSUM_MANIFEST_FILENAME = "SHA256SUMS"
 DEFAULT_EVALUATION_SUITE_PATH = (
     Path(__file__).resolve().parents[1]
     / "dagger"
@@ -115,6 +116,49 @@ DEFAULT_EVALUATION_SUITE_PATH = (
     / "bc0_eval_suite_v1.json"
 )
 DEFAULT_EVALUATION_POLICY_PATH = evaluation_gate_module.DEFAULT_POLICY_PATH.resolve()
+
+
+def _write_release_checksum_manifest(
+    output_dir: Path,
+    artifact_paths: Sequence[Path],
+) -> Path:
+    """Publish the GNU-compatible checksum manifest required by SFT launchers."""
+
+    output_dir = Path(output_dir).resolve()
+    normalized: list[Path] = []
+    seen_names: set[str] = set()
+    for raw_path in artifact_paths:
+        unresolved_path = Path(raw_path)
+        if unresolved_path.is_symlink():
+            raise ValueError(
+                f"release checksum input cannot be a symlink: {unresolved_path}"
+            )
+        path = unresolved_path.resolve()
+        if path.parent != output_dir:
+            raise ValueError(f"release checksum input is outside output_dir: {path}")
+        if not path.is_file():
+            raise ValueError(f"release checksum input is not a regular file: {path}")
+        if path.name == ROUND0_CHECKSUM_MANIFEST_FILENAME:
+            raise ValueError("release checksum manifest cannot include itself")
+        if path.name in seen_names:
+            raise ValueError(f"duplicate release checksum filename: {path.name}")
+        seen_names.add(path.name)
+        normalized.append(path)
+    if not normalized:
+        raise ValueError("release checksum manifest requires at least one artifact")
+
+    checksum_path = output_dir / ROUND0_CHECKSUM_MANIFEST_FILENAME
+    if checksum_path.is_symlink():
+        raise ValueError("release checksum manifest path cannot be a symlink")
+    checksum_path.write_text(
+        "".join(
+            f"{file_sha256(path)}  {path.name}\n"
+            for path in sorted(normalized, key=lambda item: item.name)
+        ),
+        encoding="ascii",
+    )
+    return checksum_path
+
 
 # Root-scenario counts per family at --scale 1.
 DEFAULT_PLAN: dict[str, int] = {
@@ -3167,7 +3211,8 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         "release_eligible": not release_failures,
         "release_failures": release_failures,
     }
-    (output_dir / "aggregate.generation_provenance.json").write_text(
+    generation_provenance_path = output_dir / "aggregate.generation_provenance.json"
+    generation_provenance_path.write_text(
         json.dumps(generation_provenance, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
@@ -3175,11 +3220,16 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         {
             "release_eligible": not release_failures,
             "release_failures": release_failures,
-            "path": str(output_dir / "aggregate.generation_provenance.json"),
+            "path": str(generation_provenance_path),
         }
     )
-    (output_dir / "aggregate.preflight.json").write_text(
+    preflight_path = output_dir / "aggregate.preflight.json"
+    preflight_path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    _write_release_checksum_manifest(
+        output_dir,
+        [*dataset_paths, generation_provenance_path, preflight_path],
     )
     return report
 
