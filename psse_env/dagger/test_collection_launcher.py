@@ -215,6 +215,7 @@ PY
         exit 98
         ;;
 esac
+: > "$D1_DIR/nvml_stub_ready"
 if [[ "${MONITOR_MODE:-good}" != "stubborn" \
     && "${MONITOR_MODE:-good}" != "signal_finalize" ]]; then
     trap 'exit 0' INT TERM
@@ -228,6 +229,13 @@ while :; do sleep 1; done
 set -euo pipefail
 case "${COLLECTOR_MODE:-success}" in
     success)
+        # Synchronize the fast collector stub with monitor initialization. A
+        # loaded Linux runner may otherwise finish this 0.2-second collector
+        # before the monitor process receives its first scheduling slice.
+        for _ in $(seq 1 200); do
+            [[ -e "$D1_DIR/nvml_stub_ready" ]] && break
+            sleep 0.01
+        done
         sleep 0.2
         ;;
     slow)
