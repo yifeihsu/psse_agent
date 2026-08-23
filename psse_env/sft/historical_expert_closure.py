@@ -59,6 +59,7 @@ _DUAL_ATTESTATION_KEYS = {
     "protected_blob_ids",
     "protected_sources",
     "replace_refs",
+    "schema_version",
     "tracked_tree_matches_validator",
     "tree_delta",
     "validator_source_commit",

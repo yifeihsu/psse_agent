@@ -207,6 +207,7 @@ class _ClosureFixture:
             for path in self.protected_paths
         }
         dual = {
+            "schema_version": 1,
             "artifact_is_ancestor": True,
             "artifact_source_commit": self.artifact_commit,
             "contract": "gate_only_json_domain_revalidation_v1",
