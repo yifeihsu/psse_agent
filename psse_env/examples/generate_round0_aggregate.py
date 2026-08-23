@@ -3114,6 +3114,20 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
     release_failures.extend(_input_corpus_release_failures(generation_descriptor))
     release_failures.extend(_input_artifact_release_failures(generation_descriptor))
     release_failures.extend(_holdout_release_failures(holdout_disjointness))
+    # A relaxed-environment build is never release eligible, regardless of how
+    # clean the worktree is.  Without this a locally generated corpus produced
+    # by drifted solvers would be stamped release_eligible=true and could be
+    # mistaken for a reproducible one.
+    from psse_env.dagger.suite_builder import (
+        LOCAL_DIAGNOSTIC_ENV_VAR,
+        local_diagnostic_build_enabled,
+    )
+
+    if local_diagnostic_build_enabled():
+        release_failures.append(
+            f"{LOCAL_DIAGNOSTIC_ENV_VAR} was set: environment pins were relaxed, "
+            "so this corpus is not bit-reproducible against a release build"
+        )
     if generation_descriptor["source_state"].get("release_eligible_source") is not True:
         release_failures.append("source worktree was not clean at generation time")
     if args.protocol != "canonical":

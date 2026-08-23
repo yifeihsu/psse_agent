@@ -880,34 +880,58 @@ def _verify_snapshot_tree(
             )
 
 
+def local_diagnostic_base_model() -> tuple[str, str] | None:
+    """An operator-supplied substitute base model, or ``None``.
+
+    The release base is a 31B model that cannot be loaded on a small local GPU.
+    For non-release diagnostic runs the operator may substitute a smaller model
+    so the pipeline can be exercised end to end.  Honoured only when
+    ``PSSE_LOCAL_DIAGNOSTIC_BUILD`` is set, and the substitution is recorded so
+    no diagnostic corpus can be mistaken for one built by the pinned model.
+    """
+
+    from psse_env.dagger.suite_builder import local_diagnostic_build_enabled
+
+    if not local_diagnostic_build_enabled():
+        return None
+    repo = str(os.environ.get("PSSE_LOCAL_BASE_MODEL_ID", "")).strip()
+    revision = str(os.environ.get("PSSE_LOCAL_BASE_MODEL_REVISION", "")).strip()
+    if not repo or not revision:
+        return None
+    return repo, revision
+
+
 def _resolve_base_snapshot() -> Path:
     try:
         from huggingface_hub import snapshot_download
     except Exception as exc:  # pragma: no cover - live optional dependency
         raise GateError(f"huggingface_hub is required for release inference: {exc}") from exc
 
+    override = local_diagnostic_base_model()
+    repo_id, revision = override or (BASE_MODEL_ID, BASE_MODEL_REVISION)
     try:
         raw_path = snapshot_download(
-            repo_id=BASE_MODEL_ID,
-            revision=BASE_MODEL_REVISION,
+            repo_id=repo_id,
+            revision=revision,
             local_files_only=True,
         )
     except Exception as exc:  # pragma: no cover - live cache state
         raise GateError(
             "Pinned base snapshot is absent from the local Hugging Face cache: "
-            f"{BASE_MODEL_ID}@{BASE_MODEL_REVISION}: {type(exc).__name__}: {exc}"
+            f"{repo_id}@{revision}: {type(exc).__name__}: {exc}"
         ) from exc
     snapshot = Path(raw_path).expanduser().resolve(strict=True)
-    if not snapshot.is_dir() or snapshot.name.lower() != BASE_MODEL_REVISION:
+    if not snapshot.is_dir() or snapshot.name.lower() != revision:
         raise GateError(
             "Hugging Face cache did not resolve to the exact pinned snapshot: "
             f"{snapshot}"
         )
-    _verify_snapshot_tree(
-        snapshot,
-        BASE_SNAPSHOT_FILE_MANIFEST,
-        BASE_SNAPSHOT_OPTIONAL_FILE_MANIFEST,
-    )
+    if override is None:
+        _verify_snapshot_tree(
+            snapshot,
+            BASE_SNAPSHOT_FILE_MANIFEST,
+            BASE_SNAPSHOT_OPTIONAL_FILE_MANIFEST,
+        )
     config_path = snapshot / "config.json"
     try:
         config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -1052,10 +1076,12 @@ def _validate_adapter_tree(path: str, revision: str) -> Path:
 def _load_model_bundle(model_id: str, model_revision: str) -> _ModelBundle:
     adapter_snapshot_path: str | None = None
     adapter_snapshot_owner: Any | None = None
-    if model_id == BASE_MODEL_ID:
-        if model_revision != BASE_MODEL_REVISION:
+    override = local_diagnostic_base_model()
+    base_id, base_revision = override or (BASE_MODEL_ID, BASE_MODEL_REVISION)
+    if model_id == base_id:
+        if model_revision != base_revision:
             raise GateError(
-                f"Base model revision must be exactly {BASE_MODEL_REVISION}"
+                f"Base model revision must be exactly {base_revision}"
             )
         model, processor = _load_base_components()
     else:
