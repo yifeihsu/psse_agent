@@ -1135,6 +1135,8 @@ class TestReleaseGateReport(unittest.TestCase):
             '#SBATCH --comment="preemption=yes;requeue=true"',
             "--query-gpu=name,memory.total,driver_version",
             "validate_torch_release_accelerator",
+            '--expert-baseline-gate-receipt "$EXPERT_BASELINE_GATE_RECEIPT"',
+            "release training OUTPUT_DIR must be outside the source checkout",
         ):
             self.assertIn(contract, launcher)
         self.assertIn("--require-auto-processor", launcher)
@@ -1165,6 +1167,7 @@ class TestBaselineEvaluationGate(unittest.TestCase):
         performance_passed: bool,
         evidence_failures: tuple[str, ...] = (),
         performance_failures: tuple[str, ...] = (),
+        source_commit: str = "a" * 40,
     ) -> SimpleNamespace:
         failures = (
             evidence_failures + performance_failures
@@ -1180,6 +1183,7 @@ class TestBaselineEvaluationGate(unittest.TestCase):
             "performance_enforced": role != "base-baseline",
             "evidence_failures": evidence_failures,
             "performance_failures": performance_failures,
+            "source_commit": source_commit,
         }
         return SimpleNamespace(
             **payload,
@@ -1239,7 +1243,7 @@ class TestBaselineEvaluationGate(unittest.TestCase):
                 ),
                 mock.patch(
                     "psse_env.sft.cli.validate_evaluation_artifact",
-                    side_effect=[expert, base],
+                    side_effect=[expert, base, expert, base],
                 ) as validate,
             ):
                 payload = _baseline_evaluation_gate(args)
@@ -1260,7 +1264,9 @@ class TestBaselineEvaluationGate(unittest.TestCase):
             report["base"]["performance_failures"],
             ["minimum terminal rate was not met"],
         )
-        expert_call, base_call = validate.call_args_list
+        expert_call, base_call, fresh_expert_call, fresh_base_call = (
+            validate.call_args_list
+        )
         self.assertEqual(expert_call.kwargs["role"], "expert-baseline")
         self.assertEqual(base_call.kwargs["role"], "base-baseline")
         self.assertEqual(
@@ -1270,6 +1276,412 @@ class TestBaselineEvaluationGate(unittest.TestCase):
             base_call.kwargs["expected_suite_path"], args.evaluation_suite
         )
         self.assertNotIn("expected_suite_sha256", expert_call.kwargs)
+        self.assertEqual(fresh_expert_call.kwargs, expert_call.kwargs)
+        self.assertEqual(fresh_base_call.kwargs, base_call.kwargs)
+
+    def test_historical_expert_closure_is_distinct_from_current_base_gate(self) -> None:
+        base = self._result(
+            role="base-baseline",
+            passed=True,
+            evidence_passed=True,
+            performance_passed=False,
+            performance_failures=("minimum terminal rate was not met",),
+        )
+        closure = {
+            "passed": True,
+            "failures": [],
+            "contract": "historical_expert_closure_validation_v1",
+            "artifact": {"source_commit": "e" * 40},
+            "expert": {
+                "performance_passed": True,
+                "artifact_source_commit": "e" * 40,
+                "validator_source_commit": "f" * 40,
+            },
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            args = self._args(Path(temp_dir))
+            args.expert_baseline_gate_receipt = Path(temp_dir) / "receipt.json"
+            args.expert_baseline_gate_receipt.write_text("{}\n", encoding="utf-8")
+            with (
+                mock.patch(
+                    "psse_env.sft.cli.git_source_state",
+                    return_value=self._source_state(),
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.current_registry_sha256",
+                    return_value="c" * 64,
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.validate_historical_expert_closure",
+                    return_value=closure,
+                ) as validate_closure,
+                mock.patch(
+                    "psse_env.sft.cli.validate_evaluation_artifact",
+                    return_value=base,
+                ) as validate_current,
+            ):
+                payload = _baseline_evaluation_gate(args)
+
+        self.assertTrue(payload["passed"])
+        self.assertEqual(
+            payload["expert_validation_mode"], "historical-closure-reuse"
+        )
+        self.assertEqual(payload["expert_artifact_source_commit"], "e" * 40)
+        self.assertEqual(payload["expert_validator_source_commit"], "f" * 40)
+        self.assertEqual(payload["consumer_source_commit"], "a" * 40)
+        self.assertEqual(payload["base_artifact_source_commit"], "a" * 40)
+        expected_closure_call = mock.call(
+            args.expert_baseline_gate_receipt,
+            expert_artifact_path=args.expert_baseline_evaluation,
+            repo_root=Path(__file__).resolve().parents[3],
+            expected_suite_path=args.evaluation_suite,
+            expected_policy_path=args.evaluation_policy,
+            expected_policy_identity=args.expert_policy_identity,
+            expected_protocol="canonical",
+            expected_registry_sha256="c" * 64,
+        )
+        self.assertEqual(
+            validate_closure.call_args_list,
+            [expected_closure_call, expected_closure_call],
+        )
+        self.assertEqual(validate_current.call_count, 2)
+        self.assertEqual(
+            validate_current.call_args_list[0].kwargs["role"], "base-baseline"
+        )
+
+    def test_failed_historical_artifact_does_not_claim_observed_source(self) -> None:
+        base = self._result(
+            role="base-baseline",
+            passed=True,
+            evidence_passed=True,
+            performance_passed=False,
+        )
+        closure = {
+            "passed": False,
+            "failures": ["historical expert artifact is not valid JSON"],
+            "contract": "historical_expert_closure_validation_v1",
+            "artifact": {},
+            "expert": {
+                "performance_passed": True,
+                "artifact_source_commit": "e" * 40,
+                "validator_source_commit": "f" * 40,
+            },
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            args = self._args(Path(temp_dir))
+            args.expert_baseline_gate_receipt = Path(temp_dir) / "receipt.json"
+            args.expert_baseline_gate_receipt.write_text("{}\n", encoding="utf-8")
+            with (
+                mock.patch(
+                    "psse_env.sft.cli.git_source_state",
+                    return_value=self._source_state(),
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.current_registry_sha256",
+                    return_value="c" * 64,
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.validate_historical_expert_closure",
+                    return_value=closure,
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.validate_evaluation_artifact",
+                    return_value=base,
+                ),
+                self.assertRaisesRegex(GateError, "artifact is not valid JSON"),
+            ):
+                _baseline_evaluation_gate(args)
+            report = json.loads(
+                args.baseline_evaluation_report_output.read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(report["expert_artifact_source_commit"], "")
+        self.assertEqual(report["expert_validator_source_commit"], "f" * 40)
+
+    def test_postpublication_evidence_change_removes_new_report(self) -> None:
+        expert = self._result(
+            role="expert-baseline",
+            passed=True,
+            evidence_passed=True,
+            performance_passed=True,
+        )
+        changed_expert = self._result(
+            role="expert-baseline",
+            passed=False,
+            evidence_passed=False,
+            performance_passed=False,
+            evidence_failures=("artifact identity changed",),
+        )
+        base = self._result(
+            role="base-baseline",
+            passed=True,
+            evidence_passed=True,
+            performance_passed=False,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            args = self._args(Path(temp_dir))
+            with (
+                mock.patch(
+                    "psse_env.sft.cli.git_source_state",
+                    return_value=self._source_state(),
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.current_registry_sha256",
+                    return_value="c" * 64,
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.validate_evaluation_artifact",
+                    side_effect=[expert, base, changed_expert, base],
+                ),
+                self.assertRaisesRegex(
+                    GateError,
+                    "expert evidence changed during baseline report publication",
+                ),
+            ):
+                _baseline_evaluation_gate(args)
+            report_exists = args.baseline_evaluation_report_output.exists()
+        self.assertFalse(report_exists)
+
+    def test_postpublication_historical_closure_change_removes_report(self) -> None:
+        base = self._result(
+            role="base-baseline",
+            passed=True,
+            evidence_passed=True,
+            performance_passed=False,
+        )
+        closure = {
+            "passed": True,
+            "failures": [],
+            "contract": "historical_expert_closure_validation_v1",
+            "artifact": {"source_commit": "e" * 40},
+            "expert": {
+                "performance_passed": True,
+                "artifact_source_commit": "e" * 40,
+                "validator_source_commit": "f" * 40,
+            },
+            "consumer_source_attestation": {"unchanged": True},
+        }
+        changed = copy.deepcopy(closure)
+        changed["passed"] = False
+        changed["failures"] = ["consumer repository contains Git replacement refs"]
+        changed["consumer_source_attestation"] = {"unchanged": False}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            args = self._args(Path(temp_dir))
+            args.expert_baseline_gate_receipt = Path(temp_dir) / "receipt.json"
+            args.expert_baseline_gate_receipt.write_text("{}\n", encoding="utf-8")
+            with (
+                mock.patch(
+                    "psse_env.sft.cli.git_source_state",
+                    return_value=self._source_state(),
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.current_registry_sha256",
+                    return_value="c" * 64,
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.validate_historical_expert_closure",
+                    side_effect=[closure, changed],
+                ) as validate_closure,
+                mock.patch(
+                    "psse_env.sft.cli.validate_evaluation_artifact",
+                    side_effect=[base, base],
+                ),
+                self.assertRaisesRegex(
+                    GateError,
+                    "historical expert closure.*changed during baseline report publication",
+                ),
+            ):
+                _baseline_evaluation_gate(args)
+            report_exists = args.baseline_evaluation_report_output.exists()
+        self.assertFalse(report_exists)
+        self.assertEqual(validate_closure.call_count, 2)
+        self.assertEqual(
+            validate_closure.call_args_list[0], validate_closure.call_args_list[1]
+        )
+
+    def test_postpublication_base_change_removes_report(self) -> None:
+        closure = {
+            "passed": True,
+            "failures": [],
+            "contract": "historical_expert_closure_validation_v1",
+            "artifact": {"source_commit": "e" * 40},
+            "expert": {
+                "performance_passed": True,
+                "artifact_source_commit": "e" * 40,
+                "validator_source_commit": "f" * 40,
+            },
+        }
+        base = self._result(
+            role="base-baseline",
+            passed=True,
+            evidence_passed=True,
+            performance_passed=False,
+        )
+        changed_base = self._result(
+            role="base-baseline",
+            passed=True,
+            evidence_passed=True,
+            performance_passed=False,
+            source_commit="d" * 40,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            args = self._args(Path(temp_dir))
+            args.expert_baseline_gate_receipt = Path(temp_dir) / "receipt.json"
+            args.expert_baseline_gate_receipt.write_text("{}\n", encoding="utf-8")
+            with (
+                mock.patch(
+                    "psse_env.sft.cli.git_source_state",
+                    return_value=self._source_state(),
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.current_registry_sha256",
+                    return_value="c" * 64,
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.validate_historical_expert_closure",
+                    return_value=closure,
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.validate_evaluation_artifact",
+                    side_effect=[base, changed_base],
+                ) as validate_base,
+                self.assertRaisesRegex(
+                    GateError,
+                    "Base evidence changed during baseline report publication",
+                ),
+            ):
+                _baseline_evaluation_gate(args)
+            report_exists = args.baseline_evaluation_report_output.exists()
+        self.assertFalse(report_exists)
+        self.assertEqual(validate_base.call_count, 2)
+        self.assertEqual(
+            validate_base.call_args_list[0].kwargs,
+            validate_base.call_args_list[1].kwargs,
+        )
+
+    def test_postpublication_failed_safe_removal_is_explicit(self) -> None:
+        expert = self._result(
+            role="expert-baseline",
+            passed=True,
+            evidence_passed=True,
+            performance_passed=True,
+        )
+        changed_expert = self._result(
+            role="expert-baseline",
+            passed=False,
+            evidence_passed=False,
+            performance_passed=False,
+            evidence_failures=("artifact identity changed",),
+        )
+        base = self._result(
+            role="base-baseline",
+            passed=True,
+            evidence_passed=True,
+            performance_passed=False,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            args = self._args(Path(temp_dir))
+            with (
+                mock.patch(
+                    "psse_env.sft.cli.git_source_state",
+                    return_value=self._source_state(),
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.current_registry_sha256",
+                    return_value="c" * 64,
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.validate_evaluation_artifact",
+                    side_effect=[expert, base, changed_expert, base],
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.evaluation_gate._unlink_created_report",
+                    return_value=False,
+                ),
+                self.assertRaisesRegex(
+                    GateError,
+                    "newly created report could not be safely removed",
+                ),
+            ):
+                _baseline_evaluation_gate(args)
+
+    def test_failed_foreign_base_preserves_observed_source_label(self) -> None:
+        expert = self._result(
+            role="expert-baseline",
+            passed=True,
+            evidence_passed=True,
+            performance_passed=True,
+        )
+        base = self._result(
+            role="base-baseline",
+            passed=False,
+            evidence_passed=False,
+            performance_passed=False,
+            evidence_failures=("source commit differs",),
+            source_commit="d" * 40,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            args = self._args(Path(temp_dir))
+            with (
+                mock.patch(
+                    "psse_env.sft.cli.git_source_state",
+                    return_value=self._source_state(),
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.current_registry_sha256",
+                    return_value="c" * 64,
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.validate_evaluation_artifact",
+                    side_effect=[expert, base, expert, base],
+                ),
+                self.assertRaisesRegex(GateError, "source commit differs"),
+            ):
+                _baseline_evaluation_gate(args)
+            report = json.loads(
+                args.baseline_evaluation_report_output.read_text(encoding="utf-8")
+            )
+        self.assertEqual(report["base_artifact_source_commit"], "d" * 40)
+        self.assertEqual(report["base_expected_source_commit"], "a" * 40)
+
+    def test_baseline_report_is_no_clobber(self) -> None:
+        expert = self._result(
+            role="expert-baseline",
+            passed=True,
+            evidence_passed=True,
+            performance_passed=True,
+        )
+        base = self._result(
+            role="base-baseline",
+            passed=True,
+            evidence_passed=True,
+            performance_passed=False,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            args = self._args(Path(temp_dir))
+            args.baseline_evaluation_report_output.write_text(
+                "do not replace\n", encoding="utf-8"
+            )
+            with (
+                mock.patch(
+                    "psse_env.sft.cli.git_source_state",
+                    return_value=self._source_state(),
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.current_registry_sha256",
+                    return_value="c" * 64,
+                ),
+                mock.patch(
+                    "psse_env.sft.cli.validate_evaluation_artifact",
+                    side_effect=[expert, base, expert, base],
+                ),
+                self.assertRaisesRegex(ValueError, "already exists"),
+            ):
+                _baseline_evaluation_gate(args)
+            preserved = args.baseline_evaluation_report_output.read_text(
+                encoding="utf-8"
+            )
+        self.assertEqual(preserved, "do not replace\n")
 
     def test_base_evidence_failure_blocks_and_is_reported(self) -> None:
         expert = self._result(
@@ -1299,7 +1711,7 @@ class TestBaselineEvaluationGate(unittest.TestCase):
                 ),
                 mock.patch(
                     "psse_env.sft.cli.validate_evaluation_artifact",
-                    side_effect=[expert, base],
+                    side_effect=[expert, base, expert, base],
                 ),
                 self.assertRaisesRegex(GateError, "strict audit evidence is incomplete"),
             ):
@@ -1346,7 +1758,7 @@ class TestBaselineEvaluationGate(unittest.TestCase):
                 ),
                 mock.patch(
                     "psse_env.sft.cli.validate_evaluation_artifact",
-                    side_effect=[expert, base],
+                    side_effect=[expert, base, expert, base],
                 ),
                 self.assertRaisesRegex(GateError, "expert: minimum terminal rate"),
             ):

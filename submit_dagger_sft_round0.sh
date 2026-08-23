@@ -72,7 +72,7 @@ fi
 TRAIN_FILE=${TRAIN_FILE:-}
 VALIDATION_FILE=${VALIDATION_FILE:-$AGGREGATE_DIR/aggregate.validation.jsonl}
 TEST_FILE=${TEST_FILE:-$AGGREGATE_DIR/aggregate.test.jsonl}
-OUTPUT_DIR=${OUTPUT_DIR:-/scratch/yx3882/psse_agent/outputs/bc0_gemma4_31b_round0}
+OUTPUT_DIR=${OUTPUT_DIR:-/scratch/yx3882/psse_agent_outputs/bc0_gemma4_31b_round0}
 MAX_LENGTH=${MAX_LENGTH:-8192}
 ROWS_MIN=${ROWS_MIN:-1024}
 ROWS_MAX=${ROWS_MAX:-4096}
@@ -94,7 +94,8 @@ INITIAL_ADAPTER_REVISION=${INITIAL_ADAPTER_REVISION:-}
 PARENT_CHECKPOINT_RECEIPT=${PARENT_CHECKPOINT_RECEIPT:-}
 EVALUATION_SUITE=${EVALUATION_SUITE:-psse_env/dagger/suites/bc0_eval_suite_v1.json}
 EVALUATION_POLICY=${EVALUATION_POLICY:-psse_env/dagger/bc0_evaluation_policy.json}
-EXPERT_BASELINE_EVALUATION=${EXPERT_BASELINE_EVALUATION:-artifacts/evaluations/expert_baseline_evaluation.json}
+EXPERT_BASELINE_EVALUATION=${EXPERT_BASELINE_EVALUATION:-}
+EXPERT_BASELINE_GATE_RECEIPT=${EXPERT_BASELINE_GATE_RECEIPT:-}
 BASE_GEMMA_EVALUATION=${BASE_GEMMA_EVALUATION:-artifacts/evaluations/base_gemma_evaluation.json}
 EXPERT_POLICY_IDENTITY=${EXPERT_POLICY_IDENTITY:-bc0-observable-handoff-expert-v2}
 BASELINE_EVALUATION_REPORT=${BASELINE_EVALUATION_REPORT:-$OUTPUT_DIR/baseline_evaluation_gate.json}
@@ -182,6 +183,18 @@ if [[ "$TRAINING_STAGE" == "1" ]]; then
     fi
     if [[ "$STAGE" == "round1" && ( "$ROUND1_LR" != "0.00003" || "$ROUND1_EPOCHS" != "1" ) ]]; then
         echo "ERROR: Round-1 protocol requires ROUND1_LR=0.00003 and ROUND1_EPOCHS=1." >&2
+        exit 2
+    fi
+    if [[ -z "$EXPERT_POLICY_IDENTITY" ]]; then
+        echo "ERROR: STAGE=$STAGE requires EXPERT_POLICY_IDENTITY." >&2
+        exit 2
+    fi
+    if [[ -z "$EXPERT_BASELINE_EVALUATION" || "$EXPERT_BASELINE_EVALUATION" != /* || -L "$EXPERT_BASELINE_EVALUATION" || ! -f "$EXPERT_BASELINE_EVALUATION" ]]; then
+        echo "ERROR: STAGE=$STAGE requires the absolute existing historical expert artifact outside this checkout, not a symlink." >&2
+        exit 2
+    fi
+    if [[ -z "$EXPERT_BASELINE_GATE_RECEIPT" || "$EXPERT_BASELINE_GATE_RECEIPT" != /* || -L "$EXPERT_BASELINE_GATE_RECEIPT" || ! -f "$EXPERT_BASELINE_GATE_RECEIPT" ]]; then
+        echo "ERROR: STAGE=$STAGE requires an absolute existing historical expert gate receipt, not a symlink." >&2
         exit 2
     fi
 fi
@@ -293,13 +306,18 @@ if [[ "$CURRENT_SOURCE_COMMIT" != "$REVIEWED_SOURCE_COMMIT" ]]; then
     echo "ERROR: checkout $CURRENT_SOURCE_COMMIT is not reviewed freeze commit $REVIEWED_SOURCE_COMMIT." >&2
     exit 2
 fi
+REPO_ROOT_RESOLVED=$(realpath -e -- "$REPO_ROOT")
+OUTPUT_DIR_RESOLVED=$(realpath -m -- "$OUTPUT_DIR")
+if [[ "$TRAINING_STAGE" == "1" && ( "$OUTPUT_DIR_RESOLVED" == "$REPO_ROOT_RESOLVED" || "$OUTPUT_DIR_RESOLVED" == "$REPO_ROOT_RESOLVED"/* ) ]]; then
+    echo "ERROR: release training OUTPUT_DIR must be outside the source checkout." >&2
+    exit 2
+fi
 if [[ -n "$INITIAL_ADAPTER_PATH" ]]; then
     if [[ ! -d "$INITIAL_ADAPTER_PATH" ]]; then
         echo "ERROR: initial adapter directory does not exist: $INITIAL_ADAPTER_PATH" >&2
         exit 2
     fi
     INITIAL_ADAPTER_RESOLVED=$(realpath -e -- "$INITIAL_ADAPTER_PATH")
-    OUTPUT_DIR_RESOLVED=$(realpath -m -- "$OUTPUT_DIR")
     if [[ "$OUTPUT_DIR_RESOLVED" == "$INITIAL_ADAPTER_RESOLVED" || "$OUTPUT_DIR_RESOLVED" == "$INITIAL_ADAPTER_RESOLVED"/* || "$INITIAL_ADAPTER_RESOLVED" == "$OUTPUT_DIR_RESOLVED"/* ]]; then
         echo "ERROR: OUTPUT_DIR and INITIAL_ADAPTER_PATH must not overlap." >&2
         exit 2
@@ -473,16 +491,12 @@ if [[ "$STAGE" == "round0" || "$STAGE" == "round1" || "$STAGE" == "checkpoint-ga
     done
 fi
 if [[ "$STAGE" == "round0" || "$STAGE" == "round1" ]]; then
-    for path in "$EXPERT_BASELINE_EVALUATION" "$BASE_GEMMA_EVALUATION" "$PROCESSOR_GATE_REPORT"; do
+    for path in "$BASE_GEMMA_EVALUATION" "$PROCESSOR_GATE_REPORT"; do
         if [[ ! -f "$path" ]]; then
             echo "ERROR: STAGE=$STAGE requires prerequisite evidence: $path" >&2
             exit 2
         fi
     done
-    if [[ -z "$EXPERT_POLICY_IDENTITY" ]]; then
-        echo "ERROR: STAGE=$STAGE requires EXPERT_POLICY_IDENTITY." >&2
-        exit 2
-    fi
 fi
 if [[ "$STAGE" == "checkpoint-gate" ]]; then
     if [[ -z "$CHECKPOINT_EVALUATION" || ! -f "$CHECKPOINT_EVALUATION" ]]; then
@@ -767,10 +781,10 @@ case "$STAGE" in
         COMMAND=("$PYTHON" -m psse_env.sft smoke "${COMMON_ARGS[@]}" "${INITIAL_ADAPTER_ARGS[@]}" "${ROUND1_SOURCE_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --mode tiny-overfit --tiny-overfit-steps "$TINY_OVERFIT_STEPS" --learning-rate "$TINY_OVERFIT_LR" --load-in-4bit)
         ;;
     round0)
-        COMMAND=("$PYTHON" -m psse_env.sft train "${COMMON_ARGS[@]}" "${TRAIN_ARGS[@]}" "${TRAIN_PROTOCOL_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --output-dir "$OUTPUT_DIR" --learning-rate "$TRAIN_LR" --epochs "$TRAIN_EPOCHS" --smoke-steps 1 --evaluation-suite "$EVALUATION_SUITE" --evaluation-policy "$EVALUATION_POLICY" --expert-baseline-evaluation "$EXPERT_BASELINE_EVALUATION" --base-baseline-evaluation "$BASE_GEMMA_EVALUATION" --expert-policy-identity "$EXPERT_POLICY_IDENTITY" --baseline-evaluation-report-output "$BASELINE_EVALUATION_REPORT")
+        COMMAND=("$PYTHON" -m psse_env.sft train "${COMMON_ARGS[@]}" "${TRAIN_ARGS[@]}" "${TRAIN_PROTOCOL_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --output-dir "$OUTPUT_DIR" --learning-rate "$TRAIN_LR" --epochs "$TRAIN_EPOCHS" --smoke-steps 1 --evaluation-suite "$EVALUATION_SUITE" --evaluation-policy "$EVALUATION_POLICY" --expert-baseline-evaluation "$EXPERT_BASELINE_EVALUATION" --expert-baseline-gate-receipt "$EXPERT_BASELINE_GATE_RECEIPT" --base-baseline-evaluation "$BASE_GEMMA_EVALUATION" --expert-policy-identity "$EXPERT_POLICY_IDENTITY" --baseline-evaluation-report-output "$BASELINE_EVALUATION_REPORT")
         ;;
     round1)
-        COMMAND=("$PYTHON" -m psse_env.sft train "${COMMON_ARGS[@]}" "${TRAIN_ARGS[@]}" "${TRAIN_PROTOCOL_ARGS[@]}" "${INITIAL_ADAPTER_ARGS[@]}" "${ROUND1_SOURCE_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --output-dir "$OUTPUT_DIR" --learning-rate "$ROUND1_LR" --epochs "$ROUND1_EPOCHS" --smoke-steps 1 --evaluation-suite "$EVALUATION_SUITE" --evaluation-policy "$EVALUATION_POLICY" --expert-baseline-evaluation "$EXPERT_BASELINE_EVALUATION" --base-baseline-evaluation "$BASE_GEMMA_EVALUATION" --expert-policy-identity "$EXPERT_POLICY_IDENTITY" --baseline-evaluation-report-output "$BASELINE_EVALUATION_REPORT")
+        COMMAND=("$PYTHON" -m psse_env.sft train "${COMMON_ARGS[@]}" "${TRAIN_ARGS[@]}" "${TRAIN_PROTOCOL_ARGS[@]}" "${INITIAL_ADAPTER_ARGS[@]}" "${ROUND1_SOURCE_ARGS[@]}" --pilot-min-rows "$ROWS_MIN" --pilot-max-rows "$ROWS_MAX" --output-dir "$OUTPUT_DIR" --learning-rate "$ROUND1_LR" --epochs "$ROUND1_EPOCHS" --smoke-steps 1 --evaluation-suite "$EVALUATION_SUITE" --evaluation-policy "$EVALUATION_POLICY" --expert-baseline-evaluation "$EXPERT_BASELINE_EVALUATION" --expert-baseline-gate-receipt "$EXPERT_BASELINE_GATE_RECEIPT" --base-baseline-evaluation "$BASE_GEMMA_EVALUATION" --expert-policy-identity "$EXPERT_POLICY_IDENTITY" --baseline-evaluation-report-output "$BASELINE_EVALUATION_REPORT")
         ;;
     checkpoint-gate)
         COMMAND=("$PYTHON" -m psse_env.dagger.validate_evaluation --role checkpoint-promotion --artifact "$CHECKPOINT_EVALUATION" --policy "$EVALUATION_POLICY" --expected-source-commit "$REVIEWED_SOURCE_COMMIT" --expected-suite "$EVALUATION_SUITE" --expected-protocol canonical --expected-model-id "$CHECKPOINT_MODEL_ID" --expected-model-revision "$CHECKPOINT_MODEL_REVISION" --reference-artifact "$BASE_GEMMA_EVALUATION" --reference-model-id "$MODEL_NAME" --reference-model-revision "$MODEL_REVISION" --report-output "$CHECKPOINT_GATE_REPORT")

@@ -1,0 +1,83 @@
+{
+  "closures": {
+    "bc0-expert-ef30899-validator-99b5c59-v1": {
+      "artifact": {
+        "content_sha256": "2bbe9495c447df4da2da74e5f7e112f4e3c38f0467d792f90c5ba0fa25fab73e",
+        "sha256": "193f745da59c0b527e2ca64423053508e8708cbb3b86c879799e8abdcb4027ce",
+        "source_commit": "ef30899682ef84f54c0237df9a3eb5871e1d0d7d"
+      },
+      "evaluation": {
+        "episodes": 115,
+        "gate_policy_id": "bc0_closed_loop_hard_gate_v3",
+        "gate_policy_sha256": "2ae78f378f5852fb91a71264d109e6dca46d060b92bd13d5e93d6443b3572b5b",
+        "policy_identity": {
+          "explicit_policy_identity": "bc0-observable-handoff-expert-v2",
+          "model_id": null,
+          "model_revision": null
+        },
+        "protocol": "canonical",
+        "registry_sha256": "8b3815ddecf2d4f5b9b4d1d0760ff32e8cee7872b6ea04d4d5285db80c93b709",
+        "role": "expert-baseline",
+        "safety_counts": {
+          "evaluator_error_episodes": 0,
+          "false_commit_count": 0,
+          "false_finalization_count": 0,
+          "false_rollback_count": 0,
+          "healthy_component_corruption_episodes": 0
+        },
+        "suite_sha256": "195cc7acfcffafbcbf8fc6a52a5eed5111f42eec586187ab051f62b0a7892081"
+      },
+      "protected_sources": {
+        "psse_env/dagger/bc0_evaluation_policy.json": {
+          "git_blob_id": "ac87f69f11d15e93c0df800049ac8dede3ab3323",
+          "mode": "100644",
+          "sha256": "7cc2c94ba0c326d245d147d82fd03d547e7242b98b9c43b86b0a5c2e52c1f0bb"
+        },
+        "psse_env/dagger/evaluator.py": {
+          "git_blob_id": "7054fc7fc5ddb93a40e4a6049bba61a085da1f73",
+          "mode": "100644",
+          "sha256": "c1faa284fd22fb10e3eda92027de79492b2dfac68e2e3159a4d04a24bc1e42d6"
+        },
+        "psse_env/dagger/release_factories.py": {
+          "git_blob_id": "5659bfb734ca80cc42e3b603f472428b4c554c83",
+          "mode": "100644",
+          "sha256": "afb9955de6d84e439cf1c0ddafb3db85bbc09288f4e70adbc8bd1c32e3d4a2d5"
+        },
+        "psse_env/dagger/suites/bc0_eval_suite_v1.json": {
+          "git_blob_id": "45e00e6998a806a265843ad2430a73449c3ca5f0",
+          "mode": "100644",
+          "sha256": "195cc7acfcffafbcbf8fc6a52a5eed5111f42eec586187ab051f62b0a7892081"
+        }
+      },
+      "receipt": {
+        "sha256": "3c7d65f0f5f5821a779ff4dc5765b9a4774e0965cf079a594fe38bd655277475"
+      },
+      "validator": {
+        "contract": "gate_only_json_domain_revalidation_v1",
+        "history_commits": [
+          "9314472c785c4f3cb6cbf635bab22482b8005fb4",
+          "99b5c59a70063b89806f9f207b60b5a33c6cfe03"
+        ],
+        "history_paths": [
+          "psse_env/dagger/evaluation_gate.py",
+          "psse_env/dagger/test_evaluation_gate.py"
+        ],
+        "source_commit": "99b5c59a70063b89806f9f207b60b5a33c6cfe03",
+        "validator_sources": {
+          "psse_env/dagger/evaluation_gate.py": {
+            "git_blob_id": "5c9a6981721ef9d5c8c8675de56272fac94f810b",
+            "mode": "100644",
+            "sha256": "97394996f04a97ce926f57f1dff07b91fbdcf28462270be49a407568a82d8afd"
+          },
+          "psse_env/dagger/test_evaluation_gate.py": {
+            "git_blob_id": "cb50babf127c494f50f2ffb8d308dffb3d35976b",
+            "mode": "100644",
+            "sha256": "add9ac7cb4680c5bd0fab53588204578a1a75ec6c3bc4ea18be0895755d6b857"
+          }
+        }
+      }
+    }
+  },
+  "contract": "bc0_historical_expert_closure_registry_v1",
+  "schema_version": 1
+}

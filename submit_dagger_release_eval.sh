@@ -60,6 +60,7 @@ BASE_RECOVERY_STRESS_ARTIFACT=artifacts/evaluations/recovery_stress_base_gemma_e
 CHECKPOINT_PATH=${CHECKPOINT_PATH:-}
 CHECKPOINT_REVISION=${CHECKPOINT_REVISION:-}
 REVIEWED_SOURCE_COMMIT=${REVIEWED_SOURCE_COMMIT:-}
+EVALUATION_REPORT_DIR=${EVALUATION_REPORT_DIR:-}
 
 BASE_MODEL_ID=unsloth/gemma-4-31B-it
 BASE_MODEL_REVISION=8a796db4df380b178065ed910849477ff0e99c87
@@ -423,9 +424,19 @@ PY
         exit 2
     fi
 fi
-GATE_REPORT=${EVALUATION_ARTIFACT}.gate.json
+if [[ -z "$EVALUATION_REPORT_DIR" ]]; then
+    EVALUATION_REPORT_DIR="${REPO_ROOT%/}_evaluation_reports/$SOURCE_COMMIT"
+fi
+if [[ "$EVALUATION_REPORT_DIR" != /* ]]; then
+    echo "ERROR: EVALUATION_REPORT_DIR must be an absolute directory outside the source checkout." >&2
+    exit 2
+fi
+mkdir -p -- "$EVALUATION_REPORT_DIR"
+REPORT_RUN_ID=${SLURM_JOB_ID:-manual}
+EVALUATION_BASENAME=${EVALUATION_ARTIFACT##*/}
+GATE_REPORT="$EVALUATION_REPORT_DIR/${EVALUATION_BASENAME}.${REPORT_RUN_ID}.gate.json"
 if [[ "$EVALUATION_SCOPE" == "development_holdout" || "$EVALUATION_SCOPE" == "recovery_stress" ]]; then
-    GATE_REPORT=${EVALUATION_ARTIFACT}.study.json
+    GATE_REPORT="$EVALUATION_REPORT_DIR/${EVALUATION_BASENAME}.${REPORT_RUN_ID}.study.json"
 fi
 REFERENCE_ARTIFACT=${BASE_REFERENCE_ARTIFACT:-$BASE_EVALUATION_ARTIFACT}
 
@@ -438,7 +449,7 @@ PATH_AUDIT=(
     "$CHECKPOINT_RECEIPT"
     "$REFERENCE_ARTIFACT" "$CHECKPOINT_PATH"
 )
-"${PATH_AUDIT[@]}" <<'PY'
+PATH_AUDIT_OUTPUT=$("${PATH_AUDIT[@]}" <<'PY'
 import sys
 
 from psse_env.dagger.release_launcher import validate_release_evaluation_paths
@@ -481,8 +492,18 @@ validated = validate_release_evaluation_paths(
     reference_artifact=reference if mode == "checkpoint" else None,
     checkpoint_path=checkpoint if mode == "checkpoint" else None,
 )
-print(f"release path audit: {validated}")
+print(validated["artifact"])
+print(validated["report"])
 PY
+)
+mapfile -t VALIDATED_RELEASE_PATHS <<<"$PATH_AUDIT_OUTPUT"
+if [[ "${#VALIDATED_RELEASE_PATHS[@]}" != "2" || -z "${VALIDATED_RELEASE_PATHS[0]}" || -z "${VALIDATED_RELEASE_PATHS[1]}" ]]; then
+    echo "ERROR: release path audit did not return exactly two canonical paths." >&2
+    exit 2
+fi
+EVALUATION_ARTIFACT=${VALIDATED_RELEASE_PATHS[0]}
+GATE_REPORT=${VALIDATED_RELEASE_PATHS[1]}
+echo "release path audit: artifact=$EVALUATION_ARTIFACT report=$GATE_REPORT"
 mkdir -p artifacts/evaluations
 
 EVALUATE=(
@@ -597,21 +618,29 @@ if [[ "$EVALUATION_SCOPE" == "development_holdout" || "$EVALUATION_SCOPE" == "re
     STUDY_SEED=${TRAIN_SEED:-null}
     "$PYTHON" - "$EVALUATION_ARTIFACT" "$STUDY_MANIFEST" \
         "$STUDY_VARIANT" "$STUDY_SEED" "$SOURCE_COMMIT" "$GATE_REPORT" \
-        "$EVALUATION_SCOPE" <<'PY'
+        "$EVALUATION_SCOPE" "$EVALUATION_SUITE" <<'PY'
 import json
-import os
 from pathlib import Path
 import sys
 
+from psse_env.dagger.release_launcher import publish_external_release_report
 from psse_env.dagger.study_manifest import load_study_manifest
 from psse_env.dagger.study_metrics import extract_artifact_metrics
-from psse_env.sft.provenance import stable_json_sha256
+from psse_env.sft.provenance import git_source_state, stable_json_sha256
 
 artifact_path = Path(sys.argv[1])
+repo_root = Path.cwd().resolve(strict=True)
+source_before = git_source_state(repo_root)
+if (
+    source_before.get("release_eligible_source") is not True
+    or str(source_before.get("source_commit") or "").lower() != sys.argv[5]
+):
+    raise SystemExit("study report requires the exact clean reviewed source")
 manifest = load_study_manifest(sys.argv[2])
 variant = sys.argv[3]
 seed = None if sys.argv[4] == "null" else int(sys.argv[4])
 scope = sys.argv[7]
+suite_path = Path(sys.argv[8])
 artifact_role = {
     "development_holdout": "development_evaluation",
     "recovery_stress": "recovery_stress_evaluation",
@@ -643,25 +672,31 @@ report = {
 report["content_sha256"] = stable_json_sha256(report)
 serialized = json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n"
 report_path = Path(sys.argv[6])
-descriptor = os.open(
-    report_path,
-    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
-    0o600,
-)
-with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-    handle.write(serialized)
-    handle.flush()
-    os.fsync(handle.fileno())
-if os.name != "nt":
-    directory_descriptor = os.open(
-        report_path.parent,
-        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0),
+
+def postpublication_revalidate() -> None:
+    fresh_manifest = load_study_manifest(sys.argv[2])
+    fresh_metrics = extract_artifact_metrics(
+        artifact_path,
+        variant_id=variant,
+        study_seed=seed,
+        evaluation_scope=scope,
+        study_manifest=fresh_manifest,
+        expected_source_commit=sys.argv[5],
     )
-    try:
-        os.fsync(directory_descriptor)
-    finally:
-        os.close(directory_descriptor)
-print(json.dumps({"study_ingestion_report": str(report_path), **report}, sort_keys=True))
+    if fresh_metrics != metrics:
+        raise ValueError("study artifact or metric evidence changed after publication")
+    if git_source_state(repo_root) != source_before:
+        raise ValueError("reviewed source changed after study report publication")
+
+
+published = publish_external_release_report(
+    repo_root=repo_root,
+    report=report_path,
+    rendered=serialized,
+    protected_inputs=(artifact_path, Path(sys.argv[2]), suite_path),
+    postpublication_revalidate=postpublication_revalidate,
+)
+print(json.dumps({"study_ingestion_report": published, **report}, sort_keys=True))
 PY
 else
     printf 'gate command:'
