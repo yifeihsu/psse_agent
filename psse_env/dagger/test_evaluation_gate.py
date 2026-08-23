@@ -1240,7 +1240,9 @@ def _artifact(
         },
     }
     _rehash(artifact)
-    return artifact
+    # Gate fixtures represent artifacts after the evaluator has persisted and
+    # the validator has decoded them, including JSON's string-only object keys.
+    return json.loads(json.dumps(artifact))
 
 
 def _validate(
@@ -1317,6 +1319,61 @@ class EvaluationGateV3Tests(unittest.TestCase):
         self.assertTrue(result.performance_enforced)
         self.assertEqual(result.validation_role, "expert-baseline")
         self.assertEqual(result.frozen_suite_sha256, file_sha256(self.suite_path))
+
+    def test_exact_pinned_suite_survives_json_key_normalization(self) -> None:
+        suite_path, _contract, policy, artifact = self._fixture_for_suite(
+            "partial_success_retention"
+        )
+        artifact_path = self.root / "persisted-expert-artifact.json"
+        _write_json(
+            artifact_path,
+            artifact,
+        )
+
+        result = _validate(
+            artifact_path,
+            role="expert-baseline",
+            policy=policy,
+            suite_path=suite_path,
+        )
+
+        self.assertTrue(result.passed, result.failures)
+        self.assertTrue(result.evidence_passed, result.evidence_failures)
+
+    def test_json_key_normalization_does_not_hide_partial_value_tampering(self) -> None:
+        suite_path, _contract, policy, artifact = self._fixture_for_suite(
+            "partial_success_retention"
+        )
+        persisted = json.loads(json.dumps(artifact))
+        persisted["evaluation"]["suite_metrics"]["configuration"][
+            "episode_manifest"
+        ][0]["evaluation_intervention"]["setup_actions"][1]["arguments"][
+            "measurement_updates"
+        ]["0"] = 1.0
+        episode = persisted["evaluation"]["suite_metrics"]["episodes"][0]
+        episode["evaluation_intervention"]["contract"]["setup_actions"][1][
+            "arguments"
+        ]["measurement_updates"]["0"] = 1.0
+        episode["trace"][1]["action"]["arguments"]["measurement_updates"][
+            "0"
+        ] = 1.0
+        _rehash(persisted)
+
+        result = _validate(
+            persisted,
+            role="expert-baseline",
+            policy=policy,
+            suite_path=suite_path,
+        )
+
+        self.assertFalse(result.evidence_passed)
+        self.assertTrue(
+            any(
+                "does not match" in failure
+                for failure in result.evidence_failures
+            ),
+            result.evidence_failures,
+        )
 
     def test_generic_operator_escalation_is_unqualified_not_completion(self) -> None:
         artifact = _artifact(self.suite_path, self.contract)

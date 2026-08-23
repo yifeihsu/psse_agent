@@ -1947,6 +1947,20 @@ def validate_evaluation_artifact(
             suite_policy.get("minimum_physical_roots_per_suite")
         ),
     )
+    # The artifact is necessarily read back through JSON.  Compare it against
+    # the trusted suite fingerprint in that same domain: Python action
+    # normalization uses integer measurement-index keys, while JSON object
+    # keys are strings.  This conversion is expected-only so artifact evidence
+    # remains untouched and exact equality remains fail-closed.
+    expected_suite_contract = json.loads(
+        json.dumps(
+            expected_suite_contract,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    )
     expected_roots = [
         str(row["physical_root"])
         for row in expected_suite_contract["episode_manifest"]
