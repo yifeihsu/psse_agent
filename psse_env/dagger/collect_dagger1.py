@@ -657,10 +657,34 @@ def validate_d0_provenance_binding(
     }
     failed = sorted(name for name, passed in checks.items() if not passed)
     if failed:
-        raise RuntimeError(
-            "D0 aggregate is not clean/content-addressed for current source: "
-            + ", ".join(failed)
+        from psse_env.dagger.suite_builder import (
+            LOCAL_DIAGNOSTIC_ENV_VAR,
+            local_diagnostic_build_enabled,
         )
+
+        # Provenance checks answer "was this built by the expected source?" and
+        # are relaxable for a non-release local run.  Content-addressing checks
+        # answer "are these the bytes the manifest describes?" and are not: a
+        # diagnostic result computed over corrupted input is worthless, not
+        # merely non-reproducible.
+        integrity_checks = {
+            "generation_descriptor",
+            "generation_provenance_id",
+            "raw_sha256",
+            "aggregate_manifest_sha256",
+        }
+        integrity_failed = sorted(set(failed) & integrity_checks)
+        if integrity_failed or not local_diagnostic_build_enabled():
+            hint = (
+                ""
+                if integrity_failed
+                else f"  (set {LOCAL_DIAGNOSTIC_ENV_VAR}=1 for a non-release local build)"
+            )
+            raise RuntimeError(
+                "D0 aggregate is not clean/content-addressed for current source: "
+                + ", ".join(integrity_failed or failed)
+                + hint
+            )
 
 
 def validate_development_holdout_binding(
