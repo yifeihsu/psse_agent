@@ -197,6 +197,19 @@ def _require_current_d0(
     )
     d0_source = descriptor.get("source_state") if isinstance(descriptor, Mapping) else None
     dataset_hashes = provenance.get("dataset_hashes") if isinstance(provenance, Mapping) else None
+    from psse_env.dagger.suite_builder import (
+        LOCAL_DIAGNOSTIC_ENV_VAR,
+        local_diagnostic_build_enabled,
+    )
+
+    relaxed = local_diagnostic_build_enabled()
+    # Integrity is checked separately from provenance: a relaxed build may carry
+    # a non-release stamp or a drifted commit, but corrupted bytes still fail.
+    if not (
+        isinstance(dataset_hashes, Mapping)
+        and dataset_hashes.get(raw_path.name) == file_sha256(raw_path)
+    ):
+        raise RuntimeError("D0 aggregate raw bytes do not match provenance")
     if not (
         isinstance(provenance, Mapping)
         and provenance.get("release_eligible") is True
@@ -206,10 +219,11 @@ def _require_current_d0(
         and isinstance(d0_source, Mapping)
         and d0_source.get("release_eligible_source") is True
         and d0_source.get("source_commit") == source_state.get("source_commit")
-        and isinstance(dataset_hashes, Mapping)
-        and dataset_hashes.get(raw_path.name) == file_sha256(raw_path)
-    ):
-        raise RuntimeError("D0 aggregate is not byte-bound to the clean current source")
+    ) and not relaxed:
+        raise RuntimeError(
+            "D0 aggregate is not byte-bound to the clean current source"
+            f"  (set {LOCAL_DIAGNOSTIC_ENV_VAR}=1 for a non-release local build)"
+        )
     manifest_binding = validate_aggregate_manifest_binding(
         provenance,
         aggregate_dir=d0_aggregate_dir,
@@ -382,11 +396,20 @@ def build_dagger1_development_holdout(
 ) -> dict[str, Any]:
     """Generate an independent D1 development suite and provenance manifest."""
 
+    from psse_env.dagger.suite_builder import (
+        LOCAL_DIAGNOSTIC_ENV_VAR,
+        local_diagnostic_build_enabled,
+    )
+
     repo_root = Path(__file__).resolve().parents[2]
     source_state = git_source_state(repo_root)
-    if source_state.get("release_eligible_source") is not True:
+    if (
+        source_state.get("release_eligible_source") is not True
+        and not local_diagnostic_build_enabled()
+    ):
         raise RuntimeError(
             "DAgger-1 development holdout generation requires a clean source tree"
+            f"  (set {LOCAL_DIAGNOSTIC_ENV_VAR}=1 for a non-release local build)"
         )
     if (
         isinstance(candidate_multiplier, bool)

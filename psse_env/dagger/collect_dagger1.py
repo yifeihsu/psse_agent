@@ -3169,10 +3169,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("DAgger-1 requires the reviewed production environment factory")
     if args.policy_factory != DEFAULT_POLICY_FACTORY_SPEC:
         parser.error("DAgger-1 requires the reviewed Gemma release policy factory")
+    from psse_env.dagger.suite_builder import (
+        LOCAL_DIAGNOSTIC_ENV_VAR,
+        local_diagnostic_build_enabled,
+    )
+
     repo_root = Path(__file__).resolve().parents[2]
     source_state = git_source_state(repo_root)
-    if source_state.get("release_eligible_source") is not True:
-        raise RuntimeError("DAgger-1 collection requires a clean committed source tree")
+    if (
+        source_state.get("release_eligible_source") is not True
+        and not local_diagnostic_build_enabled()
+    ):
+        raise RuntimeError(
+            "DAgger-1 collection requires a clean committed source tree"
+            f"  (set {LOCAL_DIAGNOSTIC_ENV_VAR}=1 for a non-release local build)"
+        )
     scenarios = _load_json_or_jsonl(args.input)
     source_report = json.loads(
         args.scenario_generator_report.read_text(encoding="utf-8")
