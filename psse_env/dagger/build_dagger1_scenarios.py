@@ -135,10 +135,19 @@ def build_dagger1_scenarios(
     plan: Mapping[str, int],
     candidate_multiplier: int = 2,
 ) -> dict[str, Any]:
+    from psse_env.dagger.suite_builder import (
+        LOCAL_DIAGNOSTIC_ENV_VAR,
+        local_diagnostic_build_enabled,
+    )
+
+    relaxed = local_diagnostic_build_enabled()
     repo_root = Path(__file__).resolve().parents[2]
     source_state = git_source_state(repo_root)
-    if source_state.get("release_eligible_source") is not True:
-        raise RuntimeError("DAgger-1 scenario generation requires a clean source tree")
+    if source_state.get("release_eligible_source") is not True and not relaxed:
+        raise RuntimeError(
+            "DAgger-1 scenario generation requires a clean source tree"
+            f"  (set {LOCAL_DIAGNOSTIC_ENV_VAR}=1 for a non-release local build)"
+        )
     if (
         isinstance(candidate_multiplier, bool)
         or not isinstance(candidate_multiplier, int)
@@ -187,12 +196,26 @@ def build_dagger1_scenarios(
         and d0_source.get("release_eligible_source") is True
     ):
         raise RuntimeError("D0 aggregate source state is not release eligible")
+    commit_bound = d0_source.get("source_commit") == source_state.get("source_commit")
     if not (
         isinstance(d0_provenance, Mapping)
         and d0_provenance.get("release_eligible") is True
-        and d0_source.get("source_commit") == source_state.get("source_commit")
-    ):
-        raise RuntimeError("D0 aggregate is not release eligible for current source")
+        and commit_bound
+    ) and not relaxed:
+        raise RuntimeError(
+            "D0 aggregate is not release eligible for current source"
+            f"  (set {LOCAL_DIAGNOSTIC_ENV_VAR}=1 for a non-release local build)"
+        )
+    # The D0 raw-byte check below still runs: relaxing the *binding* must never
+    # relax integrity. A drifted commit is recorded, corrupted bytes still fail.
+    source_commit_drift = (
+        None
+        if commit_bound
+        else {
+            "d0_source_commit": d0_source.get("source_commit"),
+            "running_source_commit": source_state.get("source_commit"),
+        }
+    )
     d0_hashes = d0_provenance.get("dataset_hashes")
     d0_hashes = d0_hashes if isinstance(d0_hashes, Mapping) else {}
     if d0_hashes.get(d0_raw_path.name) != file_sha256(d0_raw_path):
@@ -677,6 +700,11 @@ def build_dagger1_scenarios(
         "schema_version": 1,
         "builder_contract": DAGGER1_SCENARIO_BUILDER_CONTRACT,
         "source_state": source_state,
+        # A relaxed build is self-identifying: any consumer can refuse it, and
+        # the drift it was permitted to ignore is recorded rather than hidden.
+        "local_diagnostic_build": bool(relaxed),
+        "release_reproducible": not relaxed,
+        "d0_source_commit_drift": source_commit_drift,
         "seed": int(seed),
         # ``plan`` is retained as the v2-compatible name for the primary plan.
         "plan": normalized_plan,
