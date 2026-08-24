@@ -6,6 +6,8 @@ import unittest
 from psse_env.sft.gates import GateError
 from psse_env.sft.research_smoke import (
     PROBE_STAGES,
+    _closed_loop_disposition,
+    _closed_loop_dispositions_pass,
     _closed_loop_slice,
     _probe_policy,
     select_probe_rows,
@@ -130,6 +132,83 @@ class ResearchSmokeSelectionTests(unittest.TestCase):
         }
         selected = _closed_loop_slice(suites, count=3)
         self.assertEqual(sum(len(rows) for rows in selected.values()), 3)
+
+    def test_closed_loop_disposition_accepts_evaluator_circuit_breaker(self) -> None:
+        result = _closed_loop_disposition(
+            {
+                "scenario_id": "loop",
+                "steps": 6,
+                "terminal": False,
+                "loop_detected": True,
+                "evaluator_error": None,
+                "control_quarantine": {
+                    "breaker_error_code": "evaluation_repeated_nonadvancing_failure"
+                },
+                "trace": [
+                    {"error_code": "evaluation_repeated_nonadvancing_failure"}
+                ],
+            },
+            max_steps=8,
+        )
+        self.assertEqual(result["disposition"], "evaluator_circuit_breaker")
+        self.assertTrue(result["bounded_stop_disposition"])
+        self.assertFalse(result["horizon_disposition"])
+        self.assertTrue(result["loop_detected"])
+
+    def test_closed_loop_disposition_rejects_unclassified_early_stop(self) -> None:
+        result = _closed_loop_disposition(
+            {
+                "scenario_id": "unknown",
+                "steps": 6,
+                "terminal": False,
+                "evaluator_error": None,
+                "trace": [{"error_code": "policy_exception"}],
+            },
+            max_steps=8,
+        )
+        self.assertIsNone(result["disposition"])
+        self.assertFalse(result["bounded_stop_disposition"])
+
+    def test_closed_loop_disposition_rejects_inconsistent_loop_breaker(self) -> None:
+        result = _closed_loop_disposition(
+            {
+                "scenario_id": "inconsistent",
+                "steps": 6,
+                "terminal": False,
+                "loop_detected": False,
+                "evaluator_error": None,
+                "trace": [
+                    {"error_code": "evaluation_repeated_nonadvancing_failure"}
+                ],
+            },
+            max_steps=8,
+        )
+        self.assertIsNone(result["disposition"])
+        self.assertFalse(result["bounded_stop_disposition"])
+
+    def test_closed_loop_disposition_preserves_terminal_and_horizon(self) -> None:
+        terminal = _closed_loop_disposition(
+            {"steps": 3, "terminal": True, "terminal_outcome": "resolved"},
+            max_steps=8,
+        )
+        horizon = _closed_loop_disposition(
+            {"steps": 8, "terminal": False},
+            max_steps=8,
+        )
+        self.assertEqual(terminal["disposition"], "terminal")
+        self.assertEqual(horizon["disposition"], "horizon")
+
+    def test_evaluator_error_fails_an_otherwise_terminal_disposition(self) -> None:
+        terminal = _closed_loop_disposition(
+            {
+                "steps": 3,
+                "terminal": True,
+                "terminal_outcome": "resolved",
+                "evaluator_error": "env_step:RuntimeError",
+            },
+            max_steps=8,
+        )
+        self.assertFalse(_closed_loop_dispositions_pass([terminal], expected=1))
 
 
 if __name__ == "__main__":

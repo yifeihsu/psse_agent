@@ -59,6 +59,19 @@ PROBE_STAGES = (
     "invalid_precondition_recovery",
     "long_bounded_history",
 )
+_BOUNDED_EVALUATOR_STOP_ERRORS = frozenset(
+    {
+        "evaluation_repeated_nonadvancing_diagnostic",
+        "evaluation_repeated_nonadvancing_failure",
+        "evaluation_specialized_tool_budget_exhausted",
+    }
+)
+_LOOP_BREAKER_STOP_ERRORS = frozenset(
+    {
+        "evaluation_repeated_nonadvancing_diagnostic",
+        "evaluation_repeated_nonadvancing_failure",
+    }
+)
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -548,26 +561,8 @@ def _run_closed_loop(
         require_policy_identity=False,
     ).as_dict()
     episodes = result.get("suite_metrics", {}).get("episodes", [])
-    dispositions = []
-    for episode in episodes:
-        terminal = episode.get("terminal") is True
-        at_horizon = int(episode.get("steps") or 0) >= max_steps
-        dispositions.append(
-            {
-                "scenario_id": episode.get("scenario_id"),
-                "physical_root": episode.get("physical_root"),
-                "terminal": terminal,
-                "terminal_outcome": episode.get("terminal_outcome"),
-                "horizon_disposition": not terminal and at_horizon,
-                "steps": episode.get("steps"),
-                "evaluator_error": episode.get("evaluator_error"),
-            }
-        )
-    passed = len(dispositions) == scenarios and all(
-        not row["evaluator_error"]
-        and (row["terminal"] or row["horizon_disposition"])
-        for row in dispositions
-    )
+    dispositions = [_closed_loop_disposition(row, max_steps=max_steps) for row in episodes]
+    passed = _closed_loop_dispositions_pass(dispositions, expected=scenarios)
     return {
         "passed": passed,
         "suite_path": str(suite_path),
@@ -575,6 +570,67 @@ def _run_closed_loop(
         "max_steps": max_steps,
         "dispositions": dispositions,
         "evaluation": result,
+    }
+
+
+def _closed_loop_dispositions_pass(
+    dispositions: Sequence[Mapping[str, Any]], *, expected: int
+) -> bool:
+    return len(dispositions) == expected and all(
+        not row["evaluator_error"]
+        and row["disposition"] is not None
+        for row in dispositions
+    )
+
+
+def _closed_loop_disposition(
+    episode: Mapping[str, Any], *, max_steps: int
+) -> dict[str, Any]:
+    """Classify every evaluator-controlled, bounded end to a smoke episode.
+
+    The evaluator intentionally stops before ``max_steps`` when its circuit
+    breaker blocks a repeated non-advancing action.  That is a policy-quality
+    failure, but not an integration failure: the model ran, the action boundary
+    failed closed, and the evaluator produced an explicit bounded disposition.
+    """
+
+    terminal = episode.get("terminal") is True
+    at_horizon = not terminal and int(episode.get("steps") or 0) >= max_steps
+    trace = episode.get("trace")
+    trace = trace if isinstance(trace, list) else []
+    last_step = trace[-1] if trace and isinstance(trace[-1], Mapping) else {}
+    control = episode.get("control_quarantine")
+    control = control if isinstance(control, Mapping) else {}
+    stop_error = str(
+        control.get("breaker_error_code") or last_step.get("error_code") or ""
+    )
+    loop_detected = episode.get("loop_detected") is True
+    bounded_stop = bool(
+        not terminal
+        and not at_horizon
+        and stop_error in _BOUNDED_EVALUATOR_STOP_ERRORS
+        and (stop_error not in _LOOP_BREAKER_STOP_ERRORS or loop_detected)
+    )
+    if terminal:
+        disposition = "terminal"
+    elif at_horizon:
+        disposition = "horizon"
+    elif bounded_stop:
+        disposition = "evaluator_circuit_breaker"
+    else:
+        disposition = None
+    return {
+        "scenario_id": episode.get("scenario_id"),
+        "physical_root": episode.get("physical_root"),
+        "terminal": terminal,
+        "terminal_outcome": episode.get("terminal_outcome"),
+        "horizon_disposition": at_horizon,
+        "bounded_stop_disposition": bounded_stop,
+        "bounded_stop_reason": stop_error or None,
+        "disposition": disposition,
+        "loop_detected": loop_detected,
+        "steps": episode.get("steps"),
+        "evaluator_error": episode.get("evaluator_error"),
     }
 
 
@@ -842,9 +898,13 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     run_state["closed_loop"] = closed_loop
     _write_json(output / "stage_closed_loop.json", _jsonable(run_state))
     if not closed_loop["passed"]:
-        raise GateError("Closed-loop smoke did not produce clean terminal/horizon dispositions")
+        raise GateError(
+            "Closed-loop smoke did not produce clean terminal/horizon/bounded-stop "
+            "dispositions"
+        )
     run_state["passed"] = True
     _write_json(final_path, _jsonable(run_state))
+    (output / "failure.json").unlink(missing_ok=True)
     return run_state
 
 
@@ -881,7 +941,11 @@ def main(argv: list[str] | None = None) -> int:
             "error": str(exc),
         }
         try:
-            _write_json(args.output_dir.expanduser().resolve() / "failure.json", failure)
+            failure_root = args.output_dir.expanduser().resolve()
+            _write_json(failure_root / "failure.json", failure)
+            job_id = str(os.environ.get("SLURM_JOB_ID") or "").strip()
+            if job_id:
+                _write_json(failure_root / f"failure_{job_id}.json", failure)
         except Exception:
             pass
         print(json.dumps(failure, indent=2, sort_keys=True), file=sys.stderr)
