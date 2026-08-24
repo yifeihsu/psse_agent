@@ -115,10 +115,13 @@ export PYTHONNOUSERSITE=1
 export PYTHONUNBUFFERED=1
 export PYTHONPATH="$RESEARCH_SOURCE_ROOT"
 export TOKENIZERS_PARALLELISM=false
-export HF_HOME=${HF_HOME:-/scratch/yx3882/.cache/huggingface}
-export HF_HUB_CACHE=${HF_HUB_CACHE:-$HF_HOME/hub}
-export HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-$HF_HOME/datasets}
-export TORCH_HOME=${TORCH_HOME:-/scratch/yx3882/.cache/torch}
+# Do not inherit a login-shell HF_HOME that points somewhere other than the
+# CPU-verified snapshot cache.  A caller may override the research cache
+# explicitly, but generic ambient Hugging Face variables are not authoritative.
+export HF_HOME="${RESEARCH_HF_HOME:-/scratch/yx3882/.cache/huggingface}"
+export HF_HUB_CACHE="$HF_HOME/hub"
+export HF_DATASETS_CACHE="$HF_HOME/datasets"
+export TORCH_HOME="${RESEARCH_TORCH_HOME:-/scratch/yx3882/.cache/torch}"
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-${SLURM_CPUS_PER_TASK:-8}}
