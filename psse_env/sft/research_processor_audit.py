@@ -492,8 +492,16 @@ def audit_model_rows(
             elif spec.prompt_profile == PROMPT_PROFILE_NATIVE:
                 if not example.empty_thought_injected:
                     row_failures.append("12B did not align the processor-provided empty thought channel")
-                if example.rendered_completion.startswith(FORCED_TOOL_PREFIX):
-                    row_failures.append("12B unexpectedly relies on the E4B forced prefix")
+                # A native Unified tool response legitimately begins with the
+                # same ``<|tool_call>call:`` marker used to condition E4B.  The
+                # distinction is where it comes from: 12B's inference prompt
+                # ends at the processor-provided thought channel and does not
+                # manually append those tokens.  Reject conditioning on the
+                # prompt surface, not a valid marker in the target response.
+                if inference_prompt.endswith(FORCED_TOOL_PREFIX):
+                    row_failures.append(
+                        "12B inference prompt manually appends the E4B forced prefix"
+                    )
             if example.prompt_truncated:
                 row_failures.append("prompt was truncated")
             if example.target_truncated:
