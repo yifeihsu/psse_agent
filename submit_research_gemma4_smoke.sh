@@ -3,14 +3,21 @@
 #SBATCH --account=torch_pr_627_general
 # A live 6.5k-token E4B optimizer step peaked at 45.0/46.1 GB and then needed
 # another 6.4 GB, so L40S is outside this full-length smoke's measured envelope.
-# NYU's RTX Pro 6000, H100, and H200 choices retain the requested broad routing.
-#SBATCH --constraint='rtx6000|h200|h100'
+# Default to NYU's 96-GB RTX Pro 6000 preemptible route; callers can override
+# this directive with --constraint=h100 or --constraint=h200 when appropriate.
+#SBATCH --constraint=rtx6000
 #SBATCH --gres=gpu:1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=08:00:00
+# NYU admits the generic RTX partition only when the job explicitly opts into
+# preemption. Slurm requeues the same job, and the smoke safely reuses a saved
+# adapter or restarts its bounded 20-step training stage when none was saved.
+#SBATCH --requeue
+#SBATCH --comment="preemption=yes;requeue=true"
+#SBATCH --open-mode=append
 #SBATCH --output=gemma4_research_smoke_%j.out
 #SBATCH --error=gemma4_research_smoke_%j.err
 
