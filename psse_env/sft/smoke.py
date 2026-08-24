@@ -595,21 +595,17 @@ def run_targeted_recovery_smoke(
     )
 
 
-def run_generation_tool_call_smoke(
+def _generate_single_tool_call_with_text(
     model: Any,
     processor: Any,
     example: PreparedExample,
     *,
     max_new_tokens: int | None = None,
-) -> ParsedToolCall:
-    """Greedily generate and require the expected canonical tool call."""
+) -> tuple[ParsedToolCall, str]:
     try:
         import torch
     except Exception as exc:  # pragma: no cover - depends on training environment.
         raise GateError(f"torch is required for generation smoke: {exc}") from exc
-    expected = example.expected_tool_call
-    if expected is None:
-        raise GateError("Generation smoke requires a tool-call target example.")
     try:
         completion_start = example.completion_mask.index(1)
     except ValueError as exc:
@@ -637,7 +633,43 @@ def run_generation_tool_call_smoke(
         )
     output_ids = generated[0][completion_start:].detach().cpu()
     text = decoder.decode(output_ids, skip_special_tokens=False)
-    parsed = parse_tool_call(text)
+    return parse_tool_call(text), text
+
+
+def generate_single_tool_call(
+    model: Any,
+    processor: Any,
+    example: PreparedExample,
+    *,
+    max_new_tokens: int | None = None,
+) -> ParsedToolCall:
+    """Greedily generate exactly one parseable tool call."""
+    parsed, _text = _generate_single_tool_call_with_text(
+        model,
+        processor,
+        example,
+        max_new_tokens=max_new_tokens,
+    )
+    return parsed
+
+
+def run_generation_tool_call_smoke(
+    model: Any,
+    processor: Any,
+    example: PreparedExample,
+    *,
+    max_new_tokens: int | None = None,
+) -> ParsedToolCall:
+    """Greedily generate and require the expected canonical tool call."""
+    expected = example.expected_tool_call
+    if expected is None:
+        raise GateError("Generation smoke requires a tool-call target example.")
+    parsed, text = _generate_single_tool_call_with_text(
+        model,
+        processor,
+        example,
+        max_new_tokens=max_new_tokens,
+    )
     if parsed != expected:
         raise GateError(
             "Generated tool call does not round-trip to the target: "

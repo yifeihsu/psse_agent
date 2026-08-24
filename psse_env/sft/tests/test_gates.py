@@ -24,7 +24,11 @@ from psse_env.sft.gates import (
     prepare_example,
     validate_grouped_pilot,
 )
-from psse_env.sft.smoke import run_generation_tool_call_smoke, run_training_smoke
+from psse_env.sft.smoke import (
+    generate_single_tool_call,
+    run_generation_tool_call_smoke,
+    run_training_smoke,
+)
 from psse_env.sft.provenance import (
     ROUND1_AGGREGATE_BUILDER_CONTRACT,
     file_sha256,
@@ -370,6 +374,31 @@ class TestSchemaTemplateAndMasks(unittest.TestCase):
         )
         with self.assertRaises(GateError):
             parse_tool_call("not a tool call")
+        with self.assertRaisesRegex(GateError, "multiple found"):
+            parse_tool_call(
+                '<|tool_call|>call:run_wls{"state_id":"active"}'
+                '<|tool_call|>call:run_wls{"state_id":"candidate"}'
+            )
+        self.assertEqual(
+            parse_tool_call(
+                '<|tool_call|>call:ask_for_more_evidence{'
+                '"case_path":"active",'
+                '"request":"inspect call:operator details"}'
+            ),
+            ParsedToolCall(
+                "ask_for_more_evidence",
+                {
+                    "case_path": "active",
+                    "request": "inspect call:operator details",
+                },
+            ),
+        )
+        repeated_json = (
+            '{"name":"run_wls","arguments":{"state_id":"active"}}'
+            '{"name":"run_wls","arguments":{"state_id":"active"}}'
+        )
+        with self.assertRaisesRegex(GateError, "multiple found"):
+            parse_tool_call(repeated_json)
 
     def test_empty_thought_channel_is_aligned_for_gemma4(self) -> None:
         example = prepare_example(row(), FakeThinkingProcessor(), max_length=10000)
@@ -2214,6 +2243,24 @@ class TestTrainingSmoke(unittest.TestCase):
         parsed = run_generation_tool_call_smoke(model, processor, example)
         self.assertEqual(parsed, ParsedToolCall("run_wls", {"state_id": "active"}))
         self.assertIsNotNone(model.seen_mm_token_type_ids)
+
+        class AlternateArgumentsModel(GeneratingModel):
+            def generate(self, input_ids, mm_token_type_ids=None, **_kwargs):
+                target = '<|tool_call|>call:run_wls{"state_id":"candidate"}'
+                suffix = torch.tensor(
+                    [[ord(char) for char in target]], device=input_ids.device
+                )
+                return torch.cat([input_ids, suffix], dim=1)
+
+        alternate = AlternateArgumentsModel()
+        with self.assertRaisesRegex(GateError, "does not round-trip"):
+            run_generation_tool_call_smoke(alternate, processor, example)
+        parsed = generate_single_tool_call(
+            alternate,
+            processor,
+            example,
+        )
+        self.assertEqual(parsed, ParsedToolCall("run_wls", {"state_id": "candidate"}))
 
     def test_lora_targets_are_language_tower_only(self) -> None:
         class Model:

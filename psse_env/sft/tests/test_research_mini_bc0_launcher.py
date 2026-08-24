@@ -33,6 +33,7 @@ def test_mini_bc0_launcher_is_bounded_and_resumable() -> None:
         'model_selection.get("revision")',
         'int(adapter_delta.get("changed_tensors") or 0) > 0',
         'reload.get("fresh_base_reconstructed") is True',
+        'reload.get("canary_mode") == "parseable_single_tool_call_after_reload"',
         'reload.get("canaries_passed") == 1',
         "mini_bc0_postflight.json",
     ):

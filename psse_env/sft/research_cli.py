@@ -30,7 +30,7 @@ from psse_env.research_models import (
 from .collator import AssistantOnlyCollator
 from .gates import GateError, PreparedExample, audit_dataset, load_exact_processor, load_jsonl
 from .research_rows import normalize_research_rows
-from .smoke import run_generation_tool_call_smoke, run_training_smoke
+from .smoke import generate_single_tool_call, run_training_smoke
 from .training import (
     LoraSettings,
     _records_dataset,
@@ -407,6 +407,7 @@ def _reload_saved_adapter(
     report: dict[str, Any] = {
         "adapter_reloaded": False,
         "fresh_base_reconstructed": False,
+        "canary_mode": "parseable_single_tool_call_after_reload",
         "canaries_requested": int(canary_count),
         "canaries_selected": 0,
         "generation_canary_pass": False,
@@ -435,10 +436,28 @@ def _reload_saved_adapter(
         ][:canary_count]
         report["canaries_selected"] = len(selected)
         for index, example in enumerate(selected):
+            expected = example.expected_tool_call
             try:
-                parsed = run_generation_tool_call_smoke(model, processor, example)
+                parsed = generate_single_tool_call(
+                    model,
+                    processor,
+                    example,
+                )
                 report["canaries"].append(
-                    {"index": index, "passed": True, "tool": parsed.name}
+                    {
+                        "index": index,
+                        "passed": True,
+                        "generated_tool": parsed.name,
+                        "generated_arguments": dict(parsed.arguments),
+                        "expected_tool": expected.name if expected is not None else None,
+                        "expected_arguments": (
+                            dict(expected.arguments) if expected is not None else None
+                        ),
+                        "target_tool_match": bool(
+                            expected is not None and parsed.name == expected.name
+                        ),
+                        "exact_action_match": parsed == expected,
+                    }
                 )
             except Exception as exc:
                 report["canaries"].append(

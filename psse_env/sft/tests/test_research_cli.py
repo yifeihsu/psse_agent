@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 from psse_env.research_models import GEMMA4_12B, GEMMA4_E2B_LEGACY, GEMMA4_E4B
 from psse_env.sft import research_cli
-from psse_env.sft.gates import GateError
+from psse_env.sft.gates import GateError, ParsedToolCall
 from psse_env.sft.research_cli import (
     ResearchTrainerSettings,
     _reload_saved_adapter,
@@ -258,6 +258,85 @@ class ResearchReloadTests(unittest.TestCase):
             self.assertFalse(report["adapter_reloaded"])
             self.assertIn("TypeError", report["reload_error"])
             self.assertTrue(marker.is_file())
+
+    def test_reload_canary_requires_parseable_generation_not_exact_free_text(
+        self,
+    ) -> None:
+        class FakeModel:
+            peft_config = {"default": object()}
+
+            def eval(self):
+                return None
+
+        class FakePeftModel:
+            @classmethod
+            def from_pretrained(cls, *_args, **_kwargs):
+                return FakeModel()
+
+        peft = types.ModuleType("peft")
+        peft.PeftModel = FakePeftModel
+        expected = ParsedToolCall(
+            "ask_for_more_evidence",
+            {
+                "case_path": "active",
+                "request": "operator_escalation:recovery_options_exhausted",
+            },
+        )
+        generated = ParsedToolCall(
+            "ask_for_more_evidence",
+            {
+                "case_path": "active",
+                "request": "Please provide additional diagnostic evidence.",
+            },
+        )
+        example = types.SimpleNamespace(expected_tool_call=expected)
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            research_cli, "_load_research_base", return_value=object()
+        ), patch.object(
+            research_cli,
+            "generate_single_tool_call",
+            return_value=generated,
+        ) as generation, patch.dict(sys.modules, {"peft": peft}):
+            report = _reload_saved_adapter(
+                ResearchTrainerSettings(
+                    model_name="unsloth/gemma-4-E2B-it",
+                    revision=REVISION,
+                    output_dir=directory,
+                ),
+                object(),
+                Path(directory),
+                [example],
+                canary_count=1,
+            )
+        self.assertTrue(report["generation_canary_pass"])
+        self.assertEqual(
+            report["canary_mode"], "parseable_single_tool_call_after_reload"
+        )
+        self.assertTrue(report["canaries"][0]["target_tool_match"])
+        self.assertFalse(report["canaries"][0]["exact_action_match"])
+        generation.assert_called_once()
+
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            research_cli, "_load_research_base", return_value=object()
+        ), patch.object(
+            research_cli,
+            "generate_single_tool_call",
+            side_effect=GateError("no parseable tool call"),
+        ), patch.dict(sys.modules, {"peft": peft}):
+            malformed = _reload_saved_adapter(
+                ResearchTrainerSettings(
+                    model_name="unsloth/gemma-4-E2B-it",
+                    revision=REVISION,
+                    output_dir=directory,
+                ),
+                object(),
+                Path(directory),
+                [example],
+                canary_count=1,
+            )
+        self.assertFalse(malformed["generation_canary_pass"])
+        self.assertFalse(malformed["canaries"][0]["passed"])
+        self.assertIn("no parseable tool call", malformed["canaries"][0]["error"])
 
     def test_complete_saved_adapter_can_finalize_without_retraining(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -274,6 +274,7 @@ postflight = {
         and expected_eval_steps.issubset(observed_eval_steps)
         and "checkpoint-32" in checkpoints
         and adapter_files_valid
+        and reload.get("canary_mode") == "parseable_single_tool_call_after_reload"
         and reload.get("fresh_base_reconstructed") is True
         and reload.get("adapter_reloaded") is True
         and reload.get("canaries_requested") == 1
@@ -298,6 +299,7 @@ postflight = {
     "adapter_weight_files": [path.name for path in adapter_weights],
     "adapter_base_model": adapter.get("base_model_name_or_path"),
     "fresh_base_reconstructed": reload.get("fresh_base_reconstructed") is True,
+    "canary_mode": reload.get("canary_mode"),
     "adapter_reloaded": reload.get("adapter_reloaded") is True,
     "canaries_requested": reload.get("canaries_requested"),
     "canaries_selected": reload.get("canaries_selected"),
