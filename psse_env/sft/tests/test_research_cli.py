@@ -17,7 +17,11 @@ from psse_env.sft.research_cli import (
     run_research_training,
     validate_research_splits,
 )
-from psse_env.sft.training import LoraSettings, resolve_language_lora_targets
+from psse_env.sft.training import (
+    LoraSettings,
+    resolve_language_lora_targets,
+    trl_config_kwargs,
+)
 
 
 REVISION = GEMMA4_E2B_LEGACY.revision
@@ -46,6 +50,37 @@ class ResearchSettingsTests(unittest.TestCase):
         self.assertEqual(args.model_choice, "12b")
         self.assertIsNone(args.model)
         self.assertIsNone(args.revision)
+
+    def test_research_best_checkpoint_selects_lowest_eval_loss(self) -> None:
+        settings = ResearchTrainerSettings(
+            model_name=GEMMA4_12B.model_id,
+            revision=GEMMA4_12B.revision,
+            architecture=GEMMA4_12B.architecture,
+            output_dir="output",
+            save_steps=50,
+            eval_steps=50,
+            load_best_model_at_end=True,
+            metric_for_best_model="eval_loss",
+            greater_is_better=False,
+        )
+        settings.validate()
+        kwargs = trl_config_kwargs(settings, has_validation=True)
+        self.assertTrue(kwargs["load_best_model_at_end"])
+        self.assertEqual(kwargs["metric_for_best_model"], "eval_loss")
+        self.assertFalse(kwargs["greater_is_better"])
+
+        with self.assertRaisesRegex(GateError, "multiple of eval_steps"):
+            ResearchTrainerSettings(
+                model_name=GEMMA4_12B.model_id,
+                revision=GEMMA4_12B.revision,
+                architecture=GEMMA4_12B.architecture,
+                output_dir="output",
+                save_steps=40,
+                eval_steps=30,
+                load_best_model_at_end=True,
+                metric_for_best_model="eval_loss",
+                greater_is_better=False,
+            ).validate()
 
     def test_warm_start_requires_no_tree_digest_or_release_binding(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

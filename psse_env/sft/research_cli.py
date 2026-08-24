@@ -79,6 +79,9 @@ class ResearchTrainerSettings:
     run_name: str | None = None
     initial_adapter_path: str | None = None
     resume_from_checkpoint: str | bool | None = None
+    load_best_model_at_end: bool = False
+    metric_for_best_model: str | None = None
+    greater_is_better: bool | None = None
 
     def resolved_model_spec(self) -> ResearchModelSpec:
         try:
@@ -110,6 +113,25 @@ class ResearchTrainerSettings:
             raise GateError("eval_steps must be positive")
         if self.save_strategy == "steps" and self.save_steps <= 0:
             raise GateError("save_steps must be positive")
+        if self.load_best_model_at_end:
+            if self.eval_strategy != self.save_strategy:
+                raise GateError(
+                    "best-model selection requires matching eval/save strategies"
+                )
+            if (
+                self.eval_strategy == "steps"
+                and self.save_steps % self.eval_steps != 0
+            ):
+                raise GateError(
+                    "best-model selection requires save_steps to be a multiple "
+                    "of eval_steps"
+                )
+            if self.metric_for_best_model != "eval_loss":
+                raise GateError("research best-model selection requires eval_loss")
+            if self.greater_is_better is not False:
+                raise GateError(
+                    "research eval-loss selection requires greater_is_better=False"
+                )
         if self.bf16 and self.fp16:
             raise GateError("bf16 and fp16 cannot both be enabled")
         if self.report_to not in {"none", "wandb"}:
@@ -512,6 +534,14 @@ def _completed_adapter_settings(value: Mapping[str, Any]) -> dict[str, Any]:
     # exists, and can legitimately differ on a Slurm requeue that only finalizes
     # reload/report artifacts.
     comparable.pop("resume_from_checkpoint", None)
+    # These fields were added after the first mini-BC0 artifact. Missing fields
+    # and their disabled defaults are equivalent for saved-adapter finalization.
+    if comparable.get("load_best_model_at_end") is False:
+        comparable.pop("load_best_model_at_end", None)
+    if comparable.get("metric_for_best_model") is None:
+        comparable.pop("metric_for_best_model", None)
+    if comparable.get("greater_is_better") is None:
+        comparable.pop("greater_is_better", None)
     return _jsonable(comparable)
 
 
@@ -801,6 +831,11 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--report-to", choices=("none", "wandb"), default="none")
     result.add_argument("--run-name")
     result.add_argument(
+        "--select-best-eval-loss",
+        action="store_true",
+        help="Reload the lowest-eval-loss checkpoint before publishing the adapter",
+    )
+    result.add_argument(
         "--resume-from-checkpoint",
         help="Use 'auto' for the latest Trainer checkpoint or supply a checkpoint path",
     )
@@ -854,6 +889,11 @@ def main(argv: list[str] | None = None) -> int:
                 else None
             ),
             resume_from_checkpoint=_resume_value(args.resume_from_checkpoint),
+            load_best_model_at_end=args.select_best_eval_loss,
+            metric_for_best_model=(
+                "eval_loss" if args.select_best_eval_loss else None
+            ),
+            greater_is_better=(False if args.select_best_eval_loss else None),
         )
         report = run_research_training(
             train_file=args.train,

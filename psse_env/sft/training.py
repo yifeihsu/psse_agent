@@ -554,6 +554,13 @@ def trl_config_kwargs(settings: TrainerSettings, *, has_validation: bool) -> dic
         "max_length": None,
         "report_to": settings.report_to,
         "run_name": settings.run_name,
+        "load_best_model_at_end": getattr(
+            settings, "load_best_model_at_end", False
+        ),
+        "metric_for_best_model": getattr(
+            settings, "metric_for_best_model", None
+        ),
+        "greater_is_better": getattr(settings, "greater_is_better", None),
     }
 
 
