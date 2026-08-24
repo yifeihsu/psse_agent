@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=gemma4-research-smoke
 #SBATCH --account=torch_pr_627_general
-#SBATCH --constraint='rtx6000|h200|h100|l40s'
+# A live 6.5k-token E4B optimizer step peaked at 45.0/46.1 GB and then needed
+# another 6.4 GB, so L40S is outside this full-length smoke's measured envelope.
+# NYU's RTX Pro 6000, H100, and H200 choices retain the requested broad routing.
+#SBATCH --constraint='rtx6000|h200|h100'
 #SBATCH --gres=gpu:1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -127,6 +130,7 @@ export TRANSFORMERS_OFFLINE=1
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-${SLURM_CPUS_PER_TASK:-8}}
 export RESEARCH_MAX_INPUT_TOKENS=16384
 export RESEARCH_MAX_NEW_TOKENS=256
+export PYTORCH_ALLOC_CONF="${RESEARCH_PYTORCH_ALLOC_CONF:-expandable_segments:True}"
 
 python -m psse_env.sft research-cache \
   --model-choice "$MODEL_CHOICE" \
