@@ -485,6 +485,17 @@ def _jsonable(value: Any) -> Any:
     return str(value)
 
 
+def _completed_adapter_settings(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Return settings that must still match after training has completed."""
+    comparable = dict(value)
+    # Resume selection controls how Trainer reaches the completed adapter.  It is
+    # no longer scientifically relevant once the atomically published lora/ tree
+    # exists, and can legitimately differ on a Slurm requeue that only finalizes
+    # reload/report artifacts.
+    comparable.pop("resume_from_checkpoint", None)
+    return _jsonable(comparable)
+
+
 def _write_report(path: Path, payload: Mapping[str, Any]) -> None:
     temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
     temporary.write_text(
@@ -560,7 +571,9 @@ def run_research_training(
             completion_errors.append("adapter_delta_not_preserved")
         stage_settings = training_stage.get("settings")
         stage_settings = stage_settings if isinstance(stage_settings, Mapping) else {}
-        if _jsonable(stage_settings) != _jsonable(asdict(settings)):
+        if _completed_adapter_settings(stage_settings) != _completed_adapter_settings(
+            asdict(settings)
+        ):
             completion_errors.append("training_stage_settings_mismatch")
         stage_lora = training_stage.get("lora")
         stage_lora = stage_lora if isinstance(stage_lora, Mapping) else {}

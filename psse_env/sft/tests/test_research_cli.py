@@ -268,6 +268,8 @@ class ResearchReloadTests(unittest.TestCase):
                 output_dir=directory,
             )
             data_report = {"splits": "checked"}
+            stage_settings = asdict(settings)
+            stage_settings["resume_from_checkpoint"] = True
             adapter = output / "lora"
             adapter.mkdir()
             (adapter / "adapter_config.json").write_text(
@@ -279,7 +281,7 @@ class ResearchReloadTests(unittest.TestCase):
                     {
                         "training_metrics": {"train_loss": 0.5},
                         "adapter_delta": {"changed_tensors": 1},
-                        "settings": asdict(settings),
+                        "settings": stage_settings,
                         "lora": asdict(LoraSettings()),
                         "inputs": {
                             "train": str(Path("train.jsonl").resolve()),
@@ -312,6 +314,12 @@ class ResearchReloadTests(unittest.TestCase):
                 )
         self.assertTrue(report["passed"])
         self.assertTrue(report["resumed_saved_adapter_finalization"])
+        self.assertTrue(
+            report["preserved_training_stage"]["settings"][
+                "resume_from_checkpoint"
+            ]
+        )
+        self.assertIsNone(report["settings"]["resume_from_checkpoint"])
         reload_adapter.assert_called_once()
         load_base.assert_not_called()
 
