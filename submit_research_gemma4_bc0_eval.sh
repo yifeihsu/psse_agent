@@ -36,8 +36,8 @@ D0_ROOT="${RESEARCH_D0_ROOT:-/scratch/yx3882/dagger_release_a5a7574_20260823/rou
 D0_TRAIN="$D0_ROOT/aggregate.train_view.jsonl"
 FULL_BC0="$RESEARCH_RUN_ROOT/bc0/full"
 POSTFLIGHT="$FULL_BC0/full_bc0_postflight.json"
-ADAPTER_DIR="$FULL_BC0/lora"
-OUTPUT_DIR="$RESEARCH_RUN_ROOT/evaluation/bc0_12b"
+ADAPTER_DIR="${RESEARCH_ADAPTER_DIR:-$FULL_BC0/lora}"
+OUTPUT_DIR="${RESEARCH_EVAL_OUTPUT_DIR:-$RESEARCH_RUN_ROOT/evaluation/bc0_12b}"
 D0_REPORT="$OUTPUT_DIR/research_bc0_d0_eval.json"
 
 for required in \

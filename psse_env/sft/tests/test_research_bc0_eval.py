@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 from unittest.mock import patch
 
+from psse_env.dagger.release_factories import deterministic_case_loader
 from psse_env.research_models import GEMMA4_12B
 from psse_env.sft import research_bc0_eval
 from psse_env.sft.research_bc0_eval import (
@@ -21,6 +22,7 @@ from psse_env.sft.research_bc0_eval import (
     evaluate_research_suite,
     load_d0_training_roots,
     load_frozen_standard_suite,
+    summarize_closed_loop_outcomes,
     summarize_policy_behavior,
 )
 
@@ -252,6 +254,9 @@ class ResearchBc0EvaluationTests(unittest.TestCase):
             },
         )
         self.assertEqual(calls["evaluator_kwargs"]["max_steps"], 24)
+        self.assertIs(
+            calls["evaluator_kwargs"]["case_loader"], deterministic_case_loader
+        )
         self.assertFalse(calls["evaluator_kwargs"]["require_release_environment"])
         self.assertFalse(calls["evaluator_kwargs"]["require_policy_identity"])
         self.assertIn("suite_metrics", payload)
@@ -306,12 +311,85 @@ class ResearchBc0EvaluationTests(unittest.TestCase):
         self.assertEqual(behavior["schema_valid_actions"], 1)
         self.assertEqual(behavior["schema_valid_action_rate"], 0.5)
 
+    def test_explicit_case_loader_override_reaches_closed_loop_evaluator(self) -> None:
+        calls: dict[str, Any] = {}
+
+        def sentinel_loader(value: Any) -> Any:
+            return value
+
+        def evaluator(_suites: Mapping[str, Any], **kwargs: Any) -> _FakeEvaluationResult:
+            calls.update(kwargs)
+            return _FakeEvaluationResult(
+                {
+                    "score": 0.0,
+                    "metrics": {},
+                    "suite_metrics": {"episodes": []},
+                }
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            evaluate_research_suite(
+                [_scenario("root", "parameter")],
+                adapter_path=Path(directory),
+                seed=23,
+                max_steps=24,
+                policy_loader=lambda *_args, **_kwargs: _FakePolicy(),
+                evaluator=evaluator,
+                environment_factory=lambda **_kwargs: None,
+                case_loader=sentinel_loader,
+                expert_factory=_FakeExpert,
+                progress_callback=None,
+            )
+
+        self.assertIs(calls["case_loader"], sentinel_loader)
+
+    def test_outcome_summary_does_not_conflate_resolution_and_handoff(self) -> None:
+        summary = summarize_closed_loop_outcomes(
+            {
+                "suite_metrics": {
+                    "overall": {
+                        "episodes": 4,
+                        "final_physical_success_episodes": 1,
+                        "final_physical_success_rate": 0.25,
+                        "audited_post_correction_handoff_episodes": 2,
+                        "audited_post_correction_handoff_rate": 0.5,
+                        "audited_completion_episodes": 3,
+                        "audited_completion_rate": 0.75,
+                    }
+                }
+            }
+        )
+
+        self.assertEqual(
+            summary["strict_resolved_physical_success"],
+            {
+                "episodes": 1,
+                "rate": 0.25,
+                "terminal_outcome": "resolved",
+                "requires_strict_physical_audit": True,
+            },
+        )
+        self.assertEqual(
+            summary["audited_post_correction_handoff"],
+            {
+                "episodes": 2,
+                "rate": 0.5,
+                "terminal_outcome": "operator_escalation",
+                "requires_versioned_safety_clean_assessment": True,
+            },
+        )
+        self.assertEqual(
+            summary["audited_completion_union"],
+            {"episodes": 3, "rate": 0.75},
+        )
+
 
 class ResearchBc0InputTests(unittest.TestCase):
     def test_cli_returns_nonzero_when_readiness_fails(self) -> None:
         report = {
             "passed": False,
             "phase": "d0",
+            "closed_loop_outcomes": {},
             "readiness_gate": {"passed": False, "failures": ["schema"]},
             "policy_behavior": {"schema_valid_action_rate": 0.5},
         }

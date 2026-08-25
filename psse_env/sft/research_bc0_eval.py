@@ -20,7 +20,7 @@ from .gates import GateError, load_jsonl
 from .provenance import file_sha256, stable_json_sha256
 
 
-RESEARCH_BC0_EVAL_CONTRACT = "research_gemma4_12b_bc0_baseline_v1"
+RESEARCH_BC0_EVAL_CONTRACT = "research_gemma4_12b_bc0_baseline_v2"
 REQUIRED_MAX_INPUT_TOKENS = 32768
 DEFAULT_SEED = 20260720
 DEFAULT_MAX_STEPS = 24
@@ -49,6 +49,14 @@ def _atomic_json(path: Path, payload: Any) -> None:
         encoding="utf-8",
     )
     os.replace(temporary, path)
+
+
+def _callable_identity(value: Callable[..., Any]) -> str:
+    module = str(getattr(value, "__module__", "") or type(value).__module__)
+    qualname = str(
+        getattr(value, "__qualname__", "") or type(value).__qualname__
+    )
+    return f"{module}:{qualname}"
 
 
 def _training_root(row: Mapping[str, Any]) -> str:
@@ -326,6 +334,7 @@ def evaluate_research_suite(
     policy_loader: Callable[..., Any] | None = None,
     evaluator: Callable[..., Any] | None = None,
     environment_factory: Callable[..., Any] | None = None,
+    case_loader: Callable[[Any], Any] | None = None,
     expert_factory: Callable[[], Any] | None = None,
     progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -341,6 +350,10 @@ def evaluate_research_suite(
         from psse_env.dagger.release_factories import production_environment_factory
 
         environment_factory = production_environment_factory
+    if case_loader is None:
+        from psse_env.dagger.release_factories import deterministic_case_loader
+
+        case_loader = deterministic_case_loader
 
     records: list[dict[str, Any]] = []
     policy = policy_loader(
@@ -364,11 +377,44 @@ def evaluate_research_suite(
         minimum_suites=1,
         minimum_episodes_per_suite=len(scenarios),
         minimum_roots_per_suite=len(scenarios),
+        case_loader=case_loader,
         require_release_environment=False,
         require_policy_identity=False,
         progress_callback=progress_callback,
     ).as_dict()
     return result, summarize_policy_behavior(result, records, expert_factory=expert_factory)
+
+
+def summarize_closed_loop_outcomes(
+    evaluation: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Expose strict resolution and audited handoff as distinct outcomes."""
+
+    suite_metrics = evaluation.get("suite_metrics")
+    suite_metrics = suite_metrics if isinstance(suite_metrics, Mapping) else {}
+    overall = suite_metrics.get("overall")
+    overall = overall if isinstance(overall, Mapping) else {}
+    return {
+        "episodes": int(overall.get("episodes") or 0),
+        "strict_resolved_physical_success": {
+            "episodes": int(overall.get("final_physical_success_episodes") or 0),
+            "rate": overall.get("final_physical_success_rate"),
+            "terminal_outcome": "resolved",
+            "requires_strict_physical_audit": True,
+        },
+        "audited_post_correction_handoff": {
+            "episodes": int(
+                overall.get("audited_post_correction_handoff_episodes") or 0
+            ),
+            "rate": overall.get("audited_post_correction_handoff_rate"),
+            "terminal_outcome": "operator_escalation",
+            "requires_versioned_safety_clean_assessment": True,
+        },
+        "audited_completion_union": {
+            "episodes": int(overall.get("audited_completion_episodes") or 0),
+            "rate": overall.get("audited_completion_rate"),
+        },
+    }
 
 
 def _d0_predecessor(path: Path, adapter_id: str) -> None:
@@ -412,6 +458,7 @@ def run(
     policy_loader: Callable[..., Any] | None = None,
     evaluator: Callable[..., Any] | None = None,
     environment_factory: Callable[..., Any] | None = None,
+    case_loader: Callable[[Any], Any] | None = None,
     expert_factory: Callable[[], Any] | None = None,
     generator_factory: Callable[..., Any] | None = None,
     partitioner: Callable[..., Mapping[str, Any]] | None = None,
@@ -469,6 +516,12 @@ def run(
         )
         report_path = output / "research_bc0_d1_eval.json"
 
+    resolved_case_loader = case_loader
+    if resolved_case_loader is None:
+        from psse_env.dagger.release_factories import deterministic_case_loader
+
+        resolved_case_loader = deterministic_case_loader
+
     evaluation, behavior = evaluate_research_suite(
         scenarios,
         adapter_path=adapter,
@@ -477,6 +530,7 @@ def run(
         policy_loader=policy_loader,
         evaluator=evaluator,
         environment_factory=environment_factory,
+        case_loader=resolved_case_loader,
         expert_factory=expert_factory,
         progress_callback=progress_callback,
     )
@@ -502,6 +556,9 @@ def run(
             "prompt_profile": GEMMA4_12B.prompt_profile,
         },
         "max_input_tokens": REQUIRED_MAX_INPUT_TOKENS,
+        "evaluation_wiring": {
+            "case_loader": _callable_identity(resolved_case_loader),
+        },
         "d0_training": {
             "path": str(d0_train),
             "rows": d0_rows,
@@ -509,6 +566,7 @@ def run(
         },
         "suite": suite,
         "policy_behavior": behavior,
+        "closed_loop_outcomes": summarize_closed_loop_outcomes(evaluation),
         "readiness_gate": {
             "passed": not failures,
             "minimum_schema_valid_action_rate": SCHEMA_VALID_READINESS_RATE,
@@ -531,6 +589,7 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "passed": report["passed"],
                 "phase": report["phase"],
+                "closed_loop_outcomes": report["closed_loop_outcomes"],
                 "readiness_gate": report["readiness_gate"],
                 "policy_behavior": report["policy_behavior"],
             },
@@ -556,5 +615,6 @@ __all__ = [
     "load_frozen_standard_suite",
     "main",
     "run",
+    "summarize_closed_loop_outcomes",
     "summarize_policy_behavior",
 ]

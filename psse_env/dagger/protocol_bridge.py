@@ -497,6 +497,7 @@ def canonical_to_internal_action(action: Mapping[str, Any] | str) -> dict[str, A
         _move_key(arguments, "case_path", "state_id")
 
     if internal == CORRECT_TOPOLOGY:
+        _move_key(arguments, "line_index1", "line_index")
         desired = arguments.pop("desired_status", None)
         if desired is not None:
             arguments["status"] = int(bool(desired))
