@@ -15,10 +15,13 @@ Two measured pathologies motivate this module (traced on the frozen
 * E2B goes *silent* in deep states -- generation produces zero tool calls
   (9/9 Round-1 failures).  Greedy decoding reproduces the silence
   deterministically, so the guard retries once with sampling enabled.
-* 12B *locks onto stale references* -- it keeps addressing a candidate state
-  that has already closed (8/12 Round-1 failures, 85% of failed steps).  The
-  correct references are printed in the observation every step, so the guard
-  checks the emitted action against them and retries once when stale.
+* 12B enters absorbing lifecycle loops.  The original stale-reference
+  hypothesis is REFUTED: the locked reference is the open, valid candidate,
+  and the guard below correctly never fires.  The true failure is
+  candidate-disposition classification (commit chosen for a rejected or
+  inconclusive verification, rollback for an acceptable one), after which the
+  still-open candidate blocks other actions.  The guard is retained as the
+  measured null ablation.
 
 Both guards retry at most once and then pass the original result through,
 including exceptions: a guard that silently substitutes actions would turn an
