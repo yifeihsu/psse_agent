@@ -193,6 +193,59 @@ def load_d0_roots(path: str | Path) -> set[str]:
     return roots
 
 
+def load_protected_suite_roots(paths: Sequence[str | Path]) -> dict[str, Any]:
+    """Load and fingerprint physical roots from repeatable JSON/JSONL suites."""
+
+    artifacts: list[dict[str, Any]] = []
+    protected_roots: set[str] = set()
+    for value in paths:
+        path = Path(value).expanduser().resolve(strict=True)
+        if path.suffix.lower() == ".jsonl":
+            payload: Any = load_jsonl(path)
+        else:
+            payload = _read_json(path)
+
+        roots: set[str] = set()
+
+        def visit(node: Any) -> None:
+            if isinstance(node, Mapping):
+                root = _row_root(node)
+                if root:
+                    roots.add(root)
+                for child in node.values():
+                    visit(child)
+            elif isinstance(node, list):
+                for child in node:
+                    visit(child)
+
+        visit(payload)
+        if not roots:
+            raise ValueError(
+                f"Protected suite contains no physical_root_fingerprint: {path}"
+            )
+        content_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        artifacts.append(
+            {
+                "path": str(path),
+                "content_sha256": content_sha256,
+                "physical_root_count": len(roots),
+            }
+        )
+        protected_roots.update(roots)
+
+    roots_sorted = sorted(protected_roots)
+    return {
+        "contract": "research_protected_suites_v1",
+        "paths": [item["path"] for item in artifacts],
+        "artifacts": artifacts,
+        "physical_root_count": len(roots_sorted),
+        "physical_roots_sha256": hashlib.sha256(
+            _stable_json(roots_sorted).encode("utf-8")
+        ).hexdigest(),
+        "physical_roots": roots_sorted,
+    }
+
+
 def validate_d0_training_roots(
     rows: Sequence[Mapping[str, Any]], *, raw_roots: set[str]
 ) -> set[str]:
@@ -272,7 +325,9 @@ def allocate_scenarios(
     train_plan: Mapping[str, int],
     development_plan: Mapping[str, int],
     seed: int,
+    protected_roots: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    forbidden_roots = set(d0_roots) | set(protected_roots or set())
     by_family: dict[str, list[dict[str, Any]]] = {
         family: [] for family in set(train_plan) | set(development_plan)
     }
@@ -281,7 +336,7 @@ def allocate_scenarios(
         envelope = copy.deepcopy(dict(candidate))
         root = _row_root(envelope)
         family = _scenario_family(envelope)
-        if not root or family not in by_family or root in d0_roots:
+        if not root or family not in by_family or root in forbidden_roots:
             continue
         previous = root_owner.get(root)
         if previous is not None:
@@ -322,8 +377,8 @@ def allocate_scenarios(
     development_roots = {_row_root(row) for row in development}
     if train_roots & development_roots:
         raise ValueError("D1 training and development physical roots overlap")
-    if (train_roots | development_roots) & d0_roots:
-        raise ValueError("D1 scenarios overlap D0 physical roots")
+    if (train_roots | development_roots) & forbidden_roots:
+        raise ValueError("D1 scenarios overlap D0 or protected physical roots")
     return training, development
 
 
@@ -363,7 +418,9 @@ def prepare_scenario_split(
     candidate_multiplier: int,
     seed: int,
     run_descriptor: Mapping[str, Any],
+    protected_roots: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    protected_roots = set(protected_roots or set())
     train_path = output_dir / "training_scenarios.json"
     development_path = output_dir / "development_scenarios.json"
     config_path = output_dir / "config.json"
@@ -380,6 +437,8 @@ def prepare_scenario_split(
             "d0_raw_path": str(d0_raw_path.resolve()),
             "run_descriptor": dict(run_descriptor),
         }
+        if protected_roots:
+            expected["protected_roots"] = sorted(protected_roots)
         mismatches = [key for key, value in expected.items() if config.get(key) != value]
         if mismatches:
             raise RuntimeError(
@@ -411,6 +470,7 @@ def prepare_scenario_split(
             train_plan=train_plan,
             development_plan=development_plan,
             seed=seed,
+            protected_roots=protected_roots,
         )
         source = git_source_state(Path(__file__).resolve().parents[1])
         config = {
@@ -427,6 +487,8 @@ def prepare_scenario_split(
             "training_roots": [_row_root(row) for row in training],
             "development_roots": [_row_root(row) for row in development],
         }
+        if protected_roots:
+            config["protected_roots"] = sorted(protected_roots)
         _write_json(train_path, training)
         _write_json(development_path, development)
         _write_json(config_path, config)
@@ -439,7 +501,9 @@ def prepare_scenario_split(
         raise RuntimeError("Stored research scenario is missing a physical root")
     if len(train_roots) != len(training) or len(development_roots) != len(development):
         raise RuntimeError("Stored research scenario arrays repeat a physical root")
-    if train_roots & development_roots or (train_roots | development_roots) & d0_roots:
+    if train_roots & development_roots or (train_roots | development_roots) & (
+        set(d0_roots) | protected_roots
+    ):
         raise RuntimeError("Stored research scenario split violates physical-root isolation")
     return training, development
 
@@ -995,6 +1059,17 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--d0-raw", required=True, type=Path)
     result.add_argument("--d0-train", required=True, type=Path)
+    result.add_argument(
+        "--protected-suite",
+        action="append",
+        default=[],
+        type=Path,
+        metavar="PATH",
+        help=(
+            "Repeatable JSON or JSONL suite whose physical roots are excluded "
+            "from both generated training and development scenarios"
+        ),
+    )
     result.add_argument("--adapter-path", required=True, type=Path)
     result.add_argument("--output-dir", required=True, type=Path)
     result.add_argument(
@@ -1078,6 +1153,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     d0_train_roots = validate_d0_training_roots(
         d0_train_rows, raw_roots=d0_roots
     )
+    protected_suites = load_protected_suite_roots(args.protected_suite)
+    protected_roots = set(protected_suites["physical_roots"])
+    excluded_roots = set(d0_roots) | protected_roots
     d0_view_fingerprint = hashlib.sha256(
         _stable_json(d0_train_rows).encode("utf-8")
     ).hexdigest()
@@ -1098,10 +1176,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "beta": float(args.beta),
         "max_steps": int(args.max_steps),
     }
+    if args.protected_suite:
+        run_descriptor["protected_suites"] = protected_suites
     training, development = prepare_scenario_split(
         output_dir=output_dir,
         d0_raw_path=d0_raw,
         d0_roots=d0_roots,
+        protected_roots=protected_roots,
         train_plan=train_plan,
         development_plan=development_plan,
         candidate_multiplier=args.candidate_multiplier,
@@ -1117,7 +1198,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     rows, metrics = collect_resumable(
         training_scenarios=training,
         development_roots=development_roots,
-        d0_roots=d0_roots,
+        d0_roots=excluded_roots,
         output_dir=output_dir,
         seed=args.seed,
         beta=args.beta,
@@ -1156,7 +1237,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "Exported D1 rows contain roots outside the saved training closure: "
             f"{sorted(unexpected_d1_roots)[:8]}"
         )
-    forbidden_d1_roots = exported_d1_roots & (d0_roots | development_roots)
+    forbidden_d1_roots = exported_d1_roots & (excluded_roots | development_roots)
     if forbidden_d1_roots:
         raise RuntimeError(
             "Exported D1 rows overlap D0 or development roots: "
@@ -1218,6 +1299,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "round1_train": str(output_dir / "round1.train.jsonl"),
         },
     }
+    if args.protected_suite:
+        report["protected_suites"] = protected_suites
     _write_json(output_dir / "research_run_report.json", report)
     return report
 

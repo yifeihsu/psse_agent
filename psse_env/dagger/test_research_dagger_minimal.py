@@ -13,6 +13,7 @@ from scripts.run_dagger_research import (
     evaluate_paired_adapters,
     export_research_rows,
     is_research_dagger_row,
+    load_protected_suite_roots,
     mark_research_label_eligibility,
     refresh_d0_training_view,
 )
@@ -117,6 +118,41 @@ class ResearchEligibilityTests(unittest.TestCase):
 
 
 class ResearchSplitAndResumeTests(unittest.TestCase):
+    def test_protected_suite_loader_unions_jsonl_and_nested_d1_suite(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            jsonl_path = root / "protected.jsonl"
+            jsonl_path.write_text(
+                json.dumps({"metadata": {"physical_root_fingerprint": "protected_a"}})
+                + "\n",
+                encoding="utf-8",
+            )
+            nested_path = root / "d1_development_suite.json"
+            nested_path.write_text(
+                json.dumps(
+                    {
+                        "standard_success": [
+                            {
+                                "grouping": {
+                                    "physical_root_fingerprint": "protected_b"
+                                }
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = load_protected_suite_roots([jsonl_path, nested_path])
+
+        self.assertEqual(report["physical_root_count"], 2)
+        self.assertEqual(
+            report["physical_roots"], ["protected_a", "protected_b"]
+        )
+        self.assertEqual(report["paths"], [str(jsonl_path), str(nested_path)])
+        self.assertEqual(len(report["physical_roots_sha256"]), 64)
+        self.assertEqual(len(report["artifacts"]), 2)
+
     def test_d0_is_rerendered_under_the_current_canonical_view(self) -> None:
         raw = _raw_row("d0_root")
         prior = examples_to_chat_sft(
@@ -153,6 +189,31 @@ class ResearchSplitAndResumeTests(unittest.TestCase):
         dev_roots = {row["grouping"]["physical_root_fingerprint"] for row in development}
         self.assertFalse(train_roots & dev_roots)
         self.assertNotIn("root_0", train_roots | dev_roots)
+
+    def test_allocator_excludes_protected_roots_from_both_splits(self) -> None:
+        candidates = [
+            {
+                "grouping": {
+                    "physical_root_fingerprint": f"root_{index}",
+                    "scenario_family": "parameter",
+                    "split": "dagger_train",
+                }
+            }
+            for index in range(8)
+        ]
+        training, development = allocate_scenarios(
+            candidates,
+            d0_roots={"root_0"},
+            protected_roots={"root_1", "root_2"},
+            train_plan={"parameter": 2},
+            development_plan={"parameter": 2},
+            seed=7,
+        )
+        selected = {
+            row["grouping"]["physical_root_fingerprint"]
+            for row in [*training, *development]
+        }
+        self.assertFalse(selected & {"root_0", "root_1", "root_2"})
 
     def test_completed_episode_files_skip_policy_and_environment_on_resume(self) -> None:
         scenarios = [
