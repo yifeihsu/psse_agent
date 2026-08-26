@@ -74,6 +74,12 @@ class ParameterExpert:
             for code in parameter_codes
             if not str(code).startswith("wls_branch_multiplier")
         ]
+        # Dominance routing is deliberate: a dominant measurement outlier
+        # contaminates the branch-multiplier scans just as a structural error
+        # contaminates residuals, so the parameter path stays suppressed until
+        # branch evidence is dominant or explicit.  Forcing parameter-first
+        # here was measured to chase verification-rejected phantom lines until
+        # the recovery budget exhausted (4 of 19 mixed episodes regressed).
         suppress_parameter_hints = bool(
             measurement_dominant
             and not branch_dominant

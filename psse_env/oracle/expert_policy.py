@@ -50,6 +50,38 @@ class _ExpertContext:
     oracle_fault_families: frozenset[str]
 
 
+# Structural errors (parameter, topology) corrupt the network model itself and
+# radiate residual anomalies across many channels; measurement errors are
+# sparse and local.  Correcting measurements under a wrong model risks fitting
+# healthy sensors to the model error, and mixed-order demonstrations are
+# multimodal supervision a student cannot imitate.  Whenever an admissible
+# structural-path action exists, it therefore precedes measurement-path
+# actions.  The partition is stable and runs after admissibility ranking, so
+# it never resurrects a filtered proposal or reorders within a path.
+STRUCTURAL_PATH_TOOLS = frozenset(
+    {CORRECT_PARAMETERS, CORRECT_TOPOLOGY, GET_PARAMETER_CONTEXT, GET_TOPOLOGY_CONTEXT}
+)
+MEASUREMENT_PATH_TOOLS = frozenset({CORRECT_MEASUREMENTS, GET_MEASUREMENT_CONTEXT})
+
+
+def _structural_first_order(
+    ranked: list[ExpertActionProposal],
+) -> list[ExpertActionProposal]:
+    def path(proposal: ExpertActionProposal) -> str:
+        tool = safe_normalize_action(proposal.action)["tool"]
+        if tool in STRUCTURAL_PATH_TOOLS:
+            return "structural"
+        if tool in MEASUREMENT_PATH_TOOLS:
+            return "measurement"
+        return "neutral"
+
+    if not any(path(proposal) == "structural" for proposal in ranked):
+        return ranked
+    non_measurement = [p for p in ranked if path(p) != "measurement"]
+    measurement = [p for p in ranked if path(p) == "measurement"]
+    return non_measurement + measurement
+
+
 class ExpertPolicyOracle:
     """Recovery-aware orchestrator for the domain-specific expert modules.
 
@@ -262,7 +294,7 @@ class ExpertPolicyOracle:
             mandatory=False,
         )
         if ranked:
-            return ranked
+            return _structural_first_order(ranked)
         escalation = self._recovery_exhaustion_proposals(policy, context.history)
         return self._rank_and_filter(
             escalation,
