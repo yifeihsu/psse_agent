@@ -1,4 +1,13 @@
-"""Inference guards for failure modes DAgger cannot supervise away.
+"""Inference guards, evaluated as an explicit separate policy arm.
+
+A guarded policy is a different policy: results measured with guards must be
+reported as "policy + guards", never merged with unguarded numbers, and any
+DAgger collection intended for a guarded deployment should itself run under
+the guarded policy.  Measured effect on the frozen development suite: the
+silence retry rescued ~1 of 10 firings; the stale-reference guard never fired
+(the 12B lock is a commit-discipline failure on a valid reference, not stale
+addressing).  Both failure modes are in-principle learnable from retained
+failure states with an identifiable observation.
 
 Two measured pathologies motivate this module (traced on the frozen
 65-scenario evaluation):

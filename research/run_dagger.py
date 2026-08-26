@@ -30,7 +30,7 @@ def build_aggregate(
     round1_rows: str | Path,
     output_dir: str | Path,
     validation_fraction: float = 0.2,
-    eligible_only: bool = True,
+    inclusion: str = "selective",
     train_stratum_upweight: dict[str, int] | None = None,
     seed: int = 20260823,
 ) -> dict[str, Any]:
@@ -52,32 +52,49 @@ def build_aggregate(
     # one protocol; concatenating the two shapes directly would produce rows
     # that no trainer can render.
     raw_rows = read_jsonl(round1_rows)
-    usable = [
+    # Supervision retention must never depend on whether the LEARNER's action
+    # was well-formed: a state the learner visited and failed in is the
+    # canonical DAgger state.  The earlier filter here censored exactly those
+    # rows (41 across both iterations, several carrying commit/rollback
+    # targets); the learner action stays in the row as diagnostic metadata but
+    # plays no role in retention.
+    supervisable = [row for row in raw_rows if row.get("preferred_action")]
+    audit_failed = [
         row
-        for row in raw_rows
-        if (row.get("executed_action") or {}).get("tool") != "__invalid_action__"
-        and row.get("preferred_action")
+        for row in supervisable
+        if not (row.get("offline_teacher_target_audit") or {}).get("passed")
     ]
-    # DAgger-1 supervision is defined as learner-visited recovery states: those
-    # are the states the learner's own errors lead to.  States the expert drove
-    # to under beta-mixing, and non-recovery states, are already represented in
-    # round 0, so including them would dilute the increment rather than add to
-    # it.  ``eligible_only=False`` keeps them for a data-hungry comparison.
+    audited = [
+        row
+        for row in supervisable
+        if (row.get("offline_teacher_target_audit") or {}).get("passed")
+    ]
     ineligibility: dict[str, int] = {}
-    for row in usable:
+    for row in audited:
         if not row.get("production_label_eligible"):
             reason = str(row.get("production_label_ineligibility_reason") or "unknown")
             ineligibility[reason] = ineligibility.get(reason, 0) + 1
-    selected = (
-        [row for row in usable if row.get("production_label_eligible")]
-        if eligible_only
-        else usable
-    )
+    if inclusion == "selective":
+        # Recovery-selective, truth-audited DAgger: the production pipeline's
+        # own eligibility flag decides, uncensored.
+        selected = [row for row in audited if row.get("production_label_eligible")]
+    elif inclusion == "full_occupancy":
+        # Standard-DAgger occupancy: every state visited under the mixture
+        # policy that carries an audited expert target, including
+        # expert-visited and non-recovery states.
+        selected = audited
+    else:
+        raise ValueError(
+            f"inclusion must be 'selective' or 'full_occupancy', got {inclusion!r}"
+        )
+    # Audit-failed states are recorded as a teacher-abstention stratum rather
+    # than silently disappearing: retention conditioned on hidden truth is
+    # selection leakage and must at least be measurable.
     new_rows = examples_to_chat_sft(
         selected,
         protocol="canonical",
         require_derived_provenance=False,
-        allow_ineligible_auxiliary=not eligible_only,
+        allow_ineligible_auxiliary=inclusion == "full_occupancy",
     )
 
     by_episode: dict[str, list[dict[str, Any]]] = {}
@@ -128,6 +145,8 @@ def build_aggregate(
     validation_path = destination / "aggregate.validation.jsonl"
     write_jsonl(train_path, [*base_train, *added_train])
     write_jsonl(validation_path, [*base_validation, *added_validation])
+    if audit_failed:
+        write_jsonl(destination / "teacher_abstentions.jsonl", audit_failed)
 
     return {
         "train": str(train_path),
@@ -135,7 +154,14 @@ def build_aggregate(
         "round0_train_rows": len(base_train),
         "round0_validation_rows": len(base_validation),
         "round1_rows_collected": len(raw_rows),
-        "round1_rows_eligible_only": eligible_only,
+        "inclusion": inclusion,
+        "supervisable_rows": len(supervisable),
+        "teacher_abstention_rows": len(audit_failed),
+        "censored_by_old_rule": sum(
+            1
+            for row in selected
+            if (row.get("executed_action") or {}).get("tool") == "__invalid_action__"
+        ),
         "round1_ineligible_breakdown": ineligibility,
         "round1_rows_available": len(new_rows),
         "train_stratum_upweight": dict(train_stratum_upweight or {}),

@@ -1,6 +1,15 @@
 # Research prototype
 
-A minimal DAgger pipeline for academic use. It reuses the scientific core of
+A minimal imitation-learning pipeline for academic use. The default method is
+**recovery-selective, truth-audited DAgger**: supervision is retained only for
+learner-visited recovery states whose expert target is observably rank-one and
+passes a privileged offline truth audit. This is a *selected subset* of the
+standard-DAgger occupancy distribution, so standard no-regret arguments do not
+directly apply; `build_aggregate(inclusion="full_occupancy")` builds the
+standard-occupancy variant (every mixture-visited state with an audited expert
+target) for controlled comparison, and audit-failed states are written to a
+`teacher_abstentions.jsonl` stratum rather than silently dropped. Retention
+never depends on whether the learner's own action was well-formed. It reuses the scientific core of
 `psse_env` and skips the release scaffolding.
 
 ## Why this exists
