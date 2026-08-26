@@ -6,6 +6,7 @@ import argparse
 import copy
 import hashlib
 import json
+import math
 import os
 import sys
 from collections import Counter
@@ -14,6 +15,10 @@ from pathlib import Path
 from typing import Any
 
 from psse_env.actions import INVALID_ACTION, action_signature, safe_normalize_action
+from psse_env.dagger.release_audit import (
+    TRUTH_AUDITED_TASK_SUCCESS_CONTRACT,
+    validate_post_correction_handoff_assessment,
+)
 from psse_env.research_models import GEMMA4_12B
 
 from .gates import GateError, load_jsonl
@@ -31,10 +36,7 @@ DEFAULT_D1_PLAN = {
     "parameter": 3,
 }
 DEFAULT_D0_SUITE = (
-    Path(__file__).resolve().parents[1]
-    / "dagger"
-    / "suites"
-    / "bc0_eval_suite_v1.json"
+    Path(__file__).resolve().parents[1] / "dagger" / "suites" / "bc0_eval_suite_v1.json"
 )
 STANDARD_SUITE_NAME = "standard_success"
 EXPECTED_D0_STANDARD_ROOTS = 21
@@ -53,9 +55,7 @@ def _atomic_json(path: Path, payload: Any) -> None:
 
 def _callable_identity(value: Callable[..., Any]) -> str:
     module = str(getattr(value, "__module__", "") or type(value).__module__)
-    qualname = str(
-        getattr(value, "__qualname__", "") or type(value).__qualname__
-    )
+    qualname = str(getattr(value, "__qualname__", "") or type(value).__qualname__)
     return f"{module}:{qualname}"
 
 
@@ -117,7 +117,9 @@ def adapter_content_fingerprint(path: str | Path) -> dict[str, Any]:
     config = adapter / "adapter_config.json"
     weights = adapter / "adapter_model.safetensors"
     if not config.is_file() or not weights.is_file():
-        raise GateError("adapter needs adapter_config.json and adapter_model.safetensors")
+        raise GateError(
+            "adapter needs adapter_config.json and adapter_model.safetensors"
+        )
     files = {candidate.name: file_sha256(candidate) for candidate in (config, weights)}
     return {"content_sha256": stable_json_sha256(files), "files": files}
 
@@ -128,7 +130,10 @@ def _configure_input_ceiling() -> None:
         raise GateError("RESEARCH_MAX_INPUT_TOKENS must be 32768 for this baseline")
     os.environ["RESEARCH_MAX_INPUT_TOKENS"] = str(REQUIRED_MAX_INPUT_TOKENS)
     loaded = sys.modules.get("psse_env.dagger.preliminary_e2b_eval")
-    if loaded is not None and getattr(loaded, "MAX_INPUT_TOKENS", None) != REQUIRED_MAX_INPUT_TOKENS:
+    if (
+        loaded is not None
+        and getattr(loaded, "MAX_INPUT_TOKENS", None) != REQUIRED_MAX_INPUT_TOKENS
+    ):
         raise GateError("start a fresh process so the 32768-token ceiling takes effect")
 
 
@@ -287,7 +292,9 @@ def summarize_policy_behavior(
             try:
                 history = observation.get("history_window")
                 history = list(history) if isinstance(history, list) else []
-                proposals = expert.next_actions(copy.deepcopy(dict(observation)), history)
+                proposals = expert.next_actions(
+                    copy.deepcopy(dict(observation)), history
+                )
                 if not proposals:
                     continue
                 expected = safe_normalize_action(proposals[0])
@@ -300,7 +307,9 @@ def summarize_policy_behavior(
     def rate(value: int, total: int) -> float | None:
         return value / total if total else None
 
-    truncated = [int(row.get("truncated_input_tokens") or 0) for row in generation_records]
+    truncated = [
+        int(row.get("truncated_input_tokens") or 0) for row in generation_records
+    ]
     original_prompts = [
         int(row["original_prompt_tokens"])
         for row in generation_records
@@ -318,7 +327,9 @@ def summarize_policy_behavior(
         "observable_expert_comparable_steps": comparable,
         "observable_expert_comparison_errors": expert_errors,
         "observable_expert_tool_agreement_rate": rate(tool_matches, comparable),
-        "observable_expert_exact_action_agreement_rate": rate(exact_matches, comparable),
+        "observable_expert_exact_action_agreement_rate": rate(
+            exact_matches, comparable
+        ),
         "maximum_original_prompt_tokens": max(original_prompts, default=None),
         "input_truncated_steps": sum(value > 0 for value in truncated),
         "input_truncated_tokens": sum(max(0, value) for value in truncated),
@@ -339,7 +350,9 @@ def evaluate_research_suite(
     progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if policy_loader is None:
-        from psse_env.dagger.research_policy_factory import research_gemma_policy_factory
+        from psse_env.dagger.research_policy_factory import (
+            research_gemma_policy_factory,
+        )
 
         policy_loader = research_gemma_policy_factory
     if evaluator is None:
@@ -382,20 +395,412 @@ def evaluate_research_suite(
         require_policy_identity=False,
         progress_callback=progress_callback,
     ).as_dict()
-    return result, summarize_policy_behavior(result, records, expert_factory=expert_factory)
+    return result, summarize_policy_behavior(
+        result, records, expert_factory=expert_factory
+    )
+
+
+def _nonnegative_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _rate(numerator: int, denominator: int) -> float | None:
+    return numerator / denominator if denominator else None
+
+
+def _wilson_95(successes: int, total: int) -> dict[str, float] | None:
+    if total <= 0:
+        return None
+    z = 1.959963984540054
+    observed = successes / total
+    scale = 1.0 + z * z / total
+    center = (observed + z * z / (2.0 * total)) / scale
+    half_width = (
+        z
+        * math.sqrt(observed * (1.0 - observed) / total + z * z / (4.0 * total * total))
+        / scale
+    )
+    return {"low": max(0.0, center - half_width), "high": min(1.0, center + half_width)}
+
+
+def _positive_cardinality(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    try:
+        return int(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _legacy_truth_audited_task_success(episode: Mapping[str, Any]) -> bool:
+    """Backfill the new primary metric from persisted completion evidence."""
+
+    if episode.get("final_physical_success") is True:
+        return True
+    audit = episode.get("audit")
+    audit = audit if isinstance(audit, Mapping) else {}
+    strict = audit.get("strict_release_audit")
+    strict = strict if isinstance(strict, Mapping) else {}
+    if (
+        episode.get("terminal_outcome") == "resolved"
+        and strict.get("quarantined") is False
+        and strict.get("problems") == []
+    ):
+        return True
+    assessment = audit.get("post_correction_handoff_assessment")
+    valid, _ = validate_post_correction_handoff_assessment(
+        assessment,
+        str(episode.get("scenario_id") or ""),
+        str(episode.get("physical_root") or ""),
+        str(episode.get("family") or ""),
+    )
+    return valid
+
+
+def _episode_task_success(episode: Mapping[str, Any]) -> tuple[bool, bool]:
+    success = episode.get("truth_audited_task_success")
+    evidence_known = episode.get("truth_audited_task_success_evidence_known")
+    if isinstance(success, bool) and isinstance(evidence_known, bool):
+        return success, evidence_known
+    backfilled = _legacy_truth_audited_task_success(episode)
+    return backfilled, backfilled
+
+
+def _episode_faulted(episode: Mapping[str, Any]) -> bool:
+    audit = episode.get("audit")
+    audit = audit if isinstance(audit, Mapping) else {}
+    assessment = audit.get("truth_audited_task_assessment")
+    if isinstance(assessment, Mapping) and isinstance(assessment.get("faulted"), bool):
+        return bool(assessment["faulted"])
+    return _positive_cardinality(episode.get("cardinality"))
+
+
+def _episode_fault_presence_known(episode: Mapping[str, Any]) -> bool:
+    audit = episode.get("audit")
+    audit = audit if isinstance(audit, Mapping) else {}
+    assessment = audit.get("truth_audited_task_assessment")
+    if isinstance(assessment, Mapping) and isinstance(
+        assessment.get("fault_presence_known"), bool
+    ):
+        return bool(assessment["fault_presence_known"])
+    cardinality = episode.get("cardinality")
+    return bool(
+        isinstance(cardinality, int)
+        and not isinstance(cardinality, bool)
+        and cardinality >= 0
+    )
+
+
+def _target_identities(value: Any) -> set[tuple[str, int]] | None:
+    if not isinstance(value, Mapping):
+        return None
+    targets: set[tuple[str, int]] = set()
+    for family in ("measurement", "parameter", "topology"):
+        rows = value.get(family)
+        if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
+            return None
+        for raw_target in rows:
+            if isinstance(raw_target, bool) or not isinstance(raw_target, int):
+                return None
+            targets.add((family, raw_target))
+    return targets
+
+
+def _target_evidence_identity(raw_row: Mapping[str, Any]) -> tuple[str, int] | None:
+    family = raw_row.get("family")
+    if family == "measurement":
+        raw_target = raw_row.get("index0")
+        if isinstance(raw_target, int) and not isinstance(raw_target, bool):
+            return family, raw_target
+        return None
+    if family not in {"parameter", "topology"}:
+        return None
+    raw_target = raw_row.get("target")
+    if (
+        isinstance(raw_target, Sequence)
+        and not isinstance(raw_target, (str, bytes))
+        and len(raw_target) == 2
+        and raw_target[0] == "branch_row0"
+        and isinstance(raw_target[1], int)
+        and not isinstance(raw_target[1], bool)
+    ):
+        return str(family), raw_target[1]
+    return None
+
+
+def _target_distance_evidence(
+    audit: Mapping[str, Any],
+) -> tuple[set[tuple[str, int]], set[tuple[str, int]]]:
+    task = audit.get("truth_audited_task_assessment")
+    task = task if isinstance(task, Mapping) else {}
+    completion = task.get("counterfactual_completion_audit")
+    if not isinstance(completion, Mapping):
+        handoff = audit.get("post_correction_handoff_assessment")
+        handoff = handoff if isinstance(handoff, Mapping) else {}
+        completion = handoff.get("counterfactual_completion_audit")
+    if not isinstance(completion, Mapping):
+        completion = audit.get("strict_release_audit")
+    completion = completion if isinstance(completion, Mapping) else {}
+    checks = completion.get("checks")
+    checks = checks if isinstance(checks, Mapping) else {}
+    nonregression = checks.get("accepted_target_nonregression")
+    nonregression = nonregression if isinstance(nonregression, Mapping) else {}
+    evidence = nonregression.get("target_evidence")
+    evidence = (
+        evidence
+        if isinstance(evidence, Sequence) and not isinstance(evidence, (str, bytes))
+        else []
+    )
+    observed: set[tuple[str, int]] = set()
+    corrected: set[tuple[str, int]] = set()
+    for raw_row in evidence:
+        if not isinstance(raw_row, Mapping):
+            continue
+        identity = _target_evidence_identity(raw_row)
+        final_distance = raw_row.get("final_distance")
+        tolerance = raw_row.get("tolerance")
+        if (
+            identity is None
+            or isinstance(final_distance, bool)
+            or not isinstance(final_distance, (int, float))
+            or isinstance(tolerance, bool)
+            or not isinstance(tolerance, (int, float))
+            or not math.isfinite(float(final_distance))
+            or not math.isfinite(float(tolerance))
+            or float(final_distance) < 0.0
+            or float(tolerance) < 0.0
+            or raw_row.get("status") not in {"passed", "failed"}
+        ):
+            continue
+        observed.add(identity)
+        if raw_row.get("status") == "passed" and float(final_distance) <= float(
+            tolerance
+        ):
+            corrected.add(identity)
+    return observed, corrected
+
+
+def _target_progress(episodes: Sequence[Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    true_count = accepted_count = corrected_count = 0
+    accepted_evidence_episodes = correction_evidence_episodes = 0
+    correction_evidence_targets = eligible_episodes = 0
+    for raw_episode in episodes:
+        if not isinstance(raw_episode, Mapping) or not _positive_cardinality(
+            raw_episode.get("cardinality")
+        ):
+            continue
+        eligible_episodes += 1
+        audit = raw_episode.get("audit")
+        audit = audit if isinstance(audit, Mapping) else {}
+        target_audit = audit.get("accepted_target_audit")
+        target_audit = target_audit if isinstance(target_audit, Mapping) else {}
+        true_targets = _target_identities(target_audit.get("true_targets"))
+        accepted_targets = _target_identities(target_audit.get("accepted_targets"))
+        if not true_targets or accepted_targets is None:
+            continue
+        accepted_evidence_episodes += 1
+        true_count += len(true_targets)
+        accepted_true_targets = true_targets & accepted_targets
+        accepted_count += len(accepted_true_targets)
+        observed_targets, clean_targets = _target_distance_evidence(audit)
+        corrected_count += len(true_targets & accepted_targets & clean_targets)
+        known_correction_targets = (true_targets - accepted_true_targets) | (
+            accepted_true_targets & observed_targets
+        )
+        correction_evidence_targets += len(known_correction_targets)
+        correction_evidence_episodes += int(accepted_true_targets <= observed_targets)
+    accepted_common = {
+        "true_targets": true_count,
+        "audited_faulted_episodes": accepted_evidence_episodes,
+        "eligible_faulted_episodes": eligible_episodes,
+        "evidence_coverage_rate": _rate(accepted_evidence_episodes, eligible_episodes),
+        "supported_target_families": ["measurement", "parameter", "topology"],
+    }
+    accepted = {
+        **accepted_common,
+        "accepted_true_targets": accepted_count,
+        "rate": _rate(accepted_count, true_count),
+        "interpretation": "target identification plus accepted correction action",
+    }
+    corrected = {
+        "true_targets": true_count,
+        "audited_faulted_episodes": correction_evidence_episodes,
+        "eligible_faulted_episodes": eligible_episodes,
+        "evidence_coverage_rate": _rate(
+            correction_evidence_episodes, eligible_episodes
+        ),
+        "evidence_covered_true_targets": correction_evidence_targets,
+        "target_evidence_coverage_rate": _rate(correction_evidence_targets, true_count),
+        "evidence_interpretation": (
+            "accepted true targets require valid final-distance evidence; "
+            "unaccepted true targets are known correction failures"
+        ),
+        "supported_target_families": ["measurement", "parameter", "topology"],
+        "clean_tolerance_corrected_targets": corrected_count,
+        "rate": _rate(corrected_count, true_count),
+        "interpretation": "accepted true targets with final distance within tolerance",
+    }
+    return accepted, corrected
 
 
 def summarize_closed_loop_outcomes(
     evaluation: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Expose strict resolution and audited handoff as distinct outcomes."""
+    """Expose terminal-independent task success and stricter safety outcomes."""
 
     suite_metrics = evaluation.get("suite_metrics")
     suite_metrics = suite_metrics if isinstance(suite_metrics, Mapping) else {}
     overall = suite_metrics.get("overall")
     overall = overall if isinstance(overall, Mapping) else {}
+    raw_episodes = suite_metrics.get("episodes")
+    episodes = (
+        list(raw_episodes)
+        if isinstance(raw_episodes, Sequence)
+        and not isinstance(raw_episodes, (str, bytes))
+        else []
+    )
+    derived = [
+        (row, *_episode_task_success(row))
+        for row in episodes
+        if isinstance(row, Mapping)
+    ]
+    reported_episode_count = _nonnegative_int(overall.get("episodes"))
+    episode_count = max(reported_episode_count or 0, len(derived))
+    native_task_successes = _nonnegative_int(
+        overall.get("truth_audited_task_success_episodes")
+    )
+    native_task_known = _nonnegative_int(
+        overall.get("truth_audited_task_success_evidence_known_episodes")
+    )
+    native_faulted_episodes = _nonnegative_int(overall.get("faulted_episodes"))
+    native_fault_recovery_successes = _nonnegative_int(
+        overall.get("truth_audited_fault_recovery_success_episodes")
+    )
+    native_aggregates_present = all(
+        value is not None
+        for value in (
+            native_task_successes,
+            native_task_known,
+            native_faulted_episodes,
+            native_fault_recovery_successes,
+        )
+    )
+    native_aggregates_valid = bool(
+        native_aggregates_present
+        and native_task_successes <= native_task_known <= episode_count
+        and native_fault_recovery_successes <= native_faulted_episodes <= episode_count
+    )
+    native_episode_contract = bool(
+        len(derived) == episode_count
+        and all(
+            isinstance(row.get("truth_audited_task_success"), bool)
+            and isinstance(row.get("truth_audited_task_success_evidence_known"), bool)
+            for row, _success, _known in derived
+        )
+    )
+    if native_aggregates_valid:
+        task_successes = int(native_task_successes)
+        task_known = int(native_task_known)
+        faulted_episodes = int(native_faulted_episodes)
+        fault_recovery_successes = int(native_fault_recovery_successes)
+        contract_execution = "native_terminal_independent_truth_audit"
+    else:
+        task_successes = sum(success for _row, success, _known in derived)
+        task_known = sum(known for _row, _success, known in derived)
+        faulted_episodes = sum(
+            _episode_faulted(row) for row, _success, _known in derived
+        )
+        fault_recovery_successes = sum(
+            success and _episode_faulted(row) for row, success, _known in derived
+        )
+        contract_execution = (
+            "native_episode_recompute_after_invalid_aggregates"
+            if native_aggregates_present and native_episode_contract
+            else "invalid_native_aggregates_fail_closed_backfill"
+            if native_aggregates_present
+            else "native_terminal_independent_truth_audit"
+            if native_episode_contract
+            else "conservative_legacy_evidence_backfill"
+        )
+    native_contract = contract_execution.startswith("native_")
+    native_fault_presence_known = _nonnegative_int(
+        overall.get("truth_fault_presence_known_episodes")
+    )
+    fault_presence_known = (
+        native_fault_presence_known
+        if native_fault_presence_known is not None
+        and native_fault_presence_known <= episode_count
+        else sum(
+            _episode_fault_presence_known(row) for row, _success, _known in derived
+        )
+    )
+    task_by_outcome = overall.get("truth_audited_task_success_by_terminal_outcome")
+    if not isinstance(task_by_outcome, Mapping) or not native_aggregates_valid:
+        counts: Counter[str] = Counter()
+        for row, success, _known in derived:
+            if not success:
+                continue
+            outcome = row.get("terminal_outcome")
+            counts[str(outcome) if outcome is not None else "nonterminal"] += 1
+        task_by_outcome = dict(sorted(counts.items()))
+    accepted_targets, corrected_targets = _target_progress(episodes)
+    completion_count = _nonnegative_int(overall.get("audited_completion_episodes"))
+    completion_count = (
+        completion_count
+        if completion_count is not None and completion_count <= episode_count
+        else 0
+    )
     return {
-        "episodes": int(overall.get("episodes") or 0),
+        "episodes": episode_count,
+        "primary_success_metric": "truth_audited_task_success",
+        "success_contract": TRUTH_AUDITED_TASK_SUCCESS_CONTRACT,
+        "contract_execution": contract_execution,
+        "historical_backfill_lower_bound": not native_contract,
+        "truth_audited_task_success": {
+            "episodes": task_successes,
+            "eligible_episodes": episode_count,
+            "rate": _rate(task_successes, episode_count),
+            "wilson_95_interval": _wilson_95(task_successes, episode_count),
+            "evidence_known_episodes": task_known,
+            "evidence_coverage_rate": _rate(task_known, episode_count),
+            "evidence_coverage_interpretation": (
+                "all episodes received the native final-state audit"
+                if native_contract
+                else "episodes with persisted evidence sufficient to prove success; "
+                "historical failures were not reclassified without a native audit"
+            ),
+            "by_actual_terminal_outcome": dict(task_by_outcome),
+            "terminal_label_independent": True,
+            "standard_physical_fault_requirement": (
+                "all true faults identified and corrected within clean tolerance"
+            ),
+            "diagnostic_fault_requirement": (
+                "correct family and localization under an explicit "
+                "explanation-only diagnostic contract"
+            ),
+            "requires_healthy_components_preserved": True,
+        },
+        "truth_audited_fault_recovery_success": {
+            "episodes": fault_recovery_successes,
+            "eligible_faulted_episodes": faulted_episodes,
+            "rate": _rate(fault_recovery_successes, faulted_episodes),
+            "wilson_95_interval": _wilson_95(
+                fault_recovery_successes, faulted_episodes
+            ),
+            "fault_presence_known_episodes": fault_presence_known,
+            "fault_presence_evidence_coverage_rate": _rate(
+                fault_presence_known, episode_count
+            ),
+        },
+        "accepted_true_fault_target_coverage": accepted_targets,
+        "truth_audited_fault_target_correction": corrected_targets,
+        "safe_completion": {
+            "episodes": completion_count,
+            "rate": _rate(completion_count, episode_count),
+            "requires_safety_clean_lifecycle": True,
+        },
         "strict_resolved_physical_success": {
             "episodes": int(overall.get("final_physical_success_episodes") or 0),
             "rate": overall.get("final_physical_success_rate"),
@@ -411,8 +816,8 @@ def summarize_closed_loop_outcomes(
             "requires_versioned_safety_clean_assessment": True,
         },
         "audited_completion_union": {
-            "episodes": int(overall.get("audited_completion_episodes") or 0),
-            "rate": overall.get("audited_completion_rate"),
+            "episodes": completion_count,
+            "rate": _rate(completion_count, episode_count),
         },
     }
 
@@ -540,7 +945,10 @@ def run(
         failures.append("episode_count_mismatch")
     if behavior["evaluator_error_episodes"]:
         failures.append("evaluator_errors")
-    if not isinstance(schema_rate, (int, float)) or schema_rate < SCHEMA_VALID_READINESS_RATE:
+    if (
+        not isinstance(schema_rate, (int, float))
+        or schema_rate < SCHEMA_VALID_READINESS_RATE
+    ):
         failures.append("schema_valid_action_rate_below_0.90")
 
     report = {
@@ -582,7 +990,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         report = run(parser().parse_args(argv))
     except Exception as exc:
-        print(json.dumps({"passed": False, "error": str(exc)}, indent=2), file=sys.stderr)
+        print(
+            json.dumps({"passed": False, "error": str(exc)}, indent=2), file=sys.stderr
+        )
         return 2
     print(
         json.dumps(

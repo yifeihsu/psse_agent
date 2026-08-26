@@ -56,9 +56,7 @@ class _ScriptPolicy:
     ) -> None:
         self.observations = observations
         if release_policy_identity is not None:
-            self.release_policy_identity = copy.deepcopy(
-                dict(release_policy_identity)
-            )
+            self.release_policy_identity = copy.deepcopy(dict(release_policy_identity))
 
     def act(self, observation: Mapping[str, Any]) -> Any:
         payload = copy.deepcopy(dict(observation))
@@ -178,7 +176,9 @@ class _ScriptEnv:
             return script[self.cursor]
         return script[-1]
 
-    def get_policy_observation(self, history: list[Mapping[str, Any]]) -> dict[str, Any]:
+    def get_policy_observation(
+        self, history: list[Mapping[str, Any]]
+    ) -> dict[str, Any]:
         row = self._current_script()
         return {
             "active_state_id": "active",
@@ -332,16 +332,12 @@ class _AuditedHandoffEnv(_ScriptEnv):
                     if isinstance(last_action, Mapping)
                     else None
                 ),
-                "last_tool_output": copy.deepcopy(
-                    getattr(self, "last_output", {})
-                ),
+                "last_tool_output": copy.deepcopy(getattr(self, "last_output", {})),
                 "last_tool_status": (
                     getattr(self, "last_output", {}).get("execution_status")
                 ),
                 "unresolved_signatures": (
-                    [POST_CORRECTION_CONFIRMATION_SIGNATURE]
-                    if self.terminal
-                    else []
+                    [POST_CORRECTION_CONFIRMATION_SIGNATURE] if self.terminal else []
                 ),
             }
         )
@@ -520,7 +516,7 @@ def _partitioned_resolved_scenario() -> dict[str, Any]:
                 ),
                 "hidden_truth": copy.deepcopy(source["hidden_truth"]),
                 "truth_complete": True,
-            }
+            },
         },
         "grouping": {
             key: copy.deepcopy(source[key])
@@ -674,6 +670,31 @@ def _audited_handoff_scenario() -> dict[str, Any]:
     return scenario
 
 
+def _clean_control_scenario() -> dict[str, Any]:
+    scenario = _resolved_scenario()
+    scenario.update(
+        {
+            "scenario_id": "clean-control-root",
+            "root_scenario_id": "clean-control-root",
+            "physical_root_fingerprint": "fp-clean-control",
+            "scenario_family": "clean_control",
+            "error_cardinality": 0,
+            "measurements": copy.deepcopy(scenario["clean_measurements"]),
+            "true_measurement_errors": [],
+            "hidden_truth": {},
+            "final_remaining": 0,
+            "script": [
+                {
+                    "phase": "finalize",
+                    "remaining": 0,
+                    "terminal_outcome": "resolved",
+                }
+            ],
+        }
+    )
+    return scenario
+
+
 class ClosedLoopEvaluatorTests(unittest.TestCase):
     def test_policy_exception_is_recorded_as_a_schema_valid_invalid_action(
         self,
@@ -704,7 +725,9 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         self.assertIn("ValueError", action["arguments"]["error_detail"])
         self.assertEqual(episode["invalid_action_count"], 1)
 
-    def test_policy_hidden_failure_interventions_are_injected_before_policy(self) -> None:
+    def test_policy_hidden_failure_interventions_are_injected_before_policy(
+        self,
+    ) -> None:
         for malformed, suite, expected_tool in (
             (False, "forced_error_recovery", RUN_WLS),
             (True, "invalid_action_recovery", "__invalid_action__"),
@@ -765,9 +788,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                 "premature_commit_recovery",
                 {
                     "tool": COMMIT_STATE,
-                    "arguments": {
-                        "candidate_state_id": "stress-missing-candidate"
-                    },
+                    "arguments": {"candidate_state_id": "stress-missing-candidate"},
                 },
                 "candidate_lifecycle_violation",
             ),
@@ -816,9 +837,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                     ],
                     stratum,
                 )
-                self.assertNotIn(
-                    "evaluation_intervention", json.dumps(observations)
-                )
+                self.assertNotIn("evaluation_intervention", json.dumps(observations))
                 evidence_failures, _ = _intervention_failures(
                     episode,
                     episode["evaluation_intervention"]["contract"],
@@ -870,17 +889,13 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             max_steps=1,
         )
         episode = result.suite_metrics["episodes"][0]
-        self.assertEqual(
-            episode["evaluation_intervention"]["pre_policy_step_count"], 3
-        )
+        self.assertEqual(episode["evaluation_intervention"]["pre_policy_step_count"], 3)
         self.assertEqual(episode["policy_steps"], 1)
         self.assertEqual(
             [row["action"]["tool"] for row in episode["trace"][:3]],
             [GET_MEASUREMENT_CONTEXT, CORRECT_MEASUREMENTS, RUN_WLS],
         )
-        self.assertEqual(
-            episode["trace"][2]["candidate_disposition_offline"], "REJECT"
-        )
+        self.assertEqual(episode["trace"][2]["candidate_disposition_offline"], "REJECT")
         self.assertEqual(observations[0]["candidate_state_id"], "candidate-1")
         self.assertNotIn("required_disposition", json.dumps(observations))
         evidence_failures, _ = _intervention_failures(
@@ -914,9 +929,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             policy_factory=lambda: _ScriptPolicy(observations),
             max_steps=1,
         )
-        evidence = result.suite_metrics["episodes"][0][
-            "evaluation_intervention"
-        ]
+        evidence = result.suite_metrics["episodes"][0]["evaluation_intervention"]
         self.assertEqual(evidence["pre_policy_step_count"], 5)
         self.assertEqual(evidence["retention_opportunity_count"], 0)
         self.assertEqual(len(observations[0]["history_window"]), 4)
@@ -947,7 +960,9 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                 }
             )
 
-    def test_partial_retention_intervention_requires_a_real_committed_setup(self) -> None:
+    def test_partial_retention_intervention_requires_a_real_committed_setup(
+        self,
+    ) -> None:
         observations: list[dict[str, Any]] = []
         result = evaluate_rollout_suites(
             {"partial_success_retention": [_partial_retention_scenario()]},
@@ -985,7 +1000,9 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                 max_steps=4,
             )
 
-    def test_release_intervention_schema_is_suite_specific_and_fail_closed(self) -> None:
+    def test_release_intervention_schema_is_suite_specific_and_fail_closed(
+        self,
+    ) -> None:
         wrong_kind = _release_partitioned_resolved_scenario()
         wrong_kind["audit"]["evaluation_intervention"] = {
             "intervention_schema_version": 1,
@@ -1159,9 +1176,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                 self.assertRegex(
                     quarantine["action_signature_sha256"], r"^[0-9a-f]{64}$"
                 )
-                self.assertEqual(
-                    episode["audit"]["control_quarantine"], quarantine
-                )
+                self.assertEqual(episode["audit"]["control_quarantine"], quarantine)
                 overall = result.suite_metrics["overall"]
                 self.assertEqual(overall["control_quarantined_episodes"], 1)
                 self.assertEqual(overall["control_quarantine_rate"], 1.0)
@@ -1170,9 +1185,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                     {failure_kind: 1},
                 )
                 self.assertEqual(
-                    overall[
-                        "repeated_nonadvancing_failure_breaker_episodes"
-                    ],
+                    overall["repeated_nonadvancing_failure_breaker_episodes"],
                     1,
                 )
                 # The breaker is a policy-performance quarantine, not an
@@ -1655,9 +1668,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             set(result.suite_metrics["by_family"]),
             {"measurement+harmonic", "measurement+topology"},
         )
-        self.assertEqual(
-            result.suite_metrics["by_cardinality"]["2"]["episodes"], 2
-        )
+        self.assertEqual(result.suite_metrics["by_cardinality"]["2"]["episodes"], 2)
         self.assertEqual(set(result.suite_metrics["by_split"]), {"test", "validation"})
         self.assertEqual(
             set(result.suite_metrics["by_physical_root"]),
@@ -1710,9 +1721,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         self.assertEqual(assessment["status"], "not_applicable")
         self.assertFalse(assessment["eligible"])
         self.assertEqual(
-            result.suite_metrics["overall"][
-                "unqualified_operator_escalation_episodes"
-            ],
+            result.suite_metrics["overall"]["unqualified_operator_escalation_episodes"],
             1,
         )
         self.assertEqual(
@@ -1739,22 +1748,111 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         self.assertEqual(episode["terminal_outcome"], "operator_escalation")
         self.assertEqual(assessment["status"], "passed")
         self.assertTrue(assessment["eligible"])
-        self.assertEqual(
-            assessment["actual_terminal_outcome"], "operator_escalation"
-        )
+        self.assertEqual(assessment["actual_terminal_outcome"], "operator_escalation")
         self.assertTrue(assessment["runtime_contract"]["passed"])
         self.assertEqual(
             episode["trace"][-1]["runtime_state_hash"],
             assessment["runtime_contract"]["active_state_hash"],
         )
-        self.assertFalse(
-            assessment["counterfactual_completion_audit"]["quarantined"]
-        )
+        self.assertFalse(assessment["counterfactual_completion_audit"]["quarantined"])
         overall = result.suite_metrics["overall"]
         self.assertEqual(overall["resolution_rate"], 0.0)
         self.assertEqual(overall["audited_post_correction_handoff_rate"], 1.0)
         self.assertEqual(overall["audited_completion_rate"], 1.0)
         self.assertEqual(overall["unqualified_operator_escalation_rate"], 0.0)
+        self.assertIs(episode["truth_audited_task_success"], True)
+        self.assertIs(episode["truth_audited_task_success_evidence_known"], True)
+        task_assessment = episode["audit"]["truth_audited_task_assessment"]
+        self.assertEqual(task_assessment["status"], "passed")
+        self.assertIs(task_assessment["faulted"], True)
+        self.assertEqual(overall["truth_audited_task_success_episodes"], 1)
+        self.assertEqual(overall["truth_audited_task_success_rate"], 1.0)
+        self.assertEqual(
+            overall["truth_audited_task_success_evidence_known_episodes"], 1
+        )
+        self.assertEqual(overall["faulted_episodes"], 1)
+        self.assertEqual(overall["truth_fault_presence_known_episodes"], 1)
+        self.assertEqual(overall["truth_fault_presence_known_rate"], 1.0)
+        self.assertEqual(overall["truth_audited_fault_recovery_success_episodes"], 1)
+        self.assertEqual(overall["truth_audited_fault_recovery_success_rate"], 1.0)
+        self.assertEqual(
+            overall["truth_audited_task_success_by_terminal_outcome"],
+            {"operator_escalation": 1},
+        )
+        self.assertEqual(result.metrics.truth_audited_task_success, 1.0)
+        self.assertEqual(result.metrics.truth_audited_fault_recovery_success, 1.0)
+        self.assertEqual(result.metrics.truth_audited_task_success_evidence_known, 1.0)
+
+    def test_truth_audited_task_success_does_not_require_terminal_marker(
+        self,
+    ) -> None:
+        scenario = _audited_handoff_scenario()
+        scenario["script"][-1].pop("terminal_outcome")
+
+        result = evaluate_rollout_suites(
+            [scenario],
+            env_factory=_AuditedHandoffEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+            max_steps=2,
+        )
+
+        episode = result.suite_metrics["episodes"][0]
+        overall = result.suite_metrics["overall"]
+        self.assertIs(episode["terminal"], False)
+        self.assertIs(episode["truth_audited_task_success"], True)
+        self.assertEqual(overall["audited_completion_episodes"], 0)
+        self.assertEqual(overall["truth_audited_task_success_episodes"], 1)
+        self.assertEqual(
+            overall["truth_audited_task_success_by_terminal_outcome"],
+            {"nonterminal": 1},
+        )
+
+    def test_evaluator_error_fails_truth_audited_task_success(self) -> None:
+        class FailAfterCorrectionEnv(_AuditedHandoffEnv):
+            def step(
+                self, action: Mapping[str, Any]
+            ) -> tuple[dict[str, Any], dict[str, Any]]:
+                if self.cursor == 1:
+                    raise RuntimeError("injected evaluator failure")
+                return super().step(action)
+
+        result = evaluate_rollout_suites(
+            [_audited_handoff_scenario()],
+            env_factory=FailAfterCorrectionEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+            max_steps=2,
+        )
+
+        episode = result.suite_metrics["episodes"][0]
+        assessment = episode["audit"]["truth_audited_task_assessment"]
+        overall = result.suite_metrics["overall"]
+        self.assertIn("env_step:RuntimeError", episode["evaluator_error"])
+        self.assertIs(episode["truth_audited_task_success"], False)
+        self.assertIs(episode["truth_audited_task_success_evidence_known"], False)
+        self.assertEqual(assessment["status"], "unknown")
+        self.assertIn("task_success_evaluator_error_present", assessment["reasons"])
+        self.assertEqual(overall["truth_audited_task_success_episodes"], 0)
+        self.assertEqual(
+            overall["truth_audited_task_success_evidence_known_episodes"], 0
+        )
+
+    def test_fault_recovery_rate_uses_only_faulted_episode_denominator(self) -> None:
+        result = evaluate_rollout_suites(
+            [_audited_handoff_scenario(), _clean_control_scenario()],
+            env_factory=_AuditedHandoffEnv,
+            policy_factory=lambda: _ScriptPolicy([]),
+            max_steps=2,
+        )
+
+        overall = result.suite_metrics["overall"]
+        self.assertEqual(overall["episodes"], 2)
+        self.assertEqual(overall["truth_audited_task_success_episodes"], 2)
+        self.assertEqual(overall["truth_audited_task_success_rate"], 1.0)
+        self.assertEqual(overall["faulted_episodes"], 1)
+        self.assertEqual(overall["truth_fault_presence_known_episodes"], 2)
+        self.assertEqual(overall["truth_fault_presence_known_rate"], 1.0)
+        self.assertEqual(overall["truth_audited_fault_recovery_success_episodes"], 1)
+        self.assertEqual(overall["truth_audited_fault_recovery_success_rate"], 1.0)
 
     def test_historyless_final_state_binds_independently_checked_handoff(
         self,
@@ -1791,9 +1889,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         self.assertIn("handoff_transition_label_invalid", assessment["reasons"])
         self.assertIsNone(assessment["counterfactual_completion_audit"])
         self.assertEqual(
-            result.suite_metrics["overall"][
-                "audited_post_correction_handoff_episodes"
-            ],
+            result.suite_metrics["overall"]["audited_post_correction_handoff_episodes"],
             0,
         )
 
@@ -1810,9 +1906,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         self.assertIn("handoff_transition_label_invalid", assessment["reasons"])
         self.assertIsNone(assessment["counterfactual_completion_audit"])
         self.assertEqual(
-            result.suite_metrics["overall"][
-                "audited_post_correction_handoff_episodes"
-            ],
+            result.suite_metrics["overall"]["audited_post_correction_handoff_episodes"],
             0,
         )
 
@@ -1845,9 +1939,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             0.0,
         )
         self.assertEqual(
-            result.suite_metrics["overall"][
-                "unqualified_operator_escalation_episodes"
-            ],
+            result.suite_metrics["overall"]["unqualified_operator_escalation_episodes"],
             1,
         )
 
@@ -1952,9 +2044,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                     }
                 ],
             },
-            "audit": {
-                "actionCosts": {FINALIZE_DIAGNOSIS: 3.0, RUN_WLS: 1.0}
-            },
+            "audit": {"actionCosts": {FINALIZE_DIAGNOSIS: 3.0, RUN_WLS: 1.0}},
             "grouping": {
                 "physical_root_fingerprint": "root-partitioned-direct-cost",
                 "scenario_family": "no_error",
@@ -2156,18 +2246,14 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             "teacherActions": [{"tool": FINALIZE_DIAGNOSIS, "arguments": {}}],
             "expertActions": [{"tool": FINALIZE_DIAGNOSIS, "arguments": {}}],
             "oracleActions": [{"tool": FINALIZE_DIAGNOSIS, "arguments": {}}],
-            "recommendedActions": [
-                {"tool": FINALIZE_DIAGNOSIS, "arguments": {}}
-            ],
+            "recommendedActions": [{"tool": FINALIZE_DIAGNOSIS, "arguments": {}}],
             "correctAction": {"tool": FINALIZE_DIAGNOSIS, "arguments": {}},
             "optimalAction": {"tool": FINALIZE_DIAGNOSIS, "arguments": {}},
             "actionCostsByTool": {FINALIZE_DIAGNOSIS: 0.0},
             "qValues": {FINALIZE_DIAGNOSIS: 0.0},
             "referenceSolution": {"case": "clean-answer"},
             "family": "measurement",
-            "valid-next-actions": [
-                {"tool": FINALIZE_DIAGNOSIS, "arguments": {}}
-            ],
+            "valid-next-actions": [{"tool": FINALIZE_DIAGNOSIS, "arguments": {}}],
             "ACTION COSTS": {FINALIZE_DIAGNOSIS: 0.0, RUN_WLS: 1.0},
             "rankingCostLabels": {FINALIZE_DIAGNOSIS: 0.0},
             "metadata": {
@@ -2307,9 +2393,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                         "tool": FINALIZE_DIAGNOSIS,
                         "arguments": {},
                     },
-                    "validNextActions": [
-                        {"tool": FINALIZE_DIAGNOSIS, "arguments": {}}
-                    ],
+                    "validNextActions": [{"tool": FINALIZE_DIAGNOSIS, "arguments": {}}],
                     "action-costs": {FINALIZE_DIAGNOSIS: 0.0},
                 },
             },
@@ -2317,9 +2401,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             "grouping": {},
         }
 
-        with self.assertRaisesRegex(
-            ValueError, r"\$\.metadata\.finalPhysicalState"
-        ):
+        with self.assertRaisesRegex(ValueError, r"\$\.metadata\.finalPhysicalState"):
             strip_offline_truth(scenario)
 
         for key, path in (
@@ -2333,13 +2415,9 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                     "hif_scan_window": {"scans": [{key: [1.0]}]}
                 }
             elif key == "initial_states":
-                candidate["execution"]["metadata"] = {
-                    "parameter_scans": {key: [[1.0]]}
-                }
+                candidate["execution"]["metadata"] = {"parameter_scans": {key: [[1.0]]}}
             else:
-                candidate["execution"]["metadata"] = {
-                    "nlm_diagnostic": {key: True}
-                }
+                candidate["execution"]["metadata"] = {"nlm_diagnostic": {key: True}}
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, path):
                 strip_offline_truth(candidate)
 
@@ -2401,7 +2479,9 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         malformed.append((empty, "grouping.split must be non-empty"))
         fractional = _partitioned_resolved_scenario()
         fractional["grouping"]["error_cardinality"] = 1.5
-        malformed.append((fractional, "error_cardinality must be a non-negative integer"))
+        malformed.append(
+            (fractional, "error_cardinality must be a non-negative integer")
+        )
         ambiguous = _partitioned_resolved_scenario()
         ambiguous["grouping"]["family"] = ambiguous["grouping"]["scenario_family"]
         malformed.append((ambiguous, "grouping contains unsupported fields"))
@@ -2461,9 +2541,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             "cleanCase": scenario.pop("clean_case"),
             "cleanMeasurements": scenario.pop("clean_measurements"),
             "trueMeasurementErrors": scenario.pop("true_measurement_errors"),
-            "trueHarmonicErrors": scenario.pop("hidden_truth")[
-                "true_harmonic_errors"
-            ],
+            "trueHarmonicErrors": scenario.pop("hidden_truth")["true_harmonic_errors"],
             "truthComplete": True,
         }
 
@@ -2483,9 +2561,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             scenario = _partitioned_resolved_scenario()
             truth = scenario["audit"].pop("truth")
             scenario["audit"] = (
-                {"truth": {"groundTruth": truth}}
-                if nested
-                else {"groundTruth": truth}
+                {"truth": {"groundTruth": truth}} if nested else {"groundTruth": truth}
             )
             with self.subTest(nested=nested):
                 result = evaluate_rollout_suites(
@@ -2629,9 +2705,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         first_scenario["oracle_action_hints"] = [{"tool": "hidden_first"}]
         second_scenario = copy.deepcopy(first_scenario)
         second_scenario["true_measurement_errors"] = [{"index": 6}]
-        second_scenario["hidden_truth"] = {
-            "true_harmonic_errors": [{"bus_1based": 5}]
-        }
+        second_scenario["hidden_truth"] = {"true_harmonic_errors": [{"bus_1based": 5}]}
         second_scenario["metadata"] = {
             "hidden_truth": {"true_nested_secret": "second"},
             "clean_nested_reference": [2.0],
@@ -2683,9 +2757,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                     }
                 ]
                 return found + [
-                    key
-                    for item in value.values()
-                    for key in privileged_keys(item)
+                    key for item in value.values() for key in privileged_keys(item)
                 ]
             if isinstance(value, (list, tuple)):
                 return [key for item in value for key in privileged_keys(item)]
@@ -2704,6 +2776,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             "TrueMeasurementErrors",
         ):
             with self.subTest(leaked_key=leaked_key):
+
                 class LeakyEnv(_ScriptEnv):
                     def get_policy_observation(
                         self, history: list[Mapping[str, Any]]
@@ -2719,7 +2792,9 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                         policy_factory=lambda: _ScriptPolicy([]),
                     )
 
-    def test_grouped_correction_touching_one_healthy_meter_fails_preservation(self) -> None:
+    def test_grouped_correction_touching_one_healthy_meter_fails_preservation(
+        self,
+    ) -> None:
         scenario = _resolved_scenario()
         scenario["scenario_id"] = "broad-correction"
         scenario["scenario_family"] = "measurement"
@@ -2852,7 +2927,9 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             episode["audit"]["strict_release_audit"]["problems"],
         )
 
-    def test_default_audit_promotes_hidden_standard_truth_for_strict_check(self) -> None:
+    def test_default_audit_promotes_hidden_standard_truth_for_strict_check(
+        self,
+    ) -> None:
         scenario = _resolved_scenario()
         scenario["scenario_id"] = "hidden-standard-truth"
         scenario["hidden_truth"]["true_measurement_errors"] = scenario.pop(
@@ -2867,8 +2944,9 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         episode = result.suite_metrics["episodes"][0]
         self.assertTrue(episode["final_physical_success"])
         self.assertEqual(
-            episode["audit"]["strict_release_audit"]["checks"]
-            ["accepted_correction_targets"]["status"],
+            episode["audit"]["strict_release_audit"]["checks"][
+                "accepted_correction_targets"
+            ]["status"],
             "passed",
         )
 
@@ -2888,9 +2966,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         self.assertFalse(episode["final_physical_correct"])
         self.assertFalse(episode["final_physical_success"])
         self.assertEqual(episode["audit"]["audit_mode"], "insufficient_evidence")
-        self.assertIn(
-            "active_physical_state_unavailable", episode["audit"]["problems"]
-        )
+        self.assertIn("active_physical_state_unavailable", episode["audit"]["problems"])
 
     def test_case_reference_requires_loader_before_physical_success(self) -> None:
         scenario = _resolved_scenario()
@@ -2969,9 +3045,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "empty"):
             evaluate_rollout_suites({"standard_success": []}, **kwargs)
         with self.assertRaisesRegex(ValueError, "suite_count"):
-            evaluate_rollout_suites(
-                [_resolved_scenario()], minimum_suites=2, **kwargs
-            )
+            evaluate_rollout_suites([_resolved_scenario()], minimum_suites=2, **kwargs)
         with self.assertRaisesRegex(ValueError, "episodes=1"):
             evaluate_rollout_suites(
                 [_resolved_scenario()], minimum_episodes_per_suite=2, **kwargs
@@ -3004,7 +3078,9 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
 
         first = run([first_scenario, second_scenario])
         reordered = run([second_scenario, first_scenario])
-        self.assertEqual(first["suite_content_sha256"], reordered["suite_content_sha256"])
+        self.assertEqual(
+            first["suite_content_sha256"], reordered["suite_content_sha256"]
+        )
         self.assertEqual(first["root_set_sha256"], reordered["root_set_sha256"])
         self.assertTrue(first["suite_coverage_validation"]["passed"])
 
@@ -3015,7 +3091,9 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             first["suite_content_sha256"],
             changed_configuration["suite_content_sha256"],
         )
-        self.assertEqual(first["root_set_sha256"], changed_configuration["root_set_sha256"])
+        self.assertEqual(
+            first["root_set_sha256"], changed_configuration["root_set_sha256"]
+        )
 
     def test_runtime_environment_records_cuda_device_identity(self) -> None:
         properties = SimpleNamespace(
@@ -3037,12 +3115,15 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             stdout="570.124.06\n",
         )
 
-        with mock.patch(
-            "psse_env.dagger.evaluator.subprocess.run",
-            return_value=completed,
-        ), mock.patch(
-            "psse_env.dagger.evaluator.importlib.import_module",
-            return_value=fake_torch,
+        with (
+            mock.patch(
+                "psse_env.dagger.evaluator.subprocess.run",
+                return_value=completed,
+            ),
+            mock.patch(
+                "psse_env.dagger.evaluator.importlib.import_module",
+                return_value=fake_torch,
+            ),
         ):
             accelerator = _runtime_environment_descriptor()["accelerator"]
 
@@ -3057,9 +3138,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             [
                 {
                     "index": 0,
-                    "name": (
-                        "NVIDIA RTX PRO 6000 Blackwell Workstation Edition"
-                    ),
+                    "name": ("NVIDIA RTX PRO 6000 Blackwell Workstation Edition"),
                     "total_memory_bytes": 102_844_334_080,
                     "compute_capability": [12, 0],
                     "accelerator_class": "rtx6000",
@@ -3239,17 +3318,13 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                 provenance["input_suite"]["sha256"],
                 hashlib.sha256(input_path.read_bytes()).hexdigest(),
             )
-            self.assertEqual(
-                provenance["protocol_registry"]["protocol"], "canonical"
-            )
+            self.assertEqual(provenance["protocol_registry"]["protocol"], "canonical")
             self.assertEqual(
                 provenance["runtime_environment"]["python_implementation"],
                 platform.python_implementation(),
             )
             self.assertIn("torch", provenance["runtime_environment"]["packages"])
-            self.assertIn(
-                "transformers", provenance["runtime_environment"]["packages"]
-            )
+            self.assertIn("transformers", provenance["runtime_environment"]["packages"])
             self.assertEqual(
                 len(provenance["protocol_registry"]["registry_sha256"]), 64
             )
@@ -3273,11 +3348,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             output_path = root / "diagnostic-evaluation.json"
             input_path.write_text(
                 json.dumps(
-                    {
-                        "standard_success": [
-                            _release_partitioned_resolved_scenario()
-                        ]
-                    }
+                    {"standard_success": [_release_partitioned_resolved_scenario()]}
                 ),
                 encoding="utf-8",
             )
@@ -3398,10 +3469,13 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                 "untracked_source_files": [],
                 "release_eligible_source": True,
             }
-            with mock.patch(
-                "psse_env.dagger.evaluator.git_source_state",
-                return_value=clean_source,
-            ), self.assertRaisesRegex(ValueError, "policy identity validation failed"):
+            with (
+                mock.patch(
+                    "psse_env.dagger.evaluator.git_source_state",
+                    return_value=clean_source,
+                ),
+                self.assertRaisesRegex(ValueError, "policy identity validation failed"),
+            ):
                 evaluator_main(arguments)
             self.assertFalse((root / "release.json").exists())
 
@@ -3439,10 +3513,13 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                 "untracked_source_files": ["policy.py"],
                 "release_eligible_source": False,
             }
-            with mock.patch(
-                "psse_env.dagger.evaluator.git_source_state",
-                return_value=dirty_source,
-            ), self.assertRaisesRegex(RuntimeError, "clean tracked commit"):
+            with (
+                mock.patch(
+                    "psse_env.dagger.evaluator.git_source_state",
+                    return_value=dirty_source,
+                ),
+                self.assertRaisesRegex(RuntimeError, "clean tracked commit"),
+            ):
                 evaluator_main(arguments)
             self.assertFalse(output_path.exists())
 
@@ -3463,9 +3540,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                 )
             )
             self.assertEqual(
-                artifact["provenance"]["policy_identity"][
-                    "explicit_policy_identity"
-                ],
+                artifact["provenance"]["policy_identity"]["explicit_policy_identity"],
                 "observable-rule-policy-v1",
             )
 
@@ -3510,9 +3585,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         configuration = result.suite_metrics["configuration"]
         self.assertTrue(configuration["release_environment_validation"]["passed"])
         self.assertTrue(configuration["policy_identity_validation"]["passed"])
-        self.assertFalse(
-            configuration["release_scenario_schema_validation"]["passed"]
-        )
+        self.assertFalse(configuration["release_scenario_schema_validation"]["passed"])
 
         clean_source = {
             "source_commit": "b" * 40,
@@ -3560,12 +3633,16 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         original = copy.deepcopy(scenarios)
 
         def run(rows: list[dict[str, Any]]) -> dict[str, Any]:
-            return ClosedLoopRolloutEvaluator(
-                env_factory=_ScriptEnv,
-                policy_factory=lambda: _ScriptPolicy([]),
-                max_steps=8,
-                seed=71,
-            ).evaluate(rows).as_dict()
+            return (
+                ClosedLoopRolloutEvaluator(
+                    env_factory=_ScriptEnv,
+                    policy_factory=lambda: _ScriptPolicy([]),
+                    max_steps=8,
+                    seed=71,
+                )
+                .evaluate(rows)
+                .as_dict()
+            )
 
         first = run(scenarios)
         second = run(list(reversed(scenarios)))

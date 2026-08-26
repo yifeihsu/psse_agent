@@ -108,6 +108,10 @@ class _Harness:
         self.evaluator_calls.append(label)
         self.case_loaders.append(kwargs["case_loader"])
         episodes: list[dict[str, Any]] = []
+        count = len(suites["standard_success"])
+        task_successes = int(profile.get("task_success", profile["audited"]))
+        faulted_episodes = int(profile.get("faulted_episodes", count))
+        corrected_targets = int(profile.get("corrected_targets", task_successes))
         for index, _scenario_row in enumerate(suites["standard_success"]):
             observation = {
                 "active_state_id": f"state_{index}",
@@ -115,9 +119,52 @@ class _Harness:
                 "remaining_budget": 5,
                 "history_window": [],
             }
+            faulted = index < faulted_episodes
+            corrected = faulted and index < corrected_targets
+            target = [index] if faulted else []
+            accepted = [index] if corrected else []
+            target_evidence = (
+                [
+                    {
+                        "family": "measurement",
+                        "index0": index,
+                        "status": "passed",
+                        "final_distance": 0.0,
+                        "tolerance": 1.0,
+                    }
+                ]
+                if corrected
+                else []
+            )
             episodes.append(
                 {
                     "evaluator_error": None,
+                    "cardinality": int(faulted),
+                    "truth_audited_task_success": index < task_successes,
+                    "truth_audited_task_success_evidence_known": True,
+                    "audit": {
+                        "accepted_target_audit": {
+                            "true_targets": {
+                                "measurement": target,
+                                "parameter": [],
+                                "topology": [],
+                            },
+                            "accepted_targets": {
+                                "measurement": accepted,
+                                "parameter": [],
+                                "topology": [],
+                            },
+                        },
+                        "truth_audited_task_assessment": {
+                            "counterfactual_completion_audit": {
+                                "checks": {
+                                    "accepted_target_nonregression": {
+                                        "target_evidence": target_evidence
+                                    }
+                                }
+                            }
+                        },
+                    },
                     "trace": [
                         {
                             "intervention": False,
@@ -127,7 +174,6 @@ class _Harness:
                     ],
                 }
             )
-        count = len(episodes)
         overall = {
             "episodes": count,
             "audited_completion_episodes": profile["audited"],
@@ -206,12 +252,10 @@ class CheckpointComparisonTests(unittest.TestCase):
             "progress_callback": None,
         }
         options.update(overrides)
-        with patch.object(
-            research_bc0_checkpoint_compare, "_configure_input_ceiling"
-        ):
+        with patch.object(research_bc0_checkpoint_compare, "_configure_input_ceiling"):
             return compare_checkpoints(**options)
 
-    def test_evaluates_each_adapter_and_ranks_audited_completion_first(self) -> None:
+    def test_evaluates_each_adapter_and_reports_aligned_metrics(self) -> None:
         harness = _Harness(self.profiles)
         comparison = self._run(harness)
 
@@ -222,6 +266,16 @@ class CheckpointComparisonTests(unittest.TestCase):
         alpha = comparison["ranking"][0]
         beta = comparison["ranking"][1]
         self.assertEqual(alpha["audited_completion"], {"episodes": 3, "rate": 0.75})
+        self.assertEqual(alpha["primary_success_metric"], "truth_audited_task_success")
+        self.assertEqual(
+            alpha["contract_execution"],
+            "native_terminal_independent_truth_audit",
+        )
+        self.assertFalse(alpha["historical_backfill_lower_bound"])
+        self.assertEqual(alpha["truth_audited_task_success"]["rate"], 0.75)
+        self.assertEqual(alpha["truth_audited_fault_recovery_success"]["rate"], 0.75)
+        self.assertEqual(alpha["truth_audited_fault_target_correction"]["rate"], 0.75)
+        self.assertEqual(alpha["safe_completion"]["rate"], 0.75)
         self.assertEqual(alpha["audited_post_correction_handoff"]["rate"], 0.5)
         self.assertEqual(alpha["strict_resolved_physical_success"]["rate"], 0.25)
         self.assertEqual(alpha["schema_valid_action_rate"], 1.0)
@@ -232,6 +286,57 @@ class CheckpointComparisonTests(unittest.TestCase):
         self.assertTrue((self.output / COMPARISON_REPORT_NAME).is_file())
         self.assertTrue((self.output / "research_bc0_checkpoint_alpha.json").is_file())
         self.assertTrue((self.output / "research_bc0_checkpoint_beta.json").is_file())
+        self.assertEqual(
+            comparison["ranking_criteria"][:4],
+            [
+                "truth_audited_task_success_rate_desc",
+                "truth_audited_fault_recovery_success_rate_desc",
+                "truth_audited_fault_target_correction_rate_desc",
+                "safe_completion_rate_desc",
+            ],
+        )
+
+    def test_aligned_task_success_ranks_before_legacy_completion(self) -> None:
+        profiles = copy.deepcopy(self.profiles)
+        profiles[str(self.alpha)]["task_success"] = 1
+        profiles[str(self.alpha)]["corrected_targets"] = 1
+        profiles[str(self.beta)]["task_success"] = 3
+        profiles[str(self.beta)]["corrected_targets"] = 3
+
+        comparison = self._run(_Harness(profiles))
+
+        self.assertEqual(
+            [row["label"] for row in comparison["ranking"]], ["beta", "alpha"]
+        )
+        self.assertGreater(
+            comparison["ranking"][0]["truth_audited_task_success"]["rate"],
+            comparison["ranking"][1]["truth_audited_task_success"]["rate"],
+        )
+        self.assertLess(
+            comparison["ranking"][0]["audited_completion"]["rate"],
+            comparison["ranking"][1]["audited_completion"]["rate"],
+        )
+
+    def test_fault_target_correction_breaks_task_success_tie(self) -> None:
+        profiles = copy.deepcopy(self.profiles)
+        profiles[str(self.alpha)]["task_success"] = 1
+        profiles[str(self.alpha)]["corrected_targets"] = 1
+        profiles[str(self.beta)]["task_success"] = 1
+        profiles[str(self.beta)]["corrected_targets"] = 2
+
+        comparison = self._run(_Harness(profiles))
+
+        self.assertEqual(
+            [row["label"] for row in comparison["ranking"]], ["beta", "alpha"]
+        )
+        self.assertEqual(
+            comparison["ranking"][0]["truth_audited_task_success"]["rate"],
+            comparison["ranking"][1]["truth_audited_task_success"]["rate"],
+        )
+        self.assertGreater(
+            comparison["ranking"][0]["truth_audited_fault_target_correction"]["rate"],
+            comparison["ranking"][1]["truth_audited_fault_target_correction"]["rate"],
+        )
 
     def test_reuses_only_completed_matching_adapter_report(self) -> None:
         harness = _Harness(self.profiles)

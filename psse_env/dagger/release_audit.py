@@ -43,6 +43,7 @@ AUDIT_VERSION = "strict_offline_episode_truth_v3"
 POST_CORRECTION_COMPLETION_CONTRACT = (
     "audit_verified_post_correction_controller_handoff_v1"
 )
+TRUTH_AUDITED_TASK_SUCCESS_CONTRACT = "truth_audited_final_task_success_v1"
 
 ACCEPTED_TARGETS_CHECK = "accepted_correction_targets"
 ACCEPTED_TARGET_NONREGRESSION_CHECK = "accepted_target_nonregression"
@@ -72,12 +73,31 @@ _RESOLVED_CHECKS = frozenset(
 # waivable.  Final-case waivers are also prohibited until an explicit,
 # independently validated explanation-only case contract exists.
 ALLOWED_NOT_APPLICABLE_CHECKS = frozenset({FINAL_MEASUREMENTS_CHECK})
-EXPLANATION_ONLY_DIAGNOSTIC_CONTRACT = (
-    "explanation_only_diagnostic_localization_v1"
+EXPLANATION_ONLY_DIAGNOSTIC_CONTRACT = "explanation_only_diagnostic_localization_v1"
+
+# These problems mean the offline audit could not determine final task
+# correctness from canonical truth and physical-state evidence.  They are kept
+# separate from ordinary task failures (for example a wrong target or an
+# out-of-tolerance final value), which remain known failures rather than being
+# mislabeled as missing evidence.
+_TASK_SUCCESS_EVIDENCE_GAPS = frozenset(
+    {
+        "accepted_measurement_nonregression_evidence_missing_or_malformed",
+        "accepted_parameter_nonregression_evidence_missing_or_malformed",
+        "accepted_topology_nonregression_evidence_missing_or_malformed",
+        "accepted_target_nonregression_target_evidence_invalid",
+        "healthy_measurement_preservation_evidence_missing_or_malformed",
+        "healthy_case_preservation_evidence_missing_or_unloadable",
+        "final_clean_measurement_evidence_missing_or_malformed",
+        "final_clean_case_evidence_missing_or_unloadable",
+        "supplied_remaining_truth_ledger_incomplete",
+        "supplied_remaining_truth_ledger_missing_or_malformed",
+        "supplied_remaining_truth_ledger_disagrees_with_derived",
+        "true_measurement_targets_malformed",
+        "true_measurement_target_out_of_range",
+    }
 )
-_DIAGNOSTIC_FAMILIES = frozenset(
-    {"harmonic", "hif", "three_phase_unbalance"}
-)
+_DIAGNOSTIC_FAMILIES = frozenset({"harmonic", "hif", "three_phase_unbalance"})
 _CORRECTION_FAMILY = {
     CORRECT_MEASUREMENTS: "measurement",
     "correct_measurements_from_path": "measurement",
@@ -236,7 +256,9 @@ def _values_close(
     return observed == expected
 
 
-def _accepted_corrections(final_state: Mapping[str, Any]) -> tuple[list[Mapping[str, Any]], bool]:
+def _accepted_corrections(
+    final_state: Mapping[str, Any],
+) -> tuple[list[Mapping[str, Any]], bool]:
     raw = final_state.get("accepted_corrections")
     if raw is None:
         return [], True
@@ -275,7 +297,9 @@ def observable_post_correction_handoff_certificate(
 
     accepted, accepted_well_formed = _accepted_corrections(final_state)
     history = _as_sequence(final_state.get("history_window")) or []
-    last_transition = history[-1] if history and isinstance(history[-1], Mapping) else {}
+    last_transition = (
+        history[-1] if history and isinstance(history[-1], Mapping) else {}
+    )
     action = last_transition.get("action")
     action = action if isinstance(action, Mapping) else {}
     arguments = action.get("arguments")
@@ -303,9 +327,7 @@ def observable_post_correction_handoff_certificate(
     output_state_hash = metrics.get("state_hash")
     audit_state_hash = escalation.get("active_state_hash")
     transition_label = last_transition.get("transition_label")
-    transition_label = (
-        transition_label if isinstance(transition_label, Mapping) else {}
-    )
+    transition_label = transition_label if isinstance(transition_label, Mapping) else {}
     accepted_actions = [_correction_action(item) for item in accepted]
     accepted_candidate_ids = [item.get("candidate_state_id") for item in accepted]
 
@@ -436,7 +458,9 @@ def observable_post_correction_handoff_certificate(
         "contract": POST_CORRECTION_COMPLETION_CONTRACT,
         "passed": not failures,
         "failures": list(dict.fromkeys(failures)),
-        "active_state_id": active_state_id if isinstance(active_state_id, str) else None,
+        "active_state_id": active_state_id
+        if isinstance(active_state_id, str)
+        else None,
         "active_state_hash": (
             output_state_hash if isinstance(output_state_hash, str) else None
         ),
@@ -516,9 +540,7 @@ def _audit_accepted_targets(
     truth_parameters = _branch_truth_targets(
         scenario, "true_parameter_errors", problems
     )
-    truth_topology = _branch_truth_targets(
-        scenario, "true_topology_errors", problems
-    )
+    truth_topology = _branch_truth_targets(scenario, "true_topology_errors", problems)
     measurement_rows = _as_sequence(scenario.get("measurements"))
     scenario_branches = _case_branches(scenario.get("case"), case_loader)
     known_branch_targets = truth_parameters | truth_topology
@@ -649,7 +671,9 @@ def _diagnostic_truth(
     return result, problems
 
 
-def _explanations(final_state: Mapping[str, Any]) -> tuple[list[Mapping[str, Any]], bool]:
+def _explanations(
+    final_state: Mapping[str, Any],
+) -> tuple[list[Mapping[str, Any]], bool]:
     raw = final_state.get("explained_anomalies")
     if raw is None:
         return [], True
@@ -750,10 +774,17 @@ def _diagnostic_match(
             ("branch_row_tolerance", "localization_tolerance_branches"),
             tolerances.hif_branch_rows,
         )
-        if expected_branch is None or observed_branch is None or branch_tolerance is None:
+        if (
+            expected_branch is None
+            or observed_branch is None
+            or branch_tolerance is None
+        ):
             return None
         if expected_branch[0] == observed_branch[0] == "branch_row0":
-            if abs(int(expected_branch[1]) - int(observed_branch[1])) > branch_tolerance:
+            if (
+                abs(int(expected_branch[1]) - int(observed_branch[1]))
+                > branch_tolerance
+            ):
                 return False
         elif expected_branch != observed_branch:
             return False
@@ -804,9 +835,7 @@ def _diagnostic_match(
         )
         top_vuf = _as_sequence(detail.get("top_vuf_buses")) or []
         top = top_vuf[0] if top_vuf and isinstance(top_vuf[0], Mapping) else {}
-        top_k_raw = _first_value(
-            (truth,), "localization_top_k", "top_k_tolerance"
-        )
+        top_k_raw = _first_value((truth,), "localization_top_k", "top_k_tolerance")
         top_k = _nonnegative_integer(
             tolerances.unbalance_top_k if top_k_raw is None else top_k_raw
         )
@@ -1183,14 +1212,10 @@ def _healthy_case_preserved(
             ):
                 return False
     initial_other = {
-        str(key): value
-        for key, value in initial_loaded.items()
-        if str(key) != "branch"
+        str(key): value for key, value in initial_loaded.items() if str(key) != "branch"
     }
     final_other = {
-        str(key): value
-        for key, value in final_loaded.items()
-        if str(key) != "branch"
+        str(key): value for key, value in final_loaded.items() if str(key) != "branch"
     }
     return _values_close(
         final_other,
@@ -1290,9 +1315,7 @@ def _accepted_target_nonregression(
     clean_measurements = _as_sequence(
         clean_state.get("measurements", scenario.get("clean_measurements"))
     )
-    measurement_truth_rows = _as_sequence(
-        scenario.get("true_measurement_errors", [])
-    )
+    measurement_truth_rows = _as_sequence(scenario.get("true_measurement_errors", []))
 
     for index in sorted(accepted_measurements):
         malformed = False
@@ -1397,7 +1420,9 @@ def _accepted_target_nonregression(
     clean_branches = _case_branches(clean_case, case_loader) if needs_case else None
 
     parameter_truth_rows = _as_sequence(scenario.get("true_parameter_errors", []))
-    for target in sorted(accepted_parameters, key=lambda item: (str(item[0]), str(item[1]))):
+    for target in sorted(
+        accepted_parameters, key=lambda item: (str(item[0]), str(item[1]))
+    ):
         malformed = target[0] != "branch_row0" or parameter_truth_rows is None
         row0 = int(target[1]) if target[0] == "branch_row0" else -1
         initial_row = _branch_row(initial_branches, row0)
@@ -1424,7 +1449,11 @@ def _accepted_target_nonregression(
                 columns.add(column)
                 clean_field = _PARAMETER_CLEAN_FIELDS[column]
                 raw_clean = fault.get(clean_field)
-                if raw_clean is None and clean_row is not None and column < len(clean_row):
+                if (
+                    raw_clean is None
+                    and clean_row is not None
+                    and column < len(clean_row)
+                ):
                     raw_clean = clean_row[column]
                 numeric_clean = _finite_number(raw_clean)
                 if numeric_clean is None:
@@ -1478,7 +1507,9 @@ def _accepted_target_nonregression(
                 {"family": "parameter", "target": list(target), "status": "malformed"}
             )
             continue
-        numeric_initial = [float(value) for value in initial_values if value is not None]
+        numeric_initial = [
+            float(value) for value in initial_values if value is not None
+        ]
         numeric_final = [float(value) for value in final_values if value is not None]
         initial_distance = _vector_distance(numeric_initial, clean_values)
         final_distance = _vector_distance(numeric_final, clean_values)
@@ -1504,7 +1535,9 @@ def _accepted_target_nonregression(
             problems.append("accepted_parameter_target_regressed")
 
     topology_truth_rows = _as_sequence(scenario.get("true_topology_errors", []))
-    for target in sorted(accepted_topology, key=lambda item: (str(item[0]), str(item[1]))):
+    for target in sorted(
+        accepted_topology, key=lambda item: (str(item[0]), str(item[1]))
+    ):
         malformed = target[0] != "branch_row0" or topology_truth_rows is None
         row0 = int(target[1]) if target[0] == "branch_row0" else -1
         initial_row = _branch_row(initial_branches, row0)
@@ -1682,15 +1715,8 @@ def _validated_not_applicable_declarations(
             "final_measurements_not_applicable_diagnostic_truth_missing_or_malformed"
         )
 
-    if (
-        measurement_targets
-        or parameter_targets
-        or topology_targets
-        or target_problems
-    ):
-        problems.append(
-            "final_measurements_not_applicable_prohibits_correction_truth"
-        )
+    if measurement_targets or parameter_targets or topology_targets or target_problems:
+        problems.append("final_measurements_not_applicable_prohibits_correction_truth")
 
     corrections, corrections_well_formed = _accepted_corrections(final_state)
     if corrections or not corrections_well_formed:
@@ -1747,7 +1773,9 @@ def audit_episode_against_truth(
     checks: dict[str, dict[str, Any]] = {}
     all_problems: list[str] = []
 
-    def record(name: str, problems: Sequence[str], *, status: str | None = None) -> None:
+    def record(
+        name: str, problems: Sequence[str], *, status: str | None = None
+    ) -> None:
         unique = list(dict.fromkeys(str(item) for item in problems))
         resolved_status = status or ("failed" if unique else "passed")
         checks[name] = {"status": resolved_status, "problems": unique}
@@ -1860,17 +1888,15 @@ def audit_episode_against_truth(
                 )
     resolved_check(REMAINING_FAULTS_CHECK, remaining_problems)
     if resolved and REMAINING_FAULTS_CHECK in checks:
-        checks[REMAINING_FAULTS_CHECK][
-            "derived_remaining_fault_count"
-        ] = derived_remaining_count
-        checks[REMAINING_FAULTS_CHECK][
-            "evidence_source"
-        ] = "offline_scenario_truth_derivation"
+        checks[REMAINING_FAULTS_CHECK]["derived_remaining_fault_count"] = (
+            derived_remaining_count
+        )
+        checks[REMAINING_FAULTS_CHECK]["evidence_source"] = (
+            "offline_scenario_truth_derivation"
+        )
 
     physical = active_physical_state
-    if physical is None and (
-        "measurements" in final_state or "case" in final_state
-    ):
+    if physical is None and ("measurements" in final_state or "case" in final_state):
         physical = final_state
     physical = physical if isinstance(physical, Mapping) else {}
     initial_measurements = scenario.get("measurements")
@@ -1883,18 +1909,16 @@ def audit_episode_against_truth(
     )
 
     if terminal:
-        nonregression_problems, nonregression_evidence = (
-            _accepted_target_nonregression(
-                scenario,
-                final_measurements=final_measurements,
-                final_case=final_case,
-                case_loader=case_loader,
-                tolerances=tolerance_profile,
-                target_problems=target_problems,
-                accepted_measurements=accepted_measurement_targets,
-                accepted_parameters=accepted_parameter_targets,
-                accepted_topology=accepted_topology_targets,
-            )
+        nonregression_problems, nonregression_evidence = _accepted_target_nonregression(
+            scenario,
+            final_measurements=final_measurements,
+            final_case=final_case,
+            case_loader=case_loader,
+            tolerances=tolerance_profile,
+            target_problems=target_problems,
+            accepted_measurements=accepted_measurement_targets,
+            accepted_parameters=accepted_parameter_targets,
+            accepted_topology=accepted_topology_targets,
         )
         record(ACCEPTED_TARGET_NONREGRESSION_CHECK, nonregression_problems)
         checks[ACCEPTED_TARGET_NONREGRESSION_CHECK]["target_evidence"] = (
@@ -2021,6 +2045,166 @@ def audit_episode_against_truth(
         "tolerances": asdict(tolerance_profile),
         "problems": unique_problems,
         "quarantined": bool(unique_problems),
+    }
+
+
+def _initial_true_fault_count(
+    scenario: Mapping[str, Any],
+) -> tuple[int, list[str]]:
+    """Count canonical initial truth targets without exposing them to policy."""
+
+    problems: list[str] = []
+    measurement_targets = _measurement_truth_targets(scenario, problems)
+    parameter_targets = _branch_truth_targets(
+        scenario, "true_parameter_errors", problems
+    )
+    topology_targets = _branch_truth_targets(scenario, "true_topology_errors", problems)
+    diagnostic_truth, diagnostic_problems = _diagnostic_truth(scenario)
+    problems.extend(diagnostic_problems)
+    return (
+        len(measurement_targets)
+        + len(parameter_targets)
+        + len(topology_targets)
+        + sum(len(rows) for rows in diagnostic_truth.values()),
+        list(dict.fromkeys(problems)),
+    )
+
+
+def _task_success_evidence_gap(problem: str) -> bool:
+    return bool(
+        problem in _TASK_SUCCESS_EVIDENCE_GAPS
+        or problem.startswith("true_")
+        and (problem.endswith("_malformed") or problem.endswith("_missing"))
+    )
+
+
+def audit_truth_audited_task_success(
+    scenario: Mapping[str, Any],
+    final_state: Mapping[str, Any],
+    *,
+    actual_terminal: bool,
+    actual_terminal_outcome: str | None,
+    active_physical_state: Mapping[str, Any] | None = None,
+    remaining_truth: Mapping[str, Any] | None = None,
+    case_loader: Callable[[Any], Any] | None = None,
+    tolerances: ReleaseAuditTolerances | Mapping[str, Any] | None = None,
+    not_applicable: Mapping[str, str] | None = None,
+    evaluator_error: str | None = None,
+) -> dict[str, Any]:
+    """Audit final task correctness independently of the terminal label.
+
+    This is an offline research metric.  It asks whether the final active
+    physical state satisfies the existing strict resolved-state truth audit,
+    while retaining the episode's *actual* terminal state as descriptive
+    metadata.  It never changes the production outcome, policy observation, or
+    training target.
+    """
+
+    if not isinstance(scenario, Mapping) or not isinstance(final_state, Mapping):
+        raise TypeError("scenario and final_state must be mappings")
+
+    initial_true_fault_count, truth_problems = _initial_true_fault_count(scenario)
+    raw_true_fields = {
+        str(key): value
+        for key, value in scenario.items()
+        if str(key).startswith("true_")
+    }
+    truth_complete = scenario.get("truth_complete")
+    canonical_fault_presence_known = bool(
+        not truth_problems
+        and truth_complete is not False
+        and (truth_complete is True or raw_true_fields)
+    )
+    raw_cardinality = scenario.get("error_cardinality", scenario.get("cardinality"))
+    grouping_cardinality = (
+        raw_cardinality
+        if isinstance(raw_cardinality, int)
+        and not isinstance(raw_cardinality, bool)
+        and raw_cardinality >= 0
+        else None
+    )
+    if canonical_fault_presence_known:
+        faulted = initial_true_fault_count > 0
+        fault_presence_source = "canonical_truth"
+    elif grouping_cardinality is not None:
+        # Frozen-suite cardinality keeps malformed truth from silently removing
+        # a faulted episode from the recovery denominator. Success remains
+        # impossible because malformed truth also makes evidence unknown.
+        faulted = grouping_cardinality > 0
+        fault_presence_source = "grouping_cardinality_fallback"
+    else:
+        faulted = any(bool(_as_sequence(value)) for value in raw_true_fields.values())
+        fault_presence_source = "best_effort_truth_shape"
+
+    counterfactual = audit_episode_against_truth(
+        scenario,
+        final_state,
+        terminal=True,
+        terminal_outcome="resolved",
+        active_physical_state=active_physical_state,
+        remaining_truth=remaining_truth,
+        case_loader=case_loader,
+        tolerances=tolerances,
+        not_applicable=not_applicable,
+    )
+    audit_problems = [str(item) for item in counterfactual.get("problems") or []]
+    evidence_reasons: list[str] = []
+    if truth_complete is False or (truth_complete is not True and not raw_true_fields):
+        evidence_reasons.append("task_success_scenario_truth_unavailable")
+    if not isinstance(active_physical_state, Mapping) or not any(
+        active_physical_state.get(key) is not None for key in ("case", "measurements")
+    ):
+        evidence_reasons.append("task_success_active_physical_state_unavailable")
+    evidence_reasons.extend(
+        problem
+        for problem in list(dict.fromkeys(truth_problems + audit_problems))
+        if _task_success_evidence_gap(problem)
+    )
+    checks = counterfactual.get("checks")
+    checks = checks if isinstance(checks, Mapping) else {}
+    required_checks = (
+        ACCEPTED_TARGETS_CHECK,
+        ACCEPTED_TARGET_NONREGRESSION_CHECK,
+        REMAINING_FAULTS_CHECK,
+        HEALTHY_MEASUREMENTS_CHECK,
+        HEALTHY_CASE_CHECK,
+        FINAL_MEASUREMENTS_CHECK,
+        FINAL_CASE_CHECK,
+        DIAGNOSTIC_FAMILY_CHECK,
+        DIAGNOSTIC_LOCALIZATION_CHECK,
+    )
+    if any(
+        not isinstance(checks.get(name), Mapping)
+        or checks[name].get("status") not in {"passed", "failed", "not_applicable"}
+        for name in required_checks
+    ):
+        evidence_reasons.append("task_success_required_checks_incomplete")
+    if evaluator_error is not None:
+        evidence_reasons.append("task_success_evaluator_error_present")
+
+    unique_evidence_reasons = list(dict.fromkeys(evidence_reasons))
+    evidence_known = not unique_evidence_reasons
+    success = bool(
+        evidence_known
+        and counterfactual.get("quarantined") is False
+        and audit_problems == []
+    )
+    reasons = list(
+        dict.fromkeys(unique_evidence_reasons + ([] if success else audit_problems))
+    )
+    return {
+        "assessment_version": TRUTH_AUDITED_TASK_SUCCESS_CONTRACT,
+        "status": "passed" if success else "failed" if evidence_known else "unknown",
+        "eligible": success,
+        "evidence_known": evidence_known,
+        "faulted": faulted,
+        "fault_presence_known": canonical_fault_presence_known,
+        "fault_presence_source": fault_presence_source,
+        "initial_true_fault_count": initial_true_fault_count,
+        "reasons": reasons,
+        "actual_terminal": bool(actual_terminal),
+        "actual_terminal_outcome": actual_terminal_outcome,
+        "counterfactual_completion_audit": counterfactual,
     }
 
 
@@ -2227,8 +2411,7 @@ def validate_post_correction_handoff_assessment(
             )
 
     require(
-        assessment.get("assessment_version")
-        == POST_CORRECTION_COMPLETION_CONTRACT,
+        assessment.get("assessment_version") == POST_CORRECTION_COMPLETION_CONTRACT,
         "handoff_assessment_version_mismatch",
     )
     require(
@@ -2354,8 +2537,7 @@ def validate_post_correction_handoff_assessment(
         "handoff_counterfactual_remaining_truth_nonzero",
     )
     require(
-        remaining.get("evidence_source")
-        == "offline_scenario_truth_derivation",
+        remaining.get("evidence_source") == "offline_scenario_truth_derivation",
         "handoff_counterfactual_remaining_truth_source_invalid",
     )
 
@@ -2421,6 +2603,7 @@ __all__ = [
     "ALLOWED_NOT_APPLICABLE_CHECKS",
     "AUDIT_VERSION",
     "POST_CORRECTION_COMPLETION_CONTRACT",
+    "TRUTH_AUDITED_TASK_SUCCESS_CONTRACT",
     "DIAGNOSTIC_FAMILY_CHECK",
     "DIAGNOSTIC_LOCALIZATION_CHECK",
     "EXPLANATION_ONLY_DIAGNOSTIC_CONTRACT",
@@ -2431,6 +2614,7 @@ __all__ = [
     "REMAINING_FAULTS_CHECK",
     "ReleaseAuditTolerances",
     "audit_post_correction_controller_handoff",
+    "audit_truth_audited_task_success",
     "audit_episode_against_truth",
     "observable_post_correction_handoff_certificate",
     "validate_post_correction_handoff_assessment",

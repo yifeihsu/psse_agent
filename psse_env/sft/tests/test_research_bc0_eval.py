@@ -27,7 +27,9 @@ from psse_env.sft.research_bc0_eval import (
 )
 
 
-def _scenario(root: str, family: str, *, scenario_id: str | None = None) -> dict[str, Any]:
+def _scenario(
+    root: str, family: str, *, scenario_id: str | None = None
+) -> dict[str, Any]:
     identifier = scenario_id or f"scenario_{root}"
     return {
         "scenario_schema_version": 1,
@@ -114,9 +116,7 @@ class ResearchBc0DevelopmentSuiteTests(unittest.TestCase):
             Counter(row["grouping"]["scenario_family"] for row in selected),
             Counter(DEFAULT_D1_PLAN),
         )
-        roots = {
-            row["grouping"]["physical_root_fingerprint"] for row in selected
-        }
+        roots = {row["grouping"]["physical_root_fingerprint"] for row in selected}
         self.assertFalse(roots & {"d0_training_root", "frozen_standard_root"})
         self.assertEqual(selected, selected_again)
         self.assertEqual(report["root_isolation"]["d0_training_overlap"], [])
@@ -198,7 +198,9 @@ class ResearchBc0EvaluationTests(unittest.TestCase):
             calls["kwargs"] = kwargs
             return _FakePolicy()
 
-        def evaluator(suites: Mapping[str, Any], **kwargs: Any) -> _FakeEvaluationResult:
+        def evaluator(
+            suites: Mapping[str, Any], **kwargs: Any
+        ) -> _FakeEvaluationResult:
             calls["evaluator_kwargs"] = kwargs
             policy = kwargs["policy_factory"]()
             observation = {
@@ -262,13 +264,13 @@ class ResearchBc0EvaluationTests(unittest.TestCase):
         self.assertIn("suite_metrics", payload)
         self.assertEqual(behavior["schema_valid_action_rate"], 1.0)
         self.assertEqual(behavior["observable_expert_tool_agreement_rate"], 1.0)
-        self.assertEqual(
-            behavior["observable_expert_exact_action_agreement_rate"], 1.0
-        )
+        self.assertEqual(behavior["observable_expert_exact_action_agreement_rate"], 1.0)
         self.assertEqual(behavior["input_truncated_steps"], 0)
         self.assertEqual(behavior["maximum_original_prompt_tokens"], 128)
 
-    def test_behavior_summary_distinguishes_schema_validity_from_tool_failure(self) -> None:
+    def test_behavior_summary_distinguishes_schema_validity_from_tool_failure(
+        self,
+    ) -> None:
         evaluation = {
             "suite_metrics": {
                 "episodes": [
@@ -304,9 +306,7 @@ class ResearchBc0EvaluationTests(unittest.TestCase):
                 ]
             }
         }
-        behavior = summarize_policy_behavior(
-            evaluation, [], expert_factory=_FakeExpert
-        )
+        behavior = summarize_policy_behavior(evaluation, [], expert_factory=_FakeExpert)
         self.assertEqual(behavior["policy_steps"], 2)
         self.assertEqual(behavior["schema_valid_actions"], 1)
         self.assertEqual(behavior["schema_valid_action_rate"], 0.5)
@@ -317,7 +317,9 @@ class ResearchBc0EvaluationTests(unittest.TestCase):
         def sentinel_loader(value: Any) -> Any:
             return value
 
-        def evaluator(_suites: Mapping[str, Any], **kwargs: Any) -> _FakeEvaluationResult:
+        def evaluator(
+            _suites: Mapping[str, Any], **kwargs: Any
+        ) -> _FakeEvaluationResult:
             calls.update(kwargs)
             return _FakeEvaluationResult(
                 {
@@ -382,6 +384,179 @@ class ResearchBc0EvaluationTests(unittest.TestCase):
             summary["audited_completion_union"],
             {"episodes": 3, "rate": 0.75},
         )
+        self.assertEqual(
+            summary["contract_execution"],
+            "conservative_legacy_evidence_backfill",
+        )
+        self.assertTrue(summary["historical_backfill_lower_bound"])
+
+    def test_outcome_summary_uses_terminal_independent_native_contract(self) -> None:
+        summary = summarize_closed_loop_outcomes(
+            {
+                "suite_metrics": {
+                    "overall": {
+                        "episodes": 4,
+                        "truth_audited_task_success_episodes": 3,
+                        "truth_audited_task_success_evidence_known_episodes": 4,
+                        "faulted_episodes": 3,
+                        "truth_audited_fault_recovery_success_episodes": 2,
+                        "truth_audited_task_success_by_terminal_outcome": {
+                            "operator_escalation": 2,
+                            "resolved": 1,
+                        },
+                        "audited_completion_episodes": 2,
+                        "audited_completion_rate": 0.5,
+                    },
+                    "episodes": [
+                        {
+                            "cardinality": 1,
+                            "audit": {
+                                "accepted_target_audit": {
+                                    "true_targets": {
+                                        "measurement": [1, 2],
+                                        "parameter": [3],
+                                        "topology": [],
+                                    },
+                                    "accepted_targets": {
+                                        "measurement": [1, 2],
+                                        "parameter": [],
+                                        "topology": [],
+                                    },
+                                },
+                                "strict_release_audit": {
+                                    "checks": {
+                                        "accepted_target_nonregression": {
+                                            "target_evidence": [
+                                                {
+                                                    "family": "measurement",
+                                                    "index0": 1,
+                                                    "status": "passed",
+                                                    "final_distance": 0.1,
+                                                    "tolerance": 0.2,
+                                                },
+                                                {
+                                                    "family": "measurement",
+                                                    "index0": 2,
+                                                    "status": "passed",
+                                                    "final_distance": 0.3,
+                                                    "tolerance": 0.2,
+                                                },
+                                            ]
+                                        }
+                                    }
+                                },
+                            },
+                        }
+                    ],
+                }
+            }
+        )
+
+        self.assertEqual(
+            summary["contract_execution"],
+            "native_terminal_independent_truth_audit",
+        )
+        self.assertFalse(summary["historical_backfill_lower_bound"])
+        task = summary["truth_audited_task_success"]
+        self.assertEqual(task["episodes"], 3)
+        self.assertEqual(task["eligible_episodes"], 4)
+        self.assertEqual(task["rate"], 0.75)
+        self.assertEqual(task["evidence_known_episodes"], 4)
+        self.assertEqual(
+            task["by_actual_terminal_outcome"],
+            {"operator_escalation": 2, "resolved": 1},
+        )
+        self.assertLess(task["wilson_95_interval"]["low"], 0.75)
+        self.assertGreater(task["wilson_95_interval"]["high"], 0.75)
+        faulted = summary["truth_audited_fault_recovery_success"]
+        self.assertEqual(faulted["episodes"], 2)
+        self.assertEqual(faulted["eligible_faulted_episodes"], 3)
+        self.assertAlmostEqual(faulted["rate"], 2 / 3)
+        identified = summary["accepted_true_fault_target_coverage"]
+        self.assertEqual(identified["accepted_true_targets"], 2)
+        self.assertAlmostEqual(identified["rate"], 2 / 3)
+        corrected = summary["truth_audited_fault_target_correction"]
+        self.assertEqual(corrected["clean_tolerance_corrected_targets"], 1)
+        self.assertAlmostEqual(corrected["rate"], 1 / 3)
+        self.assertEqual(corrected["audited_faulted_episodes"], 1)
+        self.assertEqual(corrected["evidence_covered_true_targets"], 3)
+        self.assertEqual(corrected["target_evidence_coverage_rate"], 1.0)
+
+    def test_target_correction_requires_acceptance_and_distance_evidence(
+        self,
+    ) -> None:
+        summary = summarize_closed_loop_outcomes(
+            {
+                "suite_metrics": {
+                    "overall": {"episodes": 1},
+                    "episodes": [
+                        {
+                            "cardinality": 2,
+                            "audit": {
+                                "accepted_target_audit": {
+                                    "true_targets": {
+                                        "measurement": [1, 2],
+                                        "parameter": [],
+                                        "topology": [],
+                                    },
+                                    "accepted_targets": {
+                                        "measurement": [1],
+                                        "parameter": [],
+                                        "topology": [],
+                                    },
+                                },
+                                "strict_release_audit": {
+                                    "checks": {
+                                        "accepted_target_nonregression": {
+                                            "target_evidence": [
+                                                {
+                                                    "family": "measurement",
+                                                    "index0": 2,
+                                                    "status": "passed",
+                                                    "final_distance": 0.0,
+                                                    "tolerance": 0.1,
+                                                }
+                                            ]
+                                        }
+                                    }
+                                },
+                            },
+                        }
+                    ],
+                }
+            }
+        )
+
+        corrected = summary["truth_audited_fault_target_correction"]
+        self.assertEqual(corrected["clean_tolerance_corrected_targets"], 0)
+        self.assertEqual(corrected["audited_faulted_episodes"], 0)
+        self.assertEqual(corrected["evidence_covered_true_targets"], 1)
+        self.assertEqual(corrected["target_evidence_coverage_rate"], 0.5)
+
+    def test_invalid_native_aggregate_counts_fail_closed(self) -> None:
+        summary = summarize_closed_loop_outcomes(
+            {
+                "suite_metrics": {
+                    "overall": {
+                        "episodes": 2,
+                        "truth_audited_task_success_episodes": 3,
+                        "truth_audited_task_success_evidence_known_episodes": 1,
+                        "faulted_episodes": 3,
+                        "truth_audited_fault_recovery_success_episodes": 4,
+                    },
+                    "episodes": [],
+                }
+            }
+        )
+
+        self.assertEqual(
+            summary["contract_execution"],
+            "invalid_native_aggregates_fail_closed_backfill",
+        )
+        self.assertTrue(summary["historical_backfill_lower_bound"])
+        self.assertEqual(summary["truth_audited_task_success"]["episodes"], 0)
+        self.assertEqual(summary["truth_audited_task_success"]["rate"], 0.0)
+        self.assertEqual(summary["truth_audited_fault_recovery_success"]["episodes"], 0)
 
 
 class ResearchBc0InputTests(unittest.TestCase):

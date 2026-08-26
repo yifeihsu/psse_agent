@@ -241,6 +241,14 @@ def _rate(mapping: Mapping[str, Any], key: str) -> float | None:
     return None
 
 
+def _outcome_mapping(
+    outcomes: Mapping[str, Any],
+    key: str,
+) -> dict[str, Any]:
+    value = outcomes.get(key)
+    return copy.deepcopy(dict(value)) if isinstance(value, Mapping) else {}
+
+
 def _comparison_entry(
     report: Mapping[str, Any],
     *,
@@ -257,12 +265,32 @@ def _comparison_entry(
     behavior = behavior if isinstance(behavior, Mapping) else {}
     adapter = report.get("adapter")
     adapter = adapter if isinstance(adapter, Mapping) else {}
+    outcomes = summarize_closed_loop_outcomes(evaluation)
     return {
         "label": adapter.get("label"),
         "adapter_content_sha256": adapter.get("content_sha256"),
         "report_path": str(report_path),
         "reused_report": reused_report,
         "episodes": _count(overall, "episodes"),
+        "primary_success_metric": outcomes.get("primary_success_metric"),
+        "success_contract": outcomes.get("success_contract"),
+        "contract_execution": outcomes.get("contract_execution"),
+        "historical_backfill_lower_bound": outcomes.get(
+            "historical_backfill_lower_bound"
+        ),
+        "truth_audited_task_success": _outcome_mapping(
+            outcomes, "truth_audited_task_success"
+        ),
+        "truth_audited_fault_recovery_success": _outcome_mapping(
+            outcomes, "truth_audited_fault_recovery_success"
+        ),
+        "accepted_true_fault_target_coverage": _outcome_mapping(
+            outcomes, "accepted_true_fault_target_coverage"
+        ),
+        "truth_audited_fault_target_correction": _outcome_mapping(
+            outcomes, "truth_audited_fault_target_correction"
+        ),
+        "safe_completion": _outcome_mapping(outcomes, "safe_completion"),
         "audited_completion": {
             "episodes": _count(overall, "audited_completion_episodes"),
             "rate": _rate(overall, "audited_completion_rate"),
@@ -305,6 +333,16 @@ def _descending(value: Any) -> float:
 
 
 def _ranking_key(entry: Mapping[str, Any]) -> tuple[Any, ...]:
+    task_success = entry.get("truth_audited_task_success")
+    task_success = task_success if isinstance(task_success, Mapping) else {}
+    fault_recovery = entry.get("truth_audited_fault_recovery_success")
+    fault_recovery = fault_recovery if isinstance(fault_recovery, Mapping) else {}
+    target_correction = entry.get("truth_audited_fault_target_correction")
+    target_correction = (
+        target_correction if isinstance(target_correction, Mapping) else {}
+    )
+    safe_completion = entry.get("safe_completion")
+    safe_completion = safe_completion if isinstance(safe_completion, Mapping) else {}
     audited = entry["audited_completion"]
     handoff = entry["audited_post_correction_handoff"]
     strict = entry["strict_resolved_physical_success"]
@@ -312,6 +350,10 @@ def _ranking_key(entry: Mapping[str, Any]) -> tuple[Any, ...]:
     false_commits = entry["false_commits"]
     loops = entry["loops"]
     return (
+        _descending(task_success.get("rate")),
+        _descending(fault_recovery.get("rate")),
+        _descending(target_correction.get("rate")),
+        _descending(safe_completion.get("rate")),
         _descending(audited["rate"]),
         _descending(handoff["rate"]),
         _descending(strict["rate"]),
@@ -446,6 +488,10 @@ def compare_checkpoints(
         "evaluated_labels": evaluated_labels,
         "reused_labels": reused_labels,
         "ranking_criteria": [
+            "truth_audited_task_success_rate_desc",
+            "truth_audited_fault_recovery_success_rate_desc",
+            "truth_audited_fault_target_correction_rate_desc",
+            "safe_completion_rate_desc",
             "audited_completion_rate_desc",
             "audited_post_correction_handoff_rate_desc",
             "strict_resolved_physical_success_rate_desc",

@@ -19,8 +19,10 @@ from psse_env.dagger.release_audit import (
     HEALTHY_MEASUREMENTS_CHECK,
     POST_CORRECTION_COMPLETION_CONTRACT,
     REMAINING_FAULTS_CHECK,
+    TRUTH_AUDITED_TASK_SUCCESS_CONTRACT,
     audit_post_correction_controller_handoff,
     audit_episode_against_truth,
+    audit_truth_audited_task_success,
     observable_post_correction_handoff_certificate,
     validate_post_correction_handoff_assessment,
 )
@@ -245,12 +247,8 @@ class AcceptedCorrectionTargetTests(unittest.TestCase):
             remaining={"remaining_true_fault_count": 0},
         )
         self.assertTrue(result["quarantined"])
-        self.assertIn(
-            "accepted_measurement_targets_outside_truth", result["problems"]
-        )
-        self.assertIn(
-            "accepted_target_nonregression_false_target", result["problems"]
-        )
+        self.assertIn("accepted_measurement_targets_outside_truth", result["problems"])
+        self.assertIn("accepted_target_nonregression_false_target", result["problems"])
         self.assertNotIn(
             "accepted_target_nonregression_target_evidence_invalid",
             result["problems"],
@@ -272,9 +270,7 @@ class AcceptedCorrectionTargetTests(unittest.TestCase):
             active=_active(),
             remaining={"remaining_true_fault_count": 0},
         )
-        self.assertIn(
-            "accepted_measurement_targets_outside_truth", result["problems"]
-        )
+        self.assertIn("accepted_measurement_targets_outside_truth", result["problems"])
 
     def test_out_of_range_measurement_target_is_not_a_policy_only_failure(
         self,
@@ -365,9 +361,7 @@ class AcceptedCorrectionTargetTests(unittest.TestCase):
             "accepted_parameter_target_outside_same_family_truth",
             result["problems"],
         )
-        self.assertIn(
-            "accepted_target_nonregression_false_target", result["problems"]
-        )
+        self.assertIn("accepted_target_nonregression_false_target", result["problems"])
 
     def test_topology_correction_on_parameter_truth_line_fails(self) -> None:
         scenario = _base_scenario()
@@ -392,9 +386,7 @@ class AcceptedCorrectionTargetTests(unittest.TestCase):
             "accepted_topology_target_outside_same_family_truth",
             result["problems"],
         )
-        self.assertIn(
-            "accepted_target_nonregression_false_target", result["problems"]
-        )
+        self.assertIn("accepted_target_nonregression_false_target", result["problems"])
 
     def test_out_of_range_branch_target_is_not_a_policy_only_failure(self) -> None:
         scenario = _base_scenario()
@@ -433,9 +425,7 @@ class AcceptedCorrectionTargetTests(unittest.TestCase):
         scenario["true_measurement_errors"] = []
         scenario["measurements"] = [1.0, 2.0, 3.0]
         scenario["clean_measurements"] = [1.0, 2.0, 3.0]
-        scenario["true_topology_errors"] = [
-            {"branch_row0": 999, "expected_status": 0}
-        ]
+        scenario["true_topology_errors"] = [{"branch_row0": 999, "expected_status": 0}]
         result = audit_episode_against_truth(
             scenario,
             _final_state(
@@ -572,7 +562,9 @@ class AcceptedTargetNonregressionTests(unittest.TestCase):
             "target_evidence"
         ]
         self.assertEqual(evidence[0]["family"], "parameter")
-        self.assertGreater(evidence[0]["final_distance"], evidence[0]["initial_distance"])
+        self.assertGreater(
+            evidence[0]["final_distance"], evidence[0]["initial_distance"]
+        )
 
     def test_missing_parameter_initial_case_fails_closed(self) -> None:
         scenario = self._parameter_scenario()
@@ -641,7 +633,9 @@ class AcceptedTargetNonregressionTests(unittest.TestCase):
 
 
 class ResolvedPhysicalStateTests(unittest.TestCase):
-    def test_derived_ledger_is_sufficient_when_no_external_ledger_is_supplied(self) -> None:
+    def test_derived_ledger_is_sufficient_when_no_external_ledger_is_supplied(
+        self,
+    ) -> None:
         result = _audit_resolved(
             _base_scenario(),
             _final_state(
@@ -654,9 +648,7 @@ class ResolvedPhysicalStateTests(unittest.TestCase):
         )
         self.assertFalse(result["quarantined"], result["problems"])
         self.assertEqual(
-            result["checks"][REMAINING_FAULTS_CHECK][
-                "derived_remaining_fault_count"
-            ],
+            result["checks"][REMAINING_FAULTS_CHECK]["derived_remaining_fault_count"],
             0,
         )
         self.assertEqual(
@@ -683,13 +675,9 @@ class ResolvedPhysicalStateTests(unittest.TestCase):
                 },
             },
         )
-        self.assertIn(
-            "supplied_remaining_truth_ledger_incomplete", result["problems"]
-        )
+        self.assertIn("supplied_remaining_truth_ledger_incomplete", result["problems"])
         self.assertEqual(
-            result["checks"][REMAINING_FAULTS_CHECK][
-                "derived_remaining_fault_count"
-            ],
+            result["checks"][REMAINING_FAULTS_CHECK]["derived_remaining_fault_count"],
             0,
         )
 
@@ -721,13 +709,13 @@ class ResolvedPhysicalStateTests(unittest.TestCase):
             result["problems"],
         )
         self.assertEqual(
-            result["checks"][REMAINING_FAULTS_CHECK][
-                "derived_remaining_fault_count"
-            ],
+            result["checks"][REMAINING_FAULTS_CHECK]["derived_remaining_fault_count"],
             1,
         )
 
-    def test_missing_remaining_fault_and_active_state_evidence_fails_closed(self) -> None:
+    def test_missing_remaining_fault_and_active_state_evidence_fails_closed(
+        self,
+    ) -> None:
         result = _audit_resolved(_base_scenario(), _final_state())
         self.assertTrue(result["quarantined"])
         self.assertIn(
@@ -775,7 +763,9 @@ class ResolvedPhysicalStateTests(unittest.TestCase):
         )
         self.assertIn("healthy_measurement_modified", result["problems"])
 
-    def test_true_target_can_be_preserved_but_final_state_must_match_clean(self) -> None:
+    def test_true_target_can_be_preserved_but_final_state_must_match_clean(
+        self,
+    ) -> None:
         result = _audit_resolved(
             _base_scenario(),
             _final_state(),
@@ -893,7 +883,7 @@ class DiagnosticLocalizationTests(unittest.TestCase):
             "explanation_only_contract": EXPLANATION_ONLY_DIAGNOSTIC_CONTRACT,
             "not_applicable": {
                 FINAL_MEASUREMENTS_CHECK: "diagnostic-only anomaly is explained, not repaired"
-            }
+            },
         }
         return scenario
 
@@ -931,9 +921,7 @@ class DiagnosticLocalizationTests(unittest.TestCase):
             result["problems"],
         )
         self.assertIn("final_measurements_outside_clean_tolerance", result["problems"])
-        self.assertEqual(
-            result["checks"][FINAL_MEASUREMENTS_CHECK]["status"], "failed"
-        )
+        self.assertEqual(result["checks"][FINAL_MEASUREMENTS_CHECK]["status"], "failed")
 
     def test_explanation_only_waiver_requires_generator_contract_marker(self) -> None:
         scenario = self._diagnostic_scenario(
@@ -943,9 +931,7 @@ class DiagnosticLocalizationTests(unittest.TestCase):
         result = _audit_resolved(
             scenario,
             _final_state(
-                explanations=[
-                    {"family": "harmonic", "detail": {"bus_1based": 5}}
-                ]
+                explanations=[{"family": "harmonic", "detail": {"bus_1based": 5}}]
             ),
             active=_active(measurements=[10.0, 20.0, 30.0]),
             remaining={"remaining_true_fault_count": 0},
@@ -955,9 +941,7 @@ class DiagnosticLocalizationTests(unittest.TestCase):
             "final_measurements_not_applicable_contract_marker_missing_or_invalid",
             result["problems"],
         )
-        self.assertEqual(
-            result["checks"][FINAL_MEASUREMENTS_CHECK]["status"], "failed"
-        )
+        self.assertEqual(result["checks"][FINAL_MEASUREMENTS_CHECK]["status"], "failed")
 
     def test_operator_escalation_does_not_claim_or_require_localization(self) -> None:
         scenario = self._diagnostic_scenario(
@@ -1016,9 +1000,7 @@ class DiagnosticLocalizationTests(unittest.TestCase):
         self.assertEqual(
             result["checks"][HEALTHY_MEASUREMENTS_CHECK]["status"], "failed"
         )
-        self.assertEqual(
-            result["checks"][HEALTHY_CASE_CHECK]["status"], "passed"
-        )
+        self.assertEqual(result["checks"][HEALTHY_CASE_CHECK]["status"], "passed")
 
     def test_harmonic_bus_within_declared_tolerance_passes(self) -> None:
         scenario = self._diagnostic_scenario(
@@ -1053,9 +1035,7 @@ class DiagnosticLocalizationTests(unittest.TestCase):
         result = _audit_resolved(
             scenario,
             _final_state(
-                explanations=[
-                    {"family": "harmonic", "detail": {"bus_1based": 6}}
-                ]
+                explanations=[{"family": "harmonic", "detail": {"bus_1based": 6}}]
             ),
             active=_active(measurements=[10.0, 20.0, 30.0]),
             remaining={"remaining_true_fault_count": 0},
@@ -1128,9 +1108,7 @@ class DiagnosticLocalizationTests(unittest.TestCase):
                 explanations=[
                     {
                         "family": "three_phase_unbalance",
-                        "detail": {
-                            "top_vuf_buses": [{"bus": "b7", "vuf": 0.1}]
-                        },
+                        "detail": {"top_vuf_buses": [{"bus": "b7", "vuf": 0.1}]},
                     }
                 ]
             ),
@@ -1172,9 +1150,7 @@ class DiagnosticLocalizationTests(unittest.TestCase):
         result = _audit_resolved(
             scenario,
             _final_state(
-                explanations=[
-                    {"family": "harmonic", "detail": {"bus_1based": 1}}
-                ]
+                explanations=[{"family": "harmonic", "detail": {"bus_1based": 1}}]
             ),
             active=_active(measurements=[10.0, 20.0, 30.0]),
             remaining={"remaining_true_fault_count": 0},
@@ -1224,9 +1200,7 @@ class DiagnosticLocalizationTests(unittest.TestCase):
             },
         )
         self.assertTrue(result["quarantined"])
-        self.assertIn(
-            "not_applicable_check_unknown_or_prohibited", result["problems"]
-        )
+        self.assertIn("not_applicable_check_unknown_or_prohibited", result["problems"])
         self.assertIn("resolved_episode_has_remaining_true_faults", result["problems"])
         self.assertEqual(
             result["checks"][DIAGNOSTIC_LOCALIZATION_CHECK]["status"],
@@ -1254,12 +1228,8 @@ class DiagnosticLocalizationTests(unittest.TestCase):
             remaining={"remaining_true_fault_count": 0},
         )
         self.assertTrue(result["quarantined"])
-        self.assertIn(
-            "not_applicable_check_unknown_or_prohibited", result["problems"]
-        )
-        self.assertEqual(
-            result["checks"][FINAL_CASE_CHECK]["status"], "failed"
-        )
+        self.assertIn("not_applicable_check_unknown_or_prohibited", result["problems"])
+        self.assertEqual(result["checks"][FINAL_CASE_CHECK]["status"], "failed")
 
     def test_not_applicable_requires_known_check_and_reason(self) -> None:
         result = _audit_resolved(
@@ -1317,6 +1287,122 @@ class DiagnosticLocalizationTests(unittest.TestCase):
                 )
 
 
+class TruthAuditedTaskSuccessTests(unittest.TestCase):
+    @staticmethod
+    def _assessment(
+        *,
+        terminal: bool,
+        outcome: str | None,
+        active: dict[str, object] | None = None,
+        evaluator_error: str | None = None,
+    ) -> dict[str, object]:
+        return audit_truth_audited_task_success(
+            _post_correction_scenario(),
+            _final_state(
+                {
+                    "tool": "correct_measurements",
+                    "arguments": {"state_id": "episode:s0", "suspect_group": [1]},
+                }
+            ),
+            actual_terminal=terminal,
+            actual_terminal_outcome=outcome,
+            active_physical_state=_active() if active is None else active,
+            remaining_truth={
+                "remaining_true_fault_count": 0,
+                "remaining_true_faults": [],
+                "truth_complete": True,
+            },
+            evaluator_error=evaluator_error,
+        )
+
+    def test_clean_final_state_passes_independently_of_terminal_label(self) -> None:
+        for terminal, outcome in (
+            (True, "resolved"),
+            (True, "operator_escalation"),
+            (False, None),
+        ):
+            with self.subTest(terminal=terminal, outcome=outcome):
+                assessment = self._assessment(terminal=terminal, outcome=outcome)
+                self.assertEqual(
+                    assessment["assessment_version"],
+                    TRUTH_AUDITED_TASK_SUCCESS_CONTRACT,
+                )
+                self.assertEqual(assessment["status"], "passed")
+                self.assertIs(assessment["eligible"], True)
+                self.assertIs(assessment["evidence_known"], True)
+                self.assertIs(assessment["faulted"], True)
+                self.assertEqual(assessment["initial_true_fault_count"], 1)
+                self.assertEqual(assessment["actual_terminal"], terminal)
+                self.assertEqual(assessment["actual_terminal_outcome"], outcome)
+
+    def test_incomplete_correction_is_a_known_task_failure(self) -> None:
+        assessment = self._assessment(
+            terminal=True,
+            outcome="operator_escalation",
+            active=_active(measurements=[1.0, 99.0, 3.0]),
+        )
+
+        self.assertEqual(assessment["status"], "failed")
+        self.assertIs(assessment["eligible"], False)
+        self.assertIs(assessment["evidence_known"], True)
+        self.assertIn(
+            "final_measurements_outside_clean_tolerance", assessment["reasons"]
+        )
+
+    def test_missing_physical_evidence_or_evaluator_error_is_unknown(self) -> None:
+        missing = self._assessment(
+            terminal=True,
+            outcome="operator_escalation",
+            active={},
+        )
+        failed_evaluator = self._assessment(
+            terminal=True,
+            outcome="operator_escalation",
+            evaluator_error="env_step:RuntimeError",
+        )
+
+        self.assertEqual(missing["status"], "unknown")
+        self.assertIs(missing["evidence_known"], False)
+        self.assertIs(missing["eligible"], False)
+        self.assertIn(
+            "task_success_active_physical_state_unavailable", missing["reasons"]
+        )
+        self.assertEqual(failed_evaluator["status"], "unknown")
+        self.assertIs(failed_evaluator["eligible"], False)
+        self.assertIn(
+            "task_success_evaluator_error_present", failed_evaluator["reasons"]
+        )
+
+    def test_malformed_truth_uses_frozen_cardinality_for_fault_denominator(
+        self,
+    ) -> None:
+        scenario = _post_correction_scenario()
+        scenario["truth_complete"] = True
+        scenario["error_cardinality"] = 1
+        scenario["true_measurement_errors"] = {"malformed": 1}
+
+        assessment = audit_truth_audited_task_success(
+            scenario,
+            _final_state(),
+            actual_terminal=False,
+            actual_terminal_outcome=None,
+            active_physical_state=_active(),
+            remaining_truth={
+                "remaining_true_fault_count": 0,
+                "remaining_true_faults": [],
+                "truth_complete": True,
+            },
+        )
+
+        self.assertEqual(assessment["status"], "unknown")
+        self.assertIs(assessment["faulted"], True)
+        self.assertIs(assessment["fault_presence_known"], False)
+        self.assertEqual(
+            assessment["fault_presence_source"],
+            "grouping_cardinality_fallback",
+        )
+
+
 class PostCorrectionHandoffAssessmentTests(unittest.TestCase):
     def _validate(self, assessment: dict[str, object]) -> tuple[bool, list[str]]:
         scenario = _post_correction_scenario()
@@ -1353,9 +1439,7 @@ class PostCorrectionHandoffAssessmentTests(unittest.TestCase):
         )
         self.assertEqual(assessment["status"], "passed")
         self.assertTrue(assessment["eligible"])
-        self.assertEqual(
-            assessment["actual_terminal_outcome"], "operator_escalation"
-        )
+        self.assertEqual(assessment["actual_terminal_outcome"], "operator_escalation")
         before_validation = copy.deepcopy(assessment)
         qualified, reasons = self._validate(assessment)
         self.assertTrue(qualified, reasons)
@@ -1364,16 +1448,12 @@ class PostCorrectionHandoffAssessmentTests(unittest.TestCase):
 
     def test_forged_marker_alone_cannot_claim_completion(self) -> None:
         state = _post_correction_handoff_state()
-        state["unresolved_signatures"] = [
-            "wls_residual_outlier_dominant index=1"
-        ]
+        state["unresolved_signatures"] = ["wls_residual_outlier_dominant index=1"]
         assessment = _post_correction_assessment(final_state=state)
 
         self.assertEqual(assessment["status"], "failed")
         self.assertFalse(assessment["eligible"])
-        self.assertIn(
-            "handoff_confirmation_signature_mismatch", assessment["reasons"]
-        )
+        self.assertIn("handoff_confirmation_signature_mismatch", assessment["reasons"])
         self.assertIsNone(assessment["counterfactual_completion_audit"])
 
     def test_wrong_action_request_state_or_hash_fails_runtime_certificate(self) -> None:
@@ -1391,9 +1471,9 @@ class PostCorrectionHandoffAssessmentTests(unittest.TestCase):
             )
 
         def wrong_hash(state: dict[str, object]) -> None:
-            state["last_tool_output"]["tool_metrics"][
-                "operator_escalation_audit"
-            ]["active_state_hash"] = "c" * 64
+            state["last_tool_output"]["tool_metrics"]["operator_escalation_audit"][
+                "active_state_hash"
+            ] = "c" * 64
 
         mutations = {
             "action": (wrong_action, "handoff_final_action_mismatch"),
@@ -1421,9 +1501,7 @@ class PostCorrectionHandoffAssessmentTests(unittest.TestCase):
         assessment = _post_correction_assessment(final_state=state)
 
         self.assertEqual(assessment["status"], "failed")
-        self.assertIn(
-            "handoff_requires_accepted_correction", assessment["reasons"]
-        )
+        self.assertIn("handoff_requires_accepted_correction", assessment["reasons"])
         self.assertIn(
             "handoff_accepted_correction_state_binding_mismatch",
             assessment["reasons"],
@@ -1437,9 +1515,7 @@ class PostCorrectionHandoffAssessmentTests(unittest.TestCase):
         assessment = _post_correction_assessment(final_state=state)
 
         self.assertEqual(assessment["status"], "failed")
-        self.assertIn(
-            "handoff_requires_no_open_candidate", assessment["reasons"]
-        )
+        self.assertIn("handoff_requires_no_open_candidate", assessment["reasons"])
 
     def test_wrong_active_physical_state_hash_fails_before_private_audit(self) -> None:
         active = _active()
@@ -1501,9 +1577,7 @@ class PostCorrectionHandoffAssessmentTests(unittest.TestCase):
             nested["problems"],
         )
         self.assertEqual(
-            nested["checks"][REMAINING_FAULTS_CHECK][
-                "derived_remaining_fault_count"
-            ],
+            nested["checks"][REMAINING_FAULTS_CHECK]["derived_remaining_fault_count"],
             0,
         )
 
@@ -1528,9 +1602,7 @@ class PostCorrectionHandoffAssessmentTests(unittest.TestCase):
             "handoff_counterfactual_check_failed:final_measurements_match_clean",
             reasons,
         )
-        self.assertIn(
-            "handoff_counterfactual_target_evidence_invalid", reasons
-        )
+        self.assertIn("handoff_counterfactual_target_evidence_invalid", reasons)
 
     def test_revalidator_does_not_trust_claimed_eligibility(self) -> None:
         valid = _post_correction_assessment()
@@ -1545,14 +1617,12 @@ class PostCorrectionHandoffAssessmentTests(unittest.TestCase):
             row["runtime_contract"]["passed"] = False
 
         def wrong_binding(row: dict[str, object]) -> None:
-            row["counterfactual_completion_audit"]["scenario_id"] = (
-                "forged-scenario"
-            )
+            row["counterfactual_completion_audit"]["scenario_id"] = "forged-scenario"
 
         def wrong_remaining(row: dict[str, object]) -> None:
-            row["counterfactual_completion_audit"]["checks"][
-                REMAINING_FAULTS_CHECK
-            ]["derived_remaining_fault_count"] = 1
+            row["counterfactual_completion_audit"]["checks"][REMAINING_FAULTS_CHECK][
+                "derived_remaining_fault_count"
+            ] = 1
 
         cases = {
             "version": (wrong_version, "handoff_assessment_version_mismatch"),
