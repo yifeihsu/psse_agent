@@ -805,6 +805,7 @@ class DaggerRolloutCollector:
         supervision_policy: str = ALL_ADMISSIBLE_SUPERVISION,
         forbidden_physical_roots: Iterable[str] | None = None,
         policy_executor: Executor | None = None,
+        stop_episode_on_unverified_expert_label: bool = False,
     ) -> None:
         if supervision_policy not in SUPPORTED_SUPERVISION_POLICIES:
             raise ValueError(
@@ -828,6 +829,15 @@ class DaggerRolloutCollector:
         self.policy = policy
         self.expert_oracle = expert_oracle
         self.rng = rng or random.Random()
+        # When the expert proposes a label the environment cannot justify from
+        # observable evidence, the default is to abort: a release corpus must
+        # not be silently shortened.  A research run may instead end that one
+        # episode, keep the verified rows already collected, and record the
+        # disagreement for inspection.
+        self.stop_episode_on_unverified_expert_label = bool(
+            stop_episode_on_unverified_expert_label
+        )
+        self.unverified_expert_labels: list[dict[str, Any]] = []
         self.supervision_policy = supervision_policy
         self.policy_executor = policy_executor
         self.forbidden_physical_roots = frozenset(
@@ -1083,11 +1093,69 @@ class DaggerRolloutCollector:
                     try:
                         self.env.assert_training_decision_evidence(preferred_action)
                     except ValueError as exc:
-                        raise ValueError(
-                            "Training-decision evidence failed for "
-                            f"scenario={scenario_id}, step={step}, "
-                            f"preferred_tool={preferred_action.get('tool')}: {exc}"
-                        ) from exc
+                        if not self.stop_episode_on_unverified_expert_label:
+                            raise ValueError(
+                                "Training-decision evidence failed for "
+                                f"scenario={scenario_id}, step={step}, "
+                                f"preferred_tool={preferred_action.get('tool')}: {exc}"
+                            ) from exc
+                        # Capture the environment's own escalation ledger next
+                        # to the expert's proposal.  The disagreement is between
+                        # these two views of "exhausted", so recording only the
+                        # error text leaves the actual cause unobservable.
+                        diagnostic: dict[str, Any] = {
+                            "scenario_id": str(scenario_id),
+                            "step": int(step),
+                            "preferred_tool": str(preferred_action.get("tool")),
+                            "preferred_action": copy.deepcopy(dict(preferred_action)),
+                            "reason": str(exc),
+                        }
+                        audit_fn = getattr(
+                            self.env, "_operator_escalation_audit", None
+                        )
+                        if callable(audit_fn):
+                            try:
+                                audit = audit_fn(preferred_action)
+                                diagnostic["escalation_audit"] = {
+                                    "missing": list(audit.get("missing") or []),
+                                    "ledger": copy.deepcopy(
+                                        dict(audit.get("ledger") or {})
+                                    ),
+                                }
+                            except Exception as audit_exc:  # noqa: BLE001
+                                diagnostic["escalation_audit_error"] = (
+                                    f"{type(audit_exc).__name__}: {audit_exc}"
+                                )
+                        try:
+                            summary_state = self.env.current_state()
+                            diagnostic["state"] = {
+                                "accepted_corrections": copy.deepcopy(
+                                    list(summary_state.get("accepted_corrections") or [])
+                                ),
+                                "rejected_hypotheses": copy.deepcopy(
+                                    list(summary_state.get("rejected_hypotheses") or [])
+                                ),
+                                "tried_action_signatures": copy.deepcopy(
+                                    list(
+                                        summary_state.get("tried_action_signatures")
+                                        or []
+                                    )
+                                ),
+                                "unresolved_signatures": copy.deepcopy(
+                                    list(
+                                        summary_state.get("unresolved_signatures") or []
+                                    )
+                                ),
+                                "remaining_budget": summary_state.get(
+                                    "remaining_budget"
+                                ),
+                            }
+                        except Exception as state_exc:  # noqa: BLE001
+                            diagnostic["state_error"] = (
+                                f"{type(state_exc).__name__}: {state_exc}"
+                            )
+                        self.unverified_expert_labels.append(diagnostic)
+                        break
                     training_decision_evidence_verified = True
                 offline_target_audit: dict[str, Any] | None = None
                 if (

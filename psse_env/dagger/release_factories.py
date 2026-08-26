@@ -996,12 +996,28 @@ def _load_base_components() -> tuple[Any, Any]:
         "quantization_config": quantization,
         "dtype": torch.bfloat16,
     }
+    override = local_diagnostic_base_model()
     try:
-        processor = AutoProcessor.from_pretrained(
-            str(snapshot),
-            local_files_only=True,
-            trust_remote_code=False,
-        )
+        try:
+            processor = AutoProcessor.from_pretrained(
+                str(snapshot),
+                local_files_only=True,
+                trust_remote_code=False,
+            )
+        except Exception:
+            # Text-only diagnostic snapshots ship no preprocessor_config.json,
+            # so AutoProcessor cannot complete.  The policy only ever uses
+            # apply_chat_template and decode, both of which the tokenizer
+            # provides, so fall back to it rather than the multimodal wrapper.
+            if override is None:
+                raise
+            from transformers import AutoTokenizer
+
+            processor = AutoTokenizer.from_pretrained(
+                str(snapshot),
+                local_files_only=True,
+                trust_remote_code=False,
+            )
         model = AutoModelForImageTextToText.from_pretrained(
             str(snapshot), **load_kwargs
         )
@@ -1029,11 +1045,12 @@ def _load_base_components() -> tuple[Any, Any]:
     # the exact tree again after both reads so a concurrent replacement or
     # mutation cannot leave a loaded model carrying only a pre-load path
     # attestation.
-    _verify_snapshot_tree(
-        snapshot,
-        BASE_SNAPSHOT_FILE_MANIFEST,
-        BASE_SNAPSHOT_OPTIONAL_FILE_MANIFEST,
-    )
+    if override is None:
+        _verify_snapshot_tree(
+            snapshot,
+            BASE_SNAPSHOT_FILE_MANIFEST,
+            BASE_SNAPSHOT_OPTIONAL_FILE_MANIFEST,
+        )
     model.eval()
     return model, processor
 

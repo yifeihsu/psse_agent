@@ -617,9 +617,25 @@ def main(argv: list[str] | None = None) -> int:
             # Reject protocol drift before baseline artifact validation or any
             # model/runtime initialization.
             load_study_manifest(args.study_manifest)
-        baseline_evaluation_gate = (
-            _baseline_evaluation_gate(args) if args.command == "train" else None
-        )
+        from psse_env.dagger.suite_builder import local_diagnostic_build_enabled
+
+        if args.command != "train":
+            baseline_evaluation_gate = None
+        elif local_diagnostic_build_enabled():
+            # The frozen-suite expert/base baselines are release-admission
+            # evidence, not a training input.  A local diagnostic checkpoint
+            # records that they were never measured instead of claiming them.
+            baseline_evaluation_gate = {
+                "passed": False,
+                "skipped": "local_diagnostic_build",
+                "release_eligible": False,
+                "reason": (
+                    "Frozen-suite expert and base baselines were not measured; "
+                    "this checkpoint is diagnostic only."
+                ),
+            }
+        else:
+            baseline_evaluation_gate = _baseline_evaluation_gate(args)
         settings = TrainerSettings(
             model_name=args.model,
             revision=args.revision,

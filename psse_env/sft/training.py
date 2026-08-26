@@ -582,10 +582,14 @@ def _load_model(settings: TrainerSettings) -> tuple[Any, dict[str, Any]]:
         _verify_snapshot_tree,
     )
 
-    if settings.model_name != BASE_MODEL_ID or settings.revision != BASE_MODEL_REVISION:
+    from psse_env.dagger.release_factories import local_diagnostic_base_model
+
+    _base_override = local_diagnostic_base_model()
+    _base_id, _base_revision = _base_override or (BASE_MODEL_ID, BASE_MODEL_REVISION)
+    if settings.model_name != _base_id or settings.revision != _base_revision:
         raise GateError(
             "Release SFT trains only the reviewed base snapshot "
-            f"{BASE_MODEL_ID}@{BASE_MODEL_REVISION}; got "
+            f"{_base_id}@{_base_revision}; got "
             f"{settings.model_name!r}@{settings.revision!r}."
         )
     if not settings.local_files_only or settings.trust_remote_code:
@@ -637,17 +641,21 @@ def _load_model(settings: TrainerSettings) -> tuple[Any, dict[str, Any]]:
     # the loaded model carrying only a pre-load attestation.  The processor is
     # loaded by (id, pinned revision, local_files_only), which the Hub resolves
     # from this same verified snapshot directory.
-    _verify_snapshot_tree(
-        snapshot,
-        BASE_SNAPSHOT_FILE_MANIFEST,
-        BASE_SNAPSHOT_OPTIONAL_FILE_MANIFEST,
-    )
+    if _base_override is None:
+        _verify_snapshot_tree(
+            snapshot,
+            BASE_SNAPSHOT_FILE_MANIFEST,
+            BASE_SNAPSHOT_OPTIONAL_FILE_MANIFEST,
+        )
     attestation = {
-        "model_id": BASE_MODEL_ID,
-        "model_revision": BASE_MODEL_REVISION,
+        "model_id": _base_id,
+        "model_revision": _base_revision,
         "snapshot_path": str(snapshot),
-        "verified_files": sorted(BASE_SNAPSHOT_FILE_MANIFEST),
+        "verified_files": (
+            [] if _base_override is not None else sorted(BASE_SNAPSHOT_FILE_MANIFEST)
+        ),
         "model_class": type(model).__name__,
+        "local_diagnostic_base_model": _base_override is not None,
     }
     return model, attestation
 
@@ -1552,9 +1560,12 @@ def _prepare_checkpoint_receipt_binding(
     )
     provenance_id = str(generation.get("generation_provenance_id") or "").lower()
     source_commit = str(generation.get("source_commit") or "").lower()
+    from psse_env.dagger.suite_builder import local_diagnostic_build_enabled
+
+    _diagnostic = local_diagnostic_build_enabled()
     if (
         generation.get("passed") is not True
-        or generation.get("release_eligible") is not True
+        or (generation.get("release_eligible") is not True and not _diagnostic)
         or re.fullmatch(r"[0-9a-f]{64}", provenance_id) is None
         or re.fullmatch(r"[0-9a-f]{40}", source_commit) is None
     ):
@@ -1563,7 +1574,7 @@ def _prepare_checkpoint_receipt_binding(
             + " | ".join(str(item) for item in generation.get("failures", ()))
         )
     source_state = git_source_state(repo_root)
-    if (
+    if not _diagnostic and (
         source_state.get("release_eligible_source") is not True
         or source_state.get("source_commit") != source_commit
     ):
@@ -1660,9 +1671,10 @@ def _prepare_checkpoint_receipt_binding(
             raise GateError(
                 f"Checkpoint receipt production-D1 quarantine binding failed: {exc}"
             ) from exc
-    if settings.model_name != study["bindings"]["base_model"]["model_id"] or (
-        settings.revision != study["bindings"]["base_model"]["model_revision"]
-    ):
+    if (
+        settings.model_name != study["bindings"]["base_model"]["model_id"]
+        or settings.revision != study["bindings"]["base_model"]["model_revision"]
+    ) and not _diagnostic:
         raise GateError("Training model differs from the immutable study base model.")
     expected_training_protocol = build_training_protocol_binding(
         study,
@@ -1678,10 +1690,29 @@ def _prepare_checkpoint_receipt_binding(
         "configuration": _observed_training_configuration(settings, lora),
     }
     if observed_training_protocol != expected_training_protocol:
-        raise GateError(
-            f"Study variant {variant_id} training settings differ from the "
-            "immutable training protocol."
-        )
+        if not _diagnostic:
+            raise GateError(
+                f"Study variant {variant_id} training settings differ from the "
+                "immutable training protocol."
+            )
+        # A local diagnostic build substitutes the base model and relaxes the
+        # dependency pins, so those three fields cannot match by construction.
+        # Every other preregistered setting -- max_length, truncation policy,
+        # LoRA, quantization, precision and trainer -- is still compared exactly.
+        observed_comparable = copy.deepcopy(observed_training_protocol)
+        expected_comparable = copy.deepcopy(expected_training_protocol)
+        for payload in (observed_comparable, expected_comparable):
+            payload.pop("dependency_lock", None)
+            configuration = payload.get("configuration")
+            if isinstance(configuration, dict):
+                configuration.pop("model", None)
+                configuration.pop("processor", None)
+        if observed_comparable != expected_comparable:
+            raise GateError(
+                f"Study variant {variant_id} training settings differ from the "
+                "immutable training protocol outside the diagnostic base-model "
+                "and dependency-lock substitution."
+            )
     parent_checkpoint_receipt_id = _validated_parent_checkpoint_receipt(
         settings=settings,
         study=study,
@@ -1723,7 +1754,31 @@ def _attest_training_accelerator() -> dict[str, Any]:
 
         return validate_torch_release_accelerator(torch)
     except (ImportError, RuntimeError, ValueError) as exc:
-        raise GateError(f"Training accelerator attestation failed: {exc}") from exc
+        from psse_env.dagger.suite_builder import local_diagnostic_build_enabled
+
+        if not local_diagnostic_build_enabled():
+            raise GateError(
+                f"Training accelerator attestation failed: {exc}"
+            ) from exc
+        # A diagnostic build runs on whatever local accelerator exists.  Record
+        # the real device and the contract it fails so the receipt cannot be
+        # read as an approved-hardware run.
+        try:
+            import torch as _torch
+
+            device_name = (
+                _torch.cuda.get_device_name(0)
+                if _torch.cuda.is_available()
+                else "cpu"
+            )
+        except Exception:  # pragma: no cover - live device state
+            device_name = "unknown"
+        return {
+            "release_accelerator": False,
+            "local_diagnostic_build": True,
+            "device_name": device_name,
+            "attestation_failure": str(exc),
+        }
 
 
 def _write_base_snapshot_attestation(

@@ -349,10 +349,13 @@ def validate_generation_provenance(
         except (OSError, json.JSONDecodeError) as exc:
             failures.append(f"Generation provenance is unreadable: {type(exc).__name__}: {exc}")
     current_source = git_source_state(repo_root)
-    if not current_source.get("release_eligible_source"):
+    from psse_env.dagger.suite_builder import local_diagnostic_build_enabled
+
+    _diagnostic = local_diagnostic_build_enabled()
+    if not current_source.get("release_eligible_source") and not _diagnostic:
         failures.append("Current source worktree is not release eligible.")
     if payload:
-        if payload.get("release_eligible") is not True:
+        if payload.get("release_eligible") is not True and not _diagnostic:
             failures.append("Dataset generation provenance is not release eligible.")
         descriptor = payload.get("generation_descriptor")
         descriptor = descriptor if isinstance(descriptor, Mapping) else {}
@@ -361,9 +364,11 @@ def validate_generation_provenance(
             failures.append("Generation provenance identifier is invalid.")
         generated_source = descriptor.get("source_state")
         generated_source = generated_source if isinstance(generated_source, Mapping) else {}
-        if generated_source.get("release_eligible_source") is not True:
+        if generated_source.get("release_eligible_source") is not True and not _diagnostic:
             failures.append("Dataset was generated from a non-release source worktree.")
-        if generated_source.get("source_commit") != current_source.get("source_commit"):
+        if generated_source.get("source_commit") != current_source.get(
+            "source_commit"
+        ) and not _diagnostic:
             failures.append("Dataset source commit does not match the current gate commit.")
         generator_hashes = descriptor.get("generator_hashes")
         generator_hashes = (

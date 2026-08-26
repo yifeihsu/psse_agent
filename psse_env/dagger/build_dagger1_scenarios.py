@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -238,12 +239,27 @@ def build_dagger1_scenarios(
     frozen_roots = set(frozen_physical_roots(DEFAULT_FORBIDDEN_SUITE))
     protected_roots = d0_roots | frozen_roots
 
+    # A research corpus (extra generated samples merged with the tracked
+    # default) can be substituted through the environment without moving the
+    # tracked corpus the release path pins.  Both variables must point at a
+    # consistent pair: the merged samples file and the artifact directory
+    # holding every referenced per-sample file.
+    _corpus_override = os.environ.get("PSSE_RESEARCH_CORPUS_PATH", "").strip()
+    _artifact_override = os.environ.get(
+        "PSSE_RESEARCH_BALANCED_ARTIFACT_DIR", ""
+    ).strip()
+    _generator_overrides: dict[str, Any] = {}
+    if _corpus_override:
+        _generator_overrides["corpus_path"] = _corpus_override
+    if _artifact_override:
+        _generator_overrides["balanced_artifact_dir"] = _artifact_override
     generator = Round0ScenarioGenerator(
         seed=int(seed),
         source_partition="train",
         parameter_ranking_dominance_threshold=(
             BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD
         ),
+        **_generator_overrides,
     )
     normalized_plan = {
         str(family): int(count) for family, count in sorted(plan.items())
