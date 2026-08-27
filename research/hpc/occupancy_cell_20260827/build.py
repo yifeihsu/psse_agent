@@ -715,6 +715,13 @@ def gate_training(config_path: Path, expected_sha: str, arm: str, summary_path: 
     )
     sampled_train = summary.get("sampled_train_exposure") or {}
     gpu_inventory = summary_path.parent.parent / "gpu_inventory.csv"
+    allocated_gpu_path = summary_path.parent.parent / "allocated_gpu.json"
+    allocated_gpu = load_json(allocated_gpu_path) if allocated_gpu_path.is_file() else {}
+    expected_gpu_families = os.environ.get("CELL_EXPECTED_GPU_FAMILY", "").split("|")
+    observed_gpu_family = os.environ.get("CELL_OBSERVED_GPU_FAMILY")
+    slurmd_nodename = os.environ.get("SLURMD_NODENAME")
+    expected_gpu_feature = os.environ.get("CELL_EXPECTED_GPU_FEATURE")
+    slurm_job_constraints = os.environ.get("SLURM_JOB_CONSTRAINTS")
     checks = {
         "model_identity": (summary.get("model_id"), summary.get("model_revision"))
         == (record["model_id"], record["model_revision"]),
@@ -754,6 +761,19 @@ def gate_training(config_path: Path, expected_sha: str, arm: str, summary_path: 
         "finite_training_loss": isinstance(summary.get("training_loss"), (int, float))
         and math.isfinite(float(summary["training_loss"])),
         "gpu_inventory": gpu_inventory.is_file() and gpu_inventory.stat().st_size > 0,
+        "allocated_gpu_identity": allocated_gpu.get("torch_cuda_device_count") == 1
+        and allocated_gpu.get("torch_device_index") == 0
+        and allocated_gpu.get("cuda_visible_devices")
+        == os.environ.get("CUDA_VISIBLE_DEVICES")
+        and allocated_gpu.get("slurm_job_id") == os.environ.get("SLURM_JOB_ID")
+        and bool(slurmd_nodename)
+        and allocated_gpu.get("slurmd_nodename") == slurmd_nodename
+        and isinstance(allocated_gpu.get("name"), str)
+        and allocated_gpu.get("total_memory_bytes", 0) > 0,
+        "gpu_family_attested": observed_gpu_family in expected_gpu_families,
+        "slurm_constraint_attested": bool(expected_gpu_feature)
+        and bool(slurm_job_constraints)
+        and expected_gpu_feature in slurm_job_constraints,
     }
     adapter = summary_path.parent
     adapter_files = {}
@@ -775,10 +795,14 @@ def gate_training(config_path: Path, expected_sha: str, arm: str, summary_path: 
         "expected_sampled_train_rows": expected_sampled_rows,
         "gpu_inventory": str(gpu_inventory),
         "gpu_inventory_sha256": sha256(gpu_inventory),
-        "expected_gpu_feature": os.environ.get("CELL_EXPECTED_GPU_FEATURE"),
+        "allocated_gpu": str(allocated_gpu_path),
+        "allocated_gpu_sha256": sha256(allocated_gpu_path),
+        "allocated_gpu_identity": allocated_gpu,
+        "expected_gpu_feature": expected_gpu_feature,
         "expected_gpu_family": os.environ.get("CELL_EXPECTED_GPU_FAMILY"),
+        "observed_gpu_family": observed_gpu_family,
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
-        "slurm_job_constraints": os.environ.get("SLURM_JOB_CONSTRAINTS"),
+        "slurm_job_constraints": slurm_job_constraints,
         "release_evidence": False,
     }
     atomic_json(output, gate, exclusive=True)

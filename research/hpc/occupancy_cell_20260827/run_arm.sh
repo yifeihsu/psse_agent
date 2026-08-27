@@ -8,7 +8,8 @@ set -Eeuo pipefail
 : "${CELL_EXPECTED_GPU_FEATURE:?set by submit.sh}"
 : "${CELL_EXPECTED_GPU_FAMILY:?set by submit.sh}"
 [[ "$CELL_ARM" =~ ^[ABCD]$ ]] || exit 2
-[[ "$CELL_EXPECTED_GPU_FAMILY" =~ ^(A100|H100|H200)$ ]] || exit 2
+GPU_FAMILY_PATTERN='^(A100|H100|H200|RTX6000)(\|(A100|H100|H200|RTX6000))*$'
+[[ "$CELL_EXPECTED_GPU_FAMILY" =~ $GPU_FAMILY_PATTERN ]] || exit 2
 
 SUBMITTED_SCRIPT=$(readlink -f "${BASH_SOURCE[0]}")
 CONFIG_SOURCE_ROOT=$("$CELL_PYTHON" - "$CELL_CONFIG" <<'PY'
@@ -56,10 +57,56 @@ mkdir "$ATTEMPT"
 
 nvidia-smi --query-gpu=name,memory.total,uuid,driver_version --format=csv,noheader \
   > "$ATTEMPT/gpu_inventory.csv"
-GPU_NAMES=$(nvidia-smi --query-gpu=name --format=csv,noheader)
-grep -qi "$CELL_EXPECTED_GPU_FAMILY" <<<"$GPU_NAMES" \
+: "${CUDA_VISIBLE_DEVICES:?Slurm must bind exactly one visible GPU}"
+ALLOCATED_GPU="$ATTEMPT/allocated_gpu.json"
+"$CELL_PYTHON" - <<'PY' > "$ALLOCATED_GPU"
+import json
+import os
+
+import torch
+
+count = torch.cuda.device_count()
+if count != 1:
+    raise RuntimeError(f"expected exactly one CUDA-visible device, got {count}")
+properties = torch.cuda.get_device_properties(0)
+json.dump(
+    {
+        "cuda_visible_devices": os.environ["CUDA_VISIBLE_DEVICES"],
+        "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+        "slurmd_nodename": os.environ.get("SLURMD_NODENAME"),
+        "torch_cuda_device_count": count,
+        "torch_device_index": 0,
+        "name": properties.name,
+        "total_memory_bytes": properties.total_memory,
+        "compute_capability": [properties.major, properties.minor],
+    },
+    fp=__import__("sys").stdout,
+    sort_keys=True,
+    allow_nan=False,
+)
+print()
+PY
+GPU_NAME=$("$CELL_PYTHON" -c \
+  'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["name"])' \
+  "$ALLOCATED_GPU")
+OBSERVED_GPU_FAMILY=""
+IFS='|' read -ra ALLOWED_GPU_FAMILIES <<<"$CELL_EXPECTED_GPU_FAMILY"
+for family in "${ALLOWED_GPU_FAMILIES[@]}"; do
+  case "$family" in
+    A100|H100|H200) name_pattern=$family ;;
+    RTX6000) name_pattern='RTX[[:space:]]*6000' ;;
+    *) exit 2 ;;
+  esac
+  if grep -Eqi -- "$name_pattern" <<<"$GPU_NAME"; then
+    OBSERVED_GPU_FAMILY=$family
+    break
+  fi
+done
+[[ -n "$OBSERVED_GPU_FAMILY" ]] \
   || { echo "observed GPU does not match $CELL_EXPECTED_GPU_FAMILY" >&2; exit 2; }
-[[ "${SLURM_JOB_CONSTRAINTS:-$CELL_EXPECTED_GPU_FEATURE}" == *"$CELL_EXPECTED_GPU_FEATURE"* ]] \
+export CELL_OBSERVED_GPU_FAMILY=$OBSERVED_GPU_FAMILY
+: "${SLURM_JOB_CONSTRAINTS:?Slurm did not expose the applied job constraint}"
+[[ "$SLURM_JOB_CONSTRAINTS" == *"$CELL_EXPECTED_GPU_FEATURE"* ]] \
   || { echo "Slurm constraint drift" >&2; exit 2; }
 
 ADAPTER="$ATTEMPT/adapter"

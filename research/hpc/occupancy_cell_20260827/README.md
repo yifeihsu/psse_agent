@@ -40,17 +40,33 @@ factorial.
 export CELL_CONFIG=/absolute/path/cell.config.json
 export CELL_PYTHON=/scratch/yx3882/envs/dagger12b_overlay/bin/python
 export CELL_GPU_CONSTRAINT='e2b=RECHECK_FEATURE,12b=RECHECK_FEATURE'
-export CELL_GPU_FAMILY='e2b=RECHECK_FAMILY,12b=RECHECK_FAMILY'
+export CELL_GPU_FAMILY='e2b=RECHECK_FAMILY_SET,12b=RECHECK_FAMILY_SET'
 bash research/hpc/occupancy_cell_20260827/submit.sh
 ```
 
 Current routing blocker: the historical E2B arms ran on A100 and the historical
 12B arms ran on H100, but exact A100/H100 requests are not currently accepted
-by Torch while H200 is. `submit.sh` deliberately has no routing default. Both
-the scheduler feature and the expected physical family (`A100`, `H100`, or
-`H200`) must be explicit; every GPU job checks the observed device before
-training. A/C share one declared lane and B/D share the other. No script
-specifies a partition.
+by Torch; the authorized union also exposes H200 and `rtx6000` candidates.
+`submit.sh` deliberately has no routing default. Both
+the scheduler feature and expected physical family set must be explicit. Family
+sets may contain `A100`, `H100`, `H200`, or `RTX6000`, joined by `|`; RTX 6000
+matches both spaced and unspaced device names. Every GPU job requires exactly
+one CUDA-visible device, derives its family from the Torch device-0 properties,
+and records its exact name, memory, compute capability, CUDA binding, node, and
+inventory before training. No script specifies a partition.
+
+A scheduler union is not an actual hardware match: A/C or B/D can land on
+different devices. Compare a pair as hardware-matched only when the two
+training gates report the same exact allocated-device name, memory, and compute
+capability. Otherwise retain the results as pipeline screens and label the
+hardware mismatch as a confound.
+
+The explicitly authorized scheduler-union form is:
+
+```bash
+export CELL_GPU_CONSTRAINT='e2b=a100|h100|h200|rtx6000,12b=a100|h100|h200|rtx6000'
+export CELL_GPU_FAMILY='e2b=A100|H100|H200|RTX6000,12b=A100|H100|H200|RTX6000'
+```
 
 The submit launcher refuses to run unless its resolved directory is inside the
 configured, tree-hashed `source_root`. Because Slurm executes a spool copy of

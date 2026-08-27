@@ -37,11 +37,12 @@ done
 [[ -n "$E2B_FEATURE" && -n "$B12_FEATURE" ]] || { echo "both GPU features are required" >&2; exit 2; }
 
 E2B_FAMILY=""; B12_FAMILY=""
+FAMILY_PATTERN='^(A100|H100|H200|RTX6000)(\|(A100|H100|H200|RTX6000))*$'
 IFS=',' read -ra PAIRS <<<"$CELL_GPU_FAMILY"
 [[ ${#PAIRS[@]} -eq 2 ]] || { echo "expected e2b=FAMILY,12b=FAMILY" >&2; exit 2; }
 for pair in "${PAIRS[@]}"; do
   key=${pair%%=*}; value=${pair#*=}
-  [[ "$value" =~ ^(A100|H100|H200)$ ]] || { echo "invalid GPU family" >&2; exit 2; }
+  [[ "$value" =~ $FAMILY_PATTERN ]] || { echo "invalid GPU family set" >&2; exit 2; }
   case "$key" in e2b) E2B_FAMILY=$value ;; 12b) B12_FAMILY=$value ;; *) exit 2 ;; esac
 done
 [[ -n "$E2B_FAMILY" && -n "$B12_FAMILY" ]] || { echo "both GPU families are required" >&2; exit 2; }
