@@ -50,7 +50,8 @@ by Torch; the authorized union also exposes H200 and `rtx6000` candidates.
 `submit.sh` deliberately has no routing default. Both
 the scheduler feature and expected physical family set must be explicit. Family
 sets may contain `A100`, `H100`, `H200`, or `RTX6000`, joined by `|`; RTX 6000
-matches both spaced and unspaced device names. Every GPU job requires exactly
+matches both the legacy spelling and Torch's observed `NVIDIA RTX PRO 6000
+Blackwell Server Edition` name. Every GPU job requires exactly
 one CUDA-visible device, derives its family from the Torch device-0 properties,
 and records its exact name, memory, compute capability, CUDA binding, node, and
 inventory before training. No script specifies a partition.

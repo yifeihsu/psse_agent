@@ -94,7 +94,7 @@ IFS='|' read -ra ALLOWED_GPU_FAMILIES <<<"$CELL_EXPECTED_GPU_FAMILY"
 for family in "${ALLOWED_GPU_FAMILIES[@]}"; do
   case "$family" in
     A100|H100|H200) name_pattern=$family ;;
-    RTX6000) name_pattern='RTX[[:space:]]*6000' ;;
+    RTX6000) name_pattern='RTX([[:space:]]+PRO)?[[:space:]]*6000' ;;
     *) exit 2 ;;
   esac
   if grep -Eqi -- "$name_pattern" <<<"$GPU_NAME"; then
