@@ -1,0 +1,67 @@
+{
+  "distinct_physical_roots": 14,
+  "episodes": 14,
+  "output": "/scratch/yx3882/research_dagger_demo_20260823/recovery_stress_small.json",
+  "per_suite": 2,
+  "suites": 7
+}
+[bc0] evaluating adapter=/scratch/yx3882/prelim_e2b_fullnatural_2b32029_20260822/output/bc0/lora max_input=16384 max_new=256
+🦥 Unsloth: Will patch your computer to enable 2x faster free finetuning.
+Unsloth: Your Flash Attention 2 installation seems to be broken. Using Xformers instead. No performance changes will be seen.
+🦥 Unsloth Zoo will now patch everything to make training faster!
+==((====))==  Unsloth 2026.5.10: Fast Gemma4 patching. Transformers: 5.5.0.
+   \\   /|    NVIDIA RTX PRO 6000 Blackwell Server Edition. Num GPUs = 1. Max memory: 94.971 GB. Platform: Linux.
+O^O/ \_/ \    Torch: 2.10.0+cu128. CUDA: 12.0. CUDA Toolkit: 12.8. Triton: 3.6.0
+\        /    Bfloat16 = TRUE. FA [Xformers = 0.0.35. FA2 = False]
+ "-____-"     Free license: http://github.com/unslothai/unsloth
+{"content_sha256": "58d02f792487b8439d16e952893beceec194a86ec686dd3ace4fcd1d78928629", "output": "/scratch/yx3882/research_dagger_demo_20260823/bc0_eval.json", "release_eligible": false, "score": 0.0}
+[dagger] evaluating adapter=/scratch/yx3882/prelim_e2b_fullnatural_2b32029_20260822/output/dagger/lora max_input=16384 max_new=256
+🦥 Unsloth: Will patch your computer to enable 2x faster free finetuning.
+Unsloth: Your Flash Attention 2 installation seems to be broken. Using Xformers instead. No performance changes will be seen.
+🦥 Unsloth Zoo will now patch everything to make training faster!
+==((====))==  Unsloth 2026.5.10: Fast Gemma4 patching. Transformers: 5.5.0.
+   \\   /|    NVIDIA RTX PRO 6000 Blackwell Server Edition. Num GPUs = 1. Max memory: 94.971 GB. Platform: Linux.
+O^O/ \_/ \    Torch: 2.10.0+cu128. CUDA: 12.0. CUDA Toolkit: 12.8. Triton: 3.6.0
+\        /    Bfloat16 = TRUE. FA [Xformers = 0.0.35. FA2 = False]
+ "-____-"     Free license: http://github.com/unslothai/unsloth
+{"content_sha256": "526e00cfc1842f60044eb9bb2b1eb6c463b4abc8c357a5de9df52aed8eaaf4e6", "output": "/scratch/yx3882/research_dagger_demo_20260823/dagger_eval.json", "release_eligible": false, "score": 0.0}
+{
+  "bc0": {
+    "episodes": 14,
+    "episodes_with_invalid_actions": 14,
+    "false_commit_count": 0,
+    "false_finalization_count": 0,
+    "false_rollback_count": 0,
+    "healthy_component_corruption_episodes": 0,
+    "invalid_action_count": 146,
+    "loop_episodes": 14,
+    "loop_rate": 1.0,
+    "resolution_rate": 0.0,
+    "resolved_episodes": 0,
+    "terminal_episodes": 0,
+    "terminal_rate": 0.0
+  },
+  "dagger": {
+    "episodes": 14,
+    "episodes_with_invalid_actions": 14,
+    "false_commit_count": 0,
+    "false_finalization_count": 0,
+    "false_rollback_count": 0,
+    "healthy_component_corruption_episodes": 0,
+    "invalid_action_count": 138,
+    "loop_episodes": 14,
+    "loop_rate": 1.0,
+    "resolution_rate": 0.0,
+    "resolved_episodes": 0,
+    "terminal_episodes": 0,
+    "terminal_rate": 0.0
+  },
+  "delta": {
+    "invalid_action_count": -8,
+    "loop_rate": 0.0,
+    "resolution_rate": 0.0,
+    "terminal_rate": 0.0
+  },
+  "prototype": true
+}
+RESEARCH_DAGGER_DEMO_COMPLETE

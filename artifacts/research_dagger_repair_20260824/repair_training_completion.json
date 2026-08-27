@@ -1,0 +1,9 @@
+{
+  "adapter_path": "/scratch/yx3882/research_dagger_repair_20260824/training_512_step32/lora",
+  "adapter_tree_sha256": "4e9323e019a33d7c737289d9af20cb1143fe42e9ff162c9ab8f1306857c8201e",
+  "checkpoint_path": "/scratch/yx3882/research_dagger_repair_20260824/training_512_step32/checkpoint-32",
+  "contract": "research_dagger_repair_training_completion_v1",
+  "global_step": "32",
+  "recipe_sha256": "b300ed5a4799a27d4523300a55b5e16f4692e50988ae1d866b0de6f0c6d7df71",
+  "trainer_state_sha256": "ed3c5e3eb1fdd640f1f9ed111169e5970187e1cab4388583c73199b3c11e40e1"
+}

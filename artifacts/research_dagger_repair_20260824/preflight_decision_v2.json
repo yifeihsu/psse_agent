@@ -1,0 +1,146 @@
+{
+  "baseline": {
+    "adapter_path": "/scratch/yx3882/prelim_e2b_fullnatural_2b32029_20260822/output/bc0/lora",
+    "adapter_tree_sha256": "4e476ded5b666b00122fb569283d9d36398c90d5a999ae144bb87ab3ca3f9690",
+    "exact_target_match_count": 0,
+    "report_path": "/scratch/yx3882/research_dagger_repair_20260824/preflight_bc0_v2.json",
+    "report_sha256": "b872b47475285ffbea94076d0c0e97c16351bf24c7c9edd3bb2287938e93acfd"
+  },
+  "candidates": [
+    {
+      "adapter_path": "/scratch/yx3882/research_dagger_repair_20260824/training_512_step32/checkpoint-8",
+      "adapter_tree_sha256": "0dcc1756464bffda91fc8d87145a05303811b6aa4a1f7dbfe9b571b8d1ad304b",
+      "critical_tool_coverage": 0,
+      "critical_tool_exact_counts": {
+        "correct_parameters_from_path": 0,
+        "get_measurement_context": 0,
+        "get_topology_context": 0,
+        "rollback_state": 0,
+        "wls_from_path": 0
+      },
+      "exact_target_match_count": 0,
+      "ordinal": 0,
+      "report_path": "/scratch/yx3882/research_dagger_repair_20260824/preflight_checkpoint-8-v2.json",
+      "report_sha256": "03c6c750d9680db9b14d25b70c7e6fe7da37ad4f681967160752fcec0cd5ef11",
+      "schema_valid_count": 24,
+      "schema_valid_rate": 0.8888888888888888,
+      "state_bound_count": 24,
+      "state_bound_rate": 0.8888888888888888,
+      "target_tool_match_count": 0
+    },
+    {
+      "adapter_path": "/scratch/yx3882/research_dagger_repair_20260824/training_512_step32/checkpoint-16",
+      "adapter_tree_sha256": "96921821dccdb5ac78ae434da309a91aa8b047fba9323763eebde0464e81c452",
+      "critical_tool_coverage": 0,
+      "critical_tool_exact_counts": {
+        "correct_parameters_from_path": 0,
+        "get_measurement_context": 0,
+        "get_topology_context": 0,
+        "rollback_state": 0,
+        "wls_from_path": 0
+      },
+      "exact_target_match_count": 0,
+      "ordinal": 1,
+      "report_path": "/scratch/yx3882/research_dagger_repair_20260824/preflight_checkpoint-16-v2.json",
+      "report_sha256": "2deaf2334bbfaae49866f85a42712f728166a285d7cb530fab96f9127ddccdc5",
+      "schema_valid_count": 24,
+      "schema_valid_rate": 0.8888888888888888,
+      "state_bound_count": 24,
+      "state_bound_rate": 0.8888888888888888,
+      "target_tool_match_count": 0
+    },
+    {
+      "adapter_path": "/scratch/yx3882/research_dagger_repair_20260824/training_512_step32/checkpoint-24",
+      "adapter_tree_sha256": "3383936efcc886465ab1d5caea364a25649c32adba47e8695bb21140921f0c73",
+      "critical_tool_coverage": 0,
+      "critical_tool_exact_counts": {
+        "correct_parameters_from_path": 0,
+        "get_measurement_context": 0,
+        "get_topology_context": 0,
+        "rollback_state": 0,
+        "wls_from_path": 0
+      },
+      "exact_target_match_count": 0,
+      "ordinal": 2,
+      "report_path": "/scratch/yx3882/research_dagger_repair_20260824/preflight_checkpoint-24-v2.json",
+      "report_sha256": "12655f40c0a76a3682b6e7c81253879cf8fb0f4a7261ec5d1a5b37276d7f4c21",
+      "schema_valid_count": 24,
+      "schema_valid_rate": 0.8888888888888888,
+      "state_bound_count": 24,
+      "state_bound_rate": 0.8888888888888888,
+      "target_tool_match_count": 0
+    },
+    {
+      "adapter_path": "/scratch/yx3882/research_dagger_repair_20260824/training_512_step32/checkpoint-32",
+      "adapter_tree_sha256": "db6c72db6e0c7fdf491f05e6d291bd55461ab7d7ffaff65f8b8d34c8ed50db46",
+      "critical_tool_coverage": 0,
+      "critical_tool_exact_counts": {
+        "correct_parameters_from_path": 0,
+        "get_measurement_context": 0,
+        "get_topology_context": 0,
+        "rollback_state": 0,
+        "wls_from_path": 0
+      },
+      "exact_target_match_count": 0,
+      "ordinal": 3,
+      "report_path": "/scratch/yx3882/research_dagger_repair_20260824/preflight_checkpoint-32-v2.json",
+      "report_sha256": "67d5b10e41168b49bf02b665f1c8796da6c646a213bf2e624529e35924f114f0",
+      "schema_valid_count": 24,
+      "schema_valid_rate": 0.8888888888888888,
+      "state_bound_count": 24,
+      "state_bound_rate": 0.8888888888888888,
+      "target_tool_match_count": 0
+    }
+  ],
+  "contract": "research_dagger_preflight_decision_v2",
+  "decision": "stop_before_closed_loop",
+  "failures": [
+    "zero exact validation actions for required tools: wls_from_path, rollback_state, correct_parameters_from_path, get_measurement_context, get_topology_context",
+    "exact validation actions 0 are below the minimum 5",
+    "schema-valid rate 0.888889 is below 0.950000",
+    "state-bound rate 0.888889 is below 0.900000",
+    "exact validation actions 0 do not exceed BC0's 0"
+  ],
+  "passed": false,
+  "required_tools": [
+    "wls_from_path",
+    "rollback_state",
+    "correct_parameters_from_path",
+    "get_measurement_context",
+    "get_topology_context"
+  ],
+  "research_only": true,
+  "selected": {
+    "adapter_path": "/scratch/yx3882/research_dagger_repair_20260824/training_512_step32/checkpoint-8",
+    "adapter_tree_sha256": "0dcc1756464bffda91fc8d87145a05303811b6aa4a1f7dbfe9b571b8d1ad304b",
+    "critical_tool_coverage": 0,
+    "critical_tool_exact_counts": {
+      "correct_parameters_from_path": 0,
+      "get_measurement_context": 0,
+      "get_topology_context": 0,
+      "rollback_state": 0,
+      "wls_from_path": 0
+    },
+    "exact_target_match_count": 0,
+    "ordinal": 0,
+    "report_path": "/scratch/yx3882/research_dagger_repair_20260824/preflight_checkpoint-8-v2.json",
+    "report_sha256": "03c6c750d9680db9b14d25b70c7e6fe7da37ad4f681967160752fcec0cd5ef11",
+    "schema_valid_count": 24,
+    "schema_valid_rate": 0.8888888888888888,
+    "state_bound_count": 24,
+    "state_bound_rate": 0.8888888888888888,
+    "target_tool_match_count": 0
+  },
+  "thresholds": {
+    "minimum_exact_target_matches": 5,
+    "minimum_schema_valid_rate": 0.95,
+    "minimum_state_bound_rate": 0.9,
+    "require_exact_improvement_over_baseline": true
+  },
+  "validation_binding": {
+    "behavior_binding_sha256": "f82cfca972355a3865c03aada31410a110756fda4badefc4aa03754cc3ae6f59",
+    "canonical_tool_registry_sha256": "8b3815ddecf2d4f5b9b4d1d0760ff32e8cee7872b6ea04d4d5285db80c93b709",
+    "validation_file_sha256": "f05b944f89fa03f61c11376bd05da513f21a7b747c66bfdf80ab11908290898e",
+    "validation_row_count": 27
+  }
+}

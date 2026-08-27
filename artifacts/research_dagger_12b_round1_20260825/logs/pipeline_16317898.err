@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/scratch/yx3882/research_dagger_12b_20260824/src/research/train.py", line 23, in <module>
+    from .model import load_model_and_processor, lora_target_modules
+  File "/scratch/yx3882/research_dagger_12b_20260824/src/research/model.py", line 19, in <module>
+    from psse_env.dagger.release_factories import GemmaReleasePolicy, _ModelBundle
+  File "/scratch/yx3882/research_dagger_12b_20260824/src/psse_env/dagger/__init__.py", line 11, in <module>
+    from .dataset_builder import (
+  File "/scratch/yx3882/research_dagger_12b_20260824/src/psse_env/dagger/dataset_builder.py", line 9, in <module>
+    from hif_search_limits import (
+ModuleNotFoundError: No module named 'hif_search_limits'

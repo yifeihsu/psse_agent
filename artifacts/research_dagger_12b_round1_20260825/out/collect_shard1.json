@@ -1,0 +1,53 @@
+{
+  "beta": 0.3,
+  "distinct_physical_roots": 111,
+  "episodes": 111,
+  "executed_tools": {
+    "__invalid_action__": 5,
+    "ask_for_more_evidence": 171,
+    "commit_state": 191,
+    "correct_measurements": 98,
+    "correct_parameters": 93,
+    "finalize_diagnosis": 1,
+    "get_measurement_context": 217,
+    "get_parameter_context": 87,
+    "get_topology_context": 11,
+    "rollback_state": 16,
+    "run_wls": 313,
+    "verify_candidate": 4
+  },
+  "invalid_action_rate": 0.004142502071251036,
+  "invalid_action_rows": 5,
+  "output": "/scratch/yx3882/research_dagger_12b_20260824/out/round1_rows.shard1.jsonl",
+  "protected_roots": {
+    "development_holdout": 2,
+    "evaluation_suite": 115,
+    "round0": 129,
+    "total": 246
+  },
+  "recovery_strata": {
+    "loop_escape": 40,
+    "multi_measurement_safe_handoff": 30,
+    "post_failure_no_candidate": 6,
+    "premature_commit_recovery": 17,
+    "premature_escalation_recovery": 65,
+    "rejected_candidate_rollback": 16,
+    "sequential_measurement_parameter_recovery": 168,
+    "unclassified": 865
+  },
+  "release_evidence": false,
+  "rows": 1207,
+  "scenario_failures": [],
+  "scenarios_attempted": 111,
+  "scenarios_collected": 111,
+  "state_classes": {
+    "accepted_partial_commit": 174,
+    "accepted_partial_continuation": 334,
+    "clean_successful": 469,
+    "invalid_precondition_recovery": 76,
+    "loop_repetition": 15,
+    "rejected_candidate_recovery": 32,
+    "terminal_operator_escalation": 107
+  },
+  "unverified_expert_labels": []
+}

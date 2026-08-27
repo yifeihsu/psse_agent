@@ -1,0 +1,170 @@
+{
+  "beta": 0.3,
+  "distinct_physical_roots": 111,
+  "episodes": 111,
+  "executed_tools": {
+    "__invalid_action__": 9,
+    "ask_for_more_evidence": 181,
+    "commit_state": 200,
+    "correct_measurements": 80,
+    "correct_parameters": 131,
+    "get_measurement_context": 189,
+    "get_parameter_context": 84,
+    "get_topology_context": 17,
+    "rollback_state": 44,
+    "run_wls": 321,
+    "verify_candidate": 6
+  },
+  "invalid_action_rate": 0.0071315372424722665,
+  "invalid_action_rows": 9,
+  "output": "/scratch/yx3882/research_dagger_12b_20260824/out/round1_rows.shard2.jsonl",
+  "protected_roots": {
+    "development_holdout": 2,
+    "evaluation_suite": 115,
+    "round0": 129,
+    "total": 246
+  },
+  "recovery_strata": {
+    "loop_escape": 65,
+    "multi_measurement_safe_handoff": 27,
+    "post_failure_no_candidate": 24,
+    "premature_commit_recovery": 52,
+    "premature_escalation_recovery": 79,
+    "rejected_candidate_rollback": 45,
+    "sequential_measurement_parameter_recovery": 168,
+    "unclassified": 802
+  },
+  "release_evidence": false,
+  "rows": 1262,
+  "scenario_failures": [],
+  "scenarios_attempted": 111,
+  "scenarios_collected": 111,
+  "state_classes": {
+    "accepted_partial_commit": 147,
+    "accepted_partial_continuation": 269,
+    "clean_successful": 482,
+    "invalid_precondition_recovery": 106,
+    "loop_repetition": 56,
+    "rejected_candidate_recovery": 97,
+    "terminal_operator_escalation": 105
+  },
+  "unverified_expert_labels": [
+    {
+      "escalation_audit": {
+        "ledger": {
+          "active_state_hash": "67125780b202a44c994160073bce257c8e27f6535bde3a63ff1e92fa10369aa0",
+          "active_state_id": "r0_9f2cd95ae35f_episode71:s3",
+          "additional_evidence_available": true,
+          "autonomous_budget_available": false,
+          "exhausted_recovery_target_count": 0,
+          "family": "recovery_budget",
+          "investigation_tools": [
+            "get_measurement_context",
+            "get_parameter_context",
+            "get_topology_context"
+          ],
+          "missing_required_contexts": [],
+          "operator_review_required": true,
+          "outstanding_recovery_targets": [
+            "correct_measurements:{\"suspect_group\":[99]}",
+            "correct_measurements:{\"suspect_group\":[22]}"
+          ],
+          "post_correction_confirmation_deferred": false,
+          "post_correction_confirmation_handoff": false,
+          "rejected_estimators": [],
+          "request": "operator_escalation:recovery_budget_exhausted",
+          "required_estimators": [],
+          "safety_blocked_recovery_targets": [],
+          "supported_recovery_target_count": 2,
+          "unexplained_signature_count": 2
+        },
+        "missing": [
+          "run_wls_successful_evidence_missing"
+        ]
+      },
+      "preferred_action": {
+        "arguments": {
+          "request": "operator_escalation:recovery_budget_exhausted",
+          "state_id": "r0_9f2cd95ae35f_episode71:s3"
+        },
+        "tool": "ask_for_more_evidence"
+      },
+      "preferred_tool": "ask_for_more_evidence",
+      "reason": "Production operator-escalation label lacks exhausted, same-state observable HIF evidence: run_wls_successful_evidence_missing",
+      "scenario_id": "r0_9f2cd95ae35f",
+      "state": {
+        "accepted_corrections": [
+          {
+            "candidate_parent_id": "r0_9f2cd95ae35f_episode71:s0",
+            "candidate_state_id": "r0_9f2cd95ae35f_episode71:s1",
+            "source_action": {
+              "arguments": {
+                "state_id": "r0_9f2cd95ae35f_episode71:s0",
+                "suspect_group": [
+                  91
+                ]
+              },
+              "tool": "correct_measurements"
+            }
+          },
+          {
+            "candidate_parent_id": "r0_9f2cd95ae35f_episode71:s1",
+            "candidate_state_id": "r0_9f2cd95ae35f_episode71:s2",
+            "source_action": {
+              "arguments": {
+                "state_id": "r0_9f2cd95ae35f_episode71:s1",
+                "suspect_group": [
+                  92
+                ]
+              },
+              "tool": "correct_measurements"
+            }
+          },
+          {
+            "candidate_parent_id": "r0_9f2cd95ae35f_episode71:s2",
+            "candidate_state_id": "r0_9f2cd95ae35f_episode71:s3",
+            "source_action": {
+              "arguments": {
+                "state_id": "r0_9f2cd95ae35f_episode71:s2",
+                "suspect_group": [
+                  95
+                ]
+              },
+              "tool": "correct_measurements"
+            }
+          }
+        ],
+        "rejected_hypotheses": [],
+        "remaining_budget": 3,
+        "tried_action_signatures": [
+          "run_wls:{\"state_id\":\"r0_9f2cd95ae35f_episode71:s0\"}",
+          "get_measurement_context:{\"state_id\":\"r0_9f2cd95ae35f_episode71:s0\"}",
+          "correct_measurements:{\"state_id\":\"r0_9f2cd95ae35f_episode71:s0\",\"suspect_group\":[91]}",
+          "run_wls:{\"state_id\":\"r0_9f2cd95ae35f_episode71:s1\"}",
+          "commit_state:{\"candidate_state_id\":\"r0_9f2cd95ae35f_episode71:s1\"}",
+          "get_measurement_context:{\"state_id\":\"r0_9f2cd95ae35f_episode71:s1\"}",
+          "correct_measurements:{\"state_id\":\"r0_9f2cd95ae35f_episode71:s1\",\"suspect_group\":[92]}",
+          "run_wls:{\"state_id\":\"r0_9f2cd95ae35f_episode71:s2\"}",
+          "commit_state:{\"candidate_state_id\":\"r0_9f2cd95ae35f_episode71:s2\"}",
+          "get_measurement_context:{\"state_id\":\"r0_9f2cd95ae35f_episode71:s2\"}",
+          "ask_for_more_evidence:{\"request\":\"operator_escalation:recovery_options_exhausted\",\"state_id\":\"r0_9f2cd95ae35f_episode71:s2\"}",
+          "run_wls:{\"state_id\":\"r0_9f2cd95ae35f_episode71:s2\"}",
+          "ask_for_more_evidence:{\"request\":\"operator_escalation:recovery_options_exhausted\",\"state_id\":\"r0_9f2cd95ae35f_episode71:s2\"}",
+          "ask_for_more_evidence:{\"request\":\"operator_escalation:recovery_options_exhausted\",\"state_id\":\"r0_9f2cd95ae35f_episode71:s2\"}",
+          "ask_for_more_evidence:{\"request\":\"operator_escalation:recovery_options_exhausted\",\"state_id\":\"r0_9f2cd95ae35f_episode71:s2\"}",
+          "ask_for_more_evidence:{\"request\":\"operator_escalation:recovery_options_exhausted\",\"state_id\":\"r0_9f2cd95ae35f_episode71:s2\"}",
+          "run_wls:{\"state_id\":\"r0_9f2cd95ae35f_episode71:s2\"}",
+          "correct_measurements:{\"state_id\":\"r0_9f2cd95ae35f_episode71:s2\",\"suspect_group\":[95]}",
+          "verify_candidate:{\"state_id\":\"r0_9f2cd95ae35f_episode71:s3\"}",
+          "commit_state:{\"candidate_state_id\":\"r0_9f2cd95ae35f_episode71:s3\"}",
+          "get_measurement_context:{\"state_id\":\"r0_9f2cd95ae35f_episode71:s3\"}"
+        ],
+        "unresolved_signatures": [
+          "wls_residual_outlier_dominant index=99 channel=Pt",
+          "wls_residual_outlier_dominant index=22 channel=Pinj"
+        ]
+      },
+      "step": 21
+    }
+  ]
+}

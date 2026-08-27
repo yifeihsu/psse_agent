@@ -1,0 +1,76 @@
+{
+  "artifact": "artifacts\\research_dagger_router_20260824\\router_collection_56_iter2.json",
+  "contract": "research_dagger_learner_trace_v1",
+  "counts": {
+    "d0_available": 1280,
+    "d0_excluded_by_root": 0,
+    "d0_selected": 0,
+    "dagger_repeat": 1,
+    "raw_train_learner_rows": 175,
+    "raw_validation_learner_rows": 25,
+    "rollout_episodes": 56,
+    "skipped_or_duplicate_policy_rows": 24,
+    "train_rows": 175,
+    "validation_rows": 25
+  },
+  "recovery_stratum_distribution": {
+    "by_source": {
+      "learner_trace": {
+        "learner_visited_recovery": 106,
+        "measurement_parameter_sequential_handoff": 27,
+        "post_failure_no_candidate": 7,
+        "premature_commit_recovery": 7,
+        "premature_escalation_recovery": 7,
+        "rejected_candidate_rollback": 7,
+        "safe_continuation_after_partial_success": 7,
+        "unsupported_correction_recovery": 7
+      }
+    },
+    "overall": {
+      "learner_visited_recovery": 106,
+      "measurement_parameter_sequential_handoff": 27,
+      "post_failure_no_candidate": 7,
+      "premature_commit_recovery": 7,
+      "premature_escalation_recovery": 7,
+      "rejected_candidate_rollback": 7,
+      "safe_continuation_after_partial_success": 7,
+      "unsupported_correction_recovery": 7
+    }
+  },
+  "roots": {
+    "d0_train": 0,
+    "pairwise_overlap": 0,
+    "protected": 4,
+    "rollout": 16,
+    "trace_train": 14,
+    "train": 14,
+    "validation": 2
+  },
+  "seed": 3407,
+  "tool_distribution": {
+    "by_source": {
+      "learner_trace": {
+        "commit_state": 7,
+        "correct_measurements_from_path": 30,
+        "correct_parameters_from_path": 13,
+        "get_measurement_context": 42,
+        "get_parameter_context": 6,
+        "get_topology_context": 7,
+        "rollback_state": 7,
+        "wls_from_path": 63
+      }
+    },
+    "overall": {
+      "commit_state": 7,
+      "correct_measurements_from_path": 30,
+      "correct_parameters_from_path": 13,
+      "get_measurement_context": 42,
+      "get_parameter_context": 6,
+      "get_topology_context": 7,
+      "rollback_state": 7,
+      "wls_from_path": 63
+    }
+  },
+  "train_output": "artifacts\\research_dagger_router_20260824\\router_trace_iter2_train.jsonl",
+  "validation_output": "artifacts\\research_dagger_router_20260824\\router_trace_iter2_validation.jsonl"
+}

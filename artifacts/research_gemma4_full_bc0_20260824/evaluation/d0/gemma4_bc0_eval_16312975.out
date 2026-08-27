@@ -1,0 +1,47 @@
+{
+  "contract": "research_gemma4_exact_cache_v1",
+  "models": [
+    {
+      "architecture": "gemma4_unified",
+      "files": 9,
+      "key": "12b",
+      "logical_bytes": 23951776979,
+      "model_id": "google/gemma-4-12B-it",
+      "passed": true,
+      "processor_loader": "AutoProcessor",
+      "prompt_profile": "native",
+      "revision": "707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7",
+      "snapshot": "/scratch/yx3882/.cache/huggingface/hub/models--google--gemma-4-12B-it/snapshots/707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7",
+      "weight_manifest": {
+        "indices": [],
+        "mode": "single_file",
+        "weight_bytes": 23919549408,
+        "weight_files": 1
+      }
+    }
+  ],
+  "passed": true
+}
+{
+  "passed": true,
+  "phase": "d0",
+  "policy_behavior": {
+    "episodes": 21,
+    "evaluator_error_episodes": 0,
+    "input_truncated_steps": 0,
+    "input_truncated_tokens": 0,
+    "maximum_original_prompt_tokens": 7875,
+    "observable_expert_comparable_steps": 152,
+    "observable_expert_comparison_errors": 0,
+    "observable_expert_exact_action_agreement_rate": 0.5197368421052632,
+    "observable_expert_tool_agreement_rate": 0.5789473684210527,
+    "policy_steps": 196,
+    "schema_valid_action_rate": 0.9897959183673469,
+    "schema_valid_actions": 194
+  },
+  "readiness_gate": {
+    "failures": [],
+    "minimum_schema_valid_action_rate": 0.9,
+    "passed": true
+  }
+}

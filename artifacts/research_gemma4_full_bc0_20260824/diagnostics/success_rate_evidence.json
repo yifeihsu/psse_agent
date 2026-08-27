@@ -1,0 +1,148 @@
+{
+  "contract": "gemma4_bc0_success_rate_diagnosis_v1",
+  "generated_at": "2026-08-24T22:16:34-04:00",
+  "adapter_checkpoint": {
+    "published_checkpoint": 128,
+    "published_epoch": 0.4,
+    "total_training_steps": 320,
+    "best_eval_loss": 0.022957326844334602,
+    "final_eval_loss": 0.02602227032184601,
+    "selection_metric": "teacher_forced_token_eval_loss",
+    "closed_loop_checkpoint_selection": false
+  },
+  "source_files": [
+    "artifacts/research_gemma4_full_bc0_20260824/evaluation/d0/research_bc0_d0_eval.json",
+    "artifacts/research_gemma4_full_bc0_20260824/evaluation/d1/research_bc0_d1_eval.json",
+    "artifacts/research_gemma4_full_bc0_20260824/research_run.json",
+    "artifacts/research_gemma4_full_bc0_20260824/trainer_state.json",
+    "artifacts/reusable_sources_20260823/d0_train_view.jsonl",
+    "psse_env/oracle/termination_expert.py",
+    "psse_env/oracle/expert_policy.py",
+    "psse_env/dagger/evaluator.py",
+    "psse_env/dagger/protocol_bridge.py",
+    "psse_env/sft/research_bc0_eval.py"
+  ],
+  "headline_metrics": [
+    {
+      "suite": "D0",
+      "episodes": 21,
+      "faulted_episodes": 17,
+      "no_fault_episodes": 4,
+      "final_physical_successes": 4,
+      "final_physical_success_rate": 0.19047619047619047,
+      "faulted_episode_successes": 0,
+      "faulted_episode_success_rate": 0.0,
+      "all_true_targets_accepted_but_uncertified": 4,
+      "all_true_targets_accepted_rate": 0.23529411764705882,
+      "schema_valid_steps": 194,
+      "steps": 196,
+      "schema_valid_rate": 0.9897959183673469,
+      "runtime_accepted_steps": 160,
+      "runtime_accepted_rate": 0.8163265306122449,
+      "expert_tool_matches": 88,
+      "expert_exact_matches": 79,
+      "expert_comparable_steps": 152,
+      "expert_tool_match_rate": 0.5789473684210527,
+      "expert_exact_match_rate": 0.5197368421052632,
+      "terminal_operator_escalations": 10,
+      "nonterminal_episodes": 7
+    },
+    {
+      "suite": "D1",
+      "episodes": 15,
+      "faulted_episodes": 15,
+      "no_fault_episodes": 0,
+      "final_physical_successes": 0,
+      "final_physical_success_rate": 0.0,
+      "faulted_episode_successes": 0,
+      "faulted_episode_success_rate": 0.0,
+      "all_true_targets_accepted_but_uncertified": 8,
+      "all_true_targets_accepted_rate": 0.5333333333333333,
+      "schema_valid_steps": 164,
+      "steps": 164,
+      "schema_valid_rate": 1.0,
+      "runtime_accepted_steps": 140,
+      "runtime_accepted_rate": 0.8536585365853658,
+      "expert_tool_matches": 89,
+      "expert_exact_matches": 89,
+      "expert_comparable_steps": 129,
+      "expert_tool_match_rate": 0.689922480620155,
+      "expert_exact_match_rate": 0.689922480620155,
+      "terminal_operator_escalations": 11,
+      "nonterminal_episodes": 4
+    }
+  ],
+  "quality_layers": [
+    {"suite": "D0", "layer": "Schema-valid action", "rate": 0.9897959183673469, "numerator": 194, "denominator": 196, "grain": "policy steps", "order": 1},
+    {"suite": "D0", "layer": "Runtime-accepted action", "rate": 0.8163265306122449, "numerator": 160, "denominator": 196, "grain": "policy steps", "order": 2},
+    {"suite": "D0", "layer": "Exact expert action", "rate": 0.5197368421052632, "numerator": 79, "denominator": 152, "grain": "comparable policy steps", "order": 3},
+    {"suite": "D0", "layer": "Final physical success", "rate": 0.19047619047619047, "numerator": 4, "denominator": 21, "grain": "episodes", "order": 4},
+    {"suite": "D1", "layer": "Schema-valid action", "rate": 1.0, "numerator": 164, "denominator": 164, "grain": "policy steps", "order": 1},
+    {"suite": "D1", "layer": "Runtime-accepted action", "rate": 0.8536585365853658, "numerator": 140, "denominator": 164, "grain": "policy steps", "order": 2},
+    {"suite": "D1", "layer": "Exact expert action", "rate": 0.689922480620155, "numerator": 89, "denominator": 129, "grain": "comparable policy steps", "order": 3},
+    {"suite": "D1", "layer": "Final physical success", "rate": 0.0, "numerator": 0, "denominator": 15, "grain": "episodes", "order": 4}
+  ],
+  "outcome_composition": [
+    {"suite": "D0", "outcome": "No-fault resolved", "episodes": 4, "share": 0.19047619047619047},
+    {"suite": "D0", "outcome": "Operator escalation", "episodes": 10, "share": 0.47619047619047616},
+    {"suite": "D0", "outcome": "Loop or breaker nonterminal", "episodes": 5, "share": 0.23809523809523808},
+    {"suite": "D0", "outcome": "Max-step nonterminal", "episodes": 2, "share": 0.09523809523809523},
+    {"suite": "D1", "outcome": "Resolved", "episodes": 0, "share": 0.0},
+    {"suite": "D1", "outcome": "Operator escalation", "episodes": 11, "share": 0.7333333333333333},
+    {"suite": "D1", "outcome": "Nonterminal", "episodes": 4, "share": 0.26666666666666666}
+  ],
+  "sequencing_gap": [
+    {"action": "Rollback rejected candidate", "series": "Embedded expert expectation", "count": 45, "training_targets": 0, "d0_count": 31, "d1_count": 14, "order": 1},
+    {"action": "Rollback rejected candidate", "series": "Model action", "count": 22, "training_targets": 0, "d0_count": 15, "d1_count": 7, "order": 1},
+    {"action": "Commit candidate", "series": "Embedded expert expectation", "count": 30, "training_targets": 274, "d0_count": 12, "d1_count": 18, "order": 2},
+    {"action": "Commit candidate", "series": "Model action", "count": 53, "training_targets": 274, "d0_count": 28, "d1_count": 25, "order": 2},
+    {"action": "Get measurement context", "series": "Embedded expert expectation", "count": 68, "training_targets": 117, "d0_count": 36, "d1_count": 32, "order": 3},
+    {"action": "Get measurement context", "series": "Model action", "count": 43, "training_targets": 117, "d0_count": 18, "d1_count": 25, "order": 3},
+    {"action": "Correct parameters", "series": "Embedded expert expectation", "count": 12, "training_targets": 87, "d0_count": 4, "d1_count": 8, "order": 4},
+    {"action": "Correct parameters", "series": "Model action", "count": 34, "training_targets": 87, "d0_count": 18, "d1_count": 16, "order": 4},
+    {"action": "Request operator evidence", "series": "Embedded expert expectation", "count": 24, "training_targets": 86, "d0_count": 11, "d1_count": 13, "order": 5},
+    {"action": "Request operator evidence", "series": "Model action", "count": 38, "training_targets": 86, "d0_count": 16, "d1_count": 22, "order": 5}
+  ],
+  "d1_family_breakdown": [
+    {"family": "measurement+parameter", "episodes": 6, "physical_successes": 0, "all_targets_accepted_episodes": 4, "target_recall": 0.75, "terminal": 4, "nonterminal": 2, "runtime_rejected_actions": 18, "expert_matches": 43, "expert_comparable": 69, "expert_match_rate": 0.6231884057971014},
+    {"family": "multi_measurement", "episodes": 6, "physical_successes": 0, "all_targets_accepted_episodes": 1, "target_recall": 0.2608695652173913, "terminal": 4, "nonterminal": 2, "runtime_rejected_actions": 6, "expert_matches": 31, "expert_comparable": 42, "expert_match_rate": 0.7380952380952381},
+    {"family": "parameter", "episodes": 3, "physical_successes": 0, "all_targets_accepted_episodes": 3, "target_recall": 1.0, "terminal": 3, "nonterminal": 0, "runtime_rejected_actions": 0, "expert_matches": 15, "expert_comparable": 18, "expert_match_rate": 0.8333333333333334}
+  ],
+  "training_distribution": [
+    {
+      "train_rows": 1280,
+      "train_roots": 182,
+      "initial_states": 165,
+      "expert_visited_states": 1115,
+      "learner_visited_states": 0,
+      "rollback_targets": 0,
+      "commit_targets": 274,
+      "commit_target_share": 0.2140625,
+      "distinct_assistant_signatures": 124,
+      "top_five_signature_share": 0.57734375,
+      "median_supervised_tokens": 20,
+      "maximum_supervised_tokens": 42,
+      "prompt_truncated_rows": 0,
+      "target_truncated_rows": 0
+    }
+  ],
+  "failure_counts": [
+    {"suite": "D0", "schema_invalid_actions": 2, "runtime_rejected_actions": 36, "candidate_lifecycle_failures": 16, "false_commits": 16, "topology_bridge_failures": 6, "premature_escalation_failures": 4, "loops": 6},
+    {"suite": "D1", "schema_invalid_actions": 0, "runtime_rejected_actions": 24, "candidate_lifecycle_failures": 9, "false_commits": 7, "topology_bridge_failures": 0, "premature_escalation_failures": 9, "loops": 3}
+  ],
+  "root_causes": [
+    {"rank": 1, "category": "Metric contract", "driver": "Fault corrections cannot end as resolved under the current expert contract", "impact": "Critical", "evidence": "final_physical_success requires terminal=resolved, but accepted corrections disable autonomous finalize and route to operator handoff; D0 successes are exactly 4 no-fault roots and D1 has no no-fault roots."},
+    {"rank": 2, "category": "Audit wiring", "driver": "Research evaluation omits the physical case loader", "impact": "High", "evidence": "The evaluator call supplies no case_loader; 13 D0 and 9 D1 episodes report case_loader_required_for_physical_comparison, so plausible repairs cannot be certified."},
+    {"rank": 3, "category": "Training distribution", "driver": "BC0 contains no learner recovery states and no rollback labels", "impact": "Critical", "evidence": "All 1,280 rows are initial or expert-visited; rollback targets=0 while commit targets=274. Evaluation expected 45 rollbacks, but the model chose 22 and made 23 false commits."},
+    {"rank": 4, "category": "Protocol bridge", "driver": "Canonical topology index is not converted to the controller field", "impact": "High", "evidence": "canonical_to_internal_action maps desired_status but leaves line_index1 instead of line_index, deterministically causing six D0 unsupported-topology failures across five episodes."},
+    {"rank": 5, "category": "Teacher policy", "driver": "Multi-fault labels often stop after one accepted partial repair", "impact": "High", "evidence": "Three D0 multi-measurement episodes exactly followed the persisted teacher path yet escalated with faults remaining; D1 multi-measurement target recall was 6/23."},
+    {"rank": 6, "category": "Checkpoint selection", "driver": "The published adapter is a partial-epoch checkpoint selected by token loss", "impact": "Medium", "evidence": "Checkpoint 128 at epoch 0.40 minimized short-suffix eval loss; no closed-loop checkpoint comparison selected among steps 128, 192, 256, and 320."},
+    {"rank": 7, "category": "Training metric", "driver": "Low eval loss measures repetitive one-step teacher-forced outputs", "impact": "Medium", "evidence": "Median supervised suffix is 20 tokens, only 124 distinct assistant signatures exist, and the five most common signatures are 57.7% of rows; this does not test sequential recovery."}
+  ],
+  "ruled_out": [
+    {"hypothesis": "Input token limit", "finding": "Ruled out", "evidence": "No prompt or target truncation; evaluation prompts maxed at 7,875 of 32,768 tokens."},
+    {"hypothesis": "Malformed JSON/tool syntax", "finding": "Not primary", "evidence": "D0 schema validity was 194/196 and D1 was 164/164."},
+    {"hypothesis": "Evaluator crashes", "finding": "Ruled out", "evidence": "Both suites completed with zero evaluator-error episodes."},
+    {"hypothesis": "Model/adapter failed to load", "finding": "Ruled out", "evidence": "D0 solved all four no-fault roots, and both reports record the same adapter fingerprint."}
+  ]
+}

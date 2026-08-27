@@ -1,0 +1,2759 @@
+{
+  "artifact_path": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\artifacts\\research_dagger_router_20260824\\router_model_iter2.json",
+  "artifact_sha256": "67784f3579effbe03f7f2ac426f17724e67c59296c3c5386fbbe3ccc4a38766d",
+  "artifact_type": "research_only_observable_dagger_router_fit_report",
+  "contract": "research_dagger_observable_router_report_v1",
+  "research_only": true,
+  "sources": {
+    "anchor": {
+      "path": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\artifacts\\research_dagger_repair_20260824\\repair_train_512.jsonl",
+      "row_count": 512,
+      "sha256": "2f2b12f697224647506117aaee95e914368548706768109c970753e612964a64"
+    },
+    "protected": [
+      {
+        "path": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\artifacts\\research_dagger_trace_20260823\\heldout_suite_14_root_closure.json",
+        "physical_root_count": 4,
+        "physical_roots": [
+          "physical_v3_0192e80a93b9ecf23147e599c295d2a8e5d1f40419d81fec82ef3022fea0c80c",
+          "physical_v3_0b46d1fe736c0c73778eff771d61ac32407c97b174c389e8bb87406ef5ca0c11",
+          "physical_v3_678535db0752dfbcfc0c419b26d58a793d7f710730c3627a55cbfa692e98729e",
+          "physical_v3_7804a590697f7ef2bb2da6b8802c8663656ef99cf726c7265a90b4e69eb96fcf"
+        ],
+        "sha256": "68fec0dfe42c6dc4d0df2877633ba494faefcacfe188c44c2cd35b6272b87280"
+      }
+    ],
+    "trace": [
+      {
+        "path": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\artifacts\\research_dagger_trace_20260823\\trace_train.jsonl",
+        "row_count": 555,
+        "selected_learner_row_count": 370,
+        "sha256": "888c0b3950337b3a76cda3dcd414736580f5f74c312993979acb68698514fbbe"
+      },
+      {
+        "path": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\artifacts\\research_dagger_router_20260824\\router_trace_iter1_train.jsonl",
+        "row_count": 287,
+        "selected_learner_row_count": 287,
+        "sha256": "90ad666894479138819de7812f0e9955a3bec124aa5cfc1153b2ce86e8d34d60"
+      },
+      {
+        "path": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\artifacts\\research_dagger_router_20260824\\router_trace_iter2_train.jsonl",
+        "row_count": 175,
+        "selected_learner_row_count": 175,
+        "sha256": "965b2e4fa19c106df922f4a4b8e2c387f50ea952b157c9317a10be824a633dfe"
+      }
+    ],
+    "validation": {
+      "path": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\artifacts\\research_dagger_router_20260824\\router_trace_iter1_validation.jsonl",
+      "physical_root_count": 2,
+      "physical_roots": [
+        "physical_v3_172df19d54c0501061e799ec71271c32de60af7ed4908d35f371c6b3c94aaec3",
+        "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec"
+      ],
+      "row_count": 43,
+      "sha256": "a7b5f4b9ff1dadaef79d3ac71ba15f7ca1ccd8f02c6f3bcb968571844b654690"
+    }
+  },
+  "training": {
+    "class_distribution": {
+      "ask_for_more_evidence": 72,
+      "commit_state": 40,
+      "correct_measurements_from_path": 65,
+      "correct_parameters_from_path": 74,
+      "correct_topology_from_path": 14,
+      "estimate_hif_location_magnitude_from_path": 2,
+      "estimate_hif_location_magnitude_multiscan_from_path": 2,
+      "finalize_diagnosis": 8,
+      "get_harmonic_context": 1,
+      "get_measurement_context": 196,
+      "get_parameter_context": 16,
+      "get_topology_context": 21,
+      "rollback_state": 112,
+      "run_hse_from_path": 1,
+      "run_three_phase_nlm_from_path": 1,
+      "wls_from_path": 329
+    },
+    "conflicting_prompt_count": 0,
+    "deduplicated_row_count": 954,
+    "feature_count": 202,
+    "iterations": [
+      218
+    ],
+    "physical_root_count": 271,
+    "physical_roots": [
+      "physical_v3_005fd28379584e0463a0fa09831aacec8b946a56452d63e713505073fbb8008d",
+      "physical_v3_01da45f3c97c2b8323816b93a87f86b6f7ddad3c45c9f64b71fa33c164379da8",
+      "physical_v3_021289c353dac8f99e076e182a51505375b6b336ab34f89e78ede5bc1ee7d458",
+      "physical_v3_0487da09c854860f4d7f83e6eeaf6d3cecb624b3c8993fca28dac972af7ecebd",
+      "physical_v3_04e5bfc02e656cfe9b9120a4bc51ba49b4ae7e4c122bc79fa2456eba6ed9243e",
+      "physical_v3_069b578c4276549c8e6aae721e514fd8278602165ebe62d4a6620d264737959f",
+      "physical_v3_079fb0d7d0594d3cef49a3652a3842d911782ce9ad4d715831d30c13123fedda",
+      "physical_v3_0aa014de0e9abccce0a5d4531a3b8fc353bd5427f65ec93a85d2d99cb61d9d40",
+      "physical_v3_0aab6ac82ad0b63b4102c53a2a9d10cfa3924352b8998fe45ea2d9eb2ab49dc7",
+      "physical_v3_0ab7b4d6b37c3c62f9312fd64fcc2ef5577ca8b608aa7cdc278c8c968bbcc634",
+      "physical_v3_0c6c23925c5deb9e51cda036e26eecca989236c51e568e5a7ee4445b9191094a",
+      "physical_v3_0ced58c882125d89f37553013187c5089ff350da735c96ef7d26d4862d60a722",
+      "physical_v3_0f4fa8b0f76adac3f345b96048c8f889cc13b9fd989fce30f50c2b5e226e1245",
+      "physical_v3_0fc2d7c9f447be091a99cd6492ade75d38ba1e43f32aa2a4d26e5c67f4a24504",
+      "physical_v3_11271a3a0b885f1a6095420b35a8ac916a0231fcf3ba2fa63e58913c17728ea0",
+      "physical_v3_11642c53e0b77aee775cc1fa890e837af1450593d1bcc7fb83ac13cac8c98c0c",
+      "physical_v3_11ca65d5de39c85b107d8446c8e5245658de293a78d21ded4ca7fc29c90043e1",
+      "physical_v3_122f43dfc3c53c513062df3675de89d26bae2f73e9d23e87c5ab46c64ac0fec9",
+      "physical_v3_14edee8a9ea87331f9bf36ca1623df1966b6f512764d206210ec777d6b6c6acf",
+      "physical_v3_1587c0676c7edb12d0a3ed78e01b3021236933d69336522900d1df9fc04a5737",
+      "physical_v3_15c1e0797b4ff039f3fa7a9696eaf1fe5246bd9cb8b7cdd5d340258f095fcc7e",
+      "physical_v3_1690c045f643e6aee12db297c56fc25a5f8601d50aa7abf0150024bf06fd16ea",
+      "physical_v3_16fa7cb49610d9b0b8ecd2e2cd7c29e829bd9f1b6fe3ac4a81cd199f4ba03b79",
+      "physical_v3_191b1ae12d4f31554b897a6ac24a4c468f54022972f3abc5a90e2746f7b2f036",
+      "physical_v3_1b01cc417a2ea947df33587c763174116c0ba2943a1feed9cea74eb572cd0591",
+      "physical_v3_1bb5f6b9d8e03bf64e460ee5661e63dccc2c9a3904b5758eebff464296c6f785",
+      "physical_v3_1bbbe1e3455ed76ab29bc8124a9a0e5726749b9d03162b9445d95f086b5806fb",
+      "physical_v3_1bca9299e94521a2650914448d1b14ae1525a9c1bb2fc4a5a2eefd8469108823",
+      "physical_v3_1db9f0336a22dd2ead0101dbf0fdb1a17842d84863d69f4a0ef282b46390d8b2",
+      "physical_v3_1f0cdd5a0c8cfcb3145d1c6483b651f9b8366d6e7cb330a304ffc3ac5f6359d3",
+      "physical_v3_1f1fa2ea46ea330e5fcb2c42db66b242f67c495cecec55a9fa78cca8d45b7ea6",
+      "physical_v3_1f3308fdee0bcfd5c9fef5a15a11e6d751da4276143f40217bf00d897024cf2a",
+      "physical_v3_1fd673185599762ac29023a8124f38e33407ecb5d752ddecc93e2d3696d6d3c5",
+      "physical_v3_1fe04f3b4b90da96d2e72dde1789f279e84e37de11477005ffa5c57d8896cd8c",
+      "physical_v3_2030a16ee9ce0a2a318c4c6ed2a67d814a65971c62ab873b6da008288be6f129",
+      "physical_v3_205cd66834951f44bb8793e481dc6407b1b9babdf056631686eb5e37814f2bf4",
+      "physical_v3_20653d41f8ace8f88fa76e1ee1abdcee36cd0bbf1a91b2fafa21cd5761aed58d",
+      "physical_v3_2073bda3c5954491970cc5e4705ef37b2ce9045d7f6290663063c25d179d9369",
+      "physical_v3_22f37b848e993e5fcec14794732c9967db50051ebbada1458c6e067be7c09be3",
+      "physical_v3_22f64dfdb7442033ea793921fcccc906c7b9d118037b16bf5dfd3afc1e9478cb",
+      "physical_v3_24adb0f51462faccaa88ca6a0c81148c32066709f982008f559d4c312a3e4086",
+      "physical_v3_262d01b6d57f08f411a2b8fc968fea635f54069e8b3a6f6b4297710bae8a6971",
+      "physical_v3_2638472d01f6aeafad480939f0f5f849931e086e63dc56baf0649ddbe261261a",
+      "physical_v3_2683e2534567be48383d390a1d3f3d29c879b8d232477e13e072c4b650280f1f",
+      "physical_v3_268dd88a77ce14b3a4fd9454de1fe2c9a4935c00aad4411d6abfc752e3e24949",
+      "physical_v3_291dae6f6465f359467189a65f72e4a918e9b05443ae4e118bebcea86efb493b",
+      "physical_v3_297984803b0bf6ab69223c89388175cb989bcab34c48c794c6cfa93832abf097",
+      "physical_v3_29fc165348cd1e3f84b5b92b19a71b0db1e7ae17b0117151a0e99c65feabdedc",
+      "physical_v3_2bf4584ba168f7727b9cea5793194277b569ba92abf3727c8224d781b5ebd9e0",
+      "physical_v3_2c654445adde7f7e4469674036d9c8093564b4a38ce4053fa4f38ed1df72f68e",
+      "physical_v3_2ca65428877d5e3a59befc82c09c3f6afe9b08dab141f59588e5b1e5f149b730",
+      "physical_v3_2cbaeb13cd648de8aad2d10d0aff070c705b75ed3f8bd149ad477862cd5fa2a9",
+      "physical_v3_2cd88c6b8996033d4459f7db17b7dac3b1b4a79369f7f0e524db63adc9f220d7",
+      "physical_v3_2e760a45f599f303a2834c2cde72c6b79d93b9c89c73a0eab27c9463189bceda",
+      "physical_v3_2e9c7dcfb65455cfad9883f74f3d246ee22ca629103225b05c104ff2f00804d2",
+      "physical_v3_2fb4b2fa1c0d4bd9a8ace9d5296c46559a78ae66924edf9ff103757a33a26b13",
+      "physical_v3_309d70842240116f5006576787e9f16fc75f9839ada5346585c71289a9541c56",
+      "physical_v3_31d48bf07527fd78715c94a54da760d97a2ece15403aa54023e366d59ac60633",
+      "physical_v3_320383b775a34743f7d4050156a0c48a0d7b45fe889c053f53c9649e2ff10110",
+      "physical_v3_32497baa3a8fb072c1a395f0363b472490c86ff89920593de54b2cca6de349b6",
+      "physical_v3_32c92066b7ca1caae9396826db9b31b151fa0e185b071a4e749c9e48f6c7d58e",
+      "physical_v3_3322451d163acda6110ee7dd9cc779f9957ff923e94a2f95f05abbda825283e4",
+      "physical_v3_3406ec17c9a7a394828a2f069112c7f7a482bf8c09e864b45dc180c54f5b286d",
+      "physical_v3_34ec83234d393bc30f8361108d48f21dd9298ffe41255305397e5a4ad9dc02c9",
+      "physical_v3_352e1443d68dd5f1f0bab6117b4bd3bda4f144aecb4658516ce9db1be06479a3",
+      "physical_v3_3560db2265e8d0a8acb46d9c5906dbb63c252bc21543fbde664af80a60cab0e8",
+      "physical_v3_35dafdee5402be81046ea98f59ae51fe4bf24c4ac528a5281e0afb88d55b4e37",
+      "physical_v3_363a032fc6991c821a81dd5cf425593c77fd5e716467aef158574559d1b322e5",
+      "physical_v3_363c5d20d41032ce522e095c4fcd133b0f1dc1494516adc34a586c12052d7208",
+      "physical_v3_36e010847de24faf6cb2a64d237eaa8170c9023893666bd769b689d16d42ddfa",
+      "physical_v3_37d6417cb330090d13a115be6a163dc1f41398647c1c572bdc88a83ecb3a6d77",
+      "physical_v3_384a7ac2a86338e5ed8f6a343c94adebfae92f10388ca9d92b890cc4bc13e752",
+      "physical_v3_38504f2d86f7556ce1c03340c3db3f3a7b0fdd408bb1ebcb16792cd7061a7093",
+      "physical_v3_390cd489c74b69e39d517cded40ba2afc0682fe5c9713c843e76fc44a0ef2f33",
+      "physical_v3_3c1c37cfe3e7c0c4c96471fe10298412b44141b9e9e2e6279709bd9e48d0b548",
+      "physical_v3_3d964afdb14065a8233fbac0240623fd38d500420317e80c1034ddc5f9df3d29",
+      "physical_v3_3fa1ed2386d0b06c16b3cdcf69f6e950e1584845caa8440238698f6dd5681df0",
+      "physical_v3_42131a8b993d67e735a79857fd203b6722be917ac3cceaac1eea2a87b982f7c6",
+      "physical_v3_4251f1b244ff194d6429f94772ad8a8f899a0853963a78d5309a11fbd6967503",
+      "physical_v3_430d6f1b7c59100c056444a22cc2c96b58351e40db00b04904621b2509273b9c",
+      "physical_v3_43a8fc7ea4bc6de0ff96d71772394143fe79aa8e140e3e84ae0310440a43fe68",
+      "physical_v3_44070f68e7a07f892cadf1939d20c81e26d4fbac92b2755c7e9895a6e645ec81",
+      "physical_v3_4550f8f14cb7c1793e219bc88aa99501bbbfbed0fe8f9f167127c0407ed5c280",
+      "physical_v3_45b051f023649d8df0a5a9b256bdab6e92a505584c32cbdfa77edf32339bda59",
+      "physical_v3_45c675682f907e320551353a4d05bb027d743eb44385f4243b7f5d200ae2856a",
+      "physical_v3_45ebb86266570f1432b5de1e68b86d2f7e9a538ffe48a22c74f3ad9f46799302",
+      "physical_v3_4e413ef08163b6304e44b6da7e0a56da1f196551ee9e23b527c9b55c6351f62a",
+      "physical_v3_4e5a53fab4223d49cf345780e9ac5b58b7a2fd72b97759eec933115763e81f86",
+      "physical_v3_4fd9d821dd0fc5798c3300053832f09eef8c27611f3053c2e05b32fb184a0dc8",
+      "physical_v3_508f4b0363869e077a35f3d881e976dd18c3d3e32a214d930c4679c2c19caf21",
+      "physical_v3_50f369b6036d948bb43e12d28c74e87bef5799a8b957757d5ddd6fe2eaf75916",
+      "physical_v3_512013e938fd109b6bb57a71c51c0b9e2d7568f4c53abad894848d7726f60161",
+      "physical_v3_55fc6532f727bb0a579ee7f3801befd6252120fbb566769156389c06fcaee4ad",
+      "physical_v3_57f5578dae8f3166c8081c4e0e4aff20df4f82ca89456c42819df3a417e33bc0",
+      "physical_v3_585b52de34b48d23dda4531fbbcbd5c051b1bbbfacd06f2d88c30a424c60a76f",
+      "physical_v3_59b1d83831a2269b0d2e8b505717253402410cc93e24aa094b8ce156115f8449",
+      "physical_v3_5af3308832daa935035946b21c70d4b7fce17b9a6b4f5bc1132f7a6f9832a146",
+      "physical_v3_5d15d6cc98269a39707f6a7c1a6efb5cec5001e05f6a8b0518d3961e87393d82",
+      "physical_v3_5d3c0898bec02c0a93b6ce26bd620bc2af55fcdd55d2d240a0d0926135256d4d",
+      "physical_v3_5d5d369a8ed3105202f713e124daf578bb09ca3e89b054d188759f575e917ba8",
+      "physical_v3_5d70eed92057c85cca4b8187eb8067c8799982be5d076dd559135c41654652d9",
+      "physical_v3_5e714b26cb84e64f61b0f9edad53a9b99482f6f160b39dce587402d6397dbe48",
+      "physical_v3_5f9df5b6d8a9620ed5d83af2539163f2523ee57a8a7e9f15262a592c91088b6a",
+      "physical_v3_5fdac63bdbabda32c58df02b9a487645491ff906e263df6f99c8da6c0fc19537",
+      "physical_v3_610de9655ba0b0057489bc76f03169103fc2c2bcafdeb5eacad2d2ead37850f1",
+      "physical_v3_61d26abd814c4f95041e812204edc7aa14215fe817a7c0a69c3deb9ec23489c7",
+      "physical_v3_6367ad974b3b5bd647cef0f6560300215cf2bfa830349f8849a9aa8fd6f1bfc5",
+      "physical_v3_64f06b22bd1c3c9f040eae56b06de040cea79efeca8b4c5b702402820527f37d",
+      "physical_v3_6509eea1475b931fae8345582806e9c73b7283d2771baf06cc9dba5df225cc4b",
+      "physical_v3_65503e2dcabf057a1e1f2e7a773909a903cc488323bdae75463d0c306fd2b39c",
+      "physical_v3_67be882e8b2859dcee6b8c31ea2d53913ebe8887703da3bb3d91ebcf7f11adec",
+      "physical_v3_680e33bae8889d9a87da719e688b39ed223f96f5d8dafd3c371e65d96889bd56",
+      "physical_v3_69474f5c0dc729a8bce057b74ecf403c0723f436bbe54b4ad28cf2395f7f84e0",
+      "physical_v3_6955117ee3a1e7072fc4d216eee9ede09baec8d2eb7db2a545b09b281dd31396",
+      "physical_v3_69b7042cbf6bdfbfd7663c2ef1b47522973c1234cd9a8fc829ad3e86fbd56c1d",
+      "physical_v3_69e9822ee60b8eaf62bdb57e9668cd8deb50473af0ccd10d4101000d531adf35",
+      "physical_v3_6a5635f62c76321f8a0b68cec546a30b398d8caf5f2e6a49b0d818d27e4ee7ce",
+      "physical_v3_6a57ce948a25b870784b5a55c93722e627c690b539d68b5063c260702ff7f73e",
+      "physical_v3_6a605768334e20c2f887eeb6aa8887b3ce67397d5e90158aa02da1776196b8c9",
+      "physical_v3_6a833dbf573038189a4df1e12d5509bf415cd6cbb4392ceddea79d1682b8b689",
+      "physical_v3_6d69d52434567816bbdbd7eefceabdbb99b9de0694932c78555b2156b7e1fc8d",
+      "physical_v3_6ddca641ad98e868d6534bbddb9a84824b457c839adeea99bf2f878dc3c712ae",
+      "physical_v3_6ea46654512d50eec7b7cd2581ece1224d01956a2e4780390d0b8dcc9461e24d",
+      "physical_v3_733261918cd4d8c81b4f62c4ddea6a141be94cd3380806970df8676931712225",
+      "physical_v3_7338952983beead9166abf328764a9d43523726846d5f8765bd41f4d98455f58",
+      "physical_v3_760aafed164556e4b4a988846e1720894b692c35be225ba9544a37537312213d",
+      "physical_v3_78788c29d0d3d27d1f0a5dd09f9a5a58f9d08be945d139d24fd2024e66701266",
+      "physical_v3_797b78c2f467d9ff4f635fb56dd112c4446bb7c79368321f8fdb0a2a01b0439a",
+      "physical_v3_7a8b6314bffb8ef997b41f2f0941228d2273d81c463038679493d4acbb420074",
+      "physical_v3_7aa7b92d91beb2d45834c96344dbacb630afc1fe500ffb1f7318c011c144a36e",
+      "physical_v3_7e0614cbb9d9de2d4302d12dc440cbc3cab6002704a3039b639887d2e732689b",
+      "physical_v3_7e2daa3316e3318f56b124780a3ecd581dac9d733bfa10f42f0a2fa5cad88c52",
+      "physical_v3_7fcc9462c49e48b9d8a554709c558412696b91b547bd21db96c12554dae0d5a9",
+      "physical_v3_80fcdd45d5c5635d5189b6f1a056373314ed945fa0a1e490a047254898d8fb7f",
+      "physical_v3_8139212a5d8edcacdb6d956d14f8583e30b484e040220bc53916c744589b4184",
+      "physical_v3_81638eb21bf8a370e54a7c945599fb4c04f3dcc4aabb3ea107f4f206acf17cee",
+      "physical_v3_8228d46bc8d2f4e89d2f9ce1584cc5923b0f8897c714f99124952da4926de1b0",
+      "physical_v3_8476dc851b416f17e0f37cf4090512e2553ead1b1293e787af9c35dd22b79abc",
+      "physical_v3_84ceecaf3e3e4b2521214da27985f4ea05dc6b2cf344f9b080c59a4aff339468",
+      "physical_v3_8608de1f4c5a8c1914c892fadcc003b4ce3cdd345ab944cc55519f6768da45cb",
+      "physical_v3_87767be401ea1cee3071eca20fb89a956b6032f555cf721aace4365024d06f8c",
+      "physical_v3_89676bfd04f473a02d52bef4b870d89511c009a4e5430c93136e663673d83883",
+      "physical_v3_89b3d2dbcb7ee3fd1ea0e3dc76d0142c428167a1015cfd59320a82cfa3d7411e",
+      "physical_v3_8a936107364b79ab49eeda6694aa376e7dc28a0718ab5c13e132d9724752e361",
+      "physical_v3_8c23855c0fd15e181908fa2d420d4a3b498fc7188af5793885f864332a414749",
+      "physical_v3_8d32fb5152388a3e475f03ac0e8896a67af86f558716ae861f9574bab9afa064",
+      "physical_v3_8d35f5d6b7aff9ad24b1d1f4275be9bca7a6868f2ff6ea4bf4f62eb84a83c2b2",
+      "physical_v3_8d4724b4a6608fe7504d818b2cdcf5d6daf6e960bcccfae11ac27a4e6d47d922",
+      "physical_v3_8d92fdce74369c7ecc05f5b4311691cd8478f37220488625232e9807d50719b8",
+      "physical_v3_8de03abf05c3203e508f5a1d6e54dd4de8a5a3b88bfcb3e32e7cc91963c3413d",
+      "physical_v3_8e867fbb1ad7146f1e224212b9a9b2286a22fe9942779d6c7c12db878d93a8bb",
+      "physical_v3_8f63a291a09a351d28844303cf326579ad7dab347762019c1aa1c011149130f9",
+      "physical_v3_903246f098215ed1957fc5a1c20d714fbe0b342161c3b39839e8c4563a4f82b1",
+      "physical_v3_90947cbd35400dc3adfd3351f3643f4b6656d479c628b2d058367ca3a3ad96d5",
+      "physical_v3_910641f01e7cc2f8a8cec22523ece05f8ee81e7797e6949c9dba7936de2d65cf",
+      "physical_v3_9126240436a53aabe68e93c1beb56cc4a7cd35b95069be0fb035bbb25b699609",
+      "physical_v3_91da64e8703b0cfc82bee7655645c0c1a1da4fdc208d167429471946bfb59031",
+      "physical_v3_921f5862b0c2afc91eb38690156c02cacfe41958df54ec7b599984dbe58ab37b",
+      "physical_v3_949d9dd200202b8c619a1e1f9637603e9fcf730297ecd17aca4263d8d8d5e159",
+      "physical_v3_94c8d97fb8602206f008bbb76e27cacfbea9234519eed65544094a2e69893edf",
+      "physical_v3_94fcacb2ba4561ca763e6b0138f5ab252a8ea8ef34e433e590570a4506e57bea",
+      "physical_v3_950a300a851677ce32cb2caf45c8e9b7e0a205e643cc3ff2f1daa836dd00afc9",
+      "physical_v3_95bfad1fd08c88fe24f90407c6d3af4f974736a7ff59bfce5859653f7fcecf87",
+      "physical_v3_977000c9999b778080b1cb7c52fddc24fca64598e6ff51c1388bf14ddfcbfca1",
+      "physical_v3_97a291e94f72b2f1e13d7e4dd5536574f1a2c2fd7b8deeea706d29158a7a10e7",
+      "physical_v3_97d4ddfee9fc8bb7972f8e3fdbae1b0668ef8ff54da7f5df958fb02050f58d13",
+      "physical_v3_990d66dba96b46cc063919115ff5b8cd639f8996e195c6554ff39848ec00e10b",
+      "physical_v3_992d9c0d1d15ea9a2c7050e3e63a5a260f993d7714de8504b3dc802047c21198",
+      "physical_v3_99c0c8e2a20f8fead835e6ab5dae0d1f36e35e4fe0a849e7312970eacee6a8db",
+      "physical_v3_9a3d49f1b3dbf69af682e077bc7d735c6ebd9d7487994c68a0d6266c256af01a",
+      "physical_v3_9a7284f9346ee4e3e7bf15dc06688266838706e3b7d6a8cde2da6d10752ed265",
+      "physical_v3_9afd300ddb7db222197192daa02846861bef4a6f657d4c2c26422921a65edfe2",
+      "physical_v3_9ba46490248f71a36976f9966e8ebec0cde9dae1ad36f2cc2b7617b17ce0d719",
+      "physical_v3_9c1c211aa1ee61eaddc482d638211c5a0cbbc09fa0771f1a2c12ffb6977936be",
+      "physical_v3_9da068254dece315c00349b152cef3517fbc9843ae6a20770de5a734f9131d1b",
+      "physical_v3_9ddedb936f99a9f87a5e793588d8d39b221dfdf9eaf914a796db9ed508a78bb8",
+      "physical_v3_9fb488cf7941ba5a769229dbdf2940bada05e8dc297949fc44376d65aefabe3f",
+      "physical_v3_9ff3c3eb990e96c07080a9b63ca365a02d599f6dc918f6c94415a61e18aa261b",
+      "physical_v3_a00a5eabba0d439b8c721e61cf97201106f1ab09ae868e41bca264bd7507220c",
+      "physical_v3_a19c8b8614cb94dfc4a2753a4d76eaf917d3d6d1d2304e46d5834a1a9cc6734b",
+      "physical_v3_a19d537e0df287e58311c27dc5192eb2b9d5db8b7ea7e231faa5ff08e622fbe7",
+      "physical_v3_a240c456d309ec31ee7840b55958f1cd371f66d9bab831698b470a8aa8dc67db",
+      "physical_v3_a27497d9dff8d927763a325b94b7dd9c40fb6760ea7ed698360f794c8a09e8be",
+      "physical_v3_a304bb243a0d5af3bbe331878bbc2cbef21c7b508b6d55dfd7f21696f440f12f",
+      "physical_v3_a3f0dcbb64aeadd85df143b6140816d0ff8cea8f9189816d966854ba523943e5",
+      "physical_v3_a4ad2250daa0fef2a01a31370614d20e4f6104f4cd4b3b004f84e3ea80cf0b41",
+      "physical_v3_a52d3b379680cccabc72b3e9e9f74adf8ba78a3ede03c0ca44af418e901b0c96",
+      "physical_v3_a67bb642dd99272ce2b2b3fef7d4d97a35852bab3c2bee05561d60d7a335eddb",
+      "physical_v3_a7966cad3e783209fe8a39b4f7e24df9c4de7e18b58d61b6ea762e31e806de6c",
+      "physical_v3_a7b278250946a16c4cee1f047c619066c9563ff2e7354e0b568d828cc313871c",
+      "physical_v3_a8322312b32953cd932f5d0a02c0d25f35f2280288741ea1a27d5ba5654be819",
+      "physical_v3_a83bd911622fed1904716918ac445e702b9a09496482517f2865b1612afe16d0",
+      "physical_v3_a9785e292ac97bcf19cc70145d47ef596c21f855a9af49e768b69ea13ae4d119",
+      "physical_v3_aa2dd630a53bf329e435948846813498a0c98cb017a834f3ebb77eedd2ae5f99",
+      "physical_v3_aaa5139a42c594c632c002b64d104ba27a570455d0e28cdf28d28238a207d4cc",
+      "physical_v3_aaac7ffa55ad7e1f400ea701fa59f1cf584d9783708d07d37a08eb56e5ec710d",
+      "physical_v3_aba9dc2c157c4ebe4fb3f5bce383610f8068e0ceee87ffb405af8366e64849de",
+      "physical_v3_ad078ad4368f20ad24ad05b5e6038c256c8829b92555ac54b85892265e3c888e",
+      "physical_v3_ad6eb446b9c8000f8fd78322a33e2e36a2569819849555a0fe9a6865cc556532",
+      "physical_v3_ad7112427fa88334a5710e1192d6fef86baa00d080009ed1c451ebe488f2fbbf",
+      "physical_v3_aeaffddc7984b7f0d9e31174fbc9a3d6e7f35469c31907e6e373d996297a848b",
+      "physical_v3_b0a45d82f1b231ac60a85b5426a128e6fa7d4320c4caeb56121d26dd61009497",
+      "physical_v3_b153842e65d99f6cd13ba904965588ce84b7c5c1542bf6f8553a599b3ef1cdf8",
+      "physical_v3_b1cc9e4cf638c5e99bae37f9761f332341761b82143649fb4587caa53d8170a1",
+      "physical_v3_b3ff6db818a9a47e955cb5fa9bda65a60fb30c1c10f98c86a8c1a3e4479e7c32",
+      "physical_v3_b59375ed4213ce95e83f3a54e6c0c118955d1a942687c1952acac08234d068c6",
+      "physical_v3_b5f2c56f91732fd8ebb80d541a3cba7ebf8a4e23eb05a6923ec430d87d09f661",
+      "physical_v3_b62531a4762da6538ab8bb834a97ca45cc6bc3ce9fad435b4d5e4f0132c07304",
+      "physical_v3_b7a4c277e02f43e1eae3eac6b74e8565abebe393a188a4f1abe60248fcaf8fc3",
+      "physical_v3_b7c001013671ea1dcc306c040441aecd500da9f9110a92d6f3ca6a7ec7f8001b",
+      "physical_v3_b8739ab993e393d8f814ec4a542bd9b9a5368bb26e43abf229aa31d30f7e8b1e",
+      "physical_v3_bb839842ca3f588c10fe0a3035643d5e54f5fb57dd48be6f98781eae7bf629e3",
+      "physical_v3_bc497307cb328d86fdf700ac3874bc9a646fbd9eb4998f2e664a478c9fcb19f1",
+      "physical_v3_be0d1f19b6afe05b39de06708b0e974a2079b58c6df7a4f5f4a0aa9a717e4516",
+      "physical_v3_be3c3df9384fc760e2a31a325f3fe5035e0514604b47f49b1f03cb7f79ef2ed9",
+      "physical_v3_bf3237fa9bc6484f0fadd52ac438df3b232411c535251232d578009c9626f71b",
+      "physical_v3_c188a9ef7ed9b521a2f1bd6c54bda0594ab58ae0e9d6b9b9c6c9264058d03a22",
+      "physical_v3_c232ac84a4a7448e2980fd0225f7fc10fd08e7718219945f1351fd2957cbec19",
+      "physical_v3_c2a9b283c2e2f3fcbc25b3079d3b16b3d41753179a5eb016577627454bd6d4c8",
+      "physical_v3_c47ede72ab889e1341ccc4113f00da11e6689833fff54b86cb7aa14ba62e860c",
+      "physical_v3_c640c9941acdc532afed666dc48e6a9e579dcc38b516d674046a95c1f7b13dbc",
+      "physical_v3_c6728e6da5c120d839784dbef8dcaed20ed23c263d65c8a190646868b56ec699",
+      "physical_v3_c7b42e0f886598d6c724ca6cf7275dcc38b0b36b9361b304027d334a93c07537",
+      "physical_v3_c843d26a6693d6b3a7cb5bf7fb4cf27c80b4c1ed6aa0143619b9aa29d8f4b5ad",
+      "physical_v3_c856d6851ebe564202c46757099f800b701c4f10477494e25b78571f0a4b201f",
+      "physical_v3_c94fbb621a6027ce7848c7261286146ca63420bf3cff4546306c2337cf22b42e",
+      "physical_v3_c9c7a6a1d35d81ebae1c2aaf063422690c7f30ce9f9fdd529354b8cd68c2da8b",
+      "physical_v3_cb85746d4fae1ac279f4ee3ba166a51aa119457ff437d205dba924872304a4dd",
+      "physical_v3_cc7266723159115cf4275327b4909ba146a9ab05ec6c0019dd990bd7a7118210",
+      "physical_v3_cd3b8f199b784aa8a467c3bd7b4204e4caab6a8ee99ed3cdfd2e892edf7af233",
+      "physical_v3_d00e3c22b895aaf76be9eee038b99470be299aad6eafacc76aecbcbd3da6618b",
+      "physical_v3_d0f894ace8c5ffa6864c6bf3ffe9f8a2a15c4fcf1d6d12ebe096c767d067899c",
+      "physical_v3_d1f7d55fca99beaeaf692bbb8d3ec85365ad3e1523b41df6c5cf7485c5231d20",
+      "physical_v3_d35caa279fed32711dc7241a1c671c6ebb2e4a3342da80d0414bdc163e18b1b0",
+      "physical_v3_d36ff70ff522e2ee52ae54b16aecdc3a476d523d6144a45a5c815f3514fbdc50",
+      "physical_v3_d39ef0487873c779772a50c033d238ca5f544e43ca1dfe8e6ddef190f4bbe20b",
+      "physical_v3_d4948ea24c1b770f571965d74f9290ca5254e96ad4114bf928af4944daceaa89",
+      "physical_v3_d729dbda01628dfd20b54400844b0d7310e9ba08fc4053de0552a117063cd56f",
+      "physical_v3_dae5781d6b65e92bcadf5143ac69aa02a5aeec291eb143b57fe90063dfef9c0d",
+      "physical_v3_dcd0e1fc0628e12435adc4fea1ae85d9956fbc4ea3655ebc7c8b65140c6d2a1c",
+      "physical_v3_ddca29005eff155029a6c150f1ca0a98a2c83df3f619b7af887949f2749a642e",
+      "physical_v3_df7ffc913da4a340a79b31d0bb0fee21137e3e51dfefa8614f3103b6b02b3b1f",
+      "physical_v3_e1894fcfd28bc2412739ba248b65ca2e98a6759b078367aa04a0563f6ea4ae44",
+      "physical_v3_e20906c9413a24a384a606eca5caf9e0895879db076b5fa7e139424d21b2d15e",
+      "physical_v3_e24659b8c8bfda7f2edf41b589bc8620affe3b748a62ecad3b2b054a2cef1fef",
+      "physical_v3_e5e826a4b57502634f81c80fe5bc4874e37ece1a5f52c927c7a001ffb306ebc1",
+      "physical_v3_e710a280b6d948b4c84fff4df7c5d18de766e2b406a70b51b9640179f15418c1",
+      "physical_v3_e89857345a980a4485123e61bde40a25b11837d57946e5e9c77b92f763f6520a",
+      "physical_v3_e8b7a657f0ec5d3f4ac5187e0a0742e64c31565734b35523a6d4b894fd6d70d7",
+      "physical_v3_ea0c8fc8a20d4ea653f500dd3b6e4912ff76f5f7f8c13a5e7b921f77cb4585ae",
+      "physical_v3_ea9a8c5028a07aae7b4332876b8faf43be0164f35dde5fe6e547fbf5315964bf",
+      "physical_v3_eb2a1444dc230901911e585dac7a725c9b2d9f016d86706b0953f85997b45d54",
+      "physical_v3_ebe00c79d06efc057df01abb020d94143fd348a1e7a61f91232e27a88719d7ca",
+      "physical_v3_ed7055a75b37e28ffb128da2dc8f46056ac67e7386bcfc2d64d9fee9db2e3b86",
+      "physical_v3_ee264c9e39df51b6350e0a793bad0fb9e31beefd4ef53c48a8169e2ca6255ea8",
+      "physical_v3_f005dee6488199a860ec56bc0d11d8f9c9327568a97d92e92c8d94f5d3c399a7",
+      "physical_v3_f1a033cb6a7480e481f98fb8e133df7e2cacf06838a4ef98c1fc486603efa127",
+      "physical_v3_f29fc270131cc3a25db25b82ea726b03b318030a64cc3221b0f9905153e79d30",
+      "physical_v3_f2ce51d81b19feacc67570a771c57298f950cb2488da55b971b34a057d2b0c5a",
+      "physical_v3_f32662c151d88245f34801b54fb498b5cd6cf83b123bfb22bdaaf962df06d1b0",
+      "physical_v3_f3ece8d6628771c2d516098829a17c371c470035e9f21a84d8b18316b56d6162",
+      "physical_v3_f458222a3dc2cbfde9ab1b70a6f7200ac53257dfa83866663ccb1486ef5e65cf",
+      "physical_v3_f4b4789d7d222fc5c774bac9915c35cfd545824df5de50084e5ad60f208116b7",
+      "physical_v3_f54237c8eb70c7c758e2a8cfae8c6a33b4f320512a96370afc90dbe9a9cefb3b",
+      "physical_v3_f5af86a2d6b0f9f2165f0b4cabb735e9be7e887e7deffaa9ab840beaef519d81",
+      "physical_v3_f6cf27fc25614952d6b021812ff9c203f3875ab8b2873cc106a01bf9cb017ef9",
+      "physical_v3_f97ee27a2b89126fa2308a50c3ae8d03924d8c48cf8efad4d2323eb977f45ec7",
+      "physical_v3_fbc1fa2e2173be96e405020608de988c934f5914e9075995f6a7e1db80fd68c1",
+      "physical_v3_fdb5f34753113a25a5e93552970f7de24872763b502d846d80437c9e039d08eb",
+      "physical_v3_ff5197306f6edb2ebd425fe7033b52c09da024c5b26a0a489260c5242303d616",
+      "physical_v3_ff813e070f904889fbb8a9bb475d977b671063f546f90c51d9cbceb1aad444ba"
+    ],
+    "protected_root_overlap": [],
+    "raw_row_count": 1344,
+    "row_count": 954,
+    "training_tool_match_count": 941,
+    "training_tool_match_rate": 0.9863731656184487
+  },
+  "validation": {
+    "overall": {
+      "exact_target_match_count": 38,
+      "exact_target_match_rate": 0.8837209302325582,
+      "row_count": 43,
+      "schema_valid_count": 43,
+      "schema_valid_rate": 1.0,
+      "state_bound_count": 43,
+      "state_bound_rate": 1.0,
+      "target_tool_match_count": 38,
+      "target_tool_match_rate": 0.8837209302325582
+    },
+    "per_expected_tool": {
+      "ask_for_more_evidence": {
+        "exact_match_count": 2,
+        "expected_count": 2,
+        "tool_match_count": 2
+      },
+      "commit_state": {
+        "exact_match_count": 4,
+        "expected_count": 4,
+        "tool_match_count": 4
+      },
+      "correct_measurements_from_path": {
+        "exact_match_count": 1,
+        "expected_count": 1,
+        "tool_match_count": 1
+      },
+      "correct_parameters_from_path": {
+        "exact_match_count": 1,
+        "expected_count": 1,
+        "tool_match_count": 1
+      },
+      "get_measurement_context": {
+        "exact_match_count": 16,
+        "expected_count": 16,
+        "tool_match_count": 16
+      },
+      "get_topology_context": {
+        "exact_match_count": 1,
+        "expected_count": 1,
+        "tool_match_count": 1
+      },
+      "rollback_state": {
+        "exact_match_count": 1,
+        "expected_count": 6,
+        "tool_match_count": 1
+      },
+      "wls_from_path": {
+        "exact_match_count": 12,
+        "expected_count": 12,
+        "tool_match_count": 12
+      }
+    },
+    "results": [
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 3.5771436085768076,
+            "commit_state": 13.41143757111614,
+            "correct_measurements_from_path": 3.9136553097616296,
+            "correct_parameters_from_path": -1.8554229884638946,
+            "correct_topology_from_path": 0.21662860687167015,
+            "estimate_hif_location_magnitude_from_path": -2.195565123336193,
+            "estimate_hif_location_magnitude_multiscan_from_path": -5.95619776475778,
+            "finalize_diagnosis": -6.204357071234187,
+            "get_harmonic_context": -7.125304153944274,
+            "get_measurement_context": 0.4024167694478035,
+            "get_parameter_context": 0.7021160715228331,
+            "get_topology_context": 5.465222920180256,
+            "rollback_state": 6.741872393469987,
+            "run_hse_from_path": -6.274266767017376,
+            "run_three_phase_nlm_from_path": -7.78532104268511,
+            "wls_from_path": 2.9659416604915987
+          },
+          "guard_fallback": "verified_candidate_commit_closure",
+          "predicted_tool": "commit_state",
+          "score_margin": 6.669565177646153,
+          "selected_tool": "commit_state"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "candidate_state_id": "r0_723b6ee8921e_episode0:s1"
+          },
+          "tool": "commit_state"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_unsupported_correction:r0_723b6ee8921e:0:11",
+        "expected_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "commit_state"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "commit_state"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"candidate\"},\"name\":\"commit_state\"}",
+        "generated_text_sha256": "580377b6612bb0beb30134597e4a34fe1215cd5fa71654015e5381c8a8681209",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 2.4482533030516445,
+            "commit_state": 3.625830555674555,
+            "correct_measurements_from_path": 0.7328387622843522,
+            "correct_parameters_from_path": 0.009098858499393838,
+            "correct_topology_from_path": 0.9455105760390726,
+            "estimate_hif_location_magnitude_from_path": -1.411216469687277,
+            "estimate_hif_location_magnitude_multiscan_from_path": -2.2044779531501137,
+            "finalize_diagnosis": -1.4957988189837526,
+            "get_harmonic_context": -5.637908929246886,
+            "get_measurement_context": 9.150428826057823,
+            "get_parameter_context": 2.8689617137680177,
+            "get_topology_context": 0.030481310355647297,
+            "rollback_state": -1.9190661811821224,
+            "run_hse_from_path": -2.519427906448211,
+            "run_three_phase_nlm_from_path": -6.642806838601112,
+            "wls_from_path": 2.0192991915690057
+          },
+          "guard_fallback": null,
+          "predicted_tool": "get_measurement_context",
+          "score_margin": 5.524598270383268,
+          "selected_tool": "get_measurement_context"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "get_measurement_context"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_unsupported_correction:r0_723b6ee8921e:0:7",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"get_measurement_context\"}",
+        "generated_text_sha256": "ad8432d8cbd4cbaa5847501dcdb1f6b391c2528d87e2c5a2495dd3dace1da598",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 3.800486095976131,
+            "commit_state": 13.610492184464723,
+            "correct_measurements_from_path": 2.4547096890347575,
+            "correct_parameters_from_path": -0.6501410806148499,
+            "correct_topology_from_path": 0.6102874854233481,
+            "estimate_hif_location_magnitude_from_path": -1.854343139913997,
+            "estimate_hif_location_magnitude_multiscan_from_path": -4.423509368677379,
+            "finalize_diagnosis": -2.9939930490447315,
+            "get_harmonic_context": -7.261481580325125,
+            "get_measurement_context": -0.2590485809203756,
+            "get_parameter_context": 2.9929283132174946,
+            "get_topology_context": 2.016175260650637,
+            "rollback_state": 5.394523730614297,
+            "run_hse_from_path": -4.837985612972174,
+            "run_three_phase_nlm_from_path": -8.292289620204789,
+            "wls_from_path": -0.3068107267080031
+          },
+          "guard_fallback": "verified_candidate_commit_closure",
+          "predicted_tool": "commit_state",
+          "score_margin": 8.215968453850426,
+          "selected_tool": "commit_state"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "candidate_state_id": "r0_723b6ee8921e_episode0:s1"
+          },
+          "tool": "commit_state"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_unsupported_correction:r0_723b6ee8921e:0:10",
+        "expected_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "commit_state"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "commit_state"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"candidate\"},\"name\":\"commit_state\"}",
+        "generated_text_sha256": "580377b6612bb0beb30134597e4a34fe1215cd5fa71654015e5381c8a8681209",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 1.1246258449317414,
+            "commit_state": -2.1875945340715193,
+            "correct_measurements_from_path": 0.27512457527312145,
+            "correct_parameters_from_path": 0.44680922451915983,
+            "correct_topology_from_path": -1.8563478371487543,
+            "estimate_hif_location_magnitude_from_path": 1.8734103205515333,
+            "estimate_hif_location_magnitude_multiscan_from_path": -0.13646041656532787,
+            "finalize_diagnosis": 1.6566072481348164,
+            "get_harmonic_context": -3.438731405101798,
+            "get_measurement_context": 7.733930278228555,
+            "get_parameter_context": -1.593035695383183,
+            "get_topology_context": -1.7094902415130453,
+            "rollback_state": -0.546190332312156,
+            "run_hse_from_path": -0.10686268330748486,
+            "run_three_phase_nlm_from_path": -4.685168878852203,
+            "wls_from_path": 3.149374532616585
+          },
+          "guard_fallback": null,
+          "predicted_tool": "get_measurement_context",
+          "score_margin": 4.58455574561197,
+          "selected_tool": "get_measurement_context"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_1578a2b1f4be_episode0:s1"
+          },
+          "tool": "get_measurement_context"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_safe_continuation_after_partial_success:r0_1578a2b1f4be:0:0",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"get_measurement_context\"}",
+        "generated_text_sha256": "ad8432d8cbd4cbaa5847501dcdb1f6b391c2528d87e2c5a2495dd3dace1da598",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_172df19d54c0501061e799ec71271c32de60af7ed4908d35f371c6b3c94aaec3",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 2.553493422166979,
+            "commit_state": 2.177858541171627,
+            "correct_measurements_from_path": 2.514779969051338,
+            "correct_parameters_from_path": 3.379749198659726,
+            "correct_topology_from_path": -2.392279310746397,
+            "estimate_hif_location_magnitude_from_path": 1.0128264349859748,
+            "estimate_hif_location_magnitude_multiscan_from_path": -1.190534983638849,
+            "finalize_diagnosis": -0.10605507511628691,
+            "get_harmonic_context": -4.839413234030165,
+            "get_measurement_context": 1.6368250599154528,
+            "get_parameter_context": -2.525664712029614,
+            "get_topology_context": -3.947205656462152,
+            "rollback_state": -1.6873971883041077,
+            "run_hse_from_path": -1.3020948600269187,
+            "run_three_phase_nlm_from_path": -6.068122900901362,
+            "wls_from_path": 10.783235295304758
+          },
+          "guard_fallback": null,
+          "predicted_tool": "wls_from_path",
+          "score_margin": 7.403486096645032,
+          "selected_tool": "wls_from_path"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_1578a2b1f4be_episode0:s2"
+          },
+          "tool": "run_wls"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_measurement_parameter_sequential_handoff:r0_1578a2b1f4be:0:1",
+        "expected_action": {
+          "arguments": {
+            "case_path": "s1"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "s1"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"s1\"},\"name\":\"wls_from_path\"}",
+        "generated_text_sha256": "55d6662188e41273da246b51b68ebc169339808ff76cf5bef22c0b6932a0ea29",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_172df19d54c0501061e799ec71271c32de60af7ed4908d35f371c6b3c94aaec3",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 2.27347614787034,
+            "commit_state": 4.944087731913004,
+            "correct_measurements_from_path": 0.9647543643531533,
+            "correct_parameters_from_path": -0.9961430275081615,
+            "correct_topology_from_path": -3.4888055949118955,
+            "estimate_hif_location_magnitude_from_path": 0.9061962601949017,
+            "estimate_hif_location_magnitude_multiscan_from_path": -0.9004764284645101,
+            "finalize_diagnosis": 2.5896540518470625,
+            "get_harmonic_context": -2.7685980123494947,
+            "get_measurement_context": -2.9110251862396965,
+            "get_parameter_context": -0.706746937088295,
+            "get_topology_context": -3.932672899951936,
+            "rollback_state": 7.933549143108192,
+            "run_hse_from_path": -0.9638225973825434,
+            "run_three_phase_nlm_from_path": -3.736786008549762,
+            "wls_from_path": 0.7933589931596792
+          },
+          "guard_fallback": null,
+          "predicted_tool": "rollback_state",
+          "score_margin": 2.9894614111951885,
+          "selected_tool": "rollback_state"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "candidate_state_id": "r0_1578a2b1f4be_episode0:s1"
+          },
+          "tool": "rollback_state"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_rejected_candidate_rollback:r0_1578a2b1f4be:0:0",
+        "expected_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "rollback_state"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "rollback_state"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"candidate\"},\"name\":\"rollback_state\"}",
+        "generated_text_sha256": "108e64663086d9ea783a28ce00c3affb29a03d0c8b0a4174c6f0ce2d60b04094",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_172df19d54c0501061e799ec71271c32de60af7ed4908d35f371c6b3c94aaec3",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 0.5537786280991435,
+            "commit_state": 1.5779857789488356,
+            "correct_measurements_from_path": 1.8421406569138263,
+            "correct_parameters_from_path": 0.29004332082177686,
+            "correct_topology_from_path": 3.7198425255063734,
+            "estimate_hif_location_magnitude_from_path": 0.25492347820937045,
+            "estimate_hif_location_magnitude_multiscan_from_path": -1.9675401109340702,
+            "finalize_diagnosis": -2.0168007897602003,
+            "get_harmonic_context": -4.166506986100213,
+            "get_measurement_context": 7.112370984634244,
+            "get_parameter_context": -0.5100125651317559,
+            "get_topology_context": 0.7854352338597784,
+            "rollback_state": -2.6523374067139405,
+            "run_hse_from_path": -2.067098003310184,
+            "run_three_phase_nlm_from_path": -5.4653878743594495,
+            "wls_from_path": 2.7091631293164817
+          },
+          "guard_fallback": null,
+          "predicted_tool": "get_measurement_context",
+          "score_margin": 3.3925284591278704,
+          "selected_tool": "get_measurement_context"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "get_measurement_context"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_unsupported_correction:r0_723b6ee8921e:0:5",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"get_measurement_context\"}",
+        "generated_text_sha256": "ad8432d8cbd4cbaa5847501dcdb1f6b391c2528d87e2c5a2495dd3dace1da598",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": -2.028453757038898,
+            "commit_state": -1.9704861775582279,
+            "correct_measurements_from_path": -0.6348522205170927,
+            "correct_parameters_from_path": -1.4923226586502776,
+            "correct_topology_from_path": -0.07631421635010996,
+            "estimate_hif_location_magnitude_from_path": -1.5649937005861274,
+            "estimate_hif_location_magnitude_multiscan_from_path": -0.16922354221912028,
+            "finalize_diagnosis": -0.2510576123559688,
+            "get_harmonic_context": -0.4270715241563529,
+            "get_measurement_context": 5.663356086876284,
+            "get_parameter_context": 3.112509523012257,
+            "get_topology_context": 0.8283093620859524,
+            "rollback_state": -0.35215847799511363,
+            "run_hse_from_path": -0.08598345381720524,
+            "run_three_phase_nlm_from_path": -1.5541679926883034,
+            "wls_from_path": 1.002910361958386
+          },
+          "guard_fallback": null,
+          "predicted_tool": "get_measurement_context",
+          "score_margin": 2.5508465638640274,
+          "selected_tool": "get_measurement_context"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "get_measurement_context"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_premature_escalation:r0_723b6ee8921e:0:1",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"get_measurement_context\"}",
+        "generated_text_sha256": "ad8432d8cbd4cbaa5847501dcdb1f6b391c2528d87e2c5a2495dd3dace1da598",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 0.4582418638847818,
+            "commit_state": 0.15408017648066236,
+            "correct_measurements_from_path": 2.372875718887923,
+            "correct_parameters_from_path": 1.561994295234112,
+            "correct_topology_from_path": 0.3861009070145272,
+            "estimate_hif_location_magnitude_from_path": 0.135571144799404,
+            "estimate_hif_location_magnitude_multiscan_from_path": -1.7619386080378046,
+            "finalize_diagnosis": -1.8504334466247152,
+            "get_harmonic_context": -3.647117779259823,
+            "get_measurement_context": 8.090494141783413,
+            "get_parameter_context": -1.4209945354759699,
+            "get_topology_context": 2.588255687415411,
+            "rollback_state": -2.144670769682174,
+            "run_hse_from_path": -1.8208525382335543,
+            "run_three_phase_nlm_from_path": -4.880502957525293,
+            "wls_from_path": 1.7788966993391238
+          },
+          "guard_fallback": null,
+          "predicted_tool": "get_measurement_context",
+          "score_margin": 5.502238454368002,
+          "selected_tool": "get_measurement_context"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "get_measurement_context"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_unsupported_correction:r0_723b6ee8921e:0:4",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"get_measurement_context\"}",
+        "generated_text_sha256": "ad8432d8cbd4cbaa5847501dcdb1f6b391c2528d87e2c5a2495dd3dace1da598",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": -0.8979986522202936,
+            "commit_state": -3.9067354358939834,
+            "correct_measurements_from_path": -1.3301307855749702,
+            "correct_parameters_from_path": 0.4419456789202214,
+            "correct_topology_from_path": -0.8216064625393085,
+            "estimate_hif_location_magnitude_from_path": 1.4476851643093984,
+            "estimate_hif_location_magnitude_multiscan_from_path": 2.162899425823308,
+            "finalize_diagnosis": 2.7257096092205333,
+            "get_harmonic_context": 0.3581063838571892,
+            "get_measurement_context": 2.776545819481886,
+            "get_parameter_context": -3.9871930077633757,
+            "get_topology_context": -1.81998828276029,
+            "rollback_state": -3.4088369499838516,
+            "run_hse_from_path": 2.346315714067243,
+            "run_three_phase_nlm_from_path": -1.1574591310177527,
+            "wls_from_path": 5.07074091207409
+          },
+          "guard_fallback": null,
+          "predicted_tool": "wls_from_path",
+          "score_margin": 2.294195092592204,
+          "selected_tool": "wls_from_path"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "run_wls"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_unsupported_correction:r0_723b6ee8921e:0:1",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"wls_from_path\"}",
+        "generated_text_sha256": "940450ed3cb05dfac99cbb39ba1bf06b5b32033772086aac855d42242b8dc38d",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": -1.3254051151832926,
+            "commit_state": -2.1443821462281587,
+            "correct_measurements_from_path": -0.9686996530207002,
+            "correct_parameters_from_path": -1.1873174221024925,
+            "correct_topology_from_path": -0.08125734057833313,
+            "estimate_hif_location_magnitude_from_path": -1.625072137661799,
+            "estimate_hif_location_magnitude_multiscan_from_path": -0.1800836808978502,
+            "finalize_diagnosis": -0.3023705743105055,
+            "get_harmonic_context": -0.43025512106158076,
+            "get_measurement_context": 5.473388491510876,
+            "get_parameter_context": 2.8964447545401426,
+            "get_topology_context": 0.8041128885006558,
+            "rollback_state": -0.09779623300706328,
+            "run_hse_from_path": -0.09718652093646481,
+            "run_three_phase_nlm_from_path": -1.555428543249475,
+            "wls_from_path": 0.8213083536861259
+          },
+          "guard_fallback": null,
+          "predicted_tool": "get_measurement_context",
+          "score_margin": 2.5769437369707338,
+          "selected_tool": "get_measurement_context"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "get_measurement_context"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_premature_commit:r0_723b6ee8921e:0:1",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"get_measurement_context\"}",
+        "generated_text_sha256": "ad8432d8cbd4cbaa5847501dcdb1f6b391c2528d87e2c5a2495dd3dace1da598",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 3.8168051234859273,
+            "commit_state": 6.165063727529677,
+            "correct_measurements_from_path": 0.9362834507934108,
+            "correct_parameters_from_path": -1.1703806531638319,
+            "correct_topology_from_path": -4.270943304705401,
+            "estimate_hif_location_magnitude_from_path": 1.0395095059501422,
+            "estimate_hif_location_magnitude_multiscan_from_path": -1.8271764018106929,
+            "finalize_diagnosis": 2.39618667036832,
+            "get_harmonic_context": -5.347646220558275,
+            "get_measurement_context": 0.03693065950089483,
+            "get_parameter_context": 0.8820898140861332,
+            "get_topology_context": -4.299404584073457,
+            "rollback_state": 8.601670939122895,
+            "run_hse_from_path": -2.072350947319972,
+            "run_three_phase_nlm_from_path": -6.262789070187769,
+            "wls_from_path": 1.376151290982037
+          },
+          "guard_fallback": "verified_candidate_commit_closure",
+          "predicted_tool": "rollback_state",
+          "score_margin": 2.436607211593218,
+          "selected_tool": "commit_state"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "candidate_state_id": "r0_1578a2b1f4be_episode0:s2"
+          },
+          "tool": "commit_state"
+        },
+        "error": null,
+        "exact_target_match": false,
+        "example_id": "research_trace:recovery_rejected_candidate_rollback:r0_1578a2b1f4be:0:3",
+        "expected_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "rollback_state"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "commit_state"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"candidate\"},\"name\":\"commit_state\"}",
+        "generated_text_sha256": "580377b6612bb0beb30134597e4a34fe1215cd5fa71654015e5381c8a8681209",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_172df19d54c0501061e799ec71271c32de60af7ed4908d35f371c6b3c94aaec3",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": false
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 0.39051967943483107,
+            "commit_state": 1.1405374904266328,
+            "correct_measurements_from_path": 1.3096703830452419,
+            "correct_parameters_from_path": 0.30358610121542995,
+            "correct_topology_from_path": 3.6824311022019183,
+            "estimate_hif_location_magnitude_from_path": 0.015598491289837348,
+            "estimate_hif_location_magnitude_multiscan_from_path": -1.6508863726146257,
+            "finalize_diagnosis": -1.8461590024876773,
+            "get_harmonic_context": -3.029344406946551,
+            "get_measurement_context": 6.861348766864857,
+            "get_parameter_context": -1.1102929895193265,
+            "get_topology_context": 0.3388784396187345,
+            "rollback_state": -2.53696930205271,
+            "run_hse_from_path": -1.6856074176083338,
+            "run_three_phase_nlm_from_path": -4.259189380970684,
+            "wls_from_path": 2.0758784181024676
+          },
+          "guard_fallback": null,
+          "predicted_tool": "get_measurement_context",
+          "score_margin": 3.178917664662939,
+          "selected_tool": "get_measurement_context"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "get_measurement_context"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_premature_commit:r0_723b6ee8921e:0:3",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"get_measurement_context\"}",
+        "generated_text_sha256": "ad8432d8cbd4cbaa5847501dcdb1f6b391c2528d87e2c5a2495dd3dace1da598",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 5.08649984191848,
+            "commit_state": 3.014729438787533,
+            "correct_measurements_from_path": -0.08173503963464696,
+            "correct_parameters_from_path": -2.221312583616859,
+            "correct_topology_from_path": -5.241836443990419,
+            "estimate_hif_location_magnitude_from_path": -0.005079820326987165,
+            "estimate_hif_location_magnitude_multiscan_from_path": -2.472236928885555,
+            "finalize_diagnosis": -1.197608420057315,
+            "get_harmonic_context": -5.406892426289057,
+            "get_measurement_context": -0.8632616594644011,
+            "get_parameter_context": 0.1626492051365287,
+            "get_topology_context": -0.06499119351466495,
+            "rollback_state": 11.394157354611018,
+            "run_hse_from_path": -2.657701645701128,
+            "run_three_phase_nlm_from_path": -6.075208705477328,
+            "wls_from_path": 6.629829026504767
+          },
+          "guard_fallback": "verified_candidate_commit_closure",
+          "predicted_tool": "rollback_state",
+          "score_margin": 4.7643283281062505,
+          "selected_tool": "commit_state"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "candidate_state_id": "r0_1578a2b1f4be_episode0:s2"
+          },
+          "tool": "commit_state"
+        },
+        "error": null,
+        "exact_target_match": false,
+        "example_id": "research_trace:recovery_rejected_candidate_rollback:r0_1578a2b1f4be:0:6",
+        "expected_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "rollback_state"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "commit_state"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"candidate\"},\"name\":\"commit_state\"}",
+        "generated_text_sha256": "580377b6612bb0beb30134597e4a34fe1215cd5fa71654015e5381c8a8681209",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_172df19d54c0501061e799ec71271c32de60af7ed4908d35f371c6b3c94aaec3",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": false
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": -0.48426620295464556,
+            "commit_state": -2.3380120112167537,
+            "correct_measurements_from_path": 1.1391531210648396,
+            "correct_parameters_from_path": 0.6640982845323252,
+            "correct_topology_from_path": 0.8682727962615826,
+            "estimate_hif_location_magnitude_from_path": -0.17897247437941666,
+            "estimate_hif_location_magnitude_multiscan_from_path": -1.008414311289122,
+            "finalize_diagnosis": -1.2398883378328582,
+            "get_harmonic_context": -1.7163918003933836,
+            "get_measurement_context": 6.062450585914724,
+            "get_parameter_context": -1.0117792392947351,
+            "get_topology_context": 3.894896311361465,
+            "rollback_state": -1.0112663046042538,
+            "run_hse_from_path": -0.9055256729891145,
+            "run_three_phase_nlm_from_path": -2.9747075525674607,
+            "wls_from_path": 0.24035280838685716
+          },
+          "guard_fallback": null,
+          "predicted_tool": "get_measurement_context",
+          "score_margin": 2.1675542745532588,
+          "selected_tool": "get_measurement_context"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "get_measurement_context"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_post_failure_no_candidate:r0_723b6ee8921e:0:2",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"get_measurement_context\"}",
+        "generated_text_sha256": "ad8432d8cbd4cbaa5847501dcdb1f6b391c2528d87e2c5a2495dd3dace1da598",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": -2.4479662779597877,
+            "commit_state": -1.866615558485531,
+            "correct_measurements_from_path": -0.08795951244514114,
+            "correct_parameters_from_path": -1.238607471006774,
+            "correct_topology_from_path": -0.2873576010795437,
+            "estimate_hif_location_magnitude_from_path": -1.6804983410546543,
+            "estimate_hif_location_magnitude_multiscan_from_path": -0.19280127415215267,
+            "finalize_diagnosis": -0.3685151667947498,
+            "get_harmonic_context": -0.4519735411548501,
+            "get_measurement_context": 5.9272703093771995,
+            "get_parameter_context": 2.8582383897574295,
+            "get_topology_context": 1.4529376296794652,
+            "rollback_state": -0.30974608291182876,
+            "run_hse_from_path": -0.11298094521120515,
+            "run_three_phase_nlm_from_path": -1.5622523160273676,
+            "wls_from_path": 0.36882775946957175
+          },
+          "guard_fallback": null,
+          "predicted_tool": "get_measurement_context",
+          "score_margin": 3.06903191961977,
+          "selected_tool": "get_measurement_context"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "get_measurement_context"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_post_failure_no_candidate:r0_723b6ee8921e:0:1",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"get_measurement_context\"}",
+        "generated_text_sha256": "ad8432d8cbd4cbaa5847501dcdb1f6b391c2528d87e2c5a2495dd3dace1da598",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 3.7378410155570476,
+            "commit_state": 5.814036262993705,
+            "correct_measurements_from_path": 4.373103099607671,
+            "correct_parameters_from_path": -0.4933785776748941,
+            "correct_topology_from_path": 0.5893719035867344,
+            "estimate_hif_location_magnitude_from_path": -0.9442325013884406,
+            "estimate_hif_location_magnitude_multiscan_from_path": -3.611756262515309,
+            "finalize_diagnosis": -4.113536318986565,
+            "get_harmonic_context": -7.090622370914501,
+            "get_measurement_context": 2.8667618117166525,
+            "get_parameter_context": 1.1626294031487083,
+            "get_topology_context": 2.9494242826539483,
+            "rollback_state": -1.9772816143052476,
+            "run_hse_from_path": -3.9561749518678835,
+            "run_three_phase_nlm_from_path": -8.194761561018215,
+            "wls_from_path": 8.888576379406572
+          },
+          "guard_fallback": null,
+          "predicted_tool": "wls_from_path",
+          "score_margin": 3.0745401164128676,
+          "selected_tool": "wls_from_path"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s1"
+          },
+          "tool": "run_wls"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_unsupported_correction:r0_723b6ee8921e:0:9",
+        "expected_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"candidate\"},\"name\":\"wls_from_path\"}",
+        "generated_text_sha256": "0110bc39f4d3580a6bdfc5d8dcd15df9c18c4bf6c10ecc0638c27c9a8f9afc46",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 5.01003906765368,
+            "commit_state": 0.5971228804122902,
+            "correct_measurements_from_path": 3.767487019610019,
+            "correct_parameters_from_path": 7.596722017893227,
+            "correct_topology_from_path": -1.2145311956501594,
+            "estimate_hif_location_magnitude_from_path": 0.7285977289683682,
+            "estimate_hif_location_magnitude_multiscan_from_path": -1.120881374542265,
+            "finalize_diagnosis": -0.14042815019773727,
+            "get_harmonic_context": -4.286951586548388,
+            "get_measurement_context": 2.2008849104833828,
+            "get_parameter_context": -2.225266193074278,
+            "get_topology_context": -4.726915969181023,
+            "rollback_state": -3.1431266506947235,
+            "run_hse_from_path": -1.219897642963136,
+            "run_three_phase_nlm_from_path": -5.425794846521312,
+            "wls_from_path": 3.6029399843520564
+          },
+          "guard_fallback": null,
+          "predicted_tool": "correct_parameters_from_path",
+          "score_margin": 2.586682950239547,
+          "selected_tool": "correct_parameters_from_path"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "line_index": 6,
+            "state_id": "r0_1578a2b1f4be_episode0:s1"
+          },
+          "tool": "correct_parameters"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_measurement_parameter_sequential_handoff:r0_1578a2b1f4be:0:0",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active",
+            "line_index": 6
+          },
+          "tool": "correct_parameters_from_path"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active",
+            "line_index": 6
+          },
+          "tool": "correct_parameters_from_path"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\",\"line_index\":6},\"name\":\"correct_parameters_from_path\"}",
+        "generated_text_sha256": "da7ccf82fc7e00fbe7739f0b2bc9aece7aa25f1ddd3ff5974751d00afcb312d5",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_172df19d54c0501061e799ec71271c32de60af7ed4908d35f371c6b3c94aaec3",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": -2.5246232268880657,
+            "commit_state": -4.359827736787201,
+            "correct_measurements_from_path": 1.320996011990295,
+            "correct_parameters_from_path": -1.6599341113946549,
+            "correct_topology_from_path": -2.0761516974304195,
+            "estimate_hif_location_magnitude_from_path": 2.594039065133305,
+            "estimate_hif_location_magnitude_multiscan_from_path": -0.5538094157277298,
+            "finalize_diagnosis": 2.580740571590434,
+            "get_harmonic_context": 0.04841145582968255,
+            "get_measurement_context": 2.8222749451074853,
+            "get_parameter_context": -5.009669396852223,
+            "get_topology_context": -0.11901358111950967,
+            "rollback_state": -0.32787673250605537,
+            "run_hse_from_path": -0.27906950499064814,
+            "run_three_phase_nlm_from_path": -0.965259197123487,
+            "wls_from_path": 8.508772551168793
+          },
+          "guard_fallback": null,
+          "predicted_tool": "wls_from_path",
+          "score_margin": 5.686497606061307,
+          "selected_tool": "wls_from_path"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "run_wls"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_unsupported_correction:r0_723b6ee8921e:0:2",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"wls_from_path\"}",
+        "generated_text_sha256": "940450ed3cb05dfac99cbb39ba1bf06b5b32033772086aac855d42242b8dc38d",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 0.26628433584612105,
+            "commit_state": 0.5893816072657326,
+            "correct_measurements_from_path": 1.4905514416060426,
+            "correct_parameters_from_path": 0.3176325077594264,
+            "correct_topology_from_path": 3.663478924980329,
+            "estimate_hif_location_magnitude_from_path": 0.01648715287964673,
+            "estimate_hif_location_magnitude_multiscan_from_path": -1.6505919013842134,
+            "finalize_diagnosis": -1.8380229925017422,
+            "get_harmonic_context": -3.029278242649797,
+            "get_measurement_context": 7.22097616141754,
+            "get_parameter_context": -1.0087655709332044,
+            "get_topology_context": 0.5342867347477629,
+            "rollback_state": -2.3493416491578287,
+            "run_hse_from_path": -1.6853505907531445,
+            "run_three_phase_nlm_from_path": -4.25914719207891,
+            "wls_from_path": 1.721419272956284
+          },
+          "guard_fallback": null,
+          "predicted_tool": "get_measurement_context",
+          "score_margin": 3.5574972364372113,
+          "selected_tool": "get_measurement_context"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "get_measurement_context"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_premature_escalation:r0_723b6ee8921e:0:3",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"get_measurement_context\"}",
+        "generated_text_sha256": "ad8432d8cbd4cbaa5847501dcdb1f6b391c2528d87e2c5a2495dd3dace1da598",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 3.8973327288215414,
+            "commit_state": -0.7220492357657827,
+            "correct_measurements_from_path": 1.3423278780048955,
+            "correct_parameters_from_path": 0.1944136458058212,
+            "correct_topology_from_path": -3.4300439582191986,
+            "estimate_hif_location_magnitude_from_path": 1.5466080754975706,
+            "estimate_hif_location_magnitude_multiscan_from_path": -0.7692742542967428,
+            "finalize_diagnosis": 1.1383353076696219,
+            "get_harmonic_context": -4.4245192899887025,
+            "get_measurement_context": 0.12102347668722231,
+            "get_parameter_context": -0.04368045521895304,
+            "get_topology_context": -2.51537293345807,
+            "rollback_state": 0.5258974211538854,
+            "run_hse_from_path": -0.8771546638540392,
+            "run_three_phase_nlm_from_path": -5.489348927674005,
+            "wls_from_path": 9.505505184834961
+          },
+          "guard_fallback": null,
+          "predicted_tool": "wls_from_path",
+          "score_margin": 5.60817245601342,
+          "selected_tool": "wls_from_path"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_1578a2b1f4be_episode0:s2"
+          },
+          "tool": "run_wls"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_rejected_candidate_rollback:r0_1578a2b1f4be:0:2",
+        "expected_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"candidate\"},\"name\":\"wls_from_path\"}",
+        "generated_text_sha256": "0110bc39f4d3580a6bdfc5d8dcd15df9c18c4bf6c10ecc0638c27c9a8f9afc46",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_172df19d54c0501061e799ec71271c32de60af7ed4908d35f371c6b3c94aaec3",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 5.452458245293055,
+            "commit_state": 6.236508667365481,
+            "correct_measurements_from_path": -0.6599596203727879,
+            "correct_parameters_from_path": -1.743781371992698,
+            "correct_topology_from_path": -3.7243083999248356,
+            "estimate_hif_location_magnitude_from_path": -0.5145797121166447,
+            "estimate_hif_location_magnitude_multiscan_from_path": -2.3905266690294846,
+            "finalize_diagnosis": -1.5429803972486646,
+            "get_harmonic_context": -4.843906473943458,
+            "get_measurement_context": -1.6717015901906802,
+            "get_parameter_context": 0.45850915652409613,
+            "get_topology_context": -0.5071444215086167,
+            "rollback_state": 8.673126847110465,
+            "run_hse_from_path": -2.545428303111486,
+            "run_three_phase_nlm_from_path": -5.474173109045722,
+            "wls_from_path": 4.797887152191943
+          },
+          "guard_fallback": "verified_candidate_commit_closure",
+          "predicted_tool": "rollback_state",
+          "score_margin": 2.4366181797449844,
+          "selected_tool": "commit_state"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "candidate_state_id": "r0_1578a2b1f4be_episode0:s2"
+          },
+          "tool": "commit_state"
+        },
+        "error": null,
+        "exact_target_match": false,
+        "example_id": "research_trace:recovery_rejected_candidate_rollback:r0_1578a2b1f4be:0:5",
+        "expected_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "rollback_state"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "commit_state"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"candidate\"},\"name\":\"commit_state\"}",
+        "generated_text_sha256": "580377b6612bb0beb30134597e4a34fe1215cd5fa71654015e5381c8a8681209",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_172df19d54c0501061e799ec71271c32de60af7ed4908d35f371c6b3c94aaec3",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": false
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 2.490371012355447,
+            "commit_state": 1.2188859249946034,
+            "correct_measurements_from_path": 0.6795538568394982,
+            "correct_parameters_from_path": 0.3685802259020253,
+            "correct_topology_from_path": 2.6001177142667977,
+            "estimate_hif_location_magnitude_from_path": -1.1585363160112911,
+            "estimate_hif_location_magnitude_multiscan_from_path": -1.1833305196423554,
+            "finalize_diagnosis": -3.2454236897061195,
+            "get_harmonic_context": -4.015164351098427,
+            "get_measurement_context": 7.8769237703306265,
+            "get_parameter_context": -0.21213802424785608,
+            "get_topology_context": 0.29929804301655677,
+            "rollback_state": -2.475573068592905,
+            "run_hse_from_path": -1.3329816382950388,
+            "run_three_phase_nlm_from_path": -5.267997162315553,
+            "wls_from_path": 3.3574142222040204
+          },
+          "guard_fallback": null,
+          "predicted_tool": "get_measurement_context",
+          "score_margin": 4.5195095481266065,
+          "selected_tool": "get_measurement_context"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "get_measurement_context"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_post_failure_no_candidate:r0_723b6ee8921e:0:5",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"get_measurement_context\"}",
+        "generated_text_sha256": "ad8432d8cbd4cbaa5847501dcdb1f6b391c2528d87e2c5a2495dd3dace1da598",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 0.13647222393311617,
+            "commit_state": 1.3521930001836924,
+            "correct_measurements_from_path": 0.6924530014912523,
+            "correct_parameters_from_path": -0.7227060369815642,
+            "correct_topology_from_path": 0.31599796056574175,
+            "estimate_hif_location_magnitude_from_path": -0.9935651991870439,
+            "estimate_hif_location_magnitude_multiscan_from_path": -1.1852487721824871,
+            "finalize_diagnosis": -0.8701161042089431,
+            "get_harmonic_context": -3.116740943388864,
+            "get_measurement_context": 9.327909478824454,
+            "get_parameter_context": 2.5941698394452306,
+            "get_topology_context": -2.304561409360672,
+            "rollback_state": -1.7588883606175212,
+            "run_hse_from_path": -1.3286013377988732,
+            "run_three_phase_nlm_from_path": -4.138501553533741,
+            "wls_from_path": 1.9997342128162952
+          },
+          "guard_fallback": null,
+          "predicted_tool": "get_measurement_context",
+          "score_margin": 6.733739639379223,
+          "selected_tool": "get_measurement_context"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "get_measurement_context"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_unsupported_correction:r0_723b6ee8921e:0:3",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"get_measurement_context\"}",
+        "generated_text_sha256": "ad8432d8cbd4cbaa5847501dcdb1f6b391c2528d87e2c5a2495dd3dace1da598",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": -2.6491647126546862,
+            "commit_state": -6.680975369888487,
+            "correct_measurements_from_path": -0.4375820446582613,
+            "correct_parameters_from_path": -2.5371021986131526,
+            "correct_topology_from_path": -2.3145107735491672,
+            "estimate_hif_location_magnitude_from_path": 0.4779843661705681,
+            "estimate_hif_location_magnitude_multiscan_from_path": 1.319731177764485,
+            "finalize_diagnosis": 1.9563524059007797,
+            "get_harmonic_context": 2.83454317102256,
+            "get_measurement_context": -0.7537897886601427,
+            "get_parameter_context": -2.8514138803635847,
+            "get_topology_context": 2.9460017988348337,
+            "rollback_state": 1.0206501792696803,
+            "run_hse_from_path": 1.7809169905280027,
+            "run_three_phase_nlm_from_path": 1.7951654512602588,
+            "wls_from_path": 4.093193227636338
+          },
+          "guard_fallback": null,
+          "predicted_tool": "wls_from_path",
+          "score_margin": 1.147191428801504,
+          "selected_tool": "wls_from_path"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "run_wls"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_premature_commit:r0_723b6ee8921e:0:0",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"wls_from_path\"}",
+        "generated_text_sha256": "940450ed3cb05dfac99cbb39ba1bf06b5b32033772086aac855d42242b8dc38d",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 0.09167014636359513,
+            "commit_state": 0.3462563255947709,
+            "correct_measurements_from_path": 2.4456453010956376,
+            "correct_parameters_from_path": -1.717042035538105,
+            "correct_topology_from_path": 1.370529117248515,
+            "estimate_hif_location_magnitude_from_path": -0.6494075257878263,
+            "estimate_hif_location_magnitude_multiscan_from_path": -3.4244218040988303,
+            "finalize_diagnosis": -3.457257473121877,
+            "get_harmonic_context": -2.4443545260983113,
+            "get_measurement_context": 4.246121411076089,
+            "get_parameter_context": -0.9105203556899394,
+            "get_topology_context": 3.297909877055422,
+            "rollback_state": 0.21973025752925082,
+            "run_hse_from_path": -3.3710478773324377,
+            "run_three_phase_nlm_from_path": -3.194860840196908,
+            "wls_from_path": 7.151050001900961
+          },
+          "guard_fallback": null,
+          "predicted_tool": "wls_from_path",
+          "score_margin": 2.9049285908248716,
+          "selected_tool": "wls_from_path"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "run_wls"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_post_failure_no_candidate:r0_723b6ee8921e:0:4",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"wls_from_path\"}",
+        "generated_text_sha256": "940450ed3cb05dfac99cbb39ba1bf06b5b32033772086aac855d42242b8dc38d",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 6.350684914246247,
+            "commit_state": 0.12922751564625218,
+            "correct_measurements_from_path": 3.912490409007834,
+            "correct_parameters_from_path": -1.6880775254335703,
+            "correct_topology_from_path": -2.9891846370042217,
+            "estimate_hif_location_magnitude_from_path": 1.3976099095358836,
+            "estimate_hif_location_magnitude_multiscan_from_path": -2.877771459236259,
+            "finalize_diagnosis": 0.026505028966501944,
+            "get_harmonic_context": -5.801367995290819,
+            "get_measurement_context": 2.473281773005767,
+            "get_parameter_context": -0.9387161729137353,
+            "get_topology_context": 0.7920472174952343,
+            "rollback_state": -1.0793579329988858,
+            "run_hse_from_path": -2.9605120490029773,
+            "run_three_phase_nlm_from_path": -6.6654250535415045,
+            "wls_from_path": 9.918566057518198
+          },
+          "guard_fallback": null,
+          "predicted_tool": "wls_from_path",
+          "score_margin": 3.5678811432719515,
+          "selected_tool": "wls_from_path"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_1578a2b1f4be_episode0:s2"
+          },
+          "tool": "run_wls"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_measurement_parameter_sequential_handoff:r0_1578a2b1f4be:0:5",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"wls_from_path\"}",
+        "generated_text_sha256": "940450ed3cb05dfac99cbb39ba1bf06b5b32033772086aac855d42242b8dc38d",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_172df19d54c0501061e799ec71271c32de60af7ed4908d35f371c6b3c94aaec3",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 1.9341689733365746,
+            "commit_state": -1.1123560865559114,
+            "correct_measurements_from_path": 3.8926518407426505,
+            "correct_parameters_from_path": 1.6101376100062679,
+            "correct_topology_from_path": -3.4313227385780407,
+            "estimate_hif_location_magnitude_from_path": 1.5395054434354145,
+            "estimate_hif_location_magnitude_multiscan_from_path": -0.5387961839023248,
+            "finalize_diagnosis": 1.4555980673100803,
+            "get_harmonic_context": -3.6170622929602887,
+            "get_measurement_context": 1.3842653538742364,
+            "get_parameter_context": -0.9902665093496924,
+            "get_topology_context": -2.709215609479034,
+            "rollback_state": 0.3069064982448671,
+            "run_hse_from_path": -0.5945959770429952,
+            "run_three_phase_nlm_from_path": -4.736677754040199,
+            "wls_from_path": 5.607059364958411
+          },
+          "guard_fallback": null,
+          "predicted_tool": "wls_from_path",
+          "score_margin": 1.7144075242157601,
+          "selected_tool": "wls_from_path"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_1578a2b1f4be_episode0:s0"
+          },
+          "tool": "run_wls"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_rejected_candidate_rollback:r0_1578a2b1f4be:0:1",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"wls_from_path\"}",
+        "generated_text_sha256": "940450ed3cb05dfac99cbb39ba1bf06b5b32033772086aac855d42242b8dc38d",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_172df19d54c0501061e799ec71271c32de60af7ed4908d35f371c6b3c94aaec3",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": -2.5038749074504825,
+            "commit_state": -6.564166569682674,
+            "correct_measurements_from_path": 0.9991862681728604,
+            "correct_parameters_from_path": -3.1604385702018156,
+            "correct_topology_from_path": -2.3134228554155385,
+            "estimate_hif_location_magnitude_from_path": 0.48549409415701933,
+            "estimate_hif_location_magnitude_multiscan_from_path": 1.2147023903347978,
+            "finalize_diagnosis": 1.8445622339164427,
+            "get_harmonic_context": 2.4762635708073755,
+            "get_measurement_context": -0.4750580220946467,
+            "get_parameter_context": -2.8734019204475967,
+            "get_topology_context": 5.458743582543728,
+            "rollback_state": -1.093374218650572,
+            "run_hse_from_path": 1.6240394526015305,
+            "run_three_phase_nlm_from_path": 1.634680704831582,
+            "wls_from_path": 3.246064766578019
+          },
+          "guard_fallback": null,
+          "predicted_tool": "get_topology_context",
+          "score_margin": 2.212678815965709,
+          "selected_tool": "get_topology_context"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "get_topology_context"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_unsupported_correction:r0_723b6ee8921e:0:0",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_topology_context"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_topology_context"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"get_topology_context\"}",
+        "generated_text_sha256": "71d2a41ad61612f3da8fa9df5e68b688c5cacb8383ebfd0da5e1467af66ff9c1",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": -3.049940687872697,
+            "commit_state": -5.661659700122543,
+            "correct_measurements_from_path": -0.4378331136888339,
+            "correct_parameters_from_path": -2.753760648485385,
+            "correct_topology_from_path": -2.539683058487709,
+            "estimate_hif_location_magnitude_from_path": 0.4223586717152887,
+            "estimate_hif_location_magnitude_multiscan_from_path": 0.9679901804701254,
+            "finalize_diagnosis": 3.0529897734672415,
+            "get_harmonic_context": 2.6676840734306846,
+            "get_measurement_context": -0.8290969684236024,
+            "get_parameter_context": -1.7608056255432183,
+            "get_topology_context": 2.435441161771571,
+            "rollback_state": -0.053983825417222873,
+            "run_hse_from_path": 1.376202319998683,
+            "run_three_phase_nlm_from_path": 1.7436327453423985,
+            "wls_from_path": 4.420464701845256
+          },
+          "guard_fallback": null,
+          "predicted_tool": "wls_from_path",
+          "score_margin": 1.367474928378014,
+          "selected_tool": "wls_from_path"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "run_wls"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_post_failure_no_candidate:r0_723b6ee8921e:0:0",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"wls_from_path\"}",
+        "generated_text_sha256": "940450ed3cb05dfac99cbb39ba1bf06b5b32033772086aac855d42242b8dc38d",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 0.3586987364316811,
+            "commit_state": 1.3484855595793963,
+            "correct_measurements_from_path": 2.8638630237858282,
+            "correct_parameters_from_path": -1.7451730603104978,
+            "correct_topology_from_path": 1.4314478829108594,
+            "estimate_hif_location_magnitude_from_path": -0.41126415665400506,
+            "estimate_hif_location_magnitude_multiscan_from_path": -3.741505288576175,
+            "finalize_diagnosis": -3.6362926444527273,
+            "get_harmonic_context": -3.5816552779288275,
+            "get_measurement_context": 4.137226847196613,
+            "get_parameter_context": -0.48948611870870057,
+            "get_topology_context": 3.6419928417459078,
+            "rollback_state": -0.0862126208399839,
+            "run_hse_from_path": -3.7529368811757933,
+            "run_three_phase_nlm_from_path": -4.401130529844469,
+            "wls_from_path": 8.063941686840876
+          },
+          "guard_fallback": null,
+          "predicted_tool": "wls_from_path",
+          "score_margin": 3.926714839644262,
+          "selected_tool": "wls_from_path"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "run_wls"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_unsupported_correction:r0_723b6ee8921e:0:6",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"wls_from_path\"}",
+        "generated_text_sha256": "940450ed3cb05dfac99cbb39ba1bf06b5b32033772086aac855d42242b8dc38d",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 4.099861848688549,
+            "commit_state": 10.629267705793392,
+            "correct_measurements_from_path": 0.7319294317769166,
+            "correct_parameters_from_path": 3.4804016103138182,
+            "correct_topology_from_path": -2.456723440813415,
+            "estimate_hif_location_magnitude_from_path": 0.37347222445749334,
+            "estimate_hif_location_magnitude_multiscan_from_path": -2.3670921322518317,
+            "finalize_diagnosis": 1.7321555363685084,
+            "get_harmonic_context": -5.9834232933005,
+            "get_measurement_context": 1.2744167623245006,
+            "get_parameter_context": -1.4628762280197838,
+            "get_topology_context": -4.62080421551566,
+            "rollback_state": 3.5998276793402115,
+            "run_hse_from_path": -2.654550564997287,
+            "run_three_phase_nlm_from_path": -6.934580889212844,
+            "wls_from_path": 0.5587179650479255
+          },
+          "guard_fallback": "verified_candidate_commit_closure",
+          "predicted_tool": "commit_state",
+          "score_margin": 6.529405857104843,
+          "selected_tool": "commit_state"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "candidate_state_id": "r0_1578a2b1f4be_episode0:s2"
+          },
+          "tool": "commit_state"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_measurement_parameter_sequential_handoff:r0_1578a2b1f4be:0:2",
+        "expected_action": {
+          "arguments": {
+            "case_path": "s1"
+          },
+          "tool": "commit_state"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "s1"
+          },
+          "tool": "commit_state"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"s1\"},\"name\":\"commit_state\"}",
+        "generated_text_sha256": "06d7b75928c531bffefb815ad0fab1887088c9613f6b73ba7759cd5714b9161c",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_172df19d54c0501061e799ec71271c32de60af7ed4908d35f371c6b3c94aaec3",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": -2.987714092808443,
+            "commit_state": -7.002593267734471,
+            "correct_measurements_from_path": -0.9937676745551846,
+            "correct_parameters_from_path": -2.4820946122630234,
+            "correct_topology_from_path": -2.325898534474222,
+            "estimate_hif_location_magnitude_from_path": 0.556758318522312,
+            "estimate_hif_location_magnitude_multiscan_from_path": 1.3442894509100418,
+            "finalize_diagnosis": 2.08491215695191,
+            "get_harmonic_context": 2.909382155060231,
+            "get_measurement_context": -1.4905971095547808,
+            "get_parameter_context": -2.853099555009625,
+            "get_topology_context": 2.835802771787841,
+            "rollback_state": 0.46915104978256644,
+            "run_hse_from_path": 1.8149034138770983,
+            "run_three_phase_nlm_from_path": 1.8228330070374512,
+            "wls_from_path": 6.29773252247032
+          },
+          "guard_fallback": null,
+          "predicted_tool": "wls_from_path",
+          "score_margin": 3.3883503674100894,
+          "selected_tool": "wls_from_path"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "run_wls"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_premature_escalation:r0_723b6ee8921e:0:0",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "wls_from_path"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"wls_from_path\"}",
+        "generated_text_sha256": "940450ed3cb05dfac99cbb39ba1bf06b5b32033772086aac855d42242b8dc38d",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 6.075043953014948,
+            "commit_state": 9.683528317290797,
+            "correct_measurements_from_path": 2.073733260002251,
+            "correct_parameters_from_path": -1.9753478395131523,
+            "correct_topology_from_path": -0.9679765877661893,
+            "estimate_hif_location_magnitude_from_path": -2.7365741064873244,
+            "estimate_hif_location_magnitude_multiscan_from_path": -5.339283951935263,
+            "finalize_diagnosis": -6.74377667979396,
+            "get_harmonic_context": -8.075842036736564,
+            "get_measurement_context": 0.9227085688379179,
+            "get_parameter_context": 2.214847041663148,
+            "get_topology_context": 4.741825898968184,
+            "rollback_state": 9.131646556188004,
+            "run_hse_from_path": -5.7597218833622525,
+            "run_three_phase_nlm_from_path": -8.782394011959875,
+            "wls_from_path": 5.537583501589244
+          },
+          "guard_fallback": "verified_candidate_commit_closure",
+          "predicted_tool": "commit_state",
+          "score_margin": 0.5518817611027931,
+          "selected_tool": "commit_state"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "candidate_state_id": "r0_723b6ee8921e_episode0:s1"
+          },
+          "tool": "commit_state"
+        },
+        "error": null,
+        "exact_target_match": false,
+        "example_id": "research_trace:recovery_unsupported_correction:r0_723b6ee8921e:0:13",
+        "expected_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "rollback_state"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "commit_state"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"candidate\"},\"name\":\"commit_state\"}",
+        "generated_text_sha256": "580377b6612bb0beb30134597e4a34fe1215cd5fa71654015e5381c8a8681209",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": false
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 6.441002356389523,
+            "commit_state": 12.905307545868745,
+            "correct_measurements_from_path": 1.4955086792641108,
+            "correct_parameters_from_path": -1.49781662788899,
+            "correct_topology_from_path": 0.5495514562993943,
+            "estimate_hif_location_magnitude_from_path": -3.246073998276982,
+            "estimate_hif_location_magnitude_multiscan_from_path": -5.257573692079193,
+            "finalize_diagnosis": -7.08914865698531,
+            "get_harmonic_context": -7.5128560843909655,
+            "get_measurement_context": 0.1142686381116477,
+            "get_parameter_context": 2.5107069930507153,
+            "get_topology_context": 4.299672670974232,
+            "rollback_state": 6.410616048687451,
+            "run_hse_from_path": -5.647448540772611,
+            "run_three_phase_nlm_from_path": -8.181358415528269,
+            "wls_from_path": 3.705641627276418
+          },
+          "guard_fallback": "verified_candidate_commit_closure",
+          "predicted_tool": "commit_state",
+          "score_margin": 6.464305189479221,
+          "selected_tool": "commit_state"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "candidate_state_id": "r0_723b6ee8921e_episode0:s1"
+          },
+          "tool": "commit_state"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_unsupported_correction:r0_723b6ee8921e:0:12",
+        "expected_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "commit_state"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "commit_state"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"candidate\"},\"name\":\"commit_state\"}",
+        "generated_text_sha256": "580377b6612bb0beb30134597e4a34fe1215cd5fa71654015e5381c8a8681209",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 4.230485032116499,
+            "commit_state": 2.87602676731524,
+            "correct_measurements_from_path": 8.236109963231392,
+            "correct_parameters_from_path": 2.9976198533579304,
+            "correct_topology_from_path": 0.04379966715053325,
+            "estimate_hif_location_magnitude_from_path": -1.0290360861434307,
+            "estimate_hif_location_magnitude_multiscan_from_path": -3.462227041389032,
+            "finalize_diagnosis": -3.9079903392109276,
+            "get_harmonic_context": -6.323425774017374,
+            "get_measurement_context": 3.1623299472921778,
+            "get_parameter_context": 0.41044907650388446,
+            "get_topology_context": 1.7048410587464562,
+            "rollback_state": -1.3098048090110597,
+            "run_hse_from_path": -3.7680673691786772,
+            "run_three_phase_nlm_from_path": -7.457975381340867,
+            "wls_from_path": 3.5968654345772113
+          },
+          "guard_fallback": null,
+          "predicted_tool": "correct_measurements_from_path",
+          "score_margin": 4.005624931114894,
+          "selected_tool": "correct_measurements_from_path"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0",
+            "suspect_group": [
+              63
+            ]
+          },
+          "tool": "correct_measurements"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_unsupported_correction:r0_723b6ee8921e:0:8",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active",
+            "suspect_group": [
+              63
+            ]
+          },
+          "tool": "correct_measurements_from_path"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active",
+            "suspect_group": [
+              63
+            ]
+          },
+          "tool": "correct_measurements_from_path"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\",\"suspect_group\":[63]},\"name\":\"correct_measurements_from_path\"}",
+        "generated_text_sha256": "8a3c15cf058999003ec1a0ee0cc231d839a5daeddefd3936cfaeb1b79797407b",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 4.140970729976023,
+            "commit_state": -0.8012787003692766,
+            "correct_measurements_from_path": 0.6708184980271935,
+            "correct_parameters_from_path": 0.9950669251162626,
+            "correct_topology_from_path": -2.5503329647783266,
+            "estimate_hif_location_magnitude_from_path": 2.1144877347589524,
+            "estimate_hif_location_magnitude_multiscan_from_path": -0.7176490326513646,
+            "finalize_diagnosis": 2.024485428451489,
+            "get_harmonic_context": -5.797895732726165,
+            "get_measurement_context": 7.702574122839174,
+            "get_parameter_context": -1.4826755138811822,
+            "get_topology_context": -1.038993121596454,
+            "rollback_state": -1.1220106042744389,
+            "run_hse_from_path": -0.8299998734817479,
+            "run_three_phase_nlm_from_path": -7.107740193358002,
+            "wls_from_path": 3.8001722979478694
+          },
+          "guard_fallback": null,
+          "predicted_tool": "get_measurement_context",
+          "score_margin": 3.5616033928631508,
+          "selected_tool": "get_measurement_context"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_1578a2b1f4be_episode0:s2"
+          },
+          "tool": "get_measurement_context"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_measurement_parameter_sequential_handoff:r0_1578a2b1f4be:0:3",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"get_measurement_context\"}",
+        "generated_text_sha256": "ad8432d8cbd4cbaa5847501dcdb1f6b391c2528d87e2c5a2495dd3dace1da598",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_172df19d54c0501061e799ec71271c32de60af7ed4908d35f371c6b3c94aaec3",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": -0.8512768027689268,
+            "commit_state": -2.670197328795003,
+            "correct_measurements_from_path": 1.343942442087602,
+            "correct_parameters_from_path": 0.30119919617003277,
+            "correct_topology_from_path": 0.40923815719400053,
+            "estimate_hif_location_magnitude_from_path": -0.1007282450375905,
+            "estimate_hif_location_magnitude_multiscan_from_path": -0.9954901437749392,
+            "finalize_diagnosis": -1.1780622057863015,
+            "get_harmonic_context": -1.7119888896722513,
+            "get_measurement_context": 6.177723261185571,
+            "get_parameter_context": -1.2152362896841817,
+            "get_topology_context": 4.093763393381048,
+            "rollback_state": -0.4153398905942837,
+            "run_hse_from_path": -0.8927831063039825,
+            "run_three_phase_nlm_from_path": -2.973138876729154,
+            "wls_from_path": 0.6783753291284078
+          },
+          "guard_fallback": null,
+          "predicted_tool": "get_measurement_context",
+          "score_margin": 2.0839598678045235,
+          "selected_tool": "get_measurement_context"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "get_measurement_context"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_premature_commit:r0_723b6ee8921e:0:2",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"get_measurement_context\"}",
+        "generated_text_sha256": "ad8432d8cbd4cbaa5847501dcdb1f6b391c2528d87e2c5a2495dd3dace1da598",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 8.827963685797956,
+            "commit_state": 0.2729521674623972,
+            "correct_measurements_from_path": 3.7919659640764305,
+            "correct_parameters_from_path": 2.136540275335986,
+            "correct_topology_from_path": -2.1440386018408,
+            "estimate_hif_location_magnitude_from_path": 1.670345994913264,
+            "estimate_hif_location_magnitude_multiscan_from_path": -1.1349619754404445,
+            "finalize_diagnosis": 1.2379277440738605,
+            "get_harmonic_context": -6.416440186089751,
+            "get_measurement_context": 3.4937001143656707,
+            "get_parameter_context": -1.2952271794764767,
+            "get_topology_context": -2.4224748511765144,
+            "rollback_state": -2.958955790243169,
+            "run_hse_from_path": -1.298102754444928,
+            "run_three_phase_nlm_from_path": -7.744863143777174,
+            "wls_from_path": 3.9836685364636737
+          },
+          "guard_fallback": null,
+          "predicted_tool": "ask_for_more_evidence",
+          "score_margin": 4.8442951493342825,
+          "selected_tool": "ask_for_more_evidence"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "request": "operator_escalation:recovery_options_exhausted",
+            "state_id": "r0_1578a2b1f4be_episode0:s2"
+          },
+          "tool": "ask_for_more_evidence"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_measurement_parameter_sequential_handoff:r0_1578a2b1f4be:0:4",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active",
+            "request": "operator_escalation:recovery_options_exhausted"
+          },
+          "tool": "ask_for_more_evidence"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active",
+            "request": "operator_escalation:recovery_options_exhausted"
+          },
+          "tool": "ask_for_more_evidence"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\",\"request\":\"operator_escalation:recovery_options_exhausted\"},\"name\":\"ask_for_more_evidence\"}",
+        "generated_text_sha256": "0fec6c07cb23c315bdedc2b777671173df0e7632fb697c52f55fd897be0eb2e7",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_172df19d54c0501061e799ec71271c32de60af7ed4908d35f371c6b3c94aaec3",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 2.7696368635230804,
+            "commit_state": 6.320041048201073,
+            "correct_measurements_from_path": 1.952817169829668,
+            "correct_parameters_from_path": -2.0807098688154224,
+            "correct_topology_from_path": -4.054909880881162,
+            "estimate_hif_location_magnitude_from_path": 0.565548466852862,
+            "estimate_hif_location_magnitude_multiscan_from_path": -3.086307246831108,
+            "finalize_diagnosis": -0.6257936239286168,
+            "get_harmonic_context": -4.45613928457487,
+            "get_measurement_context": -1.6622653364082038,
+            "get_parameter_context": -1.3522720416760783,
+            "get_topology_context": 0.6711458425515632,
+            "rollback_state": 9.226693844523789,
+            "run_hse_from_path": -3.1694989495572137,
+            "run_three_phase_nlm_from_path": -5.07800638326372,
+            "wls_from_path": 4.060019380454317
+          },
+          "guard_fallback": "verified_candidate_commit_closure",
+          "predicted_tool": "rollback_state",
+          "score_margin": 2.9066527963227156,
+          "selected_tool": "commit_state"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "candidate_state_id": "r0_1578a2b1f4be_episode0:s2"
+          },
+          "tool": "commit_state"
+        },
+        "error": null,
+        "exact_target_match": false,
+        "example_id": "research_trace:recovery_rejected_candidate_rollback:r0_1578a2b1f4be:0:4",
+        "expected_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "rollback_state"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "candidate"
+          },
+          "tool": "commit_state"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"candidate\"},\"name\":\"commit_state\"}",
+        "generated_text_sha256": "580377b6612bb0beb30134597e4a34fe1215cd5fa71654015e5381c8a8681209",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_172df19d54c0501061e799ec71271c32de60af7ed4908d35f371c6b3c94aaec3",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": false
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 9.315231389211094,
+            "commit_state": 3.6825542495091934,
+            "correct_measurements_from_path": 0.9448043292405061,
+            "correct_parameters_from_path": 0.637049864804092,
+            "correct_topology_from_path": -3.534857027881366,
+            "estimate_hif_location_magnitude_from_path": 0.36033504319367604,
+            "estimate_hif_location_magnitude_multiscan_from_path": -1.4352343591303045,
+            "finalize_diagnosis": 2.7687688100772325,
+            "get_harmonic_context": -7.857103692517761,
+            "get_measurement_context": 5.723652973542923,
+            "get_parameter_context": 1.733723916748099,
+            "get_topology_context": -2.375414137637434,
+            "rollback_state": -3.5093124890295604,
+            "run_hse_from_path": -1.8393126986340183,
+            "run_three_phase_nlm_from_path": -8.903714987598926,
+            "wls_from_path": 4.288828816102549
+          },
+          "guard_fallback": null,
+          "predicted_tool": "ask_for_more_evidence",
+          "score_margin": 3.591578415668171,
+          "selected_tool": "ask_for_more_evidence"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "request": "operator_escalation:recovery_options_exhausted",
+            "state_id": "r0_1578a2b1f4be_episode0:s2"
+          },
+          "tool": "ask_for_more_evidence"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_measurement_parameter_sequential_handoff:r0_1578a2b1f4be:0:6",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active",
+            "request": "operator_escalation:recovery_options_exhausted"
+          },
+          "tool": "ask_for_more_evidence"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active",
+            "request": "operator_escalation:recovery_options_exhausted"
+          },
+          "tool": "ask_for_more_evidence"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\",\"request\":\"operator_escalation:recovery_options_exhausted\"},\"name\":\"ask_for_more_evidence\"}",
+        "generated_text_sha256": "0fec6c07cb23c315bdedc2b777671173df0e7632fb697c52f55fd897be0eb2e7",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_172df19d54c0501061e799ec71271c32de60af7ed4908d35f371c6b3c94aaec3",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": 0.3926731470646098,
+            "commit_state": 0.41348467470822153,
+            "correct_measurements_from_path": 1.522921342277684,
+            "correct_parameters_from_path": 0.1676800647228954,
+            "correct_topology_from_path": 3.6514070099218308,
+            "estimate_hif_location_magnitude_from_path": 0.01148330229244219,
+            "estimate_hif_location_magnitude_multiscan_from_path": -1.6512284604071017,
+            "finalize_diagnosis": -1.856017718230634,
+            "get_harmonic_context": -3.029575800981064,
+            "get_measurement_context": 7.066624533107686,
+            "get_parameter_context": -0.9978772308114413,
+            "get_topology_context": 0.2719741339078431,
+            "rollback_state": -2.1910922632777616,
+            "run_hse_from_path": -1.685917163145295,
+            "run_three_phase_nlm_from_path": -4.259322074297227,
+            "wls_from_path": 2.17278250314736
+          },
+          "guard_fallback": null,
+          "predicted_tool": "get_measurement_context",
+          "score_margin": 3.4152175231858553,
+          "selected_tool": "get_measurement_context"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "get_measurement_context"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_post_failure_no_candidate:r0_723b6ee8921e:0:3",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"get_measurement_context\"}",
+        "generated_text_sha256": "ad8432d8cbd4cbaa5847501dcdb1f6b391c2528d87e2c5a2495dd3dace1da598",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      },
+      {
+        "action_metrics": {
+          "class_scores": {
+            "ask_for_more_evidence": -1.098296707927954,
+            "commit_state": -2.246373791025708,
+            "correct_measurements_from_path": 1.1094690011607005,
+            "correct_parameters_from_path": 0.4318276321021869,
+            "correct_topology_from_path": 0.41018057361570764,
+            "estimate_hif_location_magnitude_from_path": -0.0997374206545142,
+            "estimate_hif_location_magnitude_multiscan_from_path": -0.995228038834676,
+            "finalize_diagnosis": -1.1774231570868023,
+            "get_harmonic_context": -1.7119451661748162,
+            "get_measurement_context": 6.334169671555549,
+            "get_parameter_context": -1.237055368105372,
+            "get_topology_context": 4.311723661002196,
+            "rollback_state": -0.7830169735854291,
+            "run_hse_from_path": -0.89248916399751,
+            "run_three_phase_nlm_from_path": -2.973102564578756,
+            "wls_from_path": 0.6172978125352486
+          },
+          "guard_fallback": null,
+          "predicted_tool": "get_measurement_context",
+          "score_margin": 2.0224460105533533,
+          "selected_tool": "get_measurement_context"
+        },
+        "bound_internal_action": {
+          "arguments": {
+            "state_id": "r0_723b6ee8921e_episode0:s0"
+          },
+          "tool": "get_measurement_context"
+        },
+        "error": null,
+        "exact_target_match": true,
+        "example_id": "research_trace:recovery_premature_escalation:r0_723b6ee8921e:0:2",
+        "expected_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_action": {
+          "arguments": {
+            "case_path": "active"
+          },
+          "tool": "get_measurement_context"
+        },
+        "generated_text_preview": "{\"arguments\":{\"case_path\":\"active\"},\"name\":\"get_measurement_context\"}",
+        "generated_text_sha256": "ad8432d8cbd4cbaa5847501dcdb1f6b391c2528d87e2c5a2495dd3dace1da598",
+        "hit_max_new_tokens": false,
+        "physical_root_fingerprint": "physical_v3_7a810a3b564608c7c7efa3c9f9e9403789daee239286f08564d673f9581585ec",
+        "schema_valid": true,
+        "state_bound": true,
+        "target_tool_match": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,104 @@
+{
+  "artifact": "/scratch/yx3882/research_dagger_trace_20260823/learner_collection_56.json",
+  "contract": "research_dagger_learner_trace_v1",
+  "counts": {
+    "d0_available": 1280,
+    "d0_excluded_by_root": 0,
+    "d0_selected": 185,
+    "dagger_repeat": 2,
+    "raw_train_learner_rows": 185,
+    "raw_validation_learner_rows": 27,
+    "rollout_episodes": 56,
+    "skipped_or_duplicate_policy_rows": 11,
+    "train_rows": 555,
+    "validation_rows": 27
+  },
+  "recovery_stratum_distribution": {
+    "by_source": {
+      "d0": {
+        "<unspecified>": 185
+      },
+      "learner_trace": {
+        "learner_visited_recovery": 216,
+        "measurement_parameter_sequential_handoff": 26,
+        "post_failure_no_candidate": 40,
+        "premature_commit_recovery": 14,
+        "premature_escalation_recovery": 14,
+        "rejected_candidate_rollback": 28,
+        "safe_continuation_after_partial_success": 14,
+        "unsupported_correction_recovery": 18
+      }
+    },
+    "overall": {
+      "<unspecified>": 185,
+      "learner_visited_recovery": 216,
+      "measurement_parameter_sequential_handoff": 26,
+      "post_failure_no_candidate": 40,
+      "premature_commit_recovery": 14,
+      "premature_escalation_recovery": 14,
+      "rejected_candidate_rollback": 28,
+      "safe_continuation_after_partial_success": 14,
+      "unsupported_correction_recovery": 18
+    }
+  },
+  "roots": {
+    "d0_train": 121,
+    "pairwise_overlap": 0,
+    "protected": 4,
+    "rollout": 16,
+    "trace_train": 14,
+    "train": 135,
+    "validation": 2
+  },
+  "seed": 3407,
+  "tool_distribution": {
+    "by_source": {
+      "d0": {
+        "ask_for_more_evidence": 9,
+        "commit_state": 32,
+        "correct_measurements_from_path": 19,
+        "correct_parameters_from_path": 14,
+        "correct_topology_from_path": 15,
+        "estimate_hif_location_magnitude_from_path": 8,
+        "estimate_hif_location_magnitude_multiscan_from_path": 3,
+        "finalize_diagnosis": 13,
+        "get_harmonic_context": 4,
+        "get_measurement_context": 17,
+        "get_parameter_context": 7,
+        "get_topology_context": 2,
+        "run_hse_from_path": 3,
+        "run_three_phase_nlm_from_path": 1,
+        "wls_from_path": 38
+      },
+      "learner_trace": {
+        "ask_for_more_evidence": 28,
+        "correct_measurements_from_path": 4,
+        "correct_parameters_from_path": 22,
+        "get_measurement_context": 18,
+        "get_topology_context": 14,
+        "rollback_state": 28,
+        "wls_from_path": 256
+      }
+    },
+    "overall": {
+      "ask_for_more_evidence": 37,
+      "commit_state": 32,
+      "correct_measurements_from_path": 23,
+      "correct_parameters_from_path": 36,
+      "correct_topology_from_path": 15,
+      "estimate_hif_location_magnitude_from_path": 8,
+      "estimate_hif_location_magnitude_multiscan_from_path": 3,
+      "finalize_diagnosis": 13,
+      "get_harmonic_context": 4,
+      "get_measurement_context": 35,
+      "get_parameter_context": 7,
+      "get_topology_context": 16,
+      "rollback_state": 28,
+      "run_hse_from_path": 3,
+      "run_three_phase_nlm_from_path": 1,
+      "wls_from_path": 294
+    }
+  },
+  "train_output": "/scratch/yx3882/research_dagger_trace_20260823/trace_train.jsonl",
+  "validation_output": "/scratch/yx3882/research_dagger_trace_20260823/trace_validation.jsonl"
+}

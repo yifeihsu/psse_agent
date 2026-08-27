@@ -1,0 +1,71 @@
+{
+  "adapter_base_model": "google/gemma-4-12B-it",
+  "adapter_files_valid": true,
+  "adapter_reloaded": true,
+  "adapter_weight_files": [
+    "adapter_model.safetensors"
+  ],
+  "canaries_passed": 1,
+  "canaries_requested": 1,
+  "canaries_selected": 1,
+  "canary_mode": "parseable_single_tool_call_after_reload",
+  "changed_adapter_tensors": 656,
+  "checkpoints": [
+    "checkpoint-16",
+    "checkpoint-24",
+    "checkpoint-32",
+    "checkpoint-8"
+  ],
+  "completion_errors": [],
+  "contract": "research_gemma4_mini_bc0_postflight_v1",
+  "expected_eval_steps": [
+    8,
+    16,
+    24,
+    32
+  ],
+  "finite_evaluations": [
+    {
+      "eval_loss": 0.3005967140197754,
+      "step": 8
+    },
+    {
+      "eval_loss": 0.13056260347366333,
+      "step": 16
+    },
+    {
+      "eval_loss": 0.08849798887968063,
+      "step": 24
+    },
+    {
+      "eval_loss": 0.07105836272239685,
+      "step": 32
+    }
+  ],
+  "finite_train_loss": true,
+  "fresh_base_reconstructed": true,
+  "generation_canary_pass": true,
+  "global_step": 32,
+  "model_contract_passed": true,
+  "model_selection": {
+    "architecture": "gemma4_unified",
+    "key": "12b",
+    "load_in_4bit": true,
+    "model_id": "google/gemma-4-12B-it",
+    "prompt_profile": "native",
+    "purpose": "first meaningful DAgger pilot",
+    "revision": "707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7",
+    "trust_remote_code": false
+  },
+  "passed": true,
+  "research_run_passed": true,
+  "split_contract_passed": true,
+  "splits": {
+    "overlap": [],
+    "train_roots": 88,
+    "train_rows": 128,
+    "validation_roots": 7,
+    "validation_rows": 32
+  },
+  "train_loss": 0.18198618275346234
+}

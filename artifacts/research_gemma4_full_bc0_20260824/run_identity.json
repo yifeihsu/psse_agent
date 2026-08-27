@@ -1,0 +1,35 @@
+{
+  "architecture": "gemma4_unified",
+  "contract": "research_gemma4_full_bc0_resume_identity_v1",
+  "lora": {
+    "alpha": 16,
+    "dropout": 0.0,
+    "rank": 16
+  },
+  "model_id": "google/gemma-4-12B-it",
+  "model_revision": "707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7",
+  "source_commit": "4112b4125897ad754bccb31e6cb1d75ee2c311f0",
+  "train": {
+    "path": "/scratch/yx3882/dagger_release_a5a7574_20260823/round0_aggregate_release/aggregate.train_view.jsonl",
+    "roots": 182,
+    "rows": 1280,
+    "sha256": "28b733db96c6ce05dbdc8d43484bdbb14445e1105958a78f9a35024aa5b3844a"
+  },
+  "training": {
+    "batch_size": 1,
+    "best_metric": "eval_loss",
+    "epochs": 1.0,
+    "eval_steps": 64,
+    "gradient_accumulation_steps": 4,
+    "learning_rate": 0.0001,
+    "max_length": 32768,
+    "save_steps": 64,
+    "seed": 20260720
+  },
+  "validation": {
+    "path": "/scratch/yx3882/dagger_release_a5a7574_20260823/round0_aggregate_release/aggregate.validation.jsonl",
+    "roots": 44,
+    "rows": 304,
+    "sha256": "2ea1c79d8bc85faf40a8ea5edd2352688c141e658b98407fcfba04ba49a9e4ca"
+  }
+}

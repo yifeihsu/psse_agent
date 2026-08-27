@@ -1,0 +1,454 @@
+matched rows: 44
+episodes: ['r0_9826886a46fd_episode126', 'r0_eab044f4881b_episode143']
+
+==============================================================================
+### r0_9826886a46fd   (20 rows)
+==============================================================================
+
+-- step 0  clean_successful / None
+   executed_by=model  origin=initial
+   preferred = {"tool": "run_wls", "args": {"state_id": "r0_9826886a46fd_episode126:s0"}}
+   executed  = {"tool": "run_wls", "args": {"state_id": "r0_9826886a46fd_episode126:s0"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[]
+   explained=[] remaining_score=None no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=[]
+
+-- step 1  clean_successful / None
+   executed_by=model  origin=learner_policy
+   preferred = {"tool": "get_measurement_context", "args": {"state_id": "r0_9826886a46fd_episode126:s0"}}
+   executed  = {"tool": "get_measurement_context", "args": {"state_id": "r0_9826886a46fd_episode126:s0"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[]
+   explained=[] remaining_score=2.4190546637831956 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=92 channel=Pt", "wls_residual_outlier_dominant index=97 channel=Pt", "wls_residual_outlier_dominant index=88 channel=Pt", "wls_residual_outlier_dominant index=17 
+
+-- step 2  clean_successful / None
+   executed_by=model  origin=learner_policy
+   preferred = {"tool": "correct_measurements", "args": {"state_id": "r0_9826886a46fd_episode126:s0"}}
+   executed  = {"tool": "correct_measurements", "args": {"state_id": "r0_9826886a46fd_episode126:s0"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[]
+   explained=[] remaining_score=2.4190546637831956 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=92 channel=Pt", "wls_residual_outlier_dominant index=97 channel=Pt", "wls_residual_outlier_dominant index=88 channel=Pt", "wls_residual_outlier_dominant index=17 
+
+-- step 3  clean_successful / None
+   executed_by=model  origin=learner_policy
+   preferred = {"tool": "run_wls", "args": {"state_id": "r0_9826886a46fd_episode126:s1"}}
+   executed  = {"tool": "run_wls", "args": {"state_id": "r0_9826886a46fd_episode126:s1"}}
+   lifecycle=OPEN_UNVERIFIED_CANDIDATE status=unverified verified=False unverified=True
+   accepted_corrections=[]
+   explained=[] remaining_score=2.4190546637831956 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=92 channel=Pt", "wls_residual_outlier_dominant index=97 channel=Pt", "wls_residual_outlier_dominant index=88 channel=Pt", "wls_residual_outlier_dominant index=17 
+
+-- step 4  invalid_precondition_recovery / None
+   executed_by=expert  origin=learner_policy
+   preferred = {"tool": "commit_state", "args": {"candidate_state_id": "r0_9826886a46fd_episode126:s1"}}
+   executed  = {"tool": "commit_state", "args": {"candidate_state_id": "r0_9826886a46fd_episode126:s1"}}
+   lifecycle=VERIFIED_CANDIDATE status=verified verified=True unverified=False
+   accepted_corrections=[]
+   explained=[] remaining_score=2.4190546637831956 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=92 channel=Pt", "wls_residual_outlier_dominant index=97 channel=Pt", "wls_residual_outlier_dominant index=88 channel=Pt", "wls_residual_outlier_dominant index=17 
+
+-- step 5  accepted_partial_continuation / None
+   executed_by=model  origin=expert_policy
+   preferred = {"tool": "get_measurement_context", "args": {"state_id": "r0_9826886a46fd_episode126:s1"}}
+   executed  = {"tool": "get_measurement_context", "args": {"state_id": "r0_9826886a46fd_episode126:s1"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_9826886a46fd_episode126:s0", "candidate_state_id": "r0_9826886a46fd_episode126:s1", "source_action": {"arguments": {"state_id": "r0_9826886a46fd_episode126:s0", "suspect_group": [92]}, "tool"
+   explained=[] remaining_score=1.8371101944411967 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=97 channel=Pt", "wls_residual_outlier_dominant index=88 channel=Pt", "wls_residual_outlier_dominant index=22 channel=Pinj", "wls_residual_outlier_dominant index=1
+
+-- step 6  accepted_partial_continuation / None
+   executed_by=model  origin=learner_policy
+   preferred = {"tool": "correct_measurements", "args": {"state_id": "r0_9826886a46fd_episode126:s1"}}
+   executed  = {"tool": "ask_for_more_evidence", "args": {"request": "operator_escalation:recovery_options_exhausted", "state_id": "r0_9826886a46fd_episode126:s1"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_9826886a46fd_episode126:s0", "candidate_state_id": "r0_9826886a46fd_episode126:s1", "source_action": {"arguments": {"state_id": "r0_9826886a46fd_episode126:s0", "suspect_group": [92]}, "tool"
+   explained=[] remaining_score=1.8371101944411967 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=97 channel=Pt", "wls_residual_outlier_dominant index=88 channel=Pt", "wls_residual_outlier_dominant index=22 channel=Pinj", "wls_residual_outlier_dominant index=1
+
+-- step 7  invalid_precondition_recovery / premature_escalation_recovery
+   executed_by=expert  origin=learner_policy
+   preferred = {"tool": "run_wls", "args": {"state_id": "r0_9826886a46fd_episode126:s1"}}
+   executed  = {"tool": "run_wls", "args": {"state_id": "r0_9826886a46fd_episode126:s1"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_9826886a46fd_episode126:s0", "candidate_state_id": "r0_9826886a46fd_episode126:s1", "source_action": {"arguments": {"state_id": "r0_9826886a46fd_episode126:s0", "suspect_group": [92]}, "tool"
+   explained=[] remaining_score=1.8371101944411967 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=97 channel=Pt", "wls_residual_outlier_dominant index=88 channel=Pt", "wls_residual_outlier_dominant index=22 channel=Pinj", "wls_residual_outlier_dominant index=1
+
+-- step 8  accepted_partial_continuation / loop_escape
+   executed_by=model  origin=expert_policy
+   preferred = {"tool": "correct_measurements", "args": {"state_id": "r0_9826886a46fd_episode126:s1"}}
+   executed  = {"tool": "ask_for_more_evidence", "args": {"request": "operator_escalation:recovery_options_exhausted", "state_id": "r0_9826886a46fd_episode126:s1"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_9826886a46fd_episode126:s0", "candidate_state_id": "r0_9826886a46fd_episode126:s1", "source_action": {"arguments": {"state_id": "r0_9826886a46fd_episode126:s0", "suspect_group": [92]}, "tool"
+   explained=[] remaining_score=1.8371101944411967 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=97 channel=Pt", "wls_residual_outlier_dominant index=88 channel=Pt", "wls_residual_outlier_dominant index=22 channel=Pinj", "wls_residual_outlier_dominant index=1
+
+-- step 9  invalid_precondition_recovery / premature_escalation_recovery
+   executed_by=model  origin=learner_policy
+   preferred = {"tool": "run_wls", "args": {"state_id": "r0_9826886a46fd_episode126:s1"}}
+   executed  = {"tool": "ask_for_more_evidence", "args": {"request": "operator_escalation:recovery_options_exhausted", "state_id": "r0_9826886a46fd_episode126:s1"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_9826886a46fd_episode126:s0", "candidate_state_id": "r0_9826886a46fd_episode126:s1", "source_action": {"arguments": {"state_id": "r0_9826886a46fd_episode126:s0", "suspect_group": [92]}, "tool"
+   explained=[] remaining_score=1.8371101944411967 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=97 channel=Pt", "wls_residual_outlier_dominant index=88 channel=Pt", "wls_residual_outlier_dominant index=22 channel=Pinj", "wls_residual_outlier_dominant index=1
+
+-- step 10  invalid_precondition_recovery / premature_escalation_recovery
+   executed_by=expert  origin=learner_policy
+   preferred = {"tool": "run_wls", "args": {"state_id": "r0_9826886a46fd_episode126:s1"}}
+   executed  = {"tool": "run_wls", "args": {"state_id": "r0_9826886a46fd_episode126:s1"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_9826886a46fd_episode126:s0", "candidate_state_id": "r0_9826886a46fd_episode126:s1", "source_action": {"arguments": {"state_id": "r0_9826886a46fd_episode126:s0", "suspect_group": [92]}, "tool"
+   explained=[] remaining_score=1.8371101944411967 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=97 channel=Pt", "wls_residual_outlier_dominant index=88 channel=Pt", "wls_residual_outlier_dominant index=22 channel=Pinj", "wls_residual_outlier_dominant index=1
+
+-- step 11  accepted_partial_continuation / loop_escape
+   executed_by=expert  origin=expert_policy
+   preferred = {"tool": "correct_measurements", "args": {"state_id": "r0_9826886a46fd_episode126:s1"}}
+   executed  = {"tool": "correct_measurements", "args": {"state_id": "r0_9826886a46fd_episode126:s1"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_9826886a46fd_episode126:s0", "candidate_state_id": "r0_9826886a46fd_episode126:s1", "source_action": {"arguments": {"state_id": "r0_9826886a46fd_episode126:s0", "suspect_group": [92]}, "tool"
+   explained=[] remaining_score=1.8371101944411967 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=97 channel=Pt", "wls_residual_outlier_dominant index=88 channel=Pt", "wls_residual_outlier_dominant index=22 channel=Pinj", "wls_residual_outlier_dominant index=1
+
+-- step 12  accepted_partial_continuation / loop_escape
+   executed_by=model  origin=expert_policy
+   preferred = {"tool": "run_wls", "args": {"state_id": "r0_9826886a46fd_episode126:s2"}}
+   executed  = {"tool": "run_wls", "args": {"state_id": "r0_9826886a46fd_episode126:s2"}}
+   lifecycle=OPEN_UNVERIFIED_CANDIDATE status=unverified verified=False unverified=True
+   accepted_corrections=[{"candidate_parent_id": "r0_9826886a46fd_episode126:s0", "candidate_state_id": "r0_9826886a46fd_episode126:s1", "source_action": {"arguments": {"state_id": "r0_9826886a46fd_episode126:s0", "suspect_group": [92]}, "tool"
+   explained=[] remaining_score=1.8371101944411967 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=97 channel=Pt", "wls_residual_outlier_dominant index=88 channel=Pt", "wls_residual_outlier_dominant index=22 channel=Pinj", "wls_residual_outlier_dominant index=1
+
+-- step 13  invalid_precondition_recovery / loop_escape
+   executed_by=expert  origin=learner_policy
+   preferred = {"tool": "commit_state", "args": {"candidate_state_id": "r0_9826886a46fd_episode126:s2"}}
+   executed  = {"tool": "commit_state", "args": {"candidate_state_id": "r0_9826886a46fd_episode126:s2"}}
+   lifecycle=VERIFIED_CANDIDATE status=verified verified=True unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_9826886a46fd_episode126:s0", "candidate_state_id": "r0_9826886a46fd_episode126:s1", "source_action": {"arguments": {"state_id": "r0_9826886a46fd_episode126:s0", "suspect_group": [92]}, "tool"
+   explained=[] remaining_score=1.8371101944411967 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=97 channel=Pt", "wls_residual_outlier_dominant index=88 channel=Pt", "wls_residual_outlier_dominant index=22 channel=Pinj", "wls_residual_outlier_dominant index=1
+
+-- step 14  accepted_partial_continuation / loop_escape
+   executed_by=model  origin=expert_policy
+   preferred = {"tool": "get_measurement_context", "args": {"state_id": "r0_9826886a46fd_episode126:s2"}}
+   executed  = {"tool": "get_measurement_context", "args": {"state_id": "r0_9826886a46fd_episode126:s2"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_9826886a46fd_episode126:s0", "candidate_state_id": "r0_9826886a46fd_episode126:s1", "source_action": {"arguments": {"state_id": "r0_9826886a46fd_episode126:s0", "suspect_group": [92]}, "tool"
+   explained=[] remaining_score=1.3738856356385374 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=88 channel=Pt", "wls_residual_outlier_dominant index=18 channel=Pinj", "wls_residual_outlier_dominant index=17 channel=Pinj"]
+
+-- step 15  accepted_partial_continuation / loop_escape
+   executed_by=model  origin=learner_policy
+   preferred = {"tool": "correct_measurements", "args": {"state_id": "r0_9826886a46fd_episode126:s2"}}
+   executed  = {"tool": "correct_measurements", "args": {"state_id": "r0_9826886a46fd_episode126:s2"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_9826886a46fd_episode126:s0", "candidate_state_id": "r0_9826886a46fd_episode126:s1", "source_action": {"arguments": {"state_id": "r0_9826886a46fd_episode126:s0", "suspect_group": [92]}, "tool"
+   explained=[] remaining_score=1.3738856356385374 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=88 channel=Pt", "wls_residual_outlier_dominant index=18 channel=Pinj", "wls_residual_outlier_dominant index=17 channel=Pinj"]
+
+-- step 16  accepted_partial_continuation / loop_escape
+   executed_by=model  origin=learner_policy
+   preferred = {"tool": "run_wls", "args": {"state_id": "r0_9826886a46fd_episode126:s3"}}
+   executed  = {"tool": "run_wls", "args": {"state_id": "r0_9826886a46fd_episode126:s3"}}
+   lifecycle=OPEN_UNVERIFIED_CANDIDATE status=unverified verified=False unverified=True
+   accepted_corrections=[{"candidate_parent_id": "r0_9826886a46fd_episode126:s0", "candidate_state_id": "r0_9826886a46fd_episode126:s1", "source_action": {"arguments": {"state_id": "r0_9826886a46fd_episode126:s0", "suspect_group": [92]}, "tool"
+   explained=[] remaining_score=1.3738856356385374 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=88 channel=Pt", "wls_residual_outlier_dominant index=18 channel=Pinj", "wls_residual_outlier_dominant index=17 channel=Pinj"]
+
+-- step 17  invalid_precondition_recovery / loop_escape  <<< QUARANTINED
+   executed_by=model  origin=learner_policy
+   preferred = {"tool": "commit_state", "args": {"candidate_state_id": "r0_9826886a46fd_episode126:s3"}}
+   executed  = {"tool": "commit_state", "args": {"candidate_state_id": "r0_9826886a46fd_episode126:s3"}}
+   lifecycle=VERIFIED_CANDIDATE status=verified verified=True unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_9826886a46fd_episode126:s0", "candidate_state_id": "r0_9826886a46fd_episode126:s1", "source_action": {"arguments": {"state_id": "r0_9826886a46fd_episode126:s0", "suspect_group": [92]}, "tool"
+   explained=[] remaining_score=1.3738856356385374 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=88 channel=Pt", "wls_residual_outlier_dominant index=18 channel=Pinj", "wls_residual_outlier_dominant index=17 channel=Pinj"]
+   AUDIT = {"action_class": "commit", "checks": {"candidate_exists": true, "candidate_source_truth_evidence_complete": true, "candidate_truth_safe_to_commit": false, "candidate_verified": true, "observable_evidence_gate_passed": true}, "contract": "dagger1_offline_teacher_target_truth_audit_v2", "passed": false, "reason_codes": ["candidate_source_target_outside_remaining_truth"]}
+
+-- step 18  accepted_partial_continuation / loop_escape
+   executed_by=expert  origin=learner_policy
+   preferred = {"tool": "get_measurement_context", "args": {"state_id": "r0_9826886a46fd_episode126:s3"}}
+   executed  = {"tool": "get_measurement_context", "args": {"state_id": "r0_9826886a46fd_episode126:s3"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_9826886a46fd_episode126:s0", "candidate_state_id": "r0_9826886a46fd_episode126:s1", "source_action": {"arguments": {"state_id": "r0_9826886a46fd_episode126:s0", "suspect_group": [92]}, "tool"
+   explained=[] remaining_score=0.9851481342016977 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["post_correction_resolution_confirmation_required:measurement_context"]
+
+-- step 19  terminal_operator_escalation / multi_measurement_safe_handoff
+   executed_by=model  origin=expert_policy
+   preferred = {"tool": "ask_for_more_evidence", "args": {"request": "operator_escalation:recovery_options_exhausted", "state_id": "r0_9826886a46fd_episode126:s3"}}
+   executed  = {"tool": "ask_for_more_evidence", "args": {"request": "operator_escalation:recovery_options_exhausted", "state_id": "r0_9826886a46fd_episode126:s3"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_9826886a46fd_episode126:s0", "candidate_state_id": "r0_9826886a46fd_episode126:s1", "source_action": {"arguments": {"state_id": "r0_9826886a46fd_episode126:s0", "suspect_group": [92]}, "tool"
+   explained=[] remaining_score=0.9851481342016977 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["post_correction_resolution_confirmation_required:measurement_context"]
+==============================================================================
+### r0_eab044f4881b   (24 rows)
+==============================================================================
+
+-- step 0  clean_successful / None
+   executed_by=model  origin=initial
+   preferred = {"tool": "run_wls", "args": {"state_id": "r0_eab044f4881b_episode143:s0"}}
+   executed  = {"tool": "run_wls", "args": {"state_id": "r0_eab044f4881b_episode143:s0"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[]
+   explained=[] remaining_score=None no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=[]
+
+-- step 1  clean_successful / None
+   executed_by=expert  origin=learner_policy
+   preferred = {"tool": "get_measurement_context", "args": {"state_id": "r0_eab044f4881b_episode143:s0"}}
+   executed  = {"tool": "get_measurement_context", "args": {"state_id": "r0_eab044f4881b_episode143:s0"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[]
+   explained=[] remaining_score=5.316613308323012 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=17 channel=Pinj", "wls_residual_outlier_dominant index=27 channel=Pinj", "wls_residual_outlier_dominant index=26 channel=Pinj", "wls_residual_outlier_dominant ind
+
+-- step 2  clean_successful / None
+   executed_by=model  origin=expert_policy
+   preferred = {"tool": "correct_measurements", "args": {"state_id": "r0_eab044f4881b_episode143:s0"}}
+   executed  = {"tool": "correct_measurements", "args": {"state_id": "r0_eab044f4881b_episode143:s0"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[]
+   explained=[] remaining_score=5.316613308323012 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=17 channel=Pinj", "wls_residual_outlier_dominant index=27 channel=Pinj", "wls_residual_outlier_dominant index=26 channel=Pinj", "wls_residual_outlier_dominant ind
+
+-- step 3  clean_successful / None
+   executed_by=model  origin=learner_policy
+   preferred = {"tool": "run_wls", "args": {"state_id": "r0_eab044f4881b_episode143:s1"}}
+   executed  = {"tool": "run_wls", "args": {"state_id": "r0_eab044f4881b_episode143:s1"}}
+   lifecycle=OPEN_UNVERIFIED_CANDIDATE status=unverified verified=False unverified=True
+   accepted_corrections=[]
+   explained=[] remaining_score=5.316613308323012 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=17 channel=Pinj", "wls_residual_outlier_dominant index=27 channel=Pinj", "wls_residual_outlier_dominant index=26 channel=Pinj", "wls_residual_outlier_dominant ind
+
+-- step 4  invalid_precondition_recovery / None
+   executed_by=model  origin=learner_policy
+   preferred = {"tool": "commit_state", "args": {"candidate_state_id": "r0_eab044f4881b_episode143:s1"}}
+   executed  = {"tool": "commit_state", "args": {"candidate_state_id": "r0_eab044f4881b_episode143:s1"}}
+   lifecycle=VERIFIED_CANDIDATE status=verified verified=True unverified=False
+   accepted_corrections=[]
+   explained=[] remaining_score=5.316613308323012 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=17 channel=Pinj", "wls_residual_outlier_dominant index=27 channel=Pinj", "wls_residual_outlier_dominant index=26 channel=Pinj", "wls_residual_outlier_dominant ind
+
+-- step 5  accepted_partial_continuation / None
+   executed_by=expert  origin=learner_policy
+   preferred = {"tool": "get_measurement_context", "args": {"state_id": "r0_eab044f4881b_episode143:s1"}}
+   executed  = {"tool": "get_measurement_context", "args": {"state_id": "r0_eab044f4881b_episode143:s1"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_eab044f4881b_episode143:s0", "candidate_state_id": "r0_eab044f4881b_episode143:s1", "source_action": {"arguments": {"state_id": "r0_eab044f4881b_episode143:s0", "suspect_group": [17]}, "tool"
+   explained=[] remaining_score=3.3809004336191637 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=27 channel=Pinj", "wls_residual_outlier_dominant index=26 channel=Pinj", "wls_residual_outlier_dominant index=19 channel=Pinj", "wls_residual_outlier_dominant ind
+
+-- step 6  accepted_partial_continuation / None
+   executed_by=model  origin=expert_policy
+   preferred = {"tool": "correct_measurements", "args": {"state_id": "r0_eab044f4881b_episode143:s1"}}
+   executed  = {"tool": "ask_for_more_evidence", "args": {"request": "operator_escalation:recovery_options_exhausted", "state_id": "r0_eab044f4881b_episode143:s1"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_eab044f4881b_episode143:s0", "candidate_state_id": "r0_eab044f4881b_episode143:s1", "source_action": {"arguments": {"state_id": "r0_eab044f4881b_episode143:s0", "suspect_group": [17]}, "tool"
+   explained=[] remaining_score=3.3809004336191637 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=27 channel=Pinj", "wls_residual_outlier_dominant index=26 channel=Pinj", "wls_residual_outlier_dominant index=19 channel=Pinj", "wls_residual_outlier_dominant ind
+
+-- step 7  invalid_precondition_recovery / premature_escalation_recovery
+   executed_by=expert  origin=learner_policy
+   preferred = {"tool": "run_wls", "args": {"state_id": "r0_eab044f4881b_episode143:s1"}}
+   executed  = {"tool": "run_wls", "args": {"state_id": "r0_eab044f4881b_episode143:s1"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_eab044f4881b_episode143:s0", "candidate_state_id": "r0_eab044f4881b_episode143:s1", "source_action": {"arguments": {"state_id": "r0_eab044f4881b_episode143:s0", "suspect_group": [17]}, "tool"
+   explained=[] remaining_score=3.3809004336191637 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=27 channel=Pinj", "wls_residual_outlier_dominant index=26 channel=Pinj", "wls_residual_outlier_dominant index=19 channel=Pinj", "wls_residual_outlier_dominant ind
+
+-- step 8  accepted_partial_continuation / loop_escape
+   executed_by=model  origin=expert_policy
+   preferred = {"tool": "correct_measurements", "args": {"state_id": "r0_eab044f4881b_episode143:s1"}}
+   executed  = {"tool": "ask_for_more_evidence", "args": {"request": "operator_escalation:recovery_options_exhausted", "state_id": "r0_eab044f4881b_episode143:s1"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_eab044f4881b_episode143:s0", "candidate_state_id": "r0_eab044f4881b_episode143:s1", "source_action": {"arguments": {"state_id": "r0_eab044f4881b_episode143:s0", "suspect_group": [17]}, "tool"
+   explained=[] remaining_score=3.3809004336191637 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=27 channel=Pinj", "wls_residual_outlier_dominant index=26 channel=Pinj", "wls_residual_outlier_dominant index=19 channel=Pinj", "wls_residual_outlier_dominant ind
+
+-- step 9  invalid_precondition_recovery / premature_escalation_recovery
+   executed_by=model  origin=learner_policy
+   preferred = {"tool": "run_wls", "args": {"state_id": "r0_eab044f4881b_episode143:s1"}}
+   executed  = {"tool": "ask_for_more_evidence", "args": {"request": "operator_escalation:recovery_options_exhausted", "state_id": "r0_eab044f4881b_episode143:s1"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_eab044f4881b_episode143:s0", "candidate_state_id": "r0_eab044f4881b_episode143:s1", "source_action": {"arguments": {"state_id": "r0_eab044f4881b_episode143:s0", "suspect_group": [17]}, "tool"
+   explained=[] remaining_score=3.3809004336191637 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=27 channel=Pinj", "wls_residual_outlier_dominant index=26 channel=Pinj", "wls_residual_outlier_dominant index=19 channel=Pinj", "wls_residual_outlier_dominant ind
+
+-- step 10  invalid_precondition_recovery / premature_escalation_recovery
+   executed_by=expert  origin=learner_policy
+   preferred = {"tool": "run_wls", "args": {"state_id": "r0_eab044f4881b_episode143:s1"}}
+   executed  = {"tool": "run_wls", "args": {"state_id": "r0_eab044f4881b_episode143:s1"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_eab044f4881b_episode143:s0", "candidate_state_id": "r0_eab044f4881b_episode143:s1", "source_action": {"arguments": {"state_id": "r0_eab044f4881b_episode143:s0", "suspect_group": [17]}, "tool"
+   explained=[] remaining_score=3.3809004336191637 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=27 channel=Pinj", "wls_residual_outlier_dominant index=26 channel=Pinj", "wls_residual_outlier_dominant index=19 channel=Pinj", "wls_residual_outlier_dominant ind
+
+-- step 11  accepted_partial_continuation / loop_escape
+   executed_by=expert  origin=expert_policy
+   preferred = {"tool": "correct_measurements", "args": {"state_id": "r0_eab044f4881b_episode143:s1"}}
+   executed  = {"tool": "correct_measurements", "args": {"state_id": "r0_eab044f4881b_episode143:s1"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_eab044f4881b_episode143:s0", "candidate_state_id": "r0_eab044f4881b_episode143:s1", "source_action": {"arguments": {"state_id": "r0_eab044f4881b_episode143:s0", "suspect_group": [17]}, "tool"
+   explained=[] remaining_score=3.3809004336191637 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=27 channel=Pinj", "wls_residual_outlier_dominant index=26 channel=Pinj", "wls_residual_outlier_dominant index=19 channel=Pinj", "wls_residual_outlier_dominant ind
+
+-- step 12  accepted_partial_continuation / loop_escape
+   executed_by=expert  origin=expert_policy
+   preferred = {"tool": "run_wls", "args": {"state_id": "r0_eab044f4881b_episode143:s2"}}
+   executed  = {"tool": "run_wls", "args": {"state_id": "r0_eab044f4881b_episode143:s2"}}
+   lifecycle=OPEN_UNVERIFIED_CANDIDATE status=unverified verified=False unverified=True
+   accepted_corrections=[{"candidate_parent_id": "r0_eab044f4881b_episode143:s0", "candidate_state_id": "r0_eab044f4881b_episode143:s1", "source_action": {"arguments": {"state_id": "r0_eab044f4881b_episode143:s0", "suspect_group": [17]}, "tool"
+   explained=[] remaining_score=3.3809004336191637 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=27 channel=Pinj", "wls_residual_outlier_dominant index=26 channel=Pinj", "wls_residual_outlier_dominant index=19 channel=Pinj", "wls_residual_outlier_dominant ind
+
+-- step 13  invalid_precondition_recovery / loop_escape
+   executed_by=model  origin=expert_policy
+   preferred = {"tool": "commit_state", "args": {"candidate_state_id": "r0_eab044f4881b_episode143:s2"}}
+   executed  = {"tool": "commit_state", "args": {"candidate_state_id": "r0_eab044f4881b_episode143:s2"}}
+   lifecycle=VERIFIED_CANDIDATE status=verified verified=True unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_eab044f4881b_episode143:s0", "candidate_state_id": "r0_eab044f4881b_episode143:s1", "source_action": {"arguments": {"state_id": "r0_eab044f4881b_episode143:s0", "suspect_group": [17]}, "tool"
+   explained=[] remaining_score=3.3809004336191637 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=27 channel=Pinj", "wls_residual_outlier_dominant index=26 channel=Pinj", "wls_residual_outlier_dominant index=19 channel=Pinj", "wls_residual_outlier_dominant ind
+
+-- step 14  accepted_partial_continuation / loop_escape
+   executed_by=model  origin=learner_policy
+   preferred = {"tool": "get_measurement_context", "args": {"state_id": "r0_eab044f4881b_episode143:s2"}}
+   executed  = {"tool": "get_measurement_context", "args": {"state_id": "r0_eab044f4881b_episode143:s2"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_eab044f4881b_episode143:s0", "candidate_state_id": "r0_eab044f4881b_episode143:s1", "source_action": {"arguments": {"state_id": "r0_eab044f4881b_episode143:s0", "suspect_group": [17]}, "tool"
+   explained=[] remaining_score=1.9369080739348243 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=26 channel=Pinj", "wls_residual_outlier_dominant index=19 channel=Pinj", "wls_residual_outlier_dominant index=51 channel=Pf"]
+
+-- step 15  accepted_partial_continuation / loop_escape
+   executed_by=model  origin=learner_policy
+   preferred = {"tool": "correct_measurements", "args": {"state_id": "r0_eab044f4881b_episode143:s2"}}
+   executed  = {"tool": "correct_measurements", "args": {"state_id": "r0_eab044f4881b_episode143:s2"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_eab044f4881b_episode143:s0", "candidate_state_id": "r0_eab044f4881b_episode143:s1", "source_action": {"arguments": {"state_id": "r0_eab044f4881b_episode143:s0", "suspect_group": [17]}, "tool"
+   explained=[] remaining_score=1.9369080739348243 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=26 channel=Pinj", "wls_residual_outlier_dominant index=19 channel=Pinj", "wls_residual_outlier_dominant index=51 channel=Pf"]
+
+-- step 16  accepted_partial_continuation / loop_escape
+   executed_by=expert  origin=learner_policy
+   preferred = {"tool": "run_wls", "args": {"state_id": "r0_eab044f4881b_episode143:s3"}}
+   executed  = {"tool": "run_wls", "args": {"state_id": "r0_eab044f4881b_episode143:s3"}}
+   lifecycle=OPEN_UNVERIFIED_CANDIDATE status=unverified verified=False unverified=True
+   accepted_corrections=[{"candidate_parent_id": "r0_eab044f4881b_episode143:s0", "candidate_state_id": "r0_eab044f4881b_episode143:s1", "source_action": {"arguments": {"state_id": "r0_eab044f4881b_episode143:s0", "suspect_group": [17]}, "tool"
+   explained=[] remaining_score=1.9369080739348243 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=26 channel=Pinj", "wls_residual_outlier_dominant index=19 channel=Pinj", "wls_residual_outlier_dominant index=51 channel=Pf"]
+
+-- step 17  invalid_precondition_recovery / loop_escape
+   executed_by=model  origin=expert_policy
+   preferred = {"tool": "commit_state", "args": {"candidate_state_id": "r0_eab044f4881b_episode143:s3"}}
+   executed  = {"tool": "commit_state", "args": {"candidate_state_id": "r0_eab044f4881b_episode143:s3"}}
+   lifecycle=VERIFIED_CANDIDATE status=verified verified=True unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_eab044f4881b_episode143:s0", "candidate_state_id": "r0_eab044f4881b_episode143:s1", "source_action": {"arguments": {"state_id": "r0_eab044f4881b_episode143:s0", "suspect_group": [17]}, "tool"
+   explained=[] remaining_score=1.9369080739348243 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=26 channel=Pinj", "wls_residual_outlier_dominant index=19 channel=Pinj", "wls_residual_outlier_dominant index=51 channel=Pf"]
+
+-- step 18  accepted_partial_continuation / loop_escape
+   executed_by=expert  origin=learner_policy
+   preferred = {"tool": "get_measurement_context", "args": {"state_id": "r0_eab044f4881b_episode143:s3"}}
+   executed  = {"tool": "get_measurement_context", "args": {"state_id": "r0_eab044f4881b_episode143:s3"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_eab044f4881b_episode143:s0", "candidate_state_id": "r0_eab044f4881b_episode143:s1", "source_action": {"arguments": {"state_id": "r0_eab044f4881b_episode143:s0", "suspect_group": [17]}, "tool"
+   explained=[] remaining_score=1.1892710027536795 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=19 channel=Pinj"]
+
+-- step 19  accepted_partial_continuation / loop_escape
+   executed_by=model  origin=expert_policy
+   preferred = {"tool": "correct_measurements", "args": {"state_id": "r0_eab044f4881b_episode143:s3"}}
+   executed  = {"tool": "correct_measurements", "args": {"state_id": "r0_eab044f4881b_episode143:s3"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_eab044f4881b_episode143:s0", "candidate_state_id": "r0_eab044f4881b_episode143:s1", "source_action": {"arguments": {"state_id": "r0_eab044f4881b_episode143:s0", "suspect_group": [17]}, "tool"
+   explained=[] remaining_score=1.1892710027536795 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=19 channel=Pinj"]
+
+-- step 20  accepted_partial_continuation / loop_escape
+   executed_by=model  origin=learner_policy
+   preferred = {"tool": "run_wls", "args": {"state_id": "r0_eab044f4881b_episode143:s4"}}
+   executed  = {"tool": "run_wls", "args": {"state_id": "r0_eab044f4881b_episode143:s4"}}
+   lifecycle=OPEN_UNVERIFIED_CANDIDATE status=unverified verified=False unverified=True
+   accepted_corrections=[{"candidate_parent_id": "r0_eab044f4881b_episode143:s0", "candidate_state_id": "r0_eab044f4881b_episode143:s1", "source_action": {"arguments": {"state_id": "r0_eab044f4881b_episode143:s0", "suspect_group": [17]}, "tool"
+   explained=[] remaining_score=1.1892710027536795 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=19 channel=Pinj"]
+
+-- step 21  invalid_precondition_recovery / loop_escape  <<< QUARANTINED
+   executed_by=expert  origin=learner_policy
+   preferred = {"tool": "commit_state", "args": {"candidate_state_id": "r0_eab044f4881b_episode143:s4"}}
+   executed  = {"tool": "commit_state", "args": {"candidate_state_id": "r0_eab044f4881b_episode143:s4"}}
+   lifecycle=VERIFIED_CANDIDATE status=verified verified=True unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_eab044f4881b_episode143:s0", "candidate_state_id": "r0_eab044f4881b_episode143:s1", "source_action": {"arguments": {"state_id": "r0_eab044f4881b_episode143:s0", "suspect_group": [17]}, "tool"
+   explained=[] remaining_score=1.1892710027536795 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["wls_residual_outlier_dominant index=19 channel=Pinj"]
+   AUDIT = {"action_class": "commit", "checks": {"candidate_exists": true, "candidate_source_truth_evidence_complete": true, "candidate_truth_safe_to_commit": false, "candidate_verified": true, "observable_evidence_gate_passed": true}, "contract": "dagger1_offline_teacher_target_truth_audit_v2", "passed": false, "reason_codes": ["candidate_source_target_outside_remaining_truth"]}
+
+-- step 22  accepted_partial_continuation / loop_escape
+   executed_by=model  origin=expert_policy
+   preferred = {"tool": "get_measurement_context", "args": {"state_id": "r0_eab044f4881b_episode143:s4"}}
+   executed  = {"tool": "get_measurement_context", "args": {"state_id": "r0_eab044f4881b_episode143:s4"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_eab044f4881b_episode143:s0", "candidate_state_id": "r0_eab044f4881b_episode143:s1", "source_action": {"arguments": {"state_id": "r0_eab044f4881b_episode143:s0", "suspect_group": [17]}, "tool"
+   explained=[] remaining_score=0.8030379470588814 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["post_correction_resolution_confirmation_required:measurement_context"]
+
+-- step 23  terminal_operator_escalation / multi_measurement_safe_handoff
+   executed_by=expert  origin=learner_policy
+   preferred = {"tool": "ask_for_more_evidence", "args": {"request": "operator_escalation:recovery_options_exhausted", "state_id": "r0_eab044f4881b_episode143:s4"}}
+   executed  = {"tool": "ask_for_more_evidence", "args": {"request": "operator_escalation:recovery_options_exhausted", "state_id": "r0_eab044f4881b_episode143:s4"}}
+   lifecycle=NO_CANDIDATE status=None verified=False unverified=False
+   accepted_corrections=[{"candidate_parent_id": "r0_eab044f4881b_episode143:s0", "candidate_state_id": "r0_eab044f4881b_episode143:s1", "source_action": {"arguments": {"state_id": "r0_eab044f4881b_episode143:s0", "suspect_group": [17]}, "tool"
+   explained=[] remaining_score=0.8030379470588814 no_material_anomaly=False
+   rejected_hypotheses=[]
+   unresolved_signatures=["post_correction_resolution_confirmation_required:measurement_context"]
+
+
+wrote /scratch/yx3882/dagger1_6b76281c-20260816T035053Z-31541-3666363/quarantine_forensics/quarantined_episodes.compact.json and .policy_rows.jsonl
