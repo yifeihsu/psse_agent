@@ -5,15 +5,19 @@ set -Eeuo pipefail
 : "${CELL_CONFIG_SHA256:?set CELL_CONFIG_SHA256}"
 : "${CELL_PYTHON:?set CELL_PYTHON}"
 
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+SUBMITTED_SCRIPT=$(readlink -f "${BASH_SOURCE[0]}")
 CONFIG_SOURCE_ROOT=$("$CELL_PYTHON" - "$CELL_CONFIG" <<'PY'
 import json, sys
 print(json.load(open(sys.argv[1], encoding="utf-8"))["source_root"])
 PY
 )
 EXPECTED_SCRIPT_DIR=$(readlink -f "$CONFIG_SOURCE_ROOT/research/hpc/occupancy_cell_20260827")
-[[ "$(readlink -f "$SCRIPT_DIR")" == "$EXPECTED_SCRIPT_DIR" ]] \
-  || { echo "launcher is outside the configured source tree" >&2; exit 2; }
+EXPECTED_SCRIPT="$EXPECTED_SCRIPT_DIR/build.sh"
+if [[ "$SUBMITTED_SCRIPT" != "$EXPECTED_SCRIPT" ]]; then
+  cmp -s "$SUBMITTED_SCRIPT" "$EXPECTED_SCRIPT" \
+    || { echo "Slurm script copy differs from the configured source" >&2; exit 2; }
+fi
+SCRIPT_DIR=$EXPECTED_SCRIPT_DIR
 mapfile -t CONFIG < <("$CELL_PYTHON" "$SCRIPT_DIR/build.py" config-values \
   --config "$CELL_CONFIG" --expected-config-sha "$CELL_CONFIG_SHA256")
 CELL_ROOT=${CONFIG[0]}

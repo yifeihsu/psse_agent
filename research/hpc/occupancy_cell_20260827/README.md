@@ -49,9 +49,12 @@ the scheduler feature and the expected physical family (`A100`, `H100`, or
 training. A/C share one declared lane and B/D share the other. No script
 specifies a partition.
 
-The launcher refuses to run unless its resolved directory is inside the
-configured, tree-hashed `source_root`. Only the explicitly required variables
-and `PATH` are exported to jobs. If an `sbatch` or receipt update fails during
+The submit launcher refuses to run unless its resolved directory is inside the
+configured, tree-hashed `source_root`. Because Slurm executes a spool copy of
+each batch script, every job byte-compares that copy with the corresponding
+script under the hashed source tree before using any gate code. Only the
+explicitly required variables and `PATH` are exported to jobs. If an `sbatch`
+or receipt update fails during
 submission, the launcher requests cancellation of every job ID created by that
 attempt and records those IDs in `submission.json`; inspect that receipt and
 `squeue`/`sacct`, then use a fresh cell root for a new attempt.
