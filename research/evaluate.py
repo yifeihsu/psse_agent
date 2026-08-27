@@ -9,6 +9,7 @@ the policy emitted an unusable action -- and makes no release claim.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from collections import Counter
 from pathlib import Path
@@ -19,8 +20,10 @@ from psse_env.dagger.release_factories import production_environment_factory
 
 from .collect import load_scenarios
 from .model import load_policy
+from .train import file_sha256
 
 DEFAULT_MAX_STEPS = 24
+EVALUATION_SCHEMA_VERSION = 2
 
 
 def _scenario_execution(scenario: dict[str, Any]) -> dict[str, Any]:
@@ -28,7 +31,7 @@ def _scenario_execution(scenario: dict[str, Any]) -> dict[str, Any]:
 
     execution = scenario.get("execution")
     if isinstance(execution, dict):
-        runtime = dict(execution)
+        runtime = copy.deepcopy(dict(execution))
         audit = scenario.get("audit")
         truth = audit.get("truth") if isinstance(audit, dict) else None
         if isinstance(truth, dict):
@@ -39,13 +42,30 @@ def _scenario_execution(scenario: dict[str, Any]) -> dict[str, Any]:
                     ("measurements", "clean_measurements"),
                 ):
                     if nested in clean_state:
-                        runtime.setdefault(flat, clean_state[nested])
+                        runtime.setdefault(flat, copy.deepcopy(clean_state[nested]))
             for key, value in truth.items():
                 if key in {"truth_complete", "clean_state"}:
                     continue
-                runtime.setdefault(str(key), value)
+                runtime.setdefault(str(key), copy.deepcopy(value))
         return runtime
-    return dict(scenario)
+    return copy.deepcopy(dict(scenario))
+
+
+def _scenario_identity(scenario: dict[str, Any]) -> dict[str, str | None]:
+    grouping = scenario.get("grouping")
+    grouping = grouping if isinstance(grouping, dict) else {}
+    root = scenario.get("root_scenario_id") or grouping.get("root_scenario_id")
+    scenario_id = scenario.get("scenario_id") or grouping.get("scenario_id") or root
+    fingerprint = scenario.get("physical_root_fingerprint") or grouping.get(
+        "physical_root_fingerprint"
+    )
+    return {
+        "scenario_id": str(scenario_id) if scenario_id is not None else None,
+        "root_scenario_id": str(root) if root is not None else None,
+        "physical_root_fingerprint": (
+            str(fingerprint) if fingerprint is not None else None
+        ),
+    }
 
 
 def run_episode(
@@ -59,6 +79,7 @@ def run_episode(
     invalid_actions = 0
     steps = 0
     terminal_outcome: str | None = None
+    termination_reason: str | None = None
 
     first_error: str | None = None
     for _ in range(max_steps):
@@ -74,6 +95,7 @@ def run_episode(
             invalid_actions += 1
             if first_error is None:
                 first_error = f"{type(exc).__name__}: {exc}"
+            termination_reason = "policy_generation_abort"
             break
         steps += 1
         try:
@@ -82,8 +104,11 @@ def run_episode(
             executed = action
         try:
             next_state, tool_output = env.step(executed)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             invalid_actions += 1
+            if first_error is None:
+                first_error = f"env.step {type(exc).__name__}: {exc}"
+            termination_reason = "environment_step_exception"
             break
         if isinstance(tool_output, dict):
             if tool_output.get("execution_status") == "failure":
@@ -100,16 +125,15 @@ def run_episode(
             ) or tool_output.get("terminal_outcome")
             if outcome:
                 terminal_outcome = str(outcome)
+                termination_reason = "terminal_outcome"
         arguments = executed.get("arguments") if isinstance(executed, dict) else None
-        rendered_arguments = json.dumps(arguments, sort_keys=True, default=str)
         trace.append(
             {
                 "tool": executed.get("tool") if isinstance(executed, dict) else None,
-                "arguments": (
-                    rendered_arguments
-                    if len(rendered_arguments) <= 300
-                    else rendered_arguments[:300] + "..."
-                ),
+                # Full structured arguments are required for deterministic
+                # physical replay.  Truncation makes an evaluation impossible
+                # to audit and is therefore never allowed in schema v2.
+                "arguments": copy.deepcopy(arguments),
                 "status": (
                     tool_output.get("execution_status")
                     if isinstance(tool_output, dict)
@@ -129,19 +153,26 @@ def run_episode(
             terminal_outcome = str(
                 getattr(env, "terminal_outcome", None) or "environment_terminal"
             )
+            termination_reason = "environment_terminal"
             break
         if isinstance(next_state, dict) and next_state.get("done"):
             terminal_outcome = terminal_outcome or "environment_terminal"
+            termination_reason = "state_done"
             break
 
+    if termination_reason is None:
+        termination_reason = (
+            "terminal_outcome" if terminal_outcome is not None else "step_horizon"
+        )
+    identity = _scenario_identity(scenario)
     return {
-        "scenario_id": scenario.get("scenario_id")
-        or (scenario.get("grouping") or {}).get("scenario_id"),
+        **identity,
         "steps": steps,
         "invalid_actions": invalid_actions,
         "first_error": first_error,
         "actions": trace,
         "terminal_outcome": terminal_outcome,
+        "termination_reason": termination_reason,
         "horizon_truncated": terminal_outcome is None,
     }
 
@@ -156,6 +187,7 @@ def evaluate(
     revision: str | None = None,
     guards: bool = False,
 ) -> dict[str, Any]:
+    scenarios_sha256 = file_sha256(scenarios_path)
     scenarios = load_scenarios(scenarios_path)
     policy = load_policy(
         model_id=model_id,
@@ -180,10 +212,17 @@ def evaluate(
     terminated = sum(
         1 for episode in episodes if not episode["horizon_truncated"]
     )
+    if file_sha256(scenarios_path) != scenarios_sha256:
+        raise RuntimeError("evaluation scenarios changed while the run was in progress")
     return {
+        "evaluation_schema_version": EVALUATION_SCHEMA_VERSION,
         "label": label,
         "adapter": str(adapter_path) if adapter_path else None,
         "episodes": len(episodes),
+        "scenarios_path": str(scenarios_path),
+        "scenarios_sha256": scenarios_sha256,
+        "model_id": model_id,
+        "model_revision": revision,
         "episodes_terminated": terminated,
         "episodes_horizon_truncated": len(episodes) - terminated,
         "total_steps": total_steps,

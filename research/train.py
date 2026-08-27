@@ -13,7 +13,11 @@ release path.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
+from collections import defaultdict
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -23,6 +27,14 @@ from psse_env.sft.gates import prepare_example
 from .model import load_model_and_processor, lora_target_modules
 
 DEFAULT_MAX_LENGTH = 8192
+
+
+def file_sha256(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
@@ -72,6 +84,77 @@ def prepare_rows(
     return prepared, failures
 
 
+def summarize_prepared_rows(
+    rows: Sequence[dict[str, list[int]]],
+) -> dict[str, int | float | None]:
+    """Summarize the assistant-target tokens available in a prepared corpus.
+
+    Prompt tokens carry the ``-100`` ignore label, so counting the remaining
+    labels measures the supervised target-token corpus rather than total prompt
+    length. This is a corpus statistic; actual sampled exposure is recorded by
+    :class:`ExposureCountingCollator` during training.
+    """
+
+    per_row = [
+        sum(1 for token in row.get("labels", []) if token != -100)
+        for row in rows
+    ]
+    total = sum(per_row)
+    return {
+        "rows": len(per_row),
+        "supervised_tokens": total,
+        "mean_supervised_tokens_per_row": (
+            total / len(per_row) if per_row else None
+        ),
+        "min_supervised_tokens_per_row": min(per_row) if per_row else None,
+        "max_supervised_tokens_per_row": max(per_row) if per_row else None,
+    }
+
+
+class ExposureCountingCollator:
+    """Pad rows while counting the exact examples and tokens actually collated."""
+
+    def __init__(self, processor: Any) -> None:
+        self.base = AssistantOnlyCollator(processor)
+        self._counts: dict[str, dict[str, int]] = defaultdict(
+            lambda: {
+                "batches": 0,
+                "rows": 0,
+                "input_tokens": 0,
+                "supervised_tokens": 0,
+            }
+        )
+
+    def __call__(self, features: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        for feature in features:
+            split = str(feature.get("_exposure_split") or "unknown")
+            labels = list(feature.get("labels") or [])
+            attention = list(feature.get("attention_mask") or [])
+            counts = self._counts[split]
+            counts["rows"] += 1
+            counts["input_tokens"] += sum(int(value) != 0 for value in attention)
+            counts["supervised_tokens"] += sum(token != -100 for token in labels)
+        for split in {
+            str(feature.get("_exposure_split") or "unknown")
+            for feature in features
+        }:
+            self._counts[split]["batches"] += 1
+        return self.base(features)
+
+    def summary(self, split: str) -> dict[str, int]:
+        return dict(
+            self._counts.get(
+                split,
+                {
+                    "batches": 0,
+                    "rows": 0,
+                    "input_tokens": 0,
+                    "supervised_tokens": 0,
+                },
+            )
+        )
+
+
 def build_config(
     *,
     output_dir: str | Path,
@@ -81,6 +164,7 @@ def build_config(
     learning_rate: float,
     seed: int,
     has_validation: bool,
+    max_steps: int = -1,
     report_to: str = "none",
     run_name: str | None = None,
 ) -> Any:
@@ -95,6 +179,7 @@ def build_config(
         "gradient_accumulation_steps": gradient_accumulation_steps,
         "learning_rate": learning_rate,
         "num_train_epochs": epochs,
+        "max_steps": max_steps,
         "optim": "adamw_torch",
         "lr_scheduler_type": "linear",
         "logging_steps": 10,
@@ -136,6 +221,7 @@ def train(
     lora_rank: int = 16,
     lora_alpha: int = 16,
     lora_dropout: float = 0.0,
+    max_steps: int = -1,
     seed: int = 20260823,
     report_to: str = "none",
     run_name: str | None = None,
@@ -155,6 +241,10 @@ def train(
         for_training=True,
     )
 
+    train_sha256_before = file_sha256(train_path)
+    validation_sha256_before = (
+        file_sha256(validation_path) if validation_path else None
+    )
     train_rows = read_jsonl(train_path)
     prepared_train, train_failures = prepare_rows(
         train_rows, processor, max_length=max_length, label="train"
@@ -170,6 +260,7 @@ def train(
             validation_rows, processor, max_length=max_length, label="validation"
         )
 
+    resolved_lora_targets: tuple[str, ...] | None = None
     if initial_adapter is None:
         model = prepare_model_for_kbit_training(model)
         # Training never reads the KV cache, and leaving it enabled costs a
@@ -178,13 +269,14 @@ def train(
         config_object = getattr(model, "config", None)
         if config_object is not None and hasattr(config_object, "use_cache"):
             config_object.use_cache = False
+        resolved_lora_targets = lora_target_modules(model)
         lora_config = LoraConfig(
             r=lora_rank,
             lora_alpha=lora_alpha,
             lora_dropout=lora_dropout,
             bias="none",
             task_type="CAUSAL_LM",
-            target_modules=lora_target_modules(model),
+            target_modules=resolved_lora_targets,
         )
         model = get_peft_model(model, lora_config)
 
@@ -196,6 +288,7 @@ def train(
         learning_rate=learning_rate,
         seed=seed,
         has_validation=bool(prepared_validation),
+        max_steps=max_steps,
         report_to=report_to,
         run_name=run_name or Path(output_dir).name,
     )
@@ -205,14 +298,24 @@ def train(
     # pads, so wrapping them changes nothing about what is learned.
     from datasets import Dataset
 
+    collator = ExposureCountingCollator(processor)
+    prepared_train_dataset = [
+        {**row, "_exposure_split": "train"} for row in prepared_train
+    ]
+    prepared_validation_dataset = [
+        {**row, "_exposure_split": "validation"}
+        for row in prepared_validation
+    ]
     trainer_kwargs: dict[str, Any] = {
         "model": model,
         "args": config,
-        "train_dataset": Dataset.from_list(prepared_train),
-        "data_collator": AssistantOnlyCollator(processor),
+        "train_dataset": Dataset.from_list(prepared_train_dataset),
+        "data_collator": collator,
     }
     if prepared_validation:
-        trainer_kwargs["eval_dataset"] = Dataset.from_list(prepared_validation)
+        trainer_kwargs["eval_dataset"] = Dataset.from_list(
+            prepared_validation_dataset
+        )
     supported = inspect.signature(SFTTrainer.__init__).parameters
     if "processing_class" in supported:
         trainer_kwargs["processing_class"] = processor
@@ -221,6 +324,18 @@ def train(
         **{key: value for key, value in trainer_kwargs.items() if key in supported}
     )
     result = trainer.train()
+    training_loss = float(getattr(result, "training_loss", float("nan")))
+    if not math.isfinite(training_loss):
+        raise RuntimeError(f"training produced a non-finite loss: {training_loss!r}")
+
+    train_sha256_after = file_sha256(train_path)
+    validation_sha256_after = (
+        file_sha256(validation_path) if validation_path else None
+    )
+    if train_sha256_after != train_sha256_before:
+        raise RuntimeError("training data changed while the run was in progress")
+    if validation_sha256_after != validation_sha256_before:
+        raise RuntimeError("validation data changed while the run was in progress")
 
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
@@ -231,19 +346,50 @@ def train(
         "model_revision": resolved_revision,
         "initial_adapter": str(initial_adapter) if initial_adapter else None,
         "output_dir": str(destination),
+        "train_path": str(train_path),
+        "train_sha256": train_sha256_before,
+        "validation_path": str(validation_path) if validation_path else None,
+        "validation_sha256": validation_sha256_before,
         "train_rows": len(train_rows),
         "prepared_train_rows": len(prepared_train),
         "prepared_validation_rows": len(prepared_validation),
+        "train_target_token_corpus_summary": summarize_prepared_rows(
+            prepared_train
+        ),
+        "validation_target_token_corpus_summary": summarize_prepared_rows(
+            prepared_validation
+        ),
+        "sampled_train_exposure": collator.summary("train"),
+        "sampled_validation_exposure": collator.summary("validation"),
+        "sampled_exposure_scope": "local_process_collator",
+        "world_size": int(getattr(trainer.args, "world_size", 1)),
         "train_preparation_failures": train_failures[:20],
         "validation_preparation_failures": validation_failures[:20],
         "max_length": max_length,
         "epochs": epochs,
+        "batch_size": batch_size,
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+        "learning_rate": learning_rate,
+        "lora_rank": lora_rank,
+        "lora_alpha": lora_alpha,
+        "lora_dropout": lora_dropout,
+        "lora_target_modules": list(resolved_lora_targets or ()),
+        "quantization": {
+            "load_in_4bit": True,
+            "bnb_4bit_quant_type": "nf4",
+            "bnb_4bit_use_double_quant": True,
+            "bnb_4bit_compute_dtype": "bfloat16",
+        },
+        "max_steps": max_steps,
+        "optimizer_updates_completed": int(getattr(trainer.state, "global_step", 0)),
+        "trainer_epoch": getattr(trainer.state, "epoch", None),
         "seed": seed,
-        "training_loss": float(getattr(result, "training_loss", float("nan"))),
+        "training_loss": training_loss,
         "release_evidence": False,
     }
     (destination / "research_training_summary.json").write_text(
-        json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        json.dumps(summary, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
     )
     return summary
 
@@ -262,6 +408,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--gradient-accumulation-steps", type=int, default=4)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--seed", type=int, default=20260823)
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=-1,
+        help="Fixed optimizer-update budget; -1 trains by epochs. Use to hold "
+        "update count constant across arms with different data sizes.",
+    )
     parser.add_argument(
         "--report-to",
         choices=("none", "wandb", "tensorboard"),
@@ -287,6 +440,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
+        max_steps=args.max_steps,
         seed=args.seed,
         report_to=args.report_to,
         run_name=args.run_name,

@@ -1,0 +1,5074 @@
+{
+  "adapter": "/scratch/yx3882/research_dagger_12b_20260824/out/round1",
+  "episodes": 65,
+  "episodes_horizon_truncated": 10,
+  "episodes_terminated": 55,
+  "guard_interventions": 0,
+  "guards_enabled": false,
+  "invalid_action_rate": 0.167574931880109,
+  "invalid_actions": 123,
+  "label": "refix-12b_r1",
+  "per_episode": [
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_f955e8463bb3_episode0:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_f955e8463bb3_episode0:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 13, \"state_id\": \"r0_f955e8463bb3_episode0:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_f955e8463bb3_episode0:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_f955e8463bb3_episode0:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_f955e8463bb3_episode0:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_f955e8463bb3_episode0:s1\", \"suspect_group\": [67]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_f955e8463bb3_episode0:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_f955e8463bb3_episode0:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_f955e8463bb3_episode0:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_f955e8463bb3_episode0:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_1513f9ef9662_episode1:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1513f9ef9662_episode1:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 3, \"state_id\": \"r0_1513f9ef9662_episode1:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1513f9ef9662_episode1:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_1513f9ef9662_episode1:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1513f9ef9662_episode1:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1513f9ef9662_episode1:s1\", \"suspect_group\": [102]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1513f9ef9662_episode1:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_1513f9ef9662_episode1:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1513f9ef9662_episode1:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_1513f9ef9662_episode1:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_415f49d7f310_episode2:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_415f49d7f310_episode2:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 5, \"state_id\": \"r0_415f49d7f310_episode2:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_415f49d7f310_episode2:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_415f49d7f310_episode2:s1\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_415f49d7f310_episode2:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_415f49d7f310_episode2:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"line_index\": 2, \"state_id\": \"r0_415f49d7f310_episode2:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_415f49d7f310_episode2:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_415f49d7f310_episode2:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_415f49d7f310_episode2:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_415f49d7f310_episode2:s0\", \"suspect_group\": [46]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_415f49d7f310_episode2:s3\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_415f49d7f310_episode2:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_415f49d7f310_episode2:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_415f49d7f310_episode2:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_415f49d7f310_episode2:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_415f49d7f310_episode2:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_415f49d7f310_episode2:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_415f49d7f310_episode2:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_415f49d7f310_episode2:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_415f49d7f310_episode2:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_415f49d7f310_episode2:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_415f49d7f310_episode2:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 12,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_46f2209438ee_episode3:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_46f2209438ee_episode3:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 12, \"state_id\": \"r0_46f2209438ee_episode3:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_46f2209438ee_episode3:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_46f2209438ee_episode3:s1\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_46f2209438ee_episode3:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_46f2209438ee_episode3:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"line_index\": 19, \"state_id\": \"r0_46f2209438ee_episode3:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_46f2209438ee_episode3:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_46f2209438ee_episode3:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_46f2209438ee_episode3:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_46f2209438ee_episode3:s0\", \"suspect_group\": [18]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_46f2209438ee_episode3:s3\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_46f2209438ee_episode3:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_46f2209438ee_episode3:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_46f2209438ee_episode3:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_46f2209438ee_episode3:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_46f2209438ee_episode3:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_46f2209438ee_episode3:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_46f2209438ee_episode3:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_46f2209438ee_episode3:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_46f2209438ee_episode3:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_46f2209438ee_episode3:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_46f2209438ee_episode3:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 12,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_4bc1540228cc_episode4:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_4bc1540228cc_episode4:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 3, \"state_id\": \"r0_4bc1540228cc_episode4:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_4bc1540228cc_episode4:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_4bc1540228cc_episode4:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_4bc1540228cc_episode4:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_4bc1540228cc_episode4:s1\", \"suspect_group\": [41]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_4bc1540228cc_episode4:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_4bc1540228cc_episode4:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_4bc1540228cc_episode4:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_4bc1540228cc_episode4:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_84afa8049495_episode5:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_84afa8049495_episode5:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_84afa8049495_episode5:s0\", \"suspect_group\": [44]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_84afa8049495_episode5:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_84afa8049495_episode5:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_84afa8049495_episode5:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_84afa8049495_episode5:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_8825ca1f2d43_episode6:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8825ca1f2d43_episode6:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8825ca1f2d43_episode6:s0\", \"suspect_group\": [45]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8825ca1f2d43_episode6:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_8825ca1f2d43_episode6:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8825ca1f2d43_episode6:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_8825ca1f2d43_episode6:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_8a1494cd02e7_episode7:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8a1494cd02e7_episode7:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 4, \"state_id\": \"r0_8a1494cd02e7_episode7:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8a1494cd02e7_episode7:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_8a1494cd02e7_episode7:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8a1494cd02e7_episode7:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8a1494cd02e7_episode7:s1\", \"suspect_group\": [112]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8a1494cd02e7_episode7:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_8a1494cd02e7_episode7:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8a1494cd02e7_episode7:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_8a1494cd02e7_episode7:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_8c0755fce51c_episode8:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8c0755fce51c_episode8:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 7, \"state_id\": \"r0_8c0755fce51c_episode8:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8c0755fce51c_episode8:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_8c0755fce51c_episode8:s1\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_8c0755fce51c_episode8:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8c0755fce51c_episode8:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8c0755fce51c_episode8:s0\", \"suspect_group\": [121]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8c0755fce51c_episode8:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_8c0755fce51c_episode8:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"line_index\": 20, \"state_id\": \"r0_8c0755fce51c_episode8:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_8c0755fce51c_episode8:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8c0755fce51c_episode8:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_8c0755fce51c_episode8:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_8c0755fce51c_episode8:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_8c0755fce51c_episode8:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8c0755fce51c_episode8:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"line_index\": 7, \"state_id\": \"r0_8c0755fce51c_episode8:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8c0755fce51c_episode8:s3\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_8c0755fce51c_episode8:s3\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8c0755fce51c_episode8:s3\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_8c0755fce51c_episode8:s3\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 7,
+      "scenario_id": null,
+      "steps": 22,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_8cbe696e5e6e_episode9:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8cbe696e5e6e_episode9:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 5, \"state_id\": \"r0_8cbe696e5e6e_episode9:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8cbe696e5e6e_episode9:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_8cbe696e5e6e_episode9:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8cbe696e5e6e_episode9:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8cbe696e5e6e_episode9:s1\", \"suspect_group\": [92]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8cbe696e5e6e_episode9:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_8cbe696e5e6e_episode9:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8cbe696e5e6e_episode9:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_8cbe696e5e6e_episode9:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_8e0849a1b325_episode10:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8e0849a1b325_episode10:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 3, \"state_id\": \"r0_8e0849a1b325_episode10:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8e0849a1b325_episode10:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_8e0849a1b325_episode10:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8e0849a1b325_episode10:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8e0849a1b325_episode10:s1\", \"suspect_group\": [58]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8e0849a1b325_episode10:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_8e0849a1b325_episode10:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_8e0849a1b325_episode10:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_8e0849a1b325_episode10:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_98e67478d418_episode11:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_98e67478d418_episode11:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_98e67478d418_episode11:s0\", \"suspect_group\": [115]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_98e67478d418_episode11:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_98e67478d418_episode11:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_98e67478d418_episode11:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"line_index\": 11, \"state_id\": \"r0_98e67478d418_episode11:s1\", \"status\": 0}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_topology"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_98e67478d418_episode11:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_98e67478d418_episode11:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_98e67478d418_episode11:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_98e67478d418_episode11:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_9c7065d6a994_episode12:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_9c7065d6a994_episode12:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_9c7065d6a994_episode12:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_topology_context"
+        },
+        {
+          "arguments": "{\"line_index\": 1, \"state_id\": \"r0_9c7065d6a994_episode12:s0\", \"status\": 0}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_topology"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_9c7065d6a994_episode12:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_9c7065d6a994_episode12:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_9c7065d6a994_episode12:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_9c7065d6a994_episode12:s1\", \"suspect_group\": [107]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_9c7065d6a994_episode12:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_9c7065d6a994_episode12:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_9c7065d6a994_episode12:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_9c7065d6a994_episode12:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 12,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_9d51abecb114_episode13:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_9d51abecb114_episode13:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 7, \"state_id\": \"r0_9d51abecb114_episode13:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_9d51abecb114_episode13:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_9d51abecb114_episode13:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_9d51abecb114_episode13:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_9d51abecb114_episode13:s1\", \"suspect_group\": [54]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_9d51abecb114_episode13:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_9d51abecb114_episode13:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_9d51abecb114_episode13:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_9d51abecb114_episode13:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_a80744a6c25e_episode14:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_a80744a6c25e_episode14:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 6, \"state_id\": \"r0_a80744a6c25e_episode14:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_a80744a6c25e_episode14:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_a80744a6c25e_episode14:s1\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_a80744a6c25e_episode14:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_a80744a6c25e_episode14:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_a80744a6c25e_episode14:s0\", \"suspect_group\": [28]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_a80744a6c25e_episode14:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_a80744a6c25e_episode14:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"line_index\": 3, \"state_id\": \"r0_a80744a6c25e_episode14:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_a80744a6c25e_episode14:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_a80744a6c25e_episode14:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_a80744a6c25e_episode14:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_a80744a6c25e_episode14:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_a80744a6c25e_episode14:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_a80744a6c25e_episode14:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_a80744a6c25e_episode14:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_a80744a6c25e_episode14:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_a80744a6c25e_episode14:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_a80744a6c25e_episode14:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_a80744a6c25e_episode14:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_a80744a6c25e_episode14:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_a80744a6c25e_episode14:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 16,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_a90e16d97693_episode15:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_a90e16d97693_episode15:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 4, \"state_id\": \"r0_a90e16d97693_episode15:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_a90e16d97693_episode15:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_a90e16d97693_episode15:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_a90e16d97693_episode15:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_a90e16d97693_episode15:s1\", \"suspect_group\": [89]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_a90e16d97693_episode15:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_a90e16d97693_episode15:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_a90e16d97693_episode15:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_a90e16d97693_episode15:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_aedc98bc7ceb_episode16:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_aedc98bc7ceb_episode16:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 13, \"state_id\": \"r0_aedc98bc7ceb_episode16:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_aedc98bc7ceb_episode16:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_aedc98bc7ceb_episode16:s1\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_aedc98bc7ceb_episode16:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_aedc98bc7ceb_episode16:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"line_index\": 19, \"state_id\": \"r0_aedc98bc7ceb_episode16:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_aedc98bc7ceb_episode16:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_aedc98bc7ceb_episode16:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_aedc98bc7ceb_episode16:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_aedc98bc7ceb_episode16:s0\", \"suspect_group\": [74]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_aedc98bc7ceb_episode16:s3\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_aedc98bc7ceb_episode16:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_aedc98bc7ceb_episode16:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_aedc98bc7ceb_episode16:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_aedc98bc7ceb_episode16:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_aedc98bc7ceb_episode16:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_aedc98bc7ceb_episode16:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_aedc98bc7ceb_episode16:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_aedc98bc7ceb_episode16:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_aedc98bc7ceb_episode16:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_aedc98bc7ceb_episode16:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_aedc98bc7ceb_episode16:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 12,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_b919ffc82424_episode17:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_b919ffc82424_episode17:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_b919ffc82424_episode17:s0\", \"suspect_group\": [115]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_b919ffc82424_episode17:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_b919ffc82424_episode17:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_b919ffc82424_episode17:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"line_index\": 12, \"state_id\": \"r0_b919ffc82424_episode17:s1\", \"status\": 0}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_topology"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_b919ffc82424_episode17:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_b919ffc82424_episode17:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_b919ffc82424_episode17:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_b919ffc82424_episode17:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_befdea82c376_episode18:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_befdea82c376_episode18:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_befdea82c376_episode18:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_topology_context"
+        },
+        {
+          "arguments": "{\"line_index\": 2, \"state_id\": \"r0_befdea82c376_episode18:s0\", \"status\": 0}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_topology"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_befdea82c376_episode18:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_befdea82c376_episode18:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_befdea82c376_episode18:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_befdea82c376_episode18:s1\", \"suspect_group\": [120]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_befdea82c376_episode18:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_befdea82c376_episode18:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_befdea82c376_episode18:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_befdea82c376_episode18:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 12,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_c309e1174c2f_episode19:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c309e1174c2f_episode19:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c309e1174c2f_episode19:s0\", \"suspect_group\": [86]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c309e1174c2f_episode19:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_c309e1174c2f_episode19:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c309e1174c2f_episode19:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"line_index\": 9, \"state_id\": \"r0_c309e1174c2f_episode19:s1\", \"status\": 0}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_topology"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c309e1174c2f_episode19:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_c309e1174c2f_episode19:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c309e1174c2f_episode19:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_c309e1174c2f_episode19:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_c5c42f947a30_episode20:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c5c42f947a30_episode20:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c5c42f947a30_episode20:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_topology_context"
+        },
+        {
+          "arguments": "{\"line_index\": 15, \"state_id\": \"r0_c5c42f947a30_episode20:s0\", \"status\": 0}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_topology"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c5c42f947a30_episode20:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_c5c42f947a30_episode20:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c5c42f947a30_episode20:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c5c42f947a30_episode20:s1\", \"suspect_group\": [49]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c5c42f947a30_episode20:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_c5c42f947a30_episode20:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c5c42f947a30_episode20:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_c5c42f947a30_episode20:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 12,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_c64f9ec8ed2f_episode21:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c64f9ec8ed2f_episode21:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c64f9ec8ed2f_episode21:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_topology_context"
+        },
+        {
+          "arguments": "{\"line_index\": 4, \"state_id\": \"r0_c64f9ec8ed2f_episode21:s0\", \"status\": 0}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_topology"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c64f9ec8ed2f_episode21:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_c64f9ec8ed2f_episode21:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c64f9ec8ed2f_episode21:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c64f9ec8ed2f_episode21:s1\", \"suspect_group\": [55]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c64f9ec8ed2f_episode21:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_c64f9ec8ed2f_episode21:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c64f9ec8ed2f_episode21:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_c64f9ec8ed2f_episode21:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 12,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_c7cec5872530_episode22:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c7cec5872530_episode22:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c7cec5872530_episode22:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_topology_context"
+        },
+        {
+          "arguments": "{\"line_index\": 7, \"state_id\": \"r0_c7cec5872530_episode22:s0\", \"status\": 0}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_topology"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c7cec5872530_episode22:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_c7cec5872530_episode22:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c7cec5872530_episode22:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c7cec5872530_episode22:s1\", \"suspect_group\": [39]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c7cec5872530_episode22:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_c7cec5872530_episode22:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_c7cec5872530_episode22:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_c7cec5872530_episode22:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 12,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_026579c5ac67_episode23:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_026579c5ac67_episode23:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 1, \"state_id\": \"r0_026579c5ac67_episode23:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_026579c5ac67_episode23:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_026579c5ac67_episode23:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_026579c5ac67_episode23:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_026579c5ac67_episode23:s1\", \"suspect_group\": [71]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_026579c5ac67_episode23:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_026579c5ac67_episode23:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_026579c5ac67_episode23:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_026579c5ac67_episode23:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_0b1cea0388ab_episode24:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0b1cea0388ab_episode24:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0b1cea0388ab_episode24:s0\", \"suspect_group\": [73]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0b1cea0388ab_episode24:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_0b1cea0388ab_episode24:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0b1cea0388ab_episode24:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_0b1cea0388ab_episode24:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_0da3fb19f8a7_episode25:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0da3fb19f8a7_episode25:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0da3fb19f8a7_episode25:s0\", \"suspect_group\": [19]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0da3fb19f8a7_episode25:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_0da3fb19f8a7_episode25:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0da3fb19f8a7_episode25:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0da3fb19f8a7_episode25:s1\", \"suspect_group\": [19, 23]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0da3fb19f8a7_episode25:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_0da3fb19f8a7_episode25:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0da3fb19f8a7_episode25:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_0da3fb19f8a7_episode25:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_0e354d915b33_episode26:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0e354d915b33_episode26:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 2, \"state_id\": \"r0_0e354d915b33_episode26:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0e354d915b33_episode26:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_0e354d915b33_episode26:s1\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_0e354d915b33_episode26:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0e354d915b33_episode26:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0e354d915b33_episode26:s0\", \"suspect_group\": [46]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0e354d915b33_episode26:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_0e354d915b33_episode26:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0e354d915b33_episode26:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_0e354d915b33_episode26:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"line_index\": 5, \"state_id\": \"r0_0e354d915b33_episode26:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_0e354d915b33_episode26:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0e354d915b33_episode26:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_0e354d915b33_episode26:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0e354d915b33_episode26:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_0e354d915b33_episode26:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0e354d915b33_episode26:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_0e354d915b33_episode26:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0e354d915b33_episode26:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_0e354d915b33_episode26:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0e354d915b33_episode26:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_0e354d915b33_episode26:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 16,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_0f1bbaf12984_episode27:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0f1bbaf12984_episode27:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0f1bbaf12984_episode27:s0\", \"suspect_group\": [101]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0f1bbaf12984_episode27:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_0f1bbaf12984_episode27:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0f1bbaf12984_episode27:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_0f1bbaf12984_episode27:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_13f7b24797d5_episode28:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_13f7b24797d5_episode28:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_13f7b24797d5_episode28:s0\", \"suspect_group\": [110]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_13f7b24797d5_episode28:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_13f7b24797d5_episode28:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_13f7b24797d5_episode28:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_13f7b24797d5_episode28:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_1782b0ec1037_episode29:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1782b0ec1037_episode29:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1782b0ec1037_episode29:s0\", \"suspect_group\": [110]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1782b0ec1037_episode29:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_1782b0ec1037_episode29:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1782b0ec1037_episode29:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_1782b0ec1037_episode29:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_2a3149d3df3f_episode30:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_2a3149d3df3f_episode30:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_2a3149d3df3f_episode30:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_topology_context"
+        },
+        {
+          "arguments": "{\"line_index\": 1, \"state_id\": \"r0_2a3149d3df3f_episode30:s0\", \"status\": 0}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_topology"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_2a3149d3df3f_episode30:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_2a3149d3df3f_episode30:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_2a3149d3df3f_episode30:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_2a3149d3df3f_episode30:s1\", \"suspect_group\": [76]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_2a3149d3df3f_episode30:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_2a3149d3df3f_episode30:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_2a3149d3df3f_episode30:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_2a3149d3df3f_episode30:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 12,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_2d795bbd0ed2_episode31:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_2d795bbd0ed2_episode31:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_2d795bbd0ed2_episode31:s0\", \"suspect_group\": [104]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_2d795bbd0ed2_episode31:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_2d795bbd0ed2_episode31:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_2d795bbd0ed2_episode31:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"line_index\": 17, \"state_id\": \"r0_2d795bbd0ed2_episode31:s1\", \"status\": 0}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_topology"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_2d795bbd0ed2_episode31:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_2d795bbd0ed2_episode31:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_2d795bbd0ed2_episode31:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_2d795bbd0ed2_episode31:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_373a6ee3a323_episode32:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_373a6ee3a323_episode32:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_373a6ee3a323_episode32:s0\", \"suspect_group\": [83]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_373a6ee3a323_episode32:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_373a6ee3a323_episode32:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_373a6ee3a323_episode32:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_373a6ee3a323_episode32:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_37f3f6c51957_episode33:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_37f3f6c51957_episode33:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_37f3f6c51957_episode33:s0\", \"suspect_group\": [13]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_37f3f6c51957_episode33:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_37f3f6c51957_episode33:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_37f3f6c51957_episode33:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"line_index\": 17, \"state_id\": \"r0_37f3f6c51957_episode33:s1\", \"status\": 0}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_topology"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_37f3f6c51957_episode33:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_37f3f6c51957_episode33:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_37f3f6c51957_episode33:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_37f3f6c51957_episode33:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_3b26bf39c2e8_episode34:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_3b26bf39c2e8_episode34:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_3b26bf39c2e8_episode34:s0\", \"suspect_group\": [105]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_3b26bf39c2e8_episode34:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_3b26bf39c2e8_episode34:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_3b26bf39c2e8_episode34:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_3b26bf39c2e8_episode34:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_3b9d79de7870_episode35:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_3b9d79de7870_episode35:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_3b9d79de7870_episode35:s0\", \"suspect_group\": [6]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_3b9d79de7870_episode35:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_3b9d79de7870_episode35:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_3b9d79de7870_episode35:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_3b9d79de7870_episode35:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_5de6fc23a4db_episode36:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_5de6fc23a4db_episode36:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_5de6fc23a4db_episode36:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_topology_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_5de6fc23a4db_episode36:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_5de6fc23a4db_episode36:s0\", \"suspect_group\": [8]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_5de6fc23a4db_episode36:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_5de6fc23a4db_episode36:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_5de6fc23a4db_episode36:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_5de6fc23a4db_episode36:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 9,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_81e17a28abbd_episode37:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_81e17a28abbd_episode37:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_81e17a28abbd_episode37:s0\", \"suspect_group\": [15]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_81e17a28abbd_episode37:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_81e17a28abbd_episode37:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_81e17a28abbd_episode37:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_81e17a28abbd_episode37:s1\", \"suspect_group\": [14]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_81e17a28abbd_episode37:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_81e17a28abbd_episode37:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_81e17a28abbd_episode37:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_81e17a28abbd_episode37:s2\", \"suspect_group\": [25]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_81e17a28abbd_episode37:s3\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_81e17a28abbd_episode37:s3\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_81e17a28abbd_episode37:s3\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_81e17a28abbd_episode37:s3\"}",
+          "error_code": "operator_escalation_precondition_not_met",
+          "status": "failure",
+          "tool": "ask_for_more_evidence"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_81e17a28abbd_episode37:s3\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_81e17a28abbd_episode37:s3\"}",
+          "error_code": "operator_escalation_precondition_not_met",
+          "status": "failure",
+          "tool": "ask_for_more_evidence"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_81e17a28abbd_episode37:s3\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_81e17a28abbd_episode37:s3\"}",
+          "error_code": "operator_escalation_precondition_not_met",
+          "status": "failure",
+          "tool": "ask_for_more_evidence"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_81e17a28abbd_episode37:s3\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_81e17a28abbd_episode37:s3\"}",
+          "error_code": "operator_escalation_precondition_not_met",
+          "status": "failure",
+          "tool": "ask_for_more_evidence"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_81e17a28abbd_episode37:s3\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_81e17a28abbd_episode37:s3\"}",
+          "error_code": "operator_escalation_precondition_not_met",
+          "status": "failure",
+          "tool": "ask_for_more_evidence"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_81e17a28abbd_episode37:s3\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 5,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_88409ff06c33_episode38:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_88409ff06c33_episode38:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_88409ff06c33_episode38:s0\", \"suspect_group\": [54]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_88409ff06c33_episode38:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_88409ff06c33_episode38:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_88409ff06c33_episode38:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_88409ff06c33_episode38:s1\", \"suspect_group\": [55]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_88409ff06c33_episode38:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_88409ff06c33_episode38:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_88409ff06c33_episode38:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_88409ff06c33_episode38:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_96298b6500ee_episode39:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_96298b6500ee_episode39:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_96298b6500ee_episode39:s0\", \"suspect_group\": [73]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_96298b6500ee_episode39:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_96298b6500ee_episode39:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_96298b6500ee_episode39:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_96298b6500ee_episode39:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_a3fd759ec5d2_episode40:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_a3fd759ec5d2_episode40:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_a3fd759ec5d2_episode40:s0\", \"suspect_group\": [113]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_a3fd759ec5d2_episode40:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_a3fd759ec5d2_episode40:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_a3fd759ec5d2_episode40:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_a3fd759ec5d2_episode40:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_aec293da3c90_episode41:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_aec293da3c90_episode41:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_aec293da3c90_episode41:s0\", \"suspect_group\": [120]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_aec293da3c90_episode41:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_aec293da3c90_episode41:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_aec293da3c90_episode41:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_aec293da3c90_episode41:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_bd163ef15fc8_episode42:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_bd163ef15fc8_episode42:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_bd163ef15fc8_episode42:s0\", \"suspect_group\": [3]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_bd163ef15fc8_episode42:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_bd163ef15fc8_episode42:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_bd163ef15fc8_episode42:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_bd163ef15fc8_episode42:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_d6637d07318a_episode43:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_d6637d07318a_episode43:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_d6637d07318a_episode43:s0\", \"suspect_group\": [70]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_d6637d07318a_episode43:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_d6637d07318a_episode43:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_d6637d07318a_episode43:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_d6637d07318a_episode43:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_04289eba5f8e_episode44:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{}",
+          "error_code": null,
+          "status": "success",
+          "tool": "finalize_diagnosis"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 2,
+      "terminal_outcome": "resolved"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_0997137d1521_episode45:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0997137d1521_episode45:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0997137d1521_episode45:s0\", \"suspect_group\": [44]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0997137d1521_episode45:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_0997137d1521_episode45:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_0997137d1521_episode45:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_0997137d1521_episode45:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_14bf9b268327_episode46:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_14bf9b268327_episode46:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 1, \"state_id\": \"r0_14bf9b268327_episode46:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_14bf9b268327_episode46:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_14bf9b268327_episode46:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_14bf9b268327_episode46:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_14bf9b268327_episode46:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_1653da3f7541_episode47:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1653da3f7541_episode47:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 17, \"state_id\": \"r0_1653da3f7541_episode47:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1653da3f7541_episode47:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_1653da3f7541_episode47:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1653da3f7541_episode47:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_1653da3f7541_episode47:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_1c330182887d_episode48:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1c330182887d_episode48:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 7, \"state_id\": \"r0_1c330182887d_episode48:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1c330182887d_episode48:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_1c330182887d_episode48:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1c330182887d_episode48:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_1c330182887d_episode48:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_1e06979fa21e_episode49:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1e06979fa21e_episode49:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 5, \"state_id\": \"r0_1e06979fa21e_episode49:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1e06979fa21e_episode49:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_1e06979fa21e_episode49:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1e06979fa21e_episode49:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1e06979fa21e_episode49:s1\", \"suspect_group\": [23]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1e06979fa21e_episode49:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_1e06979fa21e_episode49:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_1e06979fa21e_episode49:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_1e06979fa21e_episode49:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_286a096a6eb8_episode50:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_286a096a6eb8_episode50:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 4, \"state_id\": \"r0_286a096a6eb8_episode50:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_286a096a6eb8_episode50:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_286a096a6eb8_episode50:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_286a096a6eb8_episode50:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_286a096a6eb8_episode50:s1\", \"suspect_group\": [54]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_286a096a6eb8_episode50:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_286a096a6eb8_episode50:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_286a096a6eb8_episode50:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_286a096a6eb8_episode50:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_31345ad90225_episode51:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_31345ad90225_episode51:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 2, \"state_id\": \"r0_31345ad90225_episode51:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_31345ad90225_episode51:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_31345ad90225_episode51:s1\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_31345ad90225_episode51:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_31345ad90225_episode51:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"line_index\": 1, \"state_id\": \"r0_31345ad90225_episode51:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_31345ad90225_episode51:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_31345ad90225_episode51:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_31345ad90225_episode51:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_31345ad90225_episode51:s0\", \"suspect_group\": [103]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_31345ad90225_episode51:s3\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_31345ad90225_episode51:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_31345ad90225_episode51:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_31345ad90225_episode51:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_31345ad90225_episode51:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_31345ad90225_episode51:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_31345ad90225_episode51:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_31345ad90225_episode51:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_31345ad90225_episode51:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_31345ad90225_episode51:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_31345ad90225_episode51:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_31345ad90225_episode51:s3\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 12,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_33817d90f478_episode52:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_33817d90f478_episode52:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"line_index\": 6, \"state_id\": \"r0_33817d90f478_episode52:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_33817d90f478_episode52:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_33817d90f478_episode52:s1\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_33817d90f478_episode52:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_33817d90f478_episode52:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_33817d90f478_episode52:s0\", \"suspect_group\": [57]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_33817d90f478_episode52:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_33817d90f478_episode52:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_33817d90f478_episode52:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_33817d90f478_episode52:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"line_index\": 3, \"state_id\": \"r0_33817d90f478_episode52:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "correct_parameters"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_33817d90f478_episode52:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_33817d90f478_episode52:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_33817d90f478_episode52:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_33817d90f478_episode52:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_33817d90f478_episode52:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_33817d90f478_episode52:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_33817d90f478_episode52:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_33817d90f478_episode52:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_33817d90f478_episode52:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_33817d90f478_episode52:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_33817d90f478_episode52:s2\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 16,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_417bba5c46e0_episode53:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_417bba5c46e0_episode53:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_417bba5c46e0_episode53:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_topology_context"
+        },
+        {
+          "arguments": "{\"line_index\": 13, \"state_id\": \"r0_417bba5c46e0_episode53:s0\", \"status\": 0}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_topology"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_417bba5c46e0_episode53:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_417bba5c46e0_episode53:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_417bba5c46e0_episode53:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_417bba5c46e0_episode53:s1\", \"suspect_group\": [76]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_417bba5c46e0_episode53:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_417bba5c46e0_episode53:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_417bba5c46e0_episode53:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_417bba5c46e0_episode53:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 12,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_41da001b5391_episode54:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{}",
+          "error_code": null,
+          "status": "success",
+          "tool": "finalize_diagnosis"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 2,
+      "terminal_outcome": "resolved"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_5bc1812f339b_episode55:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_5bc1812f339b_episode55:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_5bc1812f339b_episode55:s0\", \"suspect_group\": [49]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_5bc1812f339b_episode55:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_5bc1812f339b_episode55:s1\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_5bc1812f339b_episode55:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_5bc1812f339b_episode55:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_5bc1812f339b_episode55:s0\", \"suspect_group\": [49]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_5bc1812f339b_episode55:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_5bc1812f339b_episode55:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_5bc1812f339b_episode55:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_5bc1812f339b_episode55:s0\", \"suspect_group\": [89]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_5bc1812f339b_episode55:s3\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_5bc1812f339b_episode55:s3\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_5bc1812f339b_episode55:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_5bc1812f339b_episode55:s0\"}",
+          "error_code": "operator_escalation_precondition_not_met",
+          "status": "failure",
+          "tool": "ask_for_more_evidence"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_5bc1812f339b_episode55:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_5bc1812f339b_episode55:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_topology_context"
+        },
+        {
+          "arguments": "{\"line_index\": 15, \"state_id\": \"r0_5bc1812f339b_episode55:s0\", \"status\": 0}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_topology"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_5bc1812f339b_episode55:s4\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_5bc1812f339b_episode55:s4\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_5bc1812f339b_episode55:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_5bc1812f339b_episode55:s4\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_5bc1812f339b_episode55:s0\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "run_wls"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 6,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_65fa79250c66_episode56:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_65fa79250c66_episode56:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_65fa79250c66_episode56:s0\", \"suspect_group\": [46]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_65fa79250c66_episode56:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_65fa79250c66_episode56:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_65fa79250c66_episode56:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_65fa79250c66_episode56:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_7197ea2319d2_episode57:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_7197ea2319d2_episode57:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_7197ea2319d2_episode57:s0\", \"suspect_group\": [4]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_7197ea2319d2_episode57:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_7197ea2319d2_episode57:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_7197ea2319d2_episode57:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_7197ea2319d2_episode57:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_788bef412591_episode58:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_788bef412591_episode58:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_788bef412591_episode58:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_topology_context"
+        },
+        {
+          "arguments": "{\"line_index\": 2, \"state_id\": \"r0_788bef412591_episode58:s0\", \"status\": 0}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_topology"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_788bef412591_episode58:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_788bef412591_episode58:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_788bef412591_episode58:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_788bef412591_episode58:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 8,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_7d429e6adba9_episode59:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_7d429e6adba9_episode59:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_7d429e6adba9_episode59:s0\", \"suspect_group\": [80]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_7d429e6adba9_episode59:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_7d429e6adba9_episode59:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_7d429e6adba9_episode59:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"line_index\": 11, \"state_id\": \"r0_7d429e6adba9_episode59:s1\", \"status\": 0}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_topology"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_7d429e6adba9_episode59:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_7d429e6adba9_episode59:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_7d429e6adba9_episode59:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_7d429e6adba9_episode59:s2\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_b7ecb172c6f3_episode60:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{}",
+          "error_code": null,
+          "status": "success",
+          "tool": "finalize_diagnosis"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 2,
+      "terminal_outcome": "resolved"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_beddcf84bee5_episode61:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_beddcf84bee5_episode61:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_parameter_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_beddcf84bee5_episode61:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_topology_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_beddcf84bee5_episode61:s0\"}",
+          "error_code": "operator_escalation_precondition_not_met",
+          "status": "failure",
+          "tool": "ask_for_more_evidence"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_beddcf84bee5_episode61:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_beddcf84bee5_episode61:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_beddcf84bee5_episode61:s0\", \"suspect_group\": [3]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_beddcf84bee5_episode61:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_beddcf84bee5_episode61:s1\"}",
+          "error_code": "candidate_lifecycle_violation",
+          "status": "failure",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_beddcf84bee5_episode61:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "rollback_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_beddcf84bee5_episode61:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_beddcf84bee5_episode61:s0\"}",
+          "error_code": "operator_escalation_precondition_not_met",
+          "status": "failure",
+          "tool": "ask_for_more_evidence"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_beddcf84bee5_episode61:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_beddcf84bee5_episode61:s0\"}",
+          "error_code": "operator_escalation_precondition_not_met",
+          "status": "failure",
+          "tool": "ask_for_more_evidence"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_beddcf84bee5_episode61:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_beddcf84bee5_episode61:s0\"}",
+          "error_code": "operator_escalation_precondition_not_met",
+          "status": "failure",
+          "tool": "ask_for_more_evidence"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_beddcf84bee5_episode61:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_beddcf84bee5_episode61:s0\"}",
+          "error_code": "operator_escalation_precondition_not_met",
+          "status": "failure",
+          "tool": "ask_for_more_evidence"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_beddcf84bee5_episode61:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_beddcf84bee5_episode61:s0\"}",
+          "error_code": "operator_escalation_precondition_not_met",
+          "status": "failure",
+          "tool": "ask_for_more_evidence"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_beddcf84bee5_episode61:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_beddcf84bee5_episode61:s0\"}",
+          "error_code": "operator_escalation_precondition_not_met",
+          "status": "failure",
+          "tool": "ask_for_more_evidence"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_beddcf84bee5_episode61:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_beddcf84bee5_episode61:s0\"}",
+          "error_code": "operator_escalation_precondition_not_met",
+          "status": "failure",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 9,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_cb23b18dd10a_episode62:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{}",
+          "error_code": null,
+          "status": "success",
+          "tool": "finalize_diagnosis"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 2,
+      "terminal_outcome": "resolved"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_eae245124c89_episode63:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_eae245124c89_episode63:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_eae245124c89_episode63:s0\", \"suspect_group\": [34]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_eae245124c89_episode63:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_eae245124c89_episode63:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_eae245124c89_episode63:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_eae245124c89_episode63:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "actions": [
+        {
+          "arguments": "{\"state_id\": \"r0_efa6598cc9de_episode64:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_efa6598cc9de_episode64:s0\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_efa6598cc9de_episode64:s0\", \"suspect_group\": [62]}",
+          "error_code": null,
+          "status": "success",
+          "tool": "correct_measurements"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_efa6598cc9de_episode64:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "run_wls"
+        },
+        {
+          "arguments": "{\"candidate_state_id\": \"r0_efa6598cc9de_episode64:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "commit_state"
+        },
+        {
+          "arguments": "{\"state_id\": \"r0_efa6598cc9de_episode64:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "get_measurement_context"
+        },
+        {
+          "arguments": "{\"request\": \"operator_escalation:recovery_options_exhausted\", \"state_id\": \"r0_efa6598cc9de_episode64:s1\"}",
+          "error_code": null,
+          "status": "success",
+          "tool": "ask_for_more_evidence"
+        }
+      ],
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    }
+  ],
+  "release_evidence": false,
+  "terminal_outcomes": {
+    "horizon_truncated": 10,
+    "operator_escalation": 51,
+    "resolved": 4
+  },
+  "total_steps": 734
+}

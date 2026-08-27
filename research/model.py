@@ -67,6 +67,21 @@ def resolve_snapshot(model_id: str, revision: str) -> Path:
     )
 
 
+def load_processor(
+    *,
+    model_id: str | None = None,
+    revision: str | None = None,
+) -> tuple[Any, str, str]:
+    """Load only the pinned local processor for CPU-side data accounting."""
+
+    from transformers import AutoProcessor
+
+    resolved_id, resolved_revision = resolve_model_identity(model_id, revision)
+    snapshot = resolve_snapshot(resolved_id, resolved_revision)
+    processor = AutoProcessor.from_pretrained(str(snapshot), local_files_only=True)
+    return processor, resolved_id, resolved_revision
+
+
 def load_model_and_processor(
     *,
     model_id: str | None = None,
@@ -78,18 +93,13 @@ def load_model_and_processor(
     """Load the model and processor, applying a LoRA adapter when given."""
 
     import torch
-    from transformers import (
-        AutoModelForImageTextToText,
-        AutoProcessor,
-        BitsAndBytesConfig,
-    )
+    from transformers import AutoModelForImageTextToText, BitsAndBytesConfig
 
-    resolved_id, resolved_revision = resolve_model_identity(model_id, revision)
+    processor, resolved_id, resolved_revision = load_processor(
+        model_id=model_id,
+        revision=revision,
+    )
     snapshot = resolve_snapshot(resolved_id, resolved_revision)
-
-    processor = AutoProcessor.from_pretrained(
-        str(snapshot), local_files_only=True
-    )
 
     kwargs: dict[str, Any] = {
         "local_files_only": True,

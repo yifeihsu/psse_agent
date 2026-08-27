@@ -1,0 +1,22 @@
+{
+  "cell_root": "/scratch/yx3882/research_dagger_occupancy_cell_20260827",
+  "contract": "research_occupancy_screening_cell_v1",
+  "inputs": {
+    "12b_legacy_selective_receipt": {"path": "/ABSOLUTE/PATH/12b_selective_dagger_report.json", "sha256": "REPLACE_WITH_64_HEX"},
+    "12b_legacy_selective_train": {"path": "/ABSOLUTE/PATH/12b_selective/aggregate.train.jsonl", "sha256": "REPLACE_WITH_64_HEX"},
+    "12b_legacy_selective_validation": {"path": "/ABSOLUTE/PATH/12b_selective/aggregate.validation.jsonl", "sha256": "REPLACE_WITH_64_HEX"},
+    "12b_round0_train": {"path": "/ABSOLUTE/PATH/12b_d0/aggregate.train_view.jsonl", "sha256": "REPLACE_WITH_64_HEX"},
+    "12b_round0_validation": {"path": "/ABSOLUTE/PATH/12b_d0/aggregate.validation.jsonl", "sha256": "REPLACE_WITH_64_HEX"},
+    "12b_round1_rows": {"path": "/scratch/yx3882/research_dagger_12b_20260824/out/round1_rows.jsonl", "sha256": "REPLACE_WITH_64_HEX"},
+    "e2b_legacy_full_train": {"path": "/ABSOLUTE/PATH/e2b_full/aggregate.train.jsonl", "sha256": "REPLACE_WITH_64_HEX"},
+    "e2b_legacy_full_validation": {"path": "/ABSOLUTE/PATH/e2b_full/aggregate.validation.jsonl", "sha256": "REPLACE_WITH_64_HEX"},
+    "e2b_round0_train": {"path": "/ABSOLUTE/PATH/e2b_d0/aggregate.train_view.jsonl", "sha256": "REPLACE_WITH_64_HEX"},
+    "e2b_round0_validation": {"path": "/ABSOLUTE/PATH/e2b_d0/aggregate.validation.jsonl", "sha256": "REPLACE_WITH_64_HEX"},
+    "e2b_round1_rows": {"path": "/ABSOLUTE/PATH/uploaded_e2b_round1_rows.jsonl", "sha256": "REPLACE_WITH_64_HEX"},
+    "evaluation_scenarios": {"path": "/scratch/yx3882/research_dagger_12b_20260824/data/eval_scenarios.json", "sha256": "REPLACE_WITH_64_HEX"}
+  },
+  "python": "/scratch/yx3882/envs/dagger12b_overlay/bin/python",
+  "source_commit": "REPLACE_WITH_40_HEX",
+  "source_root": "/scratch/yx3882/research_dagger_occupancy_cell_20260827/src",
+  "source_tree_sha256": "REPLACE_WITH_64_HEX"
+}
