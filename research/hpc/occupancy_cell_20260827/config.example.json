@@ -15,6 +15,11 @@
     "e2b_round1_rows": {"path": "/ABSOLUTE/PATH/uploaded_e2b_round1_rows.jsonl", "sha256": "REPLACE_WITH_64_HEX"},
     "evaluation_scenarios": {"path": "/scratch/yx3882/research_dagger_12b_20260824/data/eval_scenarios.json", "sha256": "REPLACE_WITH_64_HEX"}
   },
+  "hf_home": "/scratch/yx3882/.cache/huggingface",
+  "model_snapshot_sha256": {
+    "12b": "REPLACE_WITH_64_HEX",
+    "e2b": "REPLACE_WITH_64_HEX"
+  },
   "python": "/scratch/yx3882/envs/dagger12b_overlay/bin/python",
   "source_commit": "REPLACE_WITH_40_HEX",
   "source_root": "/scratch/yx3882/research_dagger_occupancy_cell_20260827/src",

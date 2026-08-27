@@ -27,6 +27,9 @@ factorial.
 1. Deploy one committed source snapshot and put all inputs at immutable paths.
 2. Copy `config.example.json`, replace every placeholder, and compute the source
    digest with `python build.py tree-digest --root /absolute/source/root`.
+   Compute each offline model snapshot digest with `python build.py
+   snapshot-digest --hf-home /absolute/hf/home --lane e2b` (and `--lane 12b`)
+   and bind the reported hashes in the configuration.
 3. Recheck every configured SHA-256 and the 12B selective inclusion receipt.
    Arm C has no historical E2B aggregate report, so the CPU build proves its
    inclusion directly by reconstructing all audited D1 chat rows, checking the
@@ -71,6 +74,13 @@ dependent CPU job then deterministically replays that evaluation and requires
 65 physically assessable episodes, zero replay mismatches, and zero
 unclassified outcomes. Preemption/requeue creates a new restart attempt rather
 than reusing a partial adapter.
+
+The configuration pins `HF_HOME` to the historical offline cache. The CPU build
+strictly resolves every entry in both exact-revision snapshots, rejects targets
+outside that cache, hashes all exposed bytes, and compares the two deterministic
+manifest digests with the immutable configuration. Each GPU job repeats this
+content check for its own model lane before loading weights. The later physical
+audit does not depend on continued model-cache availability.
 
 All job IDs, constraints, input/source hashes, exact sampled training exposure,
 evaluation hashes, and physical summaries are retained below `cell_root`.

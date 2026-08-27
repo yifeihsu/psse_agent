@@ -24,9 +24,11 @@ CELL_ROOT=${CONFIG[0]}
 SOURCE_ROOT=${CONFIG[1]}
 [[ "$CELL_PYTHON" == "${CONFIG[2]}" ]] || { echo "configured Python drift" >&2; exit 2; }
 export PYTHONPATH="$SOURCE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+export HF_HOME=${CONFIG[3]}
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false
 cd "$SOURCE_ROOT"
-"$CELL_PYTHON" "$SCRIPT_DIR/build.py" environment
+"$CELL_PYTHON" "$SCRIPT_DIR/build.py" environment --config "$CELL_CONFIG" \
+  --expected-config-sha "$CELL_CONFIG_SHA256"
 "$CELL_PYTHON" -m pytest research -q
 "$CELL_PYTHON" -m compileall -q research
 

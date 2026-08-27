@@ -102,7 +102,7 @@ def sha256(path: str | Path) -> str:
     return digest.hexdigest()
 
 
-def environment_receipt() -> dict[str, Any]:
+def environment_receipt(config: Mapping[str, Any]) -> dict[str, Any]:
     actual = {"python": platform.python_version()}
     for distribution in EXPECTED_ENVIRONMENT:
         if distribution != "python":
@@ -111,11 +111,101 @@ def environment_receipt() -> dict[str, Any]:
         raise ValueError(
             f"research environment drift: expected {EXPECTED_ENVIRONMENT}, got {actual}"
         )
+    expected_hf_home = Path(config["hf_home"]).resolve(strict=True)
+    configured_hf_home = Path(os.environ.get("HF_HOME", "")).resolve()
+    if configured_hf_home != expected_hf_home:
+        raise ValueError(
+            f"HF_HOME must be the configured historical cache {expected_hf_home}, "
+            f"got {configured_hf_home}"
+        )
     return {
         "versions": actual,
         "python_executable": str(Path(sys.executable).resolve()),
+        "hf_home": str(expected_hf_home),
         "validation": "exact_distribution_versions",
     }
+
+
+def snapshot_manifest(hf_home: str | Path, lane: str) -> dict[str, Any]:
+    """Hash every file exposed by one pinned Hub snapshot.
+
+    Hugging Face snapshots normally consist of symlinks into the repository's
+    content-addressed blob directory.  Resolve each entry strictly so broken
+    links fail, require every target to remain inside the configured cache,
+    and hash the actual bytes rather than trusting directory or blob names.
+    """
+
+    if lane not in MODELS:
+        raise ValueError(f"unknown model lane: {lane}")
+    cache = Path(hf_home).resolve(strict=True)
+    model_id, revision = MODELS[lane]
+    repository = "models--" + model_id.replace("/", "--")
+    snapshot = cache / "hub" / repository / "snapshots" / revision
+    if not snapshot.is_dir():
+        raise ValueError(f"missing pinned {lane} model snapshot: {snapshot}")
+
+    entries: list[tuple[str, int, str]] = []
+    for entry in sorted(snapshot.rglob("*"), key=lambda path: path.relative_to(snapshot).as_posix()):
+        relative = entry.relative_to(snapshot).as_posix()
+        if entry.is_symlink():
+            try:
+                target = entry.resolve(strict=True)
+            except FileNotFoundError as exc:
+                raise ValueError(f"broken pinned snapshot entry: {relative}") from exc
+            if not target.is_file():
+                raise ValueError(f"pinned snapshot entry is not a file: {relative}")
+        elif entry.is_file():
+            target = entry.resolve(strict=True)
+        elif entry.is_dir():
+            continue
+        else:
+            raise ValueError(f"unsupported pinned snapshot entry: {relative}")
+        if not target.is_relative_to(cache):
+            raise ValueError(f"pinned snapshot entry escapes HF_HOME: {relative}")
+        entries.append((relative, target.stat().st_size, sha256(target)))
+    if not entries:
+        raise ValueError(f"pinned {lane} model snapshot is empty: {snapshot}")
+    names = {name for name, _, _ in entries}
+    if "config.json" not in names:
+        raise ValueError(f"pinned {lane} model snapshot lacks config.json")
+    if not any(
+        name == "model.safetensors"
+        or name == "model.safetensors.index.json"
+        or name.startswith("model-") and name.endswith(".safetensors")
+        for name in names
+    ):
+        raise ValueError(f"pinned {lane} model snapshot lacks model weights")
+
+    digest = hashlib.sha256(b"occupancy-cell-hf-snapshot-v1\0")
+    total_bytes = 0
+    for relative, size, file_sha in entries:
+        encoded = relative.encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+        digest.update(size.to_bytes(8, "big"))
+        digest.update(bytes.fromhex(file_sha))
+        total_bytes += size
+    return {
+        "lane": lane,
+        "model_id": model_id,
+        "revision": revision,
+        "snapshot": str(snapshot),
+        "sha256": digest.hexdigest(),
+        "files": len(entries),
+        "bytes": total_bytes,
+        "validation": "all_snapshot_entries_resolved_and_content_hashed",
+    }
+
+
+def verify_model_snapshot(config: Mapping[str, Any], lane: str) -> dict[str, Any]:
+    manifest = snapshot_manifest(config["hf_home"], lane)
+    expected = config["model_snapshot_sha256"][lane]
+    if manifest["sha256"] != expected:
+        raise ValueError(
+            f"pinned {lane} model snapshot hash mismatch: "
+            f"expected {expected}, got {manifest['sha256']}"
+        )
+    return manifest
 
 
 def tree_digest(root: str | Path) -> str:
@@ -189,6 +279,16 @@ def validate_config(path: str | Path, expected_sha: str | None = None) -> tuple[
     python.resolve(strict=True)
     if not os.access(python, os.X_OK):
         raise ValueError(f"configured Python is not executable: {python}")
+    hf_home = _absolute(config.get("hf_home"), "hf_home").resolve(strict=True)
+    snapshot_hashes = config.get("model_snapshot_sha256")
+    if not isinstance(snapshot_hashes, dict) or set(snapshot_hashes) != set(MODELS):
+        raise ValueError(
+            f"model_snapshot_sha256 must contain exactly {sorted(MODELS)}"
+        )
+    for lane, digest in snapshot_hashes.items():
+        if not HEX64.fullmatch(str(digest).lower()):
+            raise ValueError(f"model_snapshot_sha256.{lane} must be a SHA-256")
+        snapshot_hashes[lane] = str(digest).lower()
     expected_tree = str(config.get("source_tree_sha256", "")).lower()
     if not HEX64.fullmatch(expected_tree) or tree_digest(source) != expected_tree:
         raise ValueError("source tree SHA-256 mismatch")
@@ -227,6 +327,7 @@ def validate_config(path: str | Path, expected_sha: str | None = None) -> tuple[
     config["source_root"] = str(source)
     config["cell_root"] = str(root)
     config["python"] = str(python)
+    config["hf_home"] = str(hf_home)
     return config, config_sha
 
 
@@ -431,6 +532,10 @@ def _validate_exposure(report: Mapping[str, Any], train: Path, validation: Path,
 
 def build(config_path: Path, expected_sha: str, attempt: Path) -> dict[str, Any]:
     config, config_sha = validate_config(config_path, expected_sha)
+    environment = environment_receipt(config)
+    environment["model_snapshots"] = {
+        lane: verify_model_snapshot(config, lane) for lane in MODELS
+    }
     cell_root = Path(config["cell_root"])
     attempt = attempt.resolve()
     if not attempt.is_relative_to(cell_root / "build"):
@@ -539,7 +644,7 @@ def build(config_path: Path, expected_sha: str, attempt: Path) -> dict[str, Any]
         "source_commit": config["source_commit"],
         "source_commit_binding": "informational_label_tree_sha256_authoritative",
         "source_tree_sha256": config["source_tree_sha256"],
-        "environment": environment_receipt(),
+        "environment": environment,
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
         "slurm_restart_count": int(os.environ.get("SLURM_RESTART_COUNT", "0")),
         "arms": built,
@@ -567,7 +672,12 @@ def verify_build(config_path: Path, expected_sha: str) -> tuple[dict[str, Any], 
     receipt = load_json(receipt_path)
     if receipt.get("config_sha256") != config_sha or receipt.get("source_tree_sha256") != config["source_tree_sha256"]:
         raise ValueError("build receipt is not bound to this configuration/source")
-    if receipt.get("environment") != environment_receipt():
+    current_environment = environment_receipt(config)
+    recorded_environment = receipt.get("environment") or {}
+    if any(
+        recorded_environment.get(key) != value
+        for key, value in current_environment.items()
+    ):
         raise ValueError("runtime environment changed after the build")
     for arm in ARMS:
         record = receipt["arms"][arm]
@@ -826,7 +936,16 @@ def parser() -> argparse.ArgumentParser:
     tree.add_argument("--root", required=True, type=Path)
     digest = sub.add_parser("sha256")
     digest.add_argument("--path", required=True, type=Path)
-    sub.add_parser("environment")
+    environment = sub.add_parser("environment")
+    environment.add_argument("--config", required=True, type=Path)
+    environment.add_argument("--expected-config-sha", required=True)
+    snapshot = sub.add_parser("snapshot-digest")
+    snapshot.add_argument("--hf-home", required=True, type=Path)
+    snapshot.add_argument("--lane", required=True, choices=MODELS)
+    cache = sub.add_parser("verify-model-cache")
+    cache.add_argument("--config", required=True, type=Path)
+    cache.add_argument("--expected-config-sha", required=True)
+    cache.add_argument("--arm", required=True, choices=ARMS)
     for name in ("config-values", "verify-build"):
         item = sub.add_parser(name)
         item.add_argument("--config", required=True, type=Path)
@@ -895,13 +1014,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(sha256(args.path))
         return 0
     if args.command == "environment":
-        print(json.dumps(environment_receipt(), sort_keys=True))
+        config, _ = validate_config(args.config, args.expected_config_sha)
+        print(json.dumps(environment_receipt(config), sort_keys=True))
+        return 0
+    if args.command == "snapshot-digest":
+        print(json.dumps(snapshot_manifest(args.hf_home, args.lane), sort_keys=True))
+        return 0
+    if args.command == "verify-model-cache":
+        config, _ = validate_config(args.config, args.expected_config_sha)
+        lane = ARMS[args.arm]["lane"]
+        print(json.dumps(verify_model_snapshot(config, lane), sort_keys=True))
         return 0
     if args.command == "config-values":
         config, _ = validate_config(args.config, args.expected_config_sha)
         print(config["cell_root"])
         print(config["source_root"])
         print(config["python"])
+        print(config["hf_home"])
         return 0
     if args.command == "verify-build":
         _, pointer, _ = verify_build(args.config, args.expected_config_sha)
