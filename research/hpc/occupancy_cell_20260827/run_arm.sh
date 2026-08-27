@@ -45,6 +45,41 @@ TRAIN=${ARM[3]}; VALIDATION=${ARM[4]}; LANE=${ARM[7]}
 JOB_ID=${SLURM_JOB_ID:?run_arm.sh must run under Slurm}
 RESTART=${SLURM_RESTART_COUNT:-0}
 [[ "$JOB_ID" =~ ^[0-9]+$ && "$RESTART" =~ ^[0-9]+$ ]] || exit 2
+
+# Torch does not currently export SLURM_JOB_CONSTRAINTS into batch jobs.  When
+# it is absent, read the job-level Constraints field back from Slurm accounting
+# and fail closed unless there is exactly one non-empty value.  This remains a
+# scheduler attestation; CELL_EXPECTED_GPU_FEATURE alone is never accepted as
+# evidence that the requested constraint was applied.
+SCHEDULER_GPU_CONSTRAINT=${SLURM_JOB_CONSTRAINTS:-}
+SCHEDULER_GPU_CONSTRAINT_SOURCE=SLURM_JOB_CONSTRAINTS
+if [[ -z "$SCHEDULER_GPU_CONSTRAINT" ]]; then
+  SCHEDULER_GPU_CONSTRAINT_SOURCE=sacct
+  read_scheduler_constraint() {
+    local -a values
+    mapfile -t values < <(
+      sacct -X -j "$JOB_ID" --format=Constraints -n -P 2>/dev/null \
+        | awk 'NF {gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print}'
+    )
+    [[ ${#values[@]} -eq 1 && -n "${values[0]}" && "${values[0]}" != "(null)" ]] \
+      || return 1
+    printf '%s' "${values[0]}"
+  }
+  SCHEDULER_GPU_CONSTRAINT=""
+  for _ in 1 2 3; do
+    if SCHEDULER_GPU_CONSTRAINT=$(read_scheduler_constraint); then
+      break
+    fi
+    sleep 2
+  done
+fi
+[[ -n "$SCHEDULER_GPU_CONSTRAINT" ]] \
+  || { echo "Slurm did not attest the applied job constraint" >&2; exit 2; }
+[[ "$SCHEDULER_GPU_CONSTRAINT" == "$CELL_EXPECTED_GPU_FEATURE" ]] \
+  || { echo "Slurm constraint drift" >&2; exit 2; }
+export CELL_SCHEDULER_GPU_CONSTRAINT=$SCHEDULER_GPU_CONSTRAINT
+export CELL_SCHEDULER_GPU_CONSTRAINT_SOURCE=$SCHEDULER_GPU_CONSTRAINT_SOURCE
+
 JOB_ROOT="$CELL_ROOT/runs/$CELL_ARM/job-$JOB_ID"
 if [[ -f "$JOB_ROOT/completed.json" ]]; then
   "$CELL_PYTHON" "$SCRIPT_DIR/build.py" verify-arm --config "$CELL_CONFIG" \
@@ -74,6 +109,10 @@ json.dump(
         "cuda_visible_devices": os.environ["CUDA_VISIBLE_DEVICES"],
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
         "slurmd_nodename": os.environ.get("SLURMD_NODENAME"),
+        "slurm_job_constraint": os.environ["CELL_SCHEDULER_GPU_CONSTRAINT"],
+        "slurm_job_constraint_source": os.environ[
+            "CELL_SCHEDULER_GPU_CONSTRAINT_SOURCE"
+        ],
         "torch_cuda_device_count": count,
         "torch_device_index": 0,
         "name": properties.name,
@@ -105,9 +144,6 @@ done
 [[ -n "$OBSERVED_GPU_FAMILY" ]] \
   || { echo "observed GPU does not match $CELL_EXPECTED_GPU_FAMILY" >&2; exit 2; }
 export CELL_OBSERVED_GPU_FAMILY=$OBSERVED_GPU_FAMILY
-: "${SLURM_JOB_CONSTRAINTS:?Slurm did not expose the applied job constraint}"
-[[ "$SLURM_JOB_CONSTRAINTS" == *"$CELL_EXPECTED_GPU_FEATURE"* ]] \
-  || { echo "Slurm constraint drift" >&2; exit 2; }
 
 ADAPTER="$ATTEMPT/adapter"
 "$CELL_PYTHON" -m research.train --train "$TRAIN" --validation "$VALIDATION" \

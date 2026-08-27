@@ -721,7 +721,10 @@ def gate_training(config_path: Path, expected_sha: str, arm: str, summary_path: 
     observed_gpu_family = os.environ.get("CELL_OBSERVED_GPU_FAMILY")
     slurmd_nodename = os.environ.get("SLURMD_NODENAME")
     expected_gpu_feature = os.environ.get("CELL_EXPECTED_GPU_FEATURE")
-    slurm_job_constraints = os.environ.get("SLURM_JOB_CONSTRAINTS")
+    slurm_job_constraint = os.environ.get("CELL_SCHEDULER_GPU_CONSTRAINT")
+    slurm_job_constraint_source = os.environ.get(
+        "CELL_SCHEDULER_GPU_CONSTRAINT_SOURCE"
+    )
     checks = {
         "model_identity": (summary.get("model_id"), summary.get("model_revision"))
         == (record["model_id"], record["model_revision"]),
@@ -768,12 +771,15 @@ def gate_training(config_path: Path, expected_sha: str, arm: str, summary_path: 
         and allocated_gpu.get("slurm_job_id") == os.environ.get("SLURM_JOB_ID")
         and bool(slurmd_nodename)
         and allocated_gpu.get("slurmd_nodename") == slurmd_nodename
+        and allocated_gpu.get("slurm_job_constraint") == slurm_job_constraint
+        and allocated_gpu.get("slurm_job_constraint_source")
+        == slurm_job_constraint_source
         and isinstance(allocated_gpu.get("name"), str)
         and allocated_gpu.get("total_memory_bytes", 0) > 0,
         "gpu_family_attested": observed_gpu_family in expected_gpu_families,
         "slurm_constraint_attested": bool(expected_gpu_feature)
-        and bool(slurm_job_constraints)
-        and expected_gpu_feature in slurm_job_constraints,
+        and slurm_job_constraint_source in {"SLURM_JOB_CONSTRAINTS", "sacct"}
+        and expected_gpu_feature == slurm_job_constraint,
     }
     adapter = summary_path.parent
     adapter_files = {}
@@ -802,7 +808,8 @@ def gate_training(config_path: Path, expected_sha: str, arm: str, summary_path: 
         "expected_gpu_family": os.environ.get("CELL_EXPECTED_GPU_FAMILY"),
         "observed_gpu_family": observed_gpu_family,
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
-        "slurm_job_constraints": slurm_job_constraints,
+        "slurm_job_constraint": slurm_job_constraint,
+        "slurm_job_constraint_source": slurm_job_constraint_source,
         "release_evidence": False,
     }
     atomic_json(output, gate, exclusive=True)
