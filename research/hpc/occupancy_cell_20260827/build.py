@@ -181,11 +181,11 @@ def validate_config(path: str | Path, expected_sha: str | None = None) -> tuple[
     if receipt.get("inclusion") != "selective":
         raise ValueError("12b_legacy_selective_receipt does not attest inclusion=selective")
     for split, rows in (("train", 1332), ("validation", 331)):
-        source = _absolute(
+        receipt_source = _absolute(
             receipt.get(split), f"12b_legacy_selective_receipt.{split}"
         ).resolve(strict=True)
         configured = inputs[f"12b_legacy_selective_{split}"]
-        if sha256(source) != configured["sha256"]:
+        if sha256(receipt_source) != configured["sha256"]:
             raise ValueError(
                 f"12B selective receipt {split} is not bound to the configured data"
             )
