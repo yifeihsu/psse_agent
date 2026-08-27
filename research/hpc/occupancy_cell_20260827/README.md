@@ -60,7 +60,11 @@ attempt and records those IDs in `submission.json`; inspect that receipt and
 `squeue`/`sacct`, then use a fresh cell root for a new attempt.
 
 The CPU build job constructs A/B aggregates on the same audited-root split and
-runs processor-only exposure checks for all four arms. Each GPU job starts in a
+runs Linux tests plus processor-only exposure checks for all four arms. The
+environment gate pins Python 3.12.12, torch 2.10.0, transformers 5.15.1, TRL
+1.10.0, PEFT 0.20.0, bitsandbytes 0.49.2, and datasets 5.0.1. It deliberately
+does not use `pip check`: this historical overlay has known package-metadata
+conflicts even though these are the exact experiment versions. Each GPU job starts in a
 fresh `job-ID/attempt-rN` directory, trains from the base model, emits a full
 schema-v2 65-episode evaluation, and passes exact hash/model/update gates. A
 dependent CPU job then deterministically replays that evaluation and requires

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import json
 import math
 import os
+import platform
 import re
 import sys
 import tempfile
@@ -18,6 +20,15 @@ from typing import Any, Mapping, Sequence
 CONTRACT = "research_occupancy_screening_cell_v1"
 HEX40 = re.compile(r"[0-9a-f]{40}")
 HEX64 = re.compile(r"[0-9a-f]{64}")
+EXPECTED_ENVIRONMENT = {
+    "python": "3.12.12",
+    "torch": "2.10.0",
+    "transformers": "5.15.1",
+    "trl": "1.10.0",
+    "peft": "0.20.0",
+    "bitsandbytes": "0.49.2",
+    "datasets": "5.0.1",
+}
 MODELS = {
     "e2b": (
         "unsloth/gemma-4-E2B-it",
@@ -89,6 +100,22 @@ def sha256(path: str | Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def environment_receipt() -> dict[str, Any]:
+    actual = {"python": platform.python_version()}
+    for distribution in EXPECTED_ENVIRONMENT:
+        if distribution != "python":
+            actual[distribution] = importlib.metadata.version(distribution)
+    if actual != EXPECTED_ENVIRONMENT:
+        raise ValueError(
+            f"research environment drift: expected {EXPECTED_ENVIRONMENT}, got {actual}"
+        )
+    return {
+        "versions": actual,
+        "python_executable": str(Path(sys.executable).resolve()),
+        "validation": "exact_distribution_versions",
+    }
 
 
 def tree_digest(root: str | Path) -> str:
@@ -512,6 +539,7 @@ def build(config_path: Path, expected_sha: str, attempt: Path) -> dict[str, Any]
         "source_commit": config["source_commit"],
         "source_commit_binding": "informational_label_tree_sha256_authoritative",
         "source_tree_sha256": config["source_tree_sha256"],
+        "environment": environment_receipt(),
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
         "slurm_restart_count": int(os.environ.get("SLURM_RESTART_COUNT", "0")),
         "arms": built,
@@ -539,6 +567,8 @@ def verify_build(config_path: Path, expected_sha: str) -> tuple[dict[str, Any], 
     receipt = load_json(receipt_path)
     if receipt.get("config_sha256") != config_sha or receipt.get("source_tree_sha256") != config["source_tree_sha256"]:
         raise ValueError("build receipt is not bound to this configuration/source")
+    if receipt.get("environment") != environment_receipt():
+        raise ValueError("runtime environment changed after the build")
     for arm in ARMS:
         record = receipt["arms"][arm]
         for key in ("train", "validation", "exposure"):
@@ -796,6 +826,7 @@ def parser() -> argparse.ArgumentParser:
     tree.add_argument("--root", required=True, type=Path)
     digest = sub.add_parser("sha256")
     digest.add_argument("--path", required=True, type=Path)
+    sub.add_parser("environment")
     for name in ("config-values", "verify-build"):
         item = sub.add_parser(name)
         item.add_argument("--config", required=True, type=Path)
@@ -862,6 +893,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "sha256":
         print(sha256(args.path))
+        return 0
+    if args.command == "environment":
+        print(json.dumps(environment_receipt(), sort_keys=True))
         return 0
     if args.command == "config-values":
         config, _ = validate_config(args.config, args.expected_config_sha)

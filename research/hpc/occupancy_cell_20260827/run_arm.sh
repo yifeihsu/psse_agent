@@ -31,7 +31,7 @@ export PYTHONPATH="$SOURCE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-8}
 cd "$SOURCE_ROOT"
-"$CELL_PYTHON" -m pip check
+"$CELL_PYTHON" "$SCRIPT_DIR/build.py" environment
 mapfile -t ARM < <("$CELL_PYTHON" "$SCRIPT_DIR/build.py" arm-values \
   --config "$CELL_CONFIG" --expected-config-sha "$CELL_CONFIG_SHA256" --arm "$CELL_ARM")
 MODEL_ID=${ARM[0]}; MODEL_REVISION=${ARM[1]}; UPDATES=${ARM[2]}
