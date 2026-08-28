@@ -49,6 +49,18 @@ ARMS = {
         "updates": 1811,
     },
     "D": {"lane": "12b", "inclusion": "selective", "updates": 247},
+    "E": {
+        "lane": "12b",
+        "inclusion": "full_occupancy",
+        "updates": 1811,
+        "matched_corpus_arm": "C",
+    },
+}
+MATCHED_CORPUS_BASELINES = {
+    "C": {
+        "train_sha256": "96239e930d9680f33bb0f003bf150eef12562e7124ba66d7d52c49066eea8856",
+        "validation_sha256": "30cc31d7694084b7abe74974e9083e5b9afb028b3c73eab76b9ef7cf8bf2f72e",
+    }
 }
 EXPECTED_LEARNER_FULL = {
     "A": {
@@ -531,6 +543,55 @@ def _validate_exposure(report: Mapping[str, Any], train: Path, validation: Path,
             raise ValueError(f"{lane} {split} exposure is incomplete or empty")
 
 
+MATCHED_CORPUS_FIELDS = (
+    "train",
+    "train_sha256",
+    "validation",
+    "validation_sha256",
+    "inclusion",
+    "updates",
+)
+
+
+def matched_corpus_binding(arms: Mapping[str, Mapping[str, Any]], arm: str) -> bool:
+    """Return whether a declared model-only arm matches its source arm.
+
+    A model-only match deliberately shares the immutable chat corpus, split,
+    occupancy interpretation, and update budget. Model identity and prepared
+    token counts remain lane-specific and therefore are not copied.
+    """
+
+    record = arms.get(arm)
+    spec = ARMS.get(arm)
+    if not isinstance(record, Mapping) or not isinstance(spec, Mapping):
+        return False
+    expected_source = spec.get("matched_corpus_arm")
+    declared_source = record.get("matched_corpus_arm")
+    if expected_source is None:
+        return declared_source is None
+    if (
+        declared_source != expected_source
+        or expected_source == arm
+        or expected_source not in arms
+    ):
+        return False
+    source = arms[expected_source]
+    baseline = MATCHED_CORPUS_BASELINES.get(expected_source)
+    if not isinstance(source, Mapping) or not isinstance(baseline, Mapping):
+        return False
+    if any(source.get(key) != value for key, value in baseline.items()):
+        return False
+    expected_lane = spec.get("lane")
+    source_lane = ARMS.get(expected_source, {}).get("lane")
+    if (
+        record.get("lane") != expected_lane
+        or source.get("lane") != source_lane
+        or expected_lane == source_lane
+    ):
+        return False
+    return all(record.get(key) == source.get(key) for key in MATCHED_CORPUS_FIELDS)
+
+
 def build(config_path: Path, expected_sha: str, attempt: Path) -> dict[str, Any]:
     config, config_sha = validate_config(config_path, expected_sha)
     environment = environment_receipt(config)
@@ -598,6 +659,15 @@ def build(config_path: Path, expected_sha: str, attempt: Path) -> dict[str, Any]
         "validation_sha256": config["inputs"]["e2b_legacy_full_validation"]["sha256"],
         "legacy_inclusion_validation": e2b_legacy_validation,
     }
+    built["E"] = {
+        "train": built["C"]["train"],
+        "train_sha256": built["C"]["train_sha256"],
+        "validation": built["C"]["validation"],
+        "validation_sha256": built["C"]["validation_sha256"],
+        "legacy_inclusion_validation": built["C"]["legacy_inclusion_validation"],
+        "matched_corpus_arm": "C",
+        "matched_corpus_binding": "exact_train_validation_paths_hashes_inclusion_and_updates",
+    }
     b12_legacy_validation = _validate_12b_legacy_selective(config)
     built["D"] = {
         "train": str(input_path(config, "12b_legacy_selective_train")),
@@ -636,6 +706,10 @@ def build(config_path: Path, expected_sha: str, attempt: Path) -> dict[str, Any]
         built[arm]["exposure_sha256"] = sha256(exposure_path)
         built[arm].update(ARMS[arm])
         built[arm]["model_id"], built[arm]["model_revision"] = MODELS[lane]
+
+    for arm, spec in ARMS.items():
+        if spec.get("matched_corpus_arm") and not matched_corpus_binding(built, arm):
+            raise ValueError(f"arm {arm} model-only corpus binding drift")
 
     receipt = {
         "contract": CONTRACT,
@@ -808,6 +882,7 @@ def gate_training(config_path: Path, expected_sha: str, arm: str, summary_path: 
         "model_identity": (summary.get("model_id"), summary.get("model_revision"))
         == (record["model_id"], record["model_revision"]),
         "fresh_base_start": summary.get("initial_adapter") is None,
+        "matched_corpus_lineage": matched_corpus_binding(receipt["arms"], arm),
         "train_hash": summary.get("train_sha256") == record["train_sha256"],
         "validation_hash": summary.get("validation_sha256") == record["validation_sha256"],
         "updates": summary.get("optimizer_updates_completed") == record["updates"]
@@ -1039,16 +1114,55 @@ def gate_audit(config_path: Path, expected_sha: str, arm: str, parent_job: str, 
     return gate
 
 
+def parse_selected_arms(value: str) -> list[str]:
+    selected = value.split(",")
+    if (
+        not selected
+        or len(set(selected)) != len(selected)
+        or any(arm not in ARMS for arm in selected)
+    ):
+        raise ValueError("selected_arms must be a unique comma-separated subset of ARMS")
+    return selected
+
+
+def validate_submission_jobs(payload: Mapping[str, Any]) -> None:
+    selected = payload.get("selected_arms")
+    if (
+        not isinstance(selected, list)
+        or any(not isinstance(arm, str) for arm in selected)
+        or parse_selected_arms(",".join(selected)) != selected
+    ):
+        raise ValueError("submission receipt selected_arms are invalid")
+    expected = {"build"}
+    for arm in selected:
+        expected.update({f"arm:{arm}", f"audit:{arm}"})
+    jobs = payload.get("jobs")
+    if not isinstance(jobs, Mapping) or set(jobs) != expected:
+        raise ValueError(
+            f"submission jobs must be exactly {sorted(expected)}, got "
+            f"{sorted(jobs) if isinstance(jobs, Mapping) else jobs}"
+        )
+    job_ids = list(jobs.values())
+    if (
+        any(not isinstance(job_id, str) or not job_id.isdigit() for job_id in job_ids)
+        or len(set(job_ids)) != len(job_ids)
+    ):
+        raise ValueError("submission job IDs must be unique decimal strings")
+
+
 def submission_update(config_path: Path, expected_sha: str, action: str, **kwargs: str) -> dict[str, Any]:
     config, config_sha = validate_config(config_path, expected_sha)
     target = Path(config["cell_root"]) / "submission.json"
     if action == "begin":
+        selected_arms = parse_selected_arms(kwargs["selected_arms"])
         payload = {
             "contract": CONTRACT, "status": "submitting", "config": str(config_path.resolve()),
             "config_sha256": config_sha, "source_commit": config["source_commit"],
             "source_commit_binding": "informational_label_tree_sha256_authoritative",
             "source_tree_sha256": config["source_tree_sha256"],
-            "gpu_constraints": kwargs["gpu_constraints"], "jobs": {}, "release_evidence": False,
+            "gpu_constraints": kwargs["gpu_constraints"],
+            "selected_arms": selected_arms,
+            "jobs": {}, "release_evidence": False,
         }
         atomic_json(target, payload, exclusive=True)
         return payload
@@ -1056,11 +1170,17 @@ def submission_update(config_path: Path, expected_sha: str, action: str, **kwarg
     if payload.get("config_sha256") != config_sha:
         raise ValueError("submission receipt configuration mismatch")
     if action == "job":
+        role = kwargs["role"]
+        arm = kwargs.get("arm")
+        if role in {"arm", "audit"} and arm not in payload.get("selected_arms", []):
+            raise ValueError(f"refusing to record unselected {role} arm: {arm}")
         key = kwargs["role"] + (f":{kwargs['arm']}" if kwargs.get("arm") else "")
         if key in payload["jobs"]:
             raise ValueError(f"submission job already recorded: {key}")
         payload["jobs"][key] = kwargs["job_id"]
     elif action in {"finish", "fail"}:
+        if action == "finish":
+            validate_submission_jobs(payload)
         payload["status"] = "submitted" if action == "finish" else "submission_failed"
         if kwargs.get("detail"):
             payload["detail"] = kwargs["detail"]
@@ -1135,6 +1255,7 @@ def parser() -> argparse.ArgumentParser:
         item.add_argument("--expected-config-sha", required=True)
         if name == "submission-begin":
             item.add_argument("--gpu-constraints", required=True)
+            item.add_argument("--selected-arms", required=True)
         elif name == "submission-job":
             item.add_argument("--role", required=True, choices=("build", "arm", "audit"))
             item.add_argument("--arm", choices=ARMS)
@@ -1233,7 +1354,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     values = vars(args)
     payload = submission_update(
         args.config, args.expected_config_sha, action,
-        **{key: str(values[key]) for key in ("gpu_constraints", "role", "arm", "job_id", "detail") if values.get(key) is not None},
+        **{
+            key: str(values[key])
+            for key in (
+                "gpu_constraints", "selected_arms", "role", "arm", "job_id", "detail"
+            )
+            if values.get(key) is not None
+        },
     )
     print(json.dumps(payload, sort_keys=True))
     return 0

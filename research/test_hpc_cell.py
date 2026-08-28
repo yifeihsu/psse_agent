@@ -69,8 +69,9 @@ def test_environment_receipt_requires_configured_hf_home(tmp_path: Path) -> None
         (2533, 662, 2645, 2646),
         (3630, 1811, 7242, 7243),
         (1332, 247, 988, 989),
+        (3630, 1811, 7242, 7243),
     ],
-    ids=("arm-a", "arm-b", "arm-c", "arm-d"),
+    ids=("arm-a", "arm-b", "arm-c", "arm-d", "arm-e-model-only"),
 )
 def test_expected_train_exposure_locks_occupancy_arms(
     train_rows: int,
@@ -122,3 +123,73 @@ def test_expected_train_exposure_rejects_invalid_inputs(
 ) -> None:
     with pytest.raises(ValueError, match="positive integers"):
         cell.expected_train_exposure(*values)
+
+
+def test_arm_e_is_a_model_only_match_to_arm_c() -> None:
+    assert cell.ARMS["E"] == {
+        "lane": "12b",
+        "inclusion": "full_occupancy",
+        "updates": 1811,
+        "matched_corpus_arm": "C",
+    }
+    assert cell.ARMS["C"]["lane"] == "e2b"
+    assert cell.ARMS["E"]["inclusion"] == cell.ARMS["C"]["inclusion"]
+    assert cell.ARMS["E"]["updates"] == cell.ARMS["C"]["updates"]
+
+
+def test_matched_corpus_binding_locks_paths_hashes_inclusion_and_updates() -> None:
+    source = {
+        "train": "/immutable/train.jsonl",
+        "train_sha256": cell.MATCHED_CORPUS_BASELINES["C"]["train_sha256"],
+        "validation": "/immutable/validation.jsonl",
+        "validation_sha256": cell.MATCHED_CORPUS_BASELINES["C"][
+            "validation_sha256"
+        ],
+        "inclusion": "full_occupancy",
+        "updates": 1811,
+        "lane": "e2b",
+    }
+    matched = {**source, "lane": "12b", "matched_corpus_arm": "C"}
+    arms = {"C": source, "E": matched}
+    assert cell.matched_corpus_binding(arms, "E")
+
+    for key in cell.MATCHED_CORPUS_FIELDS:
+        drifted = {"C": source, "E": {**matched, key: "drift"}}
+        assert not cell.matched_corpus_binding(drifted, "E")
+
+    assert not cell.matched_corpus_binding(
+        {"E": {**matched, "matched_corpus_arm": "missing"}}, "E"
+    )
+    assert not cell.matched_corpus_binding(
+        {"C": source, "E": {key: value for key, value in matched.items() if key != "matched_corpus_arm"}},
+        "E",
+    )
+    assert not cell.matched_corpus_binding(
+        {"C": source, "D": source, "E": {**matched, "matched_corpus_arm": "D"}},
+        "E",
+    )
+
+
+def test_selected_arms_are_explicit_unique_and_closed_over_known_arms() -> None:
+    assert cell.parse_selected_arms("E") == ["E"]
+    assert cell.parse_selected_arms("A,C,E") == ["A", "C", "E"]
+    for invalid in ("", "E,E", "F", "E, A"):
+        with pytest.raises(ValueError, match="selected_arms"):
+            cell.parse_selected_arms(invalid)
+
+
+def test_submission_finish_requires_exact_selected_job_graph() -> None:
+    payload = {
+        "selected_arms": ["E"],
+        "jobs": {"build": "1", "arm:E": "2", "audit:E": "3"},
+    }
+    cell.validate_submission_jobs(payload)
+
+    for jobs in (
+        {"build": "1", "arm:E": "2"},
+        {**payload["jobs"], "arm:A": "4"},
+        {"build": "1", "arm:E": "1", "audit:E": "3"},
+        {"build": "not-a-job", "arm:E": "2", "audit:E": "3"},
+    ):
+        with pytest.raises(ValueError, match="submission job"):
+            cell.validate_submission_jobs({"selected_arms": ["E"], "jobs": jobs})

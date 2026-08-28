@@ -4,10 +4,10 @@ set -Eeuo pipefail
 : "${CELL_CONFIG:?set CELL_CONFIG}"
 : "${CELL_CONFIG_SHA256:?set CELL_CONFIG_SHA256}"
 : "${CELL_PYTHON:?set CELL_PYTHON}"
-: "${CELL_ARM:?set CELL_ARM to A, B, C, or D}"
+: "${CELL_ARM:?set CELL_ARM to A, B, C, D, or E}"
 : "${CELL_EXPECTED_GPU_FEATURE:?set by submit.sh}"
 : "${CELL_EXPECTED_GPU_FAMILY:?set by submit.sh}"
-[[ "$CELL_ARM" =~ ^[ABCD]$ ]] || exit 2
+[[ "$CELL_ARM" =~ ^[ABCDE]$ ]] || exit 2
 GPU_FAMILY_PATTERN='^(A100|H100|H200|RTX6000)(\|(A100|H100|H200|RTX6000))*$'
 [[ "$CELL_EXPECTED_GPU_FAMILY" =~ $GPU_FAMILY_PATTERN ]] || exit 2
 

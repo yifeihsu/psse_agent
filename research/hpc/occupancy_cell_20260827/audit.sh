@@ -6,7 +6,7 @@ set -Eeuo pipefail
 : "${CELL_PYTHON:?set CELL_PYTHON}"
 : "${CELL_ARM:?set CELL_ARM}"
 : "${CELL_PARENT_JOB_ID:?set CELL_PARENT_JOB_ID}"
-[[ "$CELL_ARM" =~ ^[ABCD]$ && "$CELL_PARENT_JOB_ID" =~ ^[0-9]+$ ]] || exit 2
+[[ "$CELL_ARM" =~ ^[ABCDE]$ && "$CELL_PARENT_JOB_ID" =~ ^[0-9]+$ ]] || exit 2
 
 SUBMITTED_SCRIPT=$(readlink -f "${BASH_SOURCE[0]}")
 CONFIG_SOURCE_ROOT=$("$CELL_PYTHON" - "$CELL_CONFIG" <<'PY'

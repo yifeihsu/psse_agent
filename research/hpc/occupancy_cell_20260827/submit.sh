@@ -5,6 +5,7 @@ set -Eeuo pipefail
 : "${CELL_PYTHON:?set CELL_PYTHON to the configured Python executable}"
 : "${CELL_GPU_CONSTRAINT:?set CELL_GPU_CONSTRAINT explicitly; see README.md}"
 : "${CELL_GPU_FAMILY:?set CELL_GPU_FAMILY explicitly; see README.md}"
+: "${CELL_SELECTED_ARMS:?set CELL_SELECTED_ARMS explicitly, for example E}"
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 CELL_CONFIG=$(readlink -f "$CELL_CONFIG")
 case "$CELL_CONFIG" in
@@ -46,10 +47,20 @@ for pair in "${PAIRS[@]}"; do
   case "$key" in e2b) E2B_FAMILY=$value ;; 12b) B12_FAMILY=$value ;; *) exit 2 ;; esac
 done
 [[ -n "$E2B_FAMILY" && -n "$B12_FAMILY" ]] || { echo "both GPU families are required" >&2; exit 2; }
+
+IFS=',' read -ra SELECTED_ARMS <<<"$CELL_SELECTED_ARMS"
+[[ ${#SELECTED_ARMS[@]} -ge 1 ]] || { echo "at least one selected arm is required" >&2; exit 2; }
+declare -A SEEN_ARMS=()
+for arm in "${SELECTED_ARMS[@]}"; do
+  [[ "$arm" =~ ^[ABCDE]$ ]] || { echo "invalid selected arm: $arm" >&2; exit 2; }
+  [[ -z "${SEEN_ARMS[$arm]:-}" ]] || { echo "duplicate selected arm: $arm" >&2; exit 2; }
+  SEEN_ARMS[$arm]=1
+done
 mkdir -p "$CELL_ROOT/logs"
 "$CELL_PYTHON" "$SCRIPT_DIR/build.py" submission-begin --config "$CELL_CONFIG" \
   --expected-config-sha "$CELL_CONFIG_SHA256" \
-  --gpu-constraints "$CELL_GPU_CONSTRAINT;families=$CELL_GPU_FAMILY"
+  --gpu-constraints "$CELL_GPU_CONSTRAINT;families=$CELL_GPU_FAMILY" \
+  --selected-arms "$CELL_SELECTED_ARMS"
 SUBMIT_FINISHED=0
 SUBMITTED_JOBS=()
 submission_cleanup() {
@@ -91,14 +102,15 @@ SUBMITTED_JOBS+=("$BUILD")
   --expected-config-sha "$CELL_CONFIG_SHA256" --role build --job-id "$BUILD"
 
 declare -A ARM_JOBS
-for arm in A B C D; do
-  if [[ "$arm" == A || "$arm" == C ]]; then
-    feature=$E2B_FEATURE; family=$E2B_FAMILY
-  else
-    feature=$B12_FEATURE; family=$B12_FAMILY
-  fi
+for arm in "${SELECTED_ARMS[@]}"; do
+  case "$arm" in
+    A|C) feature=$E2B_FEATURE; family=$E2B_FAMILY; walltime=12:00:00 ;;
+    B|D) feature=$B12_FEATURE; family=$B12_FAMILY; walltime=12:00:00 ;;
+    E) feature=$B12_FEATURE; family=$B12_FAMILY; walltime=18:00:00 ;;
+    *) exit 2 ;;
+  esac
   ARM_JOBS[$arm]=$(job_id "$(sbatch "${common[@]}" --job-name="occ-cell-$arm" \
-    --dependency="afterok:$BUILD" --time=12:00:00 --gres=gpu:1 --constraint="$feature" \
+    --dependency="afterok:$BUILD" --time="$walltime" --gres=gpu:1 --constraint="$feature" \
     --output="$CELL_ROOT/logs/arm-$arm-%j.out" --error="$CELL_ROOT/logs/arm-$arm-%j.err" \
     --export="$export_args,CELL_ARM=$arm,CELL_EXPECTED_GPU_FEATURE=$feature,CELL_EXPECTED_GPU_FAMILY=$family" \
     "$SCRIPT_DIR/run_arm.sh")")
@@ -107,7 +119,7 @@ for arm in A B C D; do
     --expected-config-sha "$CELL_CONFIG_SHA256" --role arm --arm "$arm" --job-id "${ARM_JOBS[$arm]}"
 done
 
-for arm in A B C D; do
+for arm in "${SELECTED_ARMS[@]}"; do
   audit=$(job_id "$(sbatch "${common[@]}" --job-name="occ-audit-$arm" \
     --dependency="afterok:${ARM_JOBS[$arm]}" --time=02:00:00 \
     --output="$CELL_ROOT/logs/audit-$arm-%j.out" --error="$CELL_ROOT/logs/audit-$arm-%j.err" \

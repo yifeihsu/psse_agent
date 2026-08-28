@@ -9,6 +9,7 @@ not a release path and it does not run DAgger-2.
 | B | 12B learner-full | 662 | fixed-update learner-occupancy screen |
 | C | E2B legacy mixture-full | 1811 | legacy row-pass/coverage match |
 | D | 12B legacy selective | 247 | legacy row-pass/coverage match |
+| E | 12B on C's exact legacy mixture-full corpus | 1811 | model-only same-corpus match to C |
 
 The E2B control actually completed 666 optimizer updates, despite the earlier
 matrix describing the shared budget as 662, so A uses 666. B retains the
@@ -18,9 +19,13 @@ they supersede the approximate 1780/246 planning values.
 
 The 1811/247 budgets reproduce the historical row-pass comparison. They are
 not target-token-matched budgets. A/B use the new audited-universe split;
-C/D retain their legacy split receipts. Therefore this four-job cell is a
-provisional crossover screen, not a clean two-model by three-occupancy
-factorial.
+C/D retain their legacy split receipts. Therefore the original four-job cell
+is a provisional crossover screen, not a clean two-model by three-occupancy
+factorial. E is a later model-only addendum: it reuses C's exact immutable
+train/validation bytes, legacy split, inclusion label, update budget, seed,
+recipe, and evaluation suite while changing only the model lane and its
+model-specific processor from E2B to 12B. It is not the historical 12B-collected
+full-occupancy corpus and must not be labelled as such.
 
 ## Training-exposure semantics
 
@@ -61,8 +66,18 @@ export CELL_CONFIG=/absolute/path/cell.config.json
 export CELL_PYTHON=/scratch/yx3882/envs/dagger12b_overlay/bin/python
 export CELL_GPU_CONSTRAINT='e2b=RECHECK_FEATURE,12b=RECHECK_FEATURE'
 export CELL_GPU_FAMILY='e2b=RECHECK_FAMILY_SET,12b=RECHECK_FAMILY_SET'
+export CELL_SELECTED_ARMS=E
 bash research/hpc/occupancy_cell_20260827/submit.sh
 ```
+
+`CELL_SELECTED_ARMS` is mandatory and is recorded in `submission.json`. It is a
+comma-separated subset of `A,B,C,D,E`; duplicates, whitespace, unknown arms,
+and an empty selection fail closed. For the model-only addendum it must be
+exactly `E`, which submits only the CPU build, GPU arm E, and CPU audit E. It
+does not resubmit A-D. The launcher refuses to mark a submission complete unless
+the receipt contains exactly one build plus one arm and audit job for every
+selected arm. E receives an 18-hour wall-time because 1,811 12B updates may
+exceed the original 12-hour arm limit; A-D retain their 12-hour limit.
 
 Current routing blocker: the historical E2B arms ran on A100 and the historical
 12B arms ran on H100, but exact A100/H100 requests are not currently accepted
@@ -100,12 +115,16 @@ attempt and records those IDs in `submission.json`; inspect that receipt and
 `squeue`/`sacct`, then use a fresh cell root for a new attempt.
 
 The CPU build job constructs A/B aggregates on the same audited-root split and
-runs Linux tests plus processor-only exposure checks for all four arms. The
+runs Linux tests plus processor-only exposure checks for all five arms. E's
+build record must match C's train/validation paths and hashes, inclusion, and
+update budget exactly; C's v5 train/validation SHA-256 values are hard-pinned
+as the comparison baseline. E's exposure is then prepared independently with
+the pinned 12B processor. The
 environment gate pins Python 3.12.12, torch 2.10.0, Accelerate 1.13.0,
 Transformers 5.15.1, TRL 1.10.0, PEFT 0.20.0, bitsandbytes 0.49.2, and datasets
 5.0.1. It deliberately
 does not use `pip check`: this historical overlay has known package-metadata
-conflicts even though these are the exact experiment versions. Each GPU job starts in a
+conflicts even though these are the exact experiment versions. Each selected GPU job starts in a
 fresh `job-ID/attempt-rN` directory, trains from the base model, emits a full
 schema-v2 65-episode evaluation, and passes exact hash/model/update gates. A
 dependent CPU job then deterministically replays that evaluation and requires
