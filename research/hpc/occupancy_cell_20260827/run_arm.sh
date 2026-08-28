@@ -46,33 +46,34 @@ JOB_ID=${SLURM_JOB_ID:?run_arm.sh must run under Slurm}
 RESTART=${SLURM_RESTART_COUNT:-0}
 [[ "$JOB_ID" =~ ^[0-9]+$ && "$RESTART" =~ ^[0-9]+$ ]] || exit 2
 
-# Torch does not currently export SLURM_JOB_CONSTRAINTS into batch jobs.  When
-# it is absent, read the job-level Constraints field back from Slurm accounting
-# and fail closed unless there is exactly one non-empty value.  This remains a
-# scheduler attestation; CELL_EXPECTED_GPU_FEATURE alone is never accepted as
-# evidence that the requested constraint was applied.
-SCHEDULER_GPU_CONSTRAINT=${SLURM_JOB_CONSTRAINTS:-}
-SCHEDULER_GPU_CONSTRAINT_SOURCE=SLURM_JOB_CONSTRAINTS
-if [[ -z "$SCHEDULER_GPU_CONSTRAINT" ]]; then
-  SCHEDULER_GPU_CONSTRAINT_SOURCE=sacct
-  read_scheduler_constraint() {
-    local -a values
-    mapfile -t values < <(
-      sacct -X -j "$JOB_ID" --format=Constraints -n -P 2>/dev/null \
-        | awk 'NF {gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print}'
-    )
-    [[ ${#values[@]} -eq 1 && -n "${values[0]}" && "${values[0]}" != "(null)" ]] \
-      || return 1
-    printf '%s' "${values[0]}"
-  }
-  SCHEDULER_GPU_CONSTRAINT=""
-  for _ in 1 2 3; do
-    if SCHEDULER_GPU_CONSTRAINT=$(read_scheduler_constraint); then
-      break
-    fi
-    sleep 2
-  done
-fi
+# Torch does not currently export SLURM_JOB_CONSTRAINTS into batch jobs.  Read
+# the job-level Constraints field back from Slurm accounting unconditionally,
+# so an inherited SLURM_* value can never be mistaken for scheduler evidence.
+# Capture the pipeline before splitting it: process substitution would hide a
+# failing sacct exit status even under pipefail.
+read_scheduler_constraint() {
+  local raw
+  local -a values=()
+  if ! raw=$(
+    sacct -X -j "$JOB_ID" --format=Constraints -n -P 2>/dev/null \
+      | awk 'NF {gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print}'
+  ); then
+    return 1
+  fi
+  [[ -n "$raw" ]] || return 1
+  mapfile -t values <<<"$raw"
+  [[ ${#values[@]} -eq 1 && -n "${values[0]}" && "${values[0]}" != "(null)" ]] \
+    || return 1
+  printf '%s' "${values[0]}"
+}
+SCHEDULER_GPU_CONSTRAINT=""
+for _ in 1 2 3; do
+  if SCHEDULER_GPU_CONSTRAINT=$(read_scheduler_constraint); then
+    break
+  fi
+  sleep 2
+done
+SCHEDULER_GPU_CONSTRAINT_SOURCE=sacct
 [[ -n "$SCHEDULER_GPU_CONSTRAINT" ]] \
   || { echo "Slurm did not attest the applied job constraint" >&2; exit 2; }
 [[ "$SCHEDULER_GPU_CONSTRAINT" == "$CELL_EXPECTED_GPU_FEATURE" ]] \

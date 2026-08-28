@@ -778,7 +778,7 @@ def gate_training(config_path: Path, expected_sha: str, arm: str, summary_path: 
         and allocated_gpu.get("total_memory_bytes", 0) > 0,
         "gpu_family_attested": observed_gpu_family in expected_gpu_families,
         "slurm_constraint_attested": bool(expected_gpu_feature)
-        and slurm_job_constraint_source in {"SLURM_JOB_CONSTRAINTS", "sacct"}
+        and slurm_job_constraint_source == "sacct"
         and expected_gpu_feature == slurm_job_constraint,
     }
     adapter = summary_path.parent

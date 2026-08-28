@@ -102,9 +102,10 @@ audit does not depend on continued model-cache availability.
 All job IDs, constraints, input/source hashes, exact sampled training exposure,
 evaluation hashes, and physical summaries are retained below `cell_root`.
 Torch currently omits `SLURM_JOB_CONSTRAINTS` inside the batch environment, so
-each GPU arm reads the job-level `Constraints` field back from `sacct`, requires
-an exact match with the submitted feature expression, and includes that value
-and its scheduler source in the hashed allocated-device receipt before training.
+each GPU arm unconditionally reads the job-level `Constraints` field back from
+`sacct`, requires a successful single-row query and an exact match with the
+submitted feature expression, and includes that value and its scheduler source
+in the hashed allocated-device receipt before training.
 `source_commit` is an informational deployment label because a `git archive`
 has no `.git` directory; the validated `source_tree_sha256` is the authoritative
 source binding.
