@@ -60,3 +60,65 @@ def test_environment_receipt_requires_configured_hf_home(tmp_path: Path) -> None
     ):
         receipt = cell.environment_receipt(config)
     assert receipt["hf_home"] == str(tmp_path.resolve())
+
+
+@pytest.mark.parametrize(
+    ("train_rows", "updates", "trained", "collated"),
+    [
+        (2566, 666, 2662, 2663),
+        (2533, 662, 2645, 2646),
+        (3630, 1811, 7242, 7243),
+        (1332, 247, 988, 989),
+    ],
+    ids=("arm-a", "arm-b", "arm-c", "arm-d"),
+)
+def test_expected_train_exposure_locks_occupancy_arms(
+    train_rows: int,
+    updates: int,
+    trained: int,
+    collated: int,
+) -> None:
+    exposure = cell.expected_train_exposure(train_rows, updates, 1, 4)
+
+    assert exposure["training_step_rows"] == trained
+    assert exposure["training_step_batches"] == trained
+    assert exposure["collated_rows"] == collated
+    assert exposure["collated_batches"] == collated
+
+
+@pytest.mark.parametrize(
+    ("train_rows", "updates", "trained", "collated"),
+    [
+        (10, 2, 8, 9),
+        (10, 3, 10, 10),
+        (10, 4, 14, 15),
+        (8, 2, 8, 8),
+    ],
+)
+def test_expected_train_exposure_distinguishes_mid_epoch_lookahead(
+    train_rows: int,
+    updates: int,
+    trained: int,
+    collated: int,
+) -> None:
+    exposure = cell.expected_train_exposure(train_rows, updates, 1, 4)
+
+    assert exposure["training_step_rows"] == trained
+    assert exposure["collated_rows"] == collated
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        (0, 1, 1, 1),
+        (1, 0, 1, 1),
+        (1, 1, 0, 1),
+        (1, 1, 1, 0),
+        (True, 1, 1, 1),
+    ],
+)
+def test_expected_train_exposure_rejects_invalid_inputs(
+    values: tuple[int, int, int, int],
+) -> None:
+    with pytest.raises(ValueError, match="positive integers"):
+        cell.expected_train_exposure(*values)

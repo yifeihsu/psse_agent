@@ -27,6 +27,7 @@ from psse_env.sft.gates import prepare_example
 from .model import load_model_and_processor, lora_target_modules
 
 DEFAULT_MAX_LENGTH = 8192
+TRAINING_STEP_EXPOSURE_KEY = "_research_training_step_exposure"
 
 
 def file_sha256(path: str | Path) -> str:
@@ -126,20 +127,34 @@ class ExposureCountingCollator:
         )
 
     def __call__(self, features: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        batch_exposure = {
+            "batches": 1,
+            "rows": len(features),
+            "input_tokens": 0,
+            "supervised_tokens": 0,
+        }
         for feature in features:
             split = str(feature.get("_exposure_split") or "unknown")
             labels = list(feature.get("labels") or [])
             attention = list(feature.get("attention_mask") or [])
             counts = self._counts[split]
             counts["rows"] += 1
-            counts["input_tokens"] += sum(int(value) != 0 for value in attention)
-            counts["supervised_tokens"] += sum(token != -100 for token in labels)
-        for split in {
+            input_tokens = sum(int(value) != 0 for value in attention)
+            supervised_tokens = sum(token != -100 for token in labels)
+            counts["input_tokens"] += input_tokens
+            counts["supervised_tokens"] += supervised_tokens
+            batch_exposure["input_tokens"] += input_tokens
+            batch_exposure["supervised_tokens"] += supervised_tokens
+        splits = {
             str(feature.get("_exposure_split") or "unknown")
             for feature in features
-        }:
+        }
+        for split in splits:
             self._counts[split]["batches"] += 1
-        return self.base(features)
+        batch = self.base(features)
+        if splits == {"train"}:
+            batch[TRAINING_STEP_EXPOSURE_KEY] = batch_exposure
+        return batch
 
     def summary(self, split: str) -> dict[str, int]:
         return dict(
@@ -153,6 +168,46 @@ class ExposureCountingCollator:
                 },
             )
         )
+
+
+def pop_training_step_exposure(inputs: dict[str, Any]) -> dict[str, int]:
+    """Remove and validate CPU-counted exposure before model forwarding."""
+
+    exposure = inputs.pop(TRAINING_STEP_EXPOSURE_KEY, None)
+    if not isinstance(exposure, Mapping):
+        raise RuntimeError("training-step exposure metadata is missing")
+    expected_keys = {"batches", "rows", "input_tokens", "supervised_tokens"}
+    if set(exposure) != expected_keys or any(
+        isinstance(value, bool) or not isinstance(value, int) or value < 0
+        for value in exposure.values()
+    ):
+        raise RuntimeError("training-step exposure metadata is invalid")
+    if exposure["batches"] != 1 or exposure["rows"] <= 0:
+        raise RuntimeError("training-step exposure batch is empty")
+    labels = inputs.get("labels")
+    label_shape = getattr(labels, "shape", ())
+    if not label_shape or int(label_shape[0]) != exposure["rows"]:
+        raise RuntimeError("training-step exposure row count disagrees with labels")
+    return {key: int(exposure[key]) for key in expected_keys}
+
+
+class TrainingStepExposureCounter:
+    """Accumulate only batches whose ``training_step`` completed successfully."""
+
+    def __init__(self) -> None:
+        self._counts = {
+            "batches": 0,
+            "rows": 0,
+            "input_tokens": 0,
+            "supervised_tokens": 0,
+        }
+
+    def add(self, exposure: Mapping[str, int]) -> None:
+        for key in self._counts:
+            self._counts[key] += int(exposure[key])
+
+    def summary(self) -> dict[str, int]:
+        return dict(self._counts)
 
 
 def build_config(
@@ -183,6 +238,7 @@ def build_config(
         "optim": "adamw_torch",
         "lr_scheduler_type": "linear",
         "logging_steps": 10,
+        "dataloader_num_workers": 0,
         "eval_strategy": "epoch" if has_validation else "no",
         "save_strategy": "epoch",
         "seed": seed,
@@ -320,7 +376,22 @@ def train(
     if "processing_class" in supported:
         trainer_kwargs["processing_class"] = processor
 
-    trainer = SFTTrainer(
+    training_step_counter = TrainingStepExposureCounter()
+
+    class ExposureCountingSFTTrainer(SFTTrainer):
+        def training_step(
+            self,
+            model: Any,
+            inputs: dict[str, Any],
+            *args: Any,
+            **kwargs: Any,
+        ) -> Any:
+            exposure = pop_training_step_exposure(inputs)
+            result = super().training_step(model, inputs, *args, **kwargs)
+            training_step_counter.add(exposure)
+            return result
+
+    trainer = ExposureCountingSFTTrainer(
         **{key: value for key, value in trainer_kwargs.items() if key in supported}
     )
     result = trainer.train()
@@ -342,6 +413,7 @@ def train(
     trainer.model.save_pretrained(str(destination))
 
     summary = {
+        "schema": "research_training_summary_v2",
         "model_id": resolved_id,
         "model_revision": resolved_revision,
         "initial_adapter": str(initial_adapter) if initial_adapter else None,
@@ -359,15 +431,27 @@ def train(
         "validation_target_token_corpus_summary": summarize_prepared_rows(
             prepared_validation
         ),
-        "sampled_train_exposure": collator.summary("train"),
-        "sampled_validation_exposure": collator.summary("validation"),
-        "sampled_exposure_scope": "local_process_collator",
+        "training_step_train_exposure": training_step_counter.summary(),
+        "training_step_exposure_scope": "local_process_training_step",
+        "collated_train_exposure": collator.summary("train"),
+        "collated_validation_exposure": collator.summary("validation"),
+        "collated_exposure_scope": "local_process_collator_with_lookahead",
         "world_size": int(getattr(trainer.args, "world_size", 1)),
         "train_preparation_failures": train_failures[:20],
         "validation_preparation_failures": validation_failures[:20],
         "max_length": max_length,
         "epochs": epochs,
         "batch_size": batch_size,
+        "actual_per_device_train_batch_size": int(
+            getattr(trainer.args, "per_device_train_batch_size", -1)
+        ),
+        "auto_find_batch_size": bool(
+            getattr(trainer.args, "auto_find_batch_size", False)
+        ),
+        "dataloader_num_workers": int(
+            getattr(trainer.args, "dataloader_num_workers", -1)
+        ),
+        "packing": bool(getattr(trainer.args, "packing", False)),
         "gradient_accumulation_steps": gradient_accumulation_steps,
         "learning_rate": learning_rate,
         "lora_rank": lora_rank,

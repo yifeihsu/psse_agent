@@ -23,6 +23,7 @@ HEX64 = re.compile(r"[0-9a-f]{64}")
 EXPECTED_ENVIRONMENT = {
     "python": "3.12.12",
     "torch": "2.10.0",
+    "accelerate": "1.13.0",
     "transformers": "5.15.1",
     "trl": "1.10.0",
     "peft": "0.20.0",
@@ -699,21 +700,97 @@ def arm_values(config_path: Path, expected_sha: str, arm: str) -> list[str]:
     ]
 
 
+def expected_train_exposure(
+    train_rows: int,
+    updates: int,
+    batch_size: int,
+    gradient_accumulation_steps: int,
+) -> dict[str, int | float]:
+    """Return exact training-step and Accelerate-collator exposure counts.
+
+    Accelerate 1.13.0 fetches one batch ahead before yielding the current
+    batch. When ``max_steps`` stops training partway through an epoch, the
+    collator therefore sees one batch that never reaches ``training_step``.
+    At an epoch boundary there is no lookahead beyond the dataset.
+    """
+
+    values = {
+        "train_rows": train_rows,
+        "updates": updates,
+        "batch_size": batch_size,
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+    }
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        for value in values.values()
+    ):
+        raise ValueError(f"training exposure inputs must be positive integers: {values}")
+
+    microbatches_per_epoch = (train_rows + batch_size - 1) // batch_size
+    updates_per_epoch = (
+        microbatches_per_epoch + gradient_accumulation_steps - 1
+    ) // gradient_accumulation_steps
+    full_epochs, residual_updates = divmod(updates, updates_per_epoch)
+    residual_microbatches = min(
+        residual_updates * gradient_accumulation_steps,
+        microbatches_per_epoch,
+    )
+    training_step_batches = (
+        full_epochs * microbatches_per_epoch + residual_microbatches
+    )
+    training_step_rows = full_epochs * train_rows + min(
+        residual_microbatches * batch_size,
+        train_rows,
+    )
+
+    collated_residual_batches = residual_microbatches
+    if residual_updates > 0 and residual_microbatches < microbatches_per_epoch:
+        collated_residual_batches += 1
+    collated_batches = (
+        full_epochs * microbatches_per_epoch + collated_residual_batches
+    )
+    collated_rows = full_epochs * train_rows + min(
+        collated_residual_batches * batch_size,
+        train_rows,
+    )
+    trainer_epoch = full_epochs + (
+        residual_microbatches / microbatches_per_epoch
+    )
+    return {
+        "microbatches_per_epoch": microbatches_per_epoch,
+        "updates_per_epoch": updates_per_epoch,
+        "full_epochs": full_epochs,
+        "residual_updates": residual_updates,
+        "training_step_batches": training_step_batches,
+        "training_step_rows": training_step_rows,
+        "collated_batches": collated_batches,
+        "collated_rows": collated_rows,
+        "trainer_epoch": trainer_epoch,
+    }
+
+
 def gate_training(config_path: Path, expected_sha: str, arm: str, summary_path: Path, output: Path) -> dict[str, Any]:
     _, _, receipt = verify_build(config_path, expected_sha)
     record = receipt["arms"][arm]
     summary = load_json(summary_path)
     exposure = load_json(record["exposure"])
-    # Trainer closes a short gradient-accumulation group at each epoch boundary.
-    # This makes the exact collated-row count slightly smaller than updates * 4
-    # when the corpus size is not divisible by four.
     train_rows = exposure["train"]["prepared"]["rows"]
-    full_epoch_updates = (train_rows + 3) // 4
-    full_epochs, residual_updates = divmod(record["updates"], full_epoch_updates)
-    expected_sampled_rows = full_epochs * train_rows + min(
-        residual_updates * 4, train_rows
+    expected_exposure = expected_train_exposure(
+        train_rows=train_rows,
+        updates=record["updates"],
+        batch_size=1,
+        gradient_accumulation_steps=4,
     )
-    sampled_train = summary.get("sampled_train_exposure") or {}
+    training_step_train = summary.get("training_step_train_exposure") or {}
+    collated_train = summary.get("collated_train_exposure") or {}
+    collated_diagnostics = {
+        "scope": summary.get("collated_exposure_scope")
+        == "local_process_collator_with_lookahead",
+        "rows": collated_train.get("rows")
+        == expected_exposure["collated_rows"],
+        "batches": collated_train.get("batches")
+        == expected_exposure["collated_batches"],
+    }
     gpu_inventory = summary_path.parent.parent / "gpu_inventory.csv"
     allocated_gpu_path = summary_path.parent.parent / "allocated_gpu.json"
     allocated_gpu = load_json(allocated_gpu_path) if allocated_gpu_path.is_file() else {}
@@ -726,6 +803,8 @@ def gate_training(config_path: Path, expected_sha: str, arm: str, summary_path: 
         "CELL_SCHEDULER_GPU_CONSTRAINT_SOURCE"
     )
     checks = {
+        "summary_schema": summary.get("schema")
+        == "research_training_summary_v2",
         "model_identity": (summary.get("model_id"), summary.get("model_revision"))
         == (record["model_id"], record["model_revision"]),
         "fresh_base_start": summary.get("initial_adapter") is None,
@@ -737,6 +816,10 @@ def gate_training(config_path: Path, expected_sha: str, arm: str, summary_path: 
         and summary.get("max_length") == 8192
         and summary.get("epochs") == 2.0
         and summary.get("batch_size") == 1
+        and summary.get("actual_per_device_train_batch_size") == 1
+        and summary.get("auto_find_batch_size") is False
+        and summary.get("dataloader_num_workers") == 0
+        and summary.get("packing") is False
         and summary.get("gradient_accumulation_steps") == 4
         and summary.get("learning_rate") == 0.0001
         and summary.get("lora_rank") == 16
@@ -758,9 +841,21 @@ def gate_training(config_path: Path, expected_sha: str, arm: str, summary_path: 
         == exposure["validation"]["prepared"]["rows"],
         "train_corpus_tokens": summary.get("train_target_token_corpus_summary")
         == exposure["train"]["prepared"],
-        "sampled_train_rows": sampled_train.get("rows") == expected_sampled_rows,
-        "sampled_train_batches": sampled_train.get("batches") == expected_sampled_rows,
-        "sampled_train_tokens_recorded": sampled_train.get("supervised_tokens", 0) > 0,
+        "training_step_exposure_scope": summary.get(
+            "training_step_exposure_scope"
+        )
+        == "local_process_training_step",
+        "training_step_train_rows": training_step_train.get("rows")
+        == expected_exposure["training_step_rows"],
+        "training_step_train_batches": training_step_train.get("batches")
+        == expected_exposure["training_step_batches"],
+        "training_step_train_tokens_recorded": isinstance(
+            training_step_train.get("input_tokens"), int
+        )
+        and isinstance(training_step_train.get("supervised_tokens"), int)
+        and training_step_train.get("input_tokens", 0)
+        >= training_step_train.get("supervised_tokens", 0)
+        > 0,
         "finite_training_loss": isinstance(summary.get("training_loss"), (int, float))
         and math.isfinite(float(summary["training_loss"])),
         "gpu_inventory": gpu_inventory.is_file() and gpu_inventory.stat().st_size > 0,
@@ -796,9 +891,22 @@ def gate_training(config_path: Path, expected_sha: str, arm: str, summary_path: 
         "contract": CONTRACT, "stage": "training_gate", "arm": arm,
         "checks": checks, "summary": str(summary_path), "summary_sha256": sha256(summary_path),
         "adapter": str(adapter.resolve()), "adapter_files": adapter_files,
-        "sampled_train_exposure": summary["sampled_train_exposure"],
-        "sampled_validation_exposure": summary["sampled_validation_exposure"],
-        "expected_sampled_train_rows": expected_sampled_rows,
+        "training_step_train_exposure": summary["training_step_train_exposure"],
+        "collated_train_exposure": collated_train,
+        "collated_validation_exposure": summary.get(
+            "collated_validation_exposure"
+        )
+        or {},
+        "collated_diagnostics": collated_diagnostics,
+        "expected_train_exposure": expected_exposure,
+        "reported_trainer_epoch": summary.get("trainer_epoch"),
+        "exposure_semantics": {
+            "training_step": "exact batches successfully processed by training_step",
+            "collated": (
+                "Accelerate 1.13.0 collator invocations, including exactly one "
+                "lookahead batch only for a mid-epoch max_steps stop"
+            ),
+        },
         "gpu_inventory": str(gpu_inventory),
         "gpu_inventory_sha256": sha256(gpu_inventory),
         "allocated_gpu": str(allocated_gpu_path),

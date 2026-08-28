@@ -22,6 +22,26 @@ C/D retain their legacy split receipts. Therefore this four-job cell is a
 provisional crossover screen, not a clean two-model by three-occupancy
 factorial.
 
+## Training-exposure semantics
+
+The training gate distinguishes examples that actually reached
+`SFTTrainer.training_step` from examples merely passed to the data collator.
+Accelerate 1.13.0 deliberately fetches one batch ahead before yielding the
+current batch. A fixed-`max_steps` stop partway through an epoch therefore
+collates exactly one row that is never forwarded or used for an optimizer
+update in this batch-size-one recipe. At an exact epoch boundary there is no
+extra row.
+
+The training-step counter is the scientific exposure measure: its row and
+batch counts must match the arm's fixed-update schedule exactly, and it records
+the input- and supervised-token totals actually processed. The collator
+counter is retained as a version-pinned, non-blocking diagnostic and compared
+with the separately derived count, including the one-row lookahead only when
+applicable. A collator-only mismatch cannot invalidate weights whose exact
+training-step exposure passed. This correction does not relax corpus hashes,
+prepared row/token totals, optimizer updates, model/recipe identity, finite
+loss, adapter integrity, hardware attestation, evaluation, or physical replay.
+
 ## Fail-closed launch
 
 1. Deploy one committed source snapshot and put all inputs at immutable paths.
@@ -81,8 +101,9 @@ attempt and records those IDs in `submission.json`; inspect that receipt and
 
 The CPU build job constructs A/B aggregates on the same audited-root split and
 runs Linux tests plus processor-only exposure checks for all four arms. The
-environment gate pins Python 3.12.12, torch 2.10.0, transformers 5.15.1, TRL
-1.10.0, PEFT 0.20.0, bitsandbytes 0.49.2, and datasets 5.0.1. It deliberately
+environment gate pins Python 3.12.12, torch 2.10.0, Accelerate 1.13.0,
+Transformers 5.15.1, TRL 1.10.0, PEFT 0.20.0, bitsandbytes 0.49.2, and datasets
+5.0.1. It deliberately
 does not use `pip check`: this historical overlay has known package-metadata
 conflicts even though these are the exact experiment versions. Each GPU job starts in a
 fresh `job-ID/attempt-rN` directory, trains from the base model, emits a full
@@ -99,8 +120,9 @@ manifest digests with the immutable configuration. Each GPU job repeats this
 content check for its own model lane before loading weights. The later physical
 audit does not depend on continued model-cache availability.
 
-All job IDs, constraints, input/source hashes, exact sampled training exposure,
-evaluation hashes, and physical summaries are retained below `cell_root`.
+All job IDs, constraints, input/source hashes, exact training-step exposure,
+collator-lookahead diagnostics, evaluation hashes, and physical summaries are
+retained below `cell_root`.
 Torch currently omits `SLURM_JOB_CONSTRAINTS` inside the batch environment, so
 each GPU arm unconditionally reads the job-level `Constraints` field back from
 `sacct`, requires a successful single-row query and an exact match with the
