@@ -297,3 +297,12 @@ def test_launcher_hardcodes_union_and_never_selects_partition() -> None:
         "--milestone-output-dir",
     ):
         assert value in run_script
+
+
+def test_shell_wrappers_bootstrap_isolated_source_before_importing_builder() -> None:
+    script_root = Path(__file__).parent / "hpc" / "exposure_curve_20260828"
+    for name in ("submit.sh", "build.sh", "run_arm.sh", "audit.sh"):
+        script = (script_root / name).read_text(encoding="utf-8")
+        bootstrap = 'export PYTHONPATH="$CONFIG_SOURCE_ROOT${PYTHONPATH:+:$PYTHONPATH}"'
+        assert bootstrap in script
+        assert script.index(bootstrap) < script.index('"$SCRIPT_DIR/build.py"')

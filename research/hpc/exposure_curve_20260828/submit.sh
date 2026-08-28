@@ -17,6 +17,7 @@ print(json.load(open(sys.argv[1], encoding="utf-8"))["source_root"])
 PY
 )
 EXPECTED_SCRIPT_DIR=$(readlink -f "$CONFIG_SOURCE_ROOT/research/hpc/exposure_curve_20260828")
+export PYTHONPATH="$CONFIG_SOURCE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 [[ "$(readlink -f "$SCRIPT_DIR")" == "$EXPECTED_SCRIPT_DIR" ]] \
   || { echo "submit.sh is outside the configured source tree" >&2; exit 2; }
 CELL_CONFIG_SHA256=$("$CELL_PYTHON" "$SCRIPT_DIR/build.py" sha256 --path "$CELL_CONFIG")

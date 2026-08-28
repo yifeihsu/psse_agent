@@ -12,6 +12,7 @@ print(json.load(open(sys.argv[1], encoding="utf-8"))["source_root"])
 PY
 )
 EXPECTED_SCRIPT_DIR=$(readlink -f "$CONFIG_SOURCE_ROOT/research/hpc/exposure_curve_20260828")
+export PYTHONPATH="$CONFIG_SOURCE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 EXPECTED_SCRIPT="$EXPECTED_SCRIPT_DIR/build.sh"
 if [[ "$SUBMITTED_SCRIPT" != "$EXPECTED_SCRIPT" ]]; then
   cmp -s "$SUBMITTED_SCRIPT" "$EXPECTED_SCRIPT" \
