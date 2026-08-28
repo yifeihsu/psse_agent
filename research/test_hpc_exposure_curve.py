@@ -287,6 +287,8 @@ def test_launcher_hardcodes_union_and_never_selects_partition() -> None:
     assert "a100|h100|h200|rtx6000" in script
     assert "--constraint=\"$GPU_FEATURE_UNION\"" in script
     assert "--partition" not in script
+    assert "--hold --job-name=curve-build" in script
+    assert script.index('submission-finish') < script.index('scontrol release "$BUILD"')
     run_script = (
         Path(__file__).parent / "hpc" / "exposure_curve_20260828" / "run_arm.sh"
     ).read_text(encoding="utf-8")

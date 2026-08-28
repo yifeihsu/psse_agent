@@ -411,6 +411,7 @@ def build(config_path: Path, expected_sha: str, attempt: Path) -> dict[str, Any]
             inclusion=spec["inclusion"],
             seed=SEED,
         )
+        report["release_evidence"] = False
         _validate_aggregate_report(arm, report)
         report["missing_teacher_target_rows"] = EXPECTED_MISSING_TARGET_ROWS[lane]
         report["teacher_exclusion_rows"] = (
