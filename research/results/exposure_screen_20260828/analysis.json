@@ -1,0 +1,1557 @@
+{
+  "c_vs_historical_e2b_full_gain": {
+    "current_exact": 43,
+    "historical_exact": 23,
+    "interpretation": "Descriptive, non-additive episode transitions; categories can overlap and do not identify a causal mechanism.",
+    "net_exact_gain": 20,
+    "regressed_roots": [],
+    "rescued_by_family": {
+      "measurement+parameter": 4,
+      "measurement+topology": 11,
+      "multi-measurement": 2,
+      "topology": 3
+    },
+    "rescued_committed_target_event_delta": 16,
+    "rescued_from_final_false_intervention": 10,
+    "rescued_from_generation_abort": 5,
+    "rescued_from_loop": 3,
+    "rescued_multi_measurement": 2,
+    "rescued_roots": [
+      "r0_0997137d1521",
+      "r0_0da3fb19f8a7",
+      "r0_37f3f6c51957",
+      "r0_415f49d7f310",
+      "r0_417bba5c46e0",
+      "r0_46f2209438ee",
+      "r0_5bc1812f339b",
+      "r0_65fa79250c66",
+      "r0_788bef412591",
+      "r0_84afa8049495",
+      "r0_8825ca1f2d43",
+      "r0_88409ff06c33",
+      "r0_8a1494cd02e7",
+      "r0_9c7065d6a994",
+      "r0_9d51abecb114",
+      "r0_b919ffc82424",
+      "r0_befdea82c376",
+      "r0_c309e1174c2f",
+      "r0_c64f9ec8ed2f",
+      "r0_c7cec5872530"
+    ],
+    "rescued_topology_containing": 14,
+    "rescued_with_more_committed_target_events": 15
+  },
+  "checkpoint_metrics": {
+    "A": {
+      "correction_recall": 0.58,
+      "correction_recall_denominator_true_errors_assessable": 150,
+      "correction_recall_numerator_true_errors_corrected": 87,
+      "event_level_correction_precision": 0.925531914893617,
+      "event_level_correction_precision_denominator_all_committed_target_events": 94,
+      "event_level_correction_precision_numerator_true_committed_targets": 87,
+      "family_all": {
+        "measurement+parameter": {
+          "episodes": 19,
+          "faulted": 19,
+          "final_exact": 18,
+          "stable_exact": 18
+        },
+        "measurement+topology": {
+          "episodes": 16,
+          "faulted": 16,
+          "final_exact": 11,
+          "stable_exact": 11
+        },
+        "multi-measurement": {
+          "episodes": 20,
+          "faulted": 20,
+          "final_exact": 2,
+          "stable_exact": 2
+        },
+        "no-error": {
+          "episodes": 4,
+          "faulted": 0,
+          "final_exact": 0,
+          "stable_exact": 0
+        },
+        "parameter": {
+          "episodes": 3,
+          "faulted": 3,
+          "final_exact": 3,
+          "stable_exact": 3
+        },
+        "topology": {
+          "episodes": 3,
+          "faulted": 3,
+          "final_exact": 1,
+          "stable_exact": 1
+        }
+      },
+      "family_exact_recovery": {
+        "measurement+parameter": {
+          "episodes": 19,
+          "exact": 18,
+          "faulted": 19,
+          "stable_exact": 18
+        },
+        "measurement+topology": {
+          "episodes": 16,
+          "exact": 11,
+          "faulted": 16,
+          "stable_exact": 11
+        },
+        "multi-measurement": {
+          "episodes": 20,
+          "exact": 2,
+          "faulted": 20,
+          "stable_exact": 2
+        },
+        "parameter": {
+          "episodes": 3,
+          "exact": 3,
+          "faulted": 3,
+          "stable_exact": 3
+        },
+        "topology": {
+          "episodes": 3,
+          "exact": 1,
+          "faulted": 3,
+          "stable_exact": 1
+        }
+      },
+      "faulted_episodes": 61,
+      "faulted_final_active_false_interventions": 6,
+      "final_active_state_counts": {
+        "exact_physical_recovery": 39,
+        "false_intervention": 6,
+        "no_physical_progress": 2,
+        "partial_recovery": 18
+      },
+      "final_exact_recovery": 35,
+      "generation_aborts": 0,
+      "loops": 0,
+      "mean_excess_steps": 0.7846153846153846,
+      "mean_excess_steps_episode_count": 65,
+      "no_error_clean_preservation": 4,
+      "no_error_episodes": 4,
+      "no_error_false_interventions": 0,
+      "partial_recovery": 18,
+      "six_way_outcome_counts": {
+        "exact_physical_recovery": 39,
+        "false_intervention": 6,
+        "no_physical_progress": 2,
+        "partial_recovery": 18
+      },
+      "stable_exact_recovery": 35,
+      "unique_target_precision": 0.925531914893617,
+      "unique_target_precision_denominator_unique_committed_targets": 94,
+      "unique_target_precision_numerator_true_committed_targets": 87
+    },
+    "B": {
+      "correction_recall": 0.5333333333333333,
+      "correction_recall_denominator_true_errors_assessable": 150,
+      "correction_recall_numerator_true_errors_corrected": 80,
+      "event_level_correction_precision": 0.8421052631578947,
+      "event_level_correction_precision_denominator_all_committed_target_events": 95,
+      "event_level_correction_precision_numerator_true_committed_targets": 80,
+      "family_all": {
+        "measurement+parameter": {
+          "episodes": 19,
+          "faulted": 19,
+          "final_exact": 19,
+          "stable_exact": 19
+        },
+        "measurement+topology": {
+          "episodes": 16,
+          "faulted": 16,
+          "final_exact": 7,
+          "stable_exact": 7
+        },
+        "multi-measurement": {
+          "episodes": 20,
+          "faulted": 20,
+          "final_exact": 2,
+          "stable_exact": 2
+        },
+        "no-error": {
+          "episodes": 4,
+          "faulted": 0,
+          "final_exact": 0,
+          "stable_exact": 0
+        },
+        "parameter": {
+          "episodes": 3,
+          "faulted": 3,
+          "final_exact": 3,
+          "stable_exact": 3
+        },
+        "topology": {
+          "episodes": 3,
+          "faulted": 3,
+          "final_exact": 0,
+          "stable_exact": 0
+        }
+      },
+      "family_exact_recovery": {
+        "measurement+parameter": {
+          "episodes": 19,
+          "exact": 19,
+          "faulted": 19,
+          "stable_exact": 19
+        },
+        "measurement+topology": {
+          "episodes": 16,
+          "exact": 7,
+          "faulted": 16,
+          "stable_exact": 7
+        },
+        "multi-measurement": {
+          "episodes": 20,
+          "exact": 2,
+          "faulted": 20,
+          "stable_exact": 2
+        },
+        "parameter": {
+          "episodes": 3,
+          "exact": 3,
+          "faulted": 3,
+          "stable_exact": 3
+        },
+        "topology": {
+          "episodes": 3,
+          "exact": 0,
+          "faulted": 3,
+          "stable_exact": 0
+        }
+      },
+      "faulted_episodes": 61,
+      "faulted_final_active_false_interventions": 12,
+      "final_active_state_counts": {
+        "exact_physical_recovery": 35,
+        "false_intervention": 12,
+        "no_physical_progress": 1,
+        "partial_recovery": 17
+      },
+      "final_exact_recovery": 31,
+      "generation_aborts": 0,
+      "loops": 2,
+      "mean_excess_steps": 0.676923076923077,
+      "mean_excess_steps_episode_count": 65,
+      "no_error_clean_preservation": 4,
+      "no_error_episodes": 4,
+      "no_error_false_interventions": 0,
+      "partial_recovery": 17,
+      "six_way_outcome_counts": {
+        "exact_physical_recovery": 35,
+        "false_intervention": 12,
+        "loop_before_stable_final_state": 2,
+        "partial_recovery": 16
+      },
+      "stable_exact_recovery": 31,
+      "unique_target_precision": 0.8602150537634409,
+      "unique_target_precision_denominator_unique_committed_targets": 93,
+      "unique_target_precision_numerator_true_committed_targets": 80
+    },
+    "C": {
+      "correction_recall": 0.6533333333333333,
+      "correction_recall_denominator_true_errors_assessable": 150,
+      "correction_recall_numerator_true_errors_corrected": 98,
+      "event_level_correction_precision": 0.98,
+      "event_level_correction_precision_denominator_all_committed_target_events": 100,
+      "event_level_correction_precision_numerator_true_committed_targets": 98,
+      "family_all": {
+        "measurement+parameter": {
+          "episodes": 19,
+          "faulted": 19,
+          "final_exact": 19,
+          "stable_exact": 19
+        },
+        "measurement+topology": {
+          "episodes": 16,
+          "faulted": 16,
+          "final_exact": 16,
+          "stable_exact": 16
+        },
+        "multi-measurement": {
+          "episodes": 20,
+          "faulted": 20,
+          "final_exact": 2,
+          "stable_exact": 2
+        },
+        "no-error": {
+          "episodes": 4,
+          "faulted": 0,
+          "final_exact": 0,
+          "stable_exact": 0
+        },
+        "parameter": {
+          "episodes": 3,
+          "faulted": 3,
+          "final_exact": 3,
+          "stable_exact": 3
+        },
+        "topology": {
+          "episodes": 3,
+          "faulted": 3,
+          "final_exact": 3,
+          "stable_exact": 3
+        }
+      },
+      "family_exact_recovery": {
+        "measurement+parameter": {
+          "episodes": 19,
+          "exact": 19,
+          "faulted": 19,
+          "stable_exact": 19
+        },
+        "measurement+topology": {
+          "episodes": 16,
+          "exact": 16,
+          "faulted": 16,
+          "stable_exact": 16
+        },
+        "multi-measurement": {
+          "episodes": 20,
+          "exact": 2,
+          "faulted": 20,
+          "stable_exact": 2
+        },
+        "parameter": {
+          "episodes": 3,
+          "exact": 3,
+          "faulted": 3,
+          "stable_exact": 3
+        },
+        "topology": {
+          "episodes": 3,
+          "exact": 3,
+          "faulted": 3,
+          "stable_exact": 3
+        }
+      },
+      "faulted_episodes": 61,
+      "faulted_final_active_false_interventions": 0,
+      "final_active_state_counts": {
+        "exact_physical_recovery": 47,
+        "no_physical_progress": 1,
+        "partial_recovery": 17
+      },
+      "final_exact_recovery": 43,
+      "generation_aborts": 0,
+      "loops": 1,
+      "mean_excess_steps": 0.09230769230769231,
+      "mean_excess_steps_episode_count": 65,
+      "no_error_clean_preservation": 4,
+      "no_error_episodes": 4,
+      "no_error_false_interventions": 0,
+      "partial_recovery": 17,
+      "six_way_outcome_counts": {
+        "exact_physical_recovery": 47,
+        "loop_before_stable_final_state": 1,
+        "partial_recovery": 17
+      },
+      "stable_exact_recovery": 43,
+      "unique_target_precision": 0.98989898989899,
+      "unique_target_precision_denominator_unique_committed_targets": 99,
+      "unique_target_precision_numerator_true_committed_targets": 98
+    },
+    "D": {
+      "correction_recall": 0.4266666666666667,
+      "correction_recall_denominator_true_errors_assessable": 150,
+      "correction_recall_numerator_true_errors_corrected": 64,
+      "event_level_correction_precision": 0.8205128205128205,
+      "event_level_correction_precision_denominator_all_committed_target_events": 78,
+      "event_level_correction_precision_numerator_true_committed_targets": 64,
+      "family_all": {
+        "measurement+parameter": {
+          "episodes": 19,
+          "faulted": 19,
+          "final_exact": 12,
+          "stable_exact": 12
+        },
+        "measurement+topology": {
+          "episodes": 16,
+          "faulted": 16,
+          "final_exact": 8,
+          "stable_exact": 8
+        },
+        "multi-measurement": {
+          "episodes": 20,
+          "faulted": 20,
+          "final_exact": 2,
+          "stable_exact": 2
+        },
+        "no-error": {
+          "episodes": 4,
+          "faulted": 0,
+          "final_exact": 0,
+          "stable_exact": 0
+        },
+        "parameter": {
+          "episodes": 3,
+          "faulted": 3,
+          "final_exact": 3,
+          "stable_exact": 3
+        },
+        "topology": {
+          "episodes": 3,
+          "faulted": 3,
+          "final_exact": 0,
+          "stable_exact": 0
+        }
+      },
+      "family_exact_recovery": {
+        "measurement+parameter": {
+          "episodes": 19,
+          "exact": 12,
+          "faulted": 19,
+          "stable_exact": 12
+        },
+        "measurement+topology": {
+          "episodes": 16,
+          "exact": 8,
+          "faulted": 16,
+          "stable_exact": 8
+        },
+        "multi-measurement": {
+          "episodes": 20,
+          "exact": 2,
+          "faulted": 20,
+          "stable_exact": 2
+        },
+        "parameter": {
+          "episodes": 3,
+          "exact": 3,
+          "faulted": 3,
+          "stable_exact": 3
+        },
+        "topology": {
+          "episodes": 3,
+          "exact": 0,
+          "faulted": 3,
+          "stable_exact": 0
+        }
+      },
+      "faulted_episodes": 61,
+      "faulted_final_active_false_interventions": 11,
+      "final_active_state_counts": {
+        "exact_physical_recovery": 29,
+        "false_intervention": 11,
+        "no_physical_progress": 9,
+        "partial_recovery": 16
+      },
+      "final_exact_recovery": 25,
+      "generation_aborts": 0,
+      "loops": 9,
+      "mean_excess_steps": 1.876923076923077,
+      "mean_excess_steps_episode_count": 65,
+      "no_error_clean_preservation": 4,
+      "no_error_episodes": 4,
+      "no_error_false_interventions": 0,
+      "partial_recovery": 16,
+      "six_way_outcome_counts": {
+        "exact_physical_recovery": 29,
+        "false_intervention": 11,
+        "loop_before_stable_final_state": 9,
+        "partial_recovery": 16
+      },
+      "stable_exact_recovery": 25,
+      "unique_target_precision": 0.8421052631578947,
+      "unique_target_precision_denominator_unique_committed_targets": 76,
+      "unique_target_precision_numerator_true_committed_targets": 64
+    },
+    "historical_12b_full": {
+      "correction_recall": 0.6933333333333334,
+      "correction_recall_denominator_true_errors_assessable": 150,
+      "correction_recall_numerator_true_errors_corrected": 104,
+      "event_level_correction_precision": 0.7703703703703704,
+      "event_level_correction_precision_denominator_all_committed_target_events": 135,
+      "event_level_correction_precision_numerator_true_committed_targets": 104,
+      "family_all": {
+        "measurement+parameter": {
+          "episodes": 19,
+          "faulted": 19,
+          "final_exact": 19,
+          "stable_exact": 19
+        },
+        "measurement+topology": {
+          "episodes": 16,
+          "faulted": 16,
+          "final_exact": 8,
+          "stable_exact": 8
+        },
+        "multi-measurement": {
+          "episodes": 20,
+          "faulted": 20,
+          "final_exact": 7,
+          "stable_exact": 6
+        },
+        "no-error": {
+          "episodes": 4,
+          "faulted": 0,
+          "final_exact": 0,
+          "stable_exact": 0
+        },
+        "parameter": {
+          "episodes": 3,
+          "faulted": 3,
+          "final_exact": 3,
+          "stable_exact": 3
+        },
+        "topology": {
+          "episodes": 3,
+          "faulted": 3,
+          "final_exact": 0,
+          "stable_exact": 0
+        }
+      },
+      "family_exact_recovery": {
+        "measurement+parameter": {
+          "episodes": 19,
+          "exact": 19,
+          "faulted": 19,
+          "stable_exact": 19
+        },
+        "measurement+topology": {
+          "episodes": 16,
+          "exact": 8,
+          "faulted": 16,
+          "stable_exact": 8
+        },
+        "multi-measurement": {
+          "episodes": 20,
+          "exact": 7,
+          "faulted": 20,
+          "stable_exact": 6
+        },
+        "parameter": {
+          "episodes": 3,
+          "exact": 3,
+          "faulted": 3,
+          "stable_exact": 3
+        },
+        "topology": {
+          "episodes": 3,
+          "exact": 0,
+          "faulted": 3,
+          "stable_exact": 0
+        }
+      },
+      "faulted_episodes": 61,
+      "faulted_final_active_false_interventions": 11,
+      "final_active_state_counts": {
+        "exact_physical_recovery": 41,
+        "false_intervention": 11,
+        "no_physical_progress": 1,
+        "partial_recovery": 12
+      },
+      "final_exact_recovery": 37,
+      "generation_aborts": 0,
+      "loops": 6,
+      "mean_excess_steps": 3.9692307692307693,
+      "mean_excess_steps_episode_count": 65,
+      "no_error_clean_preservation": 4,
+      "no_error_episodes": 4,
+      "no_error_false_interventions": 0,
+      "partial_recovery": 12,
+      "six_way_outcome_counts": {
+        "exact_physical_recovery": 40,
+        "false_intervention": 9,
+        "loop_before_stable_final_state": 6,
+        "partial_recovery": 10
+      },
+      "stable_exact_recovery": 36,
+      "unique_target_precision": 0.7703703703703704,
+      "unique_target_precision_denominator_unique_committed_targets": 135,
+      "unique_target_precision_numerator_true_committed_targets": 104
+    },
+    "historical_12b_selective": {
+      "correction_recall": 0.6266666666666667,
+      "correction_recall_denominator_true_errors_assessable": 150,
+      "correction_recall_numerator_true_errors_corrected": 94,
+      "event_level_correction_precision": 0.9690721649484536,
+      "event_level_correction_precision_denominator_all_committed_target_events": 97,
+      "event_level_correction_precision_numerator_true_committed_targets": 94,
+      "family_all": {
+        "measurement+parameter": {
+          "episodes": 19,
+          "faulted": 19,
+          "final_exact": 19,
+          "stable_exact": 16
+        },
+        "measurement+topology": {
+          "episodes": 16,
+          "faulted": 16,
+          "final_exact": 16,
+          "stable_exact": 15
+        },
+        "multi-measurement": {
+          "episodes": 20,
+          "faulted": 20,
+          "final_exact": 2,
+          "stable_exact": 2
+        },
+        "no-error": {
+          "episodes": 4,
+          "faulted": 0,
+          "final_exact": 0,
+          "stable_exact": 0
+        },
+        "parameter": {
+          "episodes": 3,
+          "faulted": 3,
+          "final_exact": 3,
+          "stable_exact": 3
+        },
+        "topology": {
+          "episodes": 3,
+          "faulted": 3,
+          "final_exact": 3,
+          "stable_exact": 3
+        }
+      },
+      "family_exact_recovery": {
+        "measurement+parameter": {
+          "episodes": 19,
+          "exact": 19,
+          "faulted": 19,
+          "stable_exact": 16
+        },
+        "measurement+topology": {
+          "episodes": 16,
+          "exact": 16,
+          "faulted": 16,
+          "stable_exact": 15
+        },
+        "multi-measurement": {
+          "episodes": 20,
+          "exact": 2,
+          "faulted": 20,
+          "stable_exact": 2
+        },
+        "parameter": {
+          "episodes": 3,
+          "exact": 3,
+          "faulted": 3,
+          "stable_exact": 3
+        },
+        "topology": {
+          "episodes": 3,
+          "exact": 3,
+          "faulted": 3,
+          "stable_exact": 3
+        }
+      },
+      "faulted_episodes": 61,
+      "faulted_final_active_false_interventions": 0,
+      "final_active_state_counts": {
+        "exact_physical_recovery": 47,
+        "no_physical_progress": 5,
+        "partial_recovery": 13
+      },
+      "final_exact_recovery": 43,
+      "generation_aborts": 4,
+      "loops": 7,
+      "mean_excess_steps": 2.707692307692308,
+      "mean_excess_steps_episode_count": 65,
+      "no_error_clean_preservation": 4,
+      "no_error_episodes": 4,
+      "no_error_false_interventions": 0,
+      "partial_recovery": 13,
+      "six_way_outcome_counts": {
+        "exact_physical_recovery": 43,
+        "loop_before_stable_final_state": 7,
+        "not_assessable_generation_abort": 4,
+        "partial_recovery": 11
+      },
+      "stable_exact_recovery": 39,
+      "unique_target_precision": 0.9894736842105263,
+      "unique_target_precision_denominator_unique_committed_targets": 95,
+      "unique_target_precision_numerator_true_committed_targets": 94
+    },
+    "historical_e2b_full": {
+      "correction_recall": 0.4533333333333333,
+      "correction_recall_denominator_true_errors_assessable": 150,
+      "correction_recall_numerator_true_errors_corrected": 68,
+      "event_level_correction_precision": 0.8192771084337349,
+      "event_level_correction_precision_denominator_all_committed_target_events": 83,
+      "event_level_correction_precision_numerator_true_committed_targets": 68,
+      "family_all": {
+        "measurement+parameter": {
+          "episodes": 19,
+          "faulted": 19,
+          "final_exact": 15,
+          "stable_exact": 13
+        },
+        "measurement+topology": {
+          "episodes": 16,
+          "faulted": 16,
+          "final_exact": 5,
+          "stable_exact": 5
+        },
+        "multi-measurement": {
+          "episodes": 20,
+          "faulted": 20,
+          "final_exact": 0,
+          "stable_exact": 0
+        },
+        "no-error": {
+          "episodes": 4,
+          "faulted": 0,
+          "final_exact": 0,
+          "stable_exact": 0
+        },
+        "parameter": {
+          "episodes": 3,
+          "faulted": 3,
+          "final_exact": 3,
+          "stable_exact": 3
+        },
+        "topology": {
+          "episodes": 3,
+          "faulted": 3,
+          "final_exact": 0,
+          "stable_exact": 0
+        }
+      },
+      "family_exact_recovery": {
+        "measurement+parameter": {
+          "episodes": 19,
+          "exact": 15,
+          "faulted": 19,
+          "stable_exact": 13
+        },
+        "measurement+topology": {
+          "episodes": 16,
+          "exact": 5,
+          "faulted": 16,
+          "stable_exact": 5
+        },
+        "multi-measurement": {
+          "episodes": 20,
+          "exact": 0,
+          "faulted": 20,
+          "stable_exact": 0
+        },
+        "parameter": {
+          "episodes": 3,
+          "exact": 3,
+          "faulted": 3,
+          "stable_exact": 3
+        },
+        "topology": {
+          "episodes": 3,
+          "exact": 0,
+          "faulted": 3,
+          "stable_exact": 0
+        }
+      },
+      "faulted_episodes": 61,
+      "faulted_final_active_false_interventions": 10,
+      "final_active_state_counts": {
+        "exact_physical_recovery": 27,
+        "false_intervention": 10,
+        "no_physical_progress": 6,
+        "partial_recovery": 22
+      },
+      "final_exact_recovery": 23,
+      "generation_aborts": 10,
+      "loops": 4,
+      "mean_excess_steps": 1.323076923076923,
+      "mean_excess_steps_episode_count": 65,
+      "no_error_clean_preservation": 4,
+      "no_error_episodes": 4,
+      "no_error_false_interventions": 0,
+      "partial_recovery": 22,
+      "six_way_outcome_counts": {
+        "exact_physical_recovery": 25,
+        "false_intervention": 10,
+        "loop_before_stable_final_state": 4,
+        "no_physical_progress": 1,
+        "not_assessable_generation_abort": 10,
+        "partial_recovery": 15
+      },
+      "stable_exact_recovery": 21,
+      "unique_target_precision": 0.8292682926829268,
+      "unique_target_precision_denominator_unique_committed_targets": 82,
+      "unique_target_precision_numerator_true_committed_targets": 68
+    },
+    "historical_e2b_selective": {
+      "correction_recall": 0.5133333333333333,
+      "correction_recall_denominator_true_errors_assessable": 150,
+      "correction_recall_numerator_true_errors_corrected": 77,
+      "event_level_correction_precision": 0.9746835443037974,
+      "event_level_correction_precision_denominator_all_committed_target_events": 79,
+      "event_level_correction_precision_numerator_true_committed_targets": 77,
+      "family_all": {
+        "measurement+parameter": {
+          "episodes": 19,
+          "faulted": 19,
+          "final_exact": 10,
+          "stable_exact": 10
+        },
+        "measurement+topology": {
+          "episodes": 16,
+          "faulted": 16,
+          "final_exact": 15,
+          "stable_exact": 14
+        },
+        "multi-measurement": {
+          "episodes": 20,
+          "faulted": 20,
+          "final_exact": 1,
+          "stable_exact": 1
+        },
+        "no-error": {
+          "episodes": 4,
+          "faulted": 0,
+          "final_exact": 0,
+          "stable_exact": 0
+        },
+        "parameter": {
+          "episodes": 3,
+          "faulted": 3,
+          "final_exact": 3,
+          "stable_exact": 3
+        },
+        "topology": {
+          "episodes": 3,
+          "faulted": 3,
+          "final_exact": 3,
+          "stable_exact": 3
+        }
+      },
+      "family_exact_recovery": {
+        "measurement+parameter": {
+          "episodes": 19,
+          "exact": 10,
+          "faulted": 19,
+          "stable_exact": 10
+        },
+        "measurement+topology": {
+          "episodes": 16,
+          "exact": 15,
+          "faulted": 16,
+          "stable_exact": 14
+        },
+        "multi-measurement": {
+          "episodes": 20,
+          "exact": 1,
+          "faulted": 20,
+          "stable_exact": 1
+        },
+        "parameter": {
+          "episodes": 3,
+          "exact": 3,
+          "faulted": 3,
+          "stable_exact": 3
+        },
+        "topology": {
+          "episodes": 3,
+          "exact": 3,
+          "faulted": 3,
+          "stable_exact": 3
+        }
+      },
+      "faulted_episodes": 61,
+      "faulted_final_active_false_interventions": 0,
+      "final_active_state_counts": {
+        "exact_physical_recovery": 36,
+        "no_physical_progress": 10,
+        "partial_recovery": 19
+      },
+      "final_exact_recovery": 32,
+      "generation_aborts": 4,
+      "loops": 0,
+      "mean_excess_steps": 1.8,
+      "mean_excess_steps_episode_count": 65,
+      "no_error_clean_preservation": 4,
+      "no_error_episodes": 4,
+      "no_error_false_interventions": 0,
+      "partial_recovery": 19,
+      "six_way_outcome_counts": {
+        "exact_physical_recovery": 35,
+        "no_physical_progress": 9,
+        "not_assessable_generation_abort": 4,
+        "partial_recovery": 17
+      },
+      "stable_exact_recovery": 31,
+      "unique_target_precision": 0.9871794871794872,
+      "unique_target_precision_denominator_unique_committed_targets": 78,
+      "unique_target_precision_numerator_true_committed_targets": 77
+    }
+  },
+  "inputs": {
+    "A": {
+      "evaluation_key": "occupancy-cell-A",
+      "path": "research\\results\\exposure_screen_20260828\\inputs\\A.physical_audit.full.json",
+      "scenarios_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af",
+      "sha256": "a93bd79aeb265edd8a7a487216b13b5a22ede93f38820d8ac01fab2cd67390fe",
+      "source_evaluation": {
+        "path": "/scratch/yx3882/research_dagger_occupancy_cell_20260827_rtx6000_union_v5/runs/A/job-16500891/attempt-r0/evaluation.schema-v2.json",
+        "sha256": "475917fb219a89cb82ad0279e838833db80526a91f7a2415f93a3a536981062d"
+      },
+      "source_scenario_binding": "sha256_and_per_episode_identity",
+      "source_scenarios_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af"
+    },
+    "B": {
+      "evaluation_key": "occupancy-cell-B",
+      "path": "research\\results\\exposure_screen_20260828\\inputs\\B.physical_audit.full.json",
+      "scenarios_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af",
+      "sha256": "b250d031731be7906cf0df7b7969a38ad252f4e36c2a53c09d400b3c6cbe4bd5",
+      "source_evaluation": {
+        "path": "/scratch/yx3882/research_dagger_occupancy_cell_20260827_rtx6000_union_v5/runs/B/job-16500919/attempt-r1/evaluation.schema-v2.json",
+        "sha256": "73a49e0056c3ee7eb6d8f36908e617d3db0597977d865608fcfa4f3c56b7feae"
+      },
+      "source_scenario_binding": "sha256_and_per_episode_identity",
+      "source_scenarios_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af"
+    },
+    "C": {
+      "evaluation_key": "occupancy-cell-C",
+      "path": "research\\results\\exposure_screen_20260828\\inputs\\C.physical_audit.full.json",
+      "scenarios_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af",
+      "sha256": "8c44ab5ade8e8e679f783473b385c5aa8146e8a2693768488278d746d2404536",
+      "source_evaluation": {
+        "path": "/scratch/yx3882/research_dagger_occupancy_cell_20260827_rtx6000_union_v5/runs/C/job-16500927/attempt-r1/evaluation.schema-v2.json",
+        "sha256": "04755b67434064346eb1bc22b20bc3378b910f252591f9d758ea11cc32f83815"
+      },
+      "source_scenario_binding": "sha256_and_per_episode_identity",
+      "source_scenarios_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af"
+    },
+    "D": {
+      "evaluation_key": "occupancy-cell-D",
+      "path": "research\\results\\exposure_screen_20260828\\inputs\\D.physical_audit.full.json",
+      "scenarios_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af",
+      "sha256": "38cf901dfa6e1024b000ea10335c66b8c28d4ed7186642ef0afb5bc6b533c06a",
+      "source_evaluation": {
+        "path": "/scratch/yx3882/research_dagger_occupancy_cell_20260827_rtx6000_union_v5/runs/D/job-16500933/attempt-r1/evaluation.schema-v2.json",
+        "sha256": "330e1c97bf7dfb9965e65abcb18b28a8ffaaea285ddd6887cbfbe46299d1f774"
+      },
+      "source_scenario_binding": "sha256_and_per_episode_identity",
+      "source_scenarios_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af"
+    },
+    "historical_12b_full": {
+      "evaluation_key": "12b_full_occupancy",
+      "path": "research\\results\\physical_audit_all8_full.json",
+      "scenarios_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af",
+      "sha256": "ea89434d24bdf4d9df36b71889d0c9d5e25bf301b805bfd58688b2680aae5ea8",
+      "source_evaluation": {
+        "path": "research\\results\\physical_audit_all8_inputs\\eval_exp1_12b_fullocc.json",
+        "sha256": "594f54567bde7a7bb308d520a0766d3c02b48222f1fb33adb5f9798a8efcbbb9"
+      },
+      "source_scenario_binding": "ordered_replay_without_source_suite_hash",
+      "source_scenarios_sha256": null
+    },
+    "historical_12b_selective": {
+      "evaluation_key": "12b_selective",
+      "path": "research\\results\\physical_audit_all8_full.json",
+      "scenarios_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af",
+      "sha256": "ea89434d24bdf4d9df36b71889d0c9d5e25bf301b805bfd58688b2680aae5ea8",
+      "source_evaluation": {
+        "path": "research\\results\\physical_audit_all8_inputs\\eval_exp1_12b_selective.json",
+        "sha256": "94ac8b35089025e84a2ea5f329d6897720f983bc33035eb0f797ab7ae2b59395"
+      },
+      "source_scenario_binding": "ordered_replay_without_source_suite_hash",
+      "source_scenarios_sha256": null
+    },
+    "historical_e2b_full": {
+      "evaluation_key": "e2b_full_occupancy",
+      "path": "research\\results\\physical_audit_all8_full.json",
+      "scenarios_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af",
+      "sha256": "ea89434d24bdf4d9df36b71889d0c9d5e25bf301b805bfd58688b2680aae5ea8",
+      "source_evaluation": {
+        "path": "research\\results\\physical_audit_all8_inputs\\eval_exp1_fullocc.json",
+        "sha256": "9ca26350f29a9fefc1b087dafdec2aac11b3d08a8e030ce67e303fa7e2da28c7"
+      },
+      "source_scenario_binding": "ordered_replay_without_source_suite_hash",
+      "source_scenarios_sha256": null
+    },
+    "historical_e2b_selective": {
+      "evaluation_key": "e2b_selective",
+      "path": "research\\results\\physical_audit_all8_full.json",
+      "scenarios_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af",
+      "sha256": "ea89434d24bdf4d9df36b71889d0c9d5e25bf301b805bfd58688b2680aae5ea8",
+      "source_evaluation": {
+        "path": "research\\results\\physical_audit_all8_inputs\\eval_exp1_selective.json",
+        "sha256": "d34bf62f1aee3b49d5c2f71331d1547312ba0f87882161564e00415d918be992"
+      },
+      "source_scenario_binding": "ordered_replay_without_source_suite_hash",
+      "source_scenarios_sha256": null
+    }
+  },
+  "pairwise_comparisons": {
+    "A_vs_historical_e2b_selective": {
+      "metrics": {
+        "final_exact_recovery": {
+          "both_positive": 25,
+          "discordant": 17,
+          "exact_mcnemar_two_sided_p": 0.629058837890625,
+          "neither_positive": 19,
+          "policy_1_only": 10,
+          "policy_2_only": 7
+        },
+        "final_false_intervention": {
+          "both_positive": 0,
+          "discordant": 6,
+          "exact_mcnemar_two_sided_p": 0.03125,
+          "neither_positive": 55,
+          "policy_1_only": 6,
+          "policy_2_only": 0
+        },
+        "stable_exact_recovery": {
+          "both_positive": 24,
+          "discordant": 18,
+          "exact_mcnemar_two_sided_p": 0.480682373046875,
+          "neither_positive": 19,
+          "policy_1_only": 11,
+          "policy_2_only": 7
+        }
+      },
+      "policy_1": "A",
+      "policy_2": "historical_e2b_selective"
+    },
+    "B_vs_historical_12b_full": {
+      "metrics": {
+        "final_exact_recovery": {
+          "both_positive": 31,
+          "discordant": 6,
+          "exact_mcnemar_two_sided_p": 0.03125,
+          "neither_positive": 24,
+          "policy_1_only": 0,
+          "policy_2_only": 6
+        },
+        "final_false_intervention": {
+          "both_positive": 11,
+          "discordant": 1,
+          "exact_mcnemar_two_sided_p": 1.0,
+          "neither_positive": 49,
+          "policy_1_only": 1,
+          "policy_2_only": 0
+        },
+        "stable_exact_recovery": {
+          "both_positive": 31,
+          "discordant": 5,
+          "exact_mcnemar_two_sided_p": 0.0625,
+          "neither_positive": 25,
+          "policy_1_only": 0,
+          "policy_2_only": 5
+        }
+      },
+      "policy_1": "B",
+      "policy_2": "historical_12b_full"
+    },
+    "B_vs_historical_12b_selective": {
+      "metrics": {
+        "final_exact_recovery": {
+          "both_positive": 31,
+          "discordant": 12,
+          "exact_mcnemar_two_sided_p": 0.00048828125,
+          "neither_positive": 18,
+          "policy_1_only": 0,
+          "policy_2_only": 12
+        },
+        "final_false_intervention": {
+          "both_positive": 0,
+          "discordant": 12,
+          "exact_mcnemar_two_sided_p": 0.00048828125,
+          "neither_positive": 49,
+          "policy_1_only": 12,
+          "policy_2_only": 0
+        },
+        "stable_exact_recovery": {
+          "both_positive": 28,
+          "discordant": 14,
+          "exact_mcnemar_two_sided_p": 0.057373046875,
+          "neither_positive": 19,
+          "policy_1_only": 3,
+          "policy_2_only": 11
+        }
+      },
+      "policy_1": "B",
+      "policy_2": "historical_12b_selective"
+    },
+    "C_vs_A": {
+      "metrics": {
+        "final_exact_recovery": {
+          "both_positive": 35,
+          "discordant": 8,
+          "exact_mcnemar_two_sided_p": 0.0078125,
+          "neither_positive": 18,
+          "policy_1_only": 8,
+          "policy_2_only": 0
+        },
+        "final_false_intervention": {
+          "both_positive": 0,
+          "discordant": 6,
+          "exact_mcnemar_two_sided_p": 0.03125,
+          "neither_positive": 55,
+          "policy_1_only": 0,
+          "policy_2_only": 6
+        },
+        "stable_exact_recovery": {
+          "both_positive": 35,
+          "discordant": 8,
+          "exact_mcnemar_two_sided_p": 0.0078125,
+          "neither_positive": 18,
+          "policy_1_only": 8,
+          "policy_2_only": 0
+        }
+      },
+      "policy_1": "C",
+      "policy_2": "A"
+    },
+    "C_vs_historical_12b_selective": {
+      "metrics": {
+        "final_exact_recovery": {
+          "both_positive": 43,
+          "discordant": 0,
+          "exact_mcnemar_two_sided_p": 1.0,
+          "neither_positive": 18,
+          "policy_1_only": 0,
+          "policy_2_only": 0
+        },
+        "final_false_intervention": {
+          "both_positive": 0,
+          "discordant": 0,
+          "exact_mcnemar_two_sided_p": 1.0,
+          "neither_positive": 61,
+          "policy_1_only": 0,
+          "policy_2_only": 0
+        },
+        "stable_exact_recovery": {
+          "both_positive": 39,
+          "discordant": 4,
+          "exact_mcnemar_two_sided_p": 0.125,
+          "neither_positive": 18,
+          "policy_1_only": 4,
+          "policy_2_only": 0
+        }
+      },
+      "policy_1": "C",
+      "policy_2": "historical_12b_selective"
+    },
+    "C_vs_historical_e2b_selective": {
+      "metrics": {
+        "final_exact_recovery": {
+          "both_positive": 32,
+          "discordant": 11,
+          "exact_mcnemar_two_sided_p": 0.0009765625,
+          "neither_positive": 18,
+          "policy_1_only": 11,
+          "policy_2_only": 0
+        },
+        "final_false_intervention": {
+          "both_positive": 0,
+          "discordant": 0,
+          "exact_mcnemar_two_sided_p": 1.0,
+          "neither_positive": 61,
+          "policy_1_only": 0,
+          "policy_2_only": 0
+        },
+        "stable_exact_recovery": {
+          "both_positive": 31,
+          "discordant": 12,
+          "exact_mcnemar_two_sided_p": 0.00048828125,
+          "neither_positive": 18,
+          "policy_1_only": 12,
+          "policy_2_only": 0
+        }
+      },
+      "policy_1": "C",
+      "policy_2": "historical_e2b_selective"
+    },
+    "D_vs_historical_12b_selective": {
+      "metrics": {
+        "final_exact_recovery": {
+          "both_positive": 25,
+          "discordant": 18,
+          "exact_mcnemar_two_sided_p": 7.62939453125e-06,
+          "neither_positive": 18,
+          "policy_1_only": 0,
+          "policy_2_only": 18
+        },
+        "final_false_intervention": {
+          "both_positive": 0,
+          "discordant": 11,
+          "exact_mcnemar_two_sided_p": 0.0009765625,
+          "neither_positive": 50,
+          "policy_1_only": 11,
+          "policy_2_only": 0
+        },
+        "stable_exact_recovery": {
+          "both_positive": 23,
+          "discordant": 18,
+          "exact_mcnemar_two_sided_p": 0.001312255859375,
+          "neither_positive": 20,
+          "policy_1_only": 2,
+          "policy_2_only": 16
+        }
+      },
+      "policy_1": "D",
+      "policy_2": "historical_12b_selective"
+    }
+  },
+  "pairwise_inference_note": "All exact McNemar p-values are two-sided, unadjusted, and exploratory; 21 correlated tests are reported without multiplicity correction.",
+  "quality": {
+    "cross_report_same_fault_mask": true,
+    "cross_report_same_physical_fingerprints": true,
+    "cross_report_same_root_set": true,
+    "cross_report_same_scenario_sha256": true,
+    "historical_provenance_limit": "Historical source evaluations lack suite hashes and per-episode identities; their replay-complete audits are aligned by immutable ordered replay. Paired historical comparisons inherit this weaker lineage and must not be described as identity-bound source evaluations.",
+    "passed": true,
+    "per_report": {
+      "A": {
+        "checks": {
+          "audit_report_sha256_expected": true,
+          "audit_schema_v2": true,
+          "classified": true,
+          "episode_count": true,
+          "evaluation_label_expected": true,
+          "faulted_count": true,
+          "no_error_count": true,
+          "physical_assessment_complete": true,
+          "physical_fingerprints_present": true,
+          "replay_consistent": true,
+          "research_only": true,
+          "scenario_sha256": true,
+          "source_binding_expected": true,
+          "source_evaluation_path_present": true,
+          "source_evaluation_sha256_expected": true,
+          "source_evaluation_sha256_present": true,
+          "source_suite_binding_expected": true,
+          "summary_event_precision_support_consistent": true,
+          "summary_exact_consistent": true,
+          "summary_family_consistent": true,
+          "summary_mean_excess_consistent": true,
+          "summary_recall_support_consistent": true,
+          "summary_six_way_consistent": true,
+          "summary_stable_exact_consistent": true,
+          "summary_unique_precision_support_consistent": true,
+          "unique_root_ids": true
+        },
+        "provenance": {
+          "class": "strong_hash_and_per_episode_identity",
+          "scenario_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af",
+          "source_evaluation": {
+            "path": "/scratch/yx3882/research_dagger_occupancy_cell_20260827_rtx6000_union_v5/runs/A/job-16500891/attempt-r0/evaluation.schema-v2.json",
+            "sha256": "475917fb219a89cb82ad0279e838833db80526a91f7a2415f93a3a536981062d"
+          },
+          "source_scenario_binding": "sha256_and_per_episode_identity",
+          "source_scenarios_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af"
+        }
+      },
+      "B": {
+        "checks": {
+          "audit_report_sha256_expected": true,
+          "audit_schema_v2": true,
+          "classified": true,
+          "episode_count": true,
+          "evaluation_label_expected": true,
+          "faulted_count": true,
+          "no_error_count": true,
+          "physical_assessment_complete": true,
+          "physical_fingerprints_present": true,
+          "replay_consistent": true,
+          "research_only": true,
+          "scenario_sha256": true,
+          "source_binding_expected": true,
+          "source_evaluation_path_present": true,
+          "source_evaluation_sha256_expected": true,
+          "source_evaluation_sha256_present": true,
+          "source_suite_binding_expected": true,
+          "summary_event_precision_support_consistent": true,
+          "summary_exact_consistent": true,
+          "summary_family_consistent": true,
+          "summary_mean_excess_consistent": true,
+          "summary_recall_support_consistent": true,
+          "summary_six_way_consistent": true,
+          "summary_stable_exact_consistent": true,
+          "summary_unique_precision_support_consistent": true,
+          "unique_root_ids": true
+        },
+        "provenance": {
+          "class": "strong_hash_and_per_episode_identity",
+          "scenario_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af",
+          "source_evaluation": {
+            "path": "/scratch/yx3882/research_dagger_occupancy_cell_20260827_rtx6000_union_v5/runs/B/job-16500919/attempt-r1/evaluation.schema-v2.json",
+            "sha256": "73a49e0056c3ee7eb6d8f36908e617d3db0597977d865608fcfa4f3c56b7feae"
+          },
+          "source_scenario_binding": "sha256_and_per_episode_identity",
+          "source_scenarios_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af"
+        }
+      },
+      "C": {
+        "checks": {
+          "audit_report_sha256_expected": true,
+          "audit_schema_v2": true,
+          "classified": true,
+          "episode_count": true,
+          "evaluation_label_expected": true,
+          "faulted_count": true,
+          "no_error_count": true,
+          "physical_assessment_complete": true,
+          "physical_fingerprints_present": true,
+          "replay_consistent": true,
+          "research_only": true,
+          "scenario_sha256": true,
+          "source_binding_expected": true,
+          "source_evaluation_path_present": true,
+          "source_evaluation_sha256_expected": true,
+          "source_evaluation_sha256_present": true,
+          "source_suite_binding_expected": true,
+          "summary_event_precision_support_consistent": true,
+          "summary_exact_consistent": true,
+          "summary_family_consistent": true,
+          "summary_mean_excess_consistent": true,
+          "summary_recall_support_consistent": true,
+          "summary_six_way_consistent": true,
+          "summary_stable_exact_consistent": true,
+          "summary_unique_precision_support_consistent": true,
+          "unique_root_ids": true
+        },
+        "provenance": {
+          "class": "strong_hash_and_per_episode_identity",
+          "scenario_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af",
+          "source_evaluation": {
+            "path": "/scratch/yx3882/research_dagger_occupancy_cell_20260827_rtx6000_union_v5/runs/C/job-16500927/attempt-r1/evaluation.schema-v2.json",
+            "sha256": "04755b67434064346eb1bc22b20bc3378b910f252591f9d758ea11cc32f83815"
+          },
+          "source_scenario_binding": "sha256_and_per_episode_identity",
+          "source_scenarios_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af"
+        }
+      },
+      "D": {
+        "checks": {
+          "audit_report_sha256_expected": true,
+          "audit_schema_v2": true,
+          "classified": true,
+          "episode_count": true,
+          "evaluation_label_expected": true,
+          "faulted_count": true,
+          "no_error_count": true,
+          "physical_assessment_complete": true,
+          "physical_fingerprints_present": true,
+          "replay_consistent": true,
+          "research_only": true,
+          "scenario_sha256": true,
+          "source_binding_expected": true,
+          "source_evaluation_path_present": true,
+          "source_evaluation_sha256_expected": true,
+          "source_evaluation_sha256_present": true,
+          "source_suite_binding_expected": true,
+          "summary_event_precision_support_consistent": true,
+          "summary_exact_consistent": true,
+          "summary_family_consistent": true,
+          "summary_mean_excess_consistent": true,
+          "summary_recall_support_consistent": true,
+          "summary_six_way_consistent": true,
+          "summary_stable_exact_consistent": true,
+          "summary_unique_precision_support_consistent": true,
+          "unique_root_ids": true
+        },
+        "provenance": {
+          "class": "strong_hash_and_per_episode_identity",
+          "scenario_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af",
+          "source_evaluation": {
+            "path": "/scratch/yx3882/research_dagger_occupancy_cell_20260827_rtx6000_union_v5/runs/D/job-16500933/attempt-r1/evaluation.schema-v2.json",
+            "sha256": "330e1c97bf7dfb9965e65abcb18b28a8ffaaea285ddd6887cbfbe46299d1f774"
+          },
+          "source_scenario_binding": "sha256_and_per_episode_identity",
+          "source_scenarios_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af"
+        }
+      },
+      "historical_12b_full": {
+        "checks": {
+          "audit_report_sha256_expected": true,
+          "audit_schema_v2": true,
+          "classified": true,
+          "episode_count": true,
+          "evaluation_label_expected": true,
+          "faulted_count": true,
+          "no_error_count": true,
+          "physical_assessment_complete": true,
+          "physical_fingerprints_present": true,
+          "replay_consistent": true,
+          "research_only": true,
+          "scenario_sha256": true,
+          "source_binding_expected": true,
+          "source_evaluation_path_present": true,
+          "source_evaluation_sha256_expected": true,
+          "source_evaluation_sha256_present": true,
+          "source_suite_binding_expected": true,
+          "summary_event_precision_support_consistent": true,
+          "summary_exact_consistent": true,
+          "summary_family_consistent": true,
+          "summary_mean_excess_consistent": true,
+          "summary_recall_support_consistent": true,
+          "summary_six_way_consistent": true,
+          "summary_stable_exact_consistent": true,
+          "summary_unique_precision_support_consistent": true,
+          "unique_root_ids": true
+        },
+        "provenance": {
+          "class": "legacy_ordered_replay_only",
+          "scenario_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af",
+          "source_evaluation": {
+            "path": "research\\results\\physical_audit_all8_inputs\\eval_exp1_12b_fullocc.json",
+            "sha256": "594f54567bde7a7bb308d520a0766d3c02b48222f1fb33adb5f9798a8efcbbb9"
+          },
+          "source_scenario_binding": "ordered_replay_without_source_suite_hash",
+          "source_scenarios_sha256": null
+        }
+      },
+      "historical_12b_selective": {
+        "checks": {
+          "audit_report_sha256_expected": true,
+          "audit_schema_v2": true,
+          "classified": true,
+          "episode_count": true,
+          "evaluation_label_expected": true,
+          "faulted_count": true,
+          "no_error_count": true,
+          "physical_assessment_complete": true,
+          "physical_fingerprints_present": true,
+          "replay_consistent": true,
+          "research_only": true,
+          "scenario_sha256": true,
+          "source_binding_expected": true,
+          "source_evaluation_path_present": true,
+          "source_evaluation_sha256_expected": true,
+          "source_evaluation_sha256_present": true,
+          "source_suite_binding_expected": true,
+          "summary_event_precision_support_consistent": true,
+          "summary_exact_consistent": true,
+          "summary_family_consistent": true,
+          "summary_mean_excess_consistent": true,
+          "summary_recall_support_consistent": true,
+          "summary_six_way_consistent": true,
+          "summary_stable_exact_consistent": true,
+          "summary_unique_precision_support_consistent": true,
+          "unique_root_ids": true
+        },
+        "provenance": {
+          "class": "legacy_ordered_replay_only",
+          "scenario_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af",
+          "source_evaluation": {
+            "path": "research\\results\\physical_audit_all8_inputs\\eval_exp1_12b_selective.json",
+            "sha256": "94ac8b35089025e84a2ea5f329d6897720f983bc33035eb0f797ab7ae2b59395"
+          },
+          "source_scenario_binding": "ordered_replay_without_source_suite_hash",
+          "source_scenarios_sha256": null
+        }
+      },
+      "historical_e2b_full": {
+        "checks": {
+          "audit_report_sha256_expected": true,
+          "audit_schema_v2": true,
+          "classified": true,
+          "episode_count": true,
+          "evaluation_label_expected": true,
+          "faulted_count": true,
+          "no_error_count": true,
+          "physical_assessment_complete": true,
+          "physical_fingerprints_present": true,
+          "replay_consistent": true,
+          "research_only": true,
+          "scenario_sha256": true,
+          "source_binding_expected": true,
+          "source_evaluation_path_present": true,
+          "source_evaluation_sha256_expected": true,
+          "source_evaluation_sha256_present": true,
+          "source_suite_binding_expected": true,
+          "summary_event_precision_support_consistent": true,
+          "summary_exact_consistent": true,
+          "summary_family_consistent": true,
+          "summary_mean_excess_consistent": true,
+          "summary_recall_support_consistent": true,
+          "summary_six_way_consistent": true,
+          "summary_stable_exact_consistent": true,
+          "summary_unique_precision_support_consistent": true,
+          "unique_root_ids": true
+        },
+        "provenance": {
+          "class": "legacy_ordered_replay_only",
+          "scenario_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af",
+          "source_evaluation": {
+            "path": "research\\results\\physical_audit_all8_inputs\\eval_exp1_fullocc.json",
+            "sha256": "9ca26350f29a9fefc1b087dafdec2aac11b3d08a8e030ce67e303fa7e2da28c7"
+          },
+          "source_scenario_binding": "ordered_replay_without_source_suite_hash",
+          "source_scenarios_sha256": null
+        }
+      },
+      "historical_e2b_selective": {
+        "checks": {
+          "audit_report_sha256_expected": true,
+          "audit_schema_v2": true,
+          "classified": true,
+          "episode_count": true,
+          "evaluation_label_expected": true,
+          "faulted_count": true,
+          "no_error_count": true,
+          "physical_assessment_complete": true,
+          "physical_fingerprints_present": true,
+          "replay_consistent": true,
+          "research_only": true,
+          "scenario_sha256": true,
+          "source_binding_expected": true,
+          "source_evaluation_path_present": true,
+          "source_evaluation_sha256_expected": true,
+          "source_evaluation_sha256_present": true,
+          "source_suite_binding_expected": true,
+          "summary_event_precision_support_consistent": true,
+          "summary_exact_consistent": true,
+          "summary_family_consistent": true,
+          "summary_mean_excess_consistent": true,
+          "summary_recall_support_consistent": true,
+          "summary_six_way_consistent": true,
+          "summary_stable_exact_consistent": true,
+          "summary_unique_precision_support_consistent": true,
+          "unique_root_ids": true
+        },
+        "provenance": {
+          "class": "legacy_ordered_replay_only",
+          "scenario_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af",
+          "source_evaluation": {
+            "path": "research\\results\\physical_audit_all8_inputs\\eval_exp1_selective.json",
+            "sha256": "d34bf62f1aee3b49d5c2f71331d1547312ba0f87882161564e00415d918be992"
+          },
+          "source_scenario_binding": "ordered_replay_without_source_suite_hash",
+          "source_scenarios_sha256": null
+        }
+      }
+    },
+    "scenario_sha256": "16fff49570a77b66001adcd95a39277e32395fec868d2fd8f618e61d863530af"
+  },
+  "release_evidence": false,
+  "schema": "research_exposure_screen_analysis_v1",
+  "selection_gate": {
+    "per_arm": {
+      "A": {
+        "preserves_all_four_no_error": true,
+        "stable_exact_recovery": 35,
+        "zero_faulted_false_interventions": false
+      },
+      "B": {
+        "preserves_all_four_no_error": true,
+        "stable_exact_recovery": 31,
+        "zero_faulted_false_interventions": false
+      },
+      "C": {
+        "preserves_all_four_no_error": true,
+        "stable_exact_recovery": 43,
+        "zero_faulted_false_interventions": true
+      },
+      "D": {
+        "preserves_all_four_no_error": true,
+        "stable_exact_recovery": 25,
+        "zero_faulted_false_interventions": false
+      }
+    },
+    "provisional_leader": "C",
+    "rule": "preserve no-error; require zero faulted final-state false interventions; maximize stable exact",
+    "strictly_eligible_arms": [
+      "C"
+    ]
+  }
+}

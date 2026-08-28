@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from research.train import (
     ExposureCountingCollator,
     TRAINING_STEP_EXPOSURE_KEY,
     TrainingStepExposureCounter,
+    canonical_json_sha256,
+    finalize_restart_checkpoint,
     pop_training_step_exposure,
+    sampled_batches_after_updates,
+    sampled_rows_after_updates,
     summarize_prepared_rows,
+    validate_restart_checkpoint,
+    validate_sampled_exposure,
 )
 
 
@@ -132,3 +142,111 @@ def test_training_step_exposure_counts_only_committed_batches() -> None:
         "input_tokens": 5,
         "supervised_tokens": 3,
     }
+
+
+def test_exposure_counters_restore_persisted_restart_ledger() -> None:
+    class Processor:
+        pad_token_id = 0
+
+    initial = {
+        "batches": 8,
+        "rows": 8,
+        "input_tokens": 80,
+        "supervised_tokens": 24,
+    }
+    counter = TrainingStepExposureCounter(initial)
+    collator = ExposureCountingCollator(
+        Processor(), {"train": initial, "validation": {**initial, "rows": 2}}
+    )
+
+    counter.add(
+        {"batches": 1, "rows": 1, "input_tokens": 10, "supervised_tokens": 3}
+    )
+
+    assert counter.summary() == {
+        "batches": 9,
+        "rows": 9,
+        "input_tokens": 90,
+        "supervised_tokens": 27,
+    }
+    assert collator.summary("train") == initial
+    assert collator.summary("validation")["rows"] == 2
+
+
+def test_sampled_row_schedule_accounts_for_short_epoch_tail() -> None:
+    values = [
+        sampled_rows_after_updates(
+            train_rows=10,
+            updates=step,
+            batch_size=1,
+            gradient_accumulation_steps=4,
+        )
+        for step in range(7)
+    ]
+
+    assert values == [0, 4, 8, 10, 14, 18, 20]
+    assert [
+        sampled_batches_after_updates(
+            train_rows=10,
+            updates=step,
+            batch_size=1,
+            gradient_accumulation_steps=4,
+        )
+        for step in range(7)
+    ] == [0, 4, 8, 10, 14, 18, 20]
+
+    validate_sampled_exposure(
+        {"batches": 18, "rows": 18},
+        train_rows=10,
+        updates=5,
+        batch_size=1,
+        gradient_accumulation_steps=4,
+    )
+    with pytest.raises(ValueError, match="disagrees"):
+        validate_sampled_exposure(
+            {"batches": 18, "rows": 17},
+            train_rows=10,
+            updates=5,
+            batch_size=1,
+            gradient_accumulation_steps=4,
+        )
+
+
+def test_completed_restart_checkpoint_is_bound_and_tamper_evident(tmp_path) -> None:
+    checkpoint = tmp_path / "checkpoint-25"
+    checkpoint.mkdir()
+    (checkpoint / "trainer_state.json").write_text(
+        json.dumps({"global_step": 25}), encoding="utf-8"
+    )
+    for name in (
+        "optimizer.pt",
+        "scheduler.pt",
+        "rng_state.pth",
+        "adapter_config.json",
+        "adapter_model.safetensors",
+    ):
+        (checkpoint / name).write_bytes(name.encode())
+    binding = {"schema": "test", "arm": "E2B-selective"}
+    binding_sha256 = canonical_json_sha256(binding)
+    ledger = {
+        "schema": "research_exposure_checkpoint_v2",
+        "global_step": 25,
+        "run_binding": binding,
+        "run_binding_sha256": binding_sha256,
+        "training_step_train_exposure": {
+            "batches": 100,
+            "rows": 100,
+            "input_tokens": 1000,
+            "supervised_tokens": 300,
+        },
+        "collated_exposure": {},
+    }
+
+    finalize_restart_checkpoint(checkpoint, ledger)
+    assert validate_restart_checkpoint(
+        checkpoint, expected_run_binding_sha256=binding_sha256
+    ) == ledger
+
+    (checkpoint / "optimizer.pt").write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="file verification failed"):
+        validate_restart_checkpoint(checkpoint)

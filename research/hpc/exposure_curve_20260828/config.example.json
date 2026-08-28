@@ -1,0 +1,22 @@
+{
+  "cell_root": "/scratch/yx3882/research_dagger_exposure_curve_20260828",
+  "contract": "research_occupancy_exposure_curve_v1",
+  "inputs": {
+    "12b_round0_train": {"path": "/ABSOLUTE/PATH/d0/aggregate.train_view.jsonl", "sha256": "REPLACE_WITH_64_HEX"},
+    "12b_round0_validation": {"path": "/ABSOLUTE/PATH/d0/aggregate.validation.jsonl", "sha256": "REPLACE_WITH_64_HEX"},
+    "12b_round1_rows": {"path": "/ABSOLUTE/PATH/12b_round1_rows.jsonl", "sha256": "REPLACE_WITH_64_HEX"},
+    "e2b_round0_train": {"path": "/ABSOLUTE/PATH/d0/aggregate.train_view.jsonl", "sha256": "REPLACE_WITH_64_HEX"},
+    "e2b_round0_validation": {"path": "/ABSOLUTE/PATH/d0/aggregate.validation.jsonl", "sha256": "REPLACE_WITH_64_HEX"},
+    "e2b_round1_rows": {"path": "/ABSOLUTE/PATH/e2b_round1_rows.jsonl", "sha256": "REPLACE_WITH_64_HEX"},
+    "evaluation_scenarios": {"path": "/ABSOLUTE/PATH/eval_scenarios.json", "sha256": "REPLACE_WITH_64_HEX"}
+  },
+  "hf_home": "/scratch/yx3882/.cache/huggingface",
+  "model_snapshot_sha256": {
+    "12b": "REPLACE_WITH_64_HEX",
+    "e2b": "REPLACE_WITH_64_HEX"
+  },
+  "python": "/scratch/yx3882/envs/dagger12b_overlay/bin/python",
+  "source_commit": "REPLACE_WITH_40_HEX",
+  "source_root": "/scratch/yx3882/research_dagger_exposure_curve_20260828/src",
+  "source_tree_sha256": "REPLACE_WITH_64_HEX"
+}

@@ -1,0 +1,63 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+: "${CELL_CONFIG:?set CELL_CONFIG}"
+: "${CELL_CONFIG_SHA256:?set CELL_CONFIG_SHA256}"
+: "${CELL_PYTHON:?set CELL_PYTHON}"
+: "${CELL_ARM:?set CELL_ARM}"
+: "${CELL_PARENT_JOB_ID:?set CELL_PARENT_JOB_ID}"
+[[ "$CELL_ARM" =~ ^[ABCDEF]$ && "$CELL_PARENT_JOB_ID" =~ ^[0-9]+$ ]] || exit 2
+
+SUBMITTED_SCRIPT=$(readlink -f "${BASH_SOURCE[0]}")
+CONFIG_SOURCE_ROOT=$("$CELL_PYTHON" - "$CELL_CONFIG" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1], encoding="utf-8"))["source_root"])
+PY
+)
+EXPECTED_SCRIPT_DIR=$(readlink -f "$CONFIG_SOURCE_ROOT/research/hpc/exposure_curve_20260828")
+EXPECTED_SCRIPT="$EXPECTED_SCRIPT_DIR/audit.sh"
+if [[ "$SUBMITTED_SCRIPT" != "$EXPECTED_SCRIPT" ]]; then
+  cmp -s "$SUBMITTED_SCRIPT" "$EXPECTED_SCRIPT" \
+    || { echo "Slurm script copy differs from the configured source" >&2; exit 2; }
+fi
+SCRIPT_DIR=$EXPECTED_SCRIPT_DIR
+mapfile -t CONFIG < <("$CELL_PYTHON" "$SCRIPT_DIR/build.py" config-values \
+  --config "$CELL_CONFIG" --expected-config-sha "$CELL_CONFIG_SHA256")
+CELL_ROOT=${CONFIG[0]}; SOURCE_ROOT=${CONFIG[1]}
+[[ "$CELL_PYTHON" == "${CONFIG[2]}" ]] || exit 2
+export PYTHONPATH="$SOURCE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+export HF_HOME=${CONFIG[3]}
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false
+cd "$SOURCE_ROOT"
+"$CELL_PYTHON" "$SCRIPT_DIR/build.py" environment --config "$CELL_CONFIG" \
+  --expected-config-sha "$CELL_CONFIG_SHA256"
+mapfile -t EVALUATIONS < <("$CELL_PYTHON" "$SCRIPT_DIR/build.py" evaluation-values \
+  --config "$CELL_CONFIG" --expected-config-sha "$CELL_CONFIG_SHA256" \
+  --arm "$CELL_ARM" --job-id "$CELL_PARENT_JOB_ID")
+[[ ${#EVALUATIONS[@]} -eq 4 ]] || exit 2
+SCENARIOS=$("$CELL_PYTHON" - "$CELL_CONFIG" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1], encoding="utf-8"))["inputs"]["evaluation_scenarios"]["path"])
+PY
+)
+JOB_ID=${SLURM_JOB_ID:?audit.sh must run under Slurm}
+RESTART=${SLURM_RESTART_COUNT:-0}
+[[ "$JOB_ID" =~ ^[0-9]+$ && "$RESTART" =~ ^[0-9]+$ ]] || exit 2
+ATTEMPT="$CELL_ROOT/audits/$CELL_ARM/job-$JOB_ID/attempt-r$RESTART"
+mkdir -p "$(dirname "$ATTEMPT")"
+mkdir "$ATTEMPT"
+FULL="$ATTEMPT/physical_audit.full.json"
+SUMMARY="$ATTEMPT/physical_audit.summary.json"
+AUDIT_ARGS=()
+for item in "${EVALUATIONS[@]}"; do
+  IFS=$'\t' read -r label path <<<"$item"
+  [[ -n "$label" && -n "$path" ]] || exit 2
+  AUDIT_ARGS+=(--evaluation "$label=$path")
+done
+"$CELL_PYTHON" -m research.physical_outcome_audit --scenarios "$SCENARIOS" \
+  "${AUDIT_ARGS[@]}" --output "$FULL" --summary-output "$SUMMARY" --max-steps 24 \
+  > "$ATTEMPT/audit_console.json"
+"$CELL_PYTHON" "$SCRIPT_DIR/build.py" gate-audit --config "$CELL_CONFIG" \
+  --expected-config-sha "$CELL_CONFIG_SHA256" --arm "$CELL_ARM" \
+  --parent-job "$CELL_PARENT_JOB_ID" --full "$FULL" --summary "$SUMMARY" \
+  --output "$ATTEMPT/audit_gate.json"
