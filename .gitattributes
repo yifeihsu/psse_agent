@@ -20,3 +20,4 @@ hif_search_limits.py text eol=lf
 trace_protocol.py text eol=lf
 psse_env/sft/release_hardware.py text eol=lf
 research/hpc/occupancy_cell_20260827/*.sh text eol=lf
+research/hpc/exposure_curve_20260828/*.sh text eol=lf
