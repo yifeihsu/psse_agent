@@ -272,7 +272,13 @@ def validate_config(
         raise ValueError("source_commit must be a 40-character commit")
     source = _absolute(config.get("source_root"), "source_root").resolve(strict=True)
     root = _absolute(config.get("cell_root"), "cell_root").resolve()
-    python = _absolute(config.get("python"), "python").resolve(strict=True)
+    # Preserve the configured invocation path: this research environment is an
+    # overlay whose ``bin/python`` symlink selects a different site-packages
+    # stack from the canonical base interpreter.  Resolving the symlink would
+    # silently replace Transformers/TRL/PEFT with the base environment.
+    python = Path(os.path.abspath(_absolute(config.get("python"), "python")))
+    if not python.is_file():
+        raise ValueError(f"configured Python does not exist: {python}")
     hf_home = _absolute(config.get("hf_home"), "hf_home").resolve(strict=True)
     if not os.access(python, os.X_OK):
         raise ValueError(f"configured Python is not executable: {python}")
