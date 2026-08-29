@@ -73,7 +73,7 @@ case "${PATH:-}" in
 esac
 export_args="CELL_CONFIG=$CELL_CONFIG,CELL_CONFIG_SHA256=$CELL_CONFIG_SHA256,CELL_PYTHON=$CELL_PYTHON,PATH=${PATH:-/usr/bin:/bin}"
 
-BUILD=$(job_id "$(sbatch "${common[@]}" --hold --job-name=curve-build --time=02:00:00 \
+BUILD=$(job_id "$(sbatch "${common[@]}" --job-name=curve-build --time=02:00:00 \
   --output="$CELL_ROOT/logs/build-%j.out" --error="$CELL_ROOT/logs/build-%j.err" \
   --export="$export_args" "$SCRIPT_DIR/build.sh")")
 SUBMITTED_JOBS+=("$BUILD")
@@ -111,7 +111,6 @@ for arm in "${SELECTED_ARMS[@]}"; do
 done
 "$CELL_PYTHON" "$SCRIPT_DIR/build.py" submission-finish --config "$CELL_CONFIG" \
   --expected-config-sha "$CELL_CONFIG_SHA256"
-scontrol release "$BUILD"
 SUBMIT_FINISHED=1
 trap - EXIT
 echo "Submitted six-arm exposure curve; receipt: $CELL_ROOT/submission.json"

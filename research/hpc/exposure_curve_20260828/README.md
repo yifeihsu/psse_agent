@@ -93,4 +93,8 @@ bash research/hpc/exposure_curve_20260828/submit.sh
 cell root without silently duplicating other runs. A normal experiment uses all
 six. The submission receipt must contain exactly one CPU build, one GPU arm,
 and one dependent CPU audit for every selected arm. `submit.sh` requests the
-four-family union directly and rejects any narrower scheduler receipt.
+four-family union directly and rejects any narrower scheduler receipt. The CPU
+build job self-gates on the complete atomic submission receipt before it runs
+environment checks, tests, or build verification. This avoids relying on
+cluster-specific user hold/release behavior while keeping every GPU arm behind
+an `afterok` dependency on that receipt gate.

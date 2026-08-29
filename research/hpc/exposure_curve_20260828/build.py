@@ -9,6 +9,7 @@ import math
 import os
 import re
 import sys
+import time
 from fractions import Fraction
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -1322,6 +1323,45 @@ def validate_submission_jobs(payload: Mapping[str, Any]) -> None:
         raise ValueError("submission job IDs must be unique decimal strings")
 
 
+def submission_is_ready(payload: Mapping[str, Any], config_sha: str) -> bool:
+    if payload.get("config_sha256") != config_sha:
+        raise ValueError("submission receipt configuration mismatch")
+    status = payload.get("status")
+    if status == "submission_failed":
+        raise ValueError(
+            f"submission failed before build gate: {payload.get('detail', 'no detail')}"
+        )
+    if status == "submitting":
+        return False
+    if status != "submitted":
+        raise ValueError(f"invalid submission receipt status: {status!r}")
+    validate_scheduler_union(str(payload.get("gpu_constraints", "")))
+    validate_submission_jobs(payload)
+    if payload.get("release_evidence") is not False:
+        raise ValueError("submission receipt must remain research-only")
+    return True
+
+
+def wait_for_submission(
+    config_path: Path,
+    expected_sha: str,
+    timeout_seconds: float,
+    poll_seconds: float,
+) -> dict[str, Any]:
+    if timeout_seconds <= 0 or poll_seconds <= 0:
+        raise ValueError("submission wait durations must be positive")
+    config, config_sha = validate_config(config_path, expected_sha)
+    target = Path(config["cell_root"]) / "submission.json"
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        payload = load_json(target)
+        if submission_is_ready(payload, config_sha):
+            return payload
+        if time.monotonic() >= deadline:
+            raise TimeoutError("timed out waiting for the complete submission receipt")
+        time.sleep(min(poll_seconds, max(0.0, deadline - time.monotonic())))
+
+
 def submission_update(
     config_path: Path, expected_sha: str, action: str, **kwargs: str
 ) -> dict[str, Any]:
@@ -1407,6 +1447,11 @@ def parser() -> argparse.ArgumentParser:
     item.add_argument("--job-id", required=True)
     item.add_argument("--summary", required=True, type=Path)
     item.add_argument("--output", required=True, type=Path)
+    item = sub.add_parser("submission-wait")
+    item.add_argument("--config", required=True, type=Path)
+    item.add_argument("--expected-config-sha", required=True)
+    item.add_argument("--timeout-seconds", type=float, default=3600.0)
+    item.add_argument("--poll-seconds", type=float, default=5.0)
     item = sub.add_parser("publish-training")
     item.add_argument("--config", required=True, type=Path)
     item.add_argument("--expected-config-sha", required=True)
@@ -1623,6 +1668,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.full,
             args.summary,
             args.output,
+        )
+        return 0
+    if args.command == "submission-wait":
+        print(
+            json.dumps(
+                wait_for_submission(
+                    args.config,
+                    args.expected_config_sha,
+                    args.timeout_seconds,
+                    args.poll_seconds,
+                ),
+                sort_keys=True,
+            )
         )
         return 0
     action = args.command.removeprefix("submission-")

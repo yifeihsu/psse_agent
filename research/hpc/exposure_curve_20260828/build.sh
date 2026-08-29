@@ -19,6 +19,9 @@ if [[ "$SUBMITTED_SCRIPT" != "$EXPECTED_SCRIPT" ]]; then
     || { echo "Slurm script copy differs from the configured source" >&2; exit 2; }
 fi
 SCRIPT_DIR=$EXPECTED_SCRIPT_DIR
+"$CELL_PYTHON" "$SCRIPT_DIR/build.py" submission-wait \
+  --config "$CELL_CONFIG" --expected-config-sha "$CELL_CONFIG_SHA256" \
+  --timeout-seconds 3600 --poll-seconds 5
 mapfile -t CONFIG < <("$CELL_PYTHON" "$SCRIPT_DIR/build.py" config-values \
   --config "$CELL_CONFIG" --expected-config-sha "$CELL_CONFIG_SHA256")
 CELL_ROOT=${CONFIG[0]}; SOURCE_ROOT=${CONFIG[1]}

@@ -287,8 +287,14 @@ def test_launcher_hardcodes_union_and_never_selects_partition() -> None:
     assert "a100|h100|h200|rtx6000" in script
     assert "--constraint=\"$GPU_FEATURE_UNION\"" in script
     assert "--partition" not in script
-    assert "--hold --job-name=curve-build" in script
-    assert script.index('submission-finish') < script.index('scontrol release "$BUILD"')
+    assert "--hold" not in script
+    assert "scontrol release" not in script
+    assert "--job-name=curve-build" in script
+    build_script = (
+        Path(__file__).parent / "hpc" / "exposure_curve_20260828" / "build.sh"
+    ).read_text(encoding="utf-8")
+    assert "submission-wait" in build_script
+    assert build_script.index("submission-wait") < build_script.index("environment")
     run_script = (
         Path(__file__).parent / "hpc" / "exposure_curve_20260828" / "run_arm.sh"
     ).read_text(encoding="utf-8")
@@ -308,3 +314,29 @@ def test_shell_wrappers_bootstrap_isolated_source_before_importing_builder() -> 
         bootstrap = 'export PYTHONPATH="$CONFIG_SOURCE_ROOT${PYTHONPATH:+:$PYTHONPATH}"'
         assert bootstrap in script
         assert script.index(bootstrap) < script.index('"$SCRIPT_DIR/build.py"')
+
+
+def test_submission_ready_gate_is_fail_closed() -> None:
+    jobs = {"build": "1"}
+    for index, arm in enumerate("ABCDEF", start=2):
+        jobs[f"arm:{arm}"] = str(index)
+        jobs[f"audit:{arm}"] = str(index + 6)
+    payload = {
+        "status": "submitting",
+        "config_sha256": "1" * 64,
+        "gpu_constraints": (
+            "e2b=a100|h100|h200|rtx6000,12b=a100|h100|h200|rtx6000;"
+            "families=e2b=A100|H100|H200|RTX6000,"
+            "12b=A100|H100|H200|RTX6000"
+        ),
+        "selected_arms": list("ABCDEF"),
+        "jobs": jobs,
+        "release_evidence": False,
+    }
+    assert not curve.submission_is_ready(payload, "1" * 64)
+    payload["status"] = "submitted"
+    assert curve.submission_is_ready(payload, "1" * 64)
+    payload["status"] = "submission_failed"
+    payload["detail"] = "scheduler rejected graph"
+    with pytest.raises(ValueError, match="scheduler rejected graph"):
+        curve.submission_is_ready(payload, "1" * 64)
