@@ -1164,13 +1164,61 @@ class MultiMeasurementContinuationTests(unittest.TestCase):
 
         self.assertNotIn(closure, [proposal.action for proposal in proposals])
 
-    def test_unavailable_parameter_route_cannot_authorize_measurement(self) -> None:
+    def test_inconclusive_empty_parameter_route_authorizes_measurement(self) -> None:
+        # V2-A continuation contract: an explicit inconclusive screen that
+        # advertises no executable parameter correction closes the route just
+        # like a complete negative — there is nothing to try, and on
+        # multi-measurement states the branch cross-signals it waits on are
+        # caused by the remaining meter errors themselves.
         state, measurement_action = self._partial_measurement_branch_inventory_state(
             topology_rejected=True
         )
         state["fresh_context_evidence"]["parameter"]["route_status"] = (
             "unavailable_or_inconclusive"
         )
+
+        proposals = MeasurementExpert().propose(
+            state, [], oracle_hints=[measurement_action]
+        )
+
+        self.assertIn(
+            measurement_action, [proposal.action for proposal in proposals]
+        )
+
+    def test_inconclusive_parameter_route_with_candidates_still_blocks(self) -> None:
+        # The closure applies only to empty inventories: an inconclusive route
+        # that still advertises an untried parameter candidate stays open and
+        # keeps blocking further measurement corrections.
+        state, measurement_action = self._partial_measurement_branch_inventory_state(
+            topology_rejected=True
+        )
+        active_id = state["active_state_id"]
+        state["fresh_context_evidence"]["parameter"] = {
+            "state_id": active_id,
+            "supported_corrections": [
+                {
+                    "tool": "correct_parameters",
+                    "arguments": {"state_id": active_id, "line_index": 5},
+                }
+            ],
+            "route_status": "unavailable_or_inconclusive",
+        }
+
+        proposals = MeasurementExpert().propose(
+            state, [], oracle_hints=[measurement_action]
+        )
+
+        self.assertNotIn(
+            measurement_action, [proposal.action for proposal in proposals]
+        )
+
+    def test_legacy_empty_parameter_contract_still_blocks(self) -> None:
+        # An empty inventory without any route_status is a legacy contract that
+        # never affirmed the screen completed; it must remain open.
+        state, measurement_action = self._partial_measurement_branch_inventory_state(
+            topology_rejected=True
+        )
+        del state["fresh_context_evidence"]["parameter"]["route_status"]
 
         proposals = MeasurementExpert().propose(
             state, [], oracle_hints=[measurement_action]
@@ -1987,42 +2035,40 @@ class MultiMeasurementEndToEndRoutingTests(unittest.TestCase):
             "operator_escalation:recovery_options_exhausted",
         )
 
-    def test_partial_commit_refreshes_context_before_safe_handoff(self) -> None:
+    def test_partial_commit_continues_recovery_before_safe_handoff(self) -> None:
         env, actions = self._run(20260719)
         tools = [action["tool"] for action in actions]
 
-        commit_index = tools.index("commit_state")
-        self.assertEqual(tools[commit_index + 1], "get_measurement_context")
-        self.assertEqual(
-            actions[commit_index + 1]["arguments"]["state_id"],
-            actions[commit_index]["arguments"]["candidate_state_id"],
-        )
-        # A partial measurement repair cannot use a measurement-dominant
-        # residual to skip live branch evidence.  The mandatory fresh meter
-        # context bundles both same-state branch inventories, closing them
-        # without spending two additional controller actions per singleton.
-        self.assertNotIn("get_parameter_context", tools)
-        self.assertNotIn("get_topology_context", tools)
-        screening = env.history[commit_index + 1]["tool_output"]["tool_metrics"][
-            "branch_route_screening"
-        ]
-        self.assertEqual(set(screening), {"parameter", "topology"})
-        for family in ("parameter", "topology"):
+        # V2-A continuation contract: the first accepted correction no longer
+        # ends autonomous recovery.  The teacher re-screens both branch routes
+        # on the committed state, takes the next supported measurement
+        # correction, and repeats until a fresh same-state context exposes no
+        # further supported route — only then does it hand off.
+        self.assertGreaterEqual(tools.count("commit_state"), 2)
+        first_commit = tools.index("commit_state")
+        committed_state = actions[first_commit]["arguments"]["candidate_state_id"]
+        window = tools[first_commit + 1 : first_commit + 4]
+        self.assertIn("get_parameter_context", window)
+        self.assertIn("get_topology_context", window)
+        self.assertIn("get_measurement_context", window)
+        for offset in range(first_commit + 1, first_commit + 4):
             self.assertEqual(
-                screening[family]["state_id"],
-                actions[commit_index]["arguments"]["candidate_state_id"],
+                actions[offset]["arguments"]["state_id"], committed_state
             )
-            self.assertEqual(screening[family]["supported_corrections"], [])
+        self.assertEqual(tools[first_commit + 4], "correct_measurements")
         self.assertEqual(
-            screening["parameter"]["route_status"],
-            "unavailable_or_inconclusive",
-        )
-        self.assertEqual(
-            screening["topology"]["route_status"], "complete_negative"
+            actions[first_commit + 4]["arguments"]["state_id"], committed_state
         )
         self.assertTrue(env.is_terminal())
         self.assertEqual(env.terminal_outcome, "operator_escalation")
         self.assertEqual(tools[-1], "ask_for_more_evidence")
+        self.assertEqual(
+            actions[-1]["arguments"]["request"],
+            "operator_escalation:recovery_options_exhausted",
+        )
+        # The handoff decision is made against fresh evidence, not a stale
+        # pre-commit context.
+        self.assertEqual(tools[-2], "get_measurement_context")
 
 
 if __name__ == "__main__":

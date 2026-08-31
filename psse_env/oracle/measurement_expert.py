@@ -542,12 +542,18 @@ class MeasurementExpert:
             except (TypeError, ValueError):
                 return False
 
-        # An empty inventory closes the route only when the provider explicitly
-        # completed a negative diagnostic.  Missing repeated scans, an
-        # inconclusive candidate screen, or a legacy empty contract remains
-        # open and therefore cannot authorize another meter correction.
+        # An empty inventory closes the route when the provider explicitly
+        # completed its screen with nothing executable — a negative diagnostic
+        # or an inconclusive screen that advertises no correction.  Neither
+        # offers an action the expert could try, so leaving the route "open"
+        # can never be resolved by acting on it; on multi-measurement states
+        # the branch cross-signals it waits on are themselves caused by the
+        # remaining meter errors, deadlocking recovery.  State binding still
+        # forces a fresh same-state re-screen after every commit, so a branch
+        # fault that becomes observably dominant later reopens the route.
+        # Only a legacy empty contract without a route_status stays open.
         if not supported_signatures:
-            return route_status == "complete_negative"
+            return route_status in ("complete_negative", "unavailable_or_inconclusive")
         if route_status_present and route_status != "actionable":
             return False
 
