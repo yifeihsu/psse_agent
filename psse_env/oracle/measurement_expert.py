@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping, Sequence
 
 from psse_env.actions import (
@@ -112,6 +113,7 @@ class MeasurementExpert:
             active_id=active_id,
             accepted_targets=accepted_measurement_indices,
         )
+        flagged_residual_indices = self._residual_outlier_indices(unresolved)
         # After a partial measurement commit, any still-current branch evidence
         # must be resolved (or explicitly exhausted) before another measurement
         # correction may use that model's residuals.  Otherwise the second
@@ -144,6 +146,14 @@ class MeasurementExpert:
                     and accepted_measurement_indices
                     and accepted_measurement_indices < target_indices
                     and len(target_indices - accepted_measurement_indices) == 1
+                    # The one new closure member must itself carry a current
+                    # residual-outlier signature.  A provider closure group can
+                    # otherwise fold in an unflagged healthy meter purely
+                    # because editing it resolves the global statistic -- a
+                    # masking commit (measured on held-out root
+                    # r0_680cc8de358a, healthy index 64).
+                    and target_indices - accepted_measurement_indices
+                    <= flagged_residual_indices
                 )
                 # Provider-declared multi-target fallbacks are executable
                 # context contracts, not immediate labels.  They become an
@@ -633,6 +643,20 @@ class MeasurementExpert:
                 return False
             return metrics.get("accepted_target_refinement") is True
         return False
+
+    _RESIDUAL_OUTLIER_INDEX_RE = re.compile(
+        r"^wls_residual_outlier\S*\s+index=(\d+)\b"
+    )
+
+    @classmethod
+    def _residual_outlier_indices(cls, unresolved: Any) -> set[int]:
+        """Measurement indices carrying a current residual-outlier signature."""
+        indices: set[int] = set()
+        for raw in unresolved or []:
+            match = cls._RESIDUAL_OUTLIER_INDEX_RE.match(str(raw))
+            if match:
+                indices.add(int(match.group(1)))
+        return indices
 
     @staticmethod
     def _fresh_terminal_closure_action(

@@ -1089,6 +1089,30 @@ class MultiMeasurementContinuationTests(unittest.TestCase):
             proposal.evidence_codes,
         )
 
+    def test_terminal_closure_new_member_must_carry_residual_signature(self) -> None:
+        # Held-out leak r0_680cc8de358a: a provider closure group folded in an
+        # unflagged healthy meter (index 64) because editing it resolved the
+        # global statistic -- a masking commit.  The single new closure member
+        # must itself carry a current residual-outlier signature.
+        state, _ = self._partial_measurement_branch_inventory_state(
+            topology_rejected=True
+        )
+        active_id = state["active_state_id"]
+        closure = {
+            "tool": "correct_measurements",
+            "arguments": {"state_id": active_id, "suspect_group": [8, 64]},
+        }
+        self._install_terminal_closure_evidence(state, closure)
+        evidence = state["fresh_context_evidence"]["measurement"][
+            "verified_terminal_measurement_closure_evidence"
+        ]
+        evidence["new_target"] = 64
+        evidence["attempts"][0]["targets"] = [64]
+
+        proposals = MeasurementExpert().propose(state, [], oracle_hints=[closure])
+
+        self.assertNotIn(closure, [proposal.action for proposal in proposals])
+
     def test_bare_terminal_closure_targets_do_not_authorize_hint(self) -> None:
         state, _ = self._partial_measurement_branch_inventory_state(
             topology_rejected=True
