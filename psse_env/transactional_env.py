@@ -2323,6 +2323,44 @@ class TransactionalPSSEEnv:
                 rows.add(row0)
         return rows
 
+    _RESIDUAL_OUTLIER_SIGNATURE_RE = re.compile(
+        r"^wls_residual_outlier\S*\s+index=(\d+)\s+channel=(\S+)"
+    )
+
+    def _measurement_target_cluster(
+        self, source_action: Mapping[str, Any]
+    ) -> tuple[str, int] | None:
+        """Observable same-channel residual cluster containing the target.
+
+        Returns ``(channel, member_count)`` when every index in the action's
+        suspect group carries a current residual-outlier signature and all of
+        them share one measurement channel; ``member_count`` is how many
+        current residual outliers flag that channel.  Derived only from the
+        active state's public unresolved-signature ledger.
+        """
+        arguments = safe_normalize_action(source_action)["arguments"]
+        group = arguments.get("suspect_group")
+        if not isinstance(group, (list, tuple)) or not group:
+            return None
+        try:
+            targets = {int(index) for index in group}
+        except (TypeError, ValueError):
+            return None
+        channel_by_index: dict[int, str] = {}
+        channel_counts: dict[str, int] = {}
+        for raw in self.context_flags.get("unresolved_signatures") or []:
+            match = self._RESIDUAL_OUTLIER_SIGNATURE_RE.match(str(raw))
+            if not match:
+                continue
+            index, channel = int(match.group(1)), match.group(2)
+            channel_by_index[index] = channel
+            channel_counts[channel] = channel_counts.get(channel, 0) + 1
+        channels = {channel_by_index.get(target) for target in targets}
+        if None in channels or len(channels) != 1:
+            return None
+        channel = channels.pop()
+        return channel, channel_counts.get(channel, 0)
+
     def _measurement_target_branch_colocated(
         self, state_id: str, source_action: Mapping[str, Any]
     ) -> bool | None:
@@ -2868,6 +2906,10 @@ class TransactionalPSSEEnv:
                         metrics["independent_measurement_target"] = not bool(
                             target_colocated
                         )
+                cluster = self._measurement_target_cluster(source_action)
+                if cluster is not None:
+                    metrics["measurement_target_channel"] = cluster[0]
+                    metrics["measurement_target_cluster_size"] = cluster[1]
             truth = self.get_oracle_state().truth_dict() if self._oracle_payload.get("truth_complete") else None
             assessment = self.candidate_quality_oracle.label_candidate(
                 parent_state=parent_payload,

@@ -151,7 +151,11 @@ def production_environment_factory(
     env = TransactionalPSSEEnv(
         **providers.env_kwargs(),
         production_dataset_mode=True,
-        max_steps=24,
+        # 40 steps: a k=5 multi-measurement chain needs ~6 steps per
+        # correction cycle (branch re-screens + fetch + correct + verify +
+        # commit) plus baseline and final certification; 24 truncated
+        # four-and-five-error recoveries mid-cycle.
+        max_steps=40,
         history_window=4,
     )
     if env.production_dataset_mode is not True:
@@ -439,11 +443,27 @@ def _observable_candidate_disposition(
         if global_resolved is True:
             return "commit"
         if global_resolved is False:
-            return (
-                "commit"
-                if global_progress is not None and global_progress >= partial_floor
-                else "rollback"
+            if global_progress is not None and global_progress >= partial_floor:
+                return "commit"
+            # V2-B coupled-cluster mirror of the deployment verifier: a
+            # singleton measurement correction inside a coherent same-channel
+            # residual cluster passes a halved floor.  Must stay aligned with
+            # CandidateQualityOracle.label_candidate or teacher and
+            # environment deadlock on the disposition.
+            suspect_group = correction["arguments"].get("suspect_group")
+            cluster_size = _finite_float(
+                verification.get("measurement_target_cluster_size")
             )
+            coupled_partial = bool(
+                family == "measurement"
+                and isinstance(suspect_group, (list, tuple))
+                and len(suspect_group) == 1
+                and cluster_size is not None
+                and cluster_size >= 2
+                and global_progress is not None
+                and global_progress >= 0.5 * partial_floor
+            )
+            return "commit" if coupled_partial else "rollback"
         return "inconclusive"
 
     branch_material_progress = bool(

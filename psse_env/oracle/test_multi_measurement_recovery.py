@@ -1974,6 +1974,82 @@ class ObservableGlobalProgressTests(unittest.TestCase):
         self.assertEqual(result.disposition, CandidateDisposition.INCONCLUSIVE)
         self.assertIn("measurement_target_locality_missing", result.rationale_codes)
 
+    def _coupled_cluster_case(self, **overrides):
+        action = {
+            "tool": "correct_measurements",
+            "arguments": {"state_id": "episode:s0", "suspect_group": [0]},
+        }
+        verification = {
+            "target_fixed": True,
+            "target_progress": 0.9998,
+            "global_progress": 0.13,
+            "globally_resolved": False,
+            "physical_constraints_ok": True,
+            "measurement_target_cluster_size": 2,
+            "measurement_target_channel": "Pinj",
+        }
+        verification.update(overrides.pop("verification", {}))
+        action["arguments"].update(overrides.pop("arguments", {}))
+        oracle = overrides.pop("oracle", self.oracle)
+        assert not overrides
+        return oracle.label_candidate(
+            parent_state=self.parent,
+            source_action=action,
+            candidate_state={
+                "state_id": "episode:s1",
+                "parent_state_id": "episode:s0",
+                "case": self.parent["case"],
+                "measurements": [0.9],
+            },
+            verification_output=verification,
+        )
+
+    def test_coupled_cluster_singleton_passes_halved_floor(self) -> None:
+        # Mirrors the measured rejection of true target 16 in
+        # r0_81e17a28abbd: local fix 0.9998, global progress 0.13 with two
+        # same-channel residual outliers remaining.
+        result = self._coupled_cluster_case()
+        self.assertEqual(result.disposition, CandidateDisposition.ACCEPT_PARTIAL)
+        self.assertEqual(result.progress_class, "coupled_measurement_partial")
+        self.assertIn(
+            "coupled_same_channel_residual_cluster", result.rationale_codes
+        )
+
+    def test_off_cluster_singleton_still_rejected(self) -> None:
+        # Mirrors false distractor 84 (channel Pt, cluster of one): the
+        # halved floor never applies outside a coherent cluster.
+        result = self._coupled_cluster_case(
+            verification={"measurement_target_cluster_size": 1}
+        )
+        self.assertEqual(result.disposition, CandidateDisposition.REJECT)
+        self.assertEqual(result.progress_class, "insufficient_global_progress")
+
+    def test_coupled_cluster_below_halved_floor_still_rejected(self) -> None:
+        result = self._coupled_cluster_case(verification={"global_progress": 0.08})
+        self.assertEqual(result.disposition, CandidateDisposition.REJECT)
+        self.assertEqual(result.progress_class, "insufficient_global_progress")
+
+    def test_coupled_relaxation_is_singleton_only(self) -> None:
+        result = self._coupled_cluster_case(arguments={"suspect_group": [0, 1]})
+        self.assertEqual(result.disposition, CandidateDisposition.REJECT)
+        self.assertEqual(result.progress_class, "insufficient_global_progress")
+
+    def test_coupled_relaxation_can_be_disabled(self) -> None:
+        oracle = CandidateQualityOracle(
+            mode="deployment", coupled_measurement_partial=False
+        )
+        result = self._coupled_cluster_case(oracle=oracle)
+        self.assertEqual(result.disposition, CandidateDisposition.REJECT)
+
+    def test_physical_failure_preempts_coupled_relaxation(self) -> None:
+        # Mirrors r0_beddcf84bee5: infeasible candidates stay rejected no
+        # matter how coherent the residual cluster looks.
+        result = self._coupled_cluster_case(
+            verification={"physical_constraints_ok": False}
+        )
+        self.assertEqual(result.disposition, CandidateDisposition.REJECT)
+        self.assertEqual(result.progress_class, "physical_regression")
+
 
 class MultiMeasurementEndToEndRoutingTests(unittest.TestCase):
     @staticmethod

@@ -83,6 +83,7 @@ class CandidateQualityOracle:
         max_branch_target_threshold_ratio: float = 1.25,
         min_topology_structural_global_progress: float = 0.95,
         max_new_violations: int = 0,
+        coupled_measurement_partial: bool = True,
         mode: str = "auto",
         case_differ: Any = None,
         case_loader: Any = None,
@@ -101,6 +102,14 @@ class CandidateQualityOracle:
             min_topology_structural_global_progress
         )
         self.max_new_violations = int(max_new_violations)
+        # V2-B: allow a singleton measurement correction inside a coherent
+        # same-channel residual cluster to pass a halved global-progress
+        # floor.  With several interacting meter errors, one correct fix
+        # cannot clear the shared statistic alone; requiring the full floor
+        # rejects physically correct repairs (short-horizon credit
+        # assignment).  The cluster and channel evidence come from the
+        # observable unresolved-signature ledger, never hidden truth.
+        self.coupled_measurement_partial = bool(coupled_measurement_partial)
         if mode not in {"auto", "synthetic", "deployment"}:
             raise ValueError("mode must be 'auto', 'synthetic', or 'deployment'.")
         self.mode = mode
@@ -257,9 +266,32 @@ class CandidateQualityOracle:
             and global_progress is not None
             and global_progress < partial_global_progress_floor
         ):
-            disposition = CandidateDisposition.REJECT
-            progress_class = "insufficient_global_progress"
-            rationale.append("partial_global_progress_below_threshold")
+            if (
+                self.coupled_measurement_partial
+                and not synthetic_truth
+                and action_family == "measurement"
+                and self._singleton_measurement_action(action)
+                and _optional_float(
+                    verification.get("measurement_target_cluster_size")
+                )
+                is not None
+                and float(verification["measurement_target_cluster_size"]) >= 2
+                and global_progress >= 0.5 * partial_global_progress_floor
+            ):
+                disposition = CandidateDisposition.ACCEPT_PARTIAL
+                progress_class = "coupled_measurement_partial"
+                rationale.extend(
+                    [
+                        "target_fixed",
+                        "coupled_same_channel_residual_cluster",
+                        "coupled_partial_floor_half",
+                        "global_anomaly_remains",
+                    ]
+                )
+            else:
+                disposition = CandidateDisposition.REJECT
+                progress_class = "insufficient_global_progress"
+                rationale.append("partial_global_progress_below_threshold")
         elif target_fixed is True and synthetic_truth:
             if remaining_true_faults == 0 and global_resolved is True:
                 disposition = CandidateDisposition.ACCEPT_FINAL
@@ -836,6 +868,21 @@ class CandidateQualityOracle:
                 or violation_count > self.max_new_violations
             ),
         }
+
+    @staticmethod
+    def _singleton_measurement_action(action: Mapping[str, Any]) -> bool:
+        arguments = (
+            action.get("arguments")
+            if isinstance(action.get("arguments"), Mapping)
+            else {}
+        )
+        group = arguments.get("suspect_group")
+        if isinstance(group, (list, tuple)):
+            return len(group) == 1
+        updates = arguments.get("measurement_updates")
+        if isinstance(updates, Mapping):
+            return len(updates) == 1
+        return False
 
     @staticmethod
     def _action_family(action: Mapping[str, Any]) -> str | None:

@@ -111,7 +111,7 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
             env.kwargs["hif_max_scans"],
             factories.BC0_HIF_MAX_SCANS,
         )
-        self.assertEqual(env.kwargs["max_steps"], 24)
+        self.assertEqual(env.kwargs["max_steps"], 40)
         self.assertEqual(env.kwargs["history_window"], 4)
         self.assertEqual(env.validations, 1)
 
@@ -580,7 +580,7 @@ class RealProductionExpertRecoveryTests(unittest.TestCase):
             env_factory=factories.production_environment_factory,
             policy_factory=factories.observable_expert_policy_factory,
             case_loader=factories.deterministic_case_loader,
-            max_steps=24,
+            max_steps=40,
             seed=20260719,
             required_suites=(required_suite,),
             minimum_suites=1,
