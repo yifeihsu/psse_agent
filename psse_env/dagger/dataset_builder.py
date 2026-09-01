@@ -15,6 +15,10 @@ from hif_search_limits import (
     HIF_R_GRID_SIZE_MIN,
 )
 from psse_env.actions import INVALID_ACTION, MACRO_ACTIONS, safe_normalize_action
+from psse_env.dagger.protocol_bridge import (
+    INTERNAL_TO_CANONICAL_TOOL,
+    internal_to_canonical_action,
+)
 from psse_env.dagger.offline_teacher_target_audit import (
     validate_offline_teacher_target_audit_metadata,
 )
@@ -910,6 +914,14 @@ def summarize_history(
     omitted = max(0, len(source) - len(selected))
     for index, item in enumerate(selected):
         action = safe_normalize_action(item.get("action", item.get("executed_action", {})))
+        # History records store the executed controller action (internal tool
+        # names, internal argument keys), but the assistant reads and writes
+        # the canonical protocol.  Render each event in the protocol the model
+        # itself uses; an unmappable action passes through unchanged.
+        try:
+            action = internal_to_canonical_action(action)
+        except (ValueError, TypeError):
+            pass
         tool_output = item.get("tool_output")
         if not isinstance(tool_output, Mapping):
             tool_output = {}
@@ -1014,6 +1026,13 @@ def prepare_model_policy_observation(
     if "last_tool_output" in observation:
         observation["last_tool_output"] = _compact_last_tool_output(
             observation["last_tool_output"]
+        )
+    # The controller reports the internal tool name; the model reads and
+    # writes the canonical protocol.  Unknown names pass through unchanged.
+    last_tool = observation.get("last_tool")
+    if isinstance(last_tool, str):
+        observation["last_tool"] = INTERNAL_TO_CANONICAL_TOOL.get(
+            last_tool, last_tool
         )
     for field in (
         "last_verification",
