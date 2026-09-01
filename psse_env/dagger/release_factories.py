@@ -451,19 +451,46 @@ def _observable_candidate_disposition(
             # CandidateQualityOracle.label_candidate or teacher and
             # environment deadlock on the disposition.
             suspect_group = correction["arguments"].get("suspect_group")
+            halved_floor_singleton = bool(
+                family == "measurement"
+                and isinstance(suspect_group, (list, tuple))
+                and len(suspect_group) == 1
+                and global_progress is not None
+                and global_progress >= 0.5 * partial_floor
+            )
             cluster_size = _finite_float(
                 verification.get("measurement_target_cluster_size")
             )
             coupled_partial = bool(
-                family == "measurement"
-                and isinstance(suspect_group, (list, tuple))
-                and len(suspect_group) == 1
+                halved_floor_singleton
                 and cluster_size is not None
                 and cluster_size >= 2
-                and global_progress is not None
-                and global_progress >= 0.5 * partial_floor
             )
-            return "commit" if coupled_partial else "rollback"
+            # V2-D accepted-channel mirror: the last error of a chain has no
+            # same-channel companion left, so the cluster route cannot apply;
+            # a rank-1 flagged singleton matching the channel of >=2 accepted
+            # corrections uses the same halved floor.  Must stay aligned with
+            # CandidateQualityOracle.label_candidate.
+            accepted_count = _finite_float(
+                verification.get("accepted_measurement_target_count")
+            )
+            accepted_channel_partial = bool(
+                halved_floor_singleton
+                and verification.get("measurement_target_channel") is not None
+                and accepted_count is not None
+                and accepted_count >= 2
+                and verification.get("accepted_measurement_shared_channel")
+                is not None
+                and str(verification.get("accepted_measurement_shared_channel"))
+                == str(verification.get("measurement_target_channel"))
+                and verification.get("measurement_target_rank_one") is True
+                and verification.get("measurement_branch_routes_closed") is True
+            )
+            return (
+                "commit"
+                if coupled_partial or accepted_channel_partial
+                else "rollback"
+            )
         return "inconclusive"
 
     branch_material_progress = bool(

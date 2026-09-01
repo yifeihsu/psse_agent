@@ -2074,6 +2074,80 @@ class ObservableGlobalProgressTests(unittest.TestCase):
         self.assertEqual(result.disposition, CandidateDisposition.REJECT)
         self.assertEqual(result.progress_class, "physical_regression")
 
+    _ACCEPTED_CHANNEL_FIELDS = {
+        # Mirrors the measured rejection of true target 10 in
+        # r0_1f572de0a5e1: the last unmasked error of a chain has no
+        # same-channel companion left (cluster of one), but four accepted
+        # corrections share its channel and it is the rank-1 residual.
+        "measurement_target_cluster_size": 1,
+        "measurement_target_channel": "Vm",
+        "accepted_measurement_target_count": 4,
+        "accepted_measurement_shared_channel": "Vm",
+        "measurement_target_rank_one": True,
+        "measurement_branch_routes_closed": True,
+        "global_progress": 0.197,
+    }
+
+    def test_accepted_channel_singleton_passes_halved_floor(self) -> None:
+        result = self._coupled_cluster_case(
+            verification=dict(self._ACCEPTED_CHANNEL_FIELDS)
+        )
+        self.assertEqual(result.disposition, CandidateDisposition.ACCEPT_PARTIAL)
+        self.assertEqual(
+            result.progress_class, "accepted_channel_measurement_partial"
+        )
+        self.assertIn("accepted_channel_coherent", result.rationale_codes)
+
+    def test_accepted_channel_requires_matching_channel(self) -> None:
+        # Mirrors false distractor 38 (Qinj) in the same state: off the
+        # accepted channel, so the route never applies.
+        result = self._coupled_cluster_case(
+            verification={
+                **self._ACCEPTED_CHANNEL_FIELDS,
+                "measurement_target_channel": "Qinj",
+                "global_progress": 0.114,
+            }
+        )
+        self.assertEqual(result.disposition, CandidateDisposition.REJECT)
+        self.assertEqual(result.progress_class, "insufficient_global_progress")
+
+    def test_accepted_channel_requires_rank_one(self) -> None:
+        result = self._coupled_cluster_case(
+            verification={
+                **self._ACCEPTED_CHANNEL_FIELDS,
+                "measurement_target_rank_one": False,
+            }
+        )
+        self.assertEqual(result.disposition, CandidateDisposition.REJECT)
+
+    def test_accepted_channel_requires_two_accepted_targets(self) -> None:
+        result = self._coupled_cluster_case(
+            verification={
+                **self._ACCEPTED_CHANNEL_FIELDS,
+                "accepted_measurement_target_count": 1,
+                "accepted_measurement_shared_channel": "Vm",
+            }
+        )
+        self.assertEqual(result.disposition, CandidateDisposition.REJECT)
+
+    def test_accepted_channel_requires_closed_branch_routes(self) -> None:
+        result = self._coupled_cluster_case(
+            verification={
+                **self._ACCEPTED_CHANNEL_FIELDS,
+                "measurement_branch_routes_closed": False,
+            }
+        )
+        self.assertEqual(result.disposition, CandidateDisposition.REJECT)
+
+    def test_accepted_channel_route_can_be_disabled(self) -> None:
+        oracle = CandidateQualityOracle(
+            mode="deployment", accepted_channel_measurement_partial=False
+        )
+        result = self._coupled_cluster_case(
+            oracle=oracle, verification=dict(self._ACCEPTED_CHANNEL_FIELDS)
+        )
+        self.assertEqual(result.disposition, CandidateDisposition.REJECT)
+
 
 class MultiMeasurementEndToEndRoutingTests(unittest.TestCase):
     @staticmethod

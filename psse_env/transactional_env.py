@@ -2361,6 +2361,98 @@ class TransactionalPSSEEnv:
         channel = channels.pop()
         return channel, channel_counts.get(channel, 0)
 
+    def _accepted_measurement_channel_evidence(self) -> tuple[int, str | None]:
+        """Count accepted measurement targets and their single shared channel.
+
+        Channels come from each accepted candidate's stored verification
+        metrics, which recorded the target's channel from the public
+        signature ledger current at its own verification.  The shared
+        channel is None when there are no acceptances, any channel is
+        unknown, or the accepted channels are mixed.
+        """
+        targets: set[int] = set()
+        channels: set[str] = set()
+        unknown = False
+        for record in self.context_flags.get("accepted_corrections") or []:
+            if not isinstance(record, Mapping):
+                continue
+            action = safe_normalize_action(record.get("source_action") or {})
+            if action["tool"] != CORRECT_MEASUREMENTS:
+                continue
+            try:
+                targets.update(
+                    int(index)
+                    for index in action["arguments"].get("suspect_group") or []
+                )
+            except (TypeError, ValueError):
+                unknown = True
+            channel = None
+            candidate_id = str(record.get("candidate_state_id") or "")
+            if candidate_id and self.store.exists(candidate_id):
+                verification = self.store.get_state(candidate_id).get(
+                    "verification_output"
+                )
+                if isinstance(verification, Mapping):
+                    channel = verification.get("measurement_target_channel")
+            if channel is None:
+                unknown = True
+            else:
+                channels.add(str(channel))
+        shared = channels.pop() if not unknown and len(channels) == 1 else None
+        return len(targets), shared
+
+    def _measurement_target_rank_one(
+        self, source_action: Mapping[str, Any]
+    ) -> bool | None:
+        """Whether the singleton target is the top-ranked residual outlier.
+
+        Residual-outlier signatures enter the public ledger in descending
+        normalized-residual order, so the first one is the rank-1 finding.
+        Returns None for grouped actions or when no residual signature is
+        current.
+        """
+        arguments = safe_normalize_action(source_action)["arguments"]
+        group = arguments.get("suspect_group")
+        if not isinstance(group, (list, tuple)) or len(group) != 1:
+            return None
+        try:
+            target = int(group[0])
+        except (TypeError, ValueError):
+            return None
+        for raw in self.context_flags.get("unresolved_signatures") or []:
+            match = self._RESIDUAL_OUTLIER_SIGNATURE_RE.match(str(raw))
+            if match:
+                return int(match.group(1)) == target
+        return None
+
+    def _measurement_branch_routes_closed(self) -> bool:
+        """Both branch routes screened on the active state with nothing to try.
+
+        A conservative observable proxy for the expert's route-exhaustion
+        predicate: fresh parameter and topology evidence bound to the active
+        state, each with an empty supported inventory and an explicit
+        route status.
+        """
+        fresh = self.context_flags.get("fresh_context_evidence")
+        if not isinstance(fresh, Mapping):
+            return False
+        active_id = str(self.store.active_state_id)
+        for family in ("parameter", "topology"):
+            evidence = fresh.get(family)
+            if not isinstance(evidence, Mapping):
+                return False
+            if str(evidence.get("state_id") or "") != active_id:
+                return False
+            supported = evidence.get("supported_corrections")
+            if not isinstance(supported, (list, tuple)) or supported:
+                return False
+            if evidence.get("route_status") not in (
+                "complete_negative",
+                "unavailable_or_inconclusive",
+            ):
+                return False
+        return True
+
     def _measurement_target_branch_colocated(
         self, state_id: str, source_action: Mapping[str, Any]
     ) -> bool | None:
@@ -2910,6 +3002,18 @@ class TransactionalPSSEEnv:
                 if cluster is not None:
                     metrics["measurement_target_channel"] = cluster[0]
                     metrics["measurement_target_cluster_size"] = cluster[1]
+                accepted_count, shared_channel = (
+                    self._accepted_measurement_channel_evidence()
+                )
+                metrics["accepted_measurement_target_count"] = accepted_count
+                if shared_channel is not None:
+                    metrics["accepted_measurement_shared_channel"] = shared_channel
+                rank_one = self._measurement_target_rank_one(source_action)
+                if rank_one is not None:
+                    metrics["measurement_target_rank_one"] = rank_one
+                metrics["measurement_branch_routes_closed"] = (
+                    self._measurement_branch_routes_closed()
+                )
             truth = self.get_oracle_state().truth_dict() if self._oracle_payload.get("truth_complete") else None
             assessment = self.candidate_quality_oracle.label_candidate(
                 parent_state=parent_payload,

@@ -84,6 +84,7 @@ class CandidateQualityOracle:
         min_topology_structural_global_progress: float = 0.95,
         max_new_violations: int = 0,
         coupled_measurement_partial: bool = True,
+        accepted_channel_measurement_partial: bool = True,
         mode: str = "auto",
         case_differ: Any = None,
         case_loader: Any = None,
@@ -110,6 +111,15 @@ class CandidateQualityOracle:
         # assignment).  The cluster and channel evidence come from the
         # observable unresolved-signature ledger, never hidden truth.
         self.coupled_measurement_partial = bool(coupled_measurement_partial)
+        # V2-D: a lone remaining error has no same-channel companion left, so
+        # the cluster route above cannot apply to the last error of a chain.
+        # The accepted-channel route lets a rank-1, currently-flagged
+        # singleton whose channel matches >=2 already-accepted measurement
+        # corrections use the same halved floor, with branch routes closed.
+        # Kept independently ablatable from the cluster route.
+        self.accepted_channel_measurement_partial = bool(
+            accepted_channel_measurement_partial
+        )
         if mode not in {"auto", "synthetic", "deployment"}:
             raise ValueError("mode must be 'auto', 'synthetic', or 'deployment'.")
         self.mode = mode
@@ -266,24 +276,57 @@ class CandidateQualityOracle:
             and global_progress is not None
             and global_progress < partial_global_progress_floor
         ):
-            if (
-                self.coupled_measurement_partial
-                and not synthetic_truth
+            halved_floor_measurement_singleton = bool(
+                not synthetic_truth
                 and action_family == "measurement"
                 and self._singleton_measurement_action(action)
-                and _optional_float(
-                    verification.get("measurement_target_cluster_size")
-                )
-                is not None
-                and float(verification["measurement_target_cluster_size"]) >= 2
                 and global_progress >= 0.5 * partial_global_progress_floor
-            ):
+            )
+            cluster_size = _optional_float(
+                verification.get("measurement_target_cluster_size")
+            )
+            accepted_count = _optional_float(
+                verification.get("accepted_measurement_target_count")
+            )
+            coupled_cluster_route = bool(
+                self.coupled_measurement_partial
+                and halved_floor_measurement_singleton
+                and cluster_size is not None
+                and cluster_size >= 2
+            )
+            accepted_channel_route = bool(
+                self.accepted_channel_measurement_partial
+                and halved_floor_measurement_singleton
+                and verification.get("measurement_target_channel") is not None
+                and accepted_count is not None
+                and accepted_count >= 2
+                and verification.get("accepted_measurement_shared_channel")
+                is not None
+                and str(verification["accepted_measurement_shared_channel"])
+                == str(verification["measurement_target_channel"])
+                and verification.get("measurement_target_rank_one") is True
+                and verification.get("measurement_branch_routes_closed") is True
+            )
+            if coupled_cluster_route:
                 disposition = CandidateDisposition.ACCEPT_PARTIAL
                 progress_class = "coupled_measurement_partial"
                 rationale.extend(
                     [
                         "target_fixed",
                         "coupled_same_channel_residual_cluster",
+                        "coupled_partial_floor_half",
+                        "global_anomaly_remains",
+                    ]
+                )
+            elif accepted_channel_route:
+                disposition = CandidateDisposition.ACCEPT_PARTIAL
+                progress_class = "accepted_channel_measurement_partial"
+                rationale.extend(
+                    [
+                        "target_fixed",
+                        "accepted_channel_coherent",
+                        "residual_rank_one",
+                        "branch_routes_closed",
                         "coupled_partial_floor_half",
                         "global_anomaly_remains",
                     ]
