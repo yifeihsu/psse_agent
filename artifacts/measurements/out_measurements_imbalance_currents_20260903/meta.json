@@ -1,0 +1,268 @@
+{
+  "case": "case14",
+  "baseMVA": 100.0,
+  "nb": 14,
+  "nl": 20,
+  "index_map": {
+    "Vm": [
+      0,
+      14
+    ],
+    "Pinj": [
+      14,
+      28
+    ],
+    "Qinj": [
+      28,
+      42
+    ],
+    "Pf": [
+      42,
+      62
+    ],
+    "Qf": [
+      62,
+      82
+    ],
+    "Pt": [
+      82,
+      102
+    ],
+    "Qt": [
+      102,
+      122
+    ]
+  },
+  "measurement_order": [
+    "Vm",
+    "Pinj",
+    "Qinj",
+    "Pf",
+    "Qf",
+    "Pt",
+    "Qt"
+  ],
+  "branch_info": [
+    {
+      "i": 0,
+      "from_bus": 1,
+      "to_bus": 2,
+      "is_line": true
+    },
+    {
+      "i": 1,
+      "from_bus": 1,
+      "to_bus": 5,
+      "is_line": true
+    },
+    {
+      "i": 2,
+      "from_bus": 2,
+      "to_bus": 3,
+      "is_line": true
+    },
+    {
+      "i": 3,
+      "from_bus": 2,
+      "to_bus": 4,
+      "is_line": true
+    },
+    {
+      "i": 4,
+      "from_bus": 2,
+      "to_bus": 5,
+      "is_line": true
+    },
+    {
+      "i": 5,
+      "from_bus": 3,
+      "to_bus": 4,
+      "is_line": true
+    },
+    {
+      "i": 6,
+      "from_bus": 4,
+      "to_bus": 5,
+      "is_line": true
+    },
+    {
+      "i": 7,
+      "from_bus": 4,
+      "to_bus": 7,
+      "is_line": false
+    },
+    {
+      "i": 8,
+      "from_bus": 4,
+      "to_bus": 9,
+      "is_line": false
+    },
+    {
+      "i": 9,
+      "from_bus": 5,
+      "to_bus": 6,
+      "is_line": false
+    },
+    {
+      "i": 10,
+      "from_bus": 6,
+      "to_bus": 11,
+      "is_line": true
+    },
+    {
+      "i": 11,
+      "from_bus": 6,
+      "to_bus": 12,
+      "is_line": true
+    },
+    {
+      "i": 12,
+      "from_bus": 6,
+      "to_bus": 13,
+      "is_line": true
+    },
+    {
+      "i": 13,
+      "from_bus": 7,
+      "to_bus": 8,
+      "is_line": true
+    },
+    {
+      "i": 14,
+      "from_bus": 7,
+      "to_bus": 9,
+      "is_line": true
+    },
+    {
+      "i": 15,
+      "from_bus": 9,
+      "to_bus": 10,
+      "is_line": true
+    },
+    {
+      "i": 16,
+      "from_bus": 9,
+      "to_bus": 14,
+      "is_line": true
+    },
+    {
+      "i": 17,
+      "from_bus": 10,
+      "to_bus": 11,
+      "is_line": true
+    },
+    {
+      "i": 18,
+      "from_bus": 12,
+      "to_bus": 13,
+      "is_line": true
+    },
+    {
+      "i": 19,
+      "from_bus": 13,
+      "to_bus": 14,
+      "is_line": true
+    }
+  ],
+  "imbalance": {
+    "eligible_load_buses": [
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6",
+      "b9",
+      "b10",
+      "b11",
+      "b12",
+      "b13",
+      "b14"
+    ],
+    "bus_order": [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6",
+      "b7",
+      "b8",
+      "b9",
+      "b10",
+      "b11",
+      "b12",
+      "b13",
+      "b14"
+    ],
+    "branch_order": [
+      "Line.1-2",
+      "Line.1-5",
+      "Line.2-3",
+      "Line.2-4",
+      "Line.2-5",
+      "Line.3-4",
+      "Line.4-5",
+      "Transformer.4-7",
+      "Transformer.4-9",
+      "Transformer.5-6",
+      "Line.6-11",
+      "Line.6-12",
+      "Line.6-13",
+      "Line.7-8",
+      "Line.7-9",
+      "Line.9-10",
+      "Line.9-14",
+      "Line.10-11",
+      "Line.12-13",
+      "Line.13-14"
+    ],
+    "three_phase_voltage_measurements": {
+      "type": "VLN",
+      "phases": [
+        "A",
+        "B",
+        "C"
+      ],
+      "fields": [
+        "vln_pu",
+        "ang_deg",
+        "kvbase_ln"
+      ]
+    },
+    "three_phase_branch_current_measurements": {
+      "channel": "three_phase_branch_currents",
+      "type": "per_phase_terminal_current_phasors",
+      "phases": [
+        "A",
+        "B",
+        "C"
+      ],
+      "fields": [
+        "branch",
+        "branch_row0",
+        "from_bus",
+        "to_bus",
+        "i_from_pu",
+        "ang_from_deg",
+        "i_to_pu",
+        "ang_to_deg",
+        "ibase_from_a",
+        "ibase_to_a"
+      ],
+      "sign_convention": "current flowing into the branch from each terminal",
+      "per_unit_base": "(S_base/3) / V_LN,base at the terminal bus, S_base=100 MVA",
+      "applied_noise_sigma_pu": 0.001,
+      "branch_current_sigma_pu": 0.001
+    },
+    "base_model_override": {
+      "balanced_bus3": true,
+      "disabled_loads": [
+        "B3A",
+        "B3B",
+        "B3C"
+      ],
+      "balanced_load": "__BAL_B3",
+      "note": "The checked-in OpenDSS load file splits Bus 3 unevenly; every sample rebalances it so the labeled bus is the only unbalance source."
+    }
+  }
+}

@@ -74,6 +74,32 @@ scan window exists, else the single-scan estimator, carrying the NLM top
 branch as `candidate_branch_row0`. Privileged fault families and hints are
 ignored by this expert, so changing hidden truth while holding the policy
 observation fixed cannot change the production target.
+
+`three_phase_branch_currents` (per-phase terminal current phasors on every
+branch, with `branch_current_sigma_pu`) is a further observable channel. When
+it is present, `run_three_phase_nlm_from_path` localizes an HIF line and phase
+from the two-terminal differential current measured on the snapshot (averaged
+coherently across a scan window), reports a closed-form
+`terminal_current_estimate` of position and resistance, and keeps any stored
+NLM diagnostic only as secondary evidence; the expert forwards the observed
+`suspected_phase` as `candidate_phase`, and both HIF estimators seed their
+OpenDSS search from the closed form and add a current residual block. Both
+estimators may accept an HIF explanation on the strength of the differential
+itself (`acceptance_basis=terminal_current_differential`) when it clears the
+six-sigma floor, the closed-form fault impedance is positive and resistive,
+the two terminals agree on the fault-point voltage, and the model search
+agrees on the phase; the residual-reduction gate is diluted by sensor noise on
+hundreds of unaffected entries and remains the other accepted basis. For a
+pure unbalance signature the same tool localizes the *source bus* by the
+per-phase shunt-power spread computed from KCL (negative-sequence voltage
+alone peaks at weak buses, not at the source), records it as `bus_1based` in
+the explanation for the release audit, and accepts the explanation when that
+spread is significant against the current-sensor noise and no line carries a
+differential current above the sensor floor (an explicit non-HIF null); the
+VUF gate is reported as `voltage_gate_passed` but no longer decides, because
+its 2% threshold was calibrated on a corpus whose Bus 3 was always unbalanced.
+The channel satisfies the production-row telemetry gate for these tools on
+its own. Rows without the channel behave exactly as before.
 Diagnostic summaries (`wls_summary`, `hse_summary`, `nlm_summary`,
 `hif_summary`, `diagnostic_acceptance`, ...) are model-visible history metrics
 in SFT export. The production target audit independently requires matching

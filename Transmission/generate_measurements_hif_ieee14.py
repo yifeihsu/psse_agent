@@ -49,6 +49,12 @@ from three_phase_nlm import (  # type: ignore
 )
 from three_phase_nlm.ieee14_adapter import ELIGIBLE_HIF_BRANCHES, branch_info_for_row0
 from three_phase_nlm.hif_operating_point import canonicalize_ieee14_operating_point  # type: ignore
+from three_phase_nlm.branch_current_analysis import (  # type: ignore
+    BRANCH_CURRENT_CHANNEL,
+    BRANCH_CURRENT_SIGMA_KEY,
+    DEFAULT_BRANCH_CURRENT_SIGMA_PU,
+    add_branch_current_noise,
+)
 from Transmission.generate_measurements import (  # type: ignore
     MEASUREMENT_ORDER,
     compute_measurements_pu,
@@ -191,6 +197,7 @@ def _build_meta(
     scan_load_log_std: float,
     scan_dispatch_fraction: float,
     scan_voltage_std: float,
+    branch_current_noise_pu: float = DEFAULT_BRANCH_CURRENT_SIGMA_PU,
 ) -> dict[str, Any]:
     nb = 14
     nl = 20
@@ -216,7 +223,14 @@ def _build_meta(
                 "scans_per_window": int(scans_per_window),
                 "operating_point_mode": str(operating_point_mode),
                 "shared_parameters": ["branch_row0", "split_ratio", "phase", "r_hif_pu"],
-                "scan_specific_fields": ["z_clean", "z_obs", "three_phase_voltages", "op_point"],
+                "scan_specific_fields": [
+                    "z_clean",
+                    "z_obs",
+                    "three_phase_voltages",
+                    BRANCH_CURRENT_CHANNEL,
+                    f"{BRANCH_CURRENT_CHANNEL}_clean",
+                    "op_point",
+                ],
                 "operating_point_schema": list(IEEE14_OPERATING_POINT_KEYS),
                 "bus_load_scale_semantics": "profile_factor_multiplied_by_load_scale",
                 "note": "identical_noise repeats one operating point; diverse varies spatial load, dispatch, and voltage setpoints while preserving the HIF.",
@@ -231,6 +245,32 @@ def _build_meta(
             },
             "phases": ["A", "B", "C"],
             "measurement_vector": "operator IEEE-14 122-entry z; hidden fault bus excluded",
+            "branch_current_measurements": {
+                "channel": BRANCH_CURRENT_CHANNEL,
+                "type": "per_phase_terminal_current_phasors",
+                "fields": [
+                    "branch",
+                    "branch_row0",
+                    "from_bus",
+                    "to_bus",
+                    "i_from_pu",
+                    "ang_from_deg",
+                    "i_to_pu",
+                    "ang_to_deg",
+                    "ibase_from_a",
+                    "ibase_to_a",
+                ],
+                "sign_convention": "current flowing into the branch from each terminal",
+                "per_unit_base": "(S_base/3) / V_LN,base at the terminal bus, S_base=100 MVA",
+                "noise_model": "independent Gaussian per real/imaginary component",
+                BRANCH_CURRENT_SIGMA_KEY: float(branch_current_noise_pu),
+                "hidden_clean_copy": f"{BRANCH_CURRENT_CHANNEL}_clean",
+                "note": (
+                    "Two-terminal per-phase currents make the faulted line, phase, "
+                    "position, and resistance identifiable in closed form; the "
+                    "hidden clean copy exists for QA replay only."
+                ),
+            },
             "nlm_diagnostic": {
                 "fields": ["success", "converged", "top_hif_groups", "detected_top1", "detected_top3"],
                 "note": "Generated HIF samples use the legacy three-phase NLM bridge when scenario models are available; metadata fallback is only for adapter smoke tests without model-backed evidence.",
@@ -259,9 +299,12 @@ def generate_dataset(
     scan_load_log_std: float = 0.08,
     scan_dispatch_fraction: float = 0.20,
     scan_voltage_std: float = 0.008,
+    branch_current_noise_pu: float = DEFAULT_BRANCH_CURRENT_SIGMA_PU,
 ) -> None:
     if int(scans_per_window) < 1:
         raise ValueError("scans_per_window must be positive")
+    if float(branch_current_noise_pu) <= 0.0:
+        raise ValueError("branch_current_noise_pu must be positive (it is the declared sensor sigma)")
     if float(scan_load_log_std) < 0.0:
         raise ValueError("scan_load_log_std must be non-negative")
     if not 0.0 <= float(scan_dispatch_fraction) < 1.0:
@@ -287,8 +330,12 @@ def generate_dataset(
         scan_load_log_std=scan_load_log_std,
         scan_dispatch_fraction=scan_dispatch_fraction,
         scan_voltage_std=scan_voltage_std,
+        branch_current_noise_pu=branch_current_noise_pu,
     )
     (out / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    # Like sigma_z, the declared current sigma is the nominal sensor accuracy;
+    # noise_scale only controls how much of it is actually applied.
+    applied_current_sigma = float(branch_current_noise_pu) * float(noise_scale)
 
     ppc_base = case14()
     base_dss_dir = Path(_REPO_ROOT) / "IEEE_14_OpenDSS"
@@ -392,6 +439,7 @@ def generate_dataset(
                     z_scan = simulated["z"]
                     if len(z_scan) != 122:
                         raise RuntimeError(f"Unexpected z_obs length={len(z_scan)}, expected 122")
+                    clean_currents = list(simulated[BRANCH_CURRENT_CHANNEL])
                     scans.append(
                         {
                             "scan_index": int(scan_index),
@@ -400,6 +448,11 @@ def generate_dataset(
                                 [float(x) for x in z_scan], measurement_rng, noise_scale
                             ),
                             "three_phase_voltages": simulated["three_phase_voltages"],
+                            BRANCH_CURRENT_CHANNEL: add_branch_current_noise(
+                                clean_currents, measurement_rng, applied_current_sigma
+                            ),
+                            f"{BRANCH_CURRENT_CHANNEL}_clean": clean_currents,
+                            BRANCH_CURRENT_SIGMA_KEY: float(branch_current_noise_pu),
                             "op_point": scan_op_point,
                             "topology_id": "ieee14_base",
                         }
@@ -452,6 +505,8 @@ def generate_dataset(
                     "z_true": z_true,
                     "z_obs": reference_scan["z_obs"],
                     "three_phase_voltages": reference_scan["three_phase_voltages"],
+                    BRANCH_CURRENT_CHANNEL: reference_scan[BRANCH_CURRENT_CHANNEL],
+                    BRANCH_CURRENT_SIGMA_KEY: float(branch_current_noise_pu),
                     "label": shared_label,
                     "shared_label": shared_label,
                     "nlm_diagnostic": nlm_diagnostic,
@@ -498,6 +553,15 @@ def main() -> None:
     parser.add_argument("--scan-load-log-std", type=float, default=0.08)
     parser.add_argument("--scan-dispatch-fraction", type=float, default=0.20)
     parser.add_argument("--scan-voltage-std", type=float, default=0.008)
+    parser.add_argument(
+        "--branch-current-noise-pu",
+        type=float,
+        default=DEFAULT_BRANCH_CURRENT_SIGMA_PU,
+        help=(
+            "Declared per-component sigma of the per-phase branch-current phasors "
+            "(pu on 100 MVA); applied noise is this value times --noise-scale."
+        ),
+    )
     parser.add_argument("--keep-scenarios", action="store_true")
     parser.add_argument(
         "--branch-sampling",
@@ -526,6 +590,7 @@ def main() -> None:
         scan_load_log_std=float(args.scan_load_log_std),
         scan_dispatch_fraction=float(args.scan_dispatch_fraction),
         scan_voltage_std=float(args.scan_voltage_std),
+        branch_current_noise_pu=float(args.branch_current_noise_pu),
     )
     print(f"Wrote IEEE-14 HIF dataset to: {args.out}")
 

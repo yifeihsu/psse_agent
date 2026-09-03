@@ -660,5 +660,83 @@ class ProductionDiagnosticEvidenceGateTests(unittest.TestCase):
         self.env.assert_training_decision_evidence(supported)
 
 
+class TerminalCurrentRoutingTests(unittest.TestCase):
+    """Per-phase branch-current telemetry as an observable NLM channel."""
+
+    def setUp(self) -> None:
+        self.expert = DiagnosticsExpert()
+
+    def test_branch_currents_alone_enable_nlm_for_hif_signature(self) -> None:
+        state = _policy_state(
+            unresolved_signatures=["hif_suspected_zero_sequence"],
+            available_evidence=["three_phase_voltages", "three_phase_branch_currents"],
+        )
+        proposals = self.expert.propose(state, [])
+        self.assertEqual(proposals[0].action["tool"], "run_three_phase_nlm_from_path")
+        self.assertIn(
+            "three_phase_branch_current_telemetry_available", proposals[0].evidence_codes
+        )
+
+    def test_branch_currents_enable_nlm_for_unbalance_signature(self) -> None:
+        state = _policy_state(
+            unresolved_signatures=["three_phase_unbalance vuf_threshold_exceeded"],
+            available_evidence=["three_phase_branch_currents"],
+        )
+        proposals = self.expert.propose(state, [])
+        self.assertEqual(proposals[0].action["tool"], "run_three_phase_nlm_from_path")
+
+    def test_suspected_phase_from_nlm_is_forwarded_to_estimator(self) -> None:
+        state = _policy_state(
+            unresolved_signatures=["hif_suspected_zero_sequence"],
+            available_evidence=["three_phase_voltages", "three_phase_branch_currents"],
+        )
+        history = [
+            _successful_step(
+                "run_three_phase_nlm_from_path",
+                {
+                    "nlm_summary": {
+                        "method": "terminal_current_differential",
+                        "top_hif_groups": [{"branch_row0": 2}],
+                        "suspected_phase": "B",
+                    }
+                },
+            )
+        ]
+        proposals = self.expert.propose(state, history)
+        estimator = proposals[0]
+        self.assertEqual(estimator.action["tool"], "estimate_hif_location_magnitude_from_path")
+        self.assertEqual(estimator.action["arguments"]["candidate_branch_row0"], 2)
+        self.assertEqual(estimator.action["arguments"]["candidate_phase"], "B")
+
+    def test_no_phase_is_forwarded_without_observable_phase_evidence(self) -> None:
+        state = _policy_state(
+            unresolved_signatures=["hif_suspected_zero_sequence"],
+            available_evidence=["nlm_diagnostic"],
+        )
+        history = [
+            _successful_step(
+                "run_three_phase_nlm_from_path",
+                {"nlm_summary": {"top_hif_groups": [{"branch_row0": 2}]}},
+            )
+        ]
+        proposals = self.expert.propose(state, history)
+        self.assertEqual(proposals[0].action["tool"], "estimate_hif_location_magnitude_from_path")
+        self.assertNotIn("candidate_phase", proposals[0].action["arguments"])
+
+    def test_invalid_phase_token_is_ignored(self) -> None:
+        state = _policy_state(
+            unresolved_signatures=["hif_suspected_zero_sequence"],
+            available_evidence=["three_phase_branch_currents"],
+        )
+        history = [
+            _successful_step(
+                "run_three_phase_nlm_from_path",
+                {"nlm_summary": {"top_hif_groups": [{"branch_row0": 2}], "suspected_phase": "N"}},
+            )
+        ]
+        proposals = self.expert.propose(state, history)
+        self.assertNotIn("candidate_phase", proposals[0].action["arguments"])
+
+
 if __name__ == "__main__":
     unittest.main()

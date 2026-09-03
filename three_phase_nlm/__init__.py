@@ -9,6 +9,11 @@ from .dss_hif_injector import (
 )
 from .hif_parameter_estimator import estimate_hif_location_magnitude, simulate_hif_candidate
 from .hif_multiscan_estimator import estimate_hif_location_magnitude_multiscan
+from .branch_current_analysis import (
+    terminal_current_hif_localization,
+    two_terminal_hif_estimate,
+    unbalance_source_localization,
+)
 from .nlm_runner import run_ieee14_hif_nlm
 
 __all__ = [
@@ -20,5 +25,8 @@ __all__ = [
     "inject_midspan_hif_ieee14",
     "run_ieee14_hif_nlm",
     "simulate_hif_candidate",
+    "terminal_current_hif_localization",
+    "two_terminal_hif_estimate",
+    "unbalance_source_localization",
     "write_balanced_ieee14_load_override",
 ]

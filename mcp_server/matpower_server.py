@@ -764,6 +764,11 @@ def _run_three_phase_nlm_logic(
     phase: str | None = None,
     r_hif_ohm: float | None = None,
     load_scale: float = 1.0,
+    three_phase_voltages: List[Dict[str, Any]] | None = None,
+    three_phase_branch_currents: List[Dict[str, Any]] | None = None,
+    branch_current_sigma_pu: float | None = None,
+    top_k: int = 5,
+    scans: List[Dict[str, Any]] | None = None,
 ) -> Dict[str, Any]:
     try:
         import sys as _sys
@@ -771,6 +776,44 @@ def _run_three_phase_nlm_logic(
         if repo_root not in _sys.path:
             _sys.path.append(repo_root)
         from three_phase_nlm.nlm_runner import run_ieee14_hif_nlm  # type: ignore
+
+        # Per-phase terminal currents localize the faulted line and phase
+        # directly from telemetry; prefer that over a stored diagnostic.  A
+        # persistent scan window is averaged coherently across scans.
+        from three_phase_nlm.branch_current_analysis import (  # type: ignore
+            BRANCH_CURRENT_CHANNEL,
+            DEFAULT_BRANCH_CURRENT_SIGMA_PU,
+            terminal_current_hif_localization,
+            terminal_current_hif_localization_multiscan,
+        )
+
+        sigma = (
+            float(branch_current_sigma_pu)
+            if branch_current_sigma_pu is not None and float(branch_current_sigma_pu) > 0.0
+            else DEFAULT_BRANCH_CURRENT_SIGMA_PU
+        )
+        current_scans = [
+            scan
+            for scan in (scans or [])
+            if isinstance(scan, dict)
+            and scan.get("three_phase_voltages")
+            and scan.get(BRANCH_CURRENT_CHANNEL)
+        ]
+        localized = None
+        if len(current_scans) >= 2:
+            localized = terminal_current_hif_localization_multiscan(
+                current_scans, top_k=int(top_k), sigma_pu=sigma
+            )
+        elif three_phase_voltages and three_phase_branch_currents:
+            localized = terminal_current_hif_localization(
+                three_phase_voltages,
+                three_phase_branch_currents,
+                top_k=int(top_k),
+                sigma_pu=sigma,
+            )
+        if localized is not None:
+            localized["case_path"] = case_path
+            return localized
 
         return run_ieee14_hif_nlm(
             pristine_model_dir=pristine_model_dir,
@@ -800,6 +843,8 @@ def _estimate_hif_location_magnitude_logic(
     r_grid_size: int = 35,
     r_hif_pu_min: float = 5.0,
     r_hif_pu_max: float = 1000.0,
+    three_phase_branch_currents: List[Dict[str, Any]] | None = None,
+    branch_current_sigma_pu: float | None = None,
 ) -> Dict[str, Any]:
     try:
         import sys as _sys
@@ -807,8 +852,14 @@ def _estimate_hif_location_magnitude_logic(
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
         if repo_root not in _sys.path:
             _sys.path.append(repo_root)
+        from three_phase_nlm.branch_current_analysis import DEFAULT_BRANCH_CURRENT_SIGMA_PU  # type: ignore
         from three_phase_nlm.hif_parameter_estimator import estimate_hif_location_magnitude  # type: ignore
 
+        sigma = (
+            float(branch_current_sigma_pu)
+            if branch_current_sigma_pu is not None and float(branch_current_sigma_pu) > 0.0
+            else DEFAULT_BRANCH_CURRENT_SIGMA_PU
+        )
         return estimate_hif_location_magnitude(
             case_path=case_path,
             candidate_branch_row0=int(candidate_branch_row0),
@@ -822,6 +873,8 @@ def _estimate_hif_location_magnitude_logic(
             r_grid_size=int(r_grid_size),
             r_hif_pu_min=float(r_hif_pu_min),
             r_hif_pu_max=float(r_hif_pu_max),
+            three_phase_branch_currents=three_phase_branch_currents,
+            branch_current_sigma=sigma,
         )
     except Exception as e:
         return {"success": False, "error": f"HIF parameter estimator failed for {case_path}: {e}"}
@@ -846,6 +899,7 @@ def _estimate_hif_location_magnitude_multiscan_logic(
     r_hif_pu_max: float = 1000.0,
     robust_loss: str = "soft_l1",
     smoothness_lambda: float = 0.10,
+    branch_current_sigma_pu: float | None = None,
 ) -> Dict[str, Any]:
     try:
         import sys as _sys
@@ -853,9 +907,23 @@ def _estimate_hif_location_magnitude_multiscan_logic(
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
         if repo_root not in _sys.path:
             _sys.path.append(repo_root)
+        from three_phase_nlm.branch_current_analysis import BRANCH_CURRENT_SIGMA_KEY  # type: ignore
         from three_phase_nlm.hif_multiscan_estimator import (  # type: ignore
             estimate_hif_location_magnitude_multiscan,
         )
+
+        if (
+            scans
+            and branch_current_sigma_pu is not None
+            and float(branch_current_sigma_pu) > 0.0
+        ):
+            # Window-level current sigma applies to scans that do not declare one.
+            scans = [
+                {**dict(scan), BRANCH_CURRENT_SIGMA_KEY: float(branch_current_sigma_pu)}
+                if isinstance(scan, dict) and BRANCH_CURRENT_SIGMA_KEY not in scan
+                else scan
+                for scan in scans
+            ]
 
         return estimate_hif_location_magnitude_multiscan(
             scan_window_path=scan_window_path,
@@ -892,13 +960,21 @@ def run_three_phase_nlm_from_path(
     phase: str | None = None,
     r_hif_ohm: float | None = None,
     load_scale: float = 1.0,
+    three_phase_voltages: List[Dict[str, Any]] | None = None,
+    three_phase_branch_currents: List[Dict[str, Any]] | None = None,
+    branch_current_sigma_pu: float | None = None,
+    top_k: int = 5,
+    scans: List[Dict[str, Any]] | None = None,
 ) -> Dict[str, Any]:
     """
     Return compact three-phase NLM HIF localization evidence for the current snapshot.
 
-    The trace runtime can hydrate `nlm_diagnostic` from the hidden sample record.
-    When it is absent, the adapter returns an explicit metadata fallback instead
-    of attempting to infer HIF location from the 122-entry operator vector.
+    When per-phase branch-current phasors and three-phase voltages are
+    hydrated, the faulted line and phase come from two-terminal differential
+    currents measured on the snapshot itself.  Otherwise the trace runtime can
+    hydrate `nlm_diagnostic` from the hidden sample record, and when that is
+    absent too the adapter returns an explicit metadata fallback instead of
+    attempting to infer HIF location from the 122-entry operator vector.
     """
     return _run_three_phase_nlm_logic(
         case_path=case_path,
@@ -910,6 +986,11 @@ def run_three_phase_nlm_from_path(
         phase=phase,
         r_hif_ohm=r_hif_ohm,
         load_scale=load_scale,
+        three_phase_voltages=three_phase_voltages,
+        three_phase_branch_currents=three_phase_branch_currents,
+        branch_current_sigma_pu=branch_current_sigma_pu,
+        top_k=top_k,
+        scans=scans,
     )
 
 
@@ -928,13 +1009,17 @@ def estimate_hif_location_magnitude_from_path(
     r_grid_size: int = 35,
     r_hif_pu_min: float = 5.0,
     r_hif_pu_max: float = 1000.0,
+    three_phase_branch_currents: List[Dict[str, Any]] | None = None,
+    branch_current_sigma_pu: float | None = None,
 ) -> Dict[str, Any]:
     """
     Estimate HIF position and magnitude on a suspected IEEE-14 Line.* branch.
 
-    The trace runtime hydrates `z_obs`, optional three-phase voltages, and the
-    pristine OpenDSS model context. The model should only pass the visible
-    suspected branch selected by the line-level NLM tool.
+    The trace runtime hydrates `z_obs`, optional three-phase voltages and
+    per-phase branch currents, and the pristine OpenDSS model context. The
+    model should only pass the visible suspected branch selected by the
+    line-level NLM tool.  Branch currents add a two-terminal closed-form seed
+    and a current residual block to the model search.
     """
     return _estimate_hif_location_magnitude_logic(
         case_path=case_path,
@@ -949,6 +1034,8 @@ def estimate_hif_location_magnitude_from_path(
         r_grid_size=r_grid_size,
         r_hif_pu_min=r_hif_pu_min,
         r_hif_pu_max=r_hif_pu_max,
+        three_phase_branch_currents=three_phase_branch_currents,
+        branch_current_sigma_pu=branch_current_sigma_pu,
     )
 
 
@@ -972,6 +1059,7 @@ def estimate_hif_location_magnitude_multiscan_from_path(
     r_hif_pu_max: float = 1000.0,
     robust_loss: str = "soft_l1",
     smoothness_lambda: float = 0.10,
+    branch_current_sigma_pu: float | None = None,
 ) -> Dict[str, Any]:
     """Estimate shared HIF parameters from a persistent multi-scan event window."""
     return _estimate_hif_location_magnitude_multiscan_logic(
@@ -992,6 +1080,7 @@ def estimate_hif_location_magnitude_multiscan_from_path(
         r_hif_pu_max=r_hif_pu_max,
         robust_loss=robust_loss,
         smoothness_lambda=smoothness_lambda,
+        branch_current_sigma_pu=branch_current_sigma_pu,
     )
 
 

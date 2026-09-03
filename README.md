@@ -29,6 +29,9 @@ The current training and evaluation flow targets Gemma 4 tool-calling traces sto
 - `docs/hif_multiscan_estimation.md`: Multi-scan HIF window generation, estimator semantics, observability diagnostics, and validation gates.
 - `docs/hif_multiscan_benchmark_20260713.md`: Initial paired snapshot-count benchmark.
 - `docs/hif_multiscan_revision_20260714.md`: Transformer correction, strict 17-event QA, controlled A-E benchmark, and production go/no-go decision.
+- `docs/branch_current_telemetry_20260903.md`: Per-phase branch-current channel, closed-form HIF position/resistance and unbalance-source localization, corpus-level validation, and the bus-3 defect in the tracked imbalance corpus.
+- `three_phase_nlm/branch_current_analysis.py`: Pure-numpy analysis of the `three_phase_branch_currents` channel (sequence components, KCL shunt-power unbalance ranking, two-terminal differential HIF localization).
+- `scripts/validate_branch_current_localization.py`: Scores the closed-form localization of a generated corpus against its hidden labels.
 
 ## Active Root Scripts
 

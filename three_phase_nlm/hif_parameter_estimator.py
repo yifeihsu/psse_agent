@@ -20,20 +20,35 @@ from .dss_hif_injector import (
 )
 from .ieee14_adapter import branch_info_for_row0
 from .hif_operating_point import apply_hif_operating_point, capture_operating_point_baseline
+from .branch_current_analysis import (
+    DEFAULT_BRANCH_CURRENT_SIGMA_PU,
+    DIFFERENTIAL_DETECTION_SIGMAS,
+    branch_current_rows_to_phasors,
+    line_differential_currents,
+    two_terminal_hif_estimate,
+)
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_PRISTINE_MODEL_DIR = _REPO_ROOT / "IEEE_14_OpenDSS"
 _PHASES = ("A", "B", "C")
+#: Phase restriction from terminal currents requires the faulted phase's
+#: differential to exceed the runner-up phase by this factor.
+TERMINAL_PHASE_SEPARATION_RATIO = 3.0
 
 
 def _measurement_exporters():
     from IEEE_14_OpenDSS.export_measurement_series import (  # type: ignore
         extract_measurement_series,
+        extract_three_phase_branch_current_measurements,
         extract_three_phase_voltage_measurements,
     )
 
-    return extract_measurement_series, extract_three_phase_voltage_measurements
+    return (
+        extract_measurement_series,
+        extract_three_phase_voltage_measurements,
+        extract_three_phase_branch_current_measurements,
+    )
 
 
 def _maybe_float(value: Any) -> float | None:
@@ -183,7 +198,11 @@ def _simulate_base(
     load_scale: float = 1.0,
     op_point: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    extract_measurement_series, extract_three_phase_voltage_measurements = _measurement_exporters()
+    (
+        extract_measurement_series,
+        extract_three_phase_voltage_measurements,
+        extract_three_phase_branch_current_measurements,
+    ) = _measurement_exporters()
     _compile_base_model(model_dir)
     baseline = capture_operating_point_baseline()
     effective_op_point = dict(op_point or {})
@@ -194,6 +213,7 @@ def _simulate_base(
     return {
         "z": [float(x) for x in z_sim],
         "three_phase_voltages": extract_three_phase_voltage_measurements(),
+        "three_phase_branch_currents": extract_three_phase_branch_current_measurements(),
     }
 
 
@@ -208,7 +228,11 @@ def _simulate_candidate(
     load_scale: float = 1.0,
     op_point: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    extract_measurement_series, extract_three_phase_voltage_measurements = _measurement_exporters()
+    (
+        extract_measurement_series,
+        extract_three_phase_voltage_measurements,
+        extract_three_phase_branch_current_measurements,
+    ) = _measurement_exporters()
     r_hif_ohm = hif_ohms_from_pu(r_hif_pu, base_mva=100.0, kv_ll=1.0)
     fault_bus = "FaultEst"
     _compile_base_model(model_dir)
@@ -227,11 +251,13 @@ def _simulate_candidate(
     _solve_or_raise()
     z_sim, _buses, _branches = extract_measurement_series(branch_element_overrides=overrides)
     v3 = extract_three_phase_voltage_measurements()
+    i3 = extract_three_phase_branch_current_measurements(branch_element_overrides=overrides)
     kv_ln, _nominal_p_kw = constant_impedance_hif_kw(r_hif_ohm, kv_ll=1.0)
     fault_v = _fault_voltage_volts(fault_bus, phase, kv_ln)
     return {
         "z": [float(x) for x in z_sim],
         "three_phase_voltages": v3,
+        "three_phase_branch_currents": i3,
         "fault_v_volts": float(fault_v),
         "r_hif_ohm": float(r_hif_ohm),
     }
@@ -333,6 +359,29 @@ def _three_phase_voltage_residual(observed: Any, simulated: Any, *, sigma: float
     return residuals
 
 
+def _branch_current_residual(
+    observed: Any,
+    simulated: Any,
+    *,
+    sigma: float = DEFAULT_BRANCH_CURRENT_SIGMA_PU,
+) -> list[float]:
+    """Weighted per-phase terminal-current residuals (real and imaginary parts)."""
+    obs = branch_current_rows_to_phasors(observed)
+    sim = branch_current_rows_to_phasors(simulated)
+    if not obs or not sim:
+        return []
+    weight = max(float(sigma), 1e-12)
+    residuals: list[float] = []
+    for row0 in sorted(set(obs) & set(sim)):
+        for terminal in ("i_from", "i_to"):
+            for io, isim in zip(obs[row0][terminal], sim[row0][terminal]):
+                if not np.isfinite(io.real + io.imag + isim.real + isim.imag):
+                    continue
+                diff = (io - isim) / weight
+                residuals.extend([float(diff.real), float(diff.imag)])
+    return residuals
+
+
 def _residual_vector(
     *,
     observed_z: Sequence[float],
@@ -341,6 +390,9 @@ def _residual_vector(
     simulated_three_phase_voltages: Any = None,
     sigma_z: Sequence[float] | None = None,
     three_phase_sigma: float = 5e-3,
+    observed_branch_currents: Any = None,
+    simulated_branch_currents: Any = None,
+    branch_current_sigma: float = DEFAULT_BRANCH_CURRENT_SIGMA_PU,
 ) -> np.ndarray:
     parts = _measurement_residual(observed_z, simulated_z, sigma_z=sigma_z)
     parts.extend(
@@ -350,7 +402,102 @@ def _residual_vector(
             sigma=float(three_phase_sigma),
         )
     )
+    parts.extend(
+        _branch_current_residual(
+            observed_branch_currents,
+            simulated_branch_currents,
+            sigma=float(branch_current_sigma),
+        )
+    )
     return np.asarray(parts, dtype=float)
+
+
+def terminal_current_branch_evidence(
+    three_phase_voltages: Any,
+    three_phase_branch_currents: Any,
+    *,
+    branch_row0: int,
+    candidate_phase: str | None = None,
+    sigma: float = DEFAULT_BRANCH_CURRENT_SIGMA_PU,
+) -> dict[str, Any] | None:
+    """Closed-form terminal-current evidence for one candidate line.
+
+    Returns the two-terminal position/resistance estimate on the differential-
+    dominant phase (or the requested phase) plus whether that phase is
+    separated well enough from the others to restrict the model search.
+    """
+    if not three_phase_voltages or not three_phase_branch_currents:
+        return None
+    ranking = line_differential_currents(three_phase_voltages, three_phase_branch_currents)
+    record = next(
+        (item for item in ranking if int(item["branch_row0"]) == int(branch_row0)),
+        None,
+    )
+    if record is None:
+        return None
+    differential = [float(value) for value in record["differential_pu"]]
+    ordered = sorted(differential, reverse=True)
+    floor = float(DIFFERENTIAL_DETECTION_SIGMAS) * math.sqrt(2.0) * max(float(sigma), 1e-12)
+    phase = str(candidate_phase).strip().upper() if candidate_phase else str(record["phase"])
+    phase_confident = bool(
+        ordered[0] >= floor
+        and ordered[0] >= TERMINAL_PHASE_SEPARATION_RATIO * max(ordered[1], 1e-12)
+    )
+    estimate = two_terminal_hif_estimate(
+        three_phase_voltages,
+        three_phase_branch_currents,
+        branch_row0=int(branch_row0),
+        phase=phase,
+    )
+    if estimate is None:
+        return None
+    estimate = dict(estimate)
+    estimate.update(
+        {
+            "differential_pu": differential,
+            "differential_detection_floor_pu": floor,
+            "differential_detected": bool(ordered[0] >= floor),
+            "phase_confident": phase_confident,
+            "line_rank": next(
+                (
+                    rank
+                    for rank, item in enumerate(ranking, start=1)
+                    if int(item["branch_row0"]) == int(branch_row0)
+                ),
+                None,
+            ),
+        }
+    )
+    return estimate
+
+
+def _terminal_seed_points(
+    estimate: Mapping[str, Any],
+    *,
+    r_hif_pu_min: float,
+    r_hif_pu_max: float,
+) -> list[tuple[float, float, str]]:
+    """Local grid around the closed-form estimate, clipped to the search box."""
+    alpha0 = min(0.99, max(0.01, float(estimate["alpha_from_from_bus"])))
+    r0 = float(estimate.get("r_hif_pu") or 0.0)
+    if not math.isfinite(r0) or r0 <= 0.0:
+        r0 = math.sqrt(float(r_hif_pu_min) * float(r_hif_pu_max))
+    r0 = min(float(r_hif_pu_max), max(float(r_hif_pu_min), r0))
+    phase = str(estimate["phase"])
+    points = [(alpha0, r0, phase)]
+    points.extend(
+        (
+            min(0.99, max(0.01, alpha)),
+            min(float(r_hif_pu_max), max(float(r_hif_pu_min), r_value)),
+            phase,
+        )
+        for alpha, r_value, _ in _local_refinement_points(
+            {"alpha": alpha0, "r_hif_pu": r0, "phase": phase},
+            alpha_step=0.05,
+            r_ratio=1.5,
+        )
+    )
+    return points
 
 
 def _score(residual: np.ndarray) -> float:
@@ -442,6 +589,9 @@ def estimate_hif_location_magnitude(
     r_hif_pu_max: float = 1000.0,
     refine_top_n: int = 3,
     uncertainty_tolerance: float = 0.01,
+    three_phase_branch_currents: Any = None,
+    branch_current_sigma: float = DEFAULT_BRANCH_CURRENT_SIGMA_PU,
+    seed_from_terminal_currents: bool = True,
 ) -> dict[str, Any]:
     alpha_grid_size, r_grid_size, _ = validate_hif_search_limits(
         alpha_grid_size=alpha_grid_size,
@@ -474,6 +624,33 @@ def estimate_hif_location_magnitude(
     for phase in phase_candidates:
         _phase_number(phase)
 
+    # Terminal-current evidence: closed-form position/resistance on the
+    # candidate line, and a phase restriction when the differential current
+    # singles out one phase.  The model search below still verifies it.
+    terminal_estimate = None
+    phase_restricted = False
+    try:
+        terminal_estimate = terminal_current_branch_evidence(
+            three_phase_voltages,
+            three_phase_branch_currents,
+            branch_row0=int(candidate_branch_row0),
+            candidate_phase=candidate_phase,
+            sigma=float(branch_current_sigma),
+        )
+    except Exception:
+        terminal_estimate = None
+    if (
+        terminal_estimate is not None
+        and candidate_phase is None
+        and bool(terminal_estimate.get("phase_confident"))
+    ):
+        phase_candidates = [str(terminal_estimate["phase"])]
+        phase_restricted = True
+    branch_currents_used = bool(
+        three_phase_branch_currents
+        and branch_current_rows_to_phasors(three_phase_branch_currents)
+    )
+
     alphas = np.linspace(0.05, 0.95, int(alpha_grid_size))
     r_values = np.geomspace(float(r_hif_pu_min), float(r_hif_pu_max), int(r_grid_size))
     all_candidates: list[dict[str, Any]] = []
@@ -495,6 +672,9 @@ def estimate_hif_location_magnitude(
                 simulated_z=sim["z"],
                 observed_three_phase_voltages=three_phase_voltages,
                 simulated_three_phase_voltages=sim.get("three_phase_voltages"),
+                observed_branch_currents=three_phase_branch_currents,
+                simulated_branch_currents=sim.get("three_phase_branch_currents"),
+                branch_current_sigma=float(branch_current_sigma),
             )
             score = _score(residual)
             all_candidates.append(
@@ -516,6 +696,26 @@ def estimate_hif_location_magnitude(
         for alpha in alphas:
             for r_hif_pu in r_values:
                 evaluate(float(alpha), float(r_hif_pu), phase, stage="coarse_grid")
+
+    terminal_seeded = False
+    if (
+        seed_from_terminal_currents
+        and terminal_estimate is not None
+        and str(terminal_estimate.get("phase")) in phase_candidates
+    ):
+        seed_seen = {
+            (round(float(item["alpha"]), 12), round(float(item["r_hif_pu"]), 9), str(item["phase"]))
+            for item in all_candidates
+        }
+        for alpha, r_hif_pu, phase in _terminal_seed_points(
+            terminal_estimate, r_hif_pu_min=float(r_hif_pu_min), r_hif_pu_max=float(r_hif_pu_max)
+        ):
+            key = (round(float(alpha), 12), round(float(r_hif_pu), 9), str(phase))
+            if key in seed_seen:
+                continue
+            seed_seen.add(key)
+            evaluate(float(alpha), float(r_hif_pu), phase, stage="terminal_current_seed")
+            terminal_seeded = True
 
     if not all_candidates:
         return {
@@ -559,6 +759,9 @@ def estimate_hif_location_magnitude(
             simulated_z=base_sim["z"],
             observed_three_phase_voltages=three_phase_voltages,
             simulated_three_phase_voltages=base_sim.get("three_phase_voltages"),
+            observed_branch_currents=three_phase_branch_currents,
+            simulated_branch_currents=base_sim.get("three_phase_branch_currents"),
+            branch_current_sigma=float(branch_current_sigma),
         )
         base_score = _score(base_residual)
     except Exception:
@@ -643,11 +846,16 @@ def estimate_hif_location_magnitude(
             _candidate_payload(candidate, rank=rank)
             for rank, candidate in enumerate(top_candidates, start=1)
         ],
+        "terminal_current_estimate": terminal_estimate,
         "search": {
             "alpha_grid_size": int(alpha_grid_size),
             "r_grid_size": int(r_grid_size),
             "phase_candidates": phase_candidates,
             "coarse_candidates_evaluated": int(len(alphas) * len(r_values) * len(phase_candidates)),
             "total_candidates_evaluated": len(all_candidates),
+            "branch_current_block": branch_currents_used,
+            "branch_current_sigma_pu": float(branch_current_sigma),
+            "phase_restricted_by_terminal_currents": phase_restricted,
+            "terminal_current_seeded": terminal_seeded,
         },
     }

@@ -14,6 +14,70 @@ wls_from_path
 The NLM stage selects the suspected line. The multi-scan stage estimates the
 line fraction `alpha`, phase, and HIF resistance.
 
+## Per-Phase Branch-Current Telemetry (2026-09-03)
+
+The 2026-07-14 revision found that the 122-entry operator vector plus bus
+voltages cannot identify `alpha`. The recommended fix, per-phase terminal
+current phasors on the lines, is now a first-class channel:
+
+```text
+three_phase_branch_currents: [
+  {branch, branch_row0, from_bus, to_bus, ibase_from_a, ibase_to_a,
+   i_from_pu: [Ia, Ib, Ic], ang_from_deg: [...],
+   i_to_pu:   [Ia, Ib, Ic], ang_to_deg:   [...]}, ... 20 branches]
+branch_current_sigma_pu: declared per-component sensor sigma (default 1e-3)
+```
+
+Every phasor is the current flowing *into* the branch from that terminal, in
+per-unit on the 100 MVA base at the terminal bus. The exporter is
+`IEEE_14_OpenDSS.export_measurement_series.extract_three_phase_branch_current_measurements`;
+the analysis lives in `three_phase_nlm/branch_current_analysis.py` and needs no
+OpenDSS.
+
+What the channel changes:
+
+- **Line and phase come from telemetry.** `run_three_phase_nlm_from_path`
+  ranks lines by the per-phase differential current
+  `|I_from + I_to - j(B/2)(V_from + V_to)|` (charging removed) and names the
+  phase carrying it. With a persistent scan window it averages the complex
+  differential across scans, so the six-sigma detection floor falls as
+  `6*sqrt(2)*sigma/sqrt(N)`. Method: `terminal_current_differential`.
+- **Position and resistance have a closed form.** With both terminal
+  voltages and currents, `alpha` is the point where the fault-point voltage
+  computed from either end agrees, and `R = Re(V_x / I_fault)`. The
+  estimators report it as `terminal_current_estimate`, seed the OpenDSS grid
+  search around it, add a current residual block to the objective, and
+  restrict the phase search when the differential singles out one phase.
+- **Observability is quantified.** The observability payload reports the
+  Cramer-Rao standard deviation of `alpha` per scan
+  (`single_scan_alpha_std_min`) and for the window
+  (`alpha_crlb_std_effective`); `parameter_identifiable` requires the window
+  value inside the 0.05 audit tolerance. Voltage-only scans give a spread of
+  order one (unobservable in practice); currents cut it by more than an order
+  of magnitude, so a window whose scans only average noise is labeled
+  `noise_averaging_only` unless that averaging reaches the tolerance.
+- **The expert passes the phase.** `DiagnosticsExpert` forwards the NLM
+  tool's `suspected_phase` as `candidate_phase`, bounding the estimator search.
+
+Generate windows with currents (noise applied as `sigma * --noise-scale`):
+
+```bash
+python Transmission/generate_measurements_hif_ieee14.py \
+  --out artifacts/measurements/hif_multiscan_currents_17x10_20260903 \
+  --n-hif 17 --n-no-error 0 --seed 20260903 \
+  --scans-per-window 10 --operating-point-mode diverse \
+  --noise-scale 1.0 --branch-current-noise-pu 0.001
+```
+
+Score the closed form against the hidden labels:
+
+```bash
+python scripts/validate_branch_current_localization.py \
+  artifacts/measurements/hif_multiscan_currents_17x10_20260903/samples.jsonl
+```
+
+Results and sensitivity limits are in `docs/branch_current_telemetry_20260903.md`.
+
 ## Parameter Model
 
 The default `resistance_mode=shared` estimates:

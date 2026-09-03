@@ -12,9 +12,19 @@ import opendssdirect as dss
 from IEEE_14_OpenDSS.constants import BRANCH_ORDER, BUS_ORDER
 from IEEE_14_OpenDSS.export_measurement_series import (
     _compile_and_solve,
+    _phase_terminal_complex_currents,
     _phase_terminal_complex_powers,
     element_pq_3ph_per_terminal,
     extract_measurement_series,
+    extract_three_phase_branch_current_measurements,
+    extract_three_phase_voltage_measurements,
+)
+from three_phase_nlm.branch_current_analysis import (
+    branch_current_rows_to_phasors,
+    bus_shunt_injections,
+    line_differential_currents,
+    terminal_current_hif_localization,
+    voltage_rows_to_phasors,
 )
 from three_phase_nlm.dss_hif_injector import (
     copy_ieee14_model,
@@ -147,6 +157,102 @@ class OpenDSSExportPhysicsTests(unittest.TestCase):
             self.assertEqual(branches, BRANCH_ORDER)
             self.assertNotIn(injection.fault_bus.lower(), {bus.lower() for bus in buses})
             self.assertEqual(branches[13], "Line.7-8")
+
+
+class TerminalCurrentIndexingTests(unittest.TestCase):
+    def test_phase_conductors_follow_node_numbers_not_positions(self) -> None:
+        values = [1 + 0j, 2 + 0j, 3 + 0j, 99 + 99j, -1 + 0j, -2 + 0j, -3 + 0j, 88 + 88j]
+        currents = [component for value in values for component in (value.real, value.imag)]
+        # Terminal 1 lists nodes out of order (2, 1, 3, neutral).
+        terminals = _phase_terminal_complex_currents(
+            currents, [2, 1, 3, 0, 1, 2, 3, 0], n_conductors=4, n_terminals=2
+        )
+        self.assertEqual(terminals[0], [2 + 0j, 1 + 0j, 3 + 0j])
+        self.assertEqual(terminals[1], [-1 + 0j, -2 + 0j, -3 + 0j])
+
+
+class BranchCurrentExportPhysicsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        _compile_and_solve(str(MODEL_DIR))
+        self.assertTrue(dss.Solution.Converged())
+
+    def test_rows_follow_branch_order_with_finite_per_unit_phasors(self) -> None:
+        rows = extract_three_phase_branch_current_measurements()
+        self.assertEqual([row["branch"] for row in rows], BRANCH_ORDER)
+        self.assertEqual([row["branch_row0"] for row in rows], list(range(len(BRANCH_ORDER))))
+        parsed = branch_current_rows_to_phasors(rows)
+        self.assertEqual(len(parsed), len(BRANCH_ORDER))
+        for row in rows:
+            self.assertGreater(row["ibase_from_a"], 0.0)
+            self.assertTrue(all(math.isfinite(value) for value in row["i_from_pu"]))
+            self.assertTrue(all(0.0 < value < 5.0 for value in row["i_from_pu"]))
+
+    def test_terminal_currents_satisfy_kcl_against_bus_injections(self) -> None:
+        series, _, _ = extract_measurement_series()
+        voltages = voltage_rows_to_phasors(extract_three_phase_voltage_measurements())
+        currents = branch_current_rows_to_phasors(
+            extract_three_phase_branch_current_measurements()
+        )
+        injections = bus_shunt_injections(voltages, currents)
+        nb = len(BUS_ORDER)
+        worst = 0.0
+        for index, _bus in enumerate(BUS_ORDER):
+            bus = index + 1
+            complex_power = sum(
+                voltages[bus][phase] * injections[bus][phase].conjugate() for phase in range(3)
+            )
+            # Bus injections in z are three-phase totals on the 100 MVA base;
+            # the per-phase per-unit powers sum to three times that.
+            worst = max(
+                worst,
+                abs(complex_power.real / 3.0 - float(series[nb + index])),
+                abs(complex_power.imag / 3.0 - float(series[2 * nb + index])),
+            )
+        self.assertLess(worst, 1e-3)
+
+    def test_healthy_lines_carry_only_modeled_charging_differential(self) -> None:
+        ranking = line_differential_currents(
+            extract_three_phase_voltage_measurements(),
+            extract_three_phase_branch_current_measurements(),
+        )
+        self.assertEqual(len(ranking), 17)
+        self.assertLess(ranking[0]["score"], 1e-8)
+
+    def test_hidden_split_line_currents_localize_the_fault(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ieee14_export_hif_currents_") as temporary:
+            scenario_dir = Path(temporary)
+            copy_ieee14_model(MODEL_DIR, scenario_dir, overwrite=True)
+            write_balanced_ieee14_load_override(scenario_dir)
+            injection = inject_midspan_hif_ieee14(
+                scenario_dir,
+                "Line.7-8",
+                split_ratio=0.47,
+                phase="A",
+                r_hif_ohm=1.0,  # 100 pu on the 0.01 ohm base
+                fault_bus="Fault_7_8_CURRENT_TEST",
+            )
+            _compile_and_solve(str(scenario_dir))
+            self.assertTrue(dss.Solution.Converged())
+            voltages = extract_three_phase_voltage_measurements()
+            currents = extract_three_phase_branch_current_measurements(
+                branch_element_overrides=injection.branch_element_overrides
+            )
+
+        self.assertEqual([row["branch"] for row in currents], BRANCH_ORDER)
+        self.assertEqual(currents[13]["from_bus"], "b7")
+        self.assertEqual(currents[13]["to_bus"], "b8")
+        payload = terminal_current_hif_localization(voltages, currents, top_k=3)
+        self.assertEqual(payload["top_hif_groups"][0]["branch_row0"], 13)
+        self.assertEqual(payload["suspected_phase"], "A")
+        # Noise-free telemetry: every healthy line has zero differential, and
+        # the separation ratio is bounded only by the declared sensor floor.
+        self.assertLess(payload["second_line_differential_pu"], 1e-8)
+        self.assertTrue(payload["differential_detected"])
+        self.assertGreater(payload["separation_ratio"], 5.0)
+        estimate = payload["terminal_current_estimate"]
+        self.assertAlmostEqual(estimate["alpha_from_from_bus"], 0.47, places=6)
+        self.assertAlmostEqual(estimate["r_hif_pu"] / 100.0, 1.0, places=6)
+        self.assertAlmostEqual(estimate["r_hif_ohm"], 1.0, places=6)
 
 
 if __name__ == "__main__":

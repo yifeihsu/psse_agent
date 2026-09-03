@@ -405,6 +405,8 @@ _EXECUTION_METADATA_KEYS = frozenset(
         "hif_runtime",
         "hif_scan_window",
         "three_phase_voltages",
+        "three_phase_branch_currents",
+        "branch_current_sigma_pu",
     }
 )
 _PHYSICAL_AUDIT_OVERRIDE_KEYS = frozenset(

@@ -184,6 +184,15 @@ _unsloth_sentencepiece_temp/
 !/artifacts/measurements/hif_multiscan_benchmark_fixed_diverse_17x20_20260714/meta.json
 !/artifacts/measurements/hif_multiscan_benchmark_fixed_diverse_17x20_20260714/quality_report.json
 !/artifacts/measurements/hif_multiscan_benchmark_fixed_diverse_17x20_20260714/samples.jsonl
+!/artifacts/measurements/hif_multiscan_currents_17x10_20260903/
+!/artifacts/measurements/hif_multiscan_currents_17x10_20260903/meta.json
+!/artifacts/measurements/hif_multiscan_currents_17x10_20260903/quality_report.json
+!/artifacts/measurements/hif_multiscan_currents_17x10_20260903/branch_current_localization_report.json
+!/artifacts/measurements/hif_multiscan_currents_17x10_20260903/samples.jsonl
+!/artifacts/measurements/out_measurements_imbalance_currents_20260903/
+!/artifacts/measurements/out_measurements_imbalance_currents_20260903/meta.json
+!/artifacts/measurements/out_measurements_imbalance_currents_20260903/branch_current_localization_report.json
+!/artifacts/measurements/out_measurements_imbalance_currents_20260903/samples.jsonl
 /artifacts/traces/*
 /artifacts/eval_archives/*
 /artifacts/logs/*

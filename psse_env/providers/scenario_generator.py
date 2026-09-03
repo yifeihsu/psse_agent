@@ -50,6 +50,12 @@ from mcp_server.matpower_server import (  # noqa: E402  (repo-root package)
 )
 from tools.lagrangian_correct_port import make_ybus  # noqa: E402
 from trace_protocol import chi2_threshold  # noqa: E402
+from three_phase_nlm.branch_current_analysis import (  # noqa: E402
+    BRANCH_CURRENT_CHANNEL,
+    BRANCH_CURRENT_SIGMA_KEY,
+    balanced_branch_current_control,
+    branch_current_rows_to_phasors,
+)
 
 from psse_env.actions import (
     CORRECT_MEASUREMENTS,
@@ -576,18 +582,23 @@ class Round0ScenarioGenerator:
         if any(not normalized.get(key) for key in required):
             return normalized
         topology_id = str(normalized.get("topology_id") or "ieee14_base")
-        normalized["scans"] = [
-            {
-                "scan_index": 0,
-                "z_clean": copy.deepcopy(normalized["z_true"]),
-                "z_obs": copy.deepcopy(normalized["z_obs"]),
-                "three_phase_voltages": copy.deepcopy(
-                    normalized["three_phase_voltages"]
-                ),
-                "op_point": copy.deepcopy(normalized.get("op_point") or {}),
-                "topology_id": topology_id,
-            }
-        ]
+        promoted_scan = {
+            "scan_index": 0,
+            "z_clean": copy.deepcopy(normalized["z_true"]),
+            "z_obs": copy.deepcopy(normalized["z_obs"]),
+            "three_phase_voltages": copy.deepcopy(
+                normalized["three_phase_voltages"]
+            ),
+            "op_point": copy.deepcopy(normalized.get("op_point") or {}),
+            "topology_id": topology_id,
+        }
+        if normalized.get(BRANCH_CURRENT_CHANNEL):
+            promoted_scan[BRANCH_CURRENT_CHANNEL] = copy.deepcopy(
+                normalized[BRANCH_CURRENT_CHANNEL]
+            )
+            if normalized.get(BRANCH_CURRENT_SIGMA_KEY) is not None:
+                promoted_scan[BRANCH_CURRENT_SIGMA_KEY] = normalized[BRANCH_CURRENT_SIGMA_KEY]
+        normalized["scans"] = [promoted_scan]
         normalized["scan_count"] = 1
         normalized["topology_id"] = topology_id
         normalized["window_metadata"] = {
@@ -1381,12 +1392,37 @@ class Round0ScenarioGenerator:
             "three_phase_voltages": copy.deepcopy(row.get("three_phase_voltages")),
             "load_scale": float((row.get("op_point") or {}).get("load_scale", 1.0)),
         }
+        # The hidden clean current copy is QA replay data, never runtime telemetry.
+        clean_current_key = f"{BRANCH_CURRENT_CHANNEL}_clean"
+        runtime_scans = [
+            {key: value for key, value in dict(scan).items() if key != clean_current_key}
+            for scan in scans
+        ]
         scenario["metadata"]["hif_scan_window"] = {
             "scan_window_path": str(row.get("id") or scenario["scenario_id"]),
-            "scans": copy.deepcopy(list(scans)),
+            "scans": copy.deepcopy(runtime_scans),
             "sigma_z": copy.deepcopy(row.get("sigma_z")),
             "window_metadata": copy.deepcopy(row.get("window_metadata") or {}),
         }
+        branch_currents = row.get(BRANCH_CURRENT_CHANNEL)
+        if not branch_currents and runtime_scans:
+            branch_currents = runtime_scans[0].get(BRANCH_CURRENT_CHANNEL)
+        if branch_currents and branch_current_rows_to_phasors(branch_currents):
+            current_sigma = row.get(BRANCH_CURRENT_SIGMA_KEY)
+            if current_sigma is None and runtime_scans:
+                current_sigma = runtime_scans[0].get(BRANCH_CURRENT_SIGMA_KEY)
+            scenario["metadata"][BRANCH_CURRENT_CHANNEL] = copy.deepcopy(list(branch_currents))
+            scenario["metadata"]["hif_runtime"][BRANCH_CURRENT_CHANNEL] = copy.deepcopy(
+                list(branch_currents)
+            )
+            if current_sigma is not None:
+                scenario["metadata"][BRANCH_CURRENT_SIGMA_KEY] = float(current_sigma)
+                scenario["metadata"]["hif_runtime"][BRANCH_CURRENT_SIGMA_KEY] = float(
+                    current_sigma
+                )
+                scenario["metadata"]["hif_scan_window"][BRANCH_CURRENT_SIGMA_KEY] = float(
+                    current_sigma
+                )
         scenario["hidden_truth"] = {"true_hif_errors": [copy.deepcopy(label)]}
         scenario["release_audit"] = copy.deepcopy(
             _EXPLANATION_ONLY_RELEASE_AUDIT
@@ -1445,6 +1481,13 @@ class Round0ScenarioGenerator:
             _WAVEFORM_PROVENANCE
         )
         scenario["metadata"]["three_phase_voltages"] = copy.deepcopy(list(voltages))
+        branch_currents = row.get(BRANCH_CURRENT_CHANNEL)
+        if branch_currents and branch_current_rows_to_phasors(branch_currents):
+            scenario["metadata"][BRANCH_CURRENT_CHANNEL] = copy.deepcopy(list(branch_currents))
+            if row.get(BRANCH_CURRENT_SIGMA_KEY) is not None:
+                scenario["metadata"][BRANCH_CURRENT_SIGMA_KEY] = float(
+                    row[BRANCH_CURRENT_SIGMA_KEY]
+                )
         scenario["hidden_truth"] = {"true_unbalance_errors": [label]}
         scenario["release_audit"] = copy.deepcopy(
             _EXPLANATION_ONLY_RELEASE_AUDIT
@@ -1471,6 +1514,18 @@ class Round0ScenarioGenerator:
         scenario["clean_case"] = "case14"
         scenario["clean_measurements"] = list(measurements)
         scenario["metadata"]["three_phase_voltages"] = balanced
+        branch_currents = row.get(BRANCH_CURRENT_CHANNEL)
+        if branch_currents and branch_current_rows_to_phasors(branch_currents):
+            balanced_currents = balanced_branch_current_control(list(branch_currents))
+            if not balanced_currents:
+                raise ScenarioRejected(
+                    "balanced_current_control_invalid", str(row.get("id"))
+                )
+            scenario["metadata"][BRANCH_CURRENT_CHANNEL] = balanced_currents
+            if row.get(BRANCH_CURRENT_SIGMA_KEY) is not None:
+                scenario["metadata"][BRANCH_CURRENT_SIGMA_KEY] = float(
+                    row[BRANCH_CURRENT_SIGMA_KEY]
+                )
         scenario["hidden_truth"] = {
             "true_unbalance_errors": [],
             "control_kind": "telemetry_present_no_disturbance",

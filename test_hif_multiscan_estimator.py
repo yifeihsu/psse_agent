@@ -394,6 +394,162 @@ class HIFMultiscanEstimatorTests(unittest.TestCase):
 
         np.testing.assert_allclose(first["z"], second["z"], rtol=0.0, atol=1e-12)
 
+    @unittest.skipUnless(importlib.util.find_spec("opendssdirect"), "opendssdirect is not installed")
+    def test_real_opendss_branch_currents_make_a_single_scan_identifiable(self) -> None:
+        from three_phase_nlm.hif_parameter_estimator import (
+            _line_tokens,
+            _resolve_model_dir,
+            _simulate_candidate,
+            estimate_hif_location_magnitude,
+        )
+        from three_phase_nlm.ieee14_adapter import branch_info_for_row0
+
+        branch = 2
+        branch_info = branch_info_for_row0(branch)
+        model_dir = _resolve_model_dir(None, "case14")
+        tokens, _ = _line_tokens(model_dir, branch_info["dss_element"])
+        op_point = {"load_scale": 1.0}
+        simulated = _simulate_candidate(
+            model_dir=model_dir,
+            original_tokens=tokens,
+            dss_element=branch_info["dss_element"],
+            alpha=0.37,
+            phase="B",
+            r_hif_pu=100.0,
+            op_point=op_point,
+        )
+        self.assertEqual(len(simulated["three_phase_branch_currents"]), 20)
+        scan = {
+            "scan_index": 0,
+            "z_obs": simulated["z"],
+            "three_phase_voltages": simulated["three_phase_voltages"],
+            "three_phase_branch_currents": simulated["three_phase_branch_currents"],
+            "op_point": op_point,
+        }
+
+        single = estimate_hif_location_magnitude(
+            candidate_branch_row0=branch,
+            z_obs=scan["z_obs"],
+            three_phase_voltages=scan["three_phase_voltages"],
+            three_phase_branch_currents=scan["three_phase_branch_currents"],
+            alpha_grid_size=3,
+            r_grid_size=3,
+            r_hif_pu_min=50.0,
+            r_hif_pu_max=200.0,
+            refine_top_n=1,
+        )
+        self.assertTrue(single["success"])
+        self.assertEqual(single["search"]["phase_candidates"], ["B"])
+        self.assertTrue(single["search"]["phase_restricted_by_terminal_currents"])
+        self.assertTrue(single["search"]["terminal_current_seeded"])
+        self.assertTrue(single["search"]["branch_current_block"])
+        self.assertAlmostEqual(single["estimated"]["alpha_from_from_bus"], 0.37, places=6)
+        self.assertAlmostEqual(single["estimated"]["r_hif_pu"], 100.0, places=4)
+        self.assertAlmostEqual(
+            single["terminal_current_estimate"]["alpha_from_from_bus"], 0.37, places=6
+        )
+
+        # Two identical operating points: without currents this window is
+        # "noise_averaging_only"; with currents each scan is identifiable.
+        multi = estimate_hif_location_magnitude_multiscan(
+            candidate_branch_row0=branch,
+            scans=[scan, {**scan, "scan_index": 1}],
+            scan_selection="all",
+            max_scans=2,
+            alpha_grid_size=3,
+            r_grid_size=3,
+            r_hif_pu_min=50.0,
+            r_hif_pu_max=200.0,
+            robust_loss="linear",
+            refine_top_n=0,
+            local_max_nfev=0,
+        )
+        self.assertTrue(multi["success"])
+        self.assertEqual(multi["search"]["phase_candidates"], ["B"])
+        self.assertTrue(multi["search"]["terminal_current_seeded"])
+        self.assertAlmostEqual(multi["estimated"]["alpha_from_from_bus"], 0.37, places=6)
+        self.assertAlmostEqual(multi["estimated"]["r_hif_pu"], 100.0, places=4)
+        self.assertEqual(multi["terminal_current_estimate"]["phase_votes"], {"B": 2})
+        observability = multi["observability"]
+        # At sigma = 1e-3 pu a 100 pu fault gives a per-scan Cramer-Rao alpha
+        # spread near 0.1; two identical scans average it toward 0.07, still
+        # outside the 0.05 tolerance, so the window is honestly labeled as
+        # averaging rather than identifiable.  The correlation is broken.
+        self.assertLess(observability["single_scan_alpha_std_min"], 0.15)
+        self.assertLess(
+            observability["alpha_crlb_std_effective"], observability["single_scan_alpha_std_min"]
+        )
+        self.assertLess(abs(observability["alpha_log_r_correlation"]), 0.5)
+        self.assertEqual(observability["status"], "noise_averaging_only")
+        currents_single_std = observability["single_scan_alpha_std_min"]
+
+        voltage_only = estimate_hif_location_magnitude_multiscan(
+            candidate_branch_row0=branch,
+            scans=[
+                {key: value for key, value in scan.items() if key != "three_phase_branch_currents"},
+                {key: value for key, value in scan.items() if key != "three_phase_branch_currents"}
+                | {"scan_index": 1},
+            ],
+            candidate_phase="B",
+            scan_selection="all",
+            max_scans=2,
+            alpha_grid_size=3,
+            r_grid_size=3,
+            r_hif_pu_min=50.0,
+            r_hif_pu_max=200.0,
+            robust_loss="linear",
+            refine_top_n=0,
+            local_max_nfev=0,
+        )
+        self.assertFalse(voltage_only["search"]["branch_current_block"])
+        # Voltage-only scans are numerically full rank but their Cramer-Rao
+        # alpha spread is of order one: the parameter is unobservable in
+        # practice, which is the July finding.  Currents cut it by >10x.
+        self.assertGreater(voltage_only["observability"]["single_scan_alpha_std_min"], 1.0)
+        self.assertGreater(
+            voltage_only["observability"]["single_scan_alpha_std_min"], 10.0 * currents_single_std
+        )
+        self.assertFalse(voltage_only["observability"]["single_scan_identifiable"])
+        self.assertEqual(voltage_only["observability"]["status"], "noise_averaging_only")
+
+        # A lower-resistance fault draws more current, and a single scan then
+        # sits inside the tolerance on its own.
+        strong = _simulate_candidate(
+            model_dir=model_dir,
+            original_tokens=tokens,
+            dss_element=branch_info["dss_element"],
+            alpha=0.37,
+            phase="B",
+            r_hif_pu=30.0,
+            op_point=op_point,
+        )
+        strong_scan = {
+            "scan_index": 0,
+            "z_obs": strong["z"],
+            "three_phase_voltages": strong["three_phase_voltages"],
+            "three_phase_branch_currents": strong["three_phase_branch_currents"],
+            "op_point": op_point,
+        }
+        strong_multi = estimate_hif_location_magnitude_multiscan(
+            candidate_branch_row0=branch,
+            scans=[strong_scan, {**strong_scan, "scan_index": 1}],
+            scan_selection="all",
+            max_scans=2,
+            alpha_grid_size=3,
+            r_grid_size=3,
+            r_hif_pu_min=15.0,
+            r_hif_pu_max=60.0,
+            robust_loss="linear",
+            refine_top_n=0,
+            local_max_nfev=0,
+        )
+        strong_observability = strong_multi["observability"]
+        self.assertLess(strong_observability["single_scan_alpha_std_min"], 0.05)
+        self.assertTrue(strong_observability["single_scan_identifiable"])
+        self.assertEqual(strong_observability["status"], "full_rank_well_conditioned")
+        self.assertTrue(strong_multi["parameter_identifiable"])
+        self.assertAlmostEqual(strong_multi["estimated"]["alpha_from_from_bus"], 0.37, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

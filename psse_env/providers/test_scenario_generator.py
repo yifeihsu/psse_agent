@@ -1919,5 +1919,104 @@ class EpisodeTruthAuditTests(unittest.TestCase):
         self.assertFalse(audit["quarantined"])
 
 
+class BranchCurrentChannelPropagationTests(unittest.TestCase):
+    """Source rows carrying per-phase branch currents reach runtime metadata."""
+
+    def setUp(self) -> None:
+        self.generator = Round0ScenarioGenerator(seed=1, validate=False)
+        self.z = list(json.loads(FIXTURE.read_text(encoding="utf-8"))["z_obs"])
+
+    def test_unbalance_row_exposes_channel_and_balanced_control(self) -> None:
+        from three_phase_nlm.synthetic_branch_telemetry import synthetic_unbalance_rows
+
+        voltages, currents = synthetic_unbalance_rows(
+            source_bus=2, split=(0.5, 0.3, 0.2), unbalanced_voltage_bus=2
+        )
+        row = {
+            "id": "imb-currents",
+            "z_obs": self.z,
+            "z_true": self.z,
+            "three_phase_voltages": voltages,
+            "three_phase_branch_currents": currents,
+            "branch_current_sigma_pu": 0.002,
+            "label": {"error_type": "three_phase_imbalance", "unbalance_bus": 2},
+        }
+        scenario = self.generator._unbalance_scenario(row, 0)
+        metadata = scenario["metadata"]
+        self.assertEqual(metadata["three_phase_branch_currents"], currents)
+        self.assertEqual(metadata["branch_current_sigma_pu"], 0.002)
+        self.assertEqual(scenario["hidden_truth"]["true_unbalance_errors"][0]["unbalance_bus"], 2)
+
+        control = self.generator._telemetry_no_disturbance_scenario(row, 0)
+        balanced = control["metadata"]["three_phase_branch_currents"]
+        self.assertEqual(len(balanced), len(currents))
+        for item in balanced:
+            self.assertEqual(len(set(item["i_from_pu"])), 1)
+            self.assertEqual(len(set(item["i_to_pu"])), 1)
+        self.assertEqual(control["hidden_truth"]["true_unbalance_errors"], [])
+
+    def test_hif_row_exposes_channel_and_strips_hidden_clean_copy(self) -> None:
+        from three_phase_nlm.synthetic_branch_telemetry import synthetic_line_fault_rows
+
+        voltages, currents, _ = synthetic_line_fault_rows(
+            row0=2, alpha=0.37, phase="B", r_hif_pu=100.0
+        )
+        scan = {
+            "scan_index": 0,
+            "z_clean": self.z,
+            "z_obs": self.z,
+            "three_phase_voltages": voltages,
+            "three_phase_branch_currents": currents,
+            "three_phase_branch_currents_clean": currents,
+            "branch_current_sigma_pu": 0.002,
+            "op_point": {"load_scale": 1.0},
+            "topology_id": "ieee14_base",
+        }
+        row = {
+            "id": "hif-currents",
+            "z_obs": self.z,
+            "z_true": self.z,
+            "three_phase_voltages": voltages,
+            "three_phase_branch_currents": currents,
+            "branch_current_sigma_pu": 0.002,
+            "nlm_diagnostic": {"success": True, "top_hif_groups": [{"branch_row0": 2}]},
+            "scans": [scan],
+            "sigma_z": None,
+            "op_point": {"load_scale": 1.0},
+            "label": {"branch_row0": 2, "phase": "B", "split_ratio": 0.37, "r_hif_pu": 100.0},
+        }
+        scenario = self.generator._hif_scenario(row, 0)
+        metadata = scenario["metadata"]
+        self.assertEqual(metadata["three_phase_branch_currents"], currents)
+        self.assertEqual(metadata["hif_runtime"]["three_phase_branch_currents"], currents)
+        self.assertEqual(metadata["hif_runtime"]["branch_current_sigma_pu"], 0.002)
+        window = metadata["hif_scan_window"]
+        self.assertEqual(window["branch_current_sigma_pu"], 0.002)
+        self.assertEqual(window["scans"][0]["three_phase_branch_currents"], currents)
+        self.assertNotIn("three_phase_branch_currents_clean", window["scans"][0])
+        for key in metadata:
+            self.assertFalse(str(key).endswith("_clean"), key)
+
+    def test_legacy_single_scan_promotion_keeps_currents(self) -> None:
+        from three_phase_nlm.synthetic_branch_telemetry import synthetic_line_fault_rows
+
+        voltages, currents, _ = synthetic_line_fault_rows(
+            row0=0, alpha=0.5, phase="A", r_hif_pu=80.0
+        )
+        row = {
+            "id": "legacy",
+            "z_obs": self.z,
+            "z_true": self.z,
+            "three_phase_voltages": voltages,
+            "three_phase_branch_currents": currents,
+            "branch_current_sigma_pu": 0.001,
+            "op_point": {"load_scale": 1.0},
+        }
+        promoted = Round0ScenarioGenerator._normalize_hif_row(row)
+        self.assertEqual(promoted["scan_count"], 1)
+        self.assertEqual(promoted["scans"][0]["three_phase_branch_currents"], currents)
+        self.assertEqual(promoted["scans"][0]["branch_current_sigma_pu"], 0.001)
+
+
 if __name__ == "__main__":
     unittest.main()
