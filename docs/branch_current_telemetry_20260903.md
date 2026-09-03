@@ -148,12 +148,41 @@ VUF-only gate six of the first eight had stalled unexplained.
 
 ## Sensitivity limits
 
-- At `sigma = 1e-3` pu the single-scan six-sigma floor is `8.5e-3` pu, so a
-  single snapshot only *claims* detection for `R` below about 118 pu; the line
-  still ranks first in 97.6% of scans. Ten coherent scans lower the floor to
-  `2.7e-3` pu (R up to about 370 pu). Better sensors scale the same way.
-- Position error grows with `R` and noise: `alpha` error is roughly
-  `sigma / (|Z| * I_fault)` per scan and averages down over the window.
+- **Meter noise was applied to currents only.** Both corpora carry
+  independent Gaussian noise of `1e-3` pu per real/imaginary component on
+  every current phasor; the three-phase *voltage* phasors are the OpenDSS
+  solution without noise, as in every earlier corpus (the estimators weight
+  the voltage block at `5e-3` pu but the generators never applied it). Line,
+  phase, and resistance are insensitive to this: they depend on the
+  differential current and on `V_x`, which is of order 1 pu. The closed-form
+  **position is not**. Its sensitivity to `alpha` is the voltage drop the
+  fault current produces along the line, `|Z| * I_fault`, which is `1e-3` pu
+  or less for a 100 pu fault, so voltage phasor noise competes with it
+  directly. Synthetic check at `sigma_I = 1e-3`, 200 trials per cell,
+  median `alpha` error of the single-scan closed form:
+
+  | Line, `|Z|` (pu) | R (pu) | `sigma_V = 0` | `1e-4` | `1e-3` | `5e-3` |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | 1-2, 0.062 | 30 | 0.015 | 0.049 | 0.37 | 0.37 |
+  | 1-2, 0.062 | 100 | 0.048 | 0.16 | 0.37 | 0.37 |
+  | 2-3, 0.203 | 30 | 0.014 | 0.020 | 0.14 | 0.37 |
+  | 2-3, 0.203 | 100 | 0.057 | 0.070 | 0.37 | 0.37 |
+  | 9-14, 0.299 | 30 | 0.016 | 0.017 | 0.082 | 0.37 |
+  | 9-14, 0.299 | 100 | 0.049 | 0.059 | 0.29 | 0.37 |
+
+  An error of 0.37 is the uninformative level. Line and phase stayed at 100%
+  and resistance error was unchanged in every cell. So the position results
+  reported above assume voltage phasors accurate to about `1e-4` pu; at PMU
+  class accuracy (`1e-2` pu) the closed-form position is unusable and the
+  OpenDSS model fit, which also draws on how the fault current splits between
+  the two terminals, is the only position evidence. Any corpus meant to
+  qualify position claims must add voltage phasor noise.
+- Current noise alone: at `sigma_I = 1e-3` pu the single-scan six-sigma floor
+  is `8.5e-3` pu, so a single snapshot only *claims* detection for `R` below
+  about 118 pu; the line still ranks first in 97.6% of scans. Ten coherent
+  scans lower the floor to `2.7e-3` pu (R up to about 370 pu). Position error
+  from current noise is roughly `sigma_I / I_fault` per scan (0.1 at 100 pu)
+  and averages down over the window.
 - A fault fitted within 0.02 of a terminal is not accepted on differential
   evidence alone, because a gross error on that terminal's current sensor
   produces the same phasors. The OpenDSS model fit remains the arbiter there.
