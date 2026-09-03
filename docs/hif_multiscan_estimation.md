@@ -44,7 +44,11 @@ What the channel changes:
   `6*sqrt(2)*sigma/sqrt(N)`. Method: `terminal_current_differential`.
 - **Position and resistance have a closed form.** With both terminal
   voltages and currents, `alpha` is the point where the fault-point voltage
-  computed from either end agrees, and `R = Re(V_x / I_fault)`. The
+  computed from either end agrees, and `R = Re(V_x / I_fault)`. Line, phase,
+  and resistance are robust to meter noise; the position needs voltage
+  phasors accurate to about `1e-4` pu because its sensitivity is the
+  fault-current drop along the line, and the corpora apply noise to currents
+  only (see the sensitivity table in `docs/branch_current_telemetry_20260903.md`). The
   estimators report it as `terminal_current_estimate`, seed the OpenDSS grid
   search around it, add a current residual block to the objective, and
   restrict the phase search when the differential singles out one phase.
