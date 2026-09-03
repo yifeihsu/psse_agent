@@ -408,6 +408,7 @@ class MatpowerDeploymentProviders:
         hif_r_grid_size: int = 35,
         hif_max_scans: int = 10,
         harmonic_thd_threshold_percent: float = 1.0,
+        hse_min_sse_reduction: float = 0.5,
         # Shared with the scenario generator so the policy-visible
         # ``vuf_threshold_exceeded`` sensor signature and this gate agree.
         unbalance_vuf_threshold: float = DEFAULT_UNBALANCE_VUF_THRESHOLD,
@@ -445,6 +446,9 @@ class MatpowerDeploymentProviders:
         assert validated_hif_max_scans is not None
         self.hif_max_scans = validated_hif_max_scans
         self.harmonic_thd_threshold_percent = float(harmonic_thd_threshold_percent)
+        # Minimum fraction of the measured harmonic voltage energy the fitted
+        # single source must explain relative to the no-source null model.
+        self.hse_min_sse_reduction = float(hse_min_sse_reduction)
         self.unbalance_vuf_threshold = float(unbalance_vuf_threshold)
         self.hif_min_residual_reduction = float(hif_min_residual_reduction)
         self.hif_max_weighted_residual_norm = float(hif_max_weighted_residual_norm)
@@ -1952,10 +1956,10 @@ class MatpowerDeploymentProviders:
                 continue
             seen_rows.add(normalized_row0)
             # ``build_lambda_evidence`` is already ordered by descending
-            # absolute multiplier.  Keeping the first endpoint encountered
+            # absolute multiplier.  Keeping the first R-or-X entry encountered
             # for each physical line therefore produces a deterministic,
             # distinct-line ranking without discarding the remaining raw
-            # endpoint findings below.
+            # per-parameter findings below.
             ranked_lines.append(
                 {
                     "line_index1": normalized_row0 + 1,
@@ -2109,6 +2113,34 @@ class MatpowerDeploymentProviders:
                     },
                 }
             )
+        # Explicit status-hypothesis enumeration for the direction the R/X
+        # multiplier cannot see.  A branch modeled out of service contributes
+        # zero parameter sensitivity, so a "modeled open / truly closed" error
+        # never appears in ``findings``.  Every out-of-service row is therefore
+        # screened as a close hypothesis by the same non-mutating WLS lookahead
+        # that vets the multiplier-ranked open hypotheses.
+        hypothesis_source: dict[int, str] = {
+            int(action["arguments"]["line_index"]) - 1: "branch_multiplier_ranking"
+            for action in proposed
+        }
+        enumerated_close_lines: list[int] = []
+        if branch.shape[1] > 10:
+            for row0 in range(int(solved["nl"])):
+                if row0 in seen_rows or int(float(branch[row0][10])) != 0:
+                    continue
+                seen_rows.add(row0)
+                enumerated_close_lines.append(row0 + 1)
+                hypothesis_source[row0] = "out_of_service_status_enumeration"
+                proposed.append(
+                    {
+                        "tool": CORRECT_TOPOLOGY,
+                        "arguments": {
+                            "state_id": state_id,
+                            "line_index": row0 + 1,
+                            "status": 1,
+                        },
+                    }
+                )
         parent_score = self._remaining_anomaly_score(solved)
         supported: list[dict[str, Any]] = []
         candidate_screening: list[dict[str, Any]] = []
@@ -2117,6 +2149,9 @@ class MatpowerDeploymentProviders:
                 state,
                 action,
                 parent_score=parent_score,
+            )
+            evidence["hypothesis_source"] = hypothesis_source.get(
+                int(action["arguments"]["line_index"]) - 1
             )
             candidate_screening.append(evidence)
             if eligible:
@@ -2142,6 +2177,7 @@ class MatpowerDeploymentProviders:
             "proposed_correction_count": len(proposed),
             "screened_correction_count": len(candidate_screening),
             "topology_candidate_screening": candidate_screening,
+            "enumerated_close_hypotheses": enumerated_close_lines,
             "islanding_filtered_lines": islanding_filtered,
             "route_status": route_status,
             "route_status_reason": (
@@ -2486,7 +2522,20 @@ class MatpowerDeploymentProviders:
             return self._failure(
                 "topology_correction_target_missing", "correct_topology requires a status"
             )
-        new_status = int(status)
+        # Branch status multiplies the series admittance in the estimator's
+        # model, so anything but exactly 0 or 1 would scale or reverse the
+        # branch instead of opening/closing it.  Fail closed.
+        try:
+            status_value = float(status)
+        except (TypeError, ValueError, OverflowError):
+            return self._failure(
+                "topology_correction_invalid_status", f"status must be 0 or 1, got {status!r}"
+            )
+        if not math.isfinite(status_value) or status_value not in (0.0, 1.0):
+            return self._failure(
+                "topology_correction_invalid_status", f"status must be 0 or 1, got {status!r}"
+            )
+        new_status = int(status_value)
         if ppc["branch"].shape[1] <= 10:
             return self._failure(
                 "topology_correction_unsupported", "case branch matrix has no status column"
@@ -2728,7 +2777,23 @@ class MatpowerDeploymentProviders:
         except Exception as exc:
             return self._failure("hse_runtime_missing", f"{type(exc).__name__}: {exc}")
         slack_bus = int(self._metadata(state).get("slack_bus", 0))
-        payload = _run_hse_logic(case_path, measurements, [int(order) for order in orders], slack_bus)
+        # The observed fundamental Vm is the physically meaningful THD
+        # denominator; the case's stored Vm is only a planning value.
+        fundamental_vm: list[float] | None = None
+        try:
+            observed = self._measurements(state)
+            nb = int(_load_python_case(case_path)["bus"].shape[0])
+            if len(observed) >= nb:
+                fundamental_vm = observed[:nb]
+        except Exception:
+            fundamental_vm = None
+        payload = _run_hse_logic(
+            case_path,
+            measurements,
+            [int(order) for order in orders],
+            slack_bus,
+            fundamental_vm=fundamental_vm,
+        )
         if not payload.get("success"):
             return self._failure("hse_failure", payload.get("error"))
         summary = summarize_hse_payload(payload)
@@ -2738,10 +2803,22 @@ class MatpowerDeploymentProviders:
             thd_value = float(best_thd)
         except (TypeError, ValueError):
             thd_value = math.nan
+        try:
+            sse_reduction = float(payload.get("sse_reduction_vs_null"))
+        except (TypeError, ValueError):
+            sse_reduction = math.nan
+        # Acceptance requires both an operationally material distortion and a
+        # single-source model that actually explains the measured harmonic
+        # voltages (fails closed when the estimator reports no null-model
+        # comparison).
+        source_explains_data = bool(
+            math.isfinite(sse_reduction) and sse_reduction >= self.hse_min_sse_reduction
+        )
         accepted = bool(
             best_bus is not None
             and math.isfinite(thd_value)
             and thd_value >= self.harmonic_thd_threshold_percent
+            and source_explains_data
         )
         metrics = {
             **self._binding(state),
@@ -2750,9 +2827,13 @@ class MatpowerDeploymentProviders:
             "hse_summary": summary,
             "diagnostic_acceptance": {
                 "accepted": accepted,
-                "null_hypothesis": "thd_below_operational_threshold",
+                "null_hypothesis": "no_harmonic_source_or_thd_below_operational_threshold",
                 "thd_percent": thd_value if math.isfinite(thd_value) else None,
                 "minimum_thd_percent": self.harmonic_thd_threshold_percent,
+                "sse_reduction_vs_null": sse_reduction if math.isfinite(sse_reduction) else None,
+                "minimum_sse_reduction": self.hse_min_sse_reduction,
+                "source_model_explains_data": source_explains_data,
+                "fundamental_voltage_source": payload.get("fundamental_voltage_source"),
             },
         }
         if accepted:

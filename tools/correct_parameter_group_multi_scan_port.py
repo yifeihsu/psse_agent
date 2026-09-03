@@ -7,6 +7,8 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
+from tools.branch_param_jacobian import branch_rx_jacobian, branch_rx_jacobian_fd
+
 
 # --- MATPOWER / PYPOWER-style column indices (0-based for Python) ---
 # bus
@@ -318,130 +320,22 @@ def calculate_param_jacobian_for_line(
     """
     Analytic two-column Jacobian d h / d [R_k, X_k] for one target line.
 
-    This is the direct Python adaptation of the MATLAB helper supplied later in
-    the conversation. It assumes the case has already been converted to internal
-    consecutive bus numbering and that `line_idx` is 0-based.
-
-    Notes
-    -----
-    - Ybus/Yf/Yt are accepted for signature compatibility with MATLAB but are not
-      needed in the closed-form expression.
-    - The closed-form expression assumes the standard series branch model without
-      off-nominal tap ratio or phase shift. For such branches, use the finite-
-      difference fallback instead.
+    Thin wrapper over :func:`tools.branch_param_jacobian.branch_rx_jacobian`,
+    kept for API compatibility with the original MATLAB helper.  The shared
+    closed form is exact for every MATPOWER branch type (status, tap ratio,
+    phase shift, line charging), so the earlier restriction to unit-tap,
+    zero-shift lines no longer applies.  ``x_state_vec_scan`` is
+    ``[theta_full (rad); V_full (p.u.)]`` and ``line_idx`` is 0-based.
     """
     del Ybus, Yf, Yt  # signature compatibility only
-
     bus = np.asarray(mpc_case["bus"], dtype=float)
-    branch = np.asarray(mpc_case["branch"], dtype=float)
     nb = bus.shape[0]
-    nl = branch.shape[0]
-
     x_state_vec_scan = np.asarray(x_state_vec_scan, dtype=float).reshape(-1)
     if x_state_vec_scan.shape[0] != 2 * nb:
         raise ValueError(f"x_state_vec_scan must have length {2 * nb}, got {x_state_vec_scan.shape[0]}.")
-    if not (0 <= line_idx < nl):
-        raise IndexError(f"line_idx={line_idx} is outside valid range [0, {nl-1}].")
-
-    nz_actual = 3 * nb + 4 * nl
-    H_pg_line = np.zeros((nz_actual, 2), dtype=float)
-
-    if int(round(branch[line_idx, BR_STATUS])) == 0:
-        return H_pg_line
-
-    if not _branch_supports_analytic_param_jacobian(branch[line_idx, :]):
-        raise ValueError(
-            "Analytic parameter Jacobian is only valid here for unit tap / zero shift branches. "
-            "Use the finite-difference fallback for transformer-like branches."
-        )
-
-    theta_est_rad = x_state_vec_scan[:nb]
-    V_est_pu = x_state_vec_scan[nb: 2 * nb]
-
-    idx_fbus = int(branch[line_idx, F_BUS])
-    idx_tbus = int(branch[line_idx, T_BUS])
-
-    r_k = float(branch[line_idx, BR_R])
-    x_k = float(branch[line_idx, BR_X])
-
-    denom = r_k**2 + x_k**2
-    if denom < 1e-9:
-        warnings.warn(
-            (
-                f"Line {line_idx + 1} parameters R={r_k:.4e}, X={x_k:.4e} lead to a near-zero "
-                "denominator. Returning a zero parameter Jacobian for stability."
-            ),
-            RuntimeWarning,
-        )
-        return H_pg_line
-
-    Vi = float(V_est_pu[idx_fbus])
-    Vj = float(V_est_pu[idx_tbus])
-    dth_rad = float(theta_est_rad[idx_fbus] - theta_est_rad[idx_tbus])
-    cosd = np.cos(dth_rad)
-    sind = np.sin(dth_rad)
-
-    # g_k = R_k / (R_k^2 + X_k^2)
-    # b_k = -X_k / (R_k^2 + X_k^2)
-    dg_dr = (x_k**2 - r_k**2) / (denom**2)
-    db_dr = (2.0 * r_k * x_k) / (denom**2)
-    dg_dx = (-2.0 * r_k * x_k) / (denom**2)
-    db_dx = (x_k**2 - r_k**2) / (denom**2)
-
-    # Flow from i to j on line k
-    dP_ik_dgk = Vi**2 - Vi * Vj * cosd
-    dP_ik_dbk = -Vi * Vj * sind
-    dQ_ik_dgk = -Vi * Vj * sind
-    dQ_ik_dbk = -Vi**2 + Vi * Vj * cosd
-
-    # Flow from j to i on line k
-    dP_jk_dgk = Vj**2 - Vi * Vj * cosd
-    dP_jk_dbk = Vi * Vj * sind
-    dQ_jk_dgk = Vi * Vj * sind
-    dQ_jk_dbk = -Vj**2 + Vi * Vj * cosd
-
-    # Chain rule wrt [R_k, X_k]
-    dPi_dr = dP_ik_dgk * dg_dr + dP_ik_dbk * db_dr
-    dPi_dx = dP_ik_dgk * dg_dx + dP_ik_dbk * db_dx
-    dQi_dr = dQ_ik_dgk * dg_dr + dQ_ik_dbk * db_dr
-    dQi_dx = dQ_ik_dgk * dg_dx + dQ_ik_dbk * db_dx
-
-    dPj_dr = dP_jk_dgk * dg_dr + dP_jk_dbk * db_dr
-    dPj_dx = dP_jk_dgk * dg_dx + dP_jk_dbk * db_dx
-    dQj_dr = dQ_jk_dgk * dg_dr + dQ_jk_dbk * db_dr
-    dQj_dx = dQ_jk_dgk * dg_dx + dQ_jk_dbk * db_dx
-
-    # Measurement order: Vm (nb), Pinj (nb), Qinj (nb), Pf (nl), Qf (nl), Pt (nl), Qt (nl)
-    # Vm rows remain zero.
-
-    # P injections
-    H_pg_line[nb + idx_fbus, 0] = dPi_dr
-    H_pg_line[nb + idx_fbus, 1] = dPi_dx
-    H_pg_line[nb + idx_tbus, 0] = dPj_dr
-    H_pg_line[nb + idx_tbus, 1] = dPj_dx
-
-    # Q injections
-    H_pg_line[2 * nb + idx_fbus, 0] = dQi_dr
-    H_pg_line[2 * nb + idx_fbus, 1] = dQi_dx
-    H_pg_line[2 * nb + idx_tbus, 0] = dQj_dr
-    H_pg_line[2 * nb + idx_tbus, 1] = dQj_dx
-
-    # Line flows for this line only
-    offset_pf = 3 * nb
-    offset_qf = 3 * nb + nl
-    offset_pt = 3 * nb + 2 * nl
-    offset_qt = 3 * nb + 3 * nl
-
-    H_pg_line[offset_pf + line_idx, 0] = dPi_dr
-    H_pg_line[offset_pf + line_idx, 1] = dPi_dx
-    H_pg_line[offset_qf + line_idx, 0] = dQi_dr
-    H_pg_line[offset_qf + line_idx, 1] = dQi_dx
-    H_pg_line[offset_pt + line_idx, 0] = dPj_dr
-    H_pg_line[offset_pt + line_idx, 1] = dPj_dx
-    H_pg_line[offset_qt + line_idx, 0] = dQj_dr
-    H_pg_line[offset_qt + line_idx, 1] = dQj_dx
-
-    return H_pg_line
+    return branch_rx_jacobian(
+        mpc_case, int(line_idx), x_state_vec_scan[:nb], x_state_vec_scan[nb : 2 * nb], method="analytic"
+    )
 
 
 def calculate_param_jacobian_for_line_fd(
@@ -456,53 +350,13 @@ def calculate_param_jacobian_for_line_fd(
     """
     Numerical two-column Jacobian of the measurement model wrt a single line's [R, X].
 
-    This remains available as a robust fallback for branches with off-nominal
-    taps or phase shifts, where the supplied analytic MATLAB expression does not
-    directly match the full MATPOWER branch model.
+    Delegates to :func:`tools.branch_param_jacobian.branch_rx_jacobian_fd`.  The
+    stencil is no longer clamped to ``min_param_value`` (which produced a
+    non-positive stencil width for zero-resistance transformers); the argument
+    is accepted for compatibility and ignored.
     """
-    base_case = {
-        "baseMVA": float(case_int["baseMVA"]),
-        "bus": np.array(case_int["bus"], copy=True),
-        "branch": np.array(case_int["branch"], copy=True),
-    }
-
-    branch0 = base_case["branch"]
-    p0 = np.array([branch0[line_idx, BR_R], branch0[line_idx, BR_X]], dtype=float)
-
-    nz = 3 * base_case["bus"].shape[0] + 4 * base_case["branch"].shape[0]
-    H_p = np.zeros((nz, 2), dtype=float)
-
-    for col, br_col in enumerate((BR_R, BR_X)):
-        step = fd_rel_step * max(abs(p0[col]), 1e-3)
-        p_plus = p0[col] + step
-        p_minus = max(p0[col] - step, min_param_value)
-
-        case_plus = {
-            "baseMVA": float(base_case["baseMVA"]),
-            "bus": np.array(base_case["bus"], copy=True),
-            "branch": np.array(base_case["branch"], copy=True),
-        }
-        case_minus = {
-            "baseMVA": float(base_case["baseMVA"]),
-            "bus": np.array(base_case["bus"], copy=True),
-            "branch": np.array(base_case["branch"], copy=True),
-        }
-
-        case_plus["branch"][line_idx, br_col] = p_plus
-        case_minus["branch"][line_idx, br_col] = p_minus
-
-        Ybus_p, Yf_p, Yt_p = make_ybus(case_plus["baseMVA"], case_plus["bus"], case_plus["branch"])
-        Ybus_m, Yf_m, Yt_m = make_ybus(case_minus["baseMVA"], case_minus["bus"], case_minus["branch"])
-
-        hx_plus = calculate_hx(case_plus, theta_full, V_full, Ybus_p, Yf_p, Yt_p)
-        hx_minus = calculate_hx(case_minus, theta_full, V_full, Ybus_m, Yf_m, Yt_m)
-
-        denom = p_plus - p_minus
-        if denom <= 0.0:
-            raise RuntimeError("Finite-difference denominator for parameter Jacobian is non-positive.")
-        H_p[:, col] = (hx_plus - hx_minus) / denom
-
-    return H_p
+    del min_param_value
+    return branch_rx_jacobian_fd(case_int, int(line_idx), theta_full, V_full, fd_rel_step=fd_rel_step)
 
 
 def correct_parameter_group_multi_scan(
@@ -521,6 +375,8 @@ def correct_parameter_group_multi_scan(
     fd_rel_step: float = 1e-6,
     param_jacobian_method: str = "auto",
     verbose: bool = False,
+    tol_param_rel: float = 1e-3,
+    diagnostics: Dict[str, Any] | None = None,
 ) -> Tuple[np.ndarray, int]:
     """
     Python translation of the MATLAB function `correct_parameter_group_multi_scan()`.
@@ -562,12 +418,26 @@ def correct_parameter_group_multi_scan(
           lines and fall back to finite differences otherwise.
     verbose : bool, default False
         If True, prints iteration diagnostics similar to the MATLAB script.
+    tol_param_rel : float, default 1e-3
+        Relative convergence tolerance on the corrected ``[R, X]`` pair.  The
+        MATLAB rule ``max|dx| < tol_corr`` mixes radians, p.u. voltages, and
+        impedances, so a 5e-3 absolute step can still be 50% of a short line's
+        resistance; convergence now additionally requires
+        ``max(|dR|/max(|R|,floor), |dX|/max(|X|,floor)) < tol_param_rel``.
+    diagnostics : dict, optional
+        If supplied, filled in place with ``objective_initial``,
+        ``objective_final`` (weighted least-squares objective summed over the
+        scans, evaluated at the returned state), ``objective_reduction``,
+        ``iterations``, ``parameter_at_floor`` (True when R or X ended pinned at
+        ``min_param_value``), ``converged``, and ``termination_reason``.
 
     Returns
     -------
     corrected_params_group, success_correction
         corrected_params_group is a length-2 array [R_est, X_est].
-        success_correction is 1 if converged, else 0.
+        success_correction is 1 if converged (state and parameter criteria met
+        with a non-increasing objective and no parameter pinned at the
+        positivity floor), else 0.
     """
     method = str(param_jacobian_method).lower()
     if method not in {"auto", "analytic", "fd"}:
@@ -618,6 +488,7 @@ def correct_parameter_group_multi_scan(
         dtype=float,
     )
     corrected_params_group = p_g_current.copy()
+    p_g_initial = p_g_current.copy()
 
     R_inv_single = sp.diags(1.0 / R_variances_vec, 0, shape=(nz_single, nz_single), format="csc")
 
@@ -655,6 +526,9 @@ def correct_parameter_group_multi_scan(
         print(f"    Entering correct_parameter_group_multi_scan for line {line_to_correct_idx}...")
         print(f"    Starting iterative correction for line {line_to_correct_idx} with {n_scans} scans...")
 
+    objective_initial: float | None = None
+    objective_history: list = []
+
     for iter_idx in range(1, max_iter_corr + 1):
         G_v = sp.lil_matrix((N, N), dtype=float)
         RHS = np.zeros(N, dtype=float)
@@ -671,13 +545,11 @@ def correct_parameter_group_multi_scan(
         fbus_iter = mpc_iter["branch"][:, F_BUS].astype(int)
         tbus_iter = mpc_iter["branch"][:, T_BUS].astype(int)
 
-        analytic_supported = _branch_supports_analytic_param_jacobian(mpc_iter["branch"][line_idx, :])
-        if method == "analytic" and not analytic_supported:
-            raise ValueError(
-                "param_jacobian_method='analytic' was requested, but the target line has a non-unity tap or "
-                "nonzero phase shift. Use 'auto' or 'fd' instead."
-            )
+        # The shared closed form covers taps and phase shifts exactly, so
+        # "auto" resolves to the analytic Jacobian for every branch type.
+        analytic_supported = True
 
+        objective_iter = 0.0
         for k_scan in range(n_scans):
             idx_start = k_scan * n_states_per_scan
             idx_end = (k_scan + 1) * n_states_per_scan
@@ -688,6 +560,7 @@ def correct_parameter_group_multi_scan(
             hx_k = calculate_hx(mpc_iter, theta_full, V_full, Ybus_iter, Yf_iter, Yt_iter)
             z_k = z_all[:, k_scan]
             delta_z_k = z_k - hx_k
+            objective_iter += float(delta_z_k @ (delta_z_k / R_variances_vec))
 
             Vc_full = V_full * np.exp(1j * theta_full)
             J_full, _, _ = make_jaco(Ybus_iter, Yf_iter, Yt_iter, nb, nl, fbus_iter, tbus_iter, Vc_full)
@@ -732,12 +605,20 @@ def correct_parameter_group_multi_scan(
             RHS[row_s] += Ht_W_dz
             RHS[row_p] += Hp_t_W_dz
 
+        if objective_initial is None:
+            objective_initial = objective_iter
+        objective_history.append(objective_iter)
+
         G_v = G_v.tocsc()
         rcond_Gv = _rcond_dense(G_v.toarray())
         if rcond_Gv < 1e-14:
             if verbose:
                 print(f"    G_v is ill-conditioned at iteration {iter_idx}. Aborting correction.")
             success_correction = 0
+            _fill_diagnostics(
+                diagnostics, objective_initial, objective_history, iter_idx, corrected_params_group,
+                min_param_value, converged=False, reason="gain_matrix_ill_conditioned",
+            )
             return corrected_params_group, success_correction
 
         x_prev = x_v_current.copy()
@@ -750,31 +631,130 @@ def correct_parameter_group_multi_scan(
         x_v_current[idx_param] = p_temp
 
         max_update = float(np.max(np.abs(x_v_current - x_prev)))
+        p_prev = x_prev[idx_param]
         p_g_current = x_v_current[idx_param].copy()
         corrected_params_group = p_g_current.copy()
+        param_rel_update = float(
+            np.max(np.abs(p_g_current - p_prev) / np.maximum(np.abs(p_g_current), min_param_value))
+        )
 
         if verbose:
             print(
-                f"    Iter {iter_idx}: max update={max_update:.2e}, "
-                f"R_est={p_g_current[0]:.6g}, X_est={p_g_current[1]:.6g}"
+                f"    Iter {iter_idx}: max update={max_update:.2e}, rel param update={param_rel_update:.2e}, "
+                f"objective={objective_iter:.4g}, R_est={p_g_current[0]:.6g}, X_est={p_g_current[1]:.6g}"
             )
 
-        if max_update < tol_corr:
-            success_correction = 1
+        if max_update < tol_corr and param_rel_update < tol_param_rel:
+            # A parameter held at the positivity floor is only a failure when the
+            # model started materially above it: the corrector then drove a
+            # nonzero R or X to zero, which signals an unidentifiable or
+            # ill-posed direction rather than a solution.  A branch whose model
+            # already carries R = 0 (a MATPOWER transformer) is expected to
+            # stay at the floor, so that is reported but not treated as failure.
+            floor_mask = p_g_current <= min_param_value * (1.0 + 1e-9)
+            started_above_floor = p_g_initial > 10.0 * min_param_value
+            at_floor = bool(np.any(floor_mask & started_above_floor))
+            # Evaluate the objective at the returned point so the reduction is
+            # measured on the state actually handed back.
+            objective_final = _multi_scan_objective(
+                bus, branch, baseMVA_use, line_idx, x_v_current, z_all, R_variances_vec,
+                n_scans, n_states_per_scan, nb, ref_bus,
+            )
+            objective_history.append(objective_final)
+            increased = bool(objective_initial is not None and objective_final > objective_initial * (1.0 + 1e-9))
+            success_correction = 0 if (at_floor or increased) else 1
+            reason = (
+                "parameter_pinned_at_positivity_floor"
+                if at_floor
+                else "objective_did_not_decrease"
+                if increased
+                else "converged"
+            )
             if verbose:
-                print(f"    Correction converged in {iter_idx} iterations.")
+                print(f"    Correction terminated in {iter_idx} iterations: {reason}.")
                 print(f"    Exiting correct_parameter_group_multi_scan. success={success_correction}")
+            _fill_diagnostics(
+                diagnostics, objective_initial, objective_history, iter_idx, corrected_params_group,
+                min_param_value, converged=bool(success_correction), reason=reason,
+            )
             return corrected_params_group, success_correction
 
     success_correction = 0
     if verbose:
         print(f"    Correction did NOT converge by iteration {max_iter_corr}. Returning last estimate.")
         print(f"    Exiting correct_parameter_group_multi_scan. success={success_correction}")
+    _fill_diagnostics(
+        diagnostics, objective_initial, objective_history, max_iter_corr, corrected_params_group,
+        min_param_value, converged=False, reason="max_iterations_reached",
+    )
     return corrected_params_group, success_correction
+
+
+def _multi_scan_objective(
+    bus: np.ndarray,
+    branch: np.ndarray,
+    baseMVA_use: float,
+    line_idx: int,
+    x_v: np.ndarray,
+    z_all: np.ndarray,
+    R_variances_vec: np.ndarray,
+    n_scans: int,
+    n_states_per_scan: int,
+    nb: int,
+    ref_bus: int,
+) -> float:
+    """Weighted least-squares objective summed over scans at the joint state ``x_v``."""
+    mpc = {"baseMVA": baseMVA_use, "bus": np.array(bus, copy=True), "branch": np.array(branch, copy=True)}
+    mpc["branch"][line_idx, BR_R] = x_v[n_scans * n_states_per_scan + 0]
+    mpc["branch"][line_idx, BR_X] = x_v[n_scans * n_states_per_scan + 1]
+    Ybus, Yf, Yt = make_ybus(baseMVA_use, mpc["bus"], mpc["branch"])
+    total = 0.0
+    for k_scan in range(n_scans):
+        x_scan = x_v[k_scan * n_states_per_scan : (k_scan + 1) * n_states_per_scan]
+        theta_full, V_full = expand_state_vector(x_scan, nb, ref_bus)
+        dz = z_all[:, k_scan] - calculate_hx(mpc, theta_full, V_full, Ybus, Yf, Yt)
+        total += float(dz @ (dz / R_variances_vec))
+    return total
+
+
+def _fill_diagnostics(
+    diagnostics: Dict[str, Any] | None,
+    objective_initial: float | None,
+    objective_history: list,
+    iterations: int,
+    params: np.ndarray,
+    min_param_value: float,
+    *,
+    converged: bool,
+    reason: str,
+) -> None:
+    if diagnostics is None:
+        return
+    objective_final = float(objective_history[-1]) if objective_history else float("nan")
+    initial = float(objective_initial) if objective_initial is not None else float("nan")
+    reduction = (
+        (initial - objective_final) / initial
+        if np.isfinite(initial) and initial > 0
+        else float("nan")
+    )
+    diagnostics.update(
+        {
+            "objective_initial": initial,
+            "objective_final": objective_final,
+            "objective_reduction": float(reduction),
+            "iterations": int(iterations),
+            "parameter_at_floor": bool(np.any(np.asarray(params) <= min_param_value * (1.0 + 1e-9))),
+            "floor_is_failure": bool(reason == "parameter_pinned_at_positivity_floor"),
+            "converged": bool(converged),
+            "termination_reason": str(reason),
+        }
+    )
 
 
 __all__ = [
     "correct_parameter_group_multi_scan",
+    "branch_rx_jacobian",
+    "branch_rx_jacobian_fd",
     "calculate_param_jacobian_for_line",
     "calculate_param_jacobian_for_line_fd",
     "expand_state_vector",

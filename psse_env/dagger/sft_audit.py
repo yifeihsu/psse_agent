@@ -493,7 +493,7 @@ def _approximate_features(
                                     item.get("line_row0"),
                                     item.get("from_bus"),
                                     item.get("to_bus"),
-                                    item.get("terminal"),
+                                    item.get("parameter", item.get("terminal")),
                                 )
                             )
                     structural[f"{child_path}.rank_pattern"] = ranks

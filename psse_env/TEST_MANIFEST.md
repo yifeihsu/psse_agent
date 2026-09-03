@@ -22,6 +22,7 @@ other repository modules and are intentionally outside this archive.
 | SFT export tests | `psse_env.dagger.test_sft_export` | native schemas, dict arguments, aliases, provenance, bounded history, conflict audit |
 | production-mode tests | `psse_env.test_production_mode` | provider declarations, evidence sufficiency, realizable labels, target-aware classes |
 | exact-gate offline tests | `psse_env.sft.tests.test_gates` | schema conformance, masks, truncation, grouped production rows, smoke logic |
+| numerical-foundation tests | `tools/test_numerical_foundations.py` | finite-difference-verified R/X Jacobian, raw-objective chi-square calibration, ground-truth recovery of injected measurement / parameter / topology / harmonic-source errors (see `docs/numerical_foundations_20260903.md`) |
 
 Preferred archive-contained gate after installing `psse_env/requirements-dev.txt`:
 

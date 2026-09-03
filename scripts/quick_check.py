@@ -93,11 +93,13 @@ if chan_name is not None:
     print(f"Channel: {chan_name}[{chan_local}]")
 
 # 2) Correction
-# Server tool accepts 0- or 1-based; to be robust for MATLAB indexing use 1-based here
+# The tool boundary takes 0-based global measurement indices and converts to the
+# 1-based convention of the underlying MATLAB port itself.  Passing k+1 here
+# corrected the measurement *after* the detected one.
 corr = mcp_call("correct_measurements_from_path", {
     "case_path": case,
     "z": z,
-    "suspect_group": [k + 1],
+    "suspect_group": [k],
     "enable_correction": True,
     "max_correction_iterations": 2,
     "error_tolerance": 1e-3,

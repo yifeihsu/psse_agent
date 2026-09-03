@@ -9,14 +9,26 @@ import os
 
 # We need the scaling functions from ieee14_verification or duplicate them. 
 # proper approach: import from ieee14_verification
-from .ieee14_verification import scale_branch_params, _tap_complex, fundamental_bus_voltages
+from .ieee14_verification import (
+    scale_branch_params,
+    _tap_complex,
+    fundamental_bus_voltages,
+    bus_index_map,
+    branch_in_service,
+)
 
 def build_ybus_harmonic(bus, branch, base_mva: float, h: int, r_model: str = "sqrt") -> np.ndarray:
     """
     Harmonic Ybus(h): frequency-scaled branch parameters + scaled bus shunt susceptance.
+
+    Out-of-service branches (MATPOWER ``BR_STATUS == 0``) are excluded so an
+    open line is electrically disconnected, matching the fundamental WLS model,
+    and branch endpoints are resolved through the bus-number column rather
+    than assuming consecutive 1-based numbering.
     """
     nb = bus.shape[0]
     Y = np.zeros((nb, nb), dtype=complex)
+    index_of = bus_index_map(bus)
 
     # bus shunts (Gs + j Bs), scale Bs with h, Gs usually ignored or constant? 
     # Standard practice: Gs constant, Bs * h
@@ -26,8 +38,10 @@ def build_ybus_harmonic(bus, branch, base_mva: float, h: int, r_model: str = "sq
     Y[np.arange(nb), np.arange(nb)] += (Gs + 1j * (Bs * h))
 
     for br in branch:
-        f = int(br[0]) - 1
-        t = int(br[1]) - 1
+        if not branch_in_service(br):
+            continue
+        f = index_of[int(round(float(br[0])))]
+        t = index_of[int(round(float(br[1])))]
         # MATPOWER branch cols: BR_R=3, BR_X=4, BR_B=5 (0-indexed: 2, 3, 4)
         r1, x1, b1 = float(br[2]), float(br[3]), float(br[4])
         r, x, b = scale_branch_params(r1, x1, b1, h, r_model)

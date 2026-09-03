@@ -1,4 +1,10 @@
 function [lambdaN, success, r, lambda_vec, ea] = LagrangianM_singlephase(z, result, ind, bus_data)
+% ARCHIVE / REFERENCE ONLY (2026-09-03).  The deployed estimator is the Python
+% port tools/lagrangian_port.py.  The branch-parameter derivative block below
+% carries the wrong sign on dP/db and dQ/dg (the "CORRECTED LINE" comments
+% flipped them), ignores BR_STATUS / tap / phase shift, and several assignment
+% lines were mangled into comments, so this file is not runnable as checked in.
+% The verified closed form lives in tools/branch_param_jacobian.py.
 %% Standard State Estimation Program
 %  Zero injections are considered
 %  Residual Analysis and Lagrangian Multiplier method

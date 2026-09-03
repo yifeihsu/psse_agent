@@ -43,6 +43,7 @@ from trace_protocol import (
     SCADA_HARMONIC_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     build_global_metrics,
+    estimate_global_threshold,
     build_lambda_evidence,
     build_residual_evidence,
     hydrate_tool_arguments,
@@ -778,7 +779,7 @@ def make_mock_wls_payload(
         "lambdaN": lam.tolist(),
         "global_residual_sum": float(np.sum(r**2)),
     }
-    payload["global_residual_threshold"] = build_global_metrics(r, meta)["global_residual_threshold"]
+    payload["global_residual_threshold"] = estimate_global_threshold(r, meta.get("nb"))
     return payload
 
 

@@ -131,7 +131,7 @@
               "line_row0",
               "from_bus",
               "to_bus",
-              "terminal",
+              "parameter",
               "value"
             ],
             "properties": {
@@ -157,11 +157,11 @@
                   "null"
                 ]
               },
-              "terminal": {
+              "parameter": {
                 "type": "string",
                 "enum": [
-                  "from",
-                  "to",
+                  "R",
+                  "X",
                   "unknown"
                 ]
               },
