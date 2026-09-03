@@ -52,6 +52,14 @@ DEFAULT_SHUNT_POWER_FLOOR_PU = 0.02
 #: Fault positions this close to a terminal cannot be told apart from a gross
 #: error on that terminal's current sensor using the line's own phasors.
 ENDPOINT_AMBIGUITY_ALPHA = 0.02
+#: Voltage-unbalance-factor gate (|V2|/|V1|) behind a power-quality monitor's
+#: unbalance flag.  Calibrated on the bus-3-rebalanced corpora of 2026-09-03:
+#: the balanced telemetry control is exactly 0, mid-span HIF windows peak at
+#: 0.0032, and single-bus load unbalance has median 0.011.  One percent keeps
+#: a 3x margin above the strongest HIF-induced VUF, so the flag never fires on
+#: a pure HIF row, while roughly half of the unbalance rows still clear it;
+#: the rest are observable only through the branch-current channel.
+DEFAULT_UNBALANCE_VUF_THRESHOLD = 0.01
 S_BASE_MVA = 100.0
 KV_LL_BASE = 1.0
 TERMINAL_CURRENT_METHOD = "terminal_current_differential"
@@ -123,6 +131,24 @@ def voltage_rows_to_phasors(rows: Any) -> dict[int, list[complex]]:
         if bus is None or values is None:
             continue
         out[bus] = values
+    return out
+
+
+def voltage_unbalance_factors(rows: Any) -> list[dict[str, Any]]:
+    """Per-bus voltage unbalance factors ``|V2| / |V1|``, highest first.
+
+    This is the sequence-voltage symptom a power-quality monitor flags.  It
+    is deliberately *not* a source localizer: negative-sequence voltage peaks
+    at electrically weak buses, so use ``unbalance_source_localization`` for
+    the injecting bus.
+    """
+    out: list[dict[str, Any]] = []
+    for bus, (va, vb, vc) in voltage_rows_to_phasors(rows).items():
+        _, positive, negative = sequence_components(va, vb, vc)
+        if abs(positive) <= 1e-12:
+            continue
+        out.append({"bus": int(bus), "vuf": float(abs(negative) / abs(positive))})
+    out.sort(key=lambda item: (-float(item["vuf"]), int(item["bus"])))
     return out
 
 

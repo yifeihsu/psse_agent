@@ -209,12 +209,108 @@ VUF-only gate six of the first eight had stalled unexplained.
 - The scenario generator propagates the channel into `metadata`,
   `hif_runtime`, and every scan of `hif_scan_window`, and derives a balanced
   current control for `telemetry_no_disturbance`.
-- The generator defaults still point at the tracked corpora; pass
-  `imbalance_sample_path` and `hif_sample_paths` to use the new ones. Any
-  freeze that admits unbalance should use the new corpus and revisit the VUF
-  threshold.
+- The generator's default unbalance corpus is now the bus-3-rebalanced
+  branch-current corpus; the defective 2026-07 corpus remains reachable only
+  as `LEGACY_IMBALANCE_SAMPLE_PATH`. The frozen BC0 HIF defaults stay
+  voltage-only; the branch-current HIF corpora are exposed as
+  `CURRENT_TELEMETRY_HIF_SAMPLE_PATHS` for the research path below.
+
+## Research DAgger integration
+
+Added later on 2026-09-03 so the diagnostic families can enter the
+learner-in-the-loop research round without touching any frozen release
+input.
+
+**VUF gate recalibrated to 1%.** The 2% gate had been calibrated on the
+defective corpus. With bus 3 balanced, the balanced telemetry control has VUF
+exactly 0, the 170 HIF scans of the 17-window corpus peak at 0.32%, and the
+220 corrected unbalance rows have median 1.1% (25.5% clear 2%, 53.2% clear
+1%). One percent keeps a 3x margin above the strongest HIF-induced VUF, so the
+flag never fires on a pure HIF row. The constant lives in
+`three_phase_nlm/branch_current_analysis.py` and is shared by the deployment
+provider and the scenario generator.
+
+**Honest unbalance signatures.** The generator no longer stamps
+`three_phase_unbalance vuf_threshold_exceeded` on every row. It emits that
+flag only when the row's largest bus VUF clears the shared gate, and a second
+flag, `three_phase_unbalance phase_current_spread_detected`, only when the
+branch-current channel exposes a noise-significant unbalance source with a
+quiet line-differential null. A row exposing neither is rejected as
+`unbalance_not_observable` (about 3% of the corrected corpus). Both strings
+carry the family marker, so routing and explained-anomaly closure are
+unchanged; only the policy-visible text is now true of the telemetry.
+
+**Training corpus for HIF.** Seventeen windows cannot cover training,
+development, and a protected holdout, so
+`artifacts/measurements/hif_multiscan_currents_train_85x10_20260903/` adds 85
+windows (seed 20260904, five per eligible line, ten diverse scans each,
+resistance 20-200 pu, currents at `sigma = 1e-3` pu). Strict-physics QA
+replayed all 850 snapshots with zero issues. Closed-form accuracy on it:
+
+| HIF, 85 windows x 10 scans | Per scan | Coherent window |
+| --- | ---: | ---: |
+| Line top-1 | 95.7% | 100% |
+| Phase | 96.7% | 100% |
+| `alpha` abs error, median / p90 | n/a | 0.016 / 0.048 |
+| R relative error, median / p90 | n/a | 3.6% / 11.9% |
+
+**Research entry point.** `scripts/run_dagger_research.py` gained
+`--plan-preset {core,diagnostic,combined}`. The `diagnostic` preset trains on
+12 HIF, 6 measurement+HIF, 12 unbalance, and 6 balanced-telemetry-control
+roots with a 6/3/6/3 development split; `combined` unions it with the
+correction-family round. Diagnostic plans default to the branch-current
+corpora (`--hif-sample-paths`, `--imbalance-sample-path` override) and keep
+every scan of a ten-scan window. `--hif-search-profile auto` selects the
+research OpenDSS budget (7x9 grid over ten scans, the configuration validated
+above) whenever the plan contains an HIF family, through a research-only
+environment factory that is otherwise identical to the production one; the
+release factory module stays content-pinned and unmodified. The resolved
+profile is recorded in the run config and only participates in the resume
+check when it differs from the legacy core configuration, so earlier runs
+still resume.
+
+**Counterfactual ladder.** `plausible_wrong_actions` now injects diagnostic
+mistakes whenever the expert proposes a diagnostic tool: estimating before
+localizing, running the wrong family's diagnostic, estimating on a healthy
+line, overrunning the bounded search budget, escalating before the configured
+estimators ran, and applying a parameter correction that would mask an
+explanation-only anomaly. The healthy-line and right-line targets are
+placeholders that the counterfactual generator binds from the injected
+branch's own NLM output after its setup action, never from hidden truth.
+
+**Expert-only end-to-end check** through the research environment factory on
+a diagnostic-preset build (seed 20260905; 3 HIF, 2 measurement+HIF, 4
+unbalance, 2 control roots, none rejected): every HIF and measurement+HIF root
+ran localization then the multi-scan estimator, was accepted on the
+branch-current basis, and finalized with the correct line and phase in 14-18 s
+per episode (resistance error 0.3-4.6%); the four unbalance roots localized
+the labeled bus and finalized in under a second, two carrying both sensor
+flags and two only the current-spread flag; both controls finalized after one
+WLS pass with no explanation. The counterfactual ladder produced eleven rows
+per root (63 s on the HIF root, 7 s on the unbalance root). Every diagnostic
+injection either failed observably (`hse_runtime_missing`,
+`hif_search_budget_invalid`, `hif_diagnostic_ladder_incomplete`,
+`operator_escalation_not_supported`, `correction_route_not_actionable`) or
+ran a rejected fit on the wrong line, and the expert supplied a recovery
+target in every case. One observation for later expert review: after the
+masking parameter correction is refused on an HIF root, the rank-one recovery
+is the next classical context request rather than a return to the diagnostic
+ladder, because the injected parameter-context request has already primed the
+classical experts on the WLS-inconsistent operator vector.
+
+**Still outside this change.** A BC0 freeze that admits unbalance and the
+current-telemetry HIF corpus (new suite quotas, family-policy floors, a v2
+study manifest) needs an expert-baseline run on the new roots first; the
+DAgger-1 release collector's family-keyed schedule constants are deliberately
+untouched. A measurement+unbalance composition was not added: the 122-entry
+operator vector of an unbalanced OpenDSS solve is not consistent with the
+balanced positive-sequence WLS model (every corrected unbalance row and every
+HIF window fails the case14 chi-square test on its own), so an overlaid bad
+meter is not separable by the fundamental-frequency residuals; measurement+HIF
+already carries the same caveat under its explicit handoff allowance.
 
 ## Artifacts
 
 - `artifacts/measurements/out_measurements_imbalance_currents_20260903/` (220 rows, `branch_current_localization_report.json`)
 - `artifacts/measurements/hif_multiscan_currents_17x10_20260903/` (17 x 10 scans, `quality_report.json`, `branch_current_localization_report.json`)
+- `artifacts/measurements/hif_multiscan_currents_train_85x10_20260903/` (85 x 10 scans, seed 20260904, `quality_report.json`, `branch_current_localization_report.json`)

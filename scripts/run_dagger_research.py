@@ -39,7 +39,11 @@ from psse_env.dagger.rollout_collector import (  # noqa: E402
 )
 from psse_env.dagger.suite_builder import partition_release_scenario_v1  # noqa: E402
 from psse_env.oracle.expert_policy import ExpertPolicyOracle  # noqa: E402
-from psse_env.providers.scenario_generator import Round0ScenarioGenerator  # noqa: E402
+from psse_env.providers.scenario_generator import (  # noqa: E402
+    CURRENT_TELEMETRY_HIF_SAMPLE_PATHS,
+    CURRENT_TELEMETRY_IMBALANCE_SAMPLE_PATH,
+    Round0ScenarioGenerator,
+)
 from psse_env.research_models import (  # noqa: E402
     DEFAULT_RESEARCH_MODEL,
     RESEARCH_MODEL_SPECS,
@@ -62,6 +66,160 @@ DEFAULT_DEVELOPMENT_PLAN = {
     "multi_measurement": 6,
     "parameter": 3,
 }
+# Explanation-only diagnostic families.  HIF and unbalance terminate through
+# an accepted anomaly explanation or an operator handoff, never a repair, so a
+# round on them supervises the estimator ladder (localize, estimate, refuse a
+# masking correction, escalate) rather than physical recovery.  The balanced
+# telemetry control keeps the ladder honest: a signature-free root with the
+# same channels present must finalize without any explanation.
+DIAGNOSTIC_TRAIN_PLAN = {
+    "hif": 12,
+    "measurement+hif": 6,
+    "three_phase_unbalance": 12,
+    "telemetry_no_disturbance": 6,
+}
+DIAGNOSTIC_DEVELOPMENT_PLAN = {
+    "hif": 6,
+    "measurement+hif": 3,
+    "three_phase_unbalance": 6,
+    "telemetry_no_disturbance": 3,
+}
+PLAN_PRESETS: dict[str, tuple[dict[str, int], dict[str, int]]] = {
+    "core": (DEFAULT_TRAIN_PLAN, DEFAULT_DEVELOPMENT_PLAN),
+    "diagnostic": (DIAGNOSTIC_TRAIN_PLAN, DIAGNOSTIC_DEVELOPMENT_PLAN),
+    "combined": (
+        {**DEFAULT_TRAIN_PLAN, **DIAGNOSTIC_TRAIN_PLAN},
+        {**DEFAULT_DEVELOPMENT_PLAN, **DIAGNOSTIC_DEVELOPMENT_PLAN},
+    ),
+}
+#: Families whose rows need the per-phase branch-current corpora.
+DIAGNOSTIC_TELEMETRY_FAMILIES = frozenset(
+    {"hif", "measurement+hif", "three_phase_unbalance", "telemetry_no_disturbance"}
+)
+HIF_FAMILIES = frozenset({"hif", "measurement+hif"})
+#: OpenDSS search budget for the research HIF estimators.  The release
+#: factory's 5x7 grid over three scans was sized for voltage-only rows; with
+#: terminal currents the branch-current revision validated a 7x9 grid over
+#: ten scans at 12-18 s per multi-scan call, which is what reaches the 0.05
+#: alpha audit tolerance on a 100 pu fault.
+RESEARCH_HIF_SEARCH_BUDGET = {
+    "hif_alpha_grid_size": 7,
+    "hif_r_grid_size": 9,
+    "hif_max_scans": 10,
+}
+HIF_SEARCH_PROFILES = ("auto", "release", "research")
+LEGACY_RESEARCH_PROFILE = {
+    "plan_preset": "core",
+    "hif_search_profile": "release",
+    "scenario_sources": None,
+}
+
+
+def plan_preset(name: str) -> tuple[dict[str, int], dict[str, int]]:
+    try:
+        train, development = PLAN_PRESETS[str(name)]
+    except KeyError as exc:
+        raise ValueError(
+            f"unknown plan preset {name!r}; choose one of {sorted(PLAN_PRESETS)}"
+        ) from exc
+    return dict(train), dict(development)
+
+
+def resolve_scenario_sources(
+    *,
+    plan_families: Iterable[str],
+    hif_sample_paths: Sequence[Path | str] | None = None,
+    imbalance_sample_path: Path | str | None = None,
+) -> dict[str, Any] | None:
+    """Corpus paths for the generator, or ``None`` for its legacy defaults.
+
+    Diagnostic-telemetry families default to the per-phase branch-current
+    corpora; explicit paths always win.  A core-only plan with no explicit
+    paths keeps the generator defaults so earlier runs still resume.
+    """
+    needs_telemetry = bool(set(plan_families) & DIAGNOSTIC_TELEMETRY_FAMILIES)
+    hif = (
+        [Path(path) for path in hif_sample_paths]
+        if hif_sample_paths
+        else (list(CURRENT_TELEMETRY_HIF_SAMPLE_PATHS) if needs_telemetry else None)
+    )
+    imbalance = (
+        Path(imbalance_sample_path)
+        if imbalance_sample_path
+        else (CURRENT_TELEMETRY_IMBALANCE_SAMPLE_PATH if needs_telemetry else None)
+    )
+    if hif is None and imbalance is None:
+        return None
+    for path in [*(hif or []), *([imbalance] if imbalance is not None else [])]:
+        if not Path(path).is_file():
+            raise FileNotFoundError(f"scenario source corpus is missing: {path}")
+    return {
+        "hif_sample_paths": (
+            [str(Path(path).resolve()) for path in hif] if hif else None
+        ),
+        "imbalance_sample_path": (
+            str(Path(imbalance).resolve()) if imbalance is not None else None
+        ),
+    }
+
+
+def resolve_hif_search_profile(profile: str, plan_families: Iterable[str]) -> str:
+    if profile not in HIF_SEARCH_PROFILES:
+        raise ValueError(f"unknown HIF search profile {profile!r}")
+    if profile != "auto":
+        return profile
+    return "research" if set(plan_families) & HIF_FAMILIES else "release"
+
+
+def research_diagnostic_environment_factory(
+    *, seed: int | None = None, rng: Any | None = None
+) -> Any:
+    """Production environment with the research HIF search budget.
+
+    Identical to ``production_environment_factory`` (same chi-square level,
+    dominance threshold, production dataset mode, deployment candidate oracle,
+    and 24-step horizon) except for the bounded OpenDSS estimator budget in
+    ``RESEARCH_HIF_SEARCH_BUDGET``.  It is research-only: the release factory
+    module is content-pinned by the evaluation policy and is not modified.
+    """
+
+    del seed, rng
+    from psse_env.dagger.release_factories import (
+        BC0_CHI2_ALPHA,
+        BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD,
+    )
+    from psse_env.providers import MatpowerDeploymentProviders
+    from psse_env.transactional_env import TransactionalPSSEEnv
+
+    providers = MatpowerDeploymentProviders(
+        chi2_alpha=BC0_CHI2_ALPHA,
+        parameter_ranking_dominance_threshold=(
+            BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD
+        ),
+        **RESEARCH_HIF_SEARCH_BUDGET,
+    )
+    env = TransactionalPSSEEnv(
+        **providers.env_kwargs(),
+        production_dataset_mode=True,
+        max_steps=24,
+        history_window=4,
+    )
+    if env.production_dataset_mode is not True:
+        raise RuntimeError("research environment did not enter production dataset mode")
+    if getattr(env.candidate_quality_oracle, "mode", None) != "deployment":
+        raise RuntimeError("research environment candidate oracle is not in deployment mode")
+    env.validate_production_configuration()
+    return env
+
+
+def resolve_environment_factory(hif_search_profile: str) -> Callable[..., Any]:
+    from psse_env.dagger.release_factories import production_environment_factory
+
+    if hif_search_profile == "release":
+        return production_environment_factory
+    if hif_search_profile == "research":
+        return research_diagnostic_environment_factory
+    raise ValueError(f"unresolved HIF search profile {hif_search_profile!r}")
 
 
 def _stable_json(value: Any) -> str:
@@ -419,8 +577,10 @@ def prepare_scenario_split(
     seed: int,
     run_descriptor: Mapping[str, Any],
     protected_roots: set[str] | None = None,
+    research_profile: Mapping[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     protected_roots = set(protected_roots or set())
+    profile = dict(research_profile or LEGACY_RESEARCH_PROFILE)
     train_path = output_dir / "training_scenarios.json"
     development_path = output_dir / "development_scenarios.json"
     config_path = output_dir / "config.json"
@@ -439,6 +599,11 @@ def prepare_scenario_split(
         }
         if protected_roots:
             expected["protected_roots"] = sorted(protected_roots)
+        # Runs recorded before the research profile existed used the legacy
+        # core preset with generator-default corpora; only a non-legacy
+        # request or a recorded profile participates in the resume check.
+        if "research_profile" in config or profile != LEGACY_RESEARCH_PROFILE:
+            expected["research_profile"] = profile
         mismatches = [key for key, value in expected.items() if config.get(key) != value]
         if mismatches:
             raise RuntimeError(
@@ -455,11 +620,27 @@ def prepare_scenario_split(
             * int(candidate_multiplier)
             for family in set(train_plan) | set(development_plan)
         }
-        generator = Round0ScenarioGenerator(
-            seed=int(seed),
-            source_partition="train",
-            parameter_ranking_dominance_threshold=1.0,
-        )
+        generator_kwargs: dict[str, Any] = {
+            "seed": int(seed),
+            "source_partition": "train",
+            "parameter_ranking_dominance_threshold": 1.0,
+        }
+        sources = profile.get("scenario_sources")
+        if isinstance(sources, Mapping):
+            if sources.get("hif_sample_paths"):
+                generator_kwargs["hif_sample_paths"] = [
+                    Path(path) for path in sources["hif_sample_paths"]
+                ]
+            if sources.get("imbalance_sample_path"):
+                generator_kwargs["imbalance_sample_path"] = Path(
+                    sources["imbalance_sample_path"]
+                )
+            # Keep every scan of a ten-scan current-telemetry window so the
+            # research estimator budget can use the whole window.
+            generator_kwargs["hif_max_scans"] = RESEARCH_HIF_SEARCH_BUDGET[
+                "hif_max_scans"
+            ]
+        generator = Round0ScenarioGenerator(**generator_kwargs)
         candidates = [
             partition_release_scenario_v1(row, split="dagger_train")
             for row in generator.build(requested)
@@ -489,6 +670,8 @@ def prepare_scenario_split(
         }
         if protected_roots:
             config["protected_roots"] = sorted(protected_roots)
+        if profile != LEGACY_RESEARCH_PROFILE:
+            config["research_profile"] = profile
         _write_json(train_path, training)
         _write_json(development_path, development)
         _write_json(config_path, config)
@@ -1098,14 +1281,54 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--d1-share", type=float, default=0.25)
     result.add_argument("--candidate-multiplier", type=int, default=3)
     result.add_argument(
+        "--plan-preset",
+        choices=tuple(PLAN_PRESETS),
+        default="core",
+        help=(
+            "Default family plans: core is the 12/12/6 correction-family round, "
+            "diagnostic is the HIF/unbalance/telemetry-control round, combined "
+            "is both; --train-plan/--development-plan override the preset"
+        ),
+    )
+    result.add_argument(
         "--train-plan",
         default="",
-        help="JSON object or JSON file; default is 12/12/6 roots",
+        help="JSON object or JSON file; default comes from --plan-preset",
     )
     result.add_argument(
         "--development-plan",
         default="",
-        help="JSON object or JSON file; default is 6/6/3 roots",
+        help="JSON object or JSON file; default comes from --plan-preset",
+    )
+    result.add_argument(
+        "--hif-sample-paths",
+        nargs="+",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "HIF window corpora for the generator; diagnostic plans default to "
+            "the per-phase branch-current corpora"
+        ),
+    )
+    result.add_argument(
+        "--imbalance-sample-path",
+        type=Path,
+        default=None,
+        help=(
+            "Unbalance corpus for the generator; diagnostic plans default to the "
+            "bus-3-rebalanced branch-current corpus"
+        ),
+    )
+    result.add_argument(
+        "--hif-search-profile",
+        choices=HIF_SEARCH_PROFILES,
+        default="auto",
+        help=(
+            "OpenDSS estimator budget: release is the frozen 5x7 grid over three "
+            "scans, research is the validated 7x9 grid over ten scans; auto picks "
+            "research whenever the plan contains an HIF family"
+        ),
     )
     result.add_argument("--allow-download", action="store_true")
     result.add_argument("--trust-remote-code", action="store_true")
@@ -1159,10 +1382,24 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     d0_view_fingerprint = hashlib.sha256(
         _stable_json(d0_train_rows).encode("utf-8")
     ).hexdigest()
-    train_plan = _parse_plan(args.train_plan, DEFAULT_TRAIN_PLAN)
-    development_plan = _parse_plan(
-        args.development_plan, DEFAULT_DEVELOPMENT_PLAN
+    train_default, development_default = plan_preset(args.plan_preset)
+    train_plan = _parse_plan(args.train_plan, train_default)
+    development_plan = _parse_plan(args.development_plan, development_default)
+    plan_families = set(train_plan) | set(development_plan)
+    scenario_sources = resolve_scenario_sources(
+        plan_families=plan_families,
+        hif_sample_paths=args.hif_sample_paths,
+        imbalance_sample_path=args.imbalance_sample_path,
     )
+    hif_search_profile = resolve_hif_search_profile(
+        args.hif_search_profile, plan_families
+    )
+    environment_factory = resolve_environment_factory(hif_search_profile)
+    research_profile = {
+        "plan_preset": str(args.plan_preset),
+        "hif_search_profile": hif_search_profile,
+        "scenario_sources": scenario_sources,
+    }
     run_descriptor = {
         "adapter_path": str(adapter),
         "model_choice": model_spec.key,
@@ -1188,6 +1425,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         candidate_multiplier=args.candidate_multiplier,
         seed=args.seed,
         run_descriptor=run_descriptor,
+        research_profile=research_profile,
     )
     _write_jsonl(output_dir / "d0.train.current.jsonl", d0_train_rows)
     _write_json(
@@ -1213,7 +1451,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             prompt_profile=model_spec.prompt_profile,
             architecture=model_spec.architecture,
         ),
-        environment_factory=production_environment_factory,
+        environment_factory=environment_factory,
         learner_adapter_path=str(adapter),
     )
     updated, chat_rows, export_failures = export_research_rows(
@@ -1266,7 +1504,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             seed=args.seed,
             max_steps=args.eval_max_steps,
             policy_loader=research_gemma_policy_factory,
-            environment_factory=production_environment_factory,
+            environment_factory=environment_factory,
             evaluator=evaluate_rollout_suites,
             load_in_4bit=not args.no_load_in_4bit,
             local_files_only=not args.allow_download,
@@ -1287,6 +1525,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "prompt_profile": model_spec.prompt_profile,
             "purpose": model_spec.purpose,
         },
+        "research_profile": research_profile,
         "collection_metrics": metrics,
         "mixture": mixture_report,
         "paired_evaluation": comparison,

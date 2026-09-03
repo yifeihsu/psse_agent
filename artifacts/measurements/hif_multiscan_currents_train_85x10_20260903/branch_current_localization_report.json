@@ -1,0 +1,34 @@
+{
+  "hif": {
+    "alpha_abs_error_median": 0.04521313174320152,
+    "alpha_abs_error_p90": 0.13850289254841228,
+    "coherent_window_alpha_abs_error_median": 0.016275106757149382,
+    "coherent_window_alpha_abs_error_p90": 0.048175002822662655,
+    "coherent_window_detected_rate": 1.0,
+    "coherent_window_line_top1_accuracy": 1.0,
+    "coherent_window_phase_accuracy": 1.0,
+    "coherent_window_r_rel_error_median": 0.03560742793355746,
+    "coherent_window_r_rel_error_p90": 0.11932967732768615,
+    "differential_detected_rate": 0.5976470588235294,
+    "family": "hif",
+    "line_top1_accuracy": 0.9564705882352941,
+    "line_top3_accuracy": 0.9905882352941177,
+    "phase_accuracy": 0.9670588235294117,
+    "r_rel_error_median": 0.07677890409567695,
+    "r_rel_error_p90": 0.23710553813496701,
+    "scans_scored": 850,
+    "window_line_top1_accuracy": 1.0,
+    "window_median_alpha_abs_error_median": 0.016275106757149382,
+    "window_median_alpha_abs_error_p90": 0.04652895907498476,
+    "window_median_r_rel_error_median": 0.03973318552395001,
+    "window_median_r_rel_error_p90": 0.1391095455388087,
+    "window_phase_accuracy": 1.0,
+    "windows_scored": 85
+  },
+  "rows": 85,
+  "rows_by_scenario": {
+    "high_impedance_fault": 85
+  },
+  "rows_with_branch_currents": 85,
+  "samples": "artifacts\\measurements\\hif_multiscan_currents_train_85x10_20260903\\samples.jsonl"
+}

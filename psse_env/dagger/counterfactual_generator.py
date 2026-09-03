@@ -10,11 +10,33 @@ from psse_env.actions import (
     GET_MEASUREMENT_CONTEXT,
     GET_PARAMETER_CONTEXT,
     GET_TOPOLOGY_CONTEXT,
+    RUN_THREE_PHASE_NLM_FROM_PATH,
     RUN_WLS,
 )
 from psse_env.state_store import policy_safe_copy
+from psse_env.oracle.diagnostics_expert import DiagnosticsExpert
 from psse_env.oracle.process_validity import ProcessValidityOracle
-from .error_injectors import InjectedAction, plausible_wrong_actions
+from .error_injectors import (
+    NLM_BRANCH_PLACEHOLDERS,
+    InjectedAction,
+    plausible_wrong_actions,
+    resolve_nlm_branch_placeholder,
+)
+
+
+def latest_nlm_top_branch(history: Any) -> int | None:
+    """Top NLM branch in an executed branch history, read observably.
+
+    Reuses the diagnostics expert's history parser so the counterfactual
+    binding and the expert's own routing read the same ``nlm_summary``.
+    """
+    completed = DiagnosticsExpert._completed_diagnostics(list(history or []))
+    metrics = completed.get(RUN_THREE_PHASE_NLM_FROM_PATH)
+    # A failed localization carries no branch a learner could act on, even
+    # if a partial summary was returned with the failure.
+    if not isinstance(metrics, Mapping) or metrics.get("_execution_status") != "success":
+        return None
+    return DiagnosticsExpert._nlm_top_branch(metrics)
 
 
 class CounterfactualGenerator:
@@ -306,6 +328,13 @@ class CounterfactualGenerator:
             arguments["state_id"] = state.get("candidate_state_id")
         if arguments.get("candidate_state_id") == "__candidate__":
             arguments["candidate_state_id"] = state.get("candidate_state_id")
+        placeholder = arguments.get("candidate_branch_row0")
+        if isinstance(placeholder, str) and placeholder in NLM_BRANCH_PLACEHOLDERS:
+            # Bound from the injected branch's own NLM output after its setup
+            # actions ran; hidden truth never participates.
+            arguments["candidate_branch_row0"] = resolve_nlm_branch_placeholder(
+                placeholder, latest_nlm_top_branch(getattr(branch, "history", []))
+            )
         bound["arguments"] = arguments
         return bound
 

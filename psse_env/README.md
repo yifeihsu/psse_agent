@@ -199,7 +199,17 @@ multi-measurement, parameter, topology, harmonic, HIF,
 measurement+parameter, measurement+topology, and measurement+HIF.
 Three-phase unbalance and telemetry-no-disturbance remain supported generator
 capabilities outside the BC0 family policy; a future freeze must add explicit
-quotas and thresholds before claiming either one. Every selected scenario
+quotas and thresholds before claiming either one.
+
+Outside the frozen release path, `scripts/run_dagger_research.py
+--plan-preset diagnostic` (or `combined`) collects a research round on the
+explanation-only families: HIF, measurement+HIF, three-phase unbalance, and
+the balanced telemetry control. It draws from the per-phase branch-current
+corpora, emits unbalance sensor signatures only when the row's telemetry
+actually shows them, and runs the OpenDSS estimators under the validated
+research budget through a research-only environment factory; the release
+factory module is not modified. See
+`docs/branch_current_telemetry_20260903.md`. Every selected scenario
 passes its physical validation gate, and scenario IDs are opaque hashes;
 family, cardinality, network case, and source tier remain audit/split metadata
 rather than policy-visible hints.

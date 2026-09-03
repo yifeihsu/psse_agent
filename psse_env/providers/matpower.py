@@ -63,6 +63,7 @@ from three_phase_nlm.branch_current_analysis import (  # noqa: E402  (repo-root 
     BRANCH_CURRENT_CHANNEL,
     BRANCH_CURRENT_SIGMA_KEY,
     DEFAULT_BRANCH_CURRENT_SIGMA_PU,
+    DEFAULT_UNBALANCE_VUF_THRESHOLD,
     branch_current_rows_to_phasors,
     line_differential_null_test,
     terminal_current_hif_localization,
@@ -407,7 +408,9 @@ class MatpowerDeploymentProviders:
         hif_r_grid_size: int = 35,
         hif_max_scans: int = 10,
         harmonic_thd_threshold_percent: float = 1.0,
-        unbalance_vuf_threshold: float = 0.02,
+        # Shared with the scenario generator so the policy-visible
+        # ``vuf_threshold_exceeded`` sensor signature and this gate agree.
+        unbalance_vuf_threshold: float = DEFAULT_UNBALANCE_VUF_THRESHOLD,
         hif_min_residual_reduction: float = 0.20,
         hif_max_weighted_residual_norm: float = 3.0,
         hif_terminal_consistency_limit: float = 0.5,

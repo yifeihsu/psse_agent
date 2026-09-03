@@ -7,6 +7,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from scripts.run_dagger_research import (
+    DEFAULT_DEVELOPMENT_PLAN,
+    DEFAULT_TRAIN_PLAN,
+    RESEARCH_HIF_SEARCH_BUDGET,
     allocate_scenarios,
     build_research_mixture,
     collect_resumable,
@@ -15,7 +18,15 @@ from scripts.run_dagger_research import (
     is_research_dagger_row,
     load_protected_suite_roots,
     mark_research_label_eligibility,
+    plan_preset,
+    prepare_scenario_split,
     refresh_d0_training_view,
+    resolve_hif_search_profile,
+    resolve_scenario_sources,
+)
+from psse_env.providers.scenario_generator import (
+    CURRENT_TELEMETRY_HIF_SAMPLE_PATHS,
+    CURRENT_TELEMETRY_IMBALANCE_SAMPLE_PATH,
 )
 from psse_env.dagger.dataset_builder import examples_to_chat_sft
 from psse_env.dagger.offline_teacher_target_audit import (
@@ -358,6 +369,137 @@ class ResearchSplitAndResumeTests(unittest.TestCase):
         self.assertEqual(observed[0][1], observed[1][1])
         self.assertEqual(observed[0][1], ["dev_a", "dev_b"])
         self.assertEqual(comparison["r1_minus_bc0"]["resolved_episodes"], 1.0)
+
+
+class DiagnosticFamilyPresetTests(unittest.TestCase):
+    def test_core_preset_is_the_legacy_default_plan(self) -> None:
+        train, development = plan_preset("core")
+        self.assertEqual(train, DEFAULT_TRAIN_PLAN)
+        self.assertEqual(development, DEFAULT_DEVELOPMENT_PLAN)
+        with self.assertRaises(ValueError):
+            plan_preset("unknown")
+
+    def test_diagnostic_preset_covers_explanation_only_families_and_control(self) -> None:
+        train, development = plan_preset("diagnostic")
+        self.assertEqual(
+            set(train),
+            {"hif", "measurement+hif", "three_phase_unbalance", "telemetry_no_disturbance"},
+        )
+        self.assertEqual(set(train), set(development))
+        for family, count in train.items():
+            self.assertGreater(count, development[family])
+        combined_train, combined_dev = plan_preset("combined")
+        self.assertEqual(set(combined_train), set(DEFAULT_TRAIN_PLAN) | set(train))
+        self.assertEqual(set(combined_dev), set(DEFAULT_DEVELOPMENT_PLAN) | set(development))
+
+    def test_core_plan_keeps_generator_default_corpora(self) -> None:
+        self.assertIsNone(resolve_scenario_sources(plan_families=set(DEFAULT_TRAIN_PLAN)))
+
+    def test_diagnostic_plan_defaults_to_branch_current_corpora(self) -> None:
+        sources = resolve_scenario_sources(plan_families={"three_phase_unbalance"})
+        self.assertIsNotNone(sources)
+        assert sources is not None
+        self.assertEqual(
+            sources["hif_sample_paths"],
+            [str(Path(path).resolve()) for path in CURRENT_TELEMETRY_HIF_SAMPLE_PATHS],
+        )
+        self.assertEqual(
+            sources["imbalance_sample_path"],
+            str(Path(CURRENT_TELEMETRY_IMBALANCE_SAMPLE_PATH).resolve()),
+        )
+        for path in sources["hif_sample_paths"]:
+            self.assertIn("currents", path)
+
+    def test_explicit_corpus_paths_win_and_must_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            corpus = Path(tmp) / "samples.jsonl"
+            corpus.write_text("", encoding="utf-8")
+            sources = resolve_scenario_sources(
+                plan_families={"parameter"},
+                hif_sample_paths=[corpus],
+                imbalance_sample_path=None,
+            )
+            assert sources is not None
+            self.assertEqual(sources["hif_sample_paths"], [str(corpus.resolve())])
+            self.assertIsNone(sources["imbalance_sample_path"])
+            with self.assertRaises(FileNotFoundError):
+                resolve_scenario_sources(
+                    plan_families={"hif"},
+                    imbalance_sample_path=Path(tmp) / "missing.jsonl",
+                )
+
+    def test_hif_search_profile_auto_follows_the_plan(self) -> None:
+        self.assertEqual(resolve_hif_search_profile("auto", {"hif"}), "research")
+        self.assertEqual(resolve_hif_search_profile("auto", {"measurement+hif"}), "research")
+        self.assertEqual(resolve_hif_search_profile("auto", {"three_phase_unbalance"}), "release")
+        self.assertEqual(resolve_hif_search_profile("release", {"hif"}), "release")
+        self.assertEqual(resolve_hif_search_profile("research", {"parameter"}), "research")
+        with self.assertRaises(ValueError):
+            resolve_hif_search_profile("fast", {"hif"})
+
+    def test_research_budget_is_within_the_hard_search_limits(self) -> None:
+        from hif_search_limits import validate_hif_search_limits
+
+        alpha, radius, scans = validate_hif_search_limits(
+            alpha_grid_size=RESEARCH_HIF_SEARCH_BUDGET["hif_alpha_grid_size"],
+            r_grid_size=RESEARCH_HIF_SEARCH_BUDGET["hif_r_grid_size"],
+            max_scans=RESEARCH_HIF_SEARCH_BUDGET["hif_max_scans"],
+        )
+        self.assertEqual((alpha, radius, scans), (7, 9, 10))
+
+    def test_legacy_config_resumes_without_a_recorded_profile(self) -> None:
+        # A run recorded before the research profile existed must still
+        # resume under the core preset, and a diagnostic request against it
+        # must be refused instead of silently reusing its scenarios.
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            d0_raw = output_dir / "d0.raw.jsonl"
+            d0_raw.write_text("", encoding="utf-8")
+            descriptor = {"adapter_path": "adapter"}
+            base_config = {
+                "contract": "research_dagger_minimal_v1",
+                "seed": 7,
+                "train_plan": {"parameter": 1},
+                "development_plan": {"parameter": 1},
+                "d0_raw_path": str(d0_raw.resolve()),
+                "run_descriptor": descriptor,
+            }
+            rows = [
+                {"grouping": {"physical_root_fingerprint": f"root_{index}", "scenario_family": "parameter", "split": split}}
+                for index, split in enumerate(("dagger_train", "development"))
+            ]
+            (output_dir / "training_scenarios.json").write_text(json.dumps(rows[:1]), encoding="utf-8")
+            (output_dir / "development_scenarios.json").write_text(json.dumps(rows[1:]), encoding="utf-8")
+            (output_dir / "config.json").write_text(json.dumps(base_config), encoding="utf-8")
+            training, development = prepare_scenario_split(
+                output_dir=output_dir,
+                d0_raw_path=d0_raw,
+                d0_roots=set(),
+                train_plan={"parameter": 1},
+                development_plan={"parameter": 1},
+                candidate_multiplier=1,
+                seed=7,
+                run_descriptor=descriptor,
+            )
+            self.assertEqual(len(training), 1)
+            self.assertEqual(len(development), 1)
+            with self.assertRaises(RuntimeError) as caught:
+                prepare_scenario_split(
+                    output_dir=output_dir,
+                    d0_raw_path=d0_raw,
+                    d0_roots=set(),
+                    train_plan={"parameter": 1},
+                    development_plan={"parameter": 1},
+                    candidate_multiplier=1,
+                    seed=7,
+                    run_descriptor=descriptor,
+                    research_profile={
+                        "plan_preset": "diagnostic",
+                        "hif_search_profile": "research",
+                        "scenario_sources": None,
+                    },
+                )
+            self.assertIn("research_profile", str(caught.exception))
 
 
 if __name__ == "__main__":
