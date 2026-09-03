@@ -169,20 +169,46 @@ def _wls_json(case_path: str, z_list: List[float]) -> Dict[str, Any]:  # pragma:
         raise ValueError(f"WLS input error: |z|={len(z_arr)}, expected {expN} (=3*nb + 4*nl).")
         
     try:
-        lambdaN, success, r, lambda_vec, ea = lagrangian_port.lagrangian_m_singlephase(
+        details = lagrangian_port.lagrangian_m_singlephase_details(
             z=z_arr,
             result=ppc,
             ind=0,
             bus_data=bus_data,
         )
-        
-        # Format identical to the previous MATLAB response
-        r_list = r.tolist() if isinstance(r, np.ndarray) else list(r)
+
+        def _finite(value: Any) -> float | None:
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return None
+            return value if np.isfinite(value) else None
+
+        def _as_list(value: Any) -> List[float]:
+            return value.tolist() if isinstance(value, np.ndarray) else list(value)
+
+        # ``global_residual_sum`` is the classical WLS objective J = e' R^-1 e,
+        # the quantity that follows chi^2(m - n) under clean Gaussian noise and
+        # the one every downstream chi-square gate consumes.  The historically
+        # emitted sum of squared *normalized* residuals is kept under its own
+        # key for inspection only: those residuals are correlated with
+        # expectation ~m for their squared sum, so thresholding it against
+        # chi2(m - n) rejected clean data far above the nominal alpha.
+        wls_objective = _finite(details["wls_objective"])
         return {
-            "success": bool(success),
-            "lambdaN": lambdaN.tolist(),
-            "r": r_list,
-            "global_residual_sum": float(np.sum(np.asarray(r_list, dtype=float) ** 2)),
+            "success": bool(details["success"]),
+            "lambdaN": _as_list(details["lambdaN"]),
+            "lambda_layout": "per_branch_R_X_interleaved",
+            "r": _as_list(details["r_norm"]),
+            "raw_residual": _as_list(details["raw_residual"]),
+            "wls_objective": wls_objective,
+            "global_residual_sum": wls_objective,
+            "sum_normalized_residual_sq": _finite(details["sum_normalized_residual_sq"]),
+            "n_measurements": int(details["n_measurements"]),
+            "n_states": int(details["n_states"]),
+            "dof": int(details["dof"]),
+            "theta_est_rad": _as_list(details["theta_est_rad"]),
+            "vm_est_pu": _as_list(details["vm_est_pu"]),
+            "iterations": int(details["iterations"]),
             "branch_info": _branch_info_from_ppc(ppc),
         }
     except Exception as e:
@@ -331,6 +357,12 @@ def _meas_correction_json(
             corrected.append(rec)
             
         S["corrected_measurements"] = corrected
+        # Raw WLS objective of the (possibly corrected) final solve, so callers
+        # can run the global chi-square test on the same statistic as the WLS
+        # tool.  Only defined when every measurement was active.
+        if success and len(final_resid_raw) == nz:
+            _resid = np.asarray(final_resid_raw, dtype=float)
+            S["wls_objective"] = float(_resid @ (_resid / R_variances_full_arr))
         S["applied_any_correction"] = bool(zci.get("applied_any_correction", False))
         S["iterations_performed"] = int(zci.get("iterations_performed", 0))
         S["suspect_group_zero_based"] = suspect_group_0
@@ -631,9 +663,18 @@ def _run_hse_logic(
     case_path: str,
     harmonic_measurements: List[Dict[str, Any]],
     harmonic_orders: List[int],
-    slack_bus: int = 0
+    slack_bus: int = 0,
+    fundamental_vm: List[float] | None = None,
 ) -> Dict[str, Any]:
-    """Internal implementation of HSE logic."""
+    """Internal implementation of HSE logic.
+
+    ``fundamental_vm`` (optional) supplies the observed fundamental voltage
+    magnitudes (p.u., one per bus) used as the THD denominator; when omitted
+    the case's stored Vm is used and ``fundamental_voltage_source`` says so.
+    The payload also reports the weighted SSE of the no-source null model so
+    callers can require that the single-source fit explains the measured
+    harmonic voltages rather than accepting any threshold crossing.
+    """
     import numpy as np
     import math
     try:
@@ -691,22 +732,52 @@ def _run_hse_logic(
             candidate_buses_1based=None
         )
         
-        # 4. THD Calculation (need fundamental voltages)
-        Vm = bus_mat[:, 7]
+        # 4. THD Calculation (need fundamental voltages).  Prefer the observed
+        # fundamental Vm when the caller supplies it; the case's stored Vm is
+        # only a planning value.
+        nb_case = int(bus_mat.shape[0])
         Va = np.radians(bus_mat[:, 8])
+        fundamental_source = "case_vm"
+        Vm = bus_mat[:, 7]
+        if fundamental_vm is not None:
+            observed = np.asarray(list(fundamental_vm), dtype=float).reshape(-1)
+            if observed.shape[0] == nb_case and np.all(np.isfinite(observed)) and np.all(observed > 0.0):
+                Vm = observed
+                fundamental_source = "observed_vm"
         V1 = Vm * (np.cos(Va) + 1j * np.sin(Va))
-        
+
         thd_est = hse.compute_thd_from_states(Vhat_by_h, [1] + harmonic_orders, V1)
-        
+
+        # Null model: no harmonic source anywhere, i.e. zero predicted
+        # harmonic voltage.  Its weighted SSE uses the same 1/sigma row
+        # scaling as the single-source fit, so ``sse_reduction_vs_null`` is the
+        # fraction of measured harmonic energy the best source explains.
+        null_sse = 0.0
+        for h, (buses0, Vmeas, sigma) in Vh_meas_by_h.items():
+            if int(h) == 1:
+                continue
+            mask = np.asarray(buses0, dtype=int) != int(slack_bus)
+            v = np.asarray(Vmeas, dtype=complex)[mask]
+            s = np.clip(np.asarray(sigma, dtype=float)[mask], 1e-12, None)
+            null_sse += float(np.sum((np.abs(v) / s) ** 2))
+        best_sse = float(ranking[0]["score"]) if ranking else None
+        sse_reduction = (
+            float(1.0 - best_sse / null_sse) if (best_sse is not None and null_sse > 0.0) else None
+        )
+
         # 5. Serialize Output
         def c2l(c): return [float(c.real), float(c.imag)]
-        
+
         return {
             "success": True,
             "best_candidate_bus_1based": int(best_bus) if best_bus else None,
             "ranking_top10": ranking[:10] if ranking else [],
             "estimated_injections": {str(h): c2l(val) for h, val in I_source_hat.items()},
-            "estimated_thd_percent": {str(i+1): float(t*100) for i, t in enumerate(thd_est)}
+            "estimated_thd_percent": {str(i+1): float(t*100) for i, t in enumerate(thd_est)},
+            "fundamental_voltage_source": fundamental_source,
+            "null_model_sse": float(null_sse),
+            "best_model_sse": best_sse,
+            "sse_reduction_vs_null": sse_reduction,
         }
         
     except Exception as e:

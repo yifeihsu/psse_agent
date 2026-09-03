@@ -76,10 +76,29 @@ def _tap_complex(ratio: float, angle_deg: float) -> complex:
     return ratio * np.exp(1j * np.deg2rad(angle_deg))
 
 
+def bus_index_map(bus: np.ndarray) -> Dict[int, int]:
+    """Map external MATPOWER bus numbers (column 0) to 0-based row indices.
+
+    Branch endpoints are looked up through this map instead of ``int(id) - 1``
+    so non-consecutive bus numbering is handled the same way as in the WLS
+    ports.
+    """
+    return {int(round(float(value))): index for index, value in enumerate(np.asarray(bus)[:, 0])}
+
+
+def branch_in_service(br: np.ndarray) -> bool:
+    """MATPOWER ``BR_STATUS`` (column 11); a missing column means in service."""
+    row = np.asarray(br, dtype=float).reshape(-1)
+    if row.shape[0] <= 10:
+        return True
+    return bool(np.isfinite(row[10]) and row[10] != 0.0)
+
+
 def build_ybus(bus: np.ndarray, branch: np.ndarray, base_mva: float) -> np.ndarray:
-    """Fundamental Ybus from MATPOWER-like bus/branch arrays."""
+    """Fundamental Ybus from MATPOWER-like bus/branch arrays (honours BR_STATUS)."""
     nb = bus.shape[0]
     Y = np.zeros((nb, nb), dtype=complex)
+    index_of = bus_index_map(bus)
 
     # Bus shunts (Gs + jBs) in per unit
     Gs = bus[:, 4] / base_mva
@@ -87,8 +106,10 @@ def build_ybus(bus: np.ndarray, branch: np.ndarray, base_mva: float) -> np.ndarr
     Y[np.arange(nb), np.arange(nb)] += (Gs + 1j * Bs)
 
     for br in branch:
-        f = int(br[0]) - 1
-        t = int(br[1]) - 1
+        if not branch_in_service(br):
+            continue
+        f = index_of[int(round(float(br[0])))]
+        t = index_of[int(round(float(br[1])))]
         r, x, b = float(br[2]), float(br[3]), float(br[4])
         tap = _tap_complex(float(br[8]), float(br[9]))
 
@@ -132,9 +153,10 @@ def scale_branch_params(r1: float, x1: float, b1: float, h: int,
 
 def build_ybus_h(bus: np.ndarray, branch: np.ndarray, h: int, base_mva: float,
                  r_model: str = "sqrt") -> np.ndarray:
-    """Harmonic Ybus(h). Uses the same topology, with frequency-scaled branch parameters."""
+    """Harmonic Ybus(h). Uses the same topology (honouring BR_STATUS), with frequency-scaled branch parameters."""
     nb = bus.shape[0]
     Y = np.zeros((nb, nb), dtype=complex)
+    index_of = bus_index_map(bus)
 
     # Bus shunts: simplistic scaling of susceptance with harmonic order
     Gs = bus[:, 4] / base_mva
@@ -142,8 +164,10 @@ def build_ybus_h(bus: np.ndarray, branch: np.ndarray, h: int, base_mva: float,
     Y[np.arange(nb), np.arange(nb)] += (Gs + 1j * (Bs * h))
 
     for br in branch:
-        f = int(br[0]) - 1
-        t = int(br[1]) - 1
+        if not branch_in_service(br):
+            continue
+        f = index_of[int(round(float(br[0])))]
+        t = index_of[int(round(float(br[1])))]
         r1, x1, b1 = float(br[2]), float(br[3]), float(br[4])
         r, x, b = scale_branch_params(r1, x1, b1, h, r_model=r_model)
         tap = _tap_complex(float(br[8]), float(br[9]))
@@ -192,8 +216,10 @@ def branch_terminal_currents(V: np.ndarray, branch: np.ndarray, h: int = 1,
     If = np.zeros(nbranch, dtype=complex)
 
     for k, br in enumerate(branch):
-        f = int(br[0]) - 1
-        t = int(br[1]) - 1
+        if not branch_in_service(br):
+            continue  # an open branch carries no current
+        f = int(round(float(br[0]))) - 1
+        t = int(round(float(br[1]))) - 1
 
         r1, x1, b1 = float(br[2]), float(br[3]), float(br[4])
         if h == 1:
@@ -224,8 +250,10 @@ def branch_terminal_currents_both(V: np.ndarray, branch: np.ndarray, h: int = 1,
     It = np.zeros(nbranch, dtype=complex)
 
     for k, br in enumerate(branch):
-        f = int(br[0]) - 1
-        t = int(br[1]) - 1
+        if not branch_in_service(br):
+            continue  # an open branch carries no current
+        f = int(round(float(br[0]))) - 1
+        t = int(round(float(br[1]))) - 1
 
         r1, x1, b1 = float(br[2]), float(br[3]), float(br[4])
         if h == 1:

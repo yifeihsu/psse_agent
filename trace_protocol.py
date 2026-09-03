@@ -74,7 +74,7 @@ DECISION_SCHEMA_TEXT = {
                 "line_row0": "0-based branch row or null",
                 "from_bus": "int or null",
                 "to_bus": "int or null",
-                "terminal": "'from'|'to'|'unknown'",
+                "parameter": "'R'|'X'|'unknown' (which series parameter the multiplier belongs to)",
                 "value": "number",
             }
         ],
@@ -826,8 +826,11 @@ def build_lambda_evidence(
 ) -> list[dict[str, Any]]:
     evidence: list[dict[str, Any]] = []
     for idx0, value in topk_abs(lambda_values, k, min_abs=min_abs):
+        # ``lambdaN`` is laid out per branch as [R_k, X_k]; the two entries are
+        # the series resistance and reactance multipliers of the same line,
+        # not its two terminals.
         line_row0 = idx0 // 2 if idx0 >= 0 else None
-        terminal = "from" if idx0 % 2 == 0 else "to"
+        parameter = "R" if idx0 % 2 == 0 else "X"
         branch = branch_info[line_row0] if line_row0 is not None and 0 <= line_row0 < len(branch_info) else {}
         evidence.append(
             {
@@ -835,7 +838,7 @@ def build_lambda_evidence(
                 "line_row0": int(line_row0) if line_row0 is not None else None,
                 "from_bus": _maybe_int(branch.get("from_bus")),
                 "to_bus": _maybe_int(branch.get("to_bus")),
-                "terminal": terminal if branch else "unknown",
+                "parameter": parameter if branch else "unknown",
                 "value": float(value),
             }
         )
@@ -852,7 +855,14 @@ def build_global_metrics(
     residual_array = np.asarray(residuals, dtype=float)
     J = _maybe_float(global_residual_sum)
     if J is None:
-        J = float(np.sum(residual_array**2))
+        # The residuals handed to this helper are *normalized* residuals.
+        # Their squared sum is not the WLS objective and is not chi-square
+        # distributed with m - n degrees of freedom, so it must not be used as
+        # a stand-in for the global statistic.
+        raise ValueError(
+            "global_residual_sum (raw WLS objective e'R^-1 e) is required; "
+            "the squared sum of normalized residuals is not a chi-square statistic"
+        )
 
     threshold = _maybe_float(global_residual_threshold)
     if threshold is None:
@@ -972,6 +982,8 @@ def summarize_hse_payload(tool_payload: Mapping[str, Any]) -> dict[str, Any]:
         "best_candidate_bus_1based": best_bus,
         "best_candidate_thd_percent": best_thd,
         "ranking_top5": ranking,
+        "sse_reduction_vs_null": _maybe_float(tool_payload.get("sse_reduction_vs_null")),
+        "fundamental_voltage_source": tool_payload.get("fundamental_voltage_source"),
     }
     if tool_payload.get("error"):
         summary["error"] = str(tool_payload["error"])

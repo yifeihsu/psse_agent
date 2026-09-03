@@ -8,6 +8,8 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
+from tools.branch_param_jacobian import all_branch_rx_jacobian
+
 
 # --- MATPOWER / PYPOWER-style column indices (0-based for Python) ---
 # bus
@@ -246,7 +248,7 @@ def _split_rows_sparse(M: sp.spmatrix, rows: np.ndarray) -> Tuple[sp.csr_matrix,
     return M[keep, :].tocsr(), M[rows, :].tocsr()
 
 
-def lagrangian_m_singlephase(
+def lagrangian_m_singlephase_details(
     z: np.ndarray,
     result: Any,
     ind: int,
@@ -255,9 +257,27 @@ def lagrangian_m_singlephase(
     zero_injection_tol: float | None = None,
     max_it: int = 20,
     tol: float = 1e-5,
-) -> Tuple[np.ndarray, int, np.ndarray, np.ndarray, np.ndarray]:
+) -> Dict[str, Any]:
     """
-    Python translation of the MATLAB function LagrangianM_singlephase().
+    WLS state estimation with normalized Lagrange multipliers (NLM) for branch R/X.
+
+    Python translation of the MATLAB function LagrangianM_singlephase(), returning
+    a dictionary with every quantity a downstream bad-data test needs:
+
+    - ``lambdaN`` : normalized branch-parameter multipliers, columns ordered
+      ``[R_0, X_0, R_1, X_1, ...]`` (length ``2*nl``).
+    - ``success`` : 1 if the WLS iteration converged, else 0.
+    - ``r_norm`` : normalized residuals ``|e_i| / sqrt(Omega_ii)`` for local
+      bad-data ranking (these are correlated; their squared sum is NOT a
+      chi-square statistic).
+    - ``raw_residual`` : ``e = z - h(x_hat)``.
+    - ``wls_objective`` : ``J = e^T R^{-1} e``, the classical global chi-square
+      statistic with ``dof = m - n`` degrees of freedom.
+    - ``sum_normalized_residual_sq`` : ``sum(r_norm^2)`` (reported only so the
+      historically used statistic stays inspectable; do not threshold on it).
+    - ``theta_est_rad`` / ``vm_est_pu`` : estimated bus state.
+    - ``lambda_vec`` / ``ea`` : raw multipliers and their covariance.
+    - ``n_measurements`` / ``n_states`` / ``dof`` / ``iterations``.
 
     Parameters
     ----------
@@ -407,8 +427,23 @@ def lagrangian_m_singlephase(
         x0 = x0 + dx
         x[nstate] = x0
     else:
-        lambdaN = 10.0 * np.ones(nl)
-        return lambdaN, 0, np.array([]), np.array([]), np.array([])
+        return {
+            "lambdaN": 10.0 * np.ones(nl),
+            "success": 0,
+            "r_norm": np.array([]),
+            "lambda_vec": np.array([]),
+            "ea": np.array([]),
+            "raw_residual": np.array([]),
+            "wls_objective": float("nan"),
+            "sum_normalized_residual_sq": float("nan"),
+            "theta_est_rad": np.array([]),
+            "vm_est_pu": np.array([]),
+            "n_measurements": int(z_used.shape[0]),
+            "n_states": int(2 * nb - 1),
+            "dof": int(z_used.shape[0] - (2 * nb - 1)),
+            "iterations": int(max_it + 1),
+        }
+    iterations = int(_k + 1)
 
     # === parameter Jacobian wrt line r and x ===
     ntheta = np.r_[np.arange(ref), np.arange(ref + 1, nb)]
@@ -416,70 +451,13 @@ def lagrangian_m_singlephase(
     theta_est[ntheta] = x0[: nb - 1]
     V_est = x0[nb - 1 :]
 
-    Hp_full = np.zeros((3 * nb + 4 * nl, 2 * nl), dtype=float)
-
-    for kk in range(nl):
-        i = fbus[kk]
-        j = tbus[kk]
-        r_k = branch[kk, BR_R]
-        x_k = branch[kk, BR_X]
-
-        denom = r_k**2 + x_k**2
-        g_ij = r_k / denom
-        b_ij = -x_k / denom
-
-        dg_dr = (x_k**2 - r_k**2) / (denom**2)
-        db_dr = (2.0 * r_k * x_k) / (denom**2)
-        dg_dx = (-2.0 * r_k * x_k) / (denom**2)
-        db_dx = (x_k**2 - r_k**2) / (denom**2)
-
-        Vi = V_est[i]
-        Vj = V_est[j]
-        dth = theta_est[i] - theta_est[j]
-        cosd = np.cos(dth)
-        sind = np.sin(dth)
-
-        dPi_dg = Vi**2 - Vi * Vj * cosd
-        dPi_db = Vi * Vj * sind
-
-        dQi_dg = Vi * Vj * sind
-        dQi_db = -Vi**2 + Vi * Vj * cosd
-
-        dPj_dg = Vj**2 - Vi * Vj * cosd
-        dPj_db = -Vi * Vj * sind
-
-        dQj_dg = -Vi * Vj * sind
-        dQj_db = -Vj**2 + Vi * Vj * cosd
-
-        dPi_dr = dPi_dg * dg_dr + dPi_db * db_dr
-        dPi_dx = dPi_dg * dg_dx + dPi_db * db_dx
-        dPj_dr = dPj_dg * dg_dr + dPj_db * db_dr
-        dPj_dx = dPj_dg * dg_dx + dPj_db * db_dx
-        dQi_dr = dQi_dg * dg_dr + dQi_db * db_dr
-        dQi_dx = dQi_dg * dg_dx + dQi_db * db_dx
-        dQj_dr = dQj_dg * dg_dr + dQj_db * db_dr
-        dQj_dx = dQj_dg * dg_dx + dQj_db * db_dx
-
-        c0 = 2 * kk
-        c1 = c0 + 1
-
-        Hp_full[nb + i, c0] = dPi_dr
-        Hp_full[nb + i, c1] = dPi_dx
-        Hp_full[nb + j, c0] = dPj_dr
-        Hp_full[nb + j, c1] = dPj_dx
-        Hp_full[2 * nb + i, c0] = dQi_dr
-        Hp_full[2 * nb + i, c1] = dQi_dx
-        Hp_full[2 * nb + j, c0] = dQj_dr
-        Hp_full[2 * nb + j, c1] = dQj_dx
-
-        Hp_full[3 * nb + kk, c0] = dPi_dr
-        Hp_full[3 * nb + kk, c1] = dPi_dx
-        Hp_full[3 * nb + nl + kk, c0] = dQi_dr
-        Hp_full[3 * nb + nl + kk, c1] = dQi_dx
-        Hp_full[3 * nb + 2 * nl + kk, c0] = dPj_dr
-        Hp_full[3 * nb + 2 * nl + kk, c1] = dPj_dx
-        Hp_full[3 * nb + 3 * nl + kk, c0] = dQj_dr
-        Hp_full[3 * nb + 3 * nl + kk, c1] = dQj_dx
+    # Shared, finite-difference-verified d h / d [R_k, X_k] for every branch.
+    # Columns are ordered [R_0, X_0, R_1, X_1, ...].  Out-of-service branches
+    # contribute zero sensitivity and transformer taps / phase shifts are
+    # modeled exactly, consistent with make_ybus() above.
+    Hp_full = all_branch_rx_jacobian(
+        {"baseMVA": baseMVA, "bus": bus, "branch": branch}, theta_est, V_est
+    )
 
     Cp = Hp_full[zi_rows, :] if zi_rows.size else np.zeros((0, 2 * nl))
     Hp = np.delete(Hp_full, zi_rows, axis=0) if zi_rows.size else Hp_full.copy()
@@ -505,7 +483,9 @@ def lagrangian_m_singlephase(
 
     lambda_vec = S @ dxl[ns:]
     tt = np.sqrt(np.clip(np.diag(ea), a_min=0.0, a_max=None))
-    lambdaN = np.divide(lambda_vec, tt, out=np.full_like(lambda_vec, np.nan), where=tt > 0)
+    # A column with zero multiplier variance (e.g. an out-of-service branch,
+    # whose R/X have no effect on h) carries no evidence: report 0, not NaN.
+    lambdaN = np.divide(lambda_vec, tt, out=np.zeros_like(lambda_vec), where=tt > 0)
 
     # === final residual ===
     final_Vc = x[nb:2 * nb] * np.exp(1j * x[0:nb])
@@ -551,4 +531,44 @@ def lagrangian_m_singlephase(
     omega_diag = np.clip(omega_diag, a_min=np.finfo(float).eps, a_max=None)
     r = np.abs(final_resid) / np.sqrt(omega_diag)
 
-    return lambdaN, success, r, lambda_vec, ea
+    # Classical WLS bad-data statistic J = e' R^{-1} e ~ chi^2(m - n).
+    wls_objective = float(final_resid @ (final_resid / Rdiag_resid))
+
+    return {
+        "lambdaN": lambdaN,
+        "success": success,
+        "r_norm": r,
+        "lambda_vec": lambda_vec,
+        "ea": ea,
+        "raw_residual": final_resid,
+        "wls_objective": wls_objective,
+        "sum_normalized_residual_sq": float(np.sum(r**2)),
+        "theta_est_rad": x[0:nb].copy(),
+        "vm_est_pu": x[nb : 2 * nb].copy(),
+        "n_measurements": int(final_resid.shape[0]),
+        "n_states": int(2 * nb - 1),
+        "dof": int(final_resid.shape[0] - (2 * nb - 1)),
+        "iterations": iterations,
+    }
+
+
+def lagrangian_m_singlephase(
+    z: np.ndarray,
+    result: Any,
+    ind: int,
+    bus_data: np.ndarray,
+    *,
+    zero_injection_tol: float | None = None,
+    max_it: int = 20,
+    tol: float = 1e-5,
+) -> Tuple[np.ndarray, int, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    MATLAB-compatible 5-tuple wrapper: ``(lambdaN, success, r_norm, lambda_vec, ea)``.
+
+    Prefer :func:`lagrangian_m_singlephase_details`, which also exposes the raw
+    residual and the WLS objective needed for a valid global chi-square test.
+    """
+    out = lagrangian_m_singlephase_details(
+        z, result, ind, bus_data, zero_injection_tol=zero_injection_tol, max_it=max_it, tol=tol
+    )
+    return out["lambdaN"], out["success"], out["r_norm"], out["lambda_vec"], out["ea"]

@@ -784,10 +784,10 @@ class MeasurementContextTests(unittest.TestCase):
 
     def test_parameter_context_requires_distinct_line_lambda_dominance(self) -> None:
         findings = [
-            {"line_row0": 0, "terminal": "from", "value": -6.0},
-            {"line_row0": 0, "terminal": "to", "value": 5.5},
-            {"line_row0": 2, "terminal": "from", "value": 4.0},
-            {"line_row0": 1, "terminal": "from", "value": 3.0},
+            {"line_row0": 0, "parameter": "R", "value": -6.0},
+            {"line_row0": 0, "parameter": "X", "value": 5.5},
+            {"line_row0": 2, "parameter": "R", "value": 4.0},
+            {"line_row0": 1, "parameter": "R", "value": 3.0},
         ]
         state = copy.deepcopy(self.state)
         state["metadata"] = {
@@ -831,8 +831,8 @@ class MeasurementContextTests(unittest.TestCase):
         self,
     ) -> None:
         findings = [
-            {"line_row0": 4, "terminal": "from", "value": 6.0},
-            {"line_row0": 5, "terminal": "to", "value": -5.5},
+            {"line_row0": 4, "parameter": "R", "value": 6.0},
+            {"line_row0": 5, "parameter": "X", "value": -5.5},
         ]
         state = copy.deepcopy(self.state)
         state["metadata"] = {
@@ -1039,11 +1039,38 @@ class DiagnosticProviderTests(unittest.TestCase):
         return env
 
     @staticmethod
-    def _harmonic_metadata() -> dict:
+    def _harmonic_metadata(source_bus_1based: int = 9) -> dict:
+        """Fifth-harmonic bus voltages produced by one injection at ``source_bus_1based``.
+
+        Generated from the same harmonic admittance model the estimator uses,
+        so the HSE must recover the source bus and explain the data against
+        the no-source null model.
+        """
+        from Harmonics import hse_utils
+
+        ppc = _load_python_case("case14")
+        bus = np.asarray(ppc["bus"], dtype=float)
+        branch = np.asarray(ppc["branch"], dtype=float)
+        nb = bus.shape[0]
+        slack = 0
+        unknown = [i for i in range(nb) if i != slack]
+        yh = hse_utils.build_ybus_harmonic(bus, branch, float(ppc["baseMVA"]), 5)
+        yuu = yh[np.ix_(unknown, unknown)]
+        injection = np.zeros(len(unknown), dtype=complex)
+        injection[unknown.index(source_bus_1based - 1)] = 0.08 * np.exp(1j * 0.4)
+        vu = np.linalg.solve(yuu, injection)
+        v5 = np.zeros(nb, dtype=complex)
+        v5[unknown] = vu
         return {
             "harmonic_measurements": [
-                {"h": 5, "bus": bus, "Vm": 0.02 + 0.001 * bus, "Va_deg": 10.0 * bus, "sigma": 1e-4}
-                for bus in range(1, 15)
+                {
+                    "h": 5,
+                    "bus": index + 1,
+                    "V_real": float(v5[index].real),
+                    "V_imag": float(v5[index].imag),
+                    "sigma": 1e-4,
+                }
+                for index in range(nb)
             ]
         }
 
@@ -1061,9 +1088,16 @@ class DiagnosticProviderTests(unittest.TestCase):
         _, hse_output = env.step({"tool": "run_hse_from_path", "arguments": {"state_id": active}})
         self.assertEqual(hse_output["execution_status"], "success")
         hse_metrics = hse_output["tool_metrics"]
-        self.assertIsNotNone(hse_metrics["best_candidate_bus_1based"])
+        self.assertEqual(hse_metrics["best_candidate_bus_1based"], 9)
         self.assertTrue(hse_metrics["hse_summary"]["ranking_top5"])
         self.assertTrue(hse_metrics["diagnostic_acceptance"]["accepted"])
+        self.assertGreater(
+            hse_metrics["diagnostic_acceptance"]["sse_reduction_vs_null"], 0.9
+        )
+        self.assertEqual(
+            hse_metrics["diagnostic_acceptance"]["fundamental_voltage_source"],
+            "observed_vm",
+        )
 
     def test_harmonic_best_bus_without_threshold_crossing_is_not_explained(self) -> None:
         state = {

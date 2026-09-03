@@ -1459,12 +1459,17 @@ class ValidationGateTests(unittest.TestCase):
             ranking["parameter_ranking_dominance_ratio"],
             ranking["parameter_ranking_dominance_threshold"],
         )
+        # The corpus row's true fault is on line 1 (branch row 0, X scaled to
+        # 0.24).  With the finite-difference-verified branch Jacobian the NLM
+        # ranks the true line first; the root stays rejected because line 2's
+        # multiplier is within the dominance band.  (The defective derivative
+        # signs used before 2026-09-03 ranked line 2 ahead of the true line.)
         self.assertEqual(
             [
                 item["line_index1"]
                 for item in ranking["parameter_ranking_distinct_lines"][:2]
             ],
-            [2, 1],
+            [1, 2],
         )
 
 
