@@ -2162,7 +2162,7 @@ class MultiMeasurementEndToEndRoutingTests(unittest.TestCase):
         return scenario
 
     @staticmethod
-    def _run(seed: int) -> tuple[object, list[dict]]:
+    def _run(seed: int, *, max_steps: int = 24) -> tuple[object, list[dict]]:
         from psse_env.oracle import ExpertPolicyOracle
         from psse_env.providers import MatpowerDeploymentProviders
         from psse_env.providers.scenario_generator import Round0ScenarioGenerator
@@ -2173,12 +2173,14 @@ class MultiMeasurementEndToEndRoutingTests(unittest.TestCase):
         )[0]
         providers = MatpowerDeploymentProviders(chi2_alpha=0.01)
         env = TransactionalPSSEEnv(
-            **providers.env_kwargs(), production_dataset_mode=True, max_steps=24
+            **providers.env_kwargs(),
+            production_dataset_mode=True,
+            max_steps=int(max_steps),
         )
         oracle = ExpertPolicyOracle(process_oracle=env.process_oracle)
         env.reset(MultiMeasurementEndToEndRoutingTests._truth_free(source))
         actions: list[dict] = []
-        for _ in range(24):
+        for _ in range(int(max_steps)):
             if env.is_terminal():
                 break
             proposals = oracle.next_actions(
@@ -2192,15 +2194,27 @@ class MultiMeasurementEndToEndRoutingTests(unittest.TestCase):
         return env, actions
 
     def test_measurement_dominant_episode_never_flips_branch_hypotheses(self) -> None:
-        env, actions = self._run(31)
+        # V2-B episode budget: this seed's five meter errors are repaired one
+        # accepted commit at a time, which does not fit the pre-V2 24 steps.
+        env, actions = self._run(31, max_steps=40)
         tools = [action["tool"] for action in actions]
 
         self.assertIn("correct_measurements", tools)
         self.assertNotIn("correct_parameters", tools)
         self.assertNotIn("correct_topology", tools)
-        self.assertNotIn("get_parameter_context", tools)
-        self.assertNotIn("get_topology_context", tools)
-        self.assertLess(len(actions), 24)
+        # V2-A continuation contract: after every accepted commit the teacher
+        # re-screens the parameter and topology routes on the committed state.
+        # Reading those contexts is not a flipped hypothesis; acting on one
+        # would be, and that never happens in a measurement-dominant episode.
+        for index, tool in enumerate(tools):
+            if tool in {"get_parameter_context", "get_topology_context"}:
+                self.assertIn(
+                    "commit_state",
+                    tools[max(0, index - 3) : index],
+                    f"branch context screened outside a post-commit re-screen at step {index}",
+                )
+        self.assertGreaterEqual(tools.count("commit_state"), 1)
+        self.assertLess(len(actions), 40)
         self.assertTrue(env.is_terminal())
         self.assertEqual(env.terminal_outcome, "operator_escalation")
         self.assertEqual(tools[-1], "ask_for_more_evidence")
