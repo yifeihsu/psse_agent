@@ -273,7 +273,7 @@ class ActionMappingTests(unittest.TestCase):
                         "tool": "correct_topology",
                         "arguments": {
                             "state_id": "active",
-                            "line_index1": 4,
+                            "line_index": 4,
                             "status": 0,
                         },
                     },
@@ -507,7 +507,7 @@ class CanonicalExportTests(unittest.TestCase):
                         "tool": "correct_topology",
                         "arguments": {
                             "state_id": "active",
-                            "line_index1": 4,
+                            "line_index": 4,
                             "status": 0,
                         },
                     },

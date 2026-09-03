@@ -659,6 +659,7 @@ class TransactionalPSSEEnv:
         "nlm_diagnostic",
         "hif_runtime",
         "three_phase_voltages",
+        "three_phase_branch_currents",
     )
 
     def _observable_evidence_channels(self) -> list[str]:
@@ -1359,10 +1360,13 @@ class TransactionalPSSEEnv:
                     "Production training row for run_three_phase_nlm_from_path lacks "
                     "an observable HIF or three-phase-unbalance signature."
                 )
+            # Per-phase branch-current telemetry localizes both HIF lines and
+            # unbalance sources directly, so it satisfies the channel gate on
+            # its own; a stored NLM diagnostic remains sufficient as before.
             required_channels = (
-                {"nlm_diagnostic"}
+                {"nlm_diagnostic", "three_phase_branch_currents"}
                 if hif_codes
-                else {"nlm_diagnostic", "three_phase_voltages"}
+                else {"nlm_diagnostic", "three_phase_voltages", "three_phase_branch_currents"}
             )
             if not (available & required_channels):
                 raise ValueError(
@@ -1376,9 +1380,10 @@ class TransactionalPSSEEnv:
                 raise ValueError(
                     f"Production training row for {tool} lacks an observable HIF signature."
                 )
-            if "nlm_diagnostic" not in available:
+            if not (available & {"nlm_diagnostic", "three_phase_branch_currents"}):
                 raise ValueError(
-                    f"Production training row for {tool} lacks nlm_diagnostic telemetry."
+                    f"Production training row for {tool} lacks nlm_diagnostic or "
+                    "three_phase_branch_currents telemetry."
                 )
             if (
                 tool == ESTIMATE_HIF_MULTISCAN_FROM_PATH

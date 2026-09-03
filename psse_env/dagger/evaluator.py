@@ -76,6 +76,7 @@ from psse_env.dagger.release_audit import (
     REMAINING_FAULTS_CHECK,
     audit_post_correction_controller_handoff,
     audit_episode_against_truth as strict_audit_episode_against_truth,
+    audit_truth_audited_task_success,
     validate_post_correction_handoff_assessment,
 )
 from psse_env.state_store import OracleState, PolicyObservation, policy_safe_copy
@@ -89,15 +90,11 @@ STUDY_DEVELOPMENT_HOLDOUT_PROVENANCE_CONTRACT = (
 STUDY_RECOVERY_STRESS_PROVENANCE_CONTRACT = (
     "dagger1_recovery_stress_study_provenance_v1"
 )
-STUDY_OBJECTIVE_EPISODE_EVIDENCE_CONTRACT = (
-    "dagger_study_objective_episode_evidence_v1"
-)
+STUDY_OBJECTIVE_EPISODE_EVIDENCE_CONTRACT = "dagger_study_objective_episode_evidence_v1"
 STUDY_OBJECTIVE_ACTION_ASSESSMENT_CONTRACT = (
     "dagger_study_objective_action_assessment_v1"
 )
-STUDY_OBJECTIVE_TOOL_EVIDENCE_CONTRACT = (
-    "dagger_study_objective_tool_evidence_v1"
-)
+STUDY_OBJECTIVE_TOOL_EVIDENCE_CONTRACT = "dagger_study_objective_tool_evidence_v1"
 STUDY_EVALUATION_SCHEMA_VERSION = 4
 STUDY_POLICY_HISTORY_WINDOW = 4
 
@@ -138,6 +135,9 @@ class RecoveryMetrics:
     operator_escalation_rate: float = 0.0
     audited_post_correction_handoff: float = 0.0
     audited_completion: float = 0.0
+    truth_audited_task_success: float = 0.0
+    truth_audited_fault_recovery_success: float = 0.0
+    truth_audited_task_success_evidence_known: float = 0.0
     unqualified_operator_escalation: float = 0.0
     healthy_component_preservation: float = 0.0
     invalid_action_recovery: float = 0.0
@@ -220,6 +220,8 @@ class EpisodeEvaluation:
     trace: list[dict[str, Any]] = field(default_factory=list)
     evaluator_error: str | None = None
     control_quarantine: dict[str, Any] = field(default_factory=dict)
+    truth_audited_task_success: bool = False
+    truth_audited_task_success_evidence_known: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -230,7 +232,9 @@ def recovery_score(
     *,
     weights: Mapping[str, float] | None = None,
 ) -> float:
-    values = metrics.as_dict() if isinstance(metrics, RecoveryMetrics) else dict(metrics)
+    values = (
+        metrics.as_dict() if isinstance(metrics, RecoveryMetrics) else dict(metrics)
+    )
     score_weights = dict(weights or DEFAULT_SCORE_WEIGHTS)
     return sum(
         float(values.get(key, 0.0) or 0.0) * weight
@@ -401,6 +405,8 @@ _EXECUTION_METADATA_KEYS = frozenset(
         "hif_runtime",
         "hif_scan_window",
         "three_phase_voltages",
+        "three_phase_branch_currents",
+        "branch_current_sigma_pu",
     }
 )
 _PHYSICAL_AUDIT_OVERRIDE_KEYS = frozenset(
@@ -444,9 +450,7 @@ _GROUPING_SCENARIO_KEYS = frozenset(
         "source_tier",
     }
 )
-_REQUIRED_EXECUTION_SCENARIO_KEYS = frozenset(
-    {"scenario_id", "case", "measurements"}
-)
+_REQUIRED_EXECUTION_SCENARIO_KEYS = frozenset({"scenario_id", "case", "measurements"})
 _REQUIRED_GROUPING_SCENARIO_KEYS = frozenset(
     {
         "physical_root_fingerprint",
@@ -487,9 +491,7 @@ _EFFICIENCY_LIMIT_FIELDS = frozenset(
         "maximum_specialized_tool_calls",
     }
 )
-_REPEATED_DIAGNOSTIC_CIRCUIT_BREAKER = (
-    "evaluation_repeated_nonadvancing_diagnostic"
-)
+_REPEATED_DIAGNOSTIC_CIRCUIT_BREAKER = "evaluation_repeated_nonadvancing_diagnostic"
 _SPECIALIZED_TOOL_BUDGET_CIRCUIT_BREAKER = (
     "evaluation_specialized_tool_budget_exhausted"
 )
@@ -708,9 +710,7 @@ def policy_payload_leakage_paths(value: Any, *, path: str = "$") -> list[str]:
                 child_path = f"{prefix}.{key}"
                 if "provenance" in str(key).lower():
                     found.extend(
-                        find_forbidden_provenance_paths(
-                            child, prefix=child_path
-                        )
+                        find_forbidden_provenance_paths(child, prefix=child_path)
                     )
                 else:
                     embedded_provenance(child, prefix=child_path)
@@ -802,9 +802,7 @@ def objective_recovery_action_assessment(
     from psse_env.oracle import ExpertPolicyOracle, ProcessValidityOracle
 
     expert = ExpertPolicyOracle(
-        process_oracle=ProcessValidityOracle(
-            executor_hydrated_corrections=True
-        )
+        process_oracle=ProcessValidityOracle(executor_hydrated_corrections=True)
     )
     selection = select_observable_expert_actions(
         policy_observation=payload,
@@ -834,8 +832,7 @@ def objective_recovery_action_assessment(
         isinstance(expected, Mapping)
         and expected.get("tool") == ASK_FOR_MORE_EVIDENCE
         and isinstance(expected_arguments, Mapping)
-        and expected_arguments.get("request")
-        in _OBJECTIVE_OPERATOR_HANDOFF_REQUESTS
+        and expected_arguments.get("request") in _OBJECTIVE_OPERATOR_HANDOFF_REQUESTS
     )
     evidence_available = expected is not None
     return {
@@ -943,7 +940,9 @@ def _partitioned_scenario_parts(
     metadata = execution.get("metadata")
     if metadata is not None:
         if not isinstance(metadata, Mapping):
-            raise ValueError("partitioned scenario execution.metadata must be a mapping")
+            raise ValueError(
+                "partitioned scenario execution.metadata must be a mapping"
+            )
         unexpected_metadata = sorted(set(metadata) - _EXECUTION_METADATA_KEYS)
         if unexpected_metadata:
             raise ValueError(
@@ -956,14 +955,10 @@ def _partitioned_scenario_parts(
     execution_keys = {_normalized_key(key) for key in execution}
     grouping_keys = {_normalized_key(key) for key in grouping}
     audit_keys = {
-        _normalized_key(key)
-        for key in audit
-        if _normalized_key(key) != "truth"
+        _normalized_key(key) for key in audit if _normalized_key(key) != "truth"
     }
     truth_keys = (
-        {_normalized_key(key) for key in truth}
-        if isinstance(truth, Mapping)
-        else set()
+        {_normalized_key(key) for key in truth} if isinstance(truth, Mapping) else set()
     )
     collisions = sorted(
         (audit_keys & (execution_keys | grouping_keys))
@@ -990,9 +985,15 @@ def _partitioned_scenario_parts(
         raise ValueError("partitioned scenario execution.scenario_id must be non-empty")
     measurements = execution.get("measurements")
     if not isinstance(measurements, Sequence) or isinstance(measurements, (str, bytes)):
-        raise ValueError("partitioned scenario execution.measurements must be a sequence")
+        raise ValueError(
+            "partitioned scenario execution.measurements must be a sequence"
+        )
     cardinality = grouping.get("error_cardinality")
-    if isinstance(cardinality, bool) or not isinstance(cardinality, int) or cardinality < 0:
+    if (
+        isinstance(cardinality, bool)
+        or not isinstance(cardinality, int)
+        or cardinality < 0
+    ):
         raise ValueError(
             "partitioned scenario grouping.error_cardinality must be a non-negative integer"
         )
@@ -1040,9 +1041,7 @@ def evaluation_intervention_contract(
         return None
     _, audit, _ = _partitioned_scenario_parts(scenario)
     aliases = [
-        str(key)
-        for key in audit
-        if _normalized_key(key) == "evaluation_intervention"
+        str(key) for key in audit if _normalized_key(key) == "evaluation_intervention"
     ]
     if aliases != ["evaluation_intervention"]:
         if not aliases and not required:
@@ -1201,11 +1200,13 @@ def evaluation_intervention_contract(
         raw_actions = intervention.get("setup_actions")
         required_action_count = (
             5
-            if expected_kind
-            == "committed_partial_correction_with_observable_bridge"
+            if expected_kind == "committed_partial_correction_with_observable_bridge"
             else 4
         )
-        if not isinstance(raw_actions, list) or len(raw_actions) != required_action_count:
+        if (
+            not isinstance(raw_actions, list)
+            or len(raw_actions) != required_action_count
+        ):
             raise ValueError(
                 "partial correction intervention requires exactly context, correction, "
                 "verification, commit, and any contracted bridge action"
@@ -1240,8 +1241,7 @@ def evaluation_intervention_contract(
         if actions[3]["tool"] != COMMIT_STATE:
             raise ValueError("partial setup fourth action must be commit_state")
         if (
-            expected_kind
-            == "committed_partial_correction_with_observable_bridge"
+            expected_kind == "committed_partial_correction_with_observable_bridge"
             and actions[4]["tool"] != GET_MEASUREMENT_CONTEXT
         ):
             raise ValueError(
@@ -1250,22 +1250,28 @@ def evaluation_intervention_contract(
         for index, action in enumerate(actions):
             arguments = action["arguments"]
             for field, value in arguments.items():
-                if isinstance(value, str) and value in {
-                    "$active",
-                    "$candidate",
-                } and field not in {
-                    "state_id",
-                    "candidate_state_id",
-                }:
+                if (
+                    isinstance(value, str)
+                    and value
+                    in {
+                        "$active",
+                        "$candidate",
+                    }
+                    and field
+                    not in {
+                        "state_id",
+                        "candidate_state_id",
+                    }
+                ):
                     raise ValueError(
                         f"partial setup alias is not permitted in {field!r}"
                     )
-            expected_alias = (
-                "$active" if index < 2 or index == 4 else "$candidate"
-            )
+            expected_alias = "$active" if index < 2 or index == 4 else "$candidate"
             reference_field = "candidate_state_id" if index == 3 else "state_id"
             other_reference = (
-                "state_id" if reference_field == "candidate_state_id" else "candidate_state_id"
+                "state_id"
+                if reference_field == "candidate_state_id"
+                else "candidate_state_id"
             )
             if (
                 arguments.get(reference_field) != expected_alias
@@ -1296,9 +1302,7 @@ def evaluation_intervention_contract(
         actions = []
         for index, raw_action in enumerate(raw_actions):
             if not isinstance(raw_action, Mapping):
-                raise ValueError(
-                    f"rejected setup_actions[{index}] must be a mapping"
-                )
+                raise ValueError(f"rejected setup_actions[{index}] must be a mapping")
             if set(raw_action) != {"tool", "arguments"} or not isinstance(
                 raw_action.get("arguments"), Mapping
             ):
@@ -1362,14 +1366,14 @@ def evaluation_intervention_contract(
         ):
             value = normalized_limits.get(name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                raise ValueError(f"efficiency limit {name} must be a non-negative integer")
+                raise ValueError(
+                    f"efficiency limit {name} must be a non-negative integer"
+                )
         if normalized_limits["maximum_policy_steps"] < 1:
             raise ValueError("efficiency maximum_policy_steps must be positive")
         intervention["limits"] = normalized_limits
     else:
-        raise ValueError(
-            f"unsupported evaluation intervention kind {expected_kind!r}"
-        )
+        raise ValueError(f"unsupported evaluation intervention kind {expected_kind!r}")
 
     if set(intervention) != expected_fields:
         raise ValueError(
@@ -1447,9 +1451,7 @@ def _summarize_release_environment_attestations(
     for row in rows:
         contract = {
             "production_dataset_mode": row.get("production_dataset_mode"),
-            "candidate_quality_oracle_mode": row.get(
-                "candidate_quality_oracle_mode"
-            ),
+            "candidate_quality_oracle_mode": row.get("candidate_quality_oracle_mode"),
         }
         observed_by_hash[_stable_hash(contract)] = contract
         failures.update(str(item) for item in row.get("failures") or [])
@@ -1474,9 +1476,13 @@ def _normalize_release_policy_identity(value: Mapping[str, Any]) -> dict[str, An
     model_id = identity["model_id"]
     revision = identity["model_revision"]
     if explicit and (model_id or revision):
-        raise ValueError("release policy identity cannot mix explicit and model identities")
+        raise ValueError(
+            "release policy identity cannot mix explicit and model identities"
+        )
     if bool(model_id) != bool(revision):
-        raise ValueError("release model identity requires both model_id and model_revision")
+        raise ValueError(
+            "release model identity requires both model_id and model_revision"
+        )
     if revision and _IMMUTABLE_REVISION.fullmatch(revision) is None:
         raise ValueError("release model revision must be an immutable digest")
     if not explicit and not model_id:
@@ -1504,7 +1510,9 @@ def _policy_identity_attestation(
     if required is None:
         failures.append("no expected release policy identity was configured")
     elif actual != required:
-        failures.append("instantiated policy identity does not match the required identity")
+        failures.append(
+            "instantiated policy identity does not match the required identity"
+        )
     return {
         "passed": not failures,
         "required": required,
@@ -1528,7 +1536,9 @@ def _summarize_policy_identity_attestations(
     return {
         "passed": bool(rows) and all(row.get("passed") is True for row in rows),
         "episodes_checked": len(rows),
-        "required": copy.deepcopy(dict(required)) if isinstance(required, Mapping) else None,
+        "required": copy.deepcopy(dict(required))
+        if isinstance(required, Mapping)
+        else None,
         "observed": [observed_by_hash[key] for key in sorted(observed_by_hash)],
         "failures": sorted(failures),
     }
@@ -1589,9 +1599,7 @@ class ClosedLoopRolloutEvaluator:
             require_release_environment
             or require_policy_identity
             or isinstance(expected_policy_identity, Mapping)
-        ) and (
-            physical_audit_fn is not None or tool_cost_resolver is not None
-        ):
+        ) and (physical_audit_fn is not None or tool_cost_resolver is not None):
             raise ValueError(
                 "release evaluation forbids custom physical-audit and tool-cost callbacks"
             )
@@ -1604,9 +1612,7 @@ class ClosedLoopRolloutEvaluator:
         self.tool_cost_resolver = tool_cost_resolver
         self.case_loader = case_loader
         self.required_suites = _normalize_required_suites(required_suites)
-        self.minimum_suites = _positive_integer(
-            minimum_suites, field="minimum_suites"
-        )
+        self.minimum_suites = _positive_integer(minimum_suites, field="minimum_suites")
         self.minimum_episodes_per_suite = _positive_integer(
             minimum_episodes_per_suite, field="minimum_episodes_per_suite"
         )
@@ -1827,9 +1833,7 @@ class ClosedLoopRolloutEvaluator:
         execution_scenario = strip_offline_truth(audit_scenario)
         progress_scenario_id = _scenario_id(audit_scenario, scenario_index)
         scenario_groups = _scenario_groups(audit_scenario)
-        progress_episode_key = (
-            f"{suite}:{progress_scenario_id}:{scenario_index}"
-        )
+        progress_episode_key = f"{suite}:{progress_scenario_id}:{scenario_index}"
         env = _call_factory(self.env_factory, episode_seed)
         environment_attestation = _release_environment_attestation(env)
         if self.require_release_environment and not environment_attestation["passed"]:
@@ -1919,9 +1923,7 @@ class ClosedLoopRolloutEvaluator:
                 )
                 injected_state = _current_state(env)
                 if intervention_kind == "failed_policy_action":
-                    injected_action = copy.deepcopy(
-                        intervention_contract["action"]
-                    )
+                    injected_action = copy.deepcopy(intervention_contract["action"])
                     injected_arguments = injected_action["arguments"]
                     for field, value in list(injected_arguments.items()):
                         if value == "$active":
@@ -1932,9 +1934,7 @@ class ClosedLoopRolloutEvaluator:
                                 )
                             injected_arguments[field] = active_id
                         elif value == "$candidate":
-                            candidate_id = injected_state.get(
-                                "candidate_state_id"
-                            )
+                            candidate_id = injected_state.get("candidate_state_id")
                             if candidate_id is None:
                                 raise ValueError(
                                     "failed-action intervention could not resolve $candidate"
@@ -2049,8 +2049,7 @@ class ClosedLoopRolloutEvaluator:
                         )
                         if (
                             setup_action["tool"] == CORRECT_MEASUREMENTS
-                            and "measurement_updates"
-                            in setup_action["arguments"]
+                            and "measurement_updates" in setup_action["arguments"]
                             and callable(audited_setup)
                         ):
                             next_state, raw_output = audited_setup(
@@ -2073,7 +2072,10 @@ class ClosedLoopRolloutEvaluator:
                             "partial setup action failed at index "
                             f"{setup_index}: {output.get('error_code')!r}"
                         )
-                    if setup_index in {1, 3} and output.get("state_mutated") is not True:
+                    if (
+                        setup_index in {1, 3}
+                        and output.get("state_mutated") is not True
+                    ):
                         raise ValueError(
                             "partial setup correction/commit must report a real state mutation"
                         )
@@ -2105,9 +2107,7 @@ class ClosedLoopRolloutEvaluator:
                             "error_code": None,
                             "candidate_disposition_offline": disposition,
                             "tool_regret": None,
-                            "runtime_state_hash": _output_runtime_state_hash(
-                                output
-                            ),
+                            "runtime_state_hash": _output_runtime_state_hash(output),
                             "objective_tool_evidence": objective_tool_evidence(
                                 setup_action, output
                             ),
@@ -2121,10 +2121,9 @@ class ClosedLoopRolloutEvaluator:
                         }
                     )
                     if setup_index == 1:
-                        created_candidate = (
-                            output.get("candidate_state_id")
-                            or _current_state(env).get("candidate_state_id")
-                        )
+                        created_candidate = output.get(
+                            "candidate_state_id"
+                        ) or _current_state(env).get("candidate_state_id")
                         if created_candidate is None:
                             raise ValueError(
                                 "partial setup correction did not create a candidate"
@@ -2186,8 +2185,7 @@ class ClosedLoopRolloutEvaluator:
                         )
                         if (
                             setup_action["tool"] == CORRECT_MEASUREMENTS
-                            and "measurement_updates"
-                            in setup_action["arguments"]
+                            and "measurement_updates" in setup_action["arguments"]
                             and callable(audited_setup)
                         ):
                             next_state, raw_output = audited_setup(
@@ -2203,19 +2201,14 @@ class ClosedLoopRolloutEvaluator:
                             f"{type(exc).__name__} at index {setup_index}"
                         ) from exc
                     if not isinstance(raw_output, Mapping):
-                        raise ValueError(
-                            "rejected setup output must be a mapping"
-                        )
+                        raise ValueError("rejected setup output must be a mapping")
                     output = copy.deepcopy(dict(raw_output))
                     if output.get("execution_status") != "success":
                         raise ValueError(
                             "rejected setup action failed at index "
                             f"{setup_index}: {output.get('error_code')!r}"
                         )
-                    if (
-                        setup_index == 1
-                        and output.get("state_mutated") is not True
-                    ):
+                    if setup_index == 1 and output.get("state_mutated") is not True:
                         raise ValueError(
                             "rejected setup correction must report a real "
                             "candidate mutation"
@@ -2253,9 +2246,7 @@ class ClosedLoopRolloutEvaluator:
                                 disposition_after or disposition_before
                             ),
                             "tool_regret": None,
-                            "runtime_state_hash": _output_runtime_state_hash(
-                                output
-                            ),
+                            "runtime_state_hash": _output_runtime_state_hash(output),
                             "objective_tool_evidence": objective_tool_evidence(
                                 setup_action, output
                             ),
@@ -2269,11 +2260,14 @@ class ClosedLoopRolloutEvaluator:
                         }
                     )
                     if setup_index == 1:
-                        opened_candidate_id = str(
-                            output.get("candidate_state_id")
-                            or _current_state(env).get("candidate_state_id")
-                            or ""
-                        ) or None
+                        opened_candidate_id = (
+                            str(
+                                output.get("candidate_state_id")
+                                or _current_state(env).get("candidate_state_id")
+                                or ""
+                            )
+                            or None
+                        )
                         if opened_candidate_id is None:
                             raise ValueError(
                                 "rejected setup correction did not create a candidate"
@@ -2292,18 +2286,14 @@ class ClosedLoopRolloutEvaluator:
                     raise ValueError(
                         "rejected setup did not preserve the open candidate"
                     )
-                final_disposition = _candidate_disposition(
-                    _oracle_state(env, history)
-                )
+                final_disposition = _candidate_disposition(_oracle_state(env, history))
                 if final_disposition != "REJECT":
                     raise ValueError(
                         "rejected setup requires REJECT oracle disposition: "
                         f"scenario={_scenario_id(audit_scenario, scenario_index)}, "
                         f"observed={final_disposition}"
                     )
-                intervention_evidence["pre_policy_step_count"] = len(
-                    setup_actions
-                )
+                intervention_evidence["pre_policy_step_count"] = len(setup_actions)
 
         for policy_step in range(self.max_steps):
             step = len(trace)
@@ -2330,18 +2320,14 @@ class ClosedLoopRolloutEvaluator:
                 )
             policy_seconds = time.perf_counter() - policy_started
             action = safe_normalize_action(raw_action)
-            objective_action_assessment = (
-                objective_recovery_action_assessment(
-                    observation,
-                    scenario_family=scenario_groups["family"],
-                    error_cardinality=scenario_groups["cardinality"],
-                    partial_success_opportunity=bool(
-                        policy_step == 0
-                        and intervention_evidence[
-                            "retention_opportunity_count"
-                        ]
-                    ),
-                )
+            objective_action_assessment = objective_recovery_action_assessment(
+                observation,
+                scenario_family=scenario_groups["family"],
+                error_cardinality=scenario_groups["cardinality"],
+                partial_success_opportunity=bool(
+                    policy_step == 0
+                    and intervention_evidence["retention_opportunity_count"]
+                ),
             )
             self._emit_progress(
                 "policy_action",
@@ -2368,17 +2354,12 @@ class ClosedLoopRolloutEvaluator:
             signature = action_signature(action)
             circuit_breaker_error: str | None = None
             if tool in DIAGNOSTIC_TOOLS:
-                attempted_specialized_calls = (
-                    sum(specialized_counts.values()) + 1
-                )
+                attempted_specialized_calls = sum(specialized_counts.values()) + 1
                 if (
                     efficiency_specialized_tool_limit is not None
-                    and attempted_specialized_calls
-                    > efficiency_specialized_tool_limit
+                    and attempted_specialized_calls > efficiency_specialized_tool_limit
                 ):
-                    circuit_breaker_error = (
-                        _SPECIALIZED_TOOL_BUDGET_CIRCUIT_BREAKER
-                    )
+                    circuit_breaker_error = _SPECIALIZED_TOOL_BUDGET_CIRCUIT_BREAKER
                 elif signature in nonadvancing_signatures:
                     # The current state has not advanced since this exact
                     # read-only diagnostic was last attempted.  Executing it
@@ -2387,9 +2368,7 @@ class ClosedLoopRolloutEvaluator:
                     # attempted action as a failed transition so loop and
                     # efficiency scoring remain trace-derived, but do not call
                     # the provider a second time.
-                    circuit_breaker_error = (
-                        _REPEATED_DIAGNOSTIC_CIRCUIT_BREAKER
-                    )
+                    circuit_breaker_error = _REPEATED_DIAGNOSTIC_CIRCUIT_BREAKER
             prior_deterministic_failure = next(
                 (
                     deterministic_nonadvancing_failures[key]
@@ -2406,12 +2385,8 @@ class ClosedLoopRolloutEvaluator:
                 and int(prior_deterministic_failure.get("failure_count", 0))
                 >= _MAX_DETERMINISTIC_FAILURE_EXECUTIONS_PER_SCOPE
             ):
-                circuit_breaker_error = (
-                    _REPEATED_NONADVANCING_FAILURE_CIRCUIT_BREAKER
-                )
-                prior_count = int(
-                    prior_deterministic_failure.get("failure_count", 0)
-                )
+                circuit_breaker_error = _REPEATED_NONADVANCING_FAILURE_CIRCUIT_BREAKER
+                prior_count = int(prior_deterministic_failure.get("failure_count", 0))
                 control_quarantine = {
                     "quarantined": True,
                     "breaker_error_code": circuit_breaker_error,
@@ -2492,9 +2467,7 @@ class ClosedLoopRolloutEvaluator:
                 # trace remains schema-complete and independently ingestible.
                 action_arguments = action.get("arguments")
                 action_arguments = (
-                    action_arguments
-                    if isinstance(action_arguments, Mapping)
-                    else {}
+                    action_arguments if isinstance(action_arguments, Mapping) else {}
                 )
                 output["error_code"] = str(
                     action_arguments.get("error_code") or "invalid_action"
@@ -2522,9 +2495,10 @@ class ClosedLoopRolloutEvaluator:
                     if candidate_id:
                         partial_candidate_ids.append(candidate_id)
                     partial_action_signatures.append(signature)
-                if assessment.get("collateral_damage") is True or assessment.get(
-                    "healthy_component_modified"
-                ) is True:
+                if (
+                    assessment.get("collateral_damage") is True
+                    or assessment.get("healthy_component_modified") is True
+                ):
                     collateral_commit_seen = True
             invalid = tool == INVALID_ACTION or status != "success"
             if invalid:
@@ -2551,23 +2525,19 @@ class ClosedLoopRolloutEvaluator:
                 if signature in nonadvancing_signatures:
                     loop_detected = True
                 nonadvancing_signatures.add(signature)
-                deterministic_failure_kind = (
-                    _deterministic_nonadvancing_failure_kind(
-                        tool=tool,
-                        execution_status=status,
-                        error_code=output.get("error_code"),
-                    )
+                deterministic_failure_kind = _deterministic_nonadvancing_failure_kind(
+                    tool=tool,
+                    execution_status=status,
+                    error_code=output.get("error_code"),
                 )
                 if (
                     circuit_breaker_error is None
                     and deterministic_failure_kind is not None
                 ):
-                    deterministic_failure_key = (
-                        _deterministic_failure_storage_key(
-                            tool=tool,
-                            signature=signature,
-                            error_code=output.get("error_code"),
-                        )
+                    deterministic_failure_key = _deterministic_failure_storage_key(
+                        tool=tool,
+                        signature=signature,
+                        error_code=output.get("error_code"),
                     )
                     previous = deterministic_nonadvancing_failures.get(
                         deterministic_failure_key
@@ -2575,14 +2545,11 @@ class ClosedLoopRolloutEvaluator:
                     previous_count = (
                         int(previous.get("failure_count", 0))
                         if previous is not None
-                        and previous.get("failure_kind")
-                        == deterministic_failure_kind
+                        and previous.get("failure_kind") == deterministic_failure_kind
                         and previous.get("error_code") == output.get("error_code")
                         else 0
                     )
-                    deterministic_nonadvancing_failures[
-                        deterministic_failure_key
-                    ] = {
+                    deterministic_nonadvancing_failures[deterministic_failure_key] = {
                         "failure_kind": deterministic_failure_kind,
                         "error_code": output.get("error_code"),
                         "failure_count": min(
@@ -2633,9 +2600,7 @@ class ClosedLoopRolloutEvaluator:
                     "candidate_disposition_offline": disposition,
                     "tool_regret": regret,
                     "runtime_state_hash": _output_runtime_state_hash(output),
-                    "objective_tool_evidence": objective_tool_evidence(
-                        action, output
-                    ),
+                    "objective_tool_evidence": objective_tool_evidence(action, output),
                     "terminal_outcome": _output_terminal_outcome(output),
                     **trace_progress_evidence(
                         before=state_before_action,
@@ -2723,16 +2688,14 @@ class ClosedLoopRolloutEvaluator:
             history,
             independent_transition_label=last_transition_label,
         )
-        post_correction_handoff_assessment = (
-            audit_post_correction_controller_handoff(
-                _strict_audit_scenario(audit_scenario),
-                handoff_audit_state,
-                terminal=terminal,
-                terminal_outcome=outcome,
-                active_physical_state=active_physical_state,
-                remaining_truth=_complete_remaining_truth(final_oracle),
-                case_loader=self.case_loader,
-            )
+        post_correction_handoff_assessment = audit_post_correction_controller_handoff(
+            _strict_audit_scenario(audit_scenario),
+            handoff_audit_state,
+            terminal=terminal,
+            terminal_outcome=outcome,
+            active_physical_state=active_physical_state,
+            remaining_truth=_complete_remaining_truth(final_oracle),
+            case_loader=self.case_loader,
         )
         # This is a sibling offline assessment, not a replacement for the
         # actual production outcome or the strict physical audit.  Keeping it
@@ -2740,6 +2703,28 @@ class ClosedLoopRolloutEvaluator:
         # policy observation or trajectory target.
         audit["post_correction_handoff_assessment"] = copy.deepcopy(
             post_correction_handoff_assessment
+        )
+        truth_audited_task_assessment = audit_truth_audited_task_success(
+            _strict_audit_scenario(audit_scenario),
+            handoff_audit_state,
+            actual_terminal=terminal,
+            actual_terminal_outcome=outcome,
+            active_physical_state=active_physical_state,
+            remaining_truth=_complete_remaining_truth(final_oracle),
+            case_loader=self.case_loader,
+            evaluator_error=evaluator_error,
+        )
+        # This sibling offline assessment deliberately ignores the actual
+        # resolved-versus-handoff label.  It is persisted only for research
+        # scoring and never enters PolicyObservation or the SFT target.
+        audit["truth_audited_task_assessment"] = copy.deepcopy(
+            truth_audited_task_assessment
+        )
+        truth_audited_task_success = bool(
+            truth_audited_task_assessment.get("eligible") is True
+        )
+        truth_audited_task_success_evidence_known = bool(
+            truth_audited_task_assessment.get("evidence_known") is True
         )
 
         physical_known = bool(audit.get("physical_correctness_known", False))
@@ -2802,9 +2787,7 @@ class ClosedLoopRolloutEvaluator:
         groups = scenario_groups
         scenario_id = _scenario_id(audit_scenario, scenario_index)
         episode_key = f"{suite}:{scenario_id}:{scenario_index}"
-        final_success = bool(
-            terminal and outcome == "resolved" and physical_correct
-        )
+        final_success = bool(terminal and outcome == "resolved" and physical_correct)
         audited_handoff = _is_audited_post_correction_handoff(
             terminal=terminal,
             terminal_outcome=outcome,
@@ -2880,6 +2863,10 @@ class ClosedLoopRolloutEvaluator:
             audit=copy.deepcopy(audit),
             trace=trace,
             evaluator_error=evaluator_error,
+            truth_audited_task_success=truth_audited_task_success,
+            truth_audited_task_success_evidence_known=(
+                truth_audited_task_success_evidence_known
+            ),
         )
 
 
@@ -2959,10 +2946,7 @@ _IMMUTABLE_REVISION = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})\Z")
 
 
 def _is_sha256(value: Any) -> bool:
-    return bool(
-        isinstance(value, str)
-        and re.fullmatch(r"[0-9a-f]{64}", value)
-    )
+    return bool(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value))
 
 
 def _source_path_descriptor(
@@ -3055,11 +3039,7 @@ def _nvidia_driver_version() -> str | None:
     if completed.returncode != 0:
         return None
     versions = sorted(
-        {
-            line.strip()
-            for line in completed.stdout.splitlines()
-            if line.strip()
-        }
+        {line.strip() for line in completed.stdout.splitlines() if line.strip()}
     )
     if not versions:
         return None
@@ -3114,9 +3094,7 @@ def _accelerator_environment_descriptor() -> dict[str, Any]:
         name = str(getattr(properties, "name", "") or "").strip()
         total_memory = getattr(properties, "total_memory", None)
         normalized_memory = (
-            int(total_memory)
-            if type(total_memory) is int and total_memory > 0
-            else 0
+            int(total_memory) if type(total_memory) is int and total_memory > 0 else 0
         )
         try:
             raw_capability = cuda.get_device_capability(index)
@@ -3184,9 +3162,10 @@ def _evaluation_provenance_failures(provenance: Mapping[str, Any] | None) -> lis
     if type(provenance_schema_version) is not int or provenance_schema_version != 1:
         failures.append("provenance_schema_version is not exactly integer 1")
     source_state = provenance.get("source_state")
-    if not isinstance(source_state, Mapping) or source_state.get(
-        "release_eligible_source"
-    ) is not True:
+    if (
+        not isinstance(source_state, Mapping)
+        or source_state.get("release_eligible_source") is not True
+    ):
         failures.append(_RELEASE_SOURCE_FAILURE)
 
     input_suite = provenance.get("input_suite")
@@ -3202,27 +3181,25 @@ def _evaluation_provenance_failures(provenance: Mapping[str, Any] | None) -> lis
     factories = factories if isinstance(factories, Mapping) else {}
     for factory_role in ("environment", "policy"):
         descriptor = factories.get(factory_role)
-        if not isinstance(descriptor, Mapping) or not str(
-            descriptor.get("import_spec") or ""
-        ).strip():
+        if (
+            not isinstance(descriptor, Mapping)
+            or not str(descriptor.get("import_spec") or "").strip()
+        ):
             failures.append(f"{factory_role} factory import spec is missing")
             continue
         source = descriptor.get("source")
         if not isinstance(source, Mapping) or not _is_sha256(source.get("sha256")):
-            failures.append(
-                f"{factory_role} factory source fingerprint is missing"
-            )
+            failures.append(f"{factory_role} factory source fingerprint is missing")
     case_loader = factories.get("case_loader")
     if case_loader is not None:
-        if not isinstance(case_loader, Mapping) or not str(
-            case_loader.get("import_spec") or ""
-        ).strip():
+        if (
+            not isinstance(case_loader, Mapping)
+            or not str(case_loader.get("import_spec") or "").strip()
+        ):
             failures.append("case-loader import spec is missing")
         else:
             source = case_loader.get("source")
-            if not isinstance(source, Mapping) or not _is_sha256(
-                source.get("sha256")
-            ):
+            if not isinstance(source, Mapping) or not _is_sha256(source.get("sha256")):
                 failures.append("case-loader source fingerprint is missing")
 
     runtime_environment = provenance.get("runtime_environment")
@@ -3241,7 +3218,9 @@ def _evaluation_provenance_failures(provenance: Mapping[str, Any] | None) -> lis
         model_id = str(policy_identity.get("model_id") or "").strip()
         revision = str(policy_identity.get("model_revision") or "").strip()
         if bool(model_id) != bool(revision):
-            failures.append("model ID and immutable model revision must be supplied together")
+            failures.append(
+                "model ID and immutable model revision must be supplied together"
+            )
         if revision and _IMMUTABLE_REVISION.fullmatch(revision) is None:
             failures.append("model revision is not an immutable 40- or 64-hex digest")
         if not explicit and not (model_id and revision):
@@ -3300,7 +3279,9 @@ def _load_unlinked_regular_json_value(
     try:
         descriptor = os.open(absolute, flags)
     except OSError as exc:
-        raise ValueError(f"{field} cannot be opened as a regular file: {absolute}") from exc
+        raise ValueError(
+            f"{field} cannot be opened as a regular file: {absolute}"
+        ) from exc
     try:
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
@@ -3353,9 +3334,7 @@ def _development_evaluation_contract(
     bindings = bindings if isinstance(bindings, Mapping) else {}
     contract = bindings.get("development_evaluation")
     if not isinstance(contract, Mapping):
-        raise ValueError(
-            "study manifest does not pin bindings.development_evaluation"
-        )
+        raise ValueError("study manifest does not pin bindings.development_evaluation")
     return copy.deepcopy(dict(contract))
 
 
@@ -3399,21 +3378,18 @@ def _validate_development_holdout_for_study(
     )
     provenance, holdout_manifest, holdout_manifest_sha256 = (
         _load_unlinked_regular_json_value(
-        holdout_manifest_path, field="development holdout manifest"
+            holdout_manifest_path, field="development holdout manifest"
         )
     )
     generator, generator_report, generator_report_sha256 = (
         _load_unlinked_regular_json_value(
-        generator_report_path, field="development holdout generator report"
+            generator_report_path, field="development holdout generator report"
         )
     )
     if not all(
-        isinstance(value, Mapping)
-        for value in (payload, provenance, generator)
+        isinstance(value, Mapping) for value in (payload, provenance, generator)
     ):
-        raise ValueError(
-            "development holdout inputs must each contain one JSON object"
-        )
+        raise ValueError("development holdout inputs must each contain one JSON object")
     payload = dict(payload)
     provenance = dict(provenance)
     generator = dict(generator)
@@ -3442,7 +3418,9 @@ def _validate_development_holdout_for_study(
         if not isinstance(row.get("execution"), Mapping) or not isinstance(
             row.get("audit"), Mapping
         ):
-            raise ValueError(f"development holdout row {index} has a malformed envelope")
+            raise ValueError(
+                f"development holdout row {index} has a malformed envelope"
+            )
         grouping = row.get("grouping")
         if not isinstance(grouping, Mapping):
             raise ValueError(f"development holdout row {index} grouping is malformed")
@@ -3451,7 +3429,9 @@ def _validate_development_holdout_for_study(
         root = str(grouping.get("physical_root_fingerprint") or "").strip()
         family = str(grouping.get("scenario_family") or "").strip()
         if not root or not family:
-            raise ValueError(f"development holdout row {index} lacks root/family identity")
+            raise ValueError(
+                f"development holdout row {index} lacks root/family identity"
+            )
         if root in roots:
             raise ValueError("development holdout repeats a physical root")
         roots.add(root)
@@ -3519,24 +3499,18 @@ def _validate_development_holdout_for_study(
     checks = {
         "schema_version": type(provenance.get("schema_version")) is int
         and provenance.get("schema_version") == 1,
-        "scenario_schema_version": type(
-            provenance.get("scenario_schema_version")
-        )
+        "scenario_schema_version": type(provenance.get("scenario_schema_version"))
         is int
         and provenance.get("scenario_schema_version") == 1,
         "artifact_type": provenance.get("artifact_type")
         == "dagger1_development_holdout_suite",
         "builder_contract": provenance.get("builder_contract")
         == DAGGER1_DEVELOPMENT_HOLDOUT_CONTRACT,
-        "suite_name": provenance.get("suite_name")
-        == DAGGER1_DEVELOPMENT_SUITE_NAME,
-        "suite_format": provenance.get("suite_format")
-        == "evaluation_suite_mapping_v1",
+        "suite_name": provenance.get("suite_name") == DAGGER1_DEVELOPMENT_SUITE_NAME,
+        "suite_format": provenance.get("suite_format") == "evaluation_suite_mapping_v1",
         "split": provenance.get("split") == DAGGER1_DEVELOPMENT_SPLIT,
         "source_partition": provenance.get("source_partition") == "train",
-        "parameter_threshold": provenance.get(
-            "parameter_ranking_dominance_threshold"
-        )
+        "parameter_threshold": provenance.get("parameter_ranking_dominance_threshold")
         == DAGGER1_DEVELOPMENT_PARAMETER_RANKING_THRESHOLD,
         "seed": type(provenance.get("seed")) is int
         and provenance.get("seed") == contract.get("evaluator_seed"),
@@ -3560,23 +3534,18 @@ def _validate_development_holdout_for_study(
         "physical_root_count": type(provenance.get("physical_root_count")) is int
         and provenance.get("physical_root_count") == len(roots),
         "root_counts": exact_development_root_count,
-        "approved_root_count": len(roots)
-        == APPROVED_DAGGER1_DEVELOPMENT_ROOT_COUNT,
+        "approved_root_count": len(roots) == APPROVED_DAGGER1_DEVELOPMENT_ROOT_COUNT,
         "root_set_sha256": declared_hashes.get("development") == root_hash,
         "frozen_suite_sha256": provenance.get("frozen_suite_sha256")
         == frozen.get("suite_sha256"),
         "evaluation_policy_sha256": provenance.get("evaluation_policy_sha256")
         == frozen.get("policy_sha256"),
         "training_eligible": provenance.get("training_eligible") is False,
-        "training_collection_eligible": provenance.get(
-            "training_collection_eligible"
-        )
+        "training_collection_eligible": provenance.get("training_collection_eligible")
         is False,
         "release_evidence_eligible": provenance.get("release_evidence_eligible")
         is False,
-        "promotion_evidence_eligible": provenance.get(
-            "promotion_evidence_eligible"
-        )
+        "promotion_evidence_eligible": provenance.get("promotion_evidence_eligible")
         is False,
         "model_selection_eligible": provenance.get(
             "diagnostic_closed_loop_model_selection_eligible"
@@ -3635,11 +3604,9 @@ def _validate_recovery_stress_for_study(
     )
     from psse_env.dagger.root_sets import root_set_digest
 
-    suite_value, captured_suite_path, suite_sha256 = (
-        _load_unlinked_regular_json_value(
-            suite_path,
-            field="recovery-stress suite",
-        )
+    suite_value, captured_suite_path, suite_sha256 = _load_unlinked_regular_json_value(
+        suite_path,
+        field="recovery-stress suite",
     )
     manifest_value, captured_manifest_path, manifest_sha256 = (
         _load_unlinked_regular_json_value(
@@ -3648,15 +3615,9 @@ def _validate_recovery_stress_for_study(
         )
     )
     if captured_suite_path == captured_manifest_path:
-        raise ValueError(
-            "recovery-stress suite and manifest must be distinct files"
-        )
-    if not isinstance(suite_value, Mapping) or not isinstance(
-        manifest_value, Mapping
-    ):
-        raise ValueError(
-            "recovery-stress suite and manifest must contain JSON objects"
-        )
+        raise ValueError("recovery-stress suite and manifest must be distinct files")
+    if not isinstance(suite_value, Mapping) or not isinstance(manifest_value, Mapping):
+        raise ValueError("recovery-stress suite and manifest must contain JSON objects")
     suites = copy.deepcopy(dict(suite_value))
     provenance = copy.deepcopy(dict(manifest_value))
     expected_suite_names = tuple(RECOVERY_STRESS_SUITES)
@@ -3693,9 +3654,7 @@ def _validate_recovery_stress_for_study(
                 raise ValueError(
                     f"recovery-stress cell {suite_name} row {index} has the wrong split"
                 )
-            root = str(
-                grouping.get("physical_root_fingerprint") or ""
-            ).strip()
+            root = str(grouping.get("physical_root_fingerprint") or "").strip()
             if not root or root in roots:
                 raise ValueError(
                     f"recovery-stress cell {suite_name} repeats or omits a root"
@@ -3710,8 +3669,7 @@ def _validate_recovery_stress_for_study(
         for suite_name in _MULTI_MEASUREMENT_SUITES
     }
     mixed_root_sets = {
-        frozenset(roots_by_suite[suite_name])
-        for suite_name in _MIXED_SUITES
+        frozenset(roots_by_suite[suite_name]) for suite_name in _MIXED_SUITES
     }
     if len(multi_root_sets) != 1 or len(mixed_root_sets) != 1:
         raise ValueError(
@@ -3741,9 +3699,7 @@ def _validate_recovery_stress_for_study(
     source = source if isinstance(source, Mapping) else {}
     source_bindings = provenance.get("source_bindings")
     input_bindings = provenance.get("input_bindings")
-    input_bindings = (
-        input_bindings if isinstance(input_bindings, Mapping) else {}
-    )
+    input_bindings = input_bindings if isinstance(input_bindings, Mapping) else {}
     expected_input_binding_fields = {
         "development_holdout",
         "development_holdout_manifest",
@@ -3826,14 +3782,11 @@ def _validate_recovery_stress_for_study(
         for root in roots
     }
     validation_records_valid = (
-        validation_records_valid
-        and validation_keys == expected_validation_keys
+        validation_records_valid and validation_keys == expected_validation_keys
     )
 
     selected_roots = selection.get("selected_roots_by_family")
-    selected_roots = (
-        selected_roots if isinstance(selected_roots, Mapping) else {}
-    )
+    selected_roots = selected_roots if isinstance(selected_roots, Mapping) else {}
     fingerprint = fingerprint_evaluation_suites(
         suites,
         seed=RECOVERY_STRESS_EVALUATOR_SEED,
@@ -3848,9 +3801,7 @@ def _validate_recovery_stress_for_study(
     checks = {
         "schema_version": type(provenance.get("schema_version")) is int
         and provenance.get("schema_version") == 1,
-        "scenario_schema_version": type(
-            provenance.get("scenario_schema_version")
-        )
+        "scenario_schema_version": type(provenance.get("scenario_schema_version"))
         is int
         and provenance.get("scenario_schema_version") == 1,
         "artifact_type": provenance.get("artifact_type")
@@ -3860,23 +3811,18 @@ def _validate_recovery_stress_for_study(
         and source.get("source_commit") == reviewed_source_commit,
         "source_bindings": source_bindings
         == current_recovery_stress_source_bindings(repo_root),
-        "suite_format": provenance.get("suite_format")
-        == "evaluation_suite_mapping_v1",
-        "suite_names": provenance.get("suite_names")
-        == list(RECOVERY_STRESS_SUITES),
+        "suite_format": provenance.get("suite_format") == "evaluation_suite_mapping_v1",
+        "suite_names": provenance.get("suite_names") == list(RECOVERY_STRESS_SUITES),
         "split": provenance.get("split") == RECOVERY_STRESS_SPLIT,
         "evaluator_seed": type(provenance.get("evaluator_seed")) is int
         and provenance.get("evaluator_seed") == RECOVERY_STRESS_EVALUATOR_SEED,
         "rows": type(provenance.get("rows")) is int
         and provenance.get("rows") == episode_count,
         "rows_by_suite": declared_rows_by_suite == exact_rows_by_suite,
-        "distinct_physical_roots": type(
-            provenance.get("distinct_physical_roots")
-        )
+        "distinct_physical_roots": type(provenance.get("distinct_physical_roots"))
         is int
         and provenance.get("distinct_physical_roots") == len(stress_roots),
-        "distinct_roots_by_suite": declared_roots_by_suite
-        == exact_roots_by_suite,
+        "distinct_roots_by_suite": declared_roots_by_suite == exact_roots_by_suite,
         "minimum_distinct_roots_per_stratum": type(
             provenance.get("minimum_distinct_roots_per_stratum")
         )
@@ -3888,64 +3834,43 @@ def _validate_recovery_stress_for_study(
         )
         is int
         and provenance.get("development_parent_root_count") == 30,
-        "development_parent_subset": provenance.get(
-            "development_parent_subset"
-        )
+        "development_parent_subset": provenance.get("development_parent_subset")
         is True,
         "training_eligible": provenance.get("training_eligible") is False,
-        "model_selection_eligible": provenance.get(
-            "model_selection_eligible"
-        )
-        is False,
+        "model_selection_eligible": provenance.get("model_selection_eligible") is False,
         "recovery_test_evidence_eligible": provenance.get(
             "recovery_test_evidence_eligible"
         )
         is True,
-        "natural_coverage_eligible": provenance.get(
-            "natural_coverage_eligible"
-        )
+        "natural_coverage_eligible": provenance.get("natural_coverage_eligible")
         is False,
-        "probe_training_root_overlap": provenance.get(
-            "probe_training_root_overlap"
-        )
+        "probe_training_root_overlap": provenance.get("probe_training_root_overlap")
         == [],
-        "protected_root_overlap": set(protected_overlap)
-        == expected_overlap_fields
+        "protected_root_overlap": set(protected_overlap) == expected_overlap_fields
         and all(protected_overlap.get(name) == [] for name in expected_overlap_fields),
         "root_hash_fields": set(root_hashes) == expected_root_hash_fields
         and all(_is_sha256(value) for value in root_hashes.values()),
-        "stress_root_hash": root_hashes.get("stress")
-        == stress_root_sha256,
-        "input_binding_fields": set(input_bindings)
-        == expected_input_binding_fields
+        "stress_root_hash": root_hashes.get("stress") == stress_root_sha256,
+        "input_binding_fields": set(input_bindings) == expected_input_binding_fields
         and all(_is_sha256(value) for value in input_bindings.values()),
         "input_bindings_sha256": provenance.get("input_bindings_sha256")
         == stable_json_sha256(input_bindings),
         "frozen_input_binding": input_bindings.get("frozen_suite")
         == frozen.get("suite_sha256"),
         "selection_validation_records": validation_records_valid,
-        "selection_rejections": isinstance(
-            selection.get("rejected_candidates"), list
-        ),
+        "selection_rejections": isinstance(selection.get("rejected_candidates"), list),
         "selection_roots": set(selected_roots)
         == {"multi_measurement", "measurement+parameter"}
         and selected_roots.get("multi_measurement") == sorted(multi_roots)
-        and selected_roots.get("measurement+parameter")
-        == sorted(mixed_roots),
-        "selection_fingerprint": stable_json_sha256(
-            selection.get("fingerprint")
-        )
+        and selected_roots.get("measurement+parameter") == sorted(mixed_roots),
+        "selection_fingerprint": stable_json_sha256(selection.get("fingerprint"))
         == stable_json_sha256(fingerprint),
         "output_sha256": provenance.get("output_sha256") == suite_sha256,
     }
     failed = sorted(name for name, passed in checks.items() if not passed)
     if failed:
-        raise ValueError(
-            "recovery-stress study binding failed: " + ", ".join(failed)
-        )
-    development_parent_sha256 = str(
-        input_bindings["development_holdout"]
-    )
+        raise ValueError("recovery-stress study binding failed: " + ", ".join(failed))
+    development_parent_sha256 = str(input_bindings["development_holdout"])
     descriptor = {
         "contract": STUDY_RECOVERY_STRESS_PROVENANCE_CONTRACT,
         "suite_sha256": suite_sha256,
@@ -3965,9 +3890,7 @@ def _validate_recovery_stress_for_study(
         "recovery_stress_root_set_sha256": stress_root_sha256,
         "recovery_stress_physical_roots": len(stress_roots),
         "recovery_stress_episode_count": episode_count,
-        "recovery_stress_development_parent_sha256": (
-            development_parent_sha256
-        ),
+        "recovery_stress_development_parent_sha256": (development_parent_sha256),
         "provenance_descriptor": descriptor,
         "suite_names": sorted(RECOVERY_STRESS_SUITES),
     }
@@ -4108,11 +4031,7 @@ def build_study_evaluation_binding(
     artifact_role = (
         "development_evaluation"
         if diagnostic_only
-        else (
-            "recovery_stress_evaluation"
-            if recovery_stress
-            else "evaluation"
-        )
+        else ("recovery_stress_evaluation" if recovery_stress else "evaluation")
     )
 
     common: dict[str, Any] = {
@@ -4165,15 +4084,11 @@ def build_study_evaluation_binding(
             "minimum_suites": minimum_suites,
             "minimum_episodes_per_suite": minimum_episodes_per_suite,
             "minimum_roots_per_suite": minimum_roots_per_suite,
-            "exact_physical_roots": holdout[
-                "development_holdout_physical_roots"
-            ],
+            "exact_physical_roots": holdout["development_holdout_physical_roots"],
             "protocol": protocol,
             "release_qualification_allowed": False,
         }
-        if stable_json_sha256(actual_contract) != stable_json_sha256(
-            expected_contract
-        ):
+        if stable_json_sha256(actual_contract) != stable_json_sha256(expected_contract):
             raise ValueError(
                 "development evaluator configuration differs from the exact "
                 "preregistered contract"
@@ -4227,17 +4142,13 @@ def build_study_evaluation_binding(
             "minimum_episodes_per_suite": minimum_episodes_per_suite,
             "minimum_roots_per_suite": minimum_roots_per_suite,
             "exact_episode_count": stress["recovery_stress_episode_count"],
-            "exact_physical_roots": stress[
-                "recovery_stress_physical_roots"
-            ],
+            "exact_physical_roots": stress["recovery_stress_physical_roots"],
             "development_parent_subset_required": True,
             "zero_training_probe_frozen_overlap_required": True,
             "protocol": protocol,
             "release_qualification_allowed": True,
         }
-        if stable_json_sha256(actual_contract) != stable_json_sha256(
-            expected_contract
-        ):
+        if stable_json_sha256(actual_contract) != stable_json_sha256(expected_contract):
             raise ValueError(
                 "recovery-stress evaluator configuration differs from the exact "
                 "preregistered contract"
@@ -4254,9 +4165,7 @@ def build_study_evaluation_binding(
                 "recovery_stress_evaluation_contract_sha256": (
                     EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256
                 ),
-                "evaluation_protocol": (
-                    "preregistered_recovery_stress_test"
-                ),
+                "evaluation_protocol": ("preregistered_recovery_stress_test"),
             }
         )
     else:
@@ -4504,18 +4413,14 @@ def write_evaluation_artifact(
             )
         )
         if binding.get("artifact_role") != expected_role:
-            raise ValueError(
-                "study artifact role is inconsistent with diagnostic_only"
-            )
+            raise ValueError("study artifact role is inconsistent with diagnostic_only")
         if not isinstance(recorded_provenance, Mapping):
             raise ValueError("study evaluation requires complete provenance")
         source_state = recorded_provenance.get("source_state")
         source_state = source_state if isinstance(source_state, Mapping) else {}
-        if (
-            source_state.get("release_eligible_source") is not True
-            or source_state.get("source_commit")
-            != binding.get("reviewed_source_commit")
-        ):
+        if source_state.get("release_eligible_source") is not True or source_state.get(
+            "source_commit"
+        ) != binding.get("reviewed_source_commit"):
             raise ValueError(
                 "study binding source differs from executed clean provenance"
             )
@@ -4533,29 +4438,23 @@ def write_evaluation_artifact(
         suite_hash_field = {
             "development_evaluation": "development_holdout_sha256",
             "evaluation": "frozen_suite_sha256",
-            "recovery_stress_evaluation": (
-                "recovery_stress_suite_sha256"
-            ),
+            "recovery_stress_evaluation": ("recovery_stress_suite_sha256"),
         }[expected_role]
         expected_suite_hash = binding.get(suite_hash_field)
         if input_suite.get("sha256") != expected_suite_hash:
             raise ValueError(
                 "study binding suite hash differs from executed input provenance"
             )
-        captured_suite, _, captured_suite_sha256 = (
-            _load_unlinked_regular_json_value(
-                str(input_suite.get("resolved_path") or ""),
-                field="study evaluation input suite",
-            )
+        captured_suite, _, captured_suite_sha256 = _load_unlinked_regular_json_value(
+            str(input_suite.get("resolved_path") or ""),
+            field="study evaluation input suite",
         )
         if not isinstance(captured_suite, (list, dict)):
             raise ValueError(
                 "study evaluation input suite must contain a list or object"
             )
         if captured_suite_sha256 != expected_suite_hash:
-            raise ValueError(
-                "study evaluation input bytes changed after binding"
-            )
+            raise ValueError("study evaluation input bytes changed after binding")
         if not isinstance(configuration, Mapping):
             raise ValueError("study evaluation result has no configuration")
         expected_fingerprint = fingerprint_evaluation_suites(
@@ -4563,12 +4462,8 @@ def write_evaluation_artifact(
             seed=configuration.get("seed"),
             required_suites=configuration.get("required_suites"),
             minimum_suites=configuration.get("minimum_suites"),
-            minimum_episodes_per_suite=configuration.get(
-                "minimum_episodes_per_suite"
-            ),
-            minimum_roots_per_suite=configuration.get(
-                "minimum_roots_per_suite"
-            ),
+            minimum_episodes_per_suite=configuration.get("minimum_episodes_per_suite"),
+            minimum_roots_per_suite=configuration.get("minimum_roots_per_suite"),
             allow_diagnostic_development=diagnostic_only,
         )
         mismatched_fingerprint_fields = sorted(
@@ -4588,9 +4483,7 @@ def write_evaluation_artifact(
                 canonical_development_evaluation_contract,
             )
 
-            canonical_development = (
-                canonical_development_evaluation_contract()
-            )
+            canonical_development = canonical_development_evaluation_contract()
             suite_names = configuration.get("suite_names")
             actual_development = {
                 "contract": canonical_development["contract"],
@@ -4608,19 +4501,13 @@ def write_evaluation_artifact(
                 "minimum_episodes_per_suite": configuration.get(
                     "minimum_episodes_per_suite"
                 ),
-                "minimum_roots_per_suite": configuration.get(
-                    "minimum_roots_per_suite"
-                ),
+                "minimum_roots_per_suite": configuration.get("minimum_roots_per_suite"),
                 "exact_physical_roots": binding.get(
                     "development_holdout_physical_roots"
                 ),
                 "protocol": (
-                    recorded_provenance.get("protocol_registry", {}).get(
-                        "protocol"
-                    )
-                    if isinstance(
-                        recorded_provenance.get("protocol_registry"), Mapping
-                    )
+                    recorded_provenance.get("protocol_registry", {}).get("protocol")
+                    if isinstance(recorded_provenance.get("protocol_registry"), Mapping)
                     else None
                 ),
                 "release_qualification_allowed": False,
@@ -4640,9 +4527,7 @@ def write_evaluation_artifact(
                 canonical_recovery_stress_evaluation_contract,
             )
 
-            canonical_stress = (
-                canonical_recovery_stress_evaluation_contract()
-            )
+            canonical_stress = canonical_recovery_stress_evaluation_contract()
             actual_stress = {
                 "contract": canonical_stress["contract"],
                 "evaluation_protocol": binding.get("evaluation_protocol"),
@@ -4655,24 +4540,14 @@ def write_evaluation_artifact(
                 "minimum_episodes_per_suite": configuration.get(
                     "minimum_episodes_per_suite"
                 ),
-                "minimum_roots_per_suite": configuration.get(
-                    "minimum_roots_per_suite"
-                ),
-                "exact_episode_count": binding.get(
-                    "recovery_stress_episode_count"
-                ),
-                "exact_physical_roots": binding.get(
-                    "recovery_stress_physical_roots"
-                ),
+                "minimum_roots_per_suite": configuration.get("minimum_roots_per_suite"),
+                "exact_episode_count": binding.get("recovery_stress_episode_count"),
+                "exact_physical_roots": binding.get("recovery_stress_physical_roots"),
                 "development_parent_subset_required": True,
                 "zero_training_probe_frozen_overlap_required": True,
                 "protocol": (
-                    recorded_provenance.get("protocol_registry", {}).get(
-                        "protocol"
-                    )
-                    if isinstance(
-                        recorded_provenance.get("protocol_registry"), Mapping
-                    )
+                    recorded_provenance.get("protocol_registry", {}).get("protocol")
+                    if isinstance(recorded_provenance.get("protocol_registry"), Mapping)
                     else None
                 ),
                 "release_qualification_allowed": True,
@@ -4687,17 +4562,13 @@ def write_evaluation_artifact(
                     "from the exact preregistered contract"
                 )
         variant = str(binding.get("variant_id") or "")
-        expected_seed = (
-            None if variant == "base" else binding.get("training_seed")
-        )
+        expected_seed = None if variant == "base" else binding.get("training_seed")
         validate_study_artifact_binding(
             manifest,
             {**payload, **binding},
             variant_id=variant,
             artifact_role=expected_role,
-            expected_source_commit=str(
-                binding.get("reviewed_source_commit") or ""
-            ),
+            expected_source_commit=str(binding.get("reviewed_source_commit") or ""),
             expected_training_seed=expected_seed,
         )
         payload.update(binding)
@@ -4777,8 +4648,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Evaluate frozen closed-loop scenario suites and write JSON evidence."
     )
-    parser.add_argument("--input", required=True, help="JSON suite mapping or scenario list")
-    parser.add_argument("--output", required=True, help="Destination release JSON artifact")
+    parser.add_argument(
+        "--input", required=True, help="JSON suite mapping or scenario list"
+    )
+    parser.add_argument(
+        "--output", required=True, help="Destination release JSON artifact"
+    )
     parser.add_argument(
         "--env-factory", required=True, help="Environment factory as MODULE:ATTRIBUTE"
     )
@@ -4896,16 +4771,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if args.study_manifest is None:
         if any(value is not None for value in study_values):
-            parser.error(
-                "study binding arguments require --study-manifest"
-            )
+            parser.error("study binding arguments require --study-manifest")
     else:
         if explicit_policy_identity:
             parser.error("study evaluations require an exact model identity")
         if args.study_variant is None or args.reviewed_source_commit is None:
             parser.error(
-                "--study-manifest requires --study-variant and "
-                "--reviewed-source-commit"
+                "--study-manifest requires --study-variant and --reviewed-source-commit"
             )
         if args.allow_dirty_source:
             parser.error("study evaluations never permit --allow-dirty-source")
@@ -4939,9 +4811,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not args.diagnostic_only and any(
             value is not None for value in development_inputs
         ):
-            parser.error(
-                "development holdout bindings require --diagnostic-only"
-            )
+            parser.error("development holdout bindings require --diagnostic-only")
     expected_policy_identity = _normalize_release_policy_identity(
         {
             "explicit_policy_identity": explicit_policy_identity or None,
@@ -4958,12 +4828,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         required_suites = tuple(sorted(RECOVERY_STRESS_SUITES))
     else:
         required_suites = EVALUATION_SUITES
-    environment_factory = _load_import_spec(
-        args.env_factory, field="env_factory"
-    )
-    policy_factory = _load_import_spec(
-        args.policy_factory, field="policy_factory"
-    )
+    environment_factory = _load_import_spec(args.env_factory, field="env_factory")
+    policy_factory = _load_import_spec(args.policy_factory, field="policy_factory")
     case_loader = (
         _load_import_spec(args.case_loader, field="case_loader")
         if args.case_loader
@@ -5013,8 +4879,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ]
     if blocking_failures:
         raise RuntimeError(
-            "Closed-loop release identity gate failed: "
-            + "; ".join(blocking_failures)
+            "Closed-loop release identity gate failed: " + "; ".join(blocking_failures)
         )
 
     study_binding = None
@@ -5036,9 +4901,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             protocol=args.protocol,
             training_seed=args.training_seed,
             checkpoint_receipt_path=args.checkpoint_receipt,
-            development_holdout_manifest_path=(
-                args.development_holdout_manifest
-            ),
+            development_holdout_manifest_path=(args.development_holdout_manifest),
             development_holdout_generator_report_path=(
                 args.development_holdout_generator_report
             ),
@@ -5160,6 +5023,27 @@ def _episode_has_audited_post_correction_handoff(
     )
 
 
+def _episode_is_truth_audited_faulted(episode: EpisodeEvaluation) -> bool:
+    audit = episode.audit if isinstance(episode.audit, Mapping) else {}
+    assessment = audit.get("truth_audited_task_assessment")
+    return bool(isinstance(assessment, Mapping) and assessment.get("faulted") is True)
+
+
+def _episode_has_known_truth_fault_presence(episode: EpisodeEvaluation) -> bool:
+    audit = episode.audit if isinstance(episode.audit, Mapping) else {}
+    assessment = audit.get("truth_audited_task_assessment")
+    return bool(
+        isinstance(assessment, Mapping)
+        and assessment.get("fault_presence_known") is True
+    )
+
+
+def _truth_audited_success_outcome(episode: EpisodeEvaluation) -> str:
+    if not episode.terminal:
+        return "nonterminal"
+    return str(episode.terminal_outcome or "unknown_terminal")
+
+
 def summarize_episode_evaluations(
     episodes: Iterable[EpisodeEvaluation],
 ) -> dict[str, Any]:
@@ -5171,8 +5055,7 @@ def summarize_episode_evaluations(
     # disagree with the fail-closed release gate for false finalizations.
     resolved = sum(row.final_physical_success for row in rows)
     escalated = sum(
-        row.terminal and row.terminal_outcome == "operator_escalation"
-        for row in rows
+        row.terminal and row.terminal_outcome == "operator_escalation" for row in rows
     )
     audited_handoff_flags = [
         _episode_has_audited_post_correction_handoff(row) for row in rows
@@ -5181,6 +5064,24 @@ def summarize_episode_evaluations(
     audited_completions = sum(
         row.final_physical_success or audited_handoff
         for row, audited_handoff in zip(rows, audited_handoff_flags)
+    )
+    truth_audited_task_successes = sum(row.truth_audited_task_success for row in rows)
+    truth_audited_task_evidence_known = sum(
+        row.truth_audited_task_success_evidence_known for row in rows
+    )
+    faulted_flags = [_episode_is_truth_audited_faulted(row) for row in rows]
+    faulted_episodes = sum(faulted_flags)
+    fault_presence_known_episodes = sum(
+        _episode_has_known_truth_fault_presence(row) for row in rows
+    )
+    truth_audited_fault_recovery_successes = sum(
+        row.truth_audited_task_success and faulted
+        for row, faulted in zip(rows, faulted_flags)
+    )
+    truth_audited_success_by_outcome: Counter[str] = Counter(
+        _truth_audited_success_outcome(row)
+        for row in rows
+        if row.truth_audited_task_success
     )
     unqualified_escalations = sum(
         row.terminal
@@ -5236,12 +5137,31 @@ def summarize_episode_evaluations(
         "audited_post_correction_handoff_rate": _rate(audited_handoffs, total),
         "audited_completion_episodes": audited_completions,
         "audited_completion_rate": _rate(audited_completions, total),
-        "unqualified_operator_escalation_episodes": unqualified_escalations,
-        "unqualified_operator_escalation_rate": _rate(
-            unqualified_escalations, total
+        "truth_audited_task_success_episodes": truth_audited_task_successes,
+        "truth_audited_task_success_rate": _rate(truth_audited_task_successes, total),
+        "truth_audited_task_success_evidence_known_episodes": (
+            truth_audited_task_evidence_known
         ),
+        "truth_audited_task_success_evidence_known_rate": _rate(
+            truth_audited_task_evidence_known, total
+        ),
+        "faulted_episodes": faulted_episodes,
+        "truth_fault_presence_known_episodes": fault_presence_known_episodes,
+        "truth_fault_presence_known_rate": _rate(fault_presence_known_episodes, total),
+        "truth_audited_fault_recovery_success_episodes": (
+            truth_audited_fault_recovery_successes
+        ),
+        "truth_audited_fault_recovery_success_rate": _rate(
+            truth_audited_fault_recovery_successes, faulted_episodes
+        ),
+        "truth_audited_task_success_by_terminal_outcome": dict(
+            sorted(truth_audited_success_by_outcome.items())
+        ),
+        "unqualified_operator_escalation_episodes": unqualified_escalations,
+        "unqualified_operator_escalation_rate": _rate(unqualified_escalations, total),
         "unknown_terminal_outcome_episodes": sum(
-            row.terminal and row.terminal_outcome not in {"resolved", "operator_escalation"}
+            row.terminal
+            and row.terminal_outcome not in {"resolved", "operator_escalation"}
             for row in rows
         ),
         "physical_correctness_known_episodes": physical_known,
@@ -5260,14 +5180,12 @@ def summarize_episode_evaluations(
             healthy_preserved, healthy_known
         ),
         "healthy_component_corruption_episodes": sum(
-            row.healthy_preservation_known
-            and not row.healthy_components_preserved
+            row.healthy_preservation_known and not row.healthy_components_preserved
             for row in rows
         ),
         "healthy_component_corruption_rate": _rate(
             sum(
-                row.healthy_preservation_known
-                and not row.healthy_components_preserved
+                row.healthy_preservation_known and not row.healthy_components_preserved
                 for row in rows
             ),
             total,
@@ -5297,9 +5215,7 @@ def summarize_episode_evaluations(
         "invalid_action_recovery_rate": _rate(recovered_invalid, invalid_count),
         "injected_failure_count": injected_failures,
         "recovered_injected_failures": recovered_injected,
-        "injected_failure_recovery_rate": _rate(
-            recovered_injected, injected_failures
-        ),
+        "injected_failure_recovery_rate": _rate(recovered_injected, injected_failures),
         "episodes_with_injected_failures": sum(
             int(row.evaluation_intervention.get("injected_failure_count", 0)) > 0
             for row in rows
@@ -5329,13 +5245,11 @@ def summarize_episode_evaluations(
         "specialized_tool_counts": dict(sorted(specialized_counts.items())),
         "tool_regret_samples": regret_samples,
         "tool_regret_total": regret_total,
-        "mean_tool_regret": (
-            regret_total / regret_samples if regret_samples else None
+        "mean_tool_regret": (regret_total / regret_samples if regret_samples else None),
+        "tool_regret_coverage": _rate(regret_samples, sum(row.steps for row in rows)),
+        "evaluator_error_episodes": sum(
+            row.evaluator_error is not None for row in rows
         ),
-        "tool_regret_coverage": _rate(
-            regret_samples, sum(row.steps for row in rows)
-        ),
-        "evaluator_error_episodes": sum(row.evaluator_error is not None for row in rows),
     }
 
 
@@ -5352,9 +5266,7 @@ def _recovery_metrics(summary: Mapping[str, Any]) -> RecoveryMetrics:
         false_rollback=float(summary["false_rollback_rate"]),
         false_commit=float(summary["false_commit_rate"]),
         loop_rate=float(summary["loop_rate"]),
-        final_physical_correctness=float(
-            summary["final_physical_correctness_rate"]
-        ),
+        final_physical_correctness=float(summary["final_physical_correctness_rate"]),
         terminal_rate=float(summary["terminal_rate"]),
         resolution_rate=float(summary["resolution_rate"]),
         operator_escalation_rate=float(summary["operator_escalation_rate"]),
@@ -5362,6 +5274,13 @@ def _recovery_metrics(summary: Mapping[str, Any]) -> RecoveryMetrics:
             summary["audited_post_correction_handoff_rate"]
         ),
         audited_completion=float(summary["audited_completion_rate"]),
+        truth_audited_task_success=float(summary["truth_audited_task_success_rate"]),
+        truth_audited_fault_recovery_success=float(
+            summary["truth_audited_fault_recovery_success_rate"] or 0.0
+        ),
+        truth_audited_task_success_evidence_known=float(
+            summary["truth_audited_task_success_evidence_known_rate"]
+        ),
         unqualified_operator_escalation=float(
             summary["unqualified_operator_escalation_rate"]
         ),
@@ -5381,10 +5300,7 @@ def _group_episodes(
     for episode in episodes:
         key = str(getattr(episode, attribute))
         grouped.setdefault(key, []).append(episode)
-    return {
-        key: summarize_episode_evaluations(grouped[key])
-        for key in sorted(grouped)
-    }
+    return {key: summarize_episode_evaluations(grouped[key]) for key in sorted(grouped)}
 
 
 def _normalize_suites(
@@ -5404,13 +5320,13 @@ def _normalize_suites(
         if not suite_name:
             raise ValueError("evaluation suite names must be non-empty")
         if suite_name in suites:
-            raise ValueError(f"duplicate normalized evaluation suite name: {suite_name}")
+            raise ValueError(
+                f"duplicate normalized evaluation suite name: {suite_name}"
+            )
         rows: list[dict[str, Any]] = []
         for index, scenario in enumerate(scenarios):
             if not isinstance(scenario, Mapping):
-                raise TypeError(
-                    f"Scenario {suite_name}[{index}] must be a mapping."
-                )
+                raise TypeError(f"Scenario {suite_name}[{index}] must be a mapping.")
             rows.append(copy.deepcopy(dict(scenario)))
         if not rows:
             raise ValueError(f"evaluation suite {suite_name!r} is empty")
@@ -5454,9 +5370,7 @@ def _validate_and_fingerprint_suites(
 ) -> dict[str, Any]:
     errors: list[str] = []
     if len(suites) < minimum_suites:
-        errors.append(
-            f"suite_count={len(suites)} < minimum_suites={minimum_suites}"
-        )
+        errors.append(f"suite_count={len(suites)} < minimum_suites={minimum_suites}")
     missing = sorted(set(required_suites) - set(suites))
     if missing:
         errors.append("missing_required_suites=" + ",".join(missing))
@@ -5589,9 +5503,7 @@ def fingerprint_evaluation_suites(
                         suite_name,
                         scenario,
                         required=False,
-                        allow_diagnostic_development=(
-                            allow_diagnostic_development
-                        ),
+                        allow_diagnostic_development=(allow_diagnostic_development),
                     ),
                 }
             )
@@ -5604,7 +5516,9 @@ def fingerprint_evaluation_suites(
     }
 
 
-def load_evaluation_suites(path: str | os.PathLike[str]) -> dict[str, list[dict[str, Any]]]:
+def load_evaluation_suites(
+    path: str | os.PathLike[str],
+) -> dict[str, list[dict[str, Any]]]:
     """Load and normalize a JSON evaluation-suite file."""
 
     payload = _load_scenario_suite_file(path)
@@ -5633,9 +5547,7 @@ def validate_release_scenario_suites(
                 evaluation_intervention_contract(
                     suite_name,
                     scenario,
-                    allow_diagnostic_development=(
-                        allow_diagnostic_development
-                    ),
+                    allow_diagnostic_development=(allow_diagnostic_development),
                 )
                 development_fields = sorted(
                     set(execution) & {"initial_physical_state", "script"}
@@ -5648,7 +5560,9 @@ def validate_release_scenario_suites(
             except (TypeError, ValueError) as exc:
                 problems.append(f"{suite_name}[{index}]: {exc}")
     if problems:
-        raise ValueError("release scenario schema validation failed: " + "; ".join(problems))
+        raise ValueError(
+            "release scenario schema validation failed: " + "; ".join(problems)
+        )
     return suites
 
 
@@ -5659,9 +5573,7 @@ def _scenario_id(scenario: Mapping[str, Any], index: int) -> str:
     grouping = grouping if isinstance(grouping, Mapping) else {}
     explicit = scenario.get(
         "scenario_id",
-        grouping.get(
-            "scenario_id", execution.get("scenario_id", execution.get("id"))
-        ),
+        grouping.get("scenario_id", execution.get("scenario_id", execution.get("id"))),
     )
     if explicit is not None:
         return str(explicit)
@@ -5771,9 +5683,7 @@ def _policy_action_metrics(policy: Any) -> dict[str, Any]:
         return {}
 
 
-def _policy_observation(
-    env: Any, history: list[Mapping[str, Any]]
-) -> dict[str, Any]:
+def _policy_observation(env: Any, history: list[Mapping[str, Any]]) -> dict[str, Any]:
     if hasattr(env, "get_policy_observation"):
         raw = _call_with_optional_argument(env.get_policy_observation, history)
         if isinstance(raw, PolicyObservation):
@@ -5826,8 +5736,7 @@ def _independent_handoff_process_label(
     normalized = safe_normalize_action(action)
     if not (
         normalized["tool"] == ASK_FOR_MORE_EVIDENCE
-        and normalized["arguments"].get("request")
-        == RECOVERY_OPTIONS_EXHAUSTED_REQUEST
+        and normalized["arguments"].get("request") == RECOVERY_OPTIONS_EXHAUSTED_REQUEST
     ):
         return None
 
@@ -6034,12 +5943,8 @@ def _trace_state_snapshot(state: Mapping[str, Any]) -> dict[str, Any]:
         "active_state_id": optional_text(state.get("active_state_id")),
         "candidate_state_id": optional_text(state.get("candidate_state_id")),
         "phase": optional_text(state.get("phase")),
-        "accepted_correction_count": sequence_count(
-            state.get("accepted_corrections")
-        ),
-        "explained_anomaly_count": sequence_count(
-            state.get("explained_anomalies")
-        ),
+        "accepted_correction_count": sequence_count(state.get("accepted_corrections")),
+        "explained_anomaly_count": sequence_count(state.get("explained_anomalies")),
     }
 
 
@@ -6152,7 +6057,9 @@ def _call_with_optional_argument(method: Callable[..., Any], value: Any) -> Any:
         parameters = list(inspect.signature(method).parameters.values())
     except (TypeError, ValueError):
         return method(value)
-    if any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters):
+    if any(
+        parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters
+    ):
         return method(value)
     positional = [
         parameter
@@ -6215,30 +6122,25 @@ def _canonical_study_policy_observation(
 
     bound = copy.deepcopy(dict(observation))
     snapshot = _trace_state_snapshot(state_before)
-    if not isinstance(bound.get("active_state_id"), str) or not str(
-        bound.get("active_state_id")
-    ).strip():
+    if (
+        not isinstance(bound.get("active_state_id"), str)
+        or not str(bound.get("active_state_id")).strip()
+    ):
         raise ValueError("policy observation lacks a nonempty active_state_id")
     for name in ("active_state_id", "candidate_state_id"):
         if name not in bound or bound.get(name) != snapshot.get(name):
-            raise ValueError(
-                f"policy observation {name} contradicts the runtime state"
-            )
+            raise ValueError(f"policy observation {name} contradicts the runtime state")
     if (
         snapshot.get("phase") is not None
         and "phase" in bound
         and bound.get("phase") != snapshot.get("phase")
     ):
         raise ValueError("policy observation phase contradicts the runtime state")
-    canonical_history = policy_safe_copy(
-        list(history)[-STUDY_POLICY_HISTORY_WINDOW:]
-    )
+    canonical_history = policy_safe_copy(list(history)[-STUDY_POLICY_HISTORY_WINDOW:])
     bound["history_window"] = canonical_history
     last_transition = canonical_history[-1] if canonical_history else None
     last_action = (
-        last_transition.get("action")
-        if isinstance(last_transition, Mapping)
-        else None
+        last_transition.get("action") if isinstance(last_transition, Mapping) else None
     )
     last_output = (
         last_transition.get("tool_output")
@@ -6254,9 +6156,7 @@ def _canonical_study_policy_observation(
         else None
     )
     bound["last_tool_output"] = (
-        copy.deepcopy(dict(last_output))
-        if isinstance(last_output, Mapping)
-        else {}
+        copy.deepcopy(dict(last_output)) if isinstance(last_output, Mapping) else {}
     )
     return bound
 
@@ -6300,8 +6200,7 @@ def _validate_objective_tool_binding(
     computed_runtime_hash = _output_runtime_state_hash(policy_tool_output)
     if runtime_state_hash != computed_runtime_hash:
         raise ValueError(
-            f"{label}.runtime_state_hash is not reproducible from "
-            "policy_tool_output"
+            f"{label}.runtime_state_hash is not reproducible from policy_tool_output"
         )
     if runtime_state_hash is not None and (
         not isinstance(runtime_state_hash, str)
@@ -6426,9 +6325,7 @@ def validate_study_objective_episode_evidence(
             )
     family = episode.get("family") if scenario_family is None else scenario_family
     cardinality = (
-        episode.get("cardinality")
-        if error_cardinality is None
-        else error_cardinality
+        episode.get("cardinality") if error_cardinality is None else error_cardinality
     )
     if not isinstance(family, str) or not family.strip():
         raise ValueError(f"{label}.family is unavailable")
@@ -6513,8 +6410,7 @@ def validate_study_objective_episode_evidence(
             )
         if previous_state_after is not None and (
             state_before != previous_state_after
-            or raw_row.get("state_before_sha256")
-            != previous_state_after_sha256
+            or raw_row.get("state_before_sha256") != previous_state_after_sha256
         ):
             raise ValueError(f"{row_label}.state_before breaks the trace state chain")
         transition = _canonical_trace_transition(
@@ -6524,7 +6420,7 @@ def validate_study_objective_episode_evidence(
         )
         transition_leakage = policy_payload_leakage_paths(transition)
         leakage_paths.extend(
-            f"trace[{index}].policy_tool_output{path[len('$.tool_output'):] }"
+            f"trace[{index}].policy_tool_output{path[len('$.tool_output') :]}"
             if path.startswith("$.tool_output")
             else f"trace[{index}].policy_transition{path[1:]}"
             for path in transition_leakage
@@ -6552,9 +6448,7 @@ def validate_study_objective_episode_evidence(
             if not isinstance(raw_observation, Mapping):
                 raise ValueError(f"{row_label}.policy_observation must be a mapping")
             observation = copy.deepcopy(dict(raw_observation))
-            expected_history = policy_safe_copy(
-                history[-STUDY_POLICY_HISTORY_WINDOW:]
-            )
+            expected_history = policy_safe_copy(history[-STUDY_POLICY_HISTORY_WINDOW:])
             if observation.get("history_window") != expected_history:
                 raise ValueError(
                     f"{row_label}.policy_observation history is not derived from trace"
@@ -6571,9 +6465,7 @@ def validate_study_objective_episode_evidence(
                 else None
             )
             expected_last_tool = (
-                last_action.get("tool")
-                if isinstance(last_action, Mapping)
-                else None
+                last_action.get("tool") if isinstance(last_action, Mapping) else None
             )
             expected_last_status = (
                 last_output.get("execution_status")
@@ -6629,9 +6521,7 @@ def validate_study_objective_episode_evidence(
                 observation,
                 scenario_family=family,
                 error_cardinality=cardinality,
-                partial_success_opportunity=bool(
-                    partial_count and policy_ordinal == 0
-                ),
+                partial_success_opportunity=bool(partial_count and policy_ordinal == 0),
             )
             if raw_row.get("objective_action_assessment") != expected_assessment:
                 raise ValueError(
@@ -6688,9 +6578,7 @@ def _candidate_assessment(oracle_state: Any) -> dict[str, Any]:
     return copy.deepcopy(dict(value)) if isinstance(value, Mapping) else {}
 
 
-def _candidate_id(
-    oracle_state: Any, observation: Mapping[str, Any]
-) -> str | None:
+def _candidate_id(oracle_state: Any, observation: Mapping[str, Any]) -> str | None:
     policy_observation = (
         oracle_state.policy_observation
         if isinstance(oracle_state, OracleState)
@@ -6821,9 +6709,7 @@ def _scenario_truth(scenario: Mapping[str, Any]) -> dict[str, Any]:
             raise ValueError(f"offline {label} container is cyclic")
         seen.add(id(value))
         for container_key in ("truth", "hidden_truth", "ground_truth"):
-            found, nested = _normalized_mapping_value(
-                value, container_key, label=label
-            )
+            found, nested = _normalized_mapping_value(value, container_key, label=label)
             if found:
                 merge_container(
                     nested,
@@ -6980,7 +6866,8 @@ def _strict_check_status(checks: Mapping[str, Any], name: str) -> str | None:
 def _strict_physical_evidence_complete(problems: Sequence[str]) -> bool:
     return not any(
         problem in _STRICT_PHYSICAL_EVIDENCE_GAPS
-        or problem.startswith("true_") and problem.endswith("_malformed")
+        or problem.startswith("true_")
+        and problem.endswith("_malformed")
         for problem in problems
     )
 
@@ -7117,8 +7004,10 @@ def _accepted_corrections(final_state: Mapping[str, Any]) -> list[dict[str, Any]
 
 def _correction_action(item: Mapping[str, Any]) -> dict[str, Any]:
     raw = item.get("source_action") or item.get("action") or item
-    return safe_normalize_action(raw) if isinstance(raw, Mapping) else invalid_action(
-        "accepted_correction_action_missing"
+    return (
+        safe_normalize_action(raw)
+        if isinstance(raw, Mapping)
+        else invalid_action("accepted_correction_action_missing")
     )
 
 
@@ -7218,13 +7107,10 @@ def _accepted_target_audit(
             healthy = sorted(targets - true_targets[family])
             problems.append(f"{family}_healthy_targets_modified:{healthy}")
     uncovered = sum(
-        len(true_targets[family] - accepted_targets[family])
-        for family in true_targets
+        len(true_targets[family] - accepted_targets[family]) for family in true_targets
     )
     return {
-        "true_targets": {
-            key: sorted(value) for key, value in true_targets.items()
-        },
+        "true_targets": {key: sorted(value) for key, value in true_targets.items()},
         "accepted_targets": {
             key: sorted(value) for key, value in accepted_targets.items()
         },
@@ -7262,9 +7148,7 @@ def _diagnostic_truth_audit(
             problems.append("harmonic_localization_mismatch")
 
     hif_truth = [
-        item
-        for item in truth.get("true_hif_errors") or []
-        if isinstance(item, Mapping)
+        item for item in truth.get("true_hif_errors") or [] if isinstance(item, Mapping)
     ]
     for item in hif_truth:
         checked += 1
@@ -7301,8 +7185,7 @@ def _diagnostic_truth_audit(
         for item in truth.get(key) or []:
             checked += 1
             if not any(
-                record.get("family") == "three_phase_unbalance"
-                for record in records
+                record.get("family") == "three_phase_unbalance" for record in records
             ):
                 problems.append("three_phase_unbalance_explanation_missing")
 

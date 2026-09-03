@@ -1389,5 +1389,247 @@ class EndToEndEnvironmentTests(unittest.TestCase):
             self.assertEqual(commit_output["execution_status"], "success")
 
 
+class BranchCurrentDiagnosticProviderTests(unittest.TestCase):
+    """Per-phase branch-current telemetry through the deployment providers."""
+
+    UNBALANCE_SIGNATURE = "three_phase_unbalance vuf_threshold_exceeded"
+    HIF_SIGNATURE = "hif_suspected_zero_sequence"
+    SENSOR_PROVENANCE = {"unresolved_signatures": "deployment_sensor:waveform_capture"}
+
+    def setUp(self) -> None:
+        self.providers = MatpowerDeploymentProviders()
+        self.data = _fixture()
+
+    def _env(self, metadata: dict, **scenario_overrides) -> TransactionalPSSEEnv:
+        env = TransactionalPSSEEnv(**self.providers.env_kwargs(), production_dataset_mode=True)
+        scenario = {
+            "scenario_id": "branch-current-diagnostics",
+            "case": self.data["case_path"],
+            "measurements": list(self.data["z_obs"]),
+            "metadata": metadata,
+        }
+        scenario.update(scenario_overrides)
+        env.reset(scenario)
+        return env
+
+    @staticmethod
+    def _unbalance_metadata(*, source_bus: int = 2) -> dict:
+        from three_phase_nlm.synthetic_branch_telemetry import synthetic_unbalance_rows
+
+        voltages, currents = synthetic_unbalance_rows(
+            source_bus=source_bus,
+            split=(0.5, 0.3, 0.2),
+            unbalanced_voltage_bus=source_bus,
+        )
+        return {
+            "three_phase_voltages": voltages,
+            "three_phase_branch_currents": currents,
+            "branch_current_sigma_pu": 1e-3,
+        }
+
+    def test_branch_current_channel_is_model_visible(self) -> None:
+        env = self._env(self._unbalance_metadata())
+        available = env.get_policy_observation().available_evidence
+        self.assertIn("three_phase_branch_currents", available)
+        self.assertIn("three_phase_voltages", available)
+
+    def test_unbalance_with_branch_currents_localizes_the_source_bus(self) -> None:
+        env = self._env(
+            self._unbalance_metadata(source_bus=2),
+            unresolved_signatures=[self.UNBALANCE_SIGNATURE],
+            semantic_field_provenance=self.SENSOR_PROVENANCE,
+        )
+        active = env.current_state()["active_state_id"]
+        _, output = env.step(
+            {"tool": "run_three_phase_nlm_from_path", "arguments": {"state_id": active}}
+        )
+        self.assertEqual(output["execution_status"], "success")
+        metrics = output["tool_metrics"]
+        self.assertTrue(metrics["evidence_source"].endswith("+branch_currents"))
+        self.assertTrue(metrics["diagnostic_acceptance"]["accepted"])
+        self.assertFalse(
+            metrics["diagnostic_acceptance"]["line_differential_null"][
+                "hif_like_differential_present"
+            ]
+        )
+        summary = metrics["nlm_summary"]
+        self.assertEqual(summary["diagnostic_classification"], "three_phase_unbalance")
+        self.assertEqual(summary["localization"]["bus_1based"], 2)
+        self.assertEqual(summary["top_unbalance_source_buses"][0]["bus"], 2)
+        # Voltage unbalance alone does not name the source bus; the current
+        # channel does, and the explanation carries it for the release audit.
+        explanation = metrics["anomaly_explanation"]
+        self.assertEqual(explanation["family"], "three_phase_unbalance")
+        self.assertEqual(explanation["kind"], "voltage_unbalance_source_localized")
+        self.assertEqual(explanation["detail"]["bus_1based"], 2)
+        self.assertEqual(env.get_policy_observation().explained_anomalies[0]["family"], "three_phase_unbalance")
+
+    def test_unbalance_with_hif_like_line_differential_is_not_explained(self) -> None:
+        metadata = self._unbalance_metadata(source_bus=2)
+        corrupted = [dict(row) for row in metadata["three_phase_branch_currents"]]
+        # Inject a 50 mpu phase-A differential on line 1-2: an unbalance
+        # signature must not be accepted while a line carries fault current.
+        corrupted[0]["i_to_pu"] = [
+            corrupted[0]["i_to_pu"][0] + 0.05,
+            *corrupted[0]["i_to_pu"][1:],
+        ]
+        metadata["three_phase_branch_currents"] = corrupted
+        env = self._env(
+            metadata,
+            unresolved_signatures=[self.UNBALANCE_SIGNATURE],
+            semantic_field_provenance=self.SENSOR_PROVENANCE,
+        )
+        active = env.current_state()["active_state_id"]
+        _, output = env.step(
+            {"tool": "run_three_phase_nlm_from_path", "arguments": {"state_id": active}}
+        )
+        self.assertEqual(output["execution_status"], "success")
+        metrics = output["tool_metrics"]
+        self.assertFalse(metrics["diagnostic_acceptance"]["accepted"])
+        self.assertTrue(
+            metrics["diagnostic_acceptance"]["line_differential_null"][
+                "hif_like_differential_present"
+            ]
+        )
+        self.assertEqual(metrics["nlm_summary"]["diagnostic_classification"], "hif_suspected")
+        self.assertNotIn("anomaly_explanation", metrics)
+        self.assertFalse(env.get_policy_observation().explained_anomalies)
+
+    def test_unbalance_below_vuf_gate_is_accepted_on_significant_source(self) -> None:
+        from three_phase_nlm.synthetic_branch_telemetry import synthetic_unbalance_rows
+
+        # Balanced voltages (VUF = 0) but a clearly unbalanced load at bus 3.
+        voltages, currents = synthetic_unbalance_rows(source_bus=3, split=(0.5, 0.3, 0.2))
+        env = self._env(
+            {
+                "three_phase_voltages": voltages,
+                "three_phase_branch_currents": currents,
+                "branch_current_sigma_pu": 1e-3,
+            },
+            unresolved_signatures=[self.UNBALANCE_SIGNATURE],
+            semantic_field_provenance=self.SENSOR_PROVENANCE,
+        )
+        active = env.current_state()["active_state_id"]
+        _, output = env.step(
+            {"tool": "run_three_phase_nlm_from_path", "arguments": {"state_id": active}}
+        )
+        acceptance = output["tool_metrics"]["diagnostic_acceptance"]
+        self.assertFalse(acceptance["voltage_gate_passed"])
+        self.assertTrue(acceptance["source_significant"])
+        self.assertTrue(acceptance["accepted"])
+        self.assertEqual(acceptance["acceptance_basis"], "shunt_power_spread_source")
+        self.assertEqual(output["tool_metrics"]["anomaly_explanation"]["detail"]["bus_1based"], 3)
+
+    def test_hif_acceptance_uses_terminal_current_evidence_when_reduction_is_marginal(self) -> None:
+        def payload(**terminal_overrides):
+            terminal = {
+                "differential_detected": True,
+                "phase": "B",
+                "alpha_from_from_bus": 0.41,
+                "r_hif_pu": 90.0,
+                "x_hif_pu": 1.5,
+                "consistency_ratio": 0.08,
+                "endpoint_ambiguous": False,
+            }
+            terminal.update(terminal_overrides)
+            return {
+                "success": True,
+                "estimated": {"phase": "B", "alpha_from_from_bus": 0.4, "r_hif_pu": 92.0},
+                "fit": {"residual_reduction_vs_no_hif": 0.15, "weighted_residual_norm": 1.2},
+                "observability": {"model_mismatch_suspected": False},
+                "terminal_current_estimate": terminal,
+            }
+
+        accepted = self.providers._hif_diagnostic_acceptance(payload())
+        self.assertTrue(accepted["accepted"])
+        self.assertEqual(accepted["acceptance_basis"], "terminal_current_differential")
+        self.assertTrue(accepted["terminal_current_conclusive"])
+
+        below_floor = self.providers._hif_diagnostic_acceptance(payload(differential_detected=False))
+        self.assertFalse(below_floor["accepted"])
+        self.assertEqual(below_floor["terminal_current_reason"], "differential_below_detection_floor")
+
+        inconsistent = self.providers._hif_diagnostic_acceptance(payload(consistency_ratio=0.9))
+        self.assertFalse(inconsistent["accepted"])
+        self.assertEqual(inconsistent["terminal_current_reason"], "two_terminal_inconsistent")
+
+        reactive = self.providers._hif_diagnostic_acceptance(payload(x_hif_pu=80.0))
+        self.assertFalse(reactive["accepted"])
+        self.assertEqual(reactive["terminal_current_reason"], "fault_impedance_not_resistive")
+
+        wrong_phase = self.providers._hif_diagnostic_acceptance(payload(phase="A"))
+        self.assertFalse(wrong_phase["accepted"])
+        self.assertEqual(
+            wrong_phase["terminal_current_reason"], "phase_disagreement_with_model_search"
+        )
+
+        # A fault fitted at a terminal is what a bad terminal current sensor
+        # looks like; that evidence cannot carry acceptance by itself.
+        at_terminal = self.providers._hif_diagnostic_acceptance(
+            payload(alpha_from_from_bus=0.995, endpoint_ambiguous=True)
+        )
+        self.assertFalse(at_terminal["accepted"])
+        self.assertEqual(
+            at_terminal["terminal_current_reason"],
+            "fault_at_terminal_ambiguous_with_sensor_error",
+        )
+
+        # A large residual norm still vetoes acceptance regardless of the differential.
+        noisy = payload()
+        noisy["fit"]["weighted_residual_norm"] = 5.0
+        self.assertFalse(self.providers._hif_diagnostic_acceptance(noisy)["accepted"])
+
+    def test_hif_signature_with_branch_currents_localizes_line_and_phase(self) -> None:
+        from psse_env.oracle import ExpertPolicyOracle
+        from three_phase_nlm.synthetic_branch_telemetry import synthetic_line_fault_rows
+
+        voltages, currents, _ = synthetic_line_fault_rows(
+            row0=2, alpha=0.37, phase="B", r_hif_pu=100.0
+        )
+        metadata = {
+            "three_phase_voltages": voltages,
+            "three_phase_branch_currents": currents,
+            "branch_current_sigma_pu": 1e-3,
+            # A stored legacy diagnostic pointing elsewhere must not win over
+            # telemetry measured on the snapshot itself.
+            "nlm_diagnostic": {
+                "success": True,
+                "method": "legacy_three_phase_nlm",
+                "top_hif_groups": [{"rank": 1, "branch_row0": 5, "score": 1.0}],
+            },
+        }
+        env = self._env(
+            metadata,
+            unresolved_signatures=[self.HIF_SIGNATURE],
+            semantic_field_provenance=self.SENSOR_PROVENANCE,
+        )
+        active = env.current_state()["active_state_id"]
+        _, output = env.step(
+            {"tool": "run_three_phase_nlm_from_path", "arguments": {"state_id": active}}
+        )
+        self.assertEqual(output["execution_status"], "success")
+        metrics = output["tool_metrics"]
+        self.assertEqual(
+            metrics["evidence_source"], "deployment_diagnostic:terminal_current_differential"
+        )
+        summary = metrics["nlm_summary"]
+        self.assertEqual(summary["method"], "terminal_current_differential")
+        self.assertEqual(summary["top_hif_groups"][0]["branch_row0"], 2)
+        self.assertEqual(summary["suspected_phase"], "B")
+        self.assertEqual(summary["legacy_nlm_top_branch_row0"], 5)
+        self.assertTrue(summary["differential_detected"])
+        self.assertAlmostEqual(
+            summary["terminal_current_estimate"]["alpha_from_from_bus"], 0.37, places=3
+        )
+        self.assertNotIn("anomaly_explanation", metrics)
+
+        oracle = ExpertPolicyOracle(process_oracle=env.process_oracle)
+        actions = oracle.next_actions(env.get_oracle_state(env.history), env.history)
+        self.assertEqual(actions[0]["tool"], "estimate_hif_location_magnitude_from_path")
+        self.assertEqual(actions[0]["arguments"]["candidate_branch_row0"], 2)
+        self.assertEqual(actions[0]["arguments"]["candidate_phase"], "B")
+        env.assert_training_decision_evidence(actions[0])
+
+
 if __name__ == "__main__":
     unittest.main()

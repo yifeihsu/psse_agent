@@ -244,12 +244,23 @@ def validate_round1_source_mix_gate(
 
     ``GateError`` contains all independently detectable failures so an HPC job
     exits before loading the model or importing the GPU stack.
+
+    The aggregate's learner seed identifies the policy that visited D1 states.
+    ``initial_adapter_revision`` identifies this replicated training run's BC0
+    parent; its content and same-seed receipt are authenticated by the training
+    preflight rather than equated with the collector policy.
     """
 
     if round1_view not in ROUND1_VIEW_CHOICES:
         raise GateError(
             "Round-1 view must be selected explicitly as one of: "
             + ", ".join(ROUND1_VIEW_CHOICES)
+        )
+    warm_start_revision = str(initial_adapter_revision).strip().lower()
+    if not _is_sha256(warm_start_revision):
+        raise GateError(
+            "Round-1 initial adapter revision must be an exact 64-hex "
+            "checkpoint tree SHA-256."
         )
 
     provenance_file = Path(provenance_path).resolve()
@@ -655,11 +666,10 @@ def validate_round1_source_mix_gate(
         failures.append("round-1 provenance does not bind D1 rows and manifest")
     else:
         try:
-            validate_round1_learner_seed(
+            collection_learner_seed = validate_round1_learner_seed(
                 d1_manifest,
                 collection_manifest_sha256=str(d1_manifest_sha256),
                 aggregate_learner_seed=_mapping(descriptor.get("learner_seed")),
-                initial_adapter_revision=initial_adapter_revision,
             )
         except ValueError as exc:
             failures.append(str(exc))
@@ -1077,6 +1087,8 @@ def validate_round1_source_mix_gate(
         "passed": True,
         "selected_view": round1_view,
         "generation_provenance_id": provenance_id,
+        "collection_learner_seed": collection_learner_seed,
+        "round1_warm_start_revision": warm_start_revision,
         "d1_recovery_rows": d1_recovery_rows,
         "probe_rows": probe_rows_count,
         "selected_train_rows": len(selected_train_rows),

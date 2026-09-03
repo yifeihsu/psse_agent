@@ -1,0 +1,200 @@
+
+========================================================================
+1. GATE OUTCOMES  (failure_evidence.json)
+========================================================================
+   collection_outcome                     strict_gate_failed
+   collection_pass                        training
+   beta                                   0.25
+   iteration                              1
+   seed                                   20260719
+   strict_gate_requested                  True
+   strict_gate_passed                     False
+   expected_exit_code                     1
+   production_outputs_published           False
+   training_eligible                      False
+   round1_aggregate_eligible              False
+   release_evidence_eligible              False
+   visited_rows                           1600
+   candidate_recovery_row_count           350
+   selected_recovery_row_count            350
+   d0_physical_root_count                 263
+   eligible_physical_root_count           102
+   forbidden_physical_root_count          408
+   frozen_evaluation_root_count           115
+   development_holdout_root_count         30
+
+   failed_gate_names (5):
+      - deterministic_collection_selection
+      - independent_root_support
+      - offline_teacher_target_quarantine_summary
+      - round1_replay_capacity
+      - targeted_state_coverage
+
+-- independent_root_support: per-stratum distinct physical roots
+   stratum                                         roots  floor   rows  required
+   loop_escape                                        16      0     48  False
+   multi_measurement_safe_handoff                     47     10     47  True
+   post_failure_no_candidate                           2     10      2  True   <-- SHORTFALL
+   premature_commit_recovery                          15      5    100  True
+   premature_escalation_recovery                       6      5     41  True
+   rejected_candidate_rollback                        16      0     28  False
+   sequential_measurement_parameter_recovery          48     10     83  True
+   unsupported_correction_recovery                     1     10      1  True   <-- SHORTFALL
+
+-- targeted_state_coverage: per-cell distinct physical roots
+   multi_measurement_cardinality_2                     9      5
+   multi_measurement_cardinality_4                    10      5
+   multi_measurement_cardinality_5                    21      5
+   parameter_near_1_2_strict_rank                     28      5
+   parameter_route_actionable                         23      5
+   parameter_route_complete_negative                   4      5   <-- SHORTFALL
+   parameter_route_unavailable                        41      5
+   partial_success_retention                          93      5
+   sequential_measurement_first                       11      5
+   sequential_parameter_first                         41      5
+
+-- round1_replay_capacity
+   requested          d1=408 d0=1222 total=1630 share=0.25030674846625767
+   largest_feasible   d1=380 d0=1141 total=1521 share=0.24983563445101906
+   band: [0.2, 0.3]  configured=0.25  max_duplicate=2  max_rows_per_root=8
+   NOTE: largest_feasible share sits INSIDE the band; the gate fails only
+         because the requested total (1630) exceeds feasible (1521).
+
+-- offline_teacher_target_quarantine_summary  (zero-tolerance gate)
+   total_rows                         1600
+   candidate_rows                     352
+   passed_rows                        350
+   quarantined_rows                   2
+   quarantined_by_action_class        {'commit': 2}
+   quarantined_by_reason_code         {'candidate_source_target_outside_remaining_truth': 2}
+   passed                             False
+
+========================================================================
+2. VISITED-ROW ANALYSIS  (diagnostic.all_visited_rows.jsonl)
+========================================================================
+
+   total rows: 1600
+
+-- recovery_stratum
+     1078  None
+      167  sequential_measurement_parameter_recovery
+      100  premature_commit_recovery
+       95  loop_escape
+       75  multi_measurement_safe_handoff
+       41  premature_escalation_recovery
+       38  rejected_candidate_rollback
+        3  post_failure_no_candidate
+        3  unsupported_correction_recovery
+
+-- production_label_eligible
+     1250  False
+      350  True
+
+-- UNCLASSIFIED -> state_origin
+      723  learner_policy
+      204  expert_policy
+      151  initial
+
+-- UNCLASSIFIED -> ineligibility reason
+      723  not_recovery_state
+      355  not_learner_visited_state
+
+-- state_class -> recovery_stratum
+
+   clean_successful  (total 629)
+         596  UNCLASSIFIED
+          33  sequential_measurement_parameter_recovery
+
+   accepted_partial_continuation  (total 366)
+         221  UNCLASSIFIED
+         111  sequential_measurement_parameter_recovery
+          34  loop_escape
+
+   invalid_precondition_recovery  (total 271)
+         200  UNCLASSIFIED
+          41  premature_escalation_recovery
+          24  loop_escape
+           3  post_failure_no_candidate
+           3  unsupported_correction_recovery
+
+   terminal_operator_escalation  (total 145)
+          75  multi_measurement_safe_handoff
+          61  UNCLASSIFIED
+           9  loop_escape
+
+   rejected_candidate_recovery  (total 138)
+         100  premature_commit_recovery
+          38  rejected_candidate_rollback
+
+   loop_repetition  (total 51)
+          28  loop_escape
+          23  sequential_measurement_parameter_recovery
+
+-- UNCLASSIFIED breakdown (state_class, origin, reason)
+      351  state_class=clean_successful  origin=learner_policy  reason=not_recovery_state
+      163  state_class=accepted_partial_continuation  origin=learner_policy  reason=not_recovery_state
+      161  state_class=invalid_precondition_recovery  origin=learner_policy  reason=not_recovery_state
+      151  state_class=clean_successful  origin=initial  reason=not_learner_visited_state
+       94  state_class=clean_successful  origin=expert_policy  reason=not_learner_visited_state
+       58  state_class=accepted_partial_continuation  origin=expert_policy  reason=not_learner_visited_state
+       48  state_class=terminal_operator_escalation  origin=learner_policy  reason=not_recovery_state
+       39  state_class=invalid_precondition_recovery  origin=expert_policy  reason=not_learner_visited_state
+       13  state_class=terminal_operator_escalation  origin=expert_policy  reason=not_learner_visited_state
+
+-- The 161 learner-visited invalid_precondition_recovery rows
+   (preferred.tool, previous_failed, process_valid, has_candidate, disposition)
+      159  ('commit_state', False, True, True, None)
+        2  ('correct_measurements', False, False, False, None)
+
+   Every row has previous_failed=False, so classify_dagger1_recovery_stratum
+   falls through to `return None`. The 159 commit_state rows reach
+   state_class=invalid_precondition_recovery only because `disposition` is
+   None from every source -- the catch-all branch, not a real invalidity.
+
+========================================================================
+3. D0 ROUND-0 AGGREGATE: do the starved situations exist there?
+========================================================================
+
+   aggregate.auxiliary_counterfactual.raw.jsonl: 789 rows
+
+-- branch_family
+       97  stale_context
+       93  rollback_without_disposition
+       92  premature_finalization
+       90  premature_commit
+       84  repeated_failed_action
+       64  wrong_target_component
+       62  wrong_fault_family
+       59  wrong_correction_magnitude
+       55  skipped_verification
+       53  rollback_of_valid_partial_correction
+       40  wrong_correction_sign
+
+-- injected error_code
+      291  candidate_lifecycle_violation
+      181  unknown_state_id
+      164  correction_not_supported_by_current_context
+       92  terminal_condition_not_met
+       48  correction_route_not_actionable
+       13  schema_error
+
+-- (injected tool, unsupported code)
+       69  ('correct_measurements', 'correction_not_supported_by_current_context')
+       52  ('correct_parameters', 'correction_not_supported_by_current_context')
+       43  ('correct_topology', 'correction_not_supported_by_current_context')
+       33  ('correct_parameters', 'correction_route_not_actionable')
+       15  ('correct_topology', 'correction_route_not_actionable')
+
+   unsupported_correction_recovery predicate -> 152 distinct roots  (floor 10)
+   post_failure_no_candidate predicate       -> 263 distinct roots  (floor 10)
+
+   aggregate.raw.jsonl: 1872 ordinary rows
+   unsupported_correction_recovery predicate -> 0 distinct roots
+   post_failure_no_candidate predicate       -> 0 distinct roots
+
+   CONCLUSION: both situations exist ONLY in the injected-error
+   counterfactual stream, never in ordinary expert/model rollouts.
+   D0's roots are forbidden to DAgger-1, so the mechanism must be
+   ported to fresh roots -- the rows themselves cannot be reused.
+
+[done]

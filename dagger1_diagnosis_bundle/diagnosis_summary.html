@@ -1,0 +1,345 @@
+<title>DAgger-1 Gate Failure</title>
+<style>
+  :root {
+    --ground:      #F5F6F8;
+    --surface:     #FFFFFF;
+    --surface-alt: #EDF0F4;
+    --ink:         #161A20;
+    --ink-mid:     #454D5A;
+    --ink-dim:     #6B7484;
+    --rule:        #D9DEE6;
+    --rule-strong: #B9C1CD;
+    --accent:      #2C5D8A;
+    --accent-soft: #E4EDF6;
+    --fail:        #B22B31;
+    --fail-soft:   #FBE9E9;
+    --pass:        #2C6E49;
+    --pass-soft:   #E6F2EA;
+    --warn:        #8C6209;
+    --warn-soft:   #FBF0DC;
+
+    --display: "Sitka Text", "Iowan Old Style", Charter, "Bitstream Charter", Cambria, Georgia, serif;
+    --body: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --mono: "Cascadia Mono", ui-monospace, Consolas, "SF Mono", "Roboto Mono", monospace;
+
+    --measure: 68ch;
+    --step--1: 0.815rem;
+    --step-0:  1rem;
+    --step-1:  1.24rem;
+    --step-2:  1.62rem;
+    --step-3:  2.15rem;
+    --step-4:  2.9rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #12151A;
+      --surface:     #191D24;
+      --surface-alt: #212630;
+      --ink:         #E4E8EE;
+      --ink-mid:     #B0B8C4;
+      --ink-dim:     #858E9C;
+      --rule:        #2C323C;
+      --rule-strong: #3E4653;
+      --accent:      #7FADD8;
+      --accent-soft: #1B2836;
+      --fail:        #F0797F;
+      --fail-soft:   #2E1A1C;
+      --pass:        #68C08E;
+      --pass-soft:   #15251C;
+      --warn:        #DCA33D;
+      --warn-soft:   #2B2214;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:      #12151A;
+    --surface:     #191D24;
+    --surface-alt: #212630;
+    --ink:         #E4E8EE;
+    --ink-mid:     #B0B8C4;
+    --ink-dim:     #858E9C;
+    --rule:        #2C323C;
+    --rule-strong: #3E4653;
+    --accent:      #7FADD8;
+    --accent-soft: #1B2836;
+    --fail:        #F0797F;
+    --fail-soft:   #2E1A1C;
+    --pass:        #68C08E;
+    --pass-soft:   #15251C;
+    --warn:        #DCA33D;
+    --warn-soft:   #2B2214;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: var(--step-0);
+    line-height: 1.6;
+    margin: 0;
+    padding: clamp(1.5rem, 4vw, 4rem) clamp(1rem, 5vw, 2rem) 6rem;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: var(--measure); margin: 0 auto; display: flex; flex-direction: column; gap: 3rem; min-width: 0; }
+  .wrap > * { min-width: 0; }
+  .wide { width: 100%; min-width: 0; }
+
+  h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; line-height: 1.15; font-weight: 600; }
+  h1 { font-size: var(--step-4); letter-spacing: -0.02em; }
+  h2 { font-size: var(--step-2); letter-spacing: -0.01em; }
+  h3 { font-size: var(--step-1); }
+  p, li { margin: 0; overflow-wrap: break-word; }
+  a { color: var(--accent); }
+  code, .mono, td.name, .files, .stage-id {
+    font-family: var(--mono); overflow-wrap: anywhere;
+  }
+  code, .mono { font-size: 0.89em; font-variant-ligatures: none; }
+  code { background: var(--surface-alt); padding: 0.1em 0.35em; border-radius: 3px; }
+  strong { font-weight: 650; color: var(--ink); }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: var(--step--1);
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-dim);
+  }
+
+  header { display: flex; flex-direction: column; gap: 1rem; }
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 0.4rem 1.5rem;
+    font-family: var(--mono); font-size: var(--step--1); color: var(--ink-dim);
+    border-top: 1px solid var(--rule); padding-top: 1rem;
+  }
+  .meta b { color: var(--ink-mid); font-weight: 500; }
+
+  section { display: flex; flex-direction: column; gap: 1.15rem; }
+  .lede { font-size: var(--step-1); line-height: 1.5; color: var(--ink-mid); font-family: var(--display); }
+
+  .panel { padding: 1.25rem 1.4rem; display: flex; flex-direction: column; gap: 0.6rem; }
+  .panel.stop { background: var(--fail-soft); border-left: 3px solid var(--fail); }
+  .panel.stop .eyebrow { color: var(--fail); }
+  .panel.note { background: var(--warn-soft); border-left: 3px solid var(--warn); }
+  .panel.note .eyebrow { color: var(--warn); }
+  .panel.rec { background: var(--accent-soft); border-left: 3px solid var(--accent); }
+  .panel.rec .eyebrow { color: var(--accent); }
+
+  .chain { display: flex; flex-direction: column; gap: 0; }
+  .stage {
+    display: grid; grid-template-columns: 2.4rem minmax(0, 1fr) auto; gap: 0 0.9rem;
+    align-items: baseline; padding: 0.8rem 0; border-bottom: 1px solid var(--rule);
+  }
+  .stage > * { min-width: 0; }
+  .stage:first-child { border-top: 1px solid var(--rule-strong); }
+  .stage-n { font-family: var(--mono); font-size: var(--step--1); color: var(--ink-dim); }
+  .stage-name { font-family: var(--mono); font-size: var(--step-0); color: var(--ink); }
+  .stage-id { font-size: var(--step--1); color: var(--ink-dim); display: block; }
+  .pill {
+    font-family: var(--mono); font-size: var(--step--1); letter-spacing: 0.04em;
+    padding: 0.15rem 0.55rem; border-radius: 2px; white-space: nowrap; font-weight: 600;
+  }
+  .pill.ok   { background: var(--pass-soft); color: var(--pass); }
+  .pill.bad  { background: var(--fail-soft); color: var(--fail); }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); }
+  .pill.dead { background: var(--surface-alt); color: var(--ink-dim); }
+
+  .scroll { overflow-x: auto; border: 1px solid var(--rule); background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: var(--step--1); }
+  th, td { padding: 0.55rem 0.85rem; text-align: left; border-bottom: 1px solid var(--rule); }
+  th {
+    font-family: var(--mono); font-size: var(--step--1); font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-dim);
+    background: var(--surface-alt); white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num { font-family: var(--mono); text-align: right; font-variant-numeric: tabular-nums; }
+  tr.short td { background: var(--fail-soft); }
+  tr.short td.num { color: var(--fail); font-weight: 650; }
+  td.was { color: var(--fail); }
+
+  .block {
+    display: flex; flex-direction: column; gap: 0.9rem;
+    border-top: 2px solid var(--rule-strong); padding-top: 1.1rem;
+  }
+  .block-head { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; }
+
+  pre {
+    font-family: var(--mono); font-size: var(--step--1); line-height: 1.55;
+    background: var(--surface-alt); color: var(--ink); border: 1px solid var(--rule);
+    padding: 0.9rem 1rem; overflow-x: auto; margin: 0; border-radius: 2px;
+  }
+  pre .c { color: var(--ink-dim); }
+  pre .f { color: var(--fail); }
+  pre .p { color: var(--pass); }
+
+  ol.steps { margin: 0; padding-left: 1.4rem; display: flex; flex-direction: column; gap: 0.6rem; }
+  ol.steps li::marker { font-family: var(--mono); color: var(--ink-dim); font-size: var(--step--1); }
+
+  .files { font-size: var(--step--1); line-height: 1.9; color: var(--ink-mid); }
+  .files b { color: var(--ink); font-weight: 600; }
+
+  footer {
+    border-top: 1px solid var(--rule); padding-top: 1.25rem;
+    font-size: var(--step--1); color: var(--ink-dim);
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <span class="eyebrow">Round-2 collection · NYU Torch · revision 2</span>
+    <h1>DAgger-1 Gate Failure</h1>
+    <p class="lede">Two quarantined commit targets stopped the collector after 2 of 6 batches. Everything else measured in this run was measured on the 31.7% of the schedule that ran.</p>
+    <div class="meta">
+      <span><b>run</b> dagger1_6b76281c-20260816T035053Z</span>
+      <span><b>commit</b> 6b76281c</span>
+      <span><b>revised</b> 2026-08-18</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="panel note">
+      <span class="eyebrow">Revision 2 supersedes revision 1</span>
+      <p>Peer review established that revision 1 inverted the causal chain and overstated three claims. The corrections are listed at the bottom of this page; the underlying evidence files are unchanged.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="panel stop">
+      <span class="eyebrow">The terminal event</span>
+      <p>The chain did not crash — no traceback, no CUDA OOM, no timeout. Job <code>15842429</code> exited <code>1</code> by design. The collector stopped because <strong>two commit targets failed the private teacher-target audit</strong>, and the zero-quarantine gate is cumulative and irreversible.</p>
+      <p>Stopping immediately on quarantine is <strong>correct production behaviour</strong>. The gate cannot be repaired by later rows.</p>
+    </div>
+    <pre>stopping_reason:        <span class="f">irreversible_truth_audit_quarantine</span>
+stopped_after_batch:    reserve-1-multi_measurement-r0
+executed_batch_ids:     primary-r0, reserve-1-multi_measurement-r0   <span class="c">← 2 of 6</span>
+executed_episode_count: <span class="f">151</span>   of   planned_episode_count: <span class="f">477</span>
+terminal_failure:       gate = offline_teacher_target_quarantine_summary
+                        quarantined_rows = 2
+
+unexecuted_batch_ids:   reserve-2-measurement+parameter-r0   <span class="c">← only new-root batch</span>
+                        repeat-multi_measurement-r1
+                        repeat-measurement+parameter-r1
+                        repeat-multi_measurement-r2</pre>
+    <p>The two quarantined examples are both <code>action_class = commit</code> with <code>reason = candidate_source_target_outside_remaining_truth</code>. Resolving them requires extracting both trajectories with their private scenario envelopes, to distinguish a genuine wrong-target commit from a legitimate refinement misjudged by a new-fault-membership rule.</p>
+  </section>
+
+  <section>
+    <h2>The chain, as it actually ran</h2>
+    <div class="chain">
+      <div class="stage">
+        <span class="stage-n">01</span>
+        <span><span class="stage-name">d1r2-audit</span><span class="stage-id">15842427 · 00:00:38</span></span>
+        <span class="pill ok">COMPLETED</span>
+      </div>
+      <div class="stage">
+        <span class="stage-n">02</span>
+        <span><span class="stage-name">d1r2-diag</span><span class="stage-id">15842428 · 01:34:11</span></span>
+        <span class="pill ok">COMPLETED</span>
+      </div>
+      <div class="stage">
+        <span class="stage-n">03</span>
+        <span><span class="stage-name">d1r2-train</span><span class="stage-id">15842429 · 02:00:03 · exit 1:0 · limit was 24h, not a timeout</span></span>
+        <span class="pill bad">FAILED</span>
+      </div>
+      <div class="stage">
+        <span class="stage-n">04</span>
+        <span><span class="stage-name">d1r2-aggregate</span><span class="stage-id">15842430 · dependency never satisfiable</span></span>
+        <span class="pill dead">CANCELLED</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <h2>What the censored run does not establish</h2>
+      <span class="pill warn">CENSORED</span>
+    </div>
+    <p><strong>Established:</strong> the first two batches did not supply sufficient root support before the quarantines forced termination.</p>
+    <p><strong>Not established:</strong> that the complete 477-episode schedule would fail to produce the missing roots or capacity. Revision 1 called this a "verified generation gap." It is not verified.</p>
+    <div class="scroll wide">
+      <table>
+        <thead><tr><th>Stratum / cell</th><th>Roots</th><th>Floor</th></tr></thead>
+        <tbody>
+          <tr class="short"><td class="name">post_failure_no_candidate</td><td class="num">2</td><td class="num">10</td></tr>
+          <tr class="short"><td class="name">unsupported_correction_recovery</td><td class="num">1</td><td class="num">10</td></tr>
+          <tr class="short"><td class="name">parameter_route_complete_negative</td><td class="num">4</td><td class="num">5</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Note that <code>parameter_route_complete_negative</code> is parameter-related and <code>reserve-2-measurement+parameter-r0</code> never executed — that shortfall has an obvious unexecuted source.</p>
+
+    <h3>How close is it, really?</h3>
+    <p>Only one unexecuted batch introduces <em>new</em> physical roots; the other three are additional replicas of roots already in the pool. Replicas still help — the floors count distinct roots <em>bearing a row in that stratum</em>, so a second trajectory can newly qualify an existing root — but the two effects should be reported separately.</p>
+    <p>Scaling the raw stratum labels linearly from 151 to 477 episodes (×3.16) gives roughly 9–10 labels per stratum against a floor of <strong>10 distinct roots</strong>, where roots ≤ rows. That lands close enough to the boundary that neither "it will obviously fill" nor "it obviously cannot" is defensible from current data — which is exactly why an analysis-only complete-schedule run is worth building rather than assuming an outcome.</p>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <h2>State-class plumbing defect</h2>
+      <span class="pill ok">REAL · INDEPENDENT</span>
+    </div>
+    <p>159 rows reach <code>state_class = invalid_precondition_recovery</code> through a <strong>catch-all branch</strong>, not because anything is invalid. Every disposition source is empty, so the classifier falls through:</p>
+    <pre><span class="c"># all 159 rows, every source</span>
+transition_label.candidate_disposition   <span class="f">absent — key not in label</span>
+candidate_state_summary                  <span class="f">{}</span>
+observation.candidate_disposition        <span class="f">None</span>
+<span class="c"># actual state</span>
+candidate_lifecycle                      <span class="p">VERIFIED_CANDIDATE</span>
+preferred_action.tool                    <span class="p">commit_state</span>
+no_material_anomaly_remaining            <span class="p">false</span>   <span class="c">→ reads as accepted_partial_commit</span></pre>
+    <p>This did <strong>not</strong> cause the run to stop, and it does <strong>not</strong> skew the replay mixture — all three relevant class weights are <code>0.10</code>. It does corrupt state-class audits, class-conditioned reporting, deterministic selector behaviour, and potentially bucket allocation.</p>
+    <p>Fix it from <strong>policy-visible verification evidence</strong> rather than by exposing private disposition, sharing one observable helper across expert commit/rollback reconstruction, state-class assignment, and rank-one target proof.</p>
+  </section>
+
+  <section>
+    <h2>Corrections to revision 1</h2>
+    <div class="scroll wide">
+      <table>
+        <thead><tr><th>Revision 1 claim</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td class="was">"Generation gap is the blocker; verified"</td><td><strong>Wrong.</strong> Measured at 31.7% of schedule; the quarantine was terminal.</td></tr>
+          <tr><td class="was">"Mislabelling skews the replay mixture"</td><td><strong>Wrong.</strong> All three class weights are 0.10.</td></tr>
+          <tr><td class="was">"<code>invalid_precondition_repair</code> has a 10-root floor"</td><td><strong>Wrong.</strong> It has no floor; zero firing blocks nothing.</td></tr>
+          <tr><td class="was">"Retarget 1630 → 1521 — cheapest fix"</td><td><strong>Withdrawn.</strong> 1521 is a censored-checkpoint feasibility.</td></tr>
+          <tr><td>Classifier gates all terminal branches on <code>previous_failed</code></td><td><span class="pill ok">stands</span> code-structure fact</td></tr>
+          <tr><td>159 rows mislabelled via empty disposition</td><td><span class="pill ok">stands</span> row-level fact</td></tr>
+          <tr><td>D0 counterfactual carries 263 / 152 roots</td><td>Stands <em>as measured</em>; does not support the inference drawn from it — D0 ordinary is expert-controlled BC0, D1 is a learner-controlled mixture.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="panel rec">
+      <span class="eyebrow">Decision</span>
+      <p>Do not start aggregate ingestion, Round-1 SFT, or DAgger iteration 2. Do not add counterfactual rows, lower the capacity target, or weaken the root floors. The run stopped too early to justify any methodological change.</p>
+    </div>
+    <h3>Next-step sequence</h3>
+    <ol class="steps">
+      <li><strong>Preserve the failed bundle immutable.</strong> It is scientifically useful precisely because it records the exact censored checkpoint.</li>
+      <li><strong>Resolve the two quarantined commits</strong> forensically — genuine wrong-target commit, or legitimate refinement? Add both physical roots as regression fixtures. Do not weaken the zero-quarantine gate until this is answered.</li>
+      <li><strong>Fix state-class semantics</strong> from policy-visible evidence, with a regression test on the 159-row pattern.</li>
+      <li><strong>Add an analysis-only complete-schedule mode</strong> — same β, same seeds, same 477 episodes, continuing past quarantine for analysis only; every output training-ineligible, never accepted by aggregate ingestion.</li>
+      <li><strong>Regenerate hash-bound artifacts and rerun</strong> the strict β=0.25 protocol with β, row target, aggregate target 1630, root floors, and zero-quarantine all unchanged.</li>
+    </ol>
+    <h3>Monitoring</h3>
+    <p>Orchestration should distinguish <strong>infrastructure failure</strong> (crash, OOM, timeout) from <strong>strict collection NO-GO</strong> (valid failure bundle, expected exit 1, production outputs absent) from <strong>GO</strong> (exit 0, manifest present). It should parse <code>failure_evidence.json</code> and report failed gate names — not call a job healthy because no traceback appeared.</p>
+  </section>
+
+  <section>
+    <h2>The bundle</h2>
+    <p class="files">
+      <b>README.md</b> — full diagnosis, rev 2<br>
+      <b>OPTIONS.md</b> — counterfactual options, deferred pending an uncensored run<br>
+      <b>analysis/reproduce_analysis.py</b> — regenerates every figure, read-only<br>
+      <b>analysis/analysis_output.txt</b> — captured output<br>
+      <b>evidence/failure_evidence.json</b> — 90 KB, authoritative gate evidence<br>
+      <b>evidence/slurm_logs/</b> · <b>evidence/job_scripts/</b> · <b>evidence/sacct_job_states.txt</b>
+    </p>
+  </section>
+
+  <footer>
+    Every figure is reproducible from <code>analysis/reproduce_analysis.py</code> against the cluster artifacts. The stopping report, quarantine detail, and gate outcomes are read directly from <code>failure_evidence.json</code>.
+  </footer>
+
+</div>

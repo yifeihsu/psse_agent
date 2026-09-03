@@ -637,41 +637,140 @@ def _gemma_wire_to_json(text: str) -> str:
     return "".join(output)
 
 
+def _quoted_character_mask(text: str) -> list[bool]:
+    """Mark characters inside JSON or Gemma wire-format strings."""
+    quoted = [False] * len(text)
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(text):
+        if text.startswith('<|"|>', index):
+            for marker_index in range(index, min(index + 5, len(text))):
+                quoted[marker_index] = True
+            in_string = not in_string
+            escaped = False
+            index += 5
+            continue
+        character = text[index]
+        if in_string:
+            quoted[index] = True
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+        elif character == '"':
+            quoted[index] = True
+            in_string = True
+        index += 1
+    return quoted
+
+
+def _balanced_object_end(text: str, start: int, quoted: list[bool]) -> int | None:
+    """Return the exclusive end of an argument object in the original text."""
+    depth = 0
+    for index in range(start, len(text)):
+        if quoted[index]:
+            continue
+        character = text[index]
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return None
+
+
+def _json_tool_call_occurrences(
+    text: str,
+    decoder: json.JSONDecoder,
+    quoted: list[bool],
+    excluded_spans: list[tuple[int, int]],
+) -> list[ParsedToolCall]:
+    """Return non-nested JSON tool-call objects, preserving repeated calls."""
+    occurrences: list[tuple[int, int, ParsedToolCall]] = []
+    for index, character in enumerate(text):
+        if character != "{" or quoted[index]:
+            continue
+        if any(start <= index < end for start, end in excluded_spans):
+            continue
+        try:
+            value, end = decoder.raw_decode(text, index)
+        except json.JSONDecodeError:
+            continue
+        parsed = _json_tool_call(value)
+        if parsed is not None:
+            occurrences.append((index, end, parsed))
+
+    outermost: list[ParsedToolCall] = []
+    for occurrence_index, (start, end, parsed) in enumerate(occurrences):
+        nested = any(
+            other_index != occurrence_index
+            and other_start <= start
+            and end <= other_end
+            and (other_start < start or end < other_end)
+            for other_index, (other_start, other_end, _other) in enumerate(occurrences)
+        )
+        if not nested:
+            outermost.append(parsed)
+    return outermost
+
+
 def parse_tool_call(text: str) -> ParsedToolCall:
     """Parse common Gemma native tool-call renderings into a canonical call."""
     if not isinstance(text, str) or not text.strip():
         raise GateError("Generated tool-call text is empty.")
     decoder = json.JSONDecoder()
-    named = _CALL_NAME_RE.search(text)
-    if named is not None:
-        object_start = text.find("{", named.end())
-        if object_start != -1:
-            try:
-                arguments, _ = decoder.raw_decode(text, object_start)
-            except json.JSONDecodeError:
-                # Gemma 4's native template uses a JSON-like wire format with
-                # bare object keys and <|"|> quote sentinels, for example:
-                #   {state_id:<|"|>active<|"|>}
-                # Canonicalize only the argument object following call:<name>.
-                gemma_json = _gemma_wire_to_json(text[object_start:])
-                try:
-                    arguments, _ = decoder.raw_decode(gemma_json)
-                except json.JSONDecodeError:
-                    arguments = None
-            if isinstance(arguments, dict):
-                return ParsedToolCall(name=named.group(1), arguments=arguments)
-
-    candidates: list[ParsedToolCall] = []
-    for index, character in enumerate(text):
-        if character != "{":
+    quoted = _quoted_character_mask(text)
+    native_calls: list[ParsedToolCall | None] = []
+    native_spans: list[tuple[int, int]] = []
+    cursor = 0
+    while named := _CALL_NAME_RE.search(text, cursor):
+        cursor = named.end()
+        if quoted[named.start(1)]:
             continue
+        object_start = named.end()
+        while object_start < len(text) and text[object_start].isspace():
+            object_start += 1
+        if object_start >= len(text) or text[object_start] != "{":
+            continue
+        object_end = _balanced_object_end(text, object_start, quoted)
+        if object_end is None:
+            native_calls.append(None)
+            continue
+        native_spans.append((object_start, object_end))
+        source = text[object_start:object_end]
         try:
-            value, _ = decoder.raw_decode(text, index)
+            arguments, _ = decoder.raw_decode(source)
         except json.JSONDecodeError:
-            continue
-        parsed = _json_tool_call(value)
-        if parsed is not None and parsed not in candidates:
-            candidates.append(parsed)
+            # Gemma 4's native template uses a JSON-like wire format with
+            # bare object keys and <|"|> quote sentinels, for example:
+            #   {state_id:<|"|>active<|"|>}
+            arguments = None
+            try:
+                arguments, _ = decoder.raw_decode(_gemma_wire_to_json(source))
+            except json.JSONDecodeError:
+                pass
+        native_calls.append(
+            ParsedToolCall(name=named.group(1), arguments=arguments)
+            if isinstance(arguments, dict)
+            else None
+        )
+        cursor = object_end
+
+    if len(native_calls) > 1:
+        raise GateError(
+            "Generated output did not contain exactly one parseable tool call "
+            "(multiple found)."
+        )
+    candidates = _json_tool_call_occurrences(text, decoder, quoted, native_spans)
+    if native_calls:
+        if native_calls[0] is None:
+            candidates = []
+        else:
+            candidates.insert(0, native_calls[0])
     if len(candidates) != 1:
         detail = "none" if not candidates else "multiple"
         raise GateError(f"Generated output did not contain exactly one parseable tool call ({detail} found).")

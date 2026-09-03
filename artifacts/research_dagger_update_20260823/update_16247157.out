@@ -1,0 +1,279 @@
+[train] starting short continuation from existing DAgger adapter: /scratch/yx3882/prelim_e2b_fullnatural_2b32029_20260822/output/dagger/lora
+🦥 Unsloth: Will patch your computer to enable 2x faster free finetuning.
+Unsloth: Your Flash Attention 2 installation seems to be broken. Using Xformers instead. No performance changes will be seen.
+🦥 Unsloth Zoo will now patch everything to make training faster!
+Loading init adapter from: /scratch/yx3882/prelim_e2b_fullnatural_2b32029_20260822/output/dagger/lora
+  Adapter base model: /scratch/yx3882/.cache/huggingface/hub/models--unsloth--gemma-4-E2B-it/snapshots/f0c5915f17ad6c66dbeb577fb06ff8925bf8d7ae
+  Tokenizer source: adapter directory
+  Note: local init-adapter loading uses the adapter config base model; --model-revision is not forwarded to Unsloth.
+  Unsloth adapter load: using adapter-local tokenizer artifacts: chat_template.jinja, processor_config.json, tokenizer.json, tokenizer_config.json
+==((====))==  Unsloth 2026.5.10: Fast Gemma4 patching. Transformers: 5.5.0.
+   \\   /|    NVIDIA RTX PRO 6000 Blackwell Server Edition. Num GPUs = 1. Max memory: 94.971 GB. Platform: Linux.
+O^O/ \_/ \    Torch: 2.10.0+cu128. CUDA: 12.0. CUDA Toolkit: 12.8. Triton: 3.6.0
+\        /    Bfloat16 = TRUE. FA [Xformers = 0.0.35. FA2 = False]
+ "-____-"     Free license: http://github.com/unslothai/unsloth
+trainable params: 25,337,856 || all params: 5,148,515,872 || trainable%: 0.4921
+Gemma side-input plan: {'token_type_ids': True, 'mm_token_type_ids': True}
+Phase-gating role: system
+Inject empty thought channel: False
+Loading dataset from: {'train': '/scratch/yx3882/research_dagger_update_20260823/balanced_train.jsonl', 'validation': '/scratch/yx3882/prelim_e2b_baa7e35_attested_20260821/preliminary.d1_validation.jsonl'}
+
+=== train hardening mask audit ===
+hardening conversations: 0
+hardening assistant turns: 0
+masked hardening assistant turns: 0
+all masked assistant turns: 0
+
+=== train hardening recovery audit ===
+hardening conversations with masked turns: 0
+hardening conversations with recovery tool targets: 0
+
+=== validation hardening mask audit ===
+hardening conversations: 0
+hardening assistant turns: 0
+masked hardening assistant turns: 0
+all masked assistant turns: 0
+
+=== validation hardening recovery audit ===
+hardening conversations with masked turns: 0
+hardening conversations with recovery tool targets: 0
+=== Pre-train mask sanity (3 samples) ===
+[mask 1/3] case=unknown target=tool_call pass=True
+  expected='\'<|tool_call>call:ask_for_more_evidence\' or \'{"tool_name":"ask_for_more_evidence"\' or \'{"tool_name": "ask_for_more_evidence"\''
+  output='<|tool_call>call:ask_for_more_evidence{case_path:<|"|>active<|"|>,request:<|"|>operator_escalation:recovery_options_exhausted<|"|>}<tool_call|><|tool_response>'
+[mask 2/3] case=unknown target=tool_call pass=True
+  expected='\'<|tool_call>call:ask_for_more_evidence\' or \'{"tool_name":"ask_for_more_evidence"\' or \'{"tool_name": "ask_for_more_evidence"\''
+  output='<|tool_call>call:ask_for_more_evidence{case_path:<|"|>active<|"|>,request:<|"|>operator_escalation:recovery_options_exhausted<|"|>}<tool_call|><|tool_response>'
+[mask 3/3] case=unknown target=tool_call pass=True
+  expected='\'<|tool_call>call:get_measurement_context\' or \'{"tool_name":"get_measurement_context"\' or \'{"tool_name": "get_measurement_context"\''
+  output='<|tool_call>call:get_measurement_context{case_path:<|"|>active<|"|>}<tool_call|><|tool_response>'
+=== End pre-train mask sanity: 3/3 passed ===
+
+=== train dataset summary ===
+original conversations: 1146
+expanded assistant-turn samples: 1146
+usable samples: 1146
+skipped untrainable assistant turns: 0
+dropped too-long targets: 0
+prompt-trimmed samples: 0
+hardening prompt-trimmed samples: 0
+hardening too-long targets: 0
+assistant target kinds: {'tool_call': 1146}
+assistant phase counts: {'first_tool_call': 1146}
+supervised token mass by phase: {'first_tool_call': 26283}
+mean completion length by phase: {'first_tool_call': 22.9}
+original message-count distribution: {3: 1146}
+orig token lengths -> min=2422, p50=4133, p90=6078, p95=6414, max=7173, mean=4368.5
+used token lengths -> min=2422, p50=4133, p90=6078, p95=6414, max=7173, mean=4368.5, context_limit=16384
+=== end train summary ===
+
+
+=== validation dataset summary ===
+original conversations: 63
+expanded assistant-turn samples: 63
+usable samples: 63
+skipped untrainable assistant turns: 0
+dropped too-long targets: 0
+prompt-trimmed samples: 0
+hardening prompt-trimmed samples: 0
+hardening too-long targets: 0
+assistant target kinds: {'tool_call': 63}
+assistant phase counts: {'first_tool_call': 63}
+supervised token mass by phase: {'first_tool_call': 1431}
+mean completion length by phase: {'first_tool_call': 22.7}
+original message-count distribution: {3: 63}
+orig token lengths -> min=3609, p50=4829, p90=6064, p95=6588, max=7012, mean=4932.2
+used token lengths -> min=3609, p50=4829, p90=6064, p95=6588, max=7012, mean=4932.2, context_limit=16384
+=== end validation summary ===
+
+=== Preview of first rendered sample ===
+<bos><|turn>system
+You are a power-system state-estimation diagnostic agent. Given the current state summary and recent tool history, choose exactly one next valid tool call through the provided tool interface. Do not return final-answer prose. Case references such as active and candidate are local case_path aliases; use them exactly as provided.<|tool>declaration:wls_from_path{description:<|"|>Run weighted least-squares state estimation on the current user snapshot. Do not resend z_obs in the tool arguments.<|"|>,parameters:{properties:{case_path:{description:<|"|>Case identifier or path.<|"|>,type:<|"|>STRING<|"|>}},required:[<|"|>case_path<|"|>],type:<|"|>OBJECT<|"|>}}<tool|><|tool>declaration:get_parameter_context{description:<|"|>Retrieve repeated measurement scans and initial states needed for parameter correction. Returns a compact summary while the runtime binds the full arrays for the next tool call.<|"|>,parameters:{properties:{case_path:{description:<|"|>Case identifier or path.<|"|>,type:<|"|>STRING<|"|>}},required:[<|"|>case_path<|"|>],type:<|"|>OBJECT<|"|>}}<tool|><|tool>declaration:get_topology_context{description:<|"|>Retrieve compact breaker context for topology correction.<|"|>,parameters:{properties:{case_path:{description:<|"|>Case identifier or path.<|"|>,type:<|"|>STRING<|"|>}},required:[<|"|>case_path<|"|>],type:<|"|>OBJECT<|"|>}}<tool|><|tool>declaration:get_harmonic_context{description:<|"|>Retrieve harmonic measurements and orders for harmonic follow-up. Returns a compact summary while the runtime binds the full measurements for HSE.<|"|>,parameters:{properties:{case_path:{description:<|"|>Case identifier or path.<|"|>,type:<|"|>STRING<|"|>}},required:[<|"|>case_path<|"|>],type:<|"|>OBJECT<|"|>}}<tool|><|tool>declaration:get_verification_snapshot{description:<|"|>Verify the open transactional candidate. Optionally provide its candidate case identifier; otherwise the controller binds the open candidate alias.<|"|>,parameters:{properties:{case_path:{description:<|"|>Optional candidate case identifier to verify.<|"|>,type:<|"|>STRING<|"|>}},type:<|"|>OBJECT<|"|>}}<tool|><|tool>declaration:correct_measurements_from_path{description:<|"|>Correct suspected bad measurements using the current user snapshot. Provide the suspect group only; the wrapper will hydrate z_obs.<|"|>,parameters:{properties:{case_path:{description:<|"|>Case identifier or path.<|"|>,type:<|"|>STRING<|"|>},suspect_group:{description:<|"|>0-based suspected measurement
+=== End preview ===
+SFTConfig does not support these kwargs in the current environment; dropping: save_safetensors
+Starting training from scratch...
+Wrote run config: /scratch/yx3882/research_dagger_update_20260823/training/run_config.json
+Unsloth: Will smartly offload gradients to save VRAM!
+Unsloth: Double buffering enabled (parallel H2D + compute) for backward pass.
+{'loss': '0.1119', 'grad_norm': '3.102', 'learning_rate': '5e-06', 'epoch': '0.02792'}
+{'loss': '0.05707', 'grad_norm': '1.649', 'learning_rate': '1.5e-05', 'epoch': '0.05585'}
+{'loss': '0.03931', 'grad_norm': '0.9654', 'learning_rate': '1.967e-05', 'epoch': '0.08377'}
+{'loss': '0.0382', 'grad_norm': '0.7679', 'learning_rate': '1.9e-05', 'epoch': '0.1117'}
+{'eval_loss': '1.299', 'eval_runtime': '29.43', 'eval_samples_per_second': '2.141', 'eval_steps_per_second': '2.141', 'epoch': '0.1117'}
+{'loss': '0.03095', 'grad_norm': '0.8865', 'learning_rate': '1.833e-05', 'epoch': '0.1396'}
+{'loss': '0.02462', 'grad_norm': '0.6281', 'learning_rate': '1.767e-05', 'epoch': '0.1675'}
+{'loss': '0.01815', 'grad_norm': '0.4915', 'learning_rate': '1.7e-05', 'epoch': '0.1955'}
+{'loss': '0.01913', 'grad_norm': '0.4879', 'learning_rate': '1.633e-05', 'epoch': '0.2234'}
+{'eval_loss': '1.278', 'eval_runtime': '18.88', 'eval_samples_per_second': '3.337', 'eval_steps_per_second': '3.337', 'epoch': '0.2234'}
+{'loss': '0.02057', 'grad_norm': '0.8949', 'learning_rate': '1.567e-05', 'epoch': '0.2513'}
+{'loss': '0.01889', 'grad_norm': '0.4023', 'learning_rate': '1.5e-05', 'epoch': '0.2792'}
+{'loss': '0.015', 'grad_norm': '0.4727', 'learning_rate': '1.433e-05', 'epoch': '0.3072'}
+{'loss': '0.01248', 'grad_norm': '0.4309', 'learning_rate': '1.367e-05', 'epoch': '0.3351'}
+{'eval_loss': '1.266', 'eval_runtime': '18.78', 'eval_samples_per_second': '3.354', 'eval_steps_per_second': '3.354', 'epoch': '0.3351'}
+{'loss': '0.0158', 'grad_norm': '0.3835', 'learning_rate': '1.3e-05', 'epoch': '0.363'}
+{'loss': '0.01184', 'grad_norm': '0.4882', 'learning_rate': '1.233e-05', 'epoch': '0.3909'}
+{'loss': '0.007629', 'grad_norm': '0.2101', 'learning_rate': '1.167e-05', 'epoch': '0.4188'}
+{'loss': '0.0112', 'grad_norm': '0.3833', 'learning_rate': '1.1e-05', 'epoch': '0.4468'}
+{'eval_loss': '1.272', 'eval_runtime': '18.82', 'eval_samples_per_second': '3.348', 'eval_steps_per_second': '3.348', 'epoch': '0.4468'}
+{'loss': '0.007602', 'grad_norm': '0.305', 'learning_rate': '1.033e-05', 'epoch': '0.4747'}
+{'loss': '0.01454', 'grad_norm': '0.3681', 'learning_rate': '9.667e-06', 'epoch': '0.5026'}
+{'loss': '0.009684', 'grad_norm': '0.2126', 'learning_rate': '9e-06', 'epoch': '0.5305'}
+{'loss': '0.007052', 'grad_norm': '0.2268', 'learning_rate': '8.333e-06', 'epoch': '0.5585'}
+{'eval_loss': '1.268', 'eval_runtime': '18.94', 'eval_samples_per_second': '3.326', 'eval_steps_per_second': '3.326', 'epoch': '0.5585'}
+{'loss': '0.01136', 'grad_norm': '0.3706', 'learning_rate': '7.667e-06', 'epoch': '0.5864'}
+{'loss': '0.01199', 'grad_norm': '0.4693', 'learning_rate': '7e-06', 'epoch': '0.6143'}
+{'loss': '0.007688', 'grad_norm': '0.3072', 'learning_rate': '6.333e-06', 'epoch': '0.6422'}
+{'loss': '0.006073', 'grad_norm': '0.2939', 'learning_rate': '5.667e-06', 'epoch': '0.6702'}
+{'eval_loss': '1.271', 'eval_runtime': '18.92', 'eval_samples_per_second': '3.33', 'eval_steps_per_second': '3.33', 'epoch': '0.6702'}
+{'loss': '0.01273', 'grad_norm': '0.4319', 'learning_rate': '5e-06', 'epoch': '0.6981'}
+{'loss': '0.005805', 'grad_norm': '0.3173', 'learning_rate': '4.333e-06', 'epoch': '0.726'}
+{'loss': '0.009855', 'grad_norm': '0.3053', 'learning_rate': '3.667e-06', 'epoch': '0.7539'}
+{'loss': '0.009337', 'grad_norm': '0.3272', 'learning_rate': '3e-06', 'epoch': '0.7818'}
+{'eval_loss': '1.269', 'eval_runtime': '18.9', 'eval_samples_per_second': '3.333', 'eval_steps_per_second': '3.333', 'epoch': '0.7818'}
+{'loss': '0.008863', 'grad_norm': '0.3189', 'learning_rate': '2.333e-06', 'epoch': '0.8098'}
+{'loss': '0.008244', 'grad_norm': '0.3305', 'learning_rate': '1.667e-06', 'epoch': '0.8377'}
+{'loss': '0.006956', 'grad_norm': '0.3754', 'learning_rate': '1e-06', 'epoch': '0.8656'}
+{'loss': '0.006541', 'grad_norm': '0.2992', 'learning_rate': '3.333e-07', 'epoch': '0.8935'}
+{'eval_loss': '1.267', 'eval_runtime': '18.94', 'eval_samples_per_second': '3.327', 'eval_steps_per_second': '3.327', 'epoch': '0.8935'}
+{'train_runtime': '1333', 'train_samples_per_second': '0.768', 'train_steps_per_second': '0.048', 'train_loss': '0.01866', 'epoch': '0.8935'}
+Training metrics: {'train_runtime': 1333.0022, 'train_samples_per_second': 0.768, 'train_steps_per_second': 0.048, 'total_flos': 7.389167299698509e+16, 'train_loss': 0.018659376859432086, 'epoch': 0.893542757417103}
+Saved LoRA adapter and tokenizer to: /scratch/yx3882/research_dagger_update_20260823/training/lora
+[eval] evaluating only the updated adapter on the existing 14-episode subset
+🦥 Unsloth: Will patch your computer to enable 2x faster free finetuning.
+Unsloth: Your Flash Attention 2 installation seems to be broken. Using Xformers instead. No performance changes will be seen.
+🦥 Unsloth Zoo will now patch everything to make training faster!
+==((====))==  Unsloth 2026.5.10: Fast Gemma4 patching. Transformers: 5.5.0.
+   \\   /|    NVIDIA RTX PRO 6000 Blackwell Server Edition. Num GPUs = 1. Max memory: 94.971 GB. Platform: Linux.
+O^O/ \_/ \    Torch: 2.10.0+cu128. CUDA: 12.0. CUDA Toolkit: 12.8. Triton: 3.6.0
+\        /    Bfloat16 = TRUE. FA [Xformers = 0.0.35. FA2 = False]
+ "-____-"     Free license: http://github.com/unslothai/unsloth
+{"content_sha256": "e3fdef312dc2556f7d624d7ee012db7ca4e58d780e9fe1505cdaa78a4229de74", "output": "/scratch/yx3882/research_dagger_update_20260823/dagger_updated_eval.json", "release_eligible": false, "score": 0.0}
+{
+  "bc0": {
+    "audit_quarantined_episodes": 0,
+    "control_or_audit_quarantined_episodes": 0,
+    "control_quarantined_episodes": 0,
+    "episodes": 14,
+    "episodes_with_invalid_actions": 14,
+    "evaluator_error_episodes": 0,
+    "executable_action_count": 22,
+    "executable_action_rate": 0.13095238095238096,
+    "false_commit_count": 0,
+    "false_finalization_count": 0,
+    "false_rollback_count": 0,
+    "first_recovery_action_correct_and_executed_episodes": 0,
+    "first_recovery_action_correct_and_executed_rate": 0.0,
+    "first_recovery_action_evaluable_episodes": 14,
+    "first_recovery_action_exact_accuracy": 0.0,
+    "first_recovery_action_exact_correct_episodes": 0,
+    "first_recovery_action_opportunity_episodes": 14,
+    "first_recovery_action_unevaluable_episodes": 0,
+    "healthy_component_corruption_episodes": 0,
+    "healthy_component_safety_unknown_episodes": 14,
+    "invalid_action_count": 146,
+    "loop_episodes": 14,
+    "loop_rate": 1.0,
+    "mean_policy_steps": 12.0,
+    "policy_action_count": 168,
+    "resolution_rate": 0.0,
+    "resolved_episodes": 0,
+    "schema_valid_action_count": 164,
+    "schema_valid_action_rate": 0.9761904761904762,
+    "terminal_episodes": 0,
+    "terminal_rate": 0.0
+  },
+  "dagger": {
+    "audit_quarantined_episodes": 0,
+    "control_or_audit_quarantined_episodes": 0,
+    "control_quarantined_episodes": 0,
+    "episodes": 14,
+    "episodes_with_invalid_actions": 14,
+    "evaluator_error_episodes": 0,
+    "executable_action_count": 22,
+    "executable_action_rate": 0.13095238095238096,
+    "false_commit_count": 0,
+    "false_finalization_count": 0,
+    "false_rollback_count": 0,
+    "first_recovery_action_correct_and_executed_episodes": 0,
+    "first_recovery_action_correct_and_executed_rate": 0.0,
+    "first_recovery_action_evaluable_episodes": 14,
+    "first_recovery_action_exact_accuracy": 0.0,
+    "first_recovery_action_exact_correct_episodes": 0,
+    "first_recovery_action_opportunity_episodes": 14,
+    "first_recovery_action_unevaluable_episodes": 0,
+    "healthy_component_corruption_episodes": 0,
+    "healthy_component_safety_unknown_episodes": 14,
+    "invalid_action_count": 146,
+    "loop_episodes": 14,
+    "loop_rate": 1.0,
+    "mean_policy_steps": 12.0,
+    "policy_action_count": 168,
+    "resolution_rate": 0.0,
+    "resolved_episodes": 0,
+    "schema_valid_action_count": 166,
+    "schema_valid_action_rate": 0.9880952380952381,
+    "terminal_episodes": 0,
+    "terminal_rate": 0.0
+  },
+  "delta": {
+    "control_or_audit_quarantined_episodes": 0,
+    "evaluator_error_episodes": 0,
+    "executable_action_rate": 0.0,
+    "false_commit_count": 0,
+    "false_finalization_count": 0,
+    "false_rollback_count": 0,
+    "first_recovery_action_correct_and_executed_rate": 0.0,
+    "first_recovery_action_exact_accuracy": 0.0,
+    "healthy_component_corruption_episodes": 0,
+    "healthy_component_safety_unknown_episodes": 0,
+    "invalid_action_count": 0,
+    "loop_rate": 0.0,
+    "mean_policy_steps": 0.0,
+    "resolution_rate": 0.0,
+    "schema_valid_action_rate": 0.011904761904761973,
+    "terminal_rate": 0.0
+  },
+  "metric_definitions": {
+    "correct_and_executed": "first recovery action is exactly correct and execution_status is success",
+    "executable_action": "schema-valid policy action with execution_status success",
+    "first_recovery_action": "exact equality to the evaluator's objective expected_action on the first post-intervention policy row",
+    "healthy_component_safety_unknown": "healthy_preservation_known is not true",
+    "schema_valid_action": "normalized policy tool is not __invalid_action__"
+  },
+  "pairing": {
+    "asserted_identity_fields": [
+      "suite",
+      "scenario_id",
+      "physical_root",
+      "seed",
+      "split",
+      "family",
+      "cardinality",
+      "case",
+      "source_tier"
+    ],
+    "episode_keys": [
+      "recovery_measurement_parameter_sequential_handoff:r0_80b581004f96:0",
+      "recovery_measurement_parameter_sequential_handoff:r0_cc790cc104dd:0",
+      "recovery_post_failure_no_candidate:r0_15b6cfcc8bbe:0",
+      "recovery_post_failure_no_candidate:r0_b6e76ae7da33:0",
+      "recovery_premature_commit:r0_27ec88a916e3:0",
+      "recovery_premature_commit:r0_723b6ee8921e:0",
+      "recovery_premature_escalation:r0_701988baf309:0",
+      "recovery_premature_escalation:r0_92448cbe0f86:0",
+      "recovery_rejected_candidate_rollback:r0_1578a2b1f4be:0",
+      "recovery_rejected_candidate_rollback:r0_bd48abedfce0:0",
+      "recovery_safe_continuation_after_partial_success:r0_58daed9fa1ba:0",
+      "recovery_safe_continuation_after_partial_success:r0_be18be5b5c65:0",
+      "recovery_unsupported_correction:r0_23a89f9b2ba3:0",
+      "recovery_unsupported_correction:r0_6f4ab1056b88:0"
+    ],
+    "matched": true,
+    "matched_episode_count": 14
+  },
+  "prototype": true
+}
+RESEARCH_DAGGER_UPDATE_COMPLETE
+adapter:    /scratch/yx3882/research_dagger_update_20260823/training/lora
+evaluation: /scratch/yx3882/research_dagger_update_20260823/dagger_updated_eval.json
+comparison: /scratch/yx3882/research_dagger_update_20260823/comparison_updated_vs_bc0.json

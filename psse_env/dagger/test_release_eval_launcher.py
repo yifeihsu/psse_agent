@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
-from psse_env.dagger.release_launcher import validate_release_evaluation_paths
+from psse_env.dagger.release_launcher import (
+    publish_external_release_report,
+    validate_release_evaluation_paths,
+)
 
 
 class ReleaseEvaluationLauncherTests(unittest.TestCase):
@@ -51,6 +56,12 @@ class ReleaseEvaluationLauncherTests(unittest.TestCase):
             "--minimum-suites 5",
             "--minimum-roots-per-suite 20",
             "--expected-source-commit \"$SOURCE_COMMIT\"",
+            'EVALUATION_REPORT_DIR="${REPO_ROOT%/}_evaluation_reports/$SOURCE_COMMIT"',
+            'GATE_REPORT="$EVALUATION_REPORT_DIR/${EVALUATION_BASENAME}.${REPORT_RUN_ID}.gate.json"',
+            "EVALUATION_ARTIFACT=${VALIDATED_RELEASE_PATHS[0]}",
+            "GATE_REPORT=${VALIDATED_RELEASE_PATHS[1]}",
+            "publish_external_release_report",
+            "postpublication_revalidate",
             "EVALUATION_SCOPE=${EVALUATION_SCOPE:-frozen_suite}",
             "--seed 20260721",
             "--required-suite dagger1_development",
@@ -98,7 +109,9 @@ class ReleaseEvaluationLauncherTests(unittest.TestCase):
             self.launcher,
         )
         self.assertNotIn("BASE_EVALUATION_ARTIFACT=${", self.launcher)
-        self.assertNotIn("EVALUATION_ARTIFACT=${", self.launcher)
+        self.assertNotIn(
+            "EVALUATION_ARTIFACT=${EVALUATION_ARTIFACT:-", self.launcher
+        )
 
     def test_study_identity_is_fail_closed_before_hpc_setup(self) -> None:
         launcher_path = Path(__file__).resolve().parents[2] / "submit_dagger_release_eval.sh"
@@ -217,7 +230,9 @@ class ReleaseEvaluationLauncherTests(unittest.TestCase):
 class ReleaseEvaluationPathTests(unittest.TestCase):
     def setUp(self) -> None:
         self.owner = tempfile.TemporaryDirectory()
+        self.report_owner = tempfile.TemporaryDirectory()
         self.root = Path(self.owner.name).resolve()
+        self.report_root = Path(self.report_owner.name).resolve()
         (self.root / "artifacts" / "evaluations").mkdir(parents=True)
         (self.root / "psse_env" / "dagger").mkdir(parents=True)
         self.protected = []
@@ -234,13 +249,15 @@ class ReleaseEvaluationPathTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.owner.cleanup()
+        self.report_owner.cleanup()
 
     def test_base_outputs_are_confined_to_evidence_directory(self) -> None:
+        report_dir = self.report_root
         result = validate_release_evaluation_paths(
             repo_root=self.root,
             mode="base",
             artifact="artifacts/evaluations/base.json",
-            report="artifacts/evaluations/base.json.gate.json",
+            report=report_dir / "base.json.gate.json",
             protected_inputs=self.protected,
         )
         self.assertEqual(
@@ -251,29 +268,80 @@ class ReleaseEvaluationPathTests(unittest.TestCase):
             validate_release_evaluation_paths(
                 repo_root=self.root,
                 mode="base",
-                artifact="psse_env/dagger/suite.json",
-                report="artifacts/evaluations/base.json.gate.json",
+                artifact="psse_env/dagger/new.json",
+                report=report_dir / "other.json.gate.json",
                 protected_inputs=self.protected,
             )
+
+    def test_report_must_be_new_absolute_and_outside_repository(self) -> None:
+        report_dir = self.report_root
+        with self.assertRaisesRegex(ValueError, "absolute path"):
+            validate_release_evaluation_paths(
+                repo_root=self.root,
+                mode="base",
+                artifact="artifacts/evaluations/base.json",
+                report="relative.gate.json",
+                protected_inputs=self.protected,
+            )
+        with self.assertRaisesRegex(ValueError, "outside the source repository"):
+            validate_release_evaluation_paths(
+                repo_root=self.root,
+                mode="base",
+                artifact="artifacts/evaluations/base.json",
+                report=self.root / "inside.gate.json",
+                protected_inputs=self.protected,
+            )
+        existing = report_dir / "existing.gate.json"
+        existing.write_text("{}\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            validate_release_evaluation_paths(
+                repo_root=self.root,
+                mode="base",
+                artifact="artifacts/evaluations/base.json",
+                report=existing,
+                protected_inputs=self.protected,
+            )
+
+    def test_returned_report_path_is_canonical_through_symlink_parent(self) -> None:
+        real_parent = self.report_root / "real"
+        real_parent.mkdir()
+        alias = self.report_root / "alias"
+        try:
+            alias.symlink_to(real_parent, target_is_directory=True)
+        except OSError as exc:
+            self.skipTest(f"directory symlinks unavailable: {exc}")
+        result = validate_release_evaluation_paths(
+            repo_root=self.root,
+            mode="base",
+            artifact="artifacts/evaluations/../evaluations/base.json",
+            report=alias / "study.json",
+            protected_inputs=self.protected,
+        )
+        self.assertEqual(Path(result["report"]), real_parent / "study.json")
+        self.assertEqual(
+            Path(result["artifact"]),
+            self.root / "artifacts" / "evaluations" / "base.json",
+        )
 
     def test_checkpoint_outputs_cannot_overwrite_base_or_checkpoint(self) -> None:
         base = self.root / "artifacts" / "evaluations" / "base.json"
         base.write_text("{}", encoding="utf-8")
         checkpoint = self.root / "outputs" / "round0" / "lora"
         checkpoint.mkdir(parents=True)
-        with self.assertRaisesRegex(ValueError, "protected evidence"):
+        report_dir = self.report_root
+        with self.assertRaisesRegex(ValueError, "artifact already exists"):
             validate_release_evaluation_paths(
                 repo_root=self.root,
                 mode="checkpoint",
-                artifact="artifacts/evaluations/checkpoint.json",
-                report=base,
+                artifact=base,
+                report=report_dir / "checkpoint.gate.json",
                 protected_inputs=self.protected,
                 reference_artifact=base,
                 checkpoint_path=checkpoint,
             )
 
         nested_output = checkpoint / "gate.json"
-        with self.assertRaisesRegex(ValueError, "fixed evidence directory"):
+        with self.assertRaisesRegex(ValueError, "outside the source repository"):
             validate_release_evaluation_paths(
                 repo_root=self.root,
                 mode="checkpoint",
@@ -289,16 +357,102 @@ class ReleaseEvaluationPathTests(unittest.TestCase):
         base.write_text("{}", encoding="utf-8")
         checkpoint = self.root / "artifacts" / "evaluations" / "adapter"
         checkpoint.mkdir()
+        report_dir = self.report_root
         with self.assertRaisesRegex(ValueError, "must not live inside"):
             validate_release_evaluation_paths(
                 repo_root=self.root,
                 mode="checkpoint",
                 artifact="artifacts/evaluations/checkpoint.json",
-                report="artifacts/evaluations/checkpoint.json.gate.json",
+                report=report_dir / "checkpoint.json.gate.json",
                 protected_inputs=self.protected,
                 reference_artifact=base,
                 checkpoint_path=checkpoint,
             )
+
+
+class ExternalReleaseReportPublisherTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.repo_owner = tempfile.TemporaryDirectory()
+        self.report_owner = tempfile.TemporaryDirectory()
+        self.repo = Path(self.repo_owner.name).resolve()
+        self.report_root = Path(self.report_owner.name).resolve()
+        self.protected = self.repo / "protected.json"
+        self.protected.write_text("{}\n", encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self.repo_owner.cleanup()
+        self.report_owner.cleanup()
+
+    def _publish(self, target: Path, callback: object = None) -> dict[str, str | int]:
+        revalidate = callback if callable(callback) else lambda: None
+        return publish_external_release_report(
+            repo_root=self.repo,
+            report=target,
+            rendered='{"passed": true}\n',
+            protected_inputs=(self.protected,),
+            postpublication_revalidate=revalidate,
+        )
+
+    def test_publishes_exact_verified_read_only_bytes(self) -> None:
+        target = self.report_root / "study.json"
+        calls: list[str] = []
+        result = self._publish(target, lambda: calls.append("checked"))
+        expected = b'{"passed": true}\n'
+        self.assertEqual(calls, ["checked"])
+        self.assertEqual(target.read_bytes(), expected)
+        self.assertEqual(
+            result["sha256"], hashlib.sha256(expected).hexdigest()
+        )
+        self.assertEqual(result["path"], str(target))
+        if os.name == "posix":
+            self.assertEqual(target.stat().st_mode & 0o777, 0o400)
+
+    def test_existing_target_is_preserved(self) -> None:
+        target = self.report_root / "study.json"
+        target.write_text("preserve\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            self._publish(target)
+        self.assertEqual(target.read_text(encoding="utf-8"), "preserve\n")
+
+    def test_revalidation_failure_removes_exact_new_report(self) -> None:
+        target = self.report_root / "study.json"
+
+        def fail() -> None:
+            raise ValueError("source changed")
+
+        with self.assertRaisesRegex(ValueError, "source changed"):
+            self._publish(target, fail)
+        self.assertFalse(target.exists())
+
+    def test_changed_report_after_callback_is_removed(self) -> None:
+        target = self.report_root / "study.json"
+
+        def mutate() -> None:
+            if os.name == "posix":
+                target.chmod(0o600)
+            target.write_text("changed\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, "report changed"):
+            self._publish(target, mutate)
+        self.assertFalse(target.exists())
+
+    def test_failed_safe_removal_is_explicit(self) -> None:
+        target = self.report_root / "study.json"
+
+        def fail() -> None:
+            raise ValueError("source changed")
+
+        with (
+            mock.patch(
+                "psse_env.dagger.release_launcher.evaluation_gate._unlink_created_report",
+                return_value=False,
+            ),
+            self.assertRaisesRegex(
+                ValueError,
+                "newly created report could not be safely removed",
+            ),
+        ):
+            self._publish(target, fail)
 
 
 if __name__ == "__main__":  # pragma: no cover

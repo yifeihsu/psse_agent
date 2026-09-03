@@ -50,6 +50,16 @@ from mcp_server.matpower_server import (  # noqa: E402  (repo-root package)
 )
 from tools.lagrangian_correct_port import make_ybus  # noqa: E402
 from trace_protocol import chi2_threshold  # noqa: E402
+from three_phase_nlm.branch_current_analysis import (  # noqa: E402
+    BRANCH_CURRENT_CHANNEL,
+    BRANCH_CURRENT_SIGMA_KEY,
+    DEFAULT_UNBALANCE_VUF_THRESHOLD,
+    balanced_branch_current_control,
+    branch_current_rows_to_phasors,
+    line_differential_null_test,
+    unbalance_source_localization,
+    voltage_unbalance_factors,
+)
 
 from psse_env.actions import (
     CORRECT_MEASUREMENTS,
@@ -113,12 +123,41 @@ DEFAULT_RELEASE_HIF_QUALITY_PATHS = (
     DEFAULT_RELEASE_HIF_SAMPLE_PATHS[0].with_name("meta.json"),
     DEFAULT_RELEASE_HIF_SAMPLE_PATHS[0].with_name("quality_report.json"),
 )
-DEFAULT_IMBALANCE_SAMPLE_PATH = (
+# The 2026-07 imbalance corpus carries an unlabeled second unbalance at bus 3
+# (the checked-in OpenDSS load file splits bus 3 unevenly and the old generator
+# only scaled it; see docs/branch_current_telemetry_20260903.md).  It is kept
+# as a legacy reference only and is never a generator default.
+LEGACY_IMBALANCE_SAMPLE_PATH = (
     _REPO_ROOT
     / "artifacts"
     / "measurements"
     / "out_measurements_imbalance"
     / "samples.jsonl"
+)
+DEFAULT_IMBALANCE_SAMPLE_PATH = (
+    _REPO_ROOT
+    / "artifacts"
+    / "measurements"
+    / "out_measurements_imbalance_currents_20260903"
+    / "samples.jsonl"
+)
+CURRENT_TELEMETRY_IMBALANCE_SAMPLE_PATH = DEFAULT_IMBALANCE_SAMPLE_PATH
+# Per-phase branch-current HIF corpora.  The 85-window pool (seed 20260904,
+# five windows per eligible line, strict-physics QA passed) is the research
+# DAgger training/development source; the 17-window corpus is the validated
+# reference from the telemetry revision.  Neither is a BC0 release input: the
+# frozen release paths above stay voltage-only.
+CURRENT_TELEMETRY_HIF_SAMPLE_PATHS = (
+    _REPO_ROOT
+    / "artifacts"
+    / "measurements"
+    / "hif_multiscan_currents_train_85x10_20260903"
+    / "samples.jsonl",
+    _REPO_ROOT
+    / "artifacts"
+    / "measurements"
+    / "hif_multiscan_currents_17x10_20260903"
+    / "samples.jsonl",
 )
 DEFAULT_BALANCED_ARTIFACT_DIR = (
     _REPO_ROOT / "artifacts" / "measurements" / "out_measurements_balanced"
@@ -175,7 +214,13 @@ _WAVEFORM_PROVENANCE = "deployment_sensor:waveform_capture"
 
 HARMONIC_SIGNATURE = "harmonic_distortion_detected"
 HIF_SIGNATURE = "hif_suspected_zero_sequence"
+# Unbalance sensor signatures are policy-visible text, so each one is emitted
+# only when the row's telemetry actually shows it: the VUF flag when the
+# largest bus VUF clears the shared deployment gate, and the current-spread
+# flag when the branch-current channel exposes a noise-significant unbalance
+# source with a quiet line-differential null.
 UNBALANCE_SIGNATURE = "three_phase_unbalance vuf_threshold_exceeded"
+UNBALANCE_CURRENT_SIGNATURE = "three_phase_unbalance phase_current_spread_detected"
 
 # The tabular measurement corpus is shared by both the round-0 aggregate and
 # the frozen evaluation-suite builder.  Assign its physical source rows before
@@ -314,6 +359,7 @@ class Round0ScenarioGenerator:
         noise_profile_rows: int = 200,
         source_partition: str | None = None,
         parameter_ranking_dominance_threshold: float | None = None,
+        unbalance_vuf_threshold: float = DEFAULT_UNBALANCE_VUF_THRESHOLD,
     ) -> None:
         if source_partition not in (None, "train", "evaluation"):
             raise ValueError(
@@ -358,6 +404,9 @@ class Round0ScenarioGenerator:
         self.hif_max_scans = int(hif_max_scans)
         self.noise_profile_rows = int(noise_profile_rows)
         self.source_partition = source_partition
+        if not (0.0 < float(unbalance_vuf_threshold) < 1.0):
+            raise ValueError("unbalance_vuf_threshold must be a fraction in (0, 1)")
+        self.unbalance_vuf_threshold = float(unbalance_vuf_threshold)
         # The frozen evaluation suite deliberately preserves its previously
         # approved physical roots, including hard/ambiguous parameter cases.
         # Dominance is a single-label *training admission* requirement, not a
@@ -576,18 +625,23 @@ class Round0ScenarioGenerator:
         if any(not normalized.get(key) for key in required):
             return normalized
         topology_id = str(normalized.get("topology_id") or "ieee14_base")
-        normalized["scans"] = [
-            {
-                "scan_index": 0,
-                "z_clean": copy.deepcopy(normalized["z_true"]),
-                "z_obs": copy.deepcopy(normalized["z_obs"]),
-                "three_phase_voltages": copy.deepcopy(
-                    normalized["three_phase_voltages"]
-                ),
-                "op_point": copy.deepcopy(normalized.get("op_point") or {}),
-                "topology_id": topology_id,
-            }
-        ]
+        promoted_scan = {
+            "scan_index": 0,
+            "z_clean": copy.deepcopy(normalized["z_true"]),
+            "z_obs": copy.deepcopy(normalized["z_obs"]),
+            "three_phase_voltages": copy.deepcopy(
+                normalized["three_phase_voltages"]
+            ),
+            "op_point": copy.deepcopy(normalized.get("op_point") or {}),
+            "topology_id": topology_id,
+        }
+        if normalized.get(BRANCH_CURRENT_CHANNEL):
+            promoted_scan[BRANCH_CURRENT_CHANNEL] = copy.deepcopy(
+                normalized[BRANCH_CURRENT_CHANNEL]
+            )
+            if normalized.get(BRANCH_CURRENT_SIGMA_KEY) is not None:
+                promoted_scan[BRANCH_CURRENT_SIGMA_KEY] = normalized[BRANCH_CURRENT_SIGMA_KEY]
+        normalized["scans"] = [promoted_scan]
         normalized["scan_count"] = 1
         normalized["topology_id"] = topology_id
         normalized["window_metadata"] = {
@@ -1381,12 +1435,37 @@ class Round0ScenarioGenerator:
             "three_phase_voltages": copy.deepcopy(row.get("three_phase_voltages")),
             "load_scale": float((row.get("op_point") or {}).get("load_scale", 1.0)),
         }
+        # The hidden clean current copy is QA replay data, never runtime telemetry.
+        clean_current_key = f"{BRANCH_CURRENT_CHANNEL}_clean"
+        runtime_scans = [
+            {key: value for key, value in dict(scan).items() if key != clean_current_key}
+            for scan in scans
+        ]
         scenario["metadata"]["hif_scan_window"] = {
             "scan_window_path": str(row.get("id") or scenario["scenario_id"]),
-            "scans": copy.deepcopy(list(scans)),
+            "scans": copy.deepcopy(runtime_scans),
             "sigma_z": copy.deepcopy(row.get("sigma_z")),
             "window_metadata": copy.deepcopy(row.get("window_metadata") or {}),
         }
+        branch_currents = row.get(BRANCH_CURRENT_CHANNEL)
+        if not branch_currents and runtime_scans:
+            branch_currents = runtime_scans[0].get(BRANCH_CURRENT_CHANNEL)
+        if branch_currents and branch_current_rows_to_phasors(branch_currents):
+            current_sigma = row.get(BRANCH_CURRENT_SIGMA_KEY)
+            if current_sigma is None and runtime_scans:
+                current_sigma = runtime_scans[0].get(BRANCH_CURRENT_SIGMA_KEY)
+            scenario["metadata"][BRANCH_CURRENT_CHANNEL] = copy.deepcopy(list(branch_currents))
+            scenario["metadata"]["hif_runtime"][BRANCH_CURRENT_CHANNEL] = copy.deepcopy(
+                list(branch_currents)
+            )
+            if current_sigma is not None:
+                scenario["metadata"][BRANCH_CURRENT_SIGMA_KEY] = float(current_sigma)
+                scenario["metadata"]["hif_runtime"][BRANCH_CURRENT_SIGMA_KEY] = float(
+                    current_sigma
+                )
+                scenario["metadata"]["hif_scan_window"][BRANCH_CURRENT_SIGMA_KEY] = float(
+                    current_sigma
+                )
         scenario["hidden_truth"] = {"true_hif_errors": [copy.deepcopy(label)]}
         scenario["release_audit"] = copy.deepcopy(
             _EXPLANATION_ONLY_RELEASE_AUDIT
@@ -1422,6 +1501,43 @@ class Round0ScenarioGenerator:
             )
         return balanced
 
+    def _observable_unbalance_signatures(self, row: Mapping[str, Any]) -> list[str]:
+        """Sensor signatures an operator's monitors would raise on this row.
+
+        The signature text reaches the policy, so it must describe what the
+        telemetry shows rather than what the label says.  The VUF flag needs
+        the largest bus VUF to clear the same gate the deployment provider
+        applies; the current-spread flag needs the branch-current channel to
+        expose a noise-significant unbalance source and a quiet
+        line-differential null (a line carrying fault current is an HIF
+        signature, not an unbalance one).  An empty result means the labeled
+        unbalance is unobservable and the row must be rejected.
+        """
+        voltages = row.get("three_phase_voltages")
+        signatures: list[str] = []
+        factors = voltage_unbalance_factors(voltages)
+        if factors and float(factors[0]["vuf"]) >= self.unbalance_vuf_threshold:
+            signatures.append(UNBALANCE_SIGNATURE)
+        currents = row.get(BRANCH_CURRENT_CHANNEL)
+        if currents and branch_current_rows_to_phasors(currents):
+            raw_sigma = row.get(BRANCH_CURRENT_SIGMA_KEY)
+            sigma = float(raw_sigma) if raw_sigma is not None else None
+            localization = unbalance_source_localization(
+                voltages, currents, top_k=1, sigma_pu=sigma
+            )
+            null_test = line_differential_null_test(voltages, currents, sigma_pu=sigma)
+            hif_like = bool(
+                isinstance(null_test, Mapping)
+                and null_test.get("hif_like_differential_present")
+            )
+            if (
+                localization is not None
+                and bool(localization.get("significant"))
+                and not hif_like
+            ):
+                signatures.append(UNBALANCE_CURRENT_SIGNATURE)
+        return signatures
+
     def _unbalance_scenario(
         self, row: Mapping[str, Any], index: int
     ) -> dict[str, Any]:
@@ -1429,6 +1545,9 @@ class Round0ScenarioGenerator:
         voltages = row.get("three_phase_voltages")
         if not isinstance(voltages, Sequence) or not voltages:
             raise ScenarioRejected("three_phase_voltages_missing", str(row.get("id")))
+        signatures = self._observable_unbalance_signatures(row)
+        if not signatures:
+            raise ScenarioRejected("unbalance_not_observable", str(row.get("id")))
         z_obs = [float(value) for value in row["z_obs"]]
         if self.validate:
             self._chi2_statistic("case14", z_obs)
@@ -1440,11 +1559,18 @@ class Round0ScenarioGenerator:
         )
         scenario["clean_case"] = "case14"
         scenario["clean_measurements"] = [float(value) for value in row["z_true"]]
-        scenario["unresolved_signatures"] = [UNBALANCE_SIGNATURE]
+        scenario["unresolved_signatures"] = signatures
         scenario["semantic_field_provenance"]["unresolved_signatures"] = (
             _WAVEFORM_PROVENANCE
         )
         scenario["metadata"]["three_phase_voltages"] = copy.deepcopy(list(voltages))
+        branch_currents = row.get(BRANCH_CURRENT_CHANNEL)
+        if branch_currents and branch_current_rows_to_phasors(branch_currents):
+            scenario["metadata"][BRANCH_CURRENT_CHANNEL] = copy.deepcopy(list(branch_currents))
+            if row.get(BRANCH_CURRENT_SIGMA_KEY) is not None:
+                scenario["metadata"][BRANCH_CURRENT_SIGMA_KEY] = float(
+                    row[BRANCH_CURRENT_SIGMA_KEY]
+                )
         scenario["hidden_truth"] = {"true_unbalance_errors": [label]}
         scenario["release_audit"] = copy.deepcopy(
             _EXPLANATION_ONLY_RELEASE_AUDIT
@@ -1471,6 +1597,18 @@ class Round0ScenarioGenerator:
         scenario["clean_case"] = "case14"
         scenario["clean_measurements"] = list(measurements)
         scenario["metadata"]["three_phase_voltages"] = balanced
+        branch_currents = row.get(BRANCH_CURRENT_CHANNEL)
+        if branch_currents and branch_current_rows_to_phasors(branch_currents):
+            balanced_currents = balanced_branch_current_control(list(branch_currents))
+            if not balanced_currents:
+                raise ScenarioRejected(
+                    "balanced_current_control_invalid", str(row.get("id"))
+                )
+            scenario["metadata"][BRANCH_CURRENT_CHANNEL] = balanced_currents
+            if row.get(BRANCH_CURRENT_SIGMA_KEY) is not None:
+                scenario["metadata"][BRANCH_CURRENT_SIGMA_KEY] = float(
+                    row[BRANCH_CURRENT_SIGMA_KEY]
+                )
         scenario["hidden_truth"] = {
             "true_unbalance_errors": [],
             "control_kind": "telemetry_present_no_disturbance",
@@ -2841,6 +2979,11 @@ __all__ = [
     "DEFAULT_RELEASE_HIF_SAMPLE_PATHS",
     "DEFAULT_RELEASE_HIF_QUALITY_PATHS",
     "DEFAULT_IMBALANCE_SAMPLE_PATH",
+    "LEGACY_IMBALANCE_SAMPLE_PATH",
+    "CURRENT_TELEMETRY_HIF_SAMPLE_PATHS",
+    "CURRENT_TELEMETRY_IMBALANCE_SAMPLE_PATH",
+    "UNBALANCE_SIGNATURE",
+    "UNBALANCE_CURRENT_SIGNATURE",
     "DEFAULT_BALANCED_ARTIFACT_DIR",
     "DEFAULT_CHI2_ALPHA",
     "SYNTHESIZED_MEASUREMENT_CANONICALIZATION_CONTRACT",

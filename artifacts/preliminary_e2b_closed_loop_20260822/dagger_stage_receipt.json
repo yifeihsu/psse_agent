@@ -1,0 +1,54 @@
+{
+  "accelerator_class": "rtx6000",
+  "adapter_base_model_name_or_path": "/scratch/yx3882/.cache/huggingface/hub/models--unsloth--gemma-4-E2B-it/snapshots/f0c5915f17ad6c66dbeb577fb06ff8925bf8d7ae",
+  "adapter_tree_sha256": "9df976f275b9db5fbdfdd0aed74acc841f90151a25b413a3e90cf38252ecbf1f",
+  "artifact_type": "preliminary_dagger_nonrelease_checkpoint",
+  "contract": "preliminary_dagger_training_stage_receipt_v1",
+  "dataset_receipt_sha256": "2a1f36bd0fe9e192b5aa53b8cc48791840b1d4d7aba1d6e28bb5a493bd7a3b54",
+  "full_validation_row_count": 63,
+  "hardware_attestation": {
+    "accelerator_class": "rtx6000",
+    "artifact_type": "preliminary_dagger_nonrelease_hardware_attestation",
+    "bf16_supported": true,
+    "contract": "preliminary_dagger_hardware_attestation_v1",
+    "device_count": 1,
+    "devices": [
+      {
+        "accelerator_class": "rtx6000",
+        "compute_capability": [
+          12,
+          0
+        ],
+        "index": 0,
+        "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+        "total_memory_bytes": 101974081536
+      }
+    ],
+    "release_eligible": false,
+    "required_accelerator_class": "rtx6000",
+    "required_accelerator_class_matched": true,
+    "torch_cuda_version": "12.8"
+  },
+  "hardware_attestation_sha256": "6333ef3283e1883973daca18c42b919de150070e75f0c7307522343796687296",
+  "latest_trainer_metrics": {
+    "checkpoint_step": 40,
+    "epoch": 1.25,
+    "eval_loss": 1.960767388343811,
+    "eval_step": 40,
+    "learning_rate": 2.777777777777778e-06,
+    "loss": 0.2476528137922287,
+    "trainer_global_step": 40
+  },
+  "model": "unsloth/gemma-4-E2B-it",
+  "model_revision": "f0c5915f17ad6c66dbeb577fb06ff8925bf8d7ae",
+  "release_eligible": false,
+  "release_ineligibility_reasons": [
+    "small-model preliminary debugging run",
+    "input dataset is explicitly non-release"
+  ],
+  "run_config_sha256": "f546198ef66261fe471bc936f1219b5c56d27ef196567c5d1f697b746d2f8e18",
+  "stage": "dagger",
+  "stage_plan_sha256": "d49409eb4f5e516bb1629dd14ad2c6999fc89d0b65a7443ab01d61e165e34b76",
+  "train_file_sha256": "d7ffdb14f9e1dff791c31a36d07e186d2d36b1dbd3ac73232a84a46b1aef9173",
+  "validation_file_sha256": "3723c467de8e557cc3cc628cde5d329602c980b141b1960a153922bd20f7535b"
+}

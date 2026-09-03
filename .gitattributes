@@ -9,6 +9,7 @@ submit_dagger1_collection.sh text eol=lf
 submit_dagger_release_eval.sh text eol=lf
 submit_dagger_sft_round0.sh text eol=lf
 submit_preliminary_dagger_e2b.sh text eol=lf
+submit_research_gemma4_smoke.sh text eol=lf
 psse_env/dagger/preliminary_dataset.py text eol=lf
 scripts/build_preliminary_dagger_dataset.py text eol=lf
 psse_env/dagger/preliminary_receipt.py text eol=lf

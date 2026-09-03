@@ -1,0 +1,39 @@
+{
+  "bc0": {
+    "episodes": 14,
+    "episodes_with_invalid_actions": 14,
+    "false_commit_count": 0,
+    "false_finalization_count": 0,
+    "false_rollback_count": 0,
+    "healthy_component_corruption_episodes": 0,
+    "invalid_action_count": 146,
+    "loop_episodes": 14,
+    "loop_rate": 1.0,
+    "resolution_rate": 0.0,
+    "resolved_episodes": 0,
+    "terminal_episodes": 0,
+    "terminal_rate": 0.0
+  },
+  "dagger": {
+    "episodes": 14,
+    "episodes_with_invalid_actions": 14,
+    "false_commit_count": 0,
+    "false_finalization_count": 0,
+    "false_rollback_count": 0,
+    "healthy_component_corruption_episodes": 0,
+    "invalid_action_count": 138,
+    "loop_episodes": 14,
+    "loop_rate": 1.0,
+    "resolution_rate": 0.0,
+    "resolved_episodes": 0,
+    "terminal_episodes": 0,
+    "terminal_rate": 0.0
+  },
+  "delta": {
+    "invalid_action_count": -8,
+    "loop_rate": 0.0,
+    "resolution_rate": 0.0,
+    "terminal_rate": 0.0
+  },
+  "prototype": true
+}

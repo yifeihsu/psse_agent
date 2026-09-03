@@ -1,0 +1,338 @@
+{
+  "artifact_type": "research_only_recovery_tool_repair_curriculum",
+  "caps": {
+    "maximum_example_copies": 2,
+    "maximum_rows_per_root": 4,
+    "passed": true
+  },
+  "contract": "research_dagger_repair_curriculum_v1",
+  "counts": {
+    "maximum_example_copies": 2,
+    "maximum_rows_per_root": 4,
+    "physical_roots": 128,
+    "protected_overlap": 0,
+    "protected_roots": 6,
+    "rows": 172,
+    "unique_examples": 152
+  },
+  "inputs": {
+    "d0": {
+      "canonical_unique_examples": 930,
+      "path": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\artifacts\\reusable_sources_20260823\\d0_train_view.jsonl",
+      "sha256": "28b733db96c6ce05dbdc8d43484bdbb14445e1105958a78f9a35024aa5b3844a"
+    },
+    "natural_d1": [
+      {
+        "path": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\artifacts\\reusable_sources_20260823\\preliminary_d1_train.jsonl",
+        "sha256": "7d2f7afa851abe894be8b07d99b269c8fbafdb1ce164c29e08c2e832b775e7c1"
+      },
+      {
+        "path": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\artifacts\\reusable_sources_20260823\\preliminary_d1_validation.jsonl",
+        "sha256": "3723c467de8e557cc3cc628cde5d329602c980b141b1960a153922bd20f7535b"
+      },
+      {
+        "path": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\artifacts\\reusable_sources_20260823\\preliminary_d1_test.jsonl",
+        "sha256": "efe437a77eea41bb221ea3c107070ef69293d89ded78c4b433a49cf44079514c"
+      }
+    ],
+    "protected": [
+      {
+        "path": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\artifacts\\research_dagger_trace_20260823\\trace_validation.jsonl",
+        "physical_root_count": 2,
+        "sha256": "f05b944f89fa03f61c11376bd05da513f21a7b747c66bfdf80ab11908290898e"
+      },
+      {
+        "path": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\artifacts\\research_dagger_trace_20260823\\heldout_suite_14_root_closure.json",
+        "physical_root_count": 4,
+        "sha256": "68fec0dfe42c6dc4d0df2877633ba494faefcacfe188c44c2cd35b6272b87280"
+      }
+    ],
+    "recovery_probes": {
+      "path": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\artifacts\\reusable_sources_20260823\\recovery_probes.jsonl",
+      "sha256": "6d9e6771b2c430ecd4a2788ed9e6ebb389c70977c7a559eec33c08b09a9a055a",
+      "unique_examples": 24,
+      "unique_roots": 24
+    }
+  },
+  "natural_source_split_distribution": {
+    "preliminary_d1_test": 2,
+    "preliminary_d1_train": 68,
+    "preliminary_d1_validation": 4
+  },
+  "output": {
+    "canonical_tool_registry_sha256": "8b3815ddecf2d4f5b9b4d1d0760ff32e8cee7872b6ea04d4d5285db80c93b709",
+    "path": "artifacts\\research_dagger_repair_20260824\\repair_train_172.jsonl",
+    "sha256": "14f41984544c6e8f51d61c17ab31916fd93acc6377c4464d81aeca5f3b52fe19"
+  },
+  "passed": true,
+  "probe_recovery_stratum_distribution": {
+    "post_failure_no_candidate": 12,
+    "unsupported_correction_recovery": 12
+  },
+  "probe_tool_distribution": {
+    "get_measurement_context": 12,
+    "wls_from_path": 12
+  },
+  "release_eligible": false,
+  "release_ineligibility_reasons": [
+    "focused post-failure repair curriculum, not the canonical Round-1 view",
+    "historical natural-D1 validation/test rows are admitted to training",
+    "historical natural-D1 audit metadata uses the superseded v3 contract",
+    "production semantic-realizability and immutable-source gates are not rerun"
+  ],
+  "research_only": true,
+  "seed": 3407,
+  "selection": [
+    {
+      "bucket": "observable_recovery_probe:all",
+      "example_ids": [
+        "probe_post_failure_no_candidate_physical_v3_0c6c23925c5deb9e51cda036e26eecca989236c51e568e5a7ee4445b9191094a",
+        "probe_post_failure_no_candidate_physical_v3_0c930939cb725561ab80b74430d873518dd35ad3def55f7f912fa430873e7c0e",
+        "probe_post_failure_no_candidate_physical_v3_0fa2d31ad97ea91ce06e99178271ae00a646d16bddb624d4faad2dea3c07f42c",
+        "probe_post_failure_no_candidate_physical_v3_0fc2d7c9f447be091a99cd6492ade75d38ba1e43f32aa2a4d26e5c67f4a24504",
+        "probe_post_failure_no_candidate_physical_v3_11642c53e0b77aee775cc1fa890e837af1450593d1bcc7fb83ac13cac8c98c0c",
+        "probe_post_failure_no_candidate_physical_v3_122f43dfc3c53c513062df3675de89d26bae2f73e9d23e87c5ab46c64ac0fec9",
+        "probe_post_failure_no_candidate_physical_v3_14edee8a9ea87331f9bf36ca1623df1966b6f512764d206210ec777d6b6c6acf",
+        "probe_post_failure_no_candidate_physical_v3_1690c045f643e6aee12db297c56fc25a5f8601d50aa7abf0150024bf06fd16ea",
+        "probe_post_failure_no_candidate_physical_v3_16fa7cb49610d9b0b8ecd2e2cd7c29e829bd9f1b6fe3ac4a81cd199f4ba03b79",
+        "probe_post_failure_no_candidate_physical_v3_191b1ae12d4f31554b897a6ac24a4c468f54022972f3abc5a90e2746f7b2f036",
+        "probe_post_failure_no_candidate_physical_v3_1f3308fdee0bcfd5c9fef5a15a11e6d751da4276143f40217bf00d897024cf2a",
+        "probe_post_failure_no_candidate_physical_v3_214ca8ecf27f71ca916f7c83f2eefc210467bcf5bdbb935877ce7f56cd6433e6",
+        "probe_unsupported_correction_recovery_physical_v3_22f64dfdb7442033ea793921fcccc906c7b9d118037b16bf5dfd3afc1e9478cb",
+        "probe_unsupported_correction_recovery_physical_v3_2683e2534567be48383d390a1d3f3d29c879b8d232477e13e072c4b650280f1f",
+        "probe_unsupported_correction_recovery_physical_v3_291dae6f6465f359467189a65f72e4a918e9b05443ae4e118bebcea86efb493b",
+        "probe_unsupported_correction_recovery_physical_v3_2fb4b2fa1c0d4bd9a8ace9d5296c46559a78ae66924edf9ff103757a33a26b13",
+        "probe_unsupported_correction_recovery_physical_v3_309d70842240116f5006576787e9f16fc75f9839ada5346585c71289a9541c56",
+        "probe_unsupported_correction_recovery_physical_v3_320383b775a34743f7d4050156a0c48a0d7b45fe889c053f53c9649e2ff10110",
+        "probe_unsupported_correction_recovery_physical_v3_3406ec17c9a7a394828a2f069112c7f7a482bf8c09e864b45dc180c54f5b286d",
+        "probe_unsupported_correction_recovery_physical_v3_363c5d20d41032ce522e095c4fcd133b0f1dc1494516adc34a586c12052d7208",
+        "probe_unsupported_correction_recovery_physical_v3_36e010847de24faf6cb2a64d237eaa8170c9023893666bd769b689d16d42ddfa",
+        "probe_unsupported_correction_recovery_physical_v3_37d6417cb330090d13a115be6a163dc1f41398647c1c572bdc88a83ecb3a6d77",
+        "probe_unsupported_correction_recovery_physical_v3_384a7ac2a86338e5ed8f6a343c94adebfae92f10388ca9d92b890cc4bc13e752",
+        "probe_unsupported_correction_recovery_physical_v3_3c1c37cfe3e7c0c4c96471fe10298412b44141b9e9e2e6279709bd9e48d0b548"
+      ],
+      "placed_rows": 24,
+      "repeat": 1,
+      "source": "observable_recovery_probe",
+      "tool": "mixed",
+      "unique_examples": 24
+    },
+    {
+      "available_unique_examples": 19,
+      "bucket": "d0_bc0:get_topology_context",
+      "example_ids": [
+        "dagger_iter0_r0_07449096bec1_step2",
+        "dagger_iter0_r0_1bb2b3c42f63_step2",
+        "dagger_iter0_r0_2c67d43d8771_step2",
+        "dagger_iter0_r0_2efa10e6d866_step2",
+        "dagger_iter0_r0_4793b89556d0_step2",
+        "dagger_iter0_r0_54d5888bd783_step2",
+        "dagger_iter0_r0_59b1cc558375_step2",
+        "dagger_iter0_r0_757dd2600bae_step2",
+        "dagger_iter0_r0_76fc757c75fa_step2",
+        "dagger_iter0_r0_8db7cfa76fc9_step2",
+        "dagger_iter0_r0_9b604c3231eb_step2",
+        "dagger_iter0_r0_9c772e9477e4_step2",
+        "dagger_iter0_r0_9e9b178f577a_step2",
+        "dagger_iter0_r0_ba370eeaafb4_step2",
+        "dagger_iter0_r0_edc34976401c_step2",
+        "dagger_iter0_r0_f392bb2d55c4_step2",
+        "dagger_iter0_r0_f4ba6a8ccc1b_step2",
+        "dagger_iter0_r0_f5d16104e939_step2",
+        "dagger_iter0_r0_f8a5daa6e689_step2"
+      ],
+      "placed_rows": 38,
+      "repeat": 2,
+      "source": "d0_bc0",
+      "tool": "get_topology_context",
+      "unique_examples": 19
+    },
+    {
+      "available_unique_examples": 1,
+      "bucket": "natural_dagger1:get_topology_context",
+      "example_ids": [
+        "dagger_iter1_r0_9158c3e37cfe_step18__order127__replica0"
+      ],
+      "placed_rows": 2,
+      "repeat": 2,
+      "source": "natural_dagger1",
+      "tool": "get_topology_context",
+      "unique_examples": 1
+    },
+    {
+      "available_unique_examples": 53,
+      "bucket": "d0_bc0:correct_parameters_from_path",
+      "example_ids": [
+        "dagger_iter0_r0_000750384e8d_step2",
+        "dagger_iter0_r0_1e47ffd2eb3c_step2",
+        "dagger_iter0_r0_2838d9a8b4d6_step2",
+        "dagger_iter0_r0_2fe70d884bca_step2",
+        "dagger_iter0_r0_30731775d267_step2",
+        "dagger_iter0_r0_3d8179a3c049_step2",
+        "dagger_iter0_r0_48ab5d68d8fd_step2",
+        "dagger_iter0_r0_517bb8b965a6_step2",
+        "dagger_iter0_r0_66a789cebd16_step2",
+        "dagger_iter0_r0_714c72de5731_step2",
+        "dagger_iter0_r0_8efe7e7591dc_step2",
+        "dagger_iter0_r0_8f6aa8a3b151_step2",
+        "dagger_iter0_r0_a066a81579b9_step2",
+        "dagger_iter0_r0_a9150b304153_step6",
+        "dagger_iter0_r0_aedae3e5fb04_step2",
+        "dagger_iter0_r0_afd9d2b219d4_step2",
+        "dagger_iter0_r0_c27097cbf3c5_step6",
+        "dagger_iter0_r0_cd41d28cd3da_step2",
+        "dagger_iter0_r0_ea60c9acd100_step2",
+        "dagger_iter0_r0_fde6b42f99ef_step2"
+      ],
+      "placed_rows": 20,
+      "repeat": 1,
+      "source": "d0_bc0",
+      "tool": "correct_parameters_from_path",
+      "unique_examples": 20
+    },
+    {
+      "available_unique_examples": 215,
+      "bucket": "d0_bc0:wls_from_path",
+      "example_ids": [
+        "dagger_iter0_r0_052812c3558e_step0",
+        "dagger_iter0_r0_0a602a921acf_step0",
+        "dagger_iter0_r0_1cc4fc5b86a5_step3",
+        "dagger_iter0_r0_1de6330325de_step7",
+        "dagger_iter0_r0_23df8ba9ac43_step8",
+        "dagger_iter0_r0_43503ff1f3a4_step0",
+        "dagger_iter0_r0_4f1a9fcf736b_step0",
+        "dagger_iter0_r0_54aee17db9ee_step0",
+        "dagger_iter0_r0_58646b2663db_step3",
+        "dagger_iter0_r0_5bb90ea51d0d_step3",
+        "dagger_iter0_r0_6e575d74c52a_step8",
+        "dagger_iter0_r0_88c9203c22a4_step7",
+        "dagger_iter0_r0_95cf3e44701c_step3",
+        "dagger_iter0_r0_b93dc9873c6e_step0",
+        "dagger_iter0_r0_ced5827da5ac_step7",
+        "dagger_iter0_r0_ead258c4ca29_step0"
+      ],
+      "placed_rows": 16,
+      "repeat": 1,
+      "source": "d0_bc0",
+      "tool": "wls_from_path",
+      "unique_examples": 16
+    },
+    {
+      "available_unique_examples": 122,
+      "bucket": "natural_dagger1:rollback_state",
+      "example_ids": [
+        "dagger_iter1_r0_007861550b26_step23__order179__replica1",
+        "dagger_iter1_r0_026bc9d17f2c_step5__order203__replica1",
+        "dagger_iter1_r0_051b40207e74_step11__order2__replica0",
+        "dagger_iter1_r0_05fbca0484a7_step9__order164__replica0",
+        "dagger_iter1_r0_1394f820d820_step10__order36__replica0",
+        "dagger_iter1_r0_24539d5eafa5_step5__order30__replica1",
+        "dagger_iter1_r0_2e55ffbf1ff3_step10__order184__replica0",
+        "dagger_iter1_r0_2f331509a6fd_step7__order190__replica0",
+        "dagger_iter1_r0_41def6ddaf39_step12__order31__replica1",
+        "dagger_iter1_r0_4231b61d77ff_step11__order159__replica0",
+        "dagger_iter1_r0_4327616f5635_step19__order207__replica0",
+        "dagger_iter1_r0_4a180fbc926c_step14__order27__replica0",
+        "dagger_iter1_r0_4ceb24966c4b_step6__order202__replica1",
+        "dagger_iter1_r0_6b2a72632859_step10__order123__replica0",
+        "dagger_iter1_r0_7396ad8203c4_step5__order186__replica1",
+        "dagger_iter1_r0_74b82875a814_step10__order4__replica0",
+        "dagger_iter1_r0_77981ad23ff5_step8__order59__replica1",
+        "dagger_iter1_r0_7c6eb8a31f77_step21__order208__replica1",
+        "dagger_iter1_r0_81aabfb796b7_step6__order9__replica0",
+        "dagger_iter1_r0_913f4f1a0db9_step8__order162__replica1",
+        "dagger_iter1_r0_9d151e310334_step10__order160__replica1",
+        "dagger_iter1_r0_a38309e2ee94_step5__order12__replica0",
+        "dagger_iter1_r0_a3ab65502682_step6__order89__replica2",
+        "dagger_iter1_r0_a5122883a045_step16__order43__replica1",
+        "dagger_iter1_r0_ace551b86277_step11__order204__replica1",
+        "dagger_iter1_r0_af428f3d464f_step5__order168__replica0",
+        "dagger_iter1_r0_bd2b59e6e08f_step5__order34__replica1",
+        "dagger_iter1_r0_be75f000f099_step8__order198__replica1",
+        "dagger_iter1_r0_c1cb3a021348_step17__order187__replica0",
+        "dagger_iter1_r0_c55cbc3253af_step9__order192__replica1",
+        "dagger_iter1_r0_cb908e129b8e_step7__order163__replica1",
+        "dagger_iter1_r0_d485afe6dd31_step8__order7__replica0",
+        "dagger_iter1_r0_d90f42df5b2f_step4__order17__replica0",
+        "dagger_iter1_r0_d924a99061ef_step15__order20__replica1",
+        "dagger_iter1_r0_dd20c16c354e_step8__order38__replica1",
+        "dagger_iter1_r0_de6afa2b7111_step11__order22__replica1",
+        "dagger_iter1_r0_df83325813b8_step9__order197__replica0",
+        "dagger_iter1_r0_edc1c9764f6c_step15__order206__replica0",
+        "dagger_iter1_r0_ff5561f5c4c8_step13__order154__replica0",
+        "dagger_iter1_r0_ffdc2746db8b_step9__order136__replica0"
+      ],
+      "placed_rows": 40,
+      "repeat": 1,
+      "source": "natural_dagger1",
+      "tool": "rollback_state",
+      "unique_examples": 40
+    },
+    {
+      "available_unique_examples": 20,
+      "bucket": "natural_dagger1:correct_parameters_from_path",
+      "example_ids": [
+        "dagger_iter1_r0_051b40207e74_step6__order2__replica1",
+        "dagger_iter1_r0_0d988d38791b_step6__order13__replica0",
+        "dagger_iter1_r0_1c962809595a_step6__order199__replica0",
+        "dagger_iter1_r0_1d702e82d268_step7__order41__replica1",
+        "dagger_iter1_r0_2e55ffbf1ff3_step6__order184__replica1",
+        "dagger_iter1_r0_3a47af4a3577_step7__order10__replica0",
+        "dagger_iter1_r0_411dd9af2d8d_step6__order167__replica0",
+        "dagger_iter1_r0_411dd9af2d8d_step6__order167__replica1",
+        "dagger_iter1_r0_7c6eb8a31f77_step10__order208__replica0",
+        "dagger_iter1_r0_8f5115276aaa_step10__order39__replica1",
+        "dagger_iter1_r0_8f5115276aaa_step7__order39__replica0",
+        "dagger_iter1_r0_a09578e6e23c_step6__order157__replica1",
+        "dagger_iter1_r0_a1b054f44571_step6__order42__replica0",
+        "dagger_iter1_r0_ace551b86277_step15__order204__replica0",
+        "dagger_iter1_r0_c1cb3a021348_step6__order187__replica1",
+        "dagger_iter1_r0_d90f42df5b2f_step10__order17__replica0",
+        "dagger_iter1_r0_d90f42df5b2f_step6__order17__replica1",
+        "dagger_iter1_r0_edc1c9764f6c_step10__order206__replica1",
+        "dagger_iter1_r0_eef406f1ae3d_step6__order165__replica1",
+        "dagger_iter1_r0_eef406f1ae3d_step7__order165__replica0"
+      ],
+      "placed_rows": 20,
+      "repeat": 1,
+      "source": "natural_dagger1",
+      "tool": "correct_parameters_from_path",
+      "unique_examples": 20
+    },
+    {
+      "available_unique_examples": 74,
+      "bucket": "natural_dagger1:wls_from_path",
+      "example_ids": [
+        "dagger_iter1_r0_0d75ba277cd3_step16__order60__replica1",
+        "dagger_iter1_r0_1394f820d820_step21__order36__replica0",
+        "dagger_iter1_r0_288c2d496c53_step11__order80__replica1",
+        "dagger_iter1_r0_83e622d67447_step10__order85__replica2",
+        "dagger_iter1_r0_9826886a46fd_step13__order126__replica1",
+        "dagger_iter1_r0_99fa66c3dd95_step11__order49__replica2",
+        "dagger_iter1_r0_9fc61b4ad18d_step7__order50__replica1",
+        "dagger_iter1_r0_c797a602c9a6_step10__order0__replica1",
+        "dagger_iter1_r0_cb908e129b8e_step9__order163__replica1",
+        "dagger_iter1_r0_d1ab73400402_step20__order142__replica0",
+        "dagger_iter1_r0_eab044f4881b_step8__order143__replica1",
+        "dagger_iter1_r0_fd0c44b9de95_step8__order145__replica1"
+      ],
+      "placed_rows": 12,
+      "repeat": 1,
+      "source": "natural_dagger1",
+      "tool": "wls_from_path",
+      "unique_examples": 12
+    }
+  ],
+  "source_distribution": {
+    "d0_bc0": 74,
+    "natural_dagger1": 74,
+    "observable_recovery_probe": 24
+  },
+  "tool_distribution": {
+    "correct_parameters_from_path": 40,
+    "get_measurement_context": 12,
+    "get_topology_context": 40,
+    "rollback_state": 40,
+    "wls_from_path": 40
+  }
+}

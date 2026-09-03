@@ -1,0 +1,104 @@
+{
+  "adapter_weight_files": [
+    "adapter_model.safetensors"
+  ],
+  "best_checkpoint_adapter_sha256": "605cb5aa29432d84edabba8e1529215322b708f2b90f003d54c9eec0f43a8870",
+  "best_checkpoint_eval_loss": 0.022957326844334602,
+  "best_checkpoint_step": 128,
+  "best_metric": 0.022957326844334602,
+  "best_model_checkpoint": "/scratch/yx3882/research_gemma4_small_20260824_fe94580/bc0/full/checkpoint-128",
+  "changed_adapter_tensors": 656,
+  "checkpoints": [
+    "checkpoint-128",
+    "checkpoint-192",
+    "checkpoint-256",
+    "checkpoint-320",
+    "checkpoint-64"
+  ],
+  "checks": {
+    "adapter": true,
+    "best_eval_checkpoint": true,
+    "checkpoints": true,
+    "evaluation": true,
+    "model": true,
+    "reload": true,
+    "research_run": true,
+    "splits": true,
+    "training": true
+  },
+  "contract": "research_gemma4_full_bc0_postflight_v1",
+  "expected_eval_steps": [
+    64,
+    128,
+    192,
+    256,
+    320
+  ],
+  "finite_evaluations": [
+    {
+      "eval_loss": 0.0374467670917511,
+      "step": 64
+    },
+    {
+      "eval_loss": 0.022957326844334602,
+      "step": 128
+    },
+    {
+      "eval_loss": 0.024009397253394127,
+      "step": 192
+    },
+    {
+      "eval_loss": 0.03186453878879547,
+      "step": 256
+    },
+    {
+      "eval_loss": 0.02602227032184601,
+      "step": 320
+    }
+  ],
+  "global_step": 320,
+  "minimum_eval_loss": 0.022957326844334602,
+  "model_selection": {
+    "architecture": "gemma4_unified",
+    "key": "12b",
+    "load_in_4bit": true,
+    "model_id": "google/gemma-4-12B-it",
+    "prompt_profile": "native",
+    "purpose": "first meaningful DAgger pilot",
+    "revision": "707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7",
+    "trust_remote_code": false
+  },
+  "passed": true,
+  "published_adapter_sha256": "605cb5aa29432d84edabba8e1529215322b708f2b90f003d54c9eec0f43a8870",
+  "reload": {
+    "adapter_reloaded": true,
+    "canaries": [
+      {
+        "exact_action_match": true,
+        "expected_arguments": {
+          "case_path": "active"
+        },
+        "expected_tool": "wls_from_path",
+        "generated_arguments": {
+          "case_path": "active"
+        },
+        "generated_tool": "wls_from_path",
+        "index": 0,
+        "passed": true,
+        "target_tool_match": true
+      }
+    ],
+    "canaries_passed": 1,
+    "canary_mode": "parseable_single_tool_call_after_reload",
+    "fresh_base_reconstructed": true,
+    "generation_canary_pass": true
+  },
+  "splits": {
+    "overlap": [],
+    "train_roots": 182,
+    "train_rows": 1280,
+    "validation_roots": 44,
+    "validation_rows": 304
+  },
+  "train_loss": 0.0002257832257354764
+}

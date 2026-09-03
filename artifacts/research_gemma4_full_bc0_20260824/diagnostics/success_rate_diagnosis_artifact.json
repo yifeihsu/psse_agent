@@ -1,0 +1,359 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "Why the Gemma-4-12B BC0 Success Rate Looks Poor",
+    "description": "A trace-, training-, and code-grounded diagnosis of the D0 and D1 closed-loop results.",
+    "generatedAt": "2026-08-24T22:16:34-04:00",
+    "sources": [
+      {
+        "id": "diagnostic_evidence",
+        "label": "Derived D0/D1 success-rate evidence",
+        "path": "artifacts/research_gemma4_full_bc0_20260824/diagnostics/success_rate_evidence.json",
+        "query": {
+          "engine": "DuckDB",
+          "sql": "SELECT * FROM read_json_auto('artifacts/research_gemma4_full_bc0_20260824/diagnostics/success_rate_evidence.json');",
+          "description": "Read the bounded diagnostic evidence record used to construct the report snapshot.",
+          "executed_at": "2026-08-24T22:16:34-04:00",
+          "tables_used": ["artifacts/research_gemma4_full_bc0_20260824/diagnostics/success_rate_evidence.json"],
+          "metric_definitions": [
+            "Final physical success = terminal episode AND terminal outcome resolved AND physical correctness true.",
+            "All-targets-accepted is a diagnostic repair signal, not physical certification."
+          ]
+        }
+      },
+      {
+        "id": "d0_report",
+        "label": "Canonical D0 evaluation report",
+        "path": "artifacts/research_gemma4_full_bc0_20260824/evaluation/d0/research_bc0_d0_eval.json"
+      },
+      {
+        "id": "d1_report",
+        "label": "Protected D1 evaluation report",
+        "path": "artifacts/research_gemma4_full_bc0_20260824/evaluation/d1/research_bc0_d1_eval.json"
+      },
+      {
+        "id": "training_report",
+        "label": "Full BC0 training report",
+        "path": "artifacts/research_gemma4_full_bc0_20260824/research_run.json"
+      },
+      {
+        "id": "protocol_bridge",
+        "label": "Canonical-to-controller protocol bridge",
+        "path": "psse_env/dagger/protocol_bridge.py"
+      },
+      {
+        "id": "metric_contract",
+        "label": "Closed-loop evaluator metric contract",
+        "path": "psse_env/dagger/evaluator.py"
+      },
+      {
+        "id": "expert_contract",
+        "label": "Expert termination and post-correction handoff contract",
+        "path": "psse_env/oracle/termination_expert.py"
+      },
+      {
+        "id": "research_launcher",
+        "label": "Research BC0 evaluation launcher",
+        "path": "psse_env/sft/research_bc0_eval.py"
+      }
+    ],
+    "cards": [
+      {
+        "id": "d0_result",
+        "description": "Strict episode-level physical success on the frozen D0 suite.",
+        "dataset": "headline_metrics",
+        "sourceId": "diagnostic_evidence",
+        "filter": {"suite": "D0"},
+        "metrics": [
+          {"label": "D0 physical success", "field": "final_physical_success_rate", "format": "percent"},
+          {"label": "Faulted-root success", "field": "faulted_episode_success_rate", "format": "percent"}
+        ]
+      },
+      {
+        "id": "d1_result",
+        "description": "Strict episode-level physical success and diagnostic target completion on the protected D1 suite.",
+        "dataset": "headline_metrics",
+        "sourceId": "diagnostic_evidence",
+        "filter": {"suite": "D1"},
+        "metrics": [
+          {"label": "D1 physical success", "field": "final_physical_success_rate", "format": "percent"},
+          {"label": "All targets accepted", "field": "all_true_targets_accepted_rate", "format": "percent"}
+        ]
+      },
+      {
+        "id": "d1_action_quality",
+        "description": "Syntactic validity is much stronger than state-machine validity.",
+        "dataset": "headline_metrics",
+        "sourceId": "diagnostic_evidence",
+        "filter": {"suite": "D1"},
+        "metrics": [
+          {"label": "Schema-valid steps", "field": "schema_valid_rate", "format": "percent"},
+          {"label": "Runtime-accepted steps", "field": "runtime_accepted_rate", "format": "percent"}
+        ]
+      },
+      {
+        "id": "recovery_coverage",
+        "description": "BC0 state/action coverage available to teach recovery behavior.",
+        "dataset": "training_distribution",
+        "sourceId": "diagnostic_evidence",
+        "metrics": [
+          {"label": "Learner-visited states", "field": "learner_visited_states", "format": "number"},
+          {"label": "Rollback targets", "field": "rollback_targets", "format": "number"},
+          {"label": "Commit-label share", "field": "commit_target_share", "format": "percent"}
+        ]
+      }
+    ],
+    "charts": [
+      {
+        "id": "quality_layers_chart",
+        "title": "D0 and D1 evaluation quality layers",
+        "subtitle": "Percentages use the denominator and grain shown in the source data for each layer.",
+        "type": "bar",
+        "intent": "comparison",
+        "dataset": "quality_layers",
+        "sourceId": "diagnostic_evidence",
+        "encodings": {
+          "x": {"field": "layer", "type": "nominal", "label": "Evaluation layer"},
+          "y": {"field": "rate", "type": "quantitative", "format": "percent", "label": "Rate"},
+          "color": {"field": "suite", "type": "nominal", "label": "Suite"},
+          "tooltip": [
+            {"field": "numerator", "type": "quantitative", "label": "Numerator"},
+            {"field": "denominator", "type": "quantitative", "label": "Denominator"},
+            {"field": "grain", "type": "text", "label": "Grain"}
+          ]
+        },
+        "valueFormat": "percent",
+        "settings": {"groupMode": "grouped", "categoryLabelPolicy": "wrap", "showValues": true},
+        "legend": {"position": "bottom", "title": "Suite"},
+        "layout": "full"
+      },
+      {
+        "id": "sequencing_gap_chart",
+        "title": "Embedded expected and model action counts across D0 and D1",
+        "subtitle": "Counts expose systematic next-tool bias; they are not the report's official comparable-step agreement metric.",
+        "type": "bar",
+        "intent": "comparison",
+        "dataset": "sequencing_gap",
+        "sourceId": "diagnostic_evidence",
+        "encodings": {
+          "x": {"field": "action", "type": "nominal", "label": "Action"},
+          "y": {"field": "count", "type": "quantitative", "label": "Calls"},
+          "color": {"field": "series", "type": "nominal", "label": "Series"},
+          "tooltip": [
+            {"field": "training_targets", "type": "quantitative", "label": "BC0 training targets"},
+            {"field": "d0_count", "type": "quantitative", "label": "D0 calls"},
+            {"field": "d1_count", "type": "quantitative", "label": "D1 calls"}
+          ]
+        },
+        "settings": {"groupMode": "grouped", "categoryLabelPolicy": "wrap", "showValues": true},
+        "legend": {"position": "bottom", "title": "Action source"},
+        "layout": "full"
+      }
+    ],
+    "tables": [
+      {
+        "id": "root_causes_table",
+        "title": "Ranked causes of the poor headline result",
+        "subtitle": "Measurement/runtime defects should be removed before spending more GPU time.",
+        "dataset": "root_causes",
+        "sourceId": "diagnostic_evidence",
+        "defaultSort": {"field": "rank", "direction": "asc"},
+        "density": "spacious",
+        "layout": "full",
+        "columns": [
+          {"field": "rank", "label": "Rank", "format": "number"},
+          {"field": "category", "label": "Category", "type": "text"},
+          {"field": "driver", "label": "Driver", "type": "text"},
+          {"field": "impact", "label": "Impact", "type": "text"},
+          {"field": "evidence", "label": "Evidence", "type": "text"}
+        ]
+      },
+      {
+        "id": "d1_family_table",
+        "title": "D1 behavior by scenario family",
+        "subtitle": "All-target acceptance is diagnostic progress, not certified physical success.",
+        "dataset": "d1_family_breakdown",
+        "sourceId": "diagnostic_evidence",
+        "defaultSort": {"field": "target_recall", "direction": "asc"},
+        "density": "spacious",
+        "layout": "full",
+        "columns": [
+          {"field": "family", "label": "Family", "type": "text"},
+          {"field": "episodes", "label": "Episodes", "format": "number"},
+          {"field": "all_targets_accepted_episodes", "label": "All targets accepted", "format": "number"},
+          {"field": "target_recall", "label": "Target recall", "format": "percent"},
+          {"field": "runtime_rejected_actions", "label": "Rejected actions", "format": "number"},
+          {"field": "expert_match_rate", "label": "Expert agreement", "format": "percent"}
+        ]
+      }
+    ],
+    "blocks": [
+      {
+        "id": "report_title",
+        "type": "markdown",
+        "body": "# Why the Gemma-4-12B BC0 Success Rate Looks Poor",
+        "layout": "full"
+      },
+      {
+        "id": "executive_summary",
+        "type": "markdown",
+        "sourceId": "diagnostic_evidence",
+        "body": "## Executive Summary\n\n**The 19% D0 and 0% D1 headline is primarily a metric-contract problem, then a real closed-loop policy problem.** Final physical success requires an episode to terminate as `resolved`, but the current expert contract forbids autonomous finalization after an accepted correction and deliberately routes the corrected state to operator handoff. D0 therefore credits only its four no-fault roots; D1 contains no no-fault roots and cannot earn this headline under the standard correction path.\n\nThe learner is still not strong enough: it was trained only on initial/expert states, saw zero rollback labels, overcommits rejected candidates, escalates too early, and handles repeated faults poorly. Two implementation defects further depress the score: the research evaluator omits the physical case loader, and the topology bridge fails to translate `line_index1` to the controller's `line_index`.\n\n**Decision:** do not spend GPU time on another full SFT run yet. Fix the evaluation/protocol wiring and replay the same adapter first; then use a small recovery-focused DAgger continuation if the corrected replay still underperforms.",
+        "layout": "full"
+      },
+      {
+        "id": "headline_metrics",
+        "type": "metric-strip",
+        "cardIds": ["d0_result", "d1_result", "d1_action_quality", "recovery_coverage"],
+        "layout": "full"
+      },
+      {
+        "id": "headline_explanation",
+        "type": "markdown",
+        "sourceId": "diagnostic_evidence",
+        "body": "## Why the headline collapses to 4/21 and 0/15\n\nThe evaluator defines final physical success as `terminal AND outcome == resolved AND physical_correct`. Yet after any accepted correction, the termination expert returns no autonomous finalize proposal; the policy instead requests operator confirmation. This makes the metric suitable for clean/no-correction closure, but unsuitable as the sole repair-success measure.\n\n- D0: 4/21 successes, exactly the four no-fault roots; corrupted-root success is 0/17.\n- D1: 0/15, and all 15 roots contain faults.\n- D1 nevertheless accepted every true target in 8/15 episodes; D0 had four faulted episodes with all true targets accepted and globally resolved candidate WLS. These are promising repair signals, not certified successes.\n\nCertification also fails because the research launcher does not pass a `case_loader`, leaving final-case/non-regression evidence unavailable for many corrected episodes.",
+        "layout": "full"
+      },
+      {
+        "id": "quality_layers",
+        "type": "chart",
+        "chartId": "quality_layers_chart",
+        "layout": "full"
+      },
+      {
+        "id": "root_causes_heading",
+        "type": "markdown",
+        "body": "## Root causes\n\nThe causes are ranked by how directly they distort the headline or create reproducible closed-loop failures. The first two and the topology bridge are evaluation/runtime issues; they require no new training to test.",
+        "layout": "full"
+      },
+      {
+        "id": "root_causes",
+        "type": "table",
+        "tableId": "root_causes_table",
+        "layout": "full"
+      },
+      {
+        "id": "model_behavior",
+        "type": "markdown",
+        "sourceId": "diagnostic_evidence",
+        "body": "## What the learner does wrong after its first mistake\n\nBC0 contains 1,115 expert-visited states and 165 initial states, but **zero learner-visited recovery states**. It teaches 274 commits and zero rollbacks. In evaluation, the embedded expert expectation called for 45 rollbacks, while the model used 22; the model committed 53 times against 30 embedded expectations and accumulated 23 false commits.\n\nThe policy also diverts from information gathering into premature parameter correction, then tries to commit candidates already marked `REJECT`. Multi-measurement cases commonly fix one residual and stop. Agreement deteriorates with rollout horizon, which is the expected signature of behavior-cloning covariate shift.\n\nLow validation loss did not test this: the median supervised assistant suffix is only 20 tokens, the dataset has only 124 distinct assistant signatures, and the published checkpoint was step 128 at epoch 0.40, selected without closed-loop checkpoint comparison.",
+        "layout": "full"
+      },
+      {
+        "id": "sequencing_gap",
+        "type": "chart",
+        "chartId": "sequencing_gap_chart",
+        "layout": "full"
+      },
+      {
+        "id": "d1_family_heading",
+        "type": "markdown",
+        "sourceId": "diagnostic_evidence",
+        "body": "## D1 family evidence\n\nThe 0% D1 headline hides useful but incomplete behavior. Parameter cases accepted 3/3 true targets with no runtime-rejected actions; measurement+parameter cases accepted all targets in 4/6 episodes. The genuine weakness is most visible on repeated measurement faults, where target recall was only 6/23 (26.1%).",
+        "layout": "full"
+      },
+      {
+        "id": "d1_family",
+        "type": "table",
+        "tableId": "d1_family_table",
+        "layout": "full"
+      },
+      {
+        "id": "ruled_out",
+        "type": "markdown",
+        "sourceId": "diagnostic_evidence",
+        "body": "## What is not causing the poor result\n\n- **Token length:** no training or evaluation truncation; the longest evaluation prompt was 7,875 of 32,768 tokens.\n- **JSON/tool formatting:** D0 schema validity was 98.98%; D1 was 100%.\n- **Evaluator crashes:** both suites completed with zero evaluator-error episodes.\n- **Adapter loading:** the same adapter ran both suites and solved all four D0 no-fault roots.\n\nSchema validity only establishes parseability. It does not establish that an action is legal in the current candidate lifecycle or that the episode is physically resolved.",
+        "layout": "full"
+      },
+      {
+        "id": "next_steps",
+        "type": "markdown",
+        "body": "## Next steps\n\n1. Fix the topology bridge so `line_index1` becomes controller `line_index`, and add a round-trip regression test.\n2. Pass a real `case_loader` into the research evaluator; report audited post-correction handoff separately from strict resolved success.\n3. Replay D0 and D1 with the same adapter—no retraining—to establish the corrected baseline.\n4. Compare existing checkpoints 128, 192, 256, and 320 using closed-loop metrics; do not select solely on token loss.\n5. Repair the teacher's multi-fault continuation, then run one small DAgger continuation centered on rejected candidates, rollback, failed escalation preconditions, and post-rollback routing.",
+        "layout": "full"
+      },
+      {
+        "id": "further_questions",
+        "type": "markdown",
+        "body": "## Further questions\n\n- How many of the 4 D0 and 8 D1 all-target-accepted episodes become auditable handoff successes once the case loader is present?\n- Does checkpoint 320 outperform the published checkpoint 128 in closed loop despite its slightly higher token loss?\n- After the topology bridge fix, do the affected five D0 roots progress without any model change?\n- What is the expert-only audited handoff ceiling on the protected D1 suite after the metric wiring is corrected?",
+        "layout": "full"
+      },
+      {
+        "id": "caveats",
+        "type": "markdown",
+        "sourceId": "diagnostic_evidence",
+        "body": "## Caveats\n\n- All-target acceptance and globally resolved WLS are diagnostic evidence, not substitutes for the missing physical non-regression audit.\n- The action-count comparison uses each trace step's embedded evaluator expectation; the official expert-agreement metrics use a smaller comparable-step denominator.\n- D1 has only 15 protected roots, so family rates are directional.\n- No code was changed and no evaluation or training job was launched in this diagnosis.\n- The report's `passed=true` readiness gate checks episode completion, evaluator errors, and schema validity of at least 90%; it does not require physical success.",
+        "layout": "full"
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "generatedAt": "2026-08-24T22:16:34-04:00",
+    "status": "ready",
+    "datasets": {
+      "headline_metrics": [
+        {"suite": "D0", "episodes": 21, "faulted_episodes": 17, "final_physical_success_rate": 0.19047619047619047, "faulted_episode_success_rate": 0.0, "all_true_targets_accepted_rate": 0.23529411764705882, "schema_valid_rate": 0.9897959183673469, "runtime_accepted_rate": 0.8163265306122449, "expert_exact_match_rate": 0.5197368421052632},
+        {"suite": "D1", "episodes": 15, "faulted_episodes": 15, "final_physical_success_rate": 0.0, "faulted_episode_success_rate": 0.0, "all_true_targets_accepted_rate": 0.5333333333333333, "schema_valid_rate": 1.0, "runtime_accepted_rate": 0.8536585365853658, "expert_exact_match_rate": 0.689922480620155}
+      ],
+      "quality_layers": [
+        {"suite": "D0", "layer": "Schema-valid action", "rate": 0.9897959183673469, "numerator": 194, "denominator": 196, "grain": "policy steps", "order": 1},
+        {"suite": "D0", "layer": "Runtime-accepted action", "rate": 0.8163265306122449, "numerator": 160, "denominator": 196, "grain": "policy steps", "order": 2},
+        {"suite": "D0", "layer": "Exact expert action", "rate": 0.5197368421052632, "numerator": 79, "denominator": 152, "grain": "comparable policy steps", "order": 3},
+        {"suite": "D0", "layer": "Final physical success", "rate": 0.19047619047619047, "numerator": 4, "denominator": 21, "grain": "episodes", "order": 4},
+        {"suite": "D1", "layer": "Schema-valid action", "rate": 1.0, "numerator": 164, "denominator": 164, "grain": "policy steps", "order": 1},
+        {"suite": "D1", "layer": "Runtime-accepted action", "rate": 0.8536585365853658, "numerator": 140, "denominator": 164, "grain": "policy steps", "order": 2},
+        {"suite": "D1", "layer": "Exact expert action", "rate": 0.689922480620155, "numerator": 89, "denominator": 129, "grain": "comparable policy steps", "order": 3},
+        {"suite": "D1", "layer": "Final physical success", "rate": 0.0, "numerator": 0, "denominator": 15, "grain": "episodes", "order": 4}
+      ],
+      "sequencing_gap": [
+        {"action": "Rollback rejected candidate", "series": "Embedded expert expectation", "count": 45, "training_targets": 0, "d0_count": 31, "d1_count": 14, "order": 1},
+        {"action": "Rollback rejected candidate", "series": "Model action", "count": 22, "training_targets": 0, "d0_count": 15, "d1_count": 7, "order": 1},
+        {"action": "Commit candidate", "series": "Embedded expert expectation", "count": 30, "training_targets": 274, "d0_count": 12, "d1_count": 18, "order": 2},
+        {"action": "Commit candidate", "series": "Model action", "count": 53, "training_targets": 274, "d0_count": 28, "d1_count": 25, "order": 2},
+        {"action": "Get measurement context", "series": "Embedded expert expectation", "count": 68, "training_targets": 117, "d0_count": 36, "d1_count": 32, "order": 3},
+        {"action": "Get measurement context", "series": "Model action", "count": 43, "training_targets": 117, "d0_count": 18, "d1_count": 25, "order": 3},
+        {"action": "Correct parameters", "series": "Embedded expert expectation", "count": 12, "training_targets": 87, "d0_count": 4, "d1_count": 8, "order": 4},
+        {"action": "Correct parameters", "series": "Model action", "count": 34, "training_targets": 87, "d0_count": 18, "d1_count": 16, "order": 4},
+        {"action": "Request operator evidence", "series": "Embedded expert expectation", "count": 24, "training_targets": 86, "d0_count": 11, "d1_count": 13, "order": 5},
+        {"action": "Request operator evidence", "series": "Model action", "count": 38, "training_targets": 86, "d0_count": 16, "d1_count": 22, "order": 5}
+      ],
+      "d1_family_breakdown": [
+        {"family": "measurement+parameter", "episodes": 6, "physical_successes": 0, "all_targets_accepted_episodes": 4, "target_recall": 0.75, "runtime_rejected_actions": 18, "expert_match_rate": 0.6231884057971014},
+        {"family": "multi_measurement", "episodes": 6, "physical_successes": 0, "all_targets_accepted_episodes": 1, "target_recall": 0.2608695652173913, "runtime_rejected_actions": 6, "expert_match_rate": 0.7380952380952381},
+        {"family": "parameter", "episodes": 3, "physical_successes": 0, "all_targets_accepted_episodes": 3, "target_recall": 1.0, "runtime_rejected_actions": 0, "expert_match_rate": 0.8333333333333334}
+      ],
+      "training_distribution": [
+        {"train_rows": 1280, "train_roots": 182, "initial_states": 165, "expert_visited_states": 1115, "learner_visited_states": 0, "rollback_targets": 0, "commit_targets": 274, "commit_target_share": 0.2140625, "distinct_assistant_signatures": 124, "top_five_signature_share": 0.57734375, "median_supervised_tokens": 20, "maximum_supervised_tokens": 42}
+      ],
+      "root_causes": [
+        {"rank": 1, "category": "Metric contract", "driver": "Fault corrections cannot end as resolved under the current expert contract", "impact": "Critical", "evidence": "Success requires resolved, but accepted corrections disable autonomous finalize and route to operator handoff; D0 successes are exactly four no-fault roots and D1 has no no-fault roots."},
+        {"rank": 2, "category": "Audit wiring", "driver": "Research evaluation omits the physical case loader", "impact": "High", "evidence": "Thirteen D0 and nine D1 episodes report case_loader_required_for_physical_comparison, so plausible repairs cannot be certified."},
+        {"rank": 3, "category": "Training distribution", "driver": "BC0 contains no learner recovery states and no rollback labels", "impact": "Critical", "evidence": "All 1,280 rows are initial or expert-visited; rollback targets=0 while commit targets=274. Evaluation expected 45 rollbacks, but the model chose 22 and made 23 false commits."},
+        {"rank": 4, "category": "Protocol bridge", "driver": "Canonical topology index is not converted to the controller field", "impact": "High", "evidence": "line_index1 remains unconverted instead of becoming line_index, causing six D0 unsupported-topology failures across five episodes."},
+        {"rank": 5, "category": "Teacher policy", "driver": "Multi-fault labels often stop after one accepted partial repair", "impact": "High", "evidence": "Three D0 multi-measurement episodes followed the teacher path yet escalated with faults remaining; D1 multi-measurement target recall was 6/23."},
+        {"rank": 6, "category": "Checkpoint selection", "driver": "Published adapter is a partial-epoch checkpoint selected by token loss", "impact": "Medium", "evidence": "Checkpoint 128 at epoch 0.40 minimized short-suffix eval loss; no closed-loop checkpoint comparison was run."},
+        {"rank": 7, "category": "Training metric", "driver": "Low eval loss measures repetitive one-step teacher-forced outputs", "impact": "Medium", "evidence": "Median supervised suffix is 20 tokens, only 124 distinct signatures exist, and the five most common signatures are 57.7% of rows."}
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "diagnostic_evidence",
+      "label": "Derived D0/D1 success-rate evidence",
+      "path": "artifacts/research_gemma4_full_bc0_20260824/diagnostics/success_rate_evidence.json",
+      "query": {
+        "engine": "DuckDB",
+        "sql": "SELECT * FROM read_json_auto('artifacts/research_gemma4_full_bc0_20260824/diagnostics/success_rate_evidence.json');",
+        "description": "Read the bounded diagnostic evidence record used to construct the report snapshot.",
+        "executed_at": "2026-08-24T22:16:34-04:00",
+        "tables_used": ["artifacts/research_gemma4_full_bc0_20260824/diagnostics/success_rate_evidence.json"],
+        "metric_definitions": [
+          "Final physical success = terminal episode AND terminal outcome resolved AND physical correctness true.",
+          "All-targets-accepted is a diagnostic repair signal, not physical certification."
+        ]
+      }
+    }
+  ]
+}

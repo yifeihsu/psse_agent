@@ -1,0 +1,16 @@
+{
+  "epochs": 2.0,
+  "initial_adapter": null,
+  "max_length": 8192,
+  "model_id": "unsloth/gemma-4-12B-it",
+  "model_revision": "55cdba0740a9765956f49501f689a66b098feda3",
+  "output_dir": "/scratch/yx3882/research_dagger_12b_20260824/out/round1",
+  "prepared_train_rows": 1324,
+  "prepared_validation_rows": 331,
+  "release_evidence": false,
+  "seed": 20260823,
+  "train_preparation_failures": [],
+  "train_rows": 1324,
+  "training_loss": 0.038572273831047804,
+  "validation_preparation_failures": []
+}

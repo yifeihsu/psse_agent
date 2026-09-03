@@ -1,0 +1,22 @@
+{
+  "cancelled_dependency_descendants": [
+    "15842365",
+    "15842366",
+    "15842367"
+  ],
+  "d0_dir": "/scratch/yx3882/round0_aggregate_6b76281_20260815T143201Z_442254_8568",
+  "d1_dir": "/scratch/yx3882/dagger1_6b76281c-20260816T035053Z-31541-3666363",
+  "jobs": {
+    "aggregate": "15842430",
+    "audit": "15842427",
+    "diagnostic": "15842428",
+    "training": "15842429"
+  },
+  "learner_adapter": "/scratch/yx3882/release_evidence/6b76281c9ac977f360818b138fe34bffdd709277/sft_round0_6b76281_ctx7168_20260815T172933Z_854760_902/lora",
+  "learner_revision": "8a57791a89f91c31323519a9b42748a527f6c73a39acd5ffe20ce23bce10de4f",
+  "log_root": "/scratch/yx3882/codex_psse_debug_logs/dagger1_recovery2_6b76281c_20260816T142930Z.Ygekr9",
+  "predecessor_failed_audit": "15842364",
+  "repo": "/scratch/yx3882/psse_agent_dagger1_6b76281c-20260816T035053Z-31541-3666363",
+  "reviewed_source_commit": "6b76281c9ac977f360818b138fe34bffdd709277",
+  "round1_dir": "/scratch/yx3882/round1_aggregate_6b76281c-20260816T035053Z-31541-3666363"
+}

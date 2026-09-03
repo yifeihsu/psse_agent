@@ -1,0 +1,141 @@
+{
+  "contract": "research_gemma4_exact_cache_v1",
+  "models": [
+    {
+      "architecture": "gemma4_unified",
+      "files": 9,
+      "key": "12b",
+      "logical_bytes": 23951776979,
+      "model_id": "google/gemma-4-12B-it",
+      "passed": true,
+      "processor_loader": "AutoProcessor",
+      "prompt_profile": "native",
+      "revision": "707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7",
+      "snapshot": "/scratch/yx3882/.cache/huggingface/hub/models--google--gemma-4-12B-it/snapshots/707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7",
+      "weight_manifest": {
+        "indices": [],
+        "mode": "single_file",
+        "weight_bytes": 23919549408,
+        "weight_files": 1
+      }
+    }
+  ],
+  "passed": true
+}
+{
+  "closed_loop_outcomes": {
+    "audited_completion_union": {
+      "episodes": 12,
+      "rate": 0.5714285714285714
+    },
+    "audited_post_correction_handoff": {
+      "episodes": 8,
+      "rate": 0.38095238095238093,
+      "requires_versioned_safety_clean_assessment": true,
+      "terminal_outcome": "operator_escalation"
+    },
+    "episodes": 21,
+    "strict_resolved_physical_success": {
+      "episodes": 4,
+      "rate": 0.19047619047619047,
+      "requires_strict_physical_audit": true,
+      "terminal_outcome": "resolved"
+    }
+  },
+  "passed": true,
+  "phase": "d0",
+  "policy_behavior": {
+    "episodes": 21,
+    "evaluator_error_episodes": 0,
+    "input_truncated_steps": 0,
+    "input_truncated_tokens": 0,
+    "maximum_original_prompt_tokens": 7606,
+    "observable_expert_comparable_steps": 151,
+    "observable_expert_comparison_errors": 0,
+    "observable_expert_exact_action_agreement_rate": 0.6688741721854304,
+    "observable_expert_tool_agreement_rate": 0.6821192052980133,
+    "policy_steps": 199,
+    "schema_valid_action_rate": 0.9949748743718593,
+    "schema_valid_actions": 198
+  },
+  "readiness_gate": {
+    "failures": [],
+    "minimum_schema_valid_action_rate": 0.9,
+    "passed": true
+  }
+}
+{
+  "closed_loop_outcomes": {
+    "audited_completion_union": {
+      "episodes": 7,
+      "rate": 0.4666666666666667
+    },
+    "audited_post_correction_handoff": {
+      "episodes": 7,
+      "rate": 0.4666666666666667,
+      "requires_versioned_safety_clean_assessment": true,
+      "terminal_outcome": "operator_escalation"
+    },
+    "episodes": 15,
+    "strict_resolved_physical_success": {
+      "episodes": 0,
+      "rate": 0.0,
+      "requires_strict_physical_audit": true,
+      "terminal_outcome": "resolved"
+    }
+  },
+  "passed": true,
+  "phase": "d1",
+  "policy_behavior": {
+    "episodes": 15,
+    "evaluator_error_episodes": 0,
+    "input_truncated_steps": 0,
+    "input_truncated_tokens": 0,
+    "maximum_original_prompt_tokens": 7809,
+    "observable_expert_comparable_steps": 129,
+    "observable_expert_comparison_errors": 0,
+    "observable_expert_exact_action_agreement_rate": 0.689922480620155,
+    "observable_expert_tool_agreement_rate": 0.689922480620155,
+    "policy_steps": 164,
+    "schema_valid_action_rate": 1.0,
+    "schema_valid_actions": 164
+  },
+  "readiness_gate": {
+    "failures": [],
+    "minimum_schema_valid_action_rate": 0.9,
+    "passed": true
+  }
+}
+{
+  "comparison_completed": true,
+  "evaluated_labels": [
+    "checkpoint-64",
+    "checkpoint-128",
+    "checkpoint-192",
+    "checkpoint-256",
+    "checkpoint-320"
+  ],
+  "ranking": [
+    {
+      "label": "checkpoint-192",
+      "rank": 1
+    },
+    {
+      "label": "checkpoint-320",
+      "rank": 2
+    },
+    {
+      "label": "checkpoint-256",
+      "rank": 3
+    },
+    {
+      "label": "checkpoint-128",
+      "rank": 4
+    },
+    {
+      "label": "checkpoint-64",
+      "rank": 5
+    }
+  ],
+  "reused_labels": []
+}

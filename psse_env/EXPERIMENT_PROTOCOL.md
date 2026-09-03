@@ -67,8 +67,11 @@ low-bandwidth boolean/reason-code object in
 non-model metadata and can quarantine a target only after the observable
 teacher has fixed it. Training collection must load one absolute local adapter
 directory whose inspected tree digest is the supplied 64-hex model revision.
-The collection manifest, final aggregate, and `STAGE=round1`
-`INITIAL_ADAPTER_REVISION` must all bind that exact learner-seed digest.
+The collection manifest and final aggregate must bind that exact collector
+learner-seed digest. Each `STAGE=round1` run instead binds
+`INITIAL_ADAPTER_REVISION` to its same-training-seed BC0 checkpoint receipt;
+the collector identity remains immutable data provenance and is not reused as
+the per-seed training-parent identity.
 
 Do not equate a post-correction WLS pass with physical release finality. The
 same public residual pattern can occur after both a correct repair and a repair

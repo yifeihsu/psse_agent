@@ -43,8 +43,23 @@ from psse_env.sft.training import infer_required_side_input_names
 
 BASE_MODEL_REVISION = "f0c5915f17ad6c66dbeb577fb06ff8925bf8d7ae"
 BASE_MODEL_ID = "unsloth/gemma-4-E2B-it"
-MAX_INPUT_TOKENS = 8192
-MAX_NEW_TOKENS = 64
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    value = int(os.environ.get(name, default))
+    if value <= 0:
+        raise ValueError(f"{name} must be positive, got {value}")
+    return value
+
+
+# Keep the historical defaults for compatibility with the preliminary tool
+# gate, while allowing research jobs to relax both limits without changing
+# source code or rebuilding any dataset/checkpoint.
+MAX_INPUT_TOKENS = _positive_int_env("RESEARCH_MAX_INPUT_TOKENS", 8192)
+MAX_NEW_TOKENS = _positive_int_env("RESEARCH_MAX_NEW_TOKENS", 64)
+RELAXED_ADAPTER_IDENTITY = (
+    os.environ.get("RESEARCH_RELAXED_ADAPTER_IDENTITY", "0") == "1"
+)
 FORCED_TOOL_PREFIX = "<|tool_call>call:"
 
 
@@ -101,7 +116,10 @@ def _validate_adapter_identity(model_id: str, model_revision: str) -> tuple[Path
     if not adapter.is_absolute():
         raise GateError("E2B adapter model_id must be an absolute path")
     adapter = adapter.resolve(strict=True)
-    if checkpoint_tree_sha256(adapter) != model_revision:
+    if (
+        not RELAXED_ADAPTER_IDENTITY
+        and checkpoint_tree_sha256(adapter) != model_revision
+    ):
         raise GateError("E2B adapter tree digest does not match model_revision")
 
     config_path = adapter / "adapter_config.json"
@@ -168,7 +186,10 @@ def _load_bundle(model_id: str, model_revision: str) -> _E2BBundle:
             "Pinned local E2B adapter load failed; no raw-base fallback was used: "
             f"{type(exc).__name__}: {exc}"
         ) from exc
-    if checkpoint_tree_sha256(adapter) != model_revision:
+    if (
+        not RELAXED_ADAPTER_IDENTITY
+        and checkpoint_tree_sha256(adapter) != model_revision
+    ):
         raise GateError("E2B adapter changed while it was being loaded")
     model.eval()
     return _E2BBundle(
@@ -246,11 +267,11 @@ class _CanonicalE2BPolicy:
         input_ids = encoded.get("input_ids")
         if input_ids is None or not hasattr(input_ids, "shape"):
             raise GateError("E2B processor did not return tensor input_ids")
-        prompt_length = int(input_ids.shape[-1])
-        if prompt_length <= 0 or prompt_length > MAX_INPUT_TOKENS:
-            raise GateError(
-                f"E2B prompt length {prompt_length} is outside the trained 1..{MAX_INPUT_TOKENS} range"
-            )
+        original_prompt_length = int(input_ids.shape[-1])
+        if original_prompt_length <= 0:
+            raise GateError("E2B processor returned an empty prompt")
+        prompt_length = min(original_prompt_length, MAX_INPUT_TOKENS)
+        truncated_input_tokens = original_prompt_length - prompt_length
 
         try:
             import torch
@@ -259,9 +280,15 @@ class _CanonicalE2BPolicy:
         device = _model_input_device(self._bundle.model)
         model_inputs: dict[str, Any] = {}
         for key, value in encoded.items():
-            if not hasattr(value, "shape") or int(value.shape[-1]) != prompt_length:
+            if (
+                not hasattr(value, "shape")
+                or int(value.shape[-1]) != original_prompt_length
+            ):
                 continue
-            model_inputs[str(key)] = value.to(device)
+            # Research mode keeps the newest observable state/history when a
+            # prompt exceeds the configured window instead of rejecting the
+            # episode before inference.
+            model_inputs[str(key)] = value[..., -prompt_length:].to(device)
         required = infer_required_side_input_names(
             self._bundle.model,
             self._bundle.processor,
@@ -316,6 +343,8 @@ class _CanonicalE2BPolicy:
         )
         self._last_action_metrics = {
             "prompt_tokens": prompt_length,
+            "original_prompt_tokens": original_prompt_length,
+            "truncated_input_tokens": truncated_input_tokens,
             "generated_tokens": int(generated_tokens),
             "generation_seconds": float(generation_seconds),
             "hit_max_new_tokens": int(generated_tokens) >= MAX_NEW_TOKENS,

@@ -40,6 +40,24 @@ Measurement series exporters:
 - `export_measurement_series_balanced.py` – generates a balanced reference measurement vector using pandapower `case14` in MATPOWER style.
 - `export_measurement_series.py` – generates a three‑phase unbalanced measurement vector from the OpenDSS model (currently with Bus 3 unbalanced).
 
+## Per-Phase Branch-Current Export (2026-09-03)
+
+`export_measurement_series.py` also exports
+`extract_three_phase_branch_current_measurements()`: per-branch, per-terminal,
+per-phase current phasors in per-unit (current *into* the branch from each
+terminal, base `(S_base/3)/V_LN,base` at the terminal bus), aligned to the
+MATPOWER branch order and honoring the same hidden-split-line overrides as the
+122-entry vector. Both dataset generators (`Transmission/generate_measurements_hif_ieee14.py`
+and `Transmission/generate_measurements_imbalance.py`) emit it as the
+`three_phase_branch_currents` channel.
+
+Important: because the checked-in `IEEE14Loads.DSS` keeps the Bus 3 split
+loads below, every generator **rebalances Bus 3** before injecting its own
+disturbance (the HIF path via `write_balanced_ieee14_load_override`, the
+imbalance path via `_balance_bus3_loads`). The tracked
+`artifacts/measurements/out_measurements_imbalance` corpus predates that fix
+and carries the Bus 3 unbalance in every row in addition to the labeled bus.
+
 ## Current Unbalance Configuration
 
 As of this file:

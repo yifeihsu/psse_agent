@@ -74,6 +74,32 @@ scan window exists, else the single-scan estimator, carrying the NLM top
 branch as `candidate_branch_row0`. Privileged fault families and hints are
 ignored by this expert, so changing hidden truth while holding the policy
 observation fixed cannot change the production target.
+
+`three_phase_branch_currents` (per-phase terminal current phasors on every
+branch, with `branch_current_sigma_pu`) is a further observable channel. When
+it is present, `run_three_phase_nlm_from_path` localizes an HIF line and phase
+from the two-terminal differential current measured on the snapshot (averaged
+coherently across a scan window), reports a closed-form
+`terminal_current_estimate` of position and resistance, and keeps any stored
+NLM diagnostic only as secondary evidence; the expert forwards the observed
+`suspected_phase` as `candidate_phase`, and both HIF estimators seed their
+OpenDSS search from the closed form and add a current residual block. Both
+estimators may accept an HIF explanation on the strength of the differential
+itself (`acceptance_basis=terminal_current_differential`) when it clears the
+six-sigma floor, the closed-form fault impedance is positive and resistive,
+the two terminals agree on the fault-point voltage, and the model search
+agrees on the phase; the residual-reduction gate is diluted by sensor noise on
+hundreds of unaffected entries and remains the other accepted basis. For a
+pure unbalance signature the same tool localizes the *source bus* by the
+per-phase shunt-power spread computed from KCL (negative-sequence voltage
+alone peaks at weak buses, not at the source), records it as `bus_1based` in
+the explanation for the release audit, and accepts the explanation when that
+spread is significant against the current-sensor noise and no line carries a
+differential current above the sensor floor (an explicit non-HIF null); the
+VUF gate is reported as `voltage_gate_passed` but no longer decides, because
+its 2% threshold was calibrated on a corpus whose Bus 3 was always unbalanced.
+The channel satisfies the production-row telemetry gate for these tools on
+its own. Rows without the channel behave exactly as before.
 Diagnostic summaries (`wls_summary`, `hse_summary`, `nlm_summary`,
 `hif_summary`, `diagnostic_acceptance`, ...) are model-visible history metrics
 in SFT export. The production target audit independently requires matching
@@ -173,7 +199,17 @@ multi-measurement, parameter, topology, harmonic, HIF,
 measurement+parameter, measurement+topology, and measurement+HIF.
 Three-phase unbalance and telemetry-no-disturbance remain supported generator
 capabilities outside the BC0 family policy; a future freeze must add explicit
-quotas and thresholds before claiming either one. Every selected scenario
+quotas and thresholds before claiming either one.
+
+Outside the frozen release path, `scripts/run_dagger_research.py
+--plan-preset diagnostic` (or `combined`) collects a research round on the
+explanation-only families: HIF, measurement+HIF, three-phase unbalance, and
+the balanced telemetry control. It draws from the per-phase branch-current
+corpora, emits unbalance sensor signatures only when the row's telemetry
+actually shows them, and runs the OpenDSS estimators under the validated
+research budget through a research-only environment factory; the release
+factory module is not modified. See
+`docs/branch_current_telemetry_20260903.md`. Every selected scenario
 passes its physical validation gate, and scenario IDs are opaque hashes;
 family, cardinality, network case, and source tier remain audit/split metadata
 rather than policy-visible hints.
@@ -578,19 +614,22 @@ that it used `AutoProcessor`. The checkpoint evaluation is followed by
 `STAGE=checkpoint-gate`; it is not part of the baseline submission group.
 
 For a reviewed Round-1 aggregate, warm-start from the exact content-addressed
-BC0 learner-seed LoRA tree into a fresh, non-overlapping output directory. The
-seed remains release-ineligible; its role here is only initialization. The launcher independently
-validates the adapter contents and its 64-hex tree identity, loads it through
-PEFT with `is_trainable=True`, restores its exact pre-smoke trainable weights
-before TRL starts, and writes `initial_adapter_attestation.json`.
+same-seed BC0 LoRA tree into a fresh, non-overlapping output directory. The
+checkpoint may remain release-ineligible; its role here is only initialization.
+The launcher independently validates the adapter contents and its 64-hex tree
+identity, loads it through PEFT with `is_trainable=True`, restores its exact
+pre-smoke trainable weights before TRL starts, and writes
+`initial_adapter_attestation.json`.
 It also requires the canonical sibling BC0 `checkpoint_receipt.json` and,
 before model allocation, validates the same study manifest, reviewed source,
 training seed, adapter path, and adapter tree. The Round-1 receipt binds that
-BC0 `parent_checkpoint_receipt_id`; BC0 itself records a null parent ID.
-`STAGE=round1` also refuses any revision that differs from both the D1
-collection manifest and the aggregate's learner-seed provenance. Round 1
-is pinned to one epoch at `3e-5`; the preregistered launcher rejects overrides.
-BC0 is similarly pinned to two epochs at `1e-4`. Both use max length 6144,
+BC0 `parent_checkpoint_receipt_id`; BC0 itself records a null parent ID. The
+D1 collection manifest and aggregate separately retain the exact adapter tree
+that generated learner-visited collection states; that data-provenance identity
+does not replace the same-seed BC0 parent required for each replicated Round-1
+run. Round 1 is pinned to one epoch at `3e-5`; the preregistered launcher
+rejects overrides.
+BC0 is similarly pinned to two epochs at `1e-4`. Both use max length 8192,
 batch size 1, accumulation 4, bf16 NF4 double-quantized QLoRA, LoRA rank/alpha
 16 with zero dropout and the registered language targets, `adamw_torch`, and a
 linear schedule. The manifest also verifies the exact dependency-lock SHA-256:
@@ -840,10 +879,13 @@ and an explicit `ROUND1_VIEW`. `STAGE=round1` additionally requires the
 canonical sibling `PARENT_CHECKPOINT_RECEIPT`; data-only and smoke stages may
 validate the view without producing a checkpoint receipt. Use the same view
 and matching study variant for every stage in one arm.
-The gate validates that learner-seed identity against the D1 manifest and
-aggregate provenance without loading the adapter or allocating the base model;
-`one-batch`, `targeted-tiny-overfit`, and `round1` additionally warm-start from
-it. The targeted
+The gate independently authenticates the collector learner-seed identity from
+the D1 manifest and aggregate provenance, while recording the supplied exact
+64-hex `INITIAL_ADAPTER_REVISION` as the claimed, distinct BC0 warm-start tree.
+It does this without loading the adapter or allocating the base model.
+`one-batch`, `targeted-tiny-overfit`, and `round1` verify and warm-start from
+the supplied BC0 adapter; `STAGE=round1` additionally authenticates its
+same-seed receipt, path, and tree before model allocation. The targeted
 stage selects five distinct recovery cases,
 sweeps diagnostic learning rates `1e-4`, `3e-4`, and `1e-3`, and requires exact
 generated tools and arguments. These sweep rates do not alter the pinned

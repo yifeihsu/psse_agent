@@ -59,6 +59,17 @@ from psse_env.actions import (
 )
 from psse_env.state_store import apply_modification
 
+from three_phase_nlm.branch_current_analysis import (  # noqa: E402  (repo-root package)
+    BRANCH_CURRENT_CHANNEL,
+    BRANCH_CURRENT_SIGMA_KEY,
+    DEFAULT_BRANCH_CURRENT_SIGMA_PU,
+    DEFAULT_UNBALANCE_VUF_THRESHOLD,
+    branch_current_rows_to_phasors,
+    line_differential_null_test,
+    terminal_current_hif_localization,
+    terminal_current_hif_localization_multiscan,
+    unbalance_source_localization,
+)
 from mcp_server.matpower_server import (  # noqa: E402  (repo-root package)
     _estimate_hif_location_magnitude_logic,
     _estimate_hif_location_magnitude_multiscan_logic,
@@ -397,9 +408,12 @@ class MatpowerDeploymentProviders:
         hif_r_grid_size: int = 35,
         hif_max_scans: int = 10,
         harmonic_thd_threshold_percent: float = 1.0,
-        unbalance_vuf_threshold: float = 0.02,
+        # Shared with the scenario generator so the policy-visible
+        # ``vuf_threshold_exceeded`` sensor signature and this gate agree.
+        unbalance_vuf_threshold: float = DEFAULT_UNBALANCE_VUF_THRESHOLD,
         hif_min_residual_reduction: float = 0.20,
         hif_max_weighted_residual_norm: float = 3.0,
+        hif_terminal_consistency_limit: float = 0.5,
         vm_bound_tolerance_pu: float = 0.005,
         branch_rate_tolerance_mva: float = 1e-6,
         parameter_ranking_dominance_threshold: float = (
@@ -434,6 +448,10 @@ class MatpowerDeploymentProviders:
         self.unbalance_vuf_threshold = float(unbalance_vuf_threshold)
         self.hif_min_residual_reduction = float(hif_min_residual_reduction)
         self.hif_max_weighted_residual_norm = float(hif_max_weighted_residual_norm)
+        # Two-terminal self-consistency bound for accepting an HIF on the
+        # strength of a detected differential current (see
+        # ``_terminal_current_conclusive``).
+        self.hif_terminal_consistency_limit = float(hif_terminal_consistency_limit)
         self.vm_bound_tolerance_pu = float(vm_bound_tolerance_pu)
         self.branch_rate_tolerance_mva = float(branch_rate_tolerance_mva)
         self.parameter_ranking_dominance_threshold = float(
@@ -2525,6 +2543,39 @@ class MatpowerDeploymentProviders:
             for signature in cls._observable_signatures(state)
         )
 
+    @classmethod
+    def _branch_current_channel(
+        cls, state: Mapping[str, Any]
+    ) -> tuple[list[dict[str, Any]] | None, float]:
+        """Per-phase branch-current telemetry and its declared sigma, if present.
+
+        The channel may sit at the metadata top level (unbalance rows) or inside
+        ``hif_runtime`` (HIF rows); the declared sigma follows the same lookup
+        and falls back to the nominal sensor accuracy.
+        """
+        metadata = cls._metadata(state)
+        runtime = metadata.get("hif_runtime")
+        runtime = runtime if isinstance(runtime, Mapping) else {}
+        window = metadata.get("hif_scan_window")
+        window = window if isinstance(window, Mapping) else {}
+        rows = metadata.get(BRANCH_CURRENT_CHANNEL) or runtime.get(BRANCH_CURRENT_CHANNEL)
+        if not rows or not branch_current_rows_to_phasors(rows):
+            return None, DEFAULT_BRANCH_CURRENT_SIGMA_PU
+        sigma = DEFAULT_BRANCH_CURRENT_SIGMA_PU
+        for candidate in (
+            metadata.get(BRANCH_CURRENT_SIGMA_KEY),
+            runtime.get(BRANCH_CURRENT_SIGMA_KEY),
+            window.get(BRANCH_CURRENT_SIGMA_KEY),
+        ):
+            try:
+                value = float(candidate)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value) and value > 0.0:
+                sigma = value
+                break
+        return [dict(item) for item in rows if isinstance(item, Mapping)], sigma
+
     def _hif_diagnostic_acceptance(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         """Apply a fail-closed HIF-vs-null goodness-of-fit gate."""
         fit = payload.get("fit")
@@ -2549,16 +2600,36 @@ class MatpowerDeploymentProviders:
             fit.get("model_mismatch_suspected")
             or observability.get("model_mismatch_suspected")
         )
-        accepted = bool(
-            math.isfinite(improvement_value)
-            and math.isfinite(residual_value)
-            and improvement_value >= self.hif_min_residual_reduction
+        terminal = payload.get("terminal_current_estimate")
+        terminal = terminal if isinstance(terminal, Mapping) else {}
+        estimated = payload.get("estimated")
+        estimated = estimated if isinstance(estimated, Mapping) else {}
+        terminal_conclusive, terminal_reason = self._terminal_current_conclusive(
+            terminal, estimated
+        )
+        residual_ok = bool(
+            math.isfinite(residual_value)
             and residual_value <= self.hif_max_weighted_residual_norm
+        )
+        improvement_ok = bool(
+            math.isfinite(improvement_value)
+            and improvement_value >= self.hif_min_residual_reduction
+        )
+        accepted = bool(
+            residual_ok
             and not model_mismatch
             and not payload.get("synthetic_oracle", False)
+            and (improvement_ok or terminal_conclusive)
         )
+        if not accepted:
+            basis = None
+        elif improvement_ok:
+            basis = "residual_reduction_vs_null"
+        else:
+            basis = "terminal_current_differential"
         return {
             "accepted": accepted,
+            "acceptance_basis": basis,
             "null_hypothesis": "no_hif_base_model",
             "residual_reduction_vs_null": (
                 improvement_value if math.isfinite(improvement_value) else None
@@ -2567,7 +2638,55 @@ class MatpowerDeploymentProviders:
             "minimum_residual_reduction": self.hif_min_residual_reduction,
             "maximum_weighted_residual_norm": self.hif_max_weighted_residual_norm,
             "model_mismatch_suspected": model_mismatch,
+            "terminal_current_conclusive": terminal_conclusive,
+            "terminal_current_reason": terminal_reason,
+            "terminal_consistency_limit": self.hif_terminal_consistency_limit,
         }
+
+    def _terminal_current_conclusive(
+        self, terminal: Mapping[str, Any], estimated: Mapping[str, Any]
+    ) -> tuple[bool, str]:
+        """Is the two-terminal differential evidence conclusive on its own?
+
+        The residual-reduction gate compares whole-vector fits and is diluted
+        by sensor noise on hundreds of unaffected entries.  A differential
+        current on the candidate line that clears the six-sigma floor *is* the
+        fault current; it is conclusive when the closed form also finds a
+        positive, predominantly resistive fault impedance, the fault-point
+        voltages computed from both ends agree to within the sensor-noise
+        share of the line drop, and the model search agrees on the phase.  A
+        bad current sensor produces a differential too, but not one that any
+        (alpha, R) reconciles from both terminals.
+        """
+        if not terminal:
+            return False, "no_terminal_current_evidence"
+        if not bool(terminal.get("differential_detected")):
+            return False, "differential_below_detection_floor"
+        try:
+            r_value = float(terminal.get("r_hif_pu"))
+            ratio = float(terminal.get("consistency_ratio"))
+            x_value = float(terminal.get("x_hif_pu") or 0.0)
+            alpha = float(terminal.get("alpha_from_from_bus"))
+        except (TypeError, ValueError):
+            return False, "terminal_estimate_incomplete"
+        if not (math.isfinite(r_value) and r_value > 0.0):
+            return False, "nonpositive_fault_resistance"
+        # A fault fitted at a terminal is what a gross error on that
+        # terminal's current sensor also looks like; the line's own phasors
+        # cannot separate the two, so this evidence alone is not conclusive.
+        if bool(terminal.get("endpoint_ambiguous")) or not (
+            math.isfinite(alpha) and 0.02 < alpha < 0.98
+        ):
+            return False, "fault_at_terminal_ambiguous_with_sensor_error"
+        if not math.isfinite(ratio) or ratio > self.hif_terminal_consistency_limit:
+            return False, "two_terminal_inconsistent"
+        if abs(x_value) > 0.5 * r_value:
+            return False, "fault_impedance_not_resistive"
+        phase = terminal.get("phase")
+        model_phase = estimated.get("phase")
+        if phase and model_phase and str(phase).upper() != str(model_phase).upper():
+            return False, "phase_disagreement_with_model_search"
+        return True, "detected_consistent_resistive_differential"
 
     def get_harmonic_context(
         self, state: Mapping[str, Any], action: Mapping[str, Any] | None = None
@@ -2660,7 +2779,14 @@ class MatpowerDeploymentProviders:
         # Pure unbalance is a distinct terminal explanation, not an implicit
         # HIF localization.  Sequence-voltage evidence provides an explicit
         # balanced-system null test and never emits a candidate HIF branch.
-        three_phase_voltages = metadata.get("three_phase_voltages")
+        runtime = metadata.get("hif_runtime")
+        runtime = runtime if isinstance(runtime, Mapping) else {}
+        # HIF rows carry their three-phase voltages inside the runtime block;
+        # unbalance rows carry them at the metadata top level.
+        three_phase_voltages = metadata.get("three_phase_voltages") or runtime.get(
+            "three_phase_voltages"
+        )
+        branch_currents, current_sigma = self._branch_current_channel(state)
         if unbalance_signal and not hif_signal and three_phase_voltages:
             vuf_evidence = _three_phase_vuf_evidence(
                 three_phase_voltages, top_k=self.top_k
@@ -2678,32 +2804,164 @@ class MatpowerDeploymentProviders:
                 "max_vuf": max_vuf,
                 "minimum_vuf": self.unbalance_vuf_threshold,
             }
+            summary: dict[str, Any] = {
+                "success": True,
+                "converged": True,
+                "method": "sequence_voltage_unbalance_test",
+                "diagnostic_classification": (
+                    "three_phase_unbalance" if accepted else "unresolved"
+                ),
+                "top_hif_groups": [],
+                "top_vuf_buses": vuf_evidence,
+            }
+            detail: dict[str, Any] = {
+                "max_vuf": max_vuf,
+                "minimum_vuf": self.unbalance_vuf_threshold,
+                "top_vuf_buses": vuf_evidence,
+            }
+            evidence_source = "deployment_diagnostic:sequence_voltage_unbalance"
+            if branch_currents:
+                # Per-phase branch currents localize the unbalance *source*
+                # (negative-sequence voltage alone peaks at weak buses) and
+                # supply an explicit non-HIF null: no line may carry a
+                # differential current above the sensor floor.
+                localization = unbalance_source_localization(
+                    three_phase_voltages,
+                    branch_currents,
+                    top_k=self.top_k,
+                    sigma_pu=current_sigma,
+                )
+                null_test = line_differential_null_test(
+                    three_phase_voltages, branch_currents, sigma_pu=current_sigma
+                )
+                hif_like = bool(
+                    null_test is not None
+                    and null_test.get("hif_like_differential_present")
+                )
+                # The per-phase shunt-power spread measures the unbalance
+                # source directly, while VUF is a symptom that also depends on
+                # network strength; with currents present the explanation
+                # rests on a noise-significant source and a quiet line null.
+                source_significant = bool(
+                    localization is not None and localization.get("significant")
+                )
+                voltage_gate_passed = bool(accepted)
+                accepted = bool(source_significant and not hif_like)
+                acceptance.update(
+                    {
+                        "accepted": accepted,
+                        "null_hypothesis": (
+                            "no_significant_shunt_power_spread_and_no_line_differential"
+                        ),
+                        "voltage_gate_passed": voltage_gate_passed,
+                        "line_differential_null": null_test,
+                        "source_localized": localization is not None,
+                        "source_significant": source_significant,
+                        "acceptance_basis": (
+                            "shunt_power_spread_source" if accepted else None
+                        ),
+                    }
+                )
+                summary.update(
+                    {
+                        "method": "sequence_voltage_unbalance_test+shunt_power_spread",
+                        "diagnostic_classification": (
+                            "three_phase_unbalance"
+                            if accepted
+                            else ("hif_suspected" if hif_like else "unresolved")
+                        ),
+                        "line_differential_null": null_test,
+                    }
+                )
+                if localization is not None:
+                    summary["localization"] = {
+                        key: localization[key]
+                        for key in (
+                            "method",
+                            "bus_1based",
+                            "phase_power_spread_rel",
+                            "separation_ratio",
+                            "significant",
+                            "significant_bus_count",
+                        )
+                    }
+                    summary["top_unbalance_source_buses"] = localization[
+                        "top_unbalance_source_buses"
+                    ]
+                    detail.update(
+                        {
+                            "bus_1based": int(localization["bus_1based"]),
+                            "localization": summary["localization"],
+                            "top_unbalance_source_buses": localization[
+                                "top_unbalance_source_buses"
+                            ],
+                        }
+                    )
+                detail["line_differential_null"] = null_test
+                evidence_source = (
+                    "deployment_diagnostic:sequence_voltage_unbalance+branch_currents"
+                )
             metrics: dict[str, Any] = {
                 **self._binding(state),
-                "evidence_source": "deployment_diagnostic:sequence_voltage_unbalance",
-                "nlm_summary": {
-                    "success": True,
-                    "converged": True,
-                    "method": "sequence_voltage_unbalance_test",
-                    "diagnostic_classification": (
-                        "three_phase_unbalance" if accepted else "unresolved"
-                    ),
-                    "top_hif_groups": [],
-                    "top_vuf_buses": vuf_evidence,
-                },
+                "evidence_source": evidence_source,
+                "nlm_summary": summary,
                 "diagnostic_acceptance": acceptance,
             }
             if accepted:
                 metrics["anomaly_explanation"] = {
                     "family": "three_phase_unbalance",
-                    "kind": "voltage_unbalance_confirmed",
-                    "detail": {
-                        "max_vuf": max_vuf,
-                        "minimum_vuf": self.unbalance_vuf_threshold,
-                        "top_vuf_buses": vuf_evidence,
-                    },
+                    "kind": (
+                        "voltage_unbalance_source_localized"
+                        if branch_currents
+                        else "voltage_unbalance_confirmed"
+                    ),
+                    "detail": detail,
                 }
             return metrics
+
+        if three_phase_voltages and branch_currents:
+            # Two-terminal differential currents name the faulted line and
+            # phase from the telemetry itself; a stored NLM diagnostic is kept
+            # only as secondary evidence.  A persistent scan window is averaged
+            # coherently so the noise floor drops with the scan count.
+            window = metadata.get("hif_scan_window")
+            window_scans = (
+                window.get("scans") if isinstance(window, Mapping) else None
+            )
+            current_scans = [
+                scan
+                for scan in (window_scans or [])
+                if isinstance(scan, Mapping)
+                and scan.get("three_phase_voltages")
+                and scan.get(BRANCH_CURRENT_CHANNEL)
+            ]
+            if len(current_scans) >= 2:
+                localized = terminal_current_hif_localization_multiscan(
+                    current_scans,
+                    top_k=self.top_k,
+                    sigma_pu=current_sigma,
+                )
+            else:
+                localized = terminal_current_hif_localization(
+                    three_phase_voltages,
+                    branch_currents,
+                    top_k=self.top_k,
+                    sigma_pu=current_sigma,
+                )
+            if localized is not None:
+                summary = summarize_three_phase_nlm_payload(localized)
+                if isinstance(diagnostic, Mapping):
+                    legacy_groups = diagnostic.get("top_hif_groups")
+                    if isinstance(legacy_groups, Sequence) and legacy_groups:
+                        first = legacy_groups[0]
+                        if isinstance(first, Mapping) and first.get("branch_row0") is not None:
+                            summary["legacy_nlm_top_branch_row0"] = int(first["branch_row0"])
+                            summary["legacy_nlm_method"] = diagnostic.get("method")
+                return {
+                    **self._binding(state),
+                    "evidence_source": "deployment_diagnostic:terminal_current_differential",
+                    "nlm_summary": summary,
+                }
 
         if not isinstance(diagnostic, Mapping) and not (pristine_dir and faulted_dir):
             return self._failure(
@@ -2788,12 +3046,15 @@ class MatpowerDeploymentProviders:
             z_obs = runtime.get("z_obs") or self._measurements(state)
         except Exception as exc:
             return self._failure("hif_input_error", f"{type(exc).__name__}: {exc}")
+        branch_currents, current_sigma = self._branch_current_channel(state)
         payload = _estimate_hif_location_magnitude_logic(
             case_path=case_path,
             candidate_branch_row0=int(arguments["candidate_branch_row0"]),
             candidate_phase=arguments.get("candidate_phase"),
             z_obs=[float(value) for value in z_obs],
-            three_phase_voltages=runtime.get("three_phase_voltages"),
+            three_phase_voltages=(
+                runtime.get("three_phase_voltages") or metadata.get("three_phase_voltages")
+            ),
             pristine_model_dir=runtime.get("pristine_model_dir"),
             load_scale=float(runtime.get("load_scale", 1.0)),
             top_k=int(arguments.get("top_k", self.top_k)),
@@ -2801,6 +3062,8 @@ class MatpowerDeploymentProviders:
             r_grid_size=r_grid_size,
             r_hif_pu_min=float(arguments.get("r_hif_pu_min", 5.0)),
             r_hif_pu_max=float(arguments.get("r_hif_pu_max", 1000.0)),
+            three_phase_branch_currents=branch_currents,
+            branch_current_sigma_pu=current_sigma,
         )
         if not payload.get("success"):
             return self._failure("hif_estimation_failure", payload.get("error"))
@@ -2808,7 +3071,11 @@ class MatpowerDeploymentProviders:
         acceptance = self._hif_diagnostic_acceptance(payload)
         metrics: dict[str, Any] = {
             **self._binding(state),
-            "evidence_source": "deployment_diagnostic:hif_parameter_estimator",
+            "evidence_source": (
+                "deployment_diagnostic:hif_parameter_estimator+branch_currents"
+                if branch_currents
+                else "deployment_diagnostic:hif_parameter_estimator"
+            ),
             "hif_summary": summary,
             "diagnostic_acceptance": acceptance,
         }
@@ -2819,6 +3086,7 @@ class MatpowerDeploymentProviders:
                 "detail": {
                     "candidate_branch_row0": int(arguments["candidate_branch_row0"]),
                     "estimated": summary.get("estimated"),
+                    "terminal_current_estimate": summary.get("terminal_current_estimate"),
                     "residual_reduction_vs_null": acceptance[
                         "residual_reduction_vs_null"
                     ],
@@ -2879,14 +3147,20 @@ class MatpowerDeploymentProviders:
             r_hif_pu_max=float(arguments.get("r_hif_pu_max", 1000.0)),
             robust_loss=str(arguments.get("robust_loss", "soft_l1")),
             smoothness_lambda=float(arguments.get("smoothness_lambda", 0.10)),
+            branch_current_sigma_pu=self._branch_current_channel(state)[1],
         )
         if not payload.get("success"):
             return self._failure("hif_multiscan_failure", payload.get("error"))
         summary = summarize_hif_parameter_estimate_payload(payload)
         acceptance = self._hif_diagnostic_acceptance(payload)
+        search = payload.get("search") if isinstance(payload.get("search"), Mapping) else {}
         metrics: dict[str, Any] = {
             **self._binding(state),
-            "evidence_source": "deployment_diagnostic:hif_multiscan_estimator",
+            "evidence_source": (
+                "deployment_diagnostic:hif_multiscan_estimator+branch_currents"
+                if search.get("branch_current_block")
+                else "deployment_diagnostic:hif_multiscan_estimator"
+            ),
             "hif_summary": summary,
             "diagnostic_acceptance": acceptance,
         }
@@ -2897,6 +3171,7 @@ class MatpowerDeploymentProviders:
                 "detail": {
                     "candidate_branch_row0": int(arguments["candidate_branch_row0"]),
                     "estimated": summary.get("estimated"),
+                    "terminal_current_estimate": summary.get("terminal_current_estimate"),
                     "residual_reduction_vs_null": acceptance[
                         "residual_reduction_vs_null"
                     ],

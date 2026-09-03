@@ -158,6 +158,44 @@ HISTORY_METRIC_KEYS = (
     "hif_summary",
     "diagnostic_acceptance",
 )
+
+# ``last_verification`` can contain a large physical-evidence payload.  Taking
+# the first eight insertion-ordered fields used to discard the actual decision
+# booleans on rich successful candidates (for example ``globally_resolved``
+# and ``post_action_resolved``).  The observable expert still saw the raw
+# values and could label ``commit_state``, leaving the model with an impossible
+# target.  Preserve the policy-critical scalar closure in an explicit order;
+# bulky evidence details remain summarized below it.
+LAST_VERIFICATION_PRIORITY_KEYS = (
+    "state_id",
+    "state_hash",
+    "evidence_source",
+    "evidence_sufficiency",
+    "converged",
+    "state_estimation_converged",
+    "globally_resolved",
+    "post_action_resolved",
+    "no_material_anomaly_remaining",
+    "physical_constraints_ok",
+    "physical_evidence_complete",
+    "candidate_disposition",
+    "target_fixed",
+    "target_test_passed",
+    "target_progress",
+    "global_progress",
+    "remaining_anomaly_score",
+    "remaining_suspect_count",
+    "anomaly_threshold",
+    "parent_anomaly_score",
+    "target_metric_kind",
+    "target_metric_value",
+    "target_metric_threshold",
+    "chi_square_statistic",
+    "chi_square_threshold",
+    "max_normalized_residual",
+    "physical_bound_violations",
+    "unresolved_signatures",
+)
 CONTEXT_DETAIL_KEYS = frozenset(
     {
         "measurement_findings",
@@ -989,7 +1027,19 @@ def _compact_last_tool_output(value: Any) -> dict[str, Any]:
         metrics = {}
     compact: dict[str, Any] = {
         key: _bounded_value(value[key])
-        for key in ("execution_status", "error_code", "state_mutated", "active_state_id", "candidate_state_id")
+        for key in (
+            "execution_status",
+            "error_code",
+            "error_detail",
+            "state_mutated",
+            "active_state_id",
+            "candidate_state_id",
+            # The controller emits these actions precisely to make recovery
+            # possible without privileged truth.  Dropping them from the
+            # canonical view made observable-expert recovery labels
+            # unlearnable after lifecycle violations.
+            "valid_next_actions",
+        )
         if key in value
     }
     compact_metrics = {
@@ -1006,6 +1056,27 @@ def _compact_last_tool_output(value: Any) -> dict[str, Any]:
             compact_metrics[key] = str(hash_value)
     if compact_metrics:
         compact["observable_metrics"] = compact_metrics
+    return compact
+
+
+def _compact_last_verification(value: Any) -> dict[str, Any]:
+    """Retain the observable candidate decision closure before bulky details."""
+
+    if not isinstance(value, Mapping):
+        return {}
+    compact = {
+        key: _bounded_value(
+            value[key],
+            max_depth=5 if key == "evidence_sufficiency" else 4,
+            max_items=16 if key == "evidence_sufficiency" else 8,
+            max_text_chars=160,
+        )
+        for key in LAST_VERIFICATION_PRIORITY_KEYS
+        if key in value
+    }
+    omitted = len(set(str(key) for key in value) - set(compact))
+    if omitted:
+        compact["_omitted_fields"] = omitted
     return compact
 
 
@@ -1034,8 +1105,11 @@ def prepare_model_policy_observation(
         observation["last_tool"] = INTERNAL_TO_CANONICAL_TOOL.get(
             last_tool, last_tool
         )
+    if "last_verification" in observation:
+        observation["last_verification"] = _compact_last_verification(
+            observation["last_verification"]
+        )
     for field in (
-        "last_verification",
         "accepted_corrections",
         "explained_anomalies",
         "rejected_hypotheses",
@@ -1368,6 +1442,15 @@ def examples_to_chat_sft(
             "training_decision_evidence_verified": example.get(
                 "training_decision_evidence_verified"
             ),
+            "research_label_eligible": example.get(
+                "research_label_eligible"
+            ),
+            "research_label_contract": example.get(
+                "research_label_contract"
+            ),
+            "research_label_ineligibility_reasons": copy.deepcopy(
+                example.get("research_label_ineligibility_reasons")
+            ),
             "recovery_stratum": example.get("recovery_stratum"),
             "production_label_eligible": example.get(
                 "production_label_eligible", True
@@ -1402,6 +1485,15 @@ def examples_to_chat_sft(
                 ),
                 "training_decision_evidence_verified": example.get(
                     "training_decision_evidence_verified"
+                ),
+                "research_label_eligible": example.get(
+                    "research_label_eligible"
+                ),
+                "research_label_contract": example.get(
+                    "research_label_contract"
+                ),
+                "research_label_ineligibility_reasons": copy.deepcopy(
+                    example.get("research_label_ineligibility_reasons")
                 ),
                 "recovery_stratum": example.get("recovery_stratum"),
                 "production_label_eligible": example.get(

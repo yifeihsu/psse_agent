@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import psse_env.dagger.dataset_builder as dataset_builder
+import psse_env.dagger.evaluation_gate as evaluation_gate
 from psse_env.dagger.evaluation_gate import (
     DEFAULT_POLICY_ID,
     DEFAULT_POLICY_PATH,
@@ -32,6 +33,9 @@ from .training import (
     run_lora_training,
     run_targeted_lora_smoke_sweep,
     validate_training_seed,
+)
+from psse_env.sft.historical_expert_closure import (
+    validate_historical_expert_closure,
 )
 from psse_env.dagger.study_manifest import (
     DEFAULT_STUDY_MANIFEST,
@@ -242,6 +246,14 @@ def parser() -> argparse.ArgumentParser:
         "--expert-baseline-evaluation",
         type=Path,
         help="Release evaluator artifact for the observable expert baseline.",
+    )
+    train.add_argument(
+        "--expert-baseline-gate-receipt",
+        type=Path,
+        help=(
+            "Exact immutable dual-source gate receipt authorizing canonical "
+            "reuse of the historical observable-expert baseline."
+        ),
     )
     train.add_argument(
         "--base-baseline-evaluation",
@@ -536,12 +548,51 @@ def _baseline_evaluation_gate(args: argparse.Namespace) -> dict[str, Any]:
         "repo_root": repo_root,
         "require_current_clean_source": True,
     }
-    expert = validate_evaluation_artifact(
-        args.expert_baseline_evaluation,
-        role="expert-baseline",
-        expected_policy_identity=args.expert_policy_identity,
-        **common,
-    )
+    expert_receipt_path = getattr(args, "expert_baseline_gate_receipt", None)
+    if expert_receipt_path is not None:
+        expert_payload = validate_historical_expert_closure(
+            expert_receipt_path,
+            expert_artifact_path=args.expert_baseline_evaluation,
+            repo_root=repo_root,
+            expected_suite_path=args.evaluation_suite,
+            expected_policy_path=args.evaluation_policy,
+            expected_policy_identity=args.expert_policy_identity,
+            expected_protocol="canonical",
+            expected_registry_sha256=registry_hash,
+        )
+        expert_facts = expert_payload.get("expert", {})
+        artifact_facts = expert_payload.get("artifact", {})
+        expert_passed = expert_payload.get("passed") is True
+        expert_performance_passed = (
+            expert_facts.get("performance_passed", expert_passed) is True
+        )
+        expert_failures = [
+            str(failure) for failure in expert_payload.get("failures", [])
+        ]
+        expert_artifact_source_commit = str(
+            artifact_facts.get("source_commit") or ""
+        )
+        expert_validator_source_commit = str(
+            expert_payload.get("validator_source_commit")
+            or expert_payload.get("expert_validator_source_commit")
+            or expert_facts.get("validator_source_commit")
+            or ""
+        )
+        expert_validation_mode = "historical-closure-reuse"
+    else:
+        expert = validate_evaluation_artifact(
+            args.expert_baseline_evaluation,
+            role="expert-baseline",
+            expected_policy_identity=args.expert_policy_identity,
+            **common,
+        )
+        expert_payload = expert.as_dict()
+        expert_passed = expert.passed
+        expert_performance_passed = expert.performance_passed
+        expert_failures = list(expert.failures)
+        expert_artifact_source_commit = str(expert.source_commit or "")
+        expert_validator_source_commit = source_commit
+        expert_validation_mode = "single-source-validation"
     base = validate_evaluation_artifact(
         args.base_baseline_evaluation,
         role="base-baseline",
@@ -550,24 +601,24 @@ def _baseline_evaluation_gate(args: argparse.Namespace) -> dict[str, Any]:
         **common,
     )
     blocking_failures = [
-        *(f"expert: {failure}" for failure in expert.failures),
+        *(f"expert: {failure}" for failure in expert_failures),
         *(f"base evidence: {failure}" for failure in base.evidence_failures),
     ]
-    if not expert.passed and not expert.failures:
+    if not expert_passed and not expert_failures:
         blocking_failures.append("expert: full evaluation gate did not pass")
     if not base.evidence_passed and not base.evidence_failures:
         blocking_failures.append("base evidence: evaluation evidence gate did not pass")
     base_performance_findings = [
         f"base performance: {failure}" for failure in base.performance_failures
     ]
-    pretraining_gate_passed = expert.passed and base.evidence_passed
+    pretraining_gate_passed = expert_passed and base.evidence_passed
     all_baselines_performance_qualified = (
-        expert.performance_passed and base.performance_passed
+        expert_performance_passed and base.performance_passed
     )
     payload = {
         "passed": pretraining_gate_passed,
         "pretraining_gate_passed": pretraining_gate_passed,
-        "expert_full_gate_passed": expert.passed,
+        "expert_full_gate_passed": expert_passed,
         "base_evidence_gate_passed": base.evidence_passed,
         "all_baselines_performance_qualified": all_baselines_performance_qualified,
         # Retain the old field as a strict performance-qualification signal.  A
@@ -580,20 +631,89 @@ def _baseline_evaluation_gate(args: argparse.Namespace) -> dict[str, Any]:
         "failures": blocking_failures,
         "base_performance_findings": base_performance_findings,
         "source_commit": source_commit,
+        "consumer_source_commit": source_commit,
+        "base_artifact_source_commit": str(base.source_commit or ""),
+        "base_expected_source_commit": source_commit,
+        "expert_artifact_source_commit": expert_artifact_source_commit,
+        "expert_validator_source_commit": expert_validator_source_commit,
+        "expert_validation_mode": expert_validation_mode,
         "frozen_suite_sha256": suite_hash,
         "protocol": "canonical",
         "registry_sha256": registry_hash,
-        "expert": expert.as_dict(),
+        "expert": expert_payload,
         "base": base.as_dict(),
     }
     if args.baseline_evaluation_report_output is not None:
-        args.baseline_evaluation_report_output.parent.mkdir(
-            parents=True, exist_ok=True
+        report_target = evaluation_gate._prepare_report_output(
+            args.baseline_evaluation_report_output,
+            repo_root=repo_root,
+            protected_inputs=(
+                args.expert_baseline_evaluation,
+                expert_receipt_path,
+                args.base_baseline_evaluation,
+                args.evaluation_suite,
+                args.evaluation_policy,
+                Path(__file__),
+            ),
         )
-        args.baseline_evaluation_report_output.write_text(
+        report_identity = evaluation_gate._publish_new_report(
+            report_target,
             json.dumps(payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
         )
+        publication_failures: list[str] = []
+        try:
+            if expert_receipt_path is not None:
+                fresh_expert_payload = validate_historical_expert_closure(
+                    expert_receipt_path,
+                    expert_artifact_path=args.expert_baseline_evaluation,
+                    repo_root=repo_root,
+                    expected_suite_path=args.evaluation_suite,
+                    expected_policy_path=args.evaluation_policy,
+                    expected_policy_identity=args.expert_policy_identity,
+                    expected_protocol="canonical",
+                    expected_registry_sha256=registry_hash,
+                )
+            else:
+                fresh_expert_payload = validate_evaluation_artifact(
+                    args.expert_baseline_evaluation,
+                    role="expert-baseline",
+                    expected_policy_identity=args.expert_policy_identity,
+                    **common,
+                ).as_dict()
+            if fresh_expert_payload != expert_payload:
+                publication_failures.append(
+                    "historical expert closure or expert evidence changed during "
+                    "baseline report publication"
+                )
+            fresh_base_payload = validate_evaluation_artifact(
+                args.base_baseline_evaluation,
+                role="base-baseline",
+                expected_model_id=args.model,
+                expected_model_revision=args.revision,
+                **common,
+            ).as_dict()
+            if fresh_base_payload != base.as_dict():
+                publication_failures.append(
+                    "Base evidence changed during baseline report publication"
+                )
+            if git_source_state(repo_root) != current_source:
+                publication_failures.append(
+                    "BC0 baseline source changed during report publication"
+                )
+        except Exception as exc:
+            publication_failures.append(
+                "baseline report post-publication re-attestation failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+        if publication_failures:
+            removed = evaluation_gate._unlink_created_report(
+                report_target,
+                report_identity,
+            )
+            message = "; ".join(publication_failures)
+            if not removed:
+                message += "; the newly created report could not be safely removed"
+            raise GateError(message)
     if not pretraining_gate_passed:
         raise GateError(
             "BC0 baseline closed-loop evaluation gate failed: "

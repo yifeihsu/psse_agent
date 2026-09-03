@@ -1005,11 +1005,100 @@ def summarize_three_phase_nlm_payload(tool_payload: Mapping[str, Any]) -> dict[s
         summary["suspected_phase"] = str(tool_payload.get("suspected_phase"))
     if isinstance(tool_payload.get("phase_scores"), Mapping):
         summary["phase_scores"] = tool_payload.get("phase_scores")
+    # Terminal-current evidence (per-phase branch currents): line differential
+    # separation, closed-form position/resistance, and unbalance-source ranking.
+    for key in (
+        "separation_ratio",
+        "max_line_differential_pu",
+        "differential_detected",
+        "differential_detection_floor_pu",
+        "scan_count",
+        "aggregation",
+        "per_scan_line_votes",
+        "per_scan_phase_votes",
+    ):
+        if tool_payload.get(key) is not None:
+            summary[key] = tool_payload.get(key)
+    summary["terminal_current_estimate"] = compact_terminal_current_estimate(
+        tool_payload.get("terminal_current_estimate")
+    )
+    localization = tool_payload.get("localization")
+    if isinstance(localization, Mapping):
+        summary["localization"] = {
+            "method": localization.get("method"),
+            "bus_1based": _maybe_int(localization.get("bus_1based")),
+            "phase_power_spread_rel": _maybe_float(localization.get("phase_power_spread_rel")),
+            "separation_ratio": _maybe_float(localization.get("separation_ratio")),
+            "significant": (
+                bool(localization.get("significant"))
+                if localization.get("significant") is not None
+                else None
+            ),
+            "significant_bus_count": _maybe_int(localization.get("significant_bus_count")),
+        }
+    source_buses = tool_payload.get("top_unbalance_source_buses")
+    if isinstance(source_buses, list):
+        summary["top_unbalance_source_buses"] = [
+            {
+                "rank": _maybe_int(item.get("rank")),
+                "bus": _maybe_int(item.get("bus")),
+                "phase_power_spread_rel": _maybe_float(item.get("phase_power_spread_rel")),
+                "negative_sequence_current_pu": _maybe_float(
+                    item.get("negative_sequence_current_pu")
+                ),
+            }
+            for item in source_buses[:TOPK_EVIDENCE]
+            if isinstance(item, Mapping)
+        ]
+    null_test = tool_payload.get("line_differential_null")
+    if isinstance(null_test, Mapping):
+        summary["line_differential_null"] = {
+            "max_line_differential_pu": _maybe_float(null_test.get("max_line_differential_pu")),
+            "differential_detection_floor_pu": _maybe_float(
+                null_test.get("differential_detection_floor_pu")
+            ),
+            "hif_like_differential_present": bool(
+                null_test.get("hif_like_differential_present", False)
+            ),
+        }
     if tool_payload.get("error"):
         summary["error"] = str(tool_payload["error"])
     if tool_payload.get("method"):
         summary["method"] = str(tool_payload["method"])
     return round_assistant_payload(prune_none(summary))
+
+
+def compact_terminal_current_estimate(payload: Any) -> dict[str, Any] | None:
+    """Model-visible summary of a two-terminal closed-form HIF estimate."""
+    if not isinstance(payload, Mapping):
+        return None
+    compact = {
+        "method": payload.get("method"),
+        "branch_row0": _maybe_int(payload.get("branch_row0")),
+        "dss_element": payload.get("dss_element"),
+        "phase": payload.get("phase"),
+        "phase_confident": (
+            bool(payload.get("phase_confident"))
+            if payload.get("phase_confident") is not None
+            else None
+        ),
+        "alpha_from_from_bus": _maybe_float(payload.get("alpha_from_from_bus")),
+        "alpha_interval": payload.get("alpha_interval"),
+        "r_hif_pu": _maybe_float(payload.get("r_hif_pu")),
+        "r_hif_pu_interval": payload.get("r_hif_pu_interval"),
+        "i_hif_pu": _maybe_float(payload.get("i_hif_pu")),
+        "fit_mismatch_pu": _maybe_float(payload.get("fit_mismatch_pu")),
+        "scan_count": _maybe_int(payload.get("scan_count")),
+        "agreeing_scan_count": _maybe_int(payload.get("agreeing_scan_count")),
+        "phase_votes": payload.get("phase_votes"),
+        "differential_detected": (
+            bool(payload.get("differential_detected"))
+            if payload.get("differential_detected") is not None
+            else None
+        ),
+        "line_rank": _maybe_int(payload.get("line_rank")),
+    }
+    return prune_none(compact)
 
 
 def summarize_hif_parameter_estimate_payload(tool_payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -1051,6 +1140,9 @@ def summarize_hif_parameter_estimate_payload(tool_payload: Mapping[str, Any]) ->
             else None,
         ),
         "parameter_identifiable": bool(tool_payload.get("parameter_identifiable", False)),
+        "terminal_current_estimate": compact_terminal_current_estimate(
+            tool_payload.get("terminal_current_estimate")
+        ),
         "estimated": {
             "alpha_from_from_bus": _maybe_float(estimated.get("alpha_from_from_bus")),
             "distance_percent_from_from_bus": _maybe_float(estimated.get("distance_percent_from_from_bus")),
@@ -1417,6 +1509,29 @@ def hydrate_tool_arguments(
                 if key not in hydrated and source.get(key) is not None:
                     hydrated[key] = source.get(key)
                     notes.append(f"hydrated_hif_{key}")
+            # Observable three-phase telemetry lets the NLM tool localize the
+            # faulted line and phase from the snapshot instead of a stored
+            # diagnostic; hydrate it from the bound context or the latest
+            # user payload that carries it.
+            for key in ("three_phase_voltages", "three_phase_branch_currents"):
+                if key in hydrated:
+                    continue
+                channel_source = (
+                    source
+                    if isinstance(source.get(key), list) and source.get(key)
+                    else latest_user_payload_with_keys(messages, (key,))
+                )
+                if isinstance(channel_source, dict) and isinstance(channel_source.get(key), list):
+                    hydrated[key] = channel_source[key]
+                    notes.append(f"hydrated_hif_nlm_{key}")
+                    if (
+                        key == "three_phase_branch_currents"
+                        and "branch_current_sigma_pu" not in hydrated
+                        and channel_source.get("branch_current_sigma_pu") is not None
+                    ):
+                        hydrated["branch_current_sigma_pu"] = channel_source[
+                            "branch_current_sigma_pu"
+                        ]
 
     if tool_name == "estimate_hif_location_magnitude_from_path":
         source = hidden_tool_context("hif_context")
@@ -1441,6 +1556,22 @@ def hydrate_tool_arguments(
             if isinstance(v_source, dict) and isinstance(v_source.get("three_phase_voltages"), list):
                 hydrated["three_phase_voltages"] = v_source["three_phase_voltages"]
                 notes.append("hydrated_hif_estimator_three_phase_voltages")
+        if "three_phase_branch_currents" not in hydrated:
+            i_source = (
+                source
+                if isinstance(source.get("three_phase_branch_currents"), list)
+                else latest_user_payload_with_keys(messages, ("three_phase_branch_currents",))
+            )
+            if isinstance(i_source, dict) and isinstance(
+                i_source.get("three_phase_branch_currents"), list
+            ):
+                hydrated["three_phase_branch_currents"] = i_source["three_phase_branch_currents"]
+                notes.append("hydrated_hif_estimator_three_phase_branch_currents")
+                if (
+                    "branch_current_sigma_pu" not in hydrated
+                    and i_source.get("branch_current_sigma_pu") is not None
+                ):
+                    hydrated["branch_current_sigma_pu"] = i_source["branch_current_sigma_pu"]
         if "candidate_branch_row0" not in hydrated:
             nlm_source = latest_tool_payload_with_keys(
                 messages,

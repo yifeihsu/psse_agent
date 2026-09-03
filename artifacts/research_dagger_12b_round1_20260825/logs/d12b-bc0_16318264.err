@@ -1,0 +1,14 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/scratch/yx3882/research_dagger_12b_20260824/src/research/train.py", line 23, in <module>
+    from .model import load_model_and_processor, lora_target_modules
+  File "/scratch/yx3882/research_dagger_12b_20260824/src/research/model.py", line 19, in <module>
+    from psse_env.dagger.release_factories import GemmaReleasePolicy, _ModelBundle
+  File "/scratch/yx3882/research_dagger_12b_20260824/src/psse_env/dagger/release_factories.py", line 50, in <module>
+    from psse_env.providers.matpower import MatpowerDeploymentProviders
+  File "/scratch/yx3882/research_dagger_12b_20260824/src/psse_env/providers/__init__.py", line 1, in <module>
+    from psse_env.providers.matpower import MatpowerDeploymentProviders, matpower_case_differ
+  File "/scratch/yx3882/research_dagger_12b_20260824/src/psse_env/providers/matpower.py", line 62, in <module>
+    from mcp_server.matpower_server import (  # noqa: E402  (repo-root package)
+ModuleNotFoundError: No module named 'mcp_server'

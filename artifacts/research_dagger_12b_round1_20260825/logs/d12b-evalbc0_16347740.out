@@ -1,0 +1,539 @@
+{
+  "adapter": "/scratch/yx3882/research_dagger_12b_20260824/out/bc0",
+  "episodes": 65,
+  "episodes_horizon_truncated": 15,
+  "episodes_terminated": 50,
+  "invalid_action_rate": 0.21067415730337077,
+  "invalid_actions": 150,
+  "label": "bc0-12b",
+  "per_episode": [
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 17,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 10,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 11,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": "GateError: Generated tool 'correct_topology' is not in the pinned registry",
+      "horizon_truncated": true,
+      "invalid_actions": 2,
+      "scenario_id": null,
+      "steps": 5,
+      "terminal_outcome": null
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 1,
+      "scenario_id": null,
+      "steps": 9,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 5,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 10,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 1,
+      "scenario_id": null,
+      "steps": 8,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 1,
+      "scenario_id": null,
+      "steps": 8,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 2,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": "GateError: Generated tool 'correct_topology' is not in the pinned registry",
+      "horizon_truncated": true,
+      "invalid_actions": 2,
+      "scenario_id": null,
+      "steps": 5,
+      "terminal_outcome": null
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 8,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 1,
+      "scenario_id": null,
+      "steps": 9,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 1,
+      "scenario_id": null,
+      "steps": 8,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": "GateError: Generated tool 'correct_topology' is not in the pinned registry",
+      "horizon_truncated": true,
+      "invalid_actions": 5,
+      "scenario_id": null,
+      "steps": 14,
+      "terminal_outcome": null
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 8,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 18,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 12,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 8,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 8,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 2,
+      "terminal_outcome": "resolved"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 2,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 11,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 12,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 11,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 1,
+      "scenario_id": null,
+      "steps": 5,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 2,
+      "terminal_outcome": "resolved"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 8,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 8,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 10,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 2,
+      "terminal_outcome": "resolved"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": true,
+      "invalid_actions": 11,
+      "scenario_id": null,
+      "steps": 24,
+      "terminal_outcome": null
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 2,
+      "terminal_outcome": "resolved"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    },
+    {
+      "first_error": null,
+      "horizon_truncated": false,
+      "invalid_actions": 0,
+      "scenario_id": null,
+      "steps": 7,
+      "terminal_outcome": "operator_escalation"
+    }
+  ],
+  "release_evidence": false,
+  "terminal_outcomes": {
+    "horizon_truncated": 15,
+    "operator_escalation": 46,
+    "resolved": 4
+  },
+  "total_steps": 712
+}
+stage eval_bc0 done

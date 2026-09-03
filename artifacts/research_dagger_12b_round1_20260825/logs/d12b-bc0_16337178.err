@@ -1,0 +1,70 @@
+<frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+<frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+/scratch/yx3882/.conda/envs/unsloth_sft/lib/python3.12/site-packages/torchao/dtypes/uintx/__init__.py:1: DeprecationWarning: Importing from torchao.dtypes.uintx.dyn_int8_act_int4_wei_cpu_layout is deprecated. Please use 'from torchao.prototype.dtypes import Int8DynamicActInt4WeightCPULayout' instead. This import path will be removed in a future release of torchao. See https://github.com/pytorch/ao/issues/2752 for more details.
+  from .dyn_int8_act_int4_wei_cpu_layout import (
+/scratch/yx3882/.conda/envs/unsloth_sft/lib/python3.12/site-packages/torchao/dtypes/uintx/__init__.py:22: DeprecationWarning: Importing from torchao.dtypes.uintx.uintx_layout is deprecated. Please use 'from torchao.prototype.dtypes import UintxLayout, UintxTensor' instead. This import path will be removed in a future release of torchao. See https://github.com/pytorch/ao/issues/2752 for more details.
+  from .uintx_layout import (
+/scratch/yx3882/.conda/envs/unsloth_sft/lib/python3.12/site-packages/torchao/dtypes/__init__.py:23: DeprecationWarning: Importing BlockSparseLayout from torchao.dtypes is deprecated. Please use 'from torchao.prototype.dtypes import BlockSparseLayout' instead. This import path will be removed in a future torchao release. Please check issue: https://github.com/pytorch/ao/issues/2752 for more details. 
+  from .uintx.block_sparse_layout import BlockSparseLayout
+/scratch/yx3882/.conda/envs/unsloth_sft/lib/python3.12/site-packages/requests/__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+You are using a model of type `gemma4_unified` to instantiate a model of type ``. This may be expected if you are loading a checkpoint that shares a subset of the architecture (e.g., loading a `sam2_video` checkpoint into `Sam2Model`), but is otherwise not supported and can yield errors. Please verify that the checkpoint is compatible with the model you are instantiating.
+Traceback (most recent call last):
+  File "/scratch/yx3882/.conda/envs/unsloth_sft/lib/python3.12/site-packages/transformers/models/auto/configuration_auto.py", line 1514, in from_pretrained
+    config_class = CONFIG_MAPPING[config_dict["model_type"]]
+                   ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/yx3882/.conda/envs/unsloth_sft/lib/python3.12/site-packages/transformers/models/auto/configuration_auto.py", line 1214, in __getitem__
+    raise KeyError(key)
+KeyError: 'gemma4_unified'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/scratch/yx3882/research_dagger_12b_20260824/src/research/model.py", line 107, in load_model_and_processor
+    model = AutoModelForImageTextToText.from_pretrained(str(snapshot), **kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/yx3882/.conda/envs/unsloth_sft/lib/python3.12/site-packages/transformers/models/auto/auto_factory.py", line 329, in from_pretrained
+    config, kwargs = AutoConfig.from_pretrained(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/yx3882/.conda/envs/unsloth_sft/lib/python3.12/site-packages/transformers/models/auto/configuration_auto.py", line 1516, in from_pretrained
+    raise ValueError(
+ValueError: The checkpoint you are trying to load has model type `gemma4_unified` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.
+
+You can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/scratch/yx3882/.conda/envs/unsloth_sft/lib/python3.12/site-packages/transformers/models/auto/configuration_auto.py", line 1514, in from_pretrained
+    config_class = CONFIG_MAPPING[config_dict["model_type"]]
+                   ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/yx3882/.conda/envs/unsloth_sft/lib/python3.12/site-packages/transformers/models/auto/configuration_auto.py", line 1214, in __getitem__
+    raise KeyError(key)
+KeyError: 'gemma4_unified'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/scratch/yx3882/research_dagger_12b_20260824/src/research/train.py", line 278, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/scratch/yx3882/research_dagger_12b_20260824/src/research/train.py", line 259, in main
+    summary = train(
+              ^^^^^^
+  File "/scratch/yx3882/research_dagger_12b_20260824/src/research/train.py", line 144, in train
+    model, processor, resolved_id, resolved_revision = load_model_and_processor(
+                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/yx3882/research_dagger_12b_20260824/src/research/model.py", line 113, in load_model_and_processor
+    model = AutoModelForCausalLM.from_pretrained(str(snapshot), **kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/yx3882/.conda/envs/unsloth_sft/lib/python3.12/site-packages/transformers/models/auto/auto_factory.py", line 329, in from_pretrained
+    config, kwargs = AutoConfig.from_pretrained(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/yx3882/.conda/envs/unsloth_sft/lib/python3.12/site-packages/transformers/models/auto/configuration_auto.py", line 1516, in from_pretrained
+    raise ValueError(
+ValueError: The checkpoint you are trying to load has model type `gemma4_unified` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.
+
+You can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

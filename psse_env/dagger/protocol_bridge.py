@@ -503,7 +503,8 @@ def canonical_to_internal_action(action: Mapping[str, Any] | str) -> dict[str, A
         # model-emitted topology correction failed the exact-signature support
         # check (``correction_not_supported_by_current_context``): measured on
         # the 65-scenario suite, 195/195 correctly-targeted topology actions
-        # across four checkpoints were rejected.
+        # across four checkpoints were rejected.  (Both lines made this fix;
+        # the explicit integer cast is kept.)
         if arguments.get("line_index1") is not None:
             arguments["line_index"] = int(arguments.pop("line_index1"))
         desired = arguments.pop("desired_status", None)

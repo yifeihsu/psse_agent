@@ -1,0 +1,99 @@
+==============================================================================
+### dagger_iter1_r0_9826886a46fd_step17__order126__replica0
+### episode r0_9826886a46fd_episode126 — 20 rows, quarantined at step 17
+==============================================================================
+
+--- THE COMMIT BEING AUDITED ---
+preferred_action = {"arguments": {"candidate_state_id": "r0_9826886a46fd_episode126:s3"}, "tool": "commit_state"}
+executed_action  = {"arguments": {"candidate_state_id": "r0_9826886a46fd_episode126:s3"}, "tool": "commit_state"}
+executed_by      = model   state_class = invalid_precondition_recovery
+lifecycle=VERIFIED_CANDIDATE status=verified
+no_material_anomaly_remaining = False
+remaining_anomaly_score       = 1.3738856356385374
+
+--- CANDIDATE UNDER COMMIT (what correction created it) ---
+{}
+
+--- ACCEPTED CORRECTIONS ALREADY ON THE LEDGER AT THIS STEP ---
+count = 2
+  [0] parent=r0_9826886a46fd_episode126:s0 -> r0_9826886a46fd_episode126:s1
+      source={"args": {"state_id": "r0_9826886a46fd_episode126:s0", "suspect_group": [92]}, "tool": "correct_measurements"}
+  [1] parent=r0_9826886a46fd_episode126:s1 -> r0_9826886a46fd_episode126:s2
+      source={"args": {"state_id": "r0_9826886a46fd_episode126:s1", "suspect_group": [97]}, "tool": "correct_measurements"}
+
+--- OFFLINE TEACHER TARGET AUDIT (private) ---
+{
+ "action_class": "commit",
+ "checks": {
+  "candidate_exists": true,
+  "candidate_source_truth_evidence_complete": true,
+  "candidate_truth_safe_to_commit": false,
+  "candidate_verified": true,
+  "observable_evidence_gate_passed": true
+ },
+ "contract": "dagger1_offline_teacher_target_truth_audit_v2",
+ "passed": false,
+ "reason_codes": [
+  "candidate_source_target_outside_remaining_truth"
+ ]
+}
+
+--- PRIOR CORRECTION ACTIONS IN THIS EPISODE ---
+  step   2 correct_measurements  {"suspect_group": [92]}
+  step   6 correct_measurements  {"suspect_group": [97]}
+  step   8 correct_measurements  {"suspect_group": [97]}
+  step  11 correct_measurements  {"suspect_group": [97]}
+  step  15 correct_measurements  {"suspect_group": [88, 92, 97]}
+
+
+==============================================================================
+### dagger_iter1_r0_eab044f4881b_step21__order143__replica0
+### episode r0_eab044f4881b_episode143 — 24 rows, quarantined at step 21
+==============================================================================
+
+--- THE COMMIT BEING AUDITED ---
+preferred_action = {"arguments": {"candidate_state_id": "r0_eab044f4881b_episode143:s4"}, "tool": "commit_state"}
+executed_action  = {"arguments": {"candidate_state_id": "r0_eab044f4881b_episode143:s4"}, "tool": "commit_state"}
+executed_by      = expert   state_class = invalid_precondition_recovery
+lifecycle=VERIFIED_CANDIDATE status=verified
+no_material_anomaly_remaining = False
+remaining_anomaly_score       = 1.1892710027536795
+
+--- CANDIDATE UNDER COMMIT (what correction created it) ---
+{}
+
+--- ACCEPTED CORRECTIONS ALREADY ON THE LEDGER AT THIS STEP ---
+count = 3
+  [0] parent=r0_eab044f4881b_episode143:s0 -> r0_eab044f4881b_episode143:s1
+      source={"args": {"state_id": "r0_eab044f4881b_episode143:s0", "suspect_group": [17]}, "tool": "correct_measurements"}
+  [1] parent=r0_eab044f4881b_episode143:s1 -> r0_eab044f4881b_episode143:s2
+      source={"args": {"state_id": "r0_eab044f4881b_episode143:s1", "suspect_group": [27]}, "tool": "correct_measurements"}
+  [2] parent=r0_eab044f4881b_episode143:s2 -> r0_eab044f4881b_episode143:s3
+      source={"args": {"state_id": "r0_eab044f4881b_episode143:s2", "suspect_group": [26]}, "tool": "correct_measurements"}
+
+--- OFFLINE TEACHER TARGET AUDIT (private) ---
+{
+ "action_class": "commit",
+ "checks": {
+  "candidate_exists": true,
+  "candidate_source_truth_evidence_complete": true,
+  "candidate_truth_safe_to_commit": false,
+  "candidate_verified": true,
+  "observable_evidence_gate_passed": true
+ },
+ "contract": "dagger1_offline_teacher_target_truth_audit_v2",
+ "passed": false,
+ "reason_codes": [
+  "candidate_source_target_outside_remaining_truth"
+ ]
+}
+
+--- PRIOR CORRECTION ACTIONS IN THIS EPISODE ---
+  step   2 correct_measurements  {"suspect_group": [17]}
+  step   6 correct_measurements  {"suspect_group": [27]}
+  step   8 correct_measurements  {"suspect_group": [27]}
+  step  11 correct_measurements  {"suspect_group": [27]}
+  step  15 correct_measurements  {"suspect_group": [26]}
+  step  19 correct_measurements  {"suspect_group": [17, 19, 26, 27]}
+
+

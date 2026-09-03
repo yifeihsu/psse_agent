@@ -110,11 +110,15 @@ class DiagnosticsExpert:
 
         hif_signal = bool(hif_codes)
         unbalance_signal = bool(unbalance_codes)
+        current_channel_available = "three_phase_branch_currents" in available
         nlm_channel_available = bool(
             "nlm_diagnostic" in available
+            or current_channel_available
             or (unbalance_signal and "three_phase_voltages" in available)
         )
-        hif_branch = self._nlm_top_branch(completed.get(RUN_THREE_PHASE_NLM_FROM_PATH))
+        nlm_metrics = completed.get(RUN_THREE_PHASE_NLM_FROM_PATH)
+        hif_branch = self._nlm_top_branch(nlm_metrics)
+        hif_phase = self._nlm_suspected_phase(nlm_metrics)
         if (hif_signal or unbalance_signal) and nlm_channel_available and (
             RUN_THREE_PHASE_NLM_FROM_PATH not in completed
         ):
@@ -128,7 +132,11 @@ class DiagnosticsExpert:
                         (
                             "nlm_telemetry_available"
                             if "nlm_diagnostic" in available
-                            else "three_phase_voltage_telemetry_available"
+                            else (
+                                "three_phase_branch_current_telemetry_available"
+                                if current_channel_available
+                                else "three_phase_voltage_telemetry_available"
+                            )
                         ),
                         *evidence_codes,
                     ],
@@ -142,6 +150,10 @@ class DiagnosticsExpert:
                 "state_id": active_id,
                 "candidate_branch_row0": int(hif_branch),
             }
+            # An observable per-phase differential current names the faulted
+            # phase; passing it bounds the estimator search to that phase.
+            if hif_phase is not None:
+                follow_up_arguments["candidate_phase"] = hif_phase
             if (
                 "hif_scan_window" in available
                 and ESTIMATE_HIF_MULTISCAN_FROM_PATH not in completed
@@ -266,6 +278,20 @@ class DiagnosticsExpert:
                     observed["_error_code"] = str(error_code)
                 completed[tool] = observed
         return completed
+
+    @staticmethod
+    def _nlm_suspected_phase(metrics: Mapping[str, Any] | None) -> str | None:
+        """Faulted phase reported by terminal-current NLM output, if any."""
+        if not isinstance(metrics, Mapping):
+            return None
+        summary = metrics.get("nlm_summary")
+        if not isinstance(summary, Mapping):
+            return None
+        phase = summary.get("suspected_phase")
+        if phase is None:
+            return None
+        text = str(phase).strip().upper()
+        return text if text in {"A", "B", "C"} else None
 
     @staticmethod
     def _nlm_top_branch(metrics: Mapping[str, Any] | None) -> int | None:

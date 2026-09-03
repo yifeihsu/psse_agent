@@ -1,0 +1,1323 @@
+/scratch/yx3882/.conda/envs/gemma4_research_5104/lib/python3.12/site-packages/fastmcp/server/auth/providers/jwt.py:10: AuthlibDeprecationWarning: authlib.jose module is deprecated, please use joserfc instead.
+It will be compatible before version 2.0.0.
+  from authlib.jose import JsonWebKey, JsonWebToken
+<frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+<frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+/scratch/yx3882/.conda/envs/gemma4_research_5104/lib/python3.12/site-packages/torch/jit/_script.py:362: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+  warnings.warn(
+Loading weights:   0%|          | 0/677 [00:00<?, ?it/s]Loading weights:   0%|          | 3/677 [00:00<01:24,  7.99it/s]Loading weights:   3%|▎         | 21/677 [00:00<00:12, 52.78it/s]Loading weights:   6%|▌         | 41/677 [00:00<00:07, 82.18it/s]Loading weights:   9%|▉         | 62/677 [00:00<00:05, 110.80it/s]Loading weights:  12%|█▏        | 78/677 [00:00<00:05, 117.86it/s]Loading weights:  15%|█▍        | 100/677 [00:00<00:04, 143.58it/s]Loading weights:  17%|█▋        | 118/677 [00:01<00:03, 147.03it/s]Loading weights:  20%|██        | 138/677 [00:01<00:03, 161.12it/s]Loading weights:  23%|██▎       | 159/677 [00:01<00:03, 169.34it/s]Loading weights:  26%|██▌       | 177/677 [00:01<00:03, 161.65it/s]Loading weights:  30%|██▉       | 200/677 [00:01<00:02, 174.26it/s]Loading weights:  32%|███▏      | 218/677 [00:01<00:02, 168.10it/s]Loading weights:  36%|███▌      | 242/677 [00:01<00:02, 180.38it/s]Loading weights:  39%|███▊      | 261/677 [00:01<00:02, 172.08it/s]Loading weights:  42%|████▏     | 283/677 [00:02<00:02, 178.27it/s]Loading weights:  44%|████▍     | 301/677 [00:02<00:02, 170.40it/s]Loading weights:  48%|████▊     | 325/677 [00:02<00:01, 181.65it/s]Loading weights:  51%|█████     | 344/677 [00:02<00:01, 173.81it/s]Loading weights:  54%|█████▍    | 366/677 [00:02<00:01, 179.48it/s]Loading weights:  57%|█████▋    | 385/677 [00:02<00:01, 175.24it/s]Loading weights:  60%|██████    | 408/677 [00:02<00:01, 182.19it/s]Loading weights:  63%|██████▎   | 427/677 [00:02<00:01, 173.56it/s]Loading weights:  66%|██████▋   | 449/677 [00:02<00:01, 179.11it/s]Loading weights:  69%|██████▉   | 467/677 [00:03<00:01, 171.72it/s]Loading weights:  73%|███████▎  | 491/677 [00:03<00:01, 182.59it/s]Loading weights:  75%|███████▌  | 510/677 [00:03<00:00, 173.50it/s]Loading weights:  79%|███████▊  | 532/677 [00:03<00:00, 179.80it/s]Loading weights:  81%|████████▏ | 551/677 [00:03<00:00, 174.97it/s]Loading weights:  85%|████████▍ | 574/677 [00:03<00:00, 182.92it/s]Loading weights:  88%|████████▊ | 593/677 [00:03<00:00, 173.82it/s]Loading weights:  91%|█████████ | 615/677 [00:03<00:00, 178.65it/s]Loading weights:  94%|█████████▎| 633/677 [00:04<00:00, 171.47it/s]Loading weights:  97%|█████████▋| 657/677 [00:04<00:00, 183.60it/s]Loading weights: 100%|██████████| 677/677 [00:04<00:00, 161.62it/s]
+/scratch/yx3882/.conda/envs/gemma4_research_5104/lib/python3.12/site-packages/transformers/processing_utils.py:928: DeprecationWarning: __array__ implementation doesn't accept a copy keyword, so passing copy=False failed. __array__ must implement 'dtype' and 'copy' keyword arguments. To learn more, see the migration guide https://numpy.org/devdocs/numpy_2_0_migration_guide.html#adapting-to-changes-in-the-copy-keyword
+  tokenizer_input = np.array(tokenizer_input)
+[transformers] The following generation flags are not valid and may be ignored: ['temperature']. Set `TRANSFORMERS_VERBOSITY=info` for more details.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 4.357583281584084, "episode_key": "standard_success:r0_04289eba5f8e:0", "episode_ordinal": 1, "evaluator_error": null, "event": "episode_complete", "policy_steps": 2, "terminal": true, "terminal_outcome": "resolved", "total_episodes": 21}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 19.172858733683825, "episode_key": "standard_success:r0_0997137d1521:0", "episode_ordinal": 2, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 21}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 17.723920240066946, "episode_key": "standard_success:r0_14bf9b268327:0", "episode_ordinal": 3, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 21}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 17.827672825194895, "episode_key": "standard_success:r0_1653da3f7541:0", "episode_ordinal": 4, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 21}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 16.88100046105683, "episode_key": "standard_success:r0_1c330182887d:0", "episode_ordinal": 5, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 21}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 30.899460058193654, "episode_key": "standard_success:r0_1e06979fa21e:0", "episode_ordinal": 6, "evaluator_error": null, "event": "episode_complete", "policy_steps": 12, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 21}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 65.2671702420339, "episode_key": "standard_success:r0_286a096a6eb8:0", "episode_ordinal": 7, "evaluator_error": null, "event": "episode_complete", "policy_steps": 24, "terminal": false, "terminal_outcome": null, "total_episodes": 21}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 87.225456032902, "episode_key": "standard_success:r0_31345ad90225:0", "episode_ordinal": 8, "evaluator_error": null, "event": "episode_complete", "policy_steps": 22, "terminal": false, "terminal_outcome": null, "total_episodes": 21}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 64.8935731081292, "episode_key": "standard_success:r0_33817d90f478:0", "episode_ordinal": 9, "evaluator_error": null, "event": "episode_complete", "policy_steps": 24, "terminal": false, "terminal_outcome": null, "total_episodes": 21}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 36.7628211309202, "episode_key": "standard_success:r0_417bba5c46e0:0", "episode_ordinal": 10, "evaluator_error": null, "event": "episode_complete", "policy_steps": 13, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 21}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 2.93791290698573, "episode_key": "standard_success:r0_41da001b5391:0", "episode_ordinal": 11, "evaluator_error": null, "event": "episode_complete", "policy_steps": 2, "terminal": true, "terminal_outcome": "resolved", "total_episodes": 21}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 44.69558686390519, "episode_key": "standard_success:r0_5bc1812f339b:0", "episode_ordinal": 12, "evaluator_error": null, "event": "episode_complete", "policy_steps": 17, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 21}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 19.741241163108498, "episode_key": "standard_success:r0_65fa79250c66:0", "episode_ordinal": 13, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 21}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 19.120190288871527, "episode_key": "standard_success:r0_7197ea2319d2:0", "episode_ordinal": 14, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 21}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 18.628063507843763, "episode_key": "standard_success:r0_788bef412591:0", "episode_ordinal": 15, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 21}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 31.290944553911686, "episode_key": "standard_success:r0_7d429e6adba9:0", "episode_ordinal": 16, "evaluator_error": null, "event": "episode_complete", "policy_steps": 11, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 21}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 3.133550636935979, "episode_key": "standard_success:r0_b7ecb172c6f3:0", "episode_ordinal": 17, "evaluator_error": null, "event": "episode_complete", "policy_steps": 2, "terminal": true, "terminal_outcome": "resolved", "total_episodes": 21}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 15.123307197820395, "episode_key": "standard_success:r0_beddcf84bee5:0", "episode_ordinal": 18, "evaluator_error": null, "event": "episode_complete", "policy_steps": 5, "terminal": false, "terminal_outcome": null, "total_episodes": 21}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 3.111307826358825, "episode_key": "standard_success:r0_cb23b18dd10a:0", "episode_ordinal": 19, "evaluator_error": null, "event": "episode_complete", "policy_steps": 2, "terminal": true, "terminal_outcome": "resolved", "total_episodes": 21}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 19.300589109770954, "episode_key": "standard_success:r0_eae245124c89:0", "episode_ordinal": 20, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 21}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 19.50744826113805, "episode_key": "standard_success:r0_efa6598cc9de:0", "episode_ordinal": 21, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 21}
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+/scratch/yx3882/.conda/envs/gemma4_research_5104/lib/python3.12/site-packages/fastmcp/server/auth/providers/jwt.py:10: AuthlibDeprecationWarning: authlib.jose module is deprecated, please use joserfc instead.
+It will be compatible before version 2.0.0.
+  from authlib.jose import JsonWebKey, JsonWebToken
+<frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+<frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+/scratch/yx3882/.conda/envs/gemma4_research_5104/lib/python3.12/site-packages/torch/jit/_script.py:362: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+  warnings.warn(
+Loading weights:   0%|          | 0/677 [00:00<?, ?it/s]Loading weights:   0%|          | 3/677 [00:00<01:22,  8.15it/s]Loading weights:   3%|▎         | 21/677 [00:00<00:12, 53.71it/s]Loading weights:   6%|▌         | 42/677 [00:00<00:06, 95.50it/s]Loading weights:   9%|▉         | 62/677 [00:00<00:05, 122.97it/s]Loading weights:  12%|█▏        | 79/677 [00:00<00:04, 130.52it/s]Loading weights:  15%|█▍        | 100/677 [00:00<00:03, 152.08it/s]Loading weights:  17%|█▋        | 118/677 [00:01<00:03, 153.66it/s]Loading weights:  21%|██        | 139/677 [00:01<00:03, 167.27it/s]Loading weights:  23%|██▎       | 159/677 [00:01<00:02, 174.30it/s]Loading weights:  26%|██▋       | 178/677 [00:01<00:02, 168.21it/s]Loading weights:  30%|██▉       | 200/677 [00:01<00:02, 177.12it/s]Loading weights:  32%|███▏      | 219/677 [00:01<00:02, 173.35it/s]Loading weights:  36%|███▌      | 242/677 [00:01<00:02, 182.33it/s]Loading weights:  39%|███▊      | 261/677 [00:01<00:02, 173.93it/s]Loading weights:  42%|████▏     | 283/677 [00:01<00:02, 180.33it/s]Loading weights:  45%|████▍     | 302/677 [00:02<00:02, 175.31it/s]Loading weights:  48%|████▊     | 325/677 [00:02<00:01, 183.28it/s]Loading weights:  51%|█████     | 344/677 [00:02<00:01, 175.51it/s]Loading weights:  54%|█████▍    | 366/677 [00:02<00:01, 181.42it/s]Loading weights:  57%|█████▋    | 385/677 [00:02<00:01, 177.19it/s]Loading weights:  60%|██████    | 408/677 [00:02<00:01, 184.34it/s]Loading weights:  63%|██████▎   | 427/677 [00:02<00:01, 175.64it/s]Loading weights:  66%|██████▋   | 449/677 [00:02<00:01, 181.24it/s]Loading weights:  69%|██████▉   | 468/677 [00:02<00:01, 176.38it/s]Loading weights:  73%|███████▎  | 491/677 [00:03<00:01, 183.97it/s]Loading weights:  75%|███████▌  | 510/677 [00:03<00:00, 175.14it/s]Loading weights:  79%|███████▊  | 532/677 [00:03<00:00, 181.71it/s]Loading weights:  81%|████████▏ | 551/677 [00:03<00:00, 176.87it/s]Loading weights:  85%|████████▍ | 574/677 [00:03<00:00, 185.01it/s]Loading weights:  88%|████████▊ | 593/677 [00:03<00:00, 175.89it/s]Loading weights:  91%|█████████ | 615/677 [00:03<00:00, 180.96it/s]Loading weights:  94%|█████████▎| 634/677 [00:03<00:00, 176.30it/s]Loading weights:  97%|█████████▋| 657/677 [00:04<00:00, 182.36it/s]Loading weights: 100%|██████████| 677/677 [00:04<00:00, 165.61it/s]
+/scratch/yx3882/.conda/envs/gemma4_research_5104/lib/python3.12/site-packages/transformers/processing_utils.py:928: DeprecationWarning: __array__ implementation doesn't accept a copy keyword, so passing copy=False failed. __array__ must implement 'dtype' and 'copy' keyword arguments. To learn more, see the migration guide https://numpy.org/devdocs/numpy_2_0_migration_guide.html#adapting-to-changes-in-the-copy-keyword
+  tokenizer_input = np.array(tokenizer_input)
+[transformers] The following generation flags are not valid and may be ignored: ['temperature']. Set `TRANSFORMERS_VERBOSITY=info` for more details.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 18.843646864406765, "episode_key": "standard_success:r0_22acc2fee54c:0", "episode_ordinal": 1, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 33.09039018768817, "episode_key": "standard_success:r0_27a69fafacd6:0", "episode_ordinal": 2, "evaluator_error": null, "event": "episode_complete", "policy_steps": 13, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 30.57811179710552, "episode_key": "standard_success:r0_394bc20ee704:0", "episode_ordinal": 3, "evaluator_error": null, "event": "episode_complete", "policy_steps": 12, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 16.76777945458889, "episode_key": "standard_success:r0_3edd6829ccdc:0", "episode_ordinal": 4, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 18.92499776976183, "episode_key": "standard_success:r0_4cb1060e5ac8:0", "episode_ordinal": 5, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 17.565330186858773, "episode_key": "standard_success:r0_5ae60ed1104f:0", "episode_ordinal": 6, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 65.4540713201277, "episode_key": "standard_success:r0_7396ad8203c4:0", "episode_ordinal": 7, "evaluator_error": null, "event": "episode_complete", "policy_steps": 24, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 15.357786261010915, "episode_key": "standard_success:r0_9158c3e37cfe:0", "episode_ordinal": 8, "evaluator_error": null, "event": "episode_complete", "policy_steps": 5, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 36.06331798201427, "episode_key": "standard_success:r0_9167e7dae6cf:0", "episode_ordinal": 9, "evaluator_error": null, "event": "episode_complete", "policy_steps": 14, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 31.55009188456461, "episode_key": "standard_success:r0_96de923ac80e:0", "episode_ordinal": 10, "evaluator_error": null, "event": "episode_complete", "policy_steps": 12, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 104.81500809080899, "episode_key": "standard_success:r0_99ef0cb1e159:0", "episode_ordinal": 11, "evaluator_error": null, "event": "episode_complete", "policy_steps": 23, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 17.319547725841403, "episode_key": "standard_success:r0_9dd257838676:0", "episode_ordinal": 12, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 18.37464504316449, "episode_key": "standard_success:r0_ac26b3d3c722:0", "episode_ordinal": 13, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 27.101372716017067, "episode_key": "standard_success:r0_e6919061f18b:0", "episode_ordinal": 14, "evaluator_error": null, "event": "episode_complete", "policy_steps": 11, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 22.436915771104395, "episode_key": "standard_success:r0_e914f2c09d6e:0", "episode_ordinal": 15, "evaluator_error": null, "event": "episode_complete", "policy_steps": 8, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+/scratch/yx3882/.conda/envs/gemma4_research_5104/lib/python3.12/site-packages/fastmcp/server/auth/providers/jwt.py:10: AuthlibDeprecationWarning: authlib.jose module is deprecated, please use joserfc instead.
+It will be compatible before version 2.0.0.
+  from authlib.jose import JsonWebKey, JsonWebToken
+<frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+<frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+/scratch/yx3882/.conda/envs/gemma4_research_5104/lib/python3.12/site-packages/torch/jit/_script.py:362: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+  warnings.warn(
+Loading weights:   0%|          | 0/677 [00:00<?, ?it/s]Loading weights:   0%|          | 3/677 [00:00<01:23,  8.07it/s]Loading weights:   3%|▎         | 21/677 [00:00<00:12, 53.35it/s]Loading weights:   6%|▌         | 42/677 [00:00<00:06, 95.00it/s]Loading weights:   9%|▉         | 62/677 [00:00<00:05, 122.53it/s]Loading weights:  12%|█▏        | 79/677 [00:00<00:04, 130.32it/s]Loading weights:  15%|█▍        | 100/677 [00:00<00:03, 152.04it/s]Loading weights:  17%|█▋        | 118/677 [00:01<00:03, 153.67it/s]Loading weights:  21%|██        | 139/677 [00:01<00:03, 167.34it/s]Loading weights:  23%|██▎       | 159/677 [00:01<00:02, 174.39it/s]Loading weights:  26%|██▋       | 178/677 [00:01<00:02, 168.27it/s]Loading weights:  30%|██▉       | 200/677 [00:01<00:02, 177.24it/s]Loading weights:  32%|███▏      | 219/677 [00:01<00:02, 173.54it/s]Loading weights:  36%|███▌      | 242/677 [00:01<00:02, 182.49it/s]Loading weights:  39%|███▊      | 261/677 [00:01<00:02, 174.14it/s]Loading weights:  42%|████▏     | 283/677 [00:01<00:02, 180.39it/s]Loading weights:  45%|████▍     | 302/677 [00:02<00:02, 175.42it/s]Loading weights:  48%|████▊     | 325/677 [00:02<00:01, 183.47it/s]Loading weights:  51%|█████     | 344/677 [00:02<00:01, 175.69it/s]Loading weights:  54%|█████▍    | 366/677 [00:02<00:01, 181.69it/s]Loading weights:  57%|█████▋    | 385/677 [00:02<00:01, 177.51it/s]Loading weights:  60%|██████    | 408/677 [00:02<00:01, 184.52it/s]Loading weights:  63%|██████▎   | 427/677 [00:02<00:01, 176.02it/s]Loading weights:  66%|██████▋   | 449/677 [00:02<00:01, 181.65it/s]Loading weights:  69%|██████▉   | 468/677 [00:02<00:01, 176.75it/s]Loading weights:  73%|███████▎  | 491/677 [00:03<00:01, 184.42it/s]Loading weights:  75%|███████▌  | 510/677 [00:03<00:00, 175.48it/s]Loading weights:  79%|███████▊  | 532/677 [00:03<00:00, 182.07it/s]Loading weights:  81%|████████▏ | 551/677 [00:03<00:00, 177.23it/s]Loading weights:  85%|████████▍ | 574/677 [00:03<00:00, 185.21it/s]Loading weights:  88%|████████▊ | 593/677 [00:03<00:00, 176.01it/s]Loading weights:  91%|█████████ | 615/677 [00:03<00:00, 181.15it/s]Loading weights:  94%|█████████▎| 634/677 [00:03<00:00, 176.49it/s]Loading weights:  97%|█████████▋| 657/677 [00:04<00:00, 185.23it/s]Loading weights: 100%|██████████| 677/677 [00:04<00:00, 165.89it/s]
+/scratch/yx3882/.conda/envs/gemma4_research_5104/lib/python3.12/site-packages/transformers/processing_utils.py:928: DeprecationWarning: __array__ implementation doesn't accept a copy keyword, so passing copy=False failed. __array__ must implement 'dtype' and 'copy' keyword arguments. To learn more, see the migration guide https://numpy.org/devdocs/numpy_2_0_migration_guide.html#adapting-to-changes-in-the-copy-keyword
+  tokenizer_input = np.array(tokenizer_input)
+[transformers] The following generation flags are not valid and may be ignored: ['temperature']. Set `TRANSFORMERS_VERBOSITY=info` for more details.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 19.907743229996413, "episode_key": "standard_success:r0_22acc2fee54c:0", "episode_ordinal": 1, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 59.09527661791071, "episode_key": "standard_success:r0_27a69fafacd6:0", "episode_ordinal": 2, "evaluator_error": null, "event": "episode_complete", "policy_steps": 22, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 65.7103917519562, "episode_key": "standard_success:r0_394bc20ee704:0", "episode_ordinal": 3, "evaluator_error": null, "event": "episode_complete", "policy_steps": 24, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 16.35334910918027, "episode_key": "standard_success:r0_3edd6829ccdc:0", "episode_ordinal": 4, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 18.540838304441422, "episode_key": "standard_success:r0_4cb1060e5ac8:0", "episode_ordinal": 5, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 17.456096549052745, "episode_key": "standard_success:r0_5ae60ed1104f:0", "episode_ordinal": 6, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 66.1119064996019, "episode_key": "standard_success:r0_7396ad8203c4:0", "episode_ordinal": 7, "evaluator_error": null, "event": "episode_complete", "policy_steps": 24, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 54.49393989704549, "episode_key": "standard_success:r0_9158c3e37cfe:0", "episode_ordinal": 8, "evaluator_error": null, "event": "episode_complete", "policy_steps": 19, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 29.021459537092596, "episode_key": "standard_success:r0_9167e7dae6cf:0", "episode_ordinal": 9, "evaluator_error": null, "event": "episode_complete", "policy_steps": 12, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 27.859072556253523, "episode_key": "standard_success:r0_96de923ac80e:0", "episode_ordinal": 10, "evaluator_error": null, "event": "episode_complete", "policy_steps": 11, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 67.48849823605269, "episode_key": "standard_success:r0_99ef0cb1e159:0", "episode_ordinal": 11, "evaluator_error": null, "event": "episode_complete", "policy_steps": 24, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 17.25773363094777, "episode_key": "standard_success:r0_9dd257838676:0", "episode_ordinal": 12, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 18.697845808696, "episode_key": "standard_success:r0_ac26b3d3c722:0", "episode_ordinal": 13, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 35.83936599968001, "episode_key": "standard_success:r0_e6919061f18b:0", "episode_ordinal": 14, "evaluator_error": null, "event": "episode_complete", "policy_steps": 13, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 59.45822771685198, "episode_key": "standard_success:r0_e914f2c09d6e:0", "episode_ordinal": 15, "evaluator_error": null, "event": "episode_complete", "policy_steps": 19, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+Loading weights:   0%|          | 0/677 [00:00<?, ?it/s]Loading weights:   0%|          | 3/677 [00:00<01:16,  8.85it/s]Loading weights:   3%|▎         | 20/677 [00:00<00:11, 56.40it/s]Loading weights:   5%|▌         | 36/677 [00:00<00:07, 82.18it/s]Loading weights:   9%|▉         | 62/677 [00:00<00:04, 126.28it/s]Loading weights:  12%|█▏        | 78/677 [00:00<00:04, 128.54it/s]Loading weights:  15%|█▍        | 99/677 [00:00<00:03, 149.88it/s]Loading weights:  17%|█▋        | 117/677 [00:01<00:03, 157.50it/s]Loading weights:  20%|█▉        | 135/677 [00:01<00:03, 154.97it/s]Loading weights:  23%|██▎       | 159/677 [00:01<00:03, 170.13it/s]Loading weights:  26%|██▌       | 177/677 [00:01<00:03, 161.06it/s]Loading weights:  30%|██▉       | 200/677 [00:01<00:02, 172.20it/s]Loading weights:  32%|███▏      | 218/677 [00:01<00:02, 165.40it/s]Loading weights:  36%|███▌      | 242/677 [00:01<00:02, 176.82it/s]Loading weights:  38%|███▊      | 260/677 [00:01<00:02, 165.84it/s]Loading weights:  42%|████▏     | 283/677 [00:01<00:02, 174.76it/s]Loading weights:  44%|████▍     | 301/677 [00:02<00:02, 167.00it/s]Loading weights:  48%|████▊     | 325/677 [00:02<00:01, 177.57it/s]Loading weights:  51%|█████     | 343/677 [00:02<00:01, 167.20it/s]Loading weights:  54%|█████▍    | 366/677 [00:02<00:01, 175.73it/s]Loading weights:  57%|█████▋    | 384/677 [00:02<00:01, 168.59it/s]Loading weights:  60%|██████    | 408/677 [00:02<00:01, 178.40it/s]Loading weights:  63%|██████▎   | 426/677 [00:02<00:01, 167.42it/s]Loading weights:  66%|██████▋   | 449/677 [00:02<00:01, 175.57it/s]Loading weights:  69%|██████▉   | 467/677 [00:03<00:01, 167.83it/s]Loading weights:  73%|███████▎  | 491/677 [00:03<00:01, 178.13it/s]Loading weights:  75%|███████▌  | 509/677 [00:03<00:01, 166.88it/s]Loading weights:  79%|███████▊  | 532/677 [00:03<00:00, 176.06it/s]Loading weights:  81%|████████  | 550/677 [00:03<00:00, 168.34it/s]Loading weights:  85%|████████▍ | 574/677 [00:03<00:00, 178.96it/s]Loading weights:  87%|████████▋ | 592/677 [00:03<00:00, 167.49it/s]Loading weights:  91%|█████████ | 615/677 [00:03<00:00, 175.26it/s]Loading weights:  94%|█████████▎| 633/677 [00:04<00:00, 167.79it/s]Loading weights:  97%|█████████▋| 657/677 [00:04<00:00, 179.15it/s]Loading weights: 100%|██████████| 677/677 [00:04<00:00, 160.98it/s]
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 22.66349493060261, "episode_key": "standard_success:r0_22acc2fee54c:0", "episode_ordinal": 1, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 40.99794084299356, "episode_key": "standard_success:r0_27a69fafacd6:0", "episode_ordinal": 2, "evaluator_error": null, "event": "episode_complete", "policy_steps": 13, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 37.061584314797074, "episode_key": "standard_success:r0_394bc20ee704:0", "episode_ordinal": 3, "evaluator_error": null, "event": "episode_complete", "policy_steps": 12, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 20.25688993697986, "episode_key": "standard_success:r0_3edd6829ccdc:0", "episode_ordinal": 4, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 22.235102630220354, "episode_key": "standard_success:r0_4cb1060e5ac8:0", "episode_ordinal": 5, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 20.90581685397774, "episode_key": "standard_success:r0_5ae60ed1104f:0", "episode_ordinal": 6, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 76.55992878694087, "episode_key": "standard_success:r0_7396ad8203c4:0", "episode_ordinal": 7, "evaluator_error": null, "event": "episode_complete", "policy_steps": 24, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 17.747134430799633, "episode_key": "standard_success:r0_9158c3e37cfe:0", "episode_ordinal": 8, "evaluator_error": null, "event": "episode_complete", "policy_steps": 5, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 41.28659265162423, "episode_key": "standard_success:r0_9167e7dae6cf:0", "episode_ordinal": 9, "evaluator_error": null, "event": "episode_complete", "policy_steps": 14, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 36.378801645711064, "episode_key": "standard_success:r0_96de923ac80e:0", "episode_ordinal": 10, "evaluator_error": null, "event": "episode_complete", "policy_steps": 12, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 114.72702006297186, "episode_key": "standard_success:r0_99ef0cb1e159:0", "episode_ordinal": 11, "evaluator_error": null, "event": "episode_complete", "policy_steps": 23, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 20.278232518117875, "episode_key": "standard_success:r0_9dd257838676:0", "episode_ordinal": 12, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 20.208554042037576, "episode_key": "standard_success:r0_ac26b3d3c722:0", "episode_ordinal": 13, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 30.744407502003014, "episode_key": "standard_success:r0_e6919061f18b:0", "episode_ordinal": 14, "evaluator_error": null, "event": "episode_complete", "policy_steps": 11, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 26.40461574913934, "episode_key": "standard_success:r0_e914f2c09d6e:0", "episode_ordinal": 15, "evaluator_error": null, "event": "episode_complete", "policy_steps": 8, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+Loading weights:   0%|          | 0/677 [00:00<?, ?it/s]Loading weights:   0%|          | 3/677 [00:00<01:16,  8.82it/s]Loading weights:   3%|▎         | 20/677 [00:00<00:11, 56.31it/s]Loading weights:   5%|▌         | 36/677 [00:00<00:07, 82.27it/s]Loading weights:   9%|▉         | 62/677 [00:00<00:04, 126.54it/s]Loading weights:  12%|█▏        | 78/677 [00:00<00:04, 128.76it/s]Loading weights:  15%|█▍        | 99/677 [00:00<00:03, 150.38it/s]Loading weights:  17%|█▋        | 117/677 [00:01<00:03, 157.91it/s]Loading weights:  20%|█▉        | 135/677 [00:01<00:03, 155.20it/s]Loading weights:  23%|██▎       | 159/677 [00:01<00:03, 170.55it/s]Loading weights:  26%|██▌       | 177/677 [00:01<00:03, 161.39it/s]Loading weights:  30%|██▉       | 200/677 [00:01<00:02, 172.69it/s]Loading weights:  32%|███▏      | 218/677 [00:01<00:02, 165.96it/s]Loading weights:  36%|███▌      | 242/677 [00:01<00:02, 177.46it/s]Loading weights:  38%|███▊      | 260/677 [00:01<00:02, 164.87it/s]Loading weights:  42%|████▏     | 283/677 [00:01<00:02, 174.22it/s]Loading weights:  44%|████▍     | 301/677 [00:02<00:02, 166.79it/s]Loading weights:  48%|████▊     | 325/677 [00:02<00:01, 177.52it/s]Loading weights:  51%|█████     | 343/677 [00:02<00:01, 167.38it/s]Loading weights:  54%|█████▍    | 366/677 [00:02<00:01, 176.12it/s]Loading weights:  57%|█████▋    | 384/677 [00:02<00:01, 169.16it/s]Loading weights:  60%|██████    | 408/677 [00:02<00:01, 179.19it/s]Loading weights:  63%|██████▎   | 426/677 [00:02<00:01, 168.06it/s]Loading weights:  66%|██████▋   | 449/677 [00:02<00:01, 176.34it/s]Loading weights:  69%|██████▉   | 467/677 [00:03<00:01, 168.66it/s]Loading weights:  73%|███████▎  | 491/677 [00:03<00:01, 179.21it/s]Loading weights:  75%|███████▌  | 509/677 [00:03<00:01, 167.70it/s]Loading weights:  79%|███████▊  | 532/677 [00:03<00:00, 176.83it/s]Loading weights:  81%|████████  | 550/677 [00:03<00:00, 169.20it/s]Loading weights:  85%|████████▍ | 574/677 [00:03<00:00, 179.93it/s]Loading weights:  88%|████████▊ | 593/677 [00:03<00:00, 170.81it/s]Loading weights:  91%|█████████ | 615/677 [00:03<00:00, 175.46it/s]Loading weights:  94%|█████████▎| 633/677 [00:04<00:00, 168.15it/s]Loading weights:  97%|█████████▋| 657/677 [00:04<00:00, 180.01it/s]Loading weights: 100%|██████████| 677/677 [00:04<00:00, 161.43it/s]
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 21.367286552209407, "episode_key": "standard_success:r0_22acc2fee54c:0", "episode_ordinal": 1, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 31.82666758680716, "episode_key": "standard_success:r0_27a69fafacd6:0", "episode_ordinal": 2, "evaluator_error": null, "event": "episode_complete", "policy_steps": 11, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 31.30553866783157, "episode_key": "standard_success:r0_394bc20ee704:0", "episode_ordinal": 3, "evaluator_error": null, "event": "episode_complete", "policy_steps": 11, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 19.872700802981853, "episode_key": "standard_success:r0_3edd6829ccdc:0", "episode_ordinal": 4, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 21.81559999799356, "episode_key": "standard_success:r0_4cb1060e5ac8:0", "episode_ordinal": 5, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 20.14832191215828, "episode_key": "standard_success:r0_5ae60ed1104f:0", "episode_ordinal": 6, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 72.9402795447968, "episode_key": "standard_success:r0_7396ad8203c4:0", "episode_ordinal": 7, "evaluator_error": null, "event": "episode_complete", "policy_steps": 24, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 52.47868954995647, "episode_key": "standard_success:r0_9158c3e37cfe:0", "episode_ordinal": 8, "evaluator_error": null, "event": "episode_complete", "policy_steps": 15, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 33.61009355727583, "episode_key": "standard_success:r0_9167e7dae6cf:0", "episode_ordinal": 9, "evaluator_error": null, "event": "episode_complete", "policy_steps": 12, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 30.997520936187357, "episode_key": "standard_success:r0_96de923ac80e:0", "episode_ordinal": 10, "evaluator_error": null, "event": "episode_complete", "policy_steps": 11, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 30.325842623133212, "episode_key": "standard_success:r0_99ef0cb1e159:0", "episode_ordinal": 11, "evaluator_error": null, "event": "episode_complete", "policy_steps": 11, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 19.079855690710247, "episode_key": "standard_success:r0_9dd257838676:0", "episode_ordinal": 12, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 20.387587645091116, "episode_key": "standard_success:r0_ac26b3d3c722:0", "episode_ordinal": 13, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 30.033189203124493, "episode_key": "standard_success:r0_e6919061f18b:0", "episode_ordinal": 14, "evaluator_error": null, "event": "episode_complete", "policy_steps": 11, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 34.21605751570314, "episode_key": "standard_success:r0_e914f2c09d6e:0", "episode_ordinal": 15, "evaluator_error": null, "event": "episode_complete", "policy_steps": 11, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+Loading weights:   0%|          | 0/677 [00:00<?, ?it/s]Loading weights:   0%|          | 3/677 [00:00<01:15,  8.95it/s]Loading weights:   3%|▎         | 21/677 [00:00<00:11, 56.75it/s]Loading weights:   6%|▌         | 41/677 [00:00<00:06, 97.37it/s]Loading weights:   9%|▉         | 62/677 [00:00<00:04, 125.14it/s]Loading weights:  12%|█▏        | 78/677 [00:00<00:04, 128.52it/s]Loading weights:  15%|█▍        | 99/677 [00:00<00:03, 151.10it/s]Loading weights:  17%|█▋        | 117/677 [00:00<00:03, 159.07it/s]Loading weights:  20%|█▉        | 135/677 [00:01<00:03, 156.82it/s]Loading weights:  23%|██▎       | 159/677 [00:01<00:03, 172.66it/s]Loading weights:  26%|██▌       | 177/677 [00:01<00:03, 163.45it/s]Loading weights:  30%|██▉       | 200/677 [00:01<00:02, 175.00it/s]Loading weights:  32%|███▏      | 218/677 [00:01<00:02, 168.14it/s]Loading weights:  36%|███▌      | 242/677 [00:01<00:02, 179.90it/s]Loading weights:  39%|███▊      | 261/677 [00:01<00:02, 171.24it/s]Loading weights:  42%|████▏     | 283/677 [00:01<00:02, 177.06it/s]Loading weights:  44%|████▍     | 301/677 [00:02<00:02, 169.27it/s]Loading weights:  48%|████▊     | 325/677 [00:02<00:01, 180.15it/s]Loading weights:  51%|█████     | 344/677 [00:02<00:01, 172.38it/s]Loading weights:  54%|█████▍    | 366/677 [00:02<00:01, 178.00it/s]Loading weights:  57%|█████▋    | 384/677 [00:02<00:01, 171.06it/s]Loading weights:  60%|██████    | 408/677 [00:02<00:01, 181.31it/s]Loading weights:  63%|██████▎   | 427/677 [00:02<00:01, 172.50it/s]Loading weights:  66%|██████▋   | 449/677 [00:02<00:01, 176.78it/s]Loading weights:  69%|██████▉   | 467/677 [00:03<00:01, 169.54it/s]Loading weights:  73%|███████▎  | 491/677 [00:03<00:01, 180.52it/s]Loading weights:  75%|███████▌  | 510/677 [00:03<00:00, 171.76it/s]Loading weights:  79%|███████▊  | 532/677 [00:03<00:00, 177.97it/s]Loading weights:  81%|████████  | 550/677 [00:03<00:00, 170.63it/s]Loading weights:  85%|████████▍ | 574/677 [00:03<00:00, 181.92it/s]Loading weights:  88%|████████▊ | 593/677 [00:03<00:00, 172.78it/s]Loading weights:  91%|█████████ | 615/677 [00:03<00:00, 177.61it/s]Loading weights:  94%|█████████▎| 633/677 [00:03<00:00, 170.24it/s]Loading weights:  97%|█████████▋| 657/677 [00:04<00:00, 182.33it/s]Loading weights: 100%|██████████| 677/677 [00:04<00:00, 163.73it/s]
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 10.06276259291917, "episode_key": "standard_success:r0_22acc2fee54c:0", "episode_ordinal": 1, "evaluator_error": null, "event": "episode_complete", "policy_steps": 3, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 35.23795396275818, "episode_key": "standard_success:r0_27a69fafacd6:0", "episode_ordinal": 2, "evaluator_error": null, "event": "episode_complete", "policy_steps": 12, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 34.98691172292456, "episode_key": "standard_success:r0_394bc20ee704:0", "episode_ordinal": 3, "evaluator_error": null, "event": "episode_complete", "policy_steps": 12, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 19.823405544739217, "episode_key": "standard_success:r0_3edd6829ccdc:0", "episode_ordinal": 4, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 21.996791064273566, "episode_key": "standard_success:r0_4cb1060e5ac8:0", "episode_ordinal": 5, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 20.57354017626494, "episode_key": "standard_success:r0_5ae60ed1104f:0", "episode_ordinal": 6, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 75.7737564467825, "episode_key": "standard_success:r0_7396ad8203c4:0", "episode_ordinal": 7, "evaluator_error": null, "event": "episode_complete", "policy_steps": 24, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 9.99252425506711, "episode_key": "standard_success:r0_9158c3e37cfe:0", "episode_ordinal": 8, "evaluator_error": null, "event": "episode_complete", "policy_steps": 3, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 28.28112954599783, "episode_key": "standard_success:r0_9167e7dae6cf:0", "episode_ordinal": 9, "evaluator_error": null, "event": "episode_complete", "policy_steps": 9, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 34.70778492977843, "episode_key": "standard_success:r0_96de923ac80e:0", "episode_ordinal": 10, "evaluator_error": null, "event": "episode_complete", "policy_steps": 12, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 35.10623689368367, "episode_key": "standard_success:r0_99ef0cb1e159:0", "episode_ordinal": 11, "evaluator_error": null, "event": "episode_complete", "policy_steps": 12, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 20.03360282815993, "episode_key": "standard_success:r0_9dd257838676:0", "episode_ordinal": 12, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 12.576447553001344, "episode_key": "standard_success:r0_ac26b3d3c722:0", "episode_ordinal": 13, "evaluator_error": null, "event": "episode_complete", "policy_steps": 4, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 34.28406109614298, "episode_key": "standard_success:r0_e6919061f18b:0", "episode_ordinal": 14, "evaluator_error": null, "event": "episode_complete", "policy_steps": 12, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 9.851414491888136, "episode_key": "standard_success:r0_e914f2c09d6e:0", "episode_ordinal": 15, "evaluator_error": null, "event": "episode_complete", "policy_steps": 3, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+Loading weights:   0%|          | 0/677 [00:00<?, ?it/s]Loading weights:   0%|          | 3/677 [00:00<01:15,  8.91it/s]Loading weights:   3%|▎         | 20/677 [00:00<00:11, 56.87it/s]Loading weights:   5%|▌         | 36/677 [00:00<00:07, 83.03it/s]Loading weights:   9%|▉         | 62/677 [00:00<00:04, 127.60it/s]Loading weights:  12%|█▏        | 78/677 [00:00<00:04, 129.88it/s]Loading weights:  15%|█▍        | 99/677 [00:00<00:03, 151.54it/s]Loading weights:  17%|█▋        | 117/677 [00:00<00:03, 159.09it/s]Loading weights:  20%|█▉        | 135/677 [00:01<00:03, 156.52it/s]Loading weights:  23%|██▎       | 159/677 [00:01<00:03, 171.92it/s]Loading weights:  26%|██▌       | 177/677 [00:01<00:03, 162.85it/s]Loading weights:  30%|██▉       | 200/677 [00:01<00:02, 174.35it/s]Loading weights:  32%|███▏      | 218/677 [00:01<00:02, 167.15it/s]Loading weights:  36%|███▌      | 242/677 [00:01<00:02, 178.80it/s]Loading weights:  39%|███▊      | 261/677 [00:01<00:02, 170.14it/s]Loading weights:  42%|████▏     | 283/677 [00:01<00:02, 175.96it/s]Loading weights:  44%|████▍     | 301/677 [00:02<00:02, 168.38it/s]Loading weights:  48%|████▊     | 325/677 [00:02<00:01, 179.52it/s]Loading weights:  51%|█████     | 344/677 [00:02<00:01, 171.57it/s]Loading weights:  54%|█████▍    | 366/677 [00:02<00:01, 177.13it/s]Loading weights:  57%|█████▋    | 384/677 [00:02<00:01, 170.35it/s]Loading weights:  60%|██████    | 408/677 [00:02<00:01, 180.58it/s]Loading weights:  63%|██████▎   | 427/677 [00:02<00:01, 172.00it/s]Loading weights:  66%|██████▋   | 449/677 [00:02<00:01, 177.14it/s]Loading weights:  69%|██████▉   | 467/677 [00:03<00:01, 169.68it/s]Loading weights:  73%|███████▎  | 491/677 [00:03<00:01, 180.36it/s]Loading weights:  75%|███████▌  | 510/677 [00:03<00:00, 171.33it/s]Loading weights:  79%|███████▊  | 532/677 [00:03<00:00, 177.59it/s]Loading weights:  81%|████████  | 550/677 [00:03<00:00, 170.01it/s]Loading weights:  85%|████████▍ | 574/677 [00:03<00:00, 181.19it/s]Loading weights:  88%|████████▊ | 593/677 [00:03<00:00, 172.07it/s]Loading weights:  91%|█████████ | 615/677 [00:03<00:00, 176.94it/s]Loading weights:  94%|█████████▎| 633/677 [00:03<00:00, 169.58it/s]Loading weights:  97%|█████████▋| 657/677 [00:04<00:00, 181.68it/s]Loading weights: 100%|██████████| 677/677 [00:04<00:00, 163.06it/s]
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 20.10490677598864, "episode_key": "standard_success:r0_22acc2fee54c:0", "episode_ordinal": 1, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 34.04597230721265, "episode_key": "standard_success:r0_27a69fafacd6:0", "episode_ordinal": 2, "evaluator_error": null, "event": "episode_complete", "policy_steps": 12, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 28.772724243812263, "episode_key": "standard_success:r0_394bc20ee704:0", "episode_ordinal": 3, "evaluator_error": null, "event": "episode_complete", "policy_steps": 11, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 17.25499378889799, "episode_key": "standard_success:r0_3edd6829ccdc:0", "episode_ordinal": 4, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 19.463656443171203, "episode_key": "standard_success:r0_4cb1060e5ac8:0", "episode_ordinal": 5, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 18.183791591785848, "episode_key": "standard_success:r0_5ae60ed1104f:0", "episode_ordinal": 6, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 58.66260876087472, "episode_key": "standard_success:r0_7396ad8203c4:0", "episode_ordinal": 7, "evaluator_error": null, "event": "episode_complete", "policy_steps": 21, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 36.7088981308043, "episode_key": "standard_success:r0_9158c3e37cfe:0", "episode_ordinal": 8, "evaluator_error": null, "event": "episode_complete", "policy_steps": 13, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 10.927852681837976, "episode_key": "standard_success:r0_9167e7dae6cf:0", "episode_ordinal": 9, "evaluator_error": null, "event": "episode_complete", "policy_steps": 4, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 31.171462459955364, "episode_key": "standard_success:r0_96de923ac80e:0", "episode_ordinal": 10, "evaluator_error": null, "event": "episode_complete", "policy_steps": 12, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 28.041621468029916, "episode_key": "standard_success:r0_99ef0cb1e159:0", "episode_ordinal": 11, "evaluator_error": null, "event": "episode_complete", "policy_steps": 11, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 17.613808610010892, "episode_key": "standard_success:r0_9dd257838676:0", "episode_ordinal": 12, "evaluator_error": null, "event": "episode_complete", "policy_steps": 7, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 8.597841159906238, "episode_key": "standard_success:r0_ac26b3d3c722:0", "episode_ordinal": 13, "evaluator_error": null, "event": "episode_complete", "policy_steps": 3, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 30.447956005111337, "episode_key": "standard_success:r0_e6919061f18b:0", "episode_ordinal": 14, "evaluator_error": null, "event": "episode_complete", "policy_steps": 12, "terminal": true, "terminal_outcome": "operator_escalation", "total_episodes": 15}
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+[transformers] Setting `pad_token_id` to `eos_token_id`:49 for open-end generation.
+{"elapsed_seconds": 23.23193042166531, "episode_key": "standard_success:r0_e914f2c09d6e:0", "episode_ordinal": 15, "evaluator_error": null, "event": "episode_complete", "policy_steps": 8, "terminal": false, "terminal_outcome": null, "total_episodes": 15}
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

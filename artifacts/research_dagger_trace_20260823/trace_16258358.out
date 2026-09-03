@@ -1,0 +1,202 @@
+{
+  "contract": "research_root_disjoint_suite_split_v1",
+  "heldout_episodes": 14,
+  "heldout_output": "/scratch/yx3882/research_dagger_trace_20260823/heldout_suite_14_root_closure.json",
+  "heldout_per_suite": 2,
+  "heldout_root_ids": [
+    "physical_v3_0192e80a93b9ecf23147e599c295d2a8e5d1f40419d81fec82ef3022fea0c80c",
+    "physical_v3_0b46d1fe736c0c73778eff771d61ac32407c97b174c389e8bb87406ef5ca0c11",
+    "physical_v3_678535db0752dfbcfc0c419b26d58a793d7f710730c3627a55cbfa692e98729e",
+    "physical_v3_7804a590697f7ef2bb2da6b8802c8663656ef99cf726c7265a90b4e69eb96fcf"
+  ],
+  "heldout_roots": 4,
+  "input": "/scratch/yx3882/dagger_release_a5a7574_20260823/dagger1_a5a7574/recovery_stress.json",
+  "per_suite": {
+    "recovery_measurement_parameter_sequential_handoff": {
+      "heldout": 2,
+      "train": 8
+    },
+    "recovery_post_failure_no_candidate": {
+      "heldout": 2,
+      "train": 8
+    },
+    "recovery_premature_commit": {
+      "heldout": 2,
+      "train": 8
+    },
+    "recovery_premature_escalation": {
+      "heldout": 2,
+      "train": 8
+    },
+    "recovery_rejected_candidate_rollback": {
+      "heldout": 2,
+      "train": 8
+    },
+    "recovery_safe_continuation_after_partial_success": {
+      "heldout": 2,
+      "train": 8
+    },
+    "recovery_unsupported_correction": {
+      "heldout": 2,
+      "train": 8
+    }
+  },
+  "root_overlap": 0,
+  "suites": 7,
+  "train_episodes": 56,
+  "train_output": "/scratch/yx3882/research_dagger_trace_20260823/collection_suite_56_root_disjoint.json",
+  "train_roots": 16
+}
+[collect] completed learner rollout exists; skipping: /scratch/yx3882/research_dagger_trace_20260823/learner_collection_56.json
+[export] completed trace view exists; skipping
+[train] completed trace adapter exists; skipping: /scratch/yx3882/research_dagger_trace_20260823/training/lora
+[trace] adapter on untouched 14-episode/four-root closure
+🦥 Unsloth: Will patch your computer to enable 2x faster free finetuning.
+Unsloth: Your Flash Attention 2 installation seems to be broken. Using Xformers instead. No performance changes will be seen.
+🦥 Unsloth Zoo will now patch everything to make training faster!
+==((====))==  Unsloth 2026.5.10: Fast Gemma4 patching. Transformers: 5.5.0.
+   \\   /|    NVIDIA RTX PRO 6000 Blackwell Server Edition. Num GPUs = 1. Max memory: 94.971 GB. Platform: Linux.
+O^O/ \_/ \    Torch: 2.10.0+cu128. CUDA: 12.0. CUDA Toolkit: 12.8. Triton: 3.6.0
+\        /    Bfloat16 = TRUE. FA [Xformers = 0.0.35. FA2 = False]
+ "-____-"     Free license: http://github.com/unslothai/unsloth
+{"content_sha256": "5c2afe2a98cc600d0f61155d66737243498bb96f8bdeaa14d0880e2832b16971", "output": "/scratch/yx3882/research_dagger_trace_20260823/dagger_trace_eval_14.json", "release_eligible": false, "score": 0.0}
+[bc0] adapter on untouched 14-episode/four-root closure
+🦥 Unsloth: Will patch your computer to enable 2x faster free finetuning.
+Unsloth: Your Flash Attention 2 installation seems to be broken. Using Xformers instead. No performance changes will be seen.
+🦥 Unsloth Zoo will now patch everything to make training faster!
+==((====))==  Unsloth 2026.5.10: Fast Gemma4 patching. Transformers: 5.5.0.
+   \\   /|    NVIDIA RTX PRO 6000 Blackwell Server Edition. Num GPUs = 1. Max memory: 94.971 GB. Platform: Linux.
+O^O/ \_/ \    Torch: 2.10.0+cu128. CUDA: 12.0. CUDA Toolkit: 12.8. Triton: 3.6.0
+\        /    Bfloat16 = TRUE. FA [Xformers = 0.0.35. FA2 = False]
+ "-____-"     Free license: http://github.com/unslothai/unsloth
+{"content_sha256": "c3f3127294e31ed68daca36acb9c72adc9c19becb2ee8737f4e763fb77003a82", "output": "/scratch/yx3882/research_dagger_trace_20260823/bc0_eval_14.json", "release_eligible": false, "score": 0.0}
+{
+  "bc0": {
+    "audit_quarantined_episodes": 0,
+    "control_or_audit_quarantined_episodes": 0,
+    "control_quarantined_episodes": 0,
+    "episodes": 14,
+    "episodes_with_invalid_actions": 14,
+    "evaluator_error_episodes": 0,
+    "executable_action_count": 22,
+    "executable_action_rate": 0.13095238095238096,
+    "false_commit_count": 0,
+    "false_finalization_count": 0,
+    "false_rollback_count": 0,
+    "first_recovery_action_correct_and_executed_episodes": 0,
+    "first_recovery_action_correct_and_executed_rate": 0.0,
+    "first_recovery_action_evaluable_episodes": 14,
+    "first_recovery_action_exact_accuracy": 0.0,
+    "first_recovery_action_exact_correct_episodes": 0,
+    "first_recovery_action_opportunity_episodes": 14,
+    "first_recovery_action_unevaluable_episodes": 0,
+    "healthy_component_corruption_episodes": 0,
+    "healthy_component_safety_unknown_episodes": 14,
+    "invalid_action_count": 146,
+    "loop_episodes": 14,
+    "loop_rate": 1.0,
+    "mean_policy_steps": 12.0,
+    "policy_action_count": 168,
+    "resolution_rate": 0.0,
+    "resolved_episodes": 0,
+    "schema_valid_action_count": 165,
+    "schema_valid_action_rate": 0.9821428571428571,
+    "terminal_episodes": 0,
+    "terminal_rate": 0.0
+  },
+  "dagger": {
+    "audit_quarantined_episodes": 0,
+    "control_or_audit_quarantined_episodes": 2,
+    "control_quarantined_episodes": 2,
+    "episodes": 14,
+    "episodes_with_invalid_actions": 14,
+    "evaluator_error_episodes": 0,
+    "executable_action_count": 21,
+    "executable_action_rate": 0.1337579617834395,
+    "false_commit_count": 0,
+    "false_finalization_count": 0,
+    "false_rollback_count": 0,
+    "first_recovery_action_correct_and_executed_episodes": 0,
+    "first_recovery_action_correct_and_executed_rate": 0.0,
+    "first_recovery_action_evaluable_episodes": 14,
+    "first_recovery_action_exact_accuracy": 0.0,
+    "first_recovery_action_exact_correct_episodes": 0,
+    "first_recovery_action_opportunity_episodes": 14,
+    "first_recovery_action_unevaluable_episodes": 0,
+    "healthy_component_corruption_episodes": 0,
+    "healthy_component_safety_unknown_episodes": 14,
+    "invalid_action_count": 136,
+    "loop_episodes": 14,
+    "loop_rate": 1.0,
+    "mean_policy_steps": 11.214285714285714,
+    "policy_action_count": 157,
+    "resolution_rate": 0.0,
+    "resolved_episodes": 0,
+    "schema_valid_action_count": 153,
+    "schema_valid_action_rate": 0.9745222929936306,
+    "terminal_episodes": 0,
+    "terminal_rate": 0.0
+  },
+  "delta": {
+    "control_or_audit_quarantined_episodes": 2,
+    "evaluator_error_episodes": 0,
+    "executable_action_rate": 0.0028055808310585295,
+    "false_commit_count": 0,
+    "false_finalization_count": 0,
+    "false_rollback_count": 0,
+    "first_recovery_action_correct_and_executed_rate": 0.0,
+    "first_recovery_action_exact_accuracy": 0.0,
+    "healthy_component_corruption_episodes": 0,
+    "healthy_component_safety_unknown_episodes": 0,
+    "invalid_action_count": -10,
+    "loop_rate": 0.0,
+    "mean_policy_steps": -0.7857142857142865,
+    "resolution_rate": 0.0,
+    "schema_valid_action_rate": -0.007620564149226516,
+    "terminal_rate": 0.0
+  },
+  "metric_definitions": {
+    "correct_and_executed": "first recovery action is exactly correct and execution_status is success",
+    "executable_action": "schema-valid policy action with execution_status success",
+    "first_recovery_action": "exact equality to the evaluator's objective expected_action on the first post-intervention policy row",
+    "healthy_component_safety_unknown": "healthy_preservation_known is not true",
+    "schema_valid_action": "normalized policy tool is not __invalid_action__"
+  },
+  "pairing": {
+    "asserted_identity_fields": [
+      "suite",
+      "scenario_id",
+      "physical_root",
+      "seed",
+      "split",
+      "family",
+      "cardinality",
+      "case",
+      "source_tier"
+    ],
+    "episode_keys": [
+      "recovery_measurement_parameter_sequential_handoff:r0_80b581004f96:0",
+      "recovery_measurement_parameter_sequential_handoff:r0_cc790cc104dd:0",
+      "recovery_post_failure_no_candidate:r0_15b6cfcc8bbe:0",
+      "recovery_post_failure_no_candidate:r0_b6e76ae7da33:0",
+      "recovery_premature_commit:r0_15b6cfcc8bbe:0",
+      "recovery_premature_commit:r0_b6e76ae7da33:0",
+      "recovery_premature_escalation:r0_15b6cfcc8bbe:0",
+      "recovery_premature_escalation:r0_b6e76ae7da33:0",
+      "recovery_rejected_candidate_rollback:r0_80b581004f96:0",
+      "recovery_rejected_candidate_rollback:r0_cc790cc104dd:0",
+      "recovery_safe_continuation_after_partial_success:r0_80b581004f96:0",
+      "recovery_safe_continuation_after_partial_success:r0_cc790cc104dd:0",
+      "recovery_unsupported_correction:r0_15b6cfcc8bbe:0",
+      "recovery_unsupported_correction:r0_b6e76ae7da33:0"
+    ],
+    "matched": true,
+    "matched_episode_count": 14
+  },
+  "prototype": true
+}
+RESEARCH_DAGGER_TRACE_UPDATE_COMPLETE
+trace report: /scratch/yx3882/research_dagger_trace_20260823/trace_view_report.json
+adapter:      /scratch/yx3882/research_dagger_trace_20260823/training/lora
+evaluation:   /scratch/yx3882/research_dagger_trace_20260823/dagger_trace_eval_14.json
+comparison:   /scratch/yx3882/research_dagger_trace_20260823/comparison_trace_vs_bc0.json

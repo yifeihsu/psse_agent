@@ -4,13 +4,24 @@ import copy
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
+from hif_search_limits import HIF_ALPHA_GRID_SIZE_MAX
+from three_phase_nlm.ieee14_adapter import ELIGIBLE_HIF_BRANCHES
+
 from psse_env.actions import (
+    ASK_FOR_MORE_EVIDENCE,
     COMMIT_STATE,
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,
+    DIAGNOSTIC_TOOLS,
+    ESTIMATE_HIF_FROM_PATH,
+    ESTIMATE_HIF_MULTISCAN_FROM_PATH,
     FINALIZE_DIAGNOSIS,
+    GET_HARMONIC_CONTEXT,
+    HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
     ROLLBACK_STATE,
+    RUN_HSE_FROM_PATH,
+    RUN_THREE_PHASE_NLM_FROM_PATH,
     safe_normalize_action,
 )
 
@@ -20,6 +31,157 @@ class InjectedAction:
     family: str
     action: dict[str, Any]
     setup_actions: tuple[dict[str, Any], ...] = ()
+
+
+#: Argument placeholders that the counterfactual generator binds after the
+#: injected branch has executed its setup actions.  They resolve against the
+#: branch's own observable NLM output, never against hidden truth.
+NLM_TOP_BRANCH_PLACEHOLDER = "__nlm_top_branch_row0__"
+NLM_WRONG_BRANCH_PLACEHOLDER = "__nlm_wrong_branch_row0__"
+NLM_BRANCH_PLACEHOLDERS = frozenset(
+    {NLM_TOP_BRANCH_PLACEHOLDER, NLM_WRONG_BRANCH_PLACEHOLDER}
+)
+
+
+def resolve_nlm_branch_placeholder(
+    placeholder: str, nlm_top_branch_row0: int | None
+) -> int:
+    """Bind an NLM branch placeholder to an observable localized branch.
+
+    The top-branch placeholder is the localized line itself.  The wrong-branch
+    placeholder is the next eligible line after it, so the injected estimator
+    call targets a healthy line without consulting hidden truth.  Without a
+    localized branch both fall back to the first eligible line: the call stays
+    schema-valid and the environment, not the generator, rejects it.
+    """
+    eligible = [int(row) for row in ELIGIBLE_HIF_BRANCHES]
+    if placeholder not in NLM_BRANCH_PLACEHOLDERS:
+        raise ValueError(f"unknown NLM branch placeholder {placeholder!r}")
+    if nlm_top_branch_row0 is None:
+        return eligible[0]
+    top = int(nlm_top_branch_row0)
+    if placeholder == NLM_TOP_BRANCH_PLACEHOLDER:
+        return top
+    if top in eligible:
+        return eligible[(eligible.index(top) + 1) % len(eligible)]
+    return next(row for row in eligible if row != top)
+
+
+def diagnostic_wrong_actions(
+    state: Mapping[str, Any],
+    expert_actions: Iterable[Mapping[str, Any]] | None = None,
+) -> list[InjectedAction]:
+    """Plausible learner mistakes on the specialized-diagnostic ladder.
+
+    Emitted only when the expert's current proposals include a diagnostic
+    tool, so classical correction roots are unaffected.  Every action is
+    built from the policy observation and the expert's observable proposals;
+    branch placeholders are bound later from the injected branch's own NLM
+    output.  The mistakes mirror the ladder's failure modes: estimating
+    before localizing, running the wrong family's diagnostic, estimating on a
+    healthy line, overrunning the bounded search budget, escalating before
+    the configured estimators ran, and applying a fundamental-frequency
+    correction that would mask an explanation-only anomaly.
+    """
+    active_id = state.get("active_state_id")
+    available = {str(item) for item in (state.get("available_evidence") or [])}
+    proposed: set[str] = set()
+    for raw in expert_actions or []:
+        try:
+            proposed.add(safe_normalize_action(raw)["tool"])
+        except Exception:
+            continue
+    diagnostic = proposed & DIAGNOSTIC_TOOLS
+    if not diagnostic:
+        return []
+    estimator = (
+        ESTIMATE_HIF_MULTISCAN_FROM_PATH
+        if "hif_scan_window" in available
+        else ESTIMATE_HIF_FROM_PATH
+    )
+    first_line = int(ELIGIBLE_HIF_BRANCHES[0])
+    premature_escalation = InjectedAction(
+        "premature_diagnostic_escalation",
+        {
+            "tool": ASK_FOR_MORE_EVIDENCE,
+            "arguments": {
+                "state_id": active_id,
+                "request": HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
+            },
+        },
+    )
+    injected: list[InjectedAction] = []
+    if RUN_THREE_PHASE_NLM_FROM_PATH in diagnostic:
+        localize = {
+            "tool": RUN_THREE_PHASE_NLM_FROM_PATH,
+            "arguments": {"state_id": "__active__"},
+        }
+        injected.extend(
+            [
+                InjectedAction(
+                    "premature_hif_estimation",
+                    {
+                        "tool": estimator,
+                        "arguments": {
+                            "state_id": active_id,
+                            "candidate_branch_row0": first_line,
+                        },
+                    },
+                ),
+                InjectedAction(
+                    "wrong_diagnostic_family",
+                    {"tool": RUN_HSE_FROM_PATH, "arguments": {"state_id": active_id}},
+                ),
+                InjectedAction(
+                    "wrong_hif_candidate_branch",
+                    {
+                        "tool": estimator,
+                        "arguments": {
+                            "state_id": "__active__",
+                            "candidate_branch_row0": NLM_WRONG_BRANCH_PLACEHOLDER,
+                        },
+                    },
+                    (copy.deepcopy(localize),),
+                ),
+                InjectedAction(
+                    "hif_search_budget_overrun",
+                    {
+                        "tool": estimator,
+                        "arguments": {
+                            "state_id": "__active__",
+                            "candidate_branch_row0": NLM_TOP_BRANCH_PLACEHOLDER,
+                            "alpha_grid_size": HIF_ALPHA_GRID_SIZE_MAX + 1,
+                        },
+                    },
+                    (copy.deepcopy(localize),),
+                ),
+                premature_escalation,
+                InjectedAction(
+                    "masking_correction_on_diagnostic_anomaly",
+                    {
+                        "tool": CORRECT_PARAMETERS,
+                        "arguments": {
+                            "state_id": active_id,
+                            "branch_row0": first_line,
+                        },
+                    },
+                ),
+            ]
+        )
+    elif diagnostic & {GET_HARMONIC_CONTEXT, RUN_HSE_FROM_PATH}:
+        injected.extend(
+            [
+                InjectedAction(
+                    "wrong_diagnostic_family",
+                    {
+                        "tool": RUN_THREE_PHASE_NLM_FROM_PATH,
+                        "arguments": {"state_id": active_id},
+                    },
+                ),
+                premature_escalation,
+            ]
+        )
+    return injected
 
 
 def plausible_wrong_actions(
@@ -164,6 +326,7 @@ def plausible_wrong_actions(
                 ),
             )
         )
+    injected.extend(diagnostic_wrong_actions(state, expert_actions))
     stale = next((item.action for item in injected if item.family == "stale_context"), None)
     if stale is not None:
         injected.append(

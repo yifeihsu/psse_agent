@@ -52,7 +52,14 @@ from IEEE_14_OpenDSS.export_measurement_series import (  # type: ignore
     BRANCH_ORDER,
     BUS_ORDER,
     extract_measurement_series,
+    extract_three_phase_branch_current_measurements,
     extract_three_phase_voltage_measurements,
+)
+from three_phase_nlm.branch_current_analysis import (  # type: ignore
+    BRANCH_CURRENT_CHANNEL,
+    BRANCH_CURRENT_SIGMA_KEY,
+    DEFAULT_BRANCH_CURRENT_SIGMA_PU,
+    add_branch_current_noise,
 )
 
 from Transmission.generate_measurements import (  # type: ignore
@@ -60,6 +67,12 @@ from Transmission.generate_measurements import (  # type: ignore
     compute_measurements_pu,
     make_index_map,
 )
+
+#: The checked-in IEEE14Loads.DSS splits Bus 3 unevenly (B3A/B3B/B3C) for the
+#: original single-bus unbalance study.  Every generated sample must start from
+#: a balanced base so the labeled target bus is the *only* unbalance source.
+BALANCED_BUS3_LOAD_NAME = "__BAL_B3"
+BALANCED_BUS3_SPLIT_LOADS = ("B3A", "B3B", "B3C")
 
 
 def _scale_pypower_loads(ppc: Dict[str, Any], alpha: float) -> Dict[str, Any]:
@@ -75,10 +88,28 @@ def _solve_pypower(ppc: Dict[str, Any]) -> Dict[str, Any] | None:
     return res if res.get("success") else None
 
 
+def _balance_bus3_loads() -> None:
+    """Replace the checked-in Bus 3 split loads with one balanced load."""
+    existing = {str(name).lower() for name in (dss.Loads.AllNames() or [])}
+    for name in BALANCED_BUS3_SPLIT_LOADS:
+        if name.lower() in existing:
+            dss.Text.Command(f"Edit Load.{name} enabled=no")
+    if BALANCED_BUS3_LOAD_NAME.lower() not in existing:
+        dss.Text.Command(
+            f"New Load.{BALANCED_BUS3_LOAD_NAME} Bus1=B3 kV=1 kW=94200 kvar=19000 "
+            "vmaxpu=1.06 vminpu=0.94"
+        )
+
+
 def _compile_ieee14_opendss(repo_dir: str) -> None:
-    dss.Basic.DataPath(repo_dir)
-    dss.Text.Command("Clear")
-    dss.Text.Command("Redirect Run_IEEE14Bus.dss")
+    caller_cwd = os.getcwd()
+    try:
+        dss.Basic.DataPath(repo_dir)
+        dss.Text.Command("Clear")
+        dss.Text.Command("Redirect Run_IEEE14Bus.dss")
+    finally:
+        os.chdir(caller_cwd)
+    _balance_bus3_loads()
 
 
 def _normalize_bus_name(bus_ref: str) -> str:
@@ -89,6 +120,8 @@ def _read_base_loads() -> Dict[str, Dict[str, Any]]:
     base: Dict[str, Dict[str, Any]] = {}
     for name in dss.Loads.AllNames() or []:
         dss.Loads.Name(name)
+        if hasattr(dss.CktElement, "Enabled") and not bool(dss.CktElement.Enabled()):
+            continue
         bus_ref = str((dss.CktElement.BusNames() or [""])[0])
         base[str(name).lower()] = {
             "name": str(name),
@@ -269,7 +302,16 @@ def generate_dataset(
     load_scale_min: float,
     load_scale_max: float,
     dirichlet_alpha: float,
+    branch_current_noise_pu: float = 0.0,
+    branch_current_sigma_pu: float = DEFAULT_BRANCH_CURRENT_SIGMA_PU,
 ) -> None:
+    if float(branch_current_noise_pu) < 0.0:
+        raise ValueError("branch_current_noise_pu must be non-negative")
+    if float(branch_current_sigma_pu) <= 0.0:
+        raise ValueError("branch_current_sigma_pu must be positive")
+    # The declared sigma is the nominal sensor accuracy used to weight the
+    # channel; applied noise may be zero (clean telemetry) or larger.
+    declared_current_sigma = max(float(branch_current_sigma_pu), float(branch_current_noise_pu))
     rng = np.random.default_rng(seed)
     # IMPORTANT: OpenDSS `Basic.DataPath()` changes the process CWD, so always use absolute output paths.
     out = Path(os.path.abspath(out_dir))
@@ -296,6 +338,36 @@ def generate_dataset(
                 phases=["A", "B", "C"],
                 fields=["vln_pu", "ang_deg", "kvbase_ln"],
             ),
+            three_phase_branch_current_measurements={
+                "channel": BRANCH_CURRENT_CHANNEL,
+                "type": "per_phase_terminal_current_phasors",
+                "phases": ["A", "B", "C"],
+                "fields": [
+                    "branch",
+                    "branch_row0",
+                    "from_bus",
+                    "to_bus",
+                    "i_from_pu",
+                    "ang_from_deg",
+                    "i_to_pu",
+                    "ang_to_deg",
+                    "ibase_from_a",
+                    "ibase_to_a",
+                ],
+                "sign_convention": "current flowing into the branch from each terminal",
+                "per_unit_base": "(S_base/3) / V_LN,base at the terminal bus, S_base=100 MVA",
+                "applied_noise_sigma_pu": float(branch_current_noise_pu),
+                BRANCH_CURRENT_SIGMA_KEY: float(declared_current_sigma),
+            },
+            base_model_override={
+                "balanced_bus3": True,
+                "disabled_loads": list(BALANCED_BUS3_SPLIT_LOADS),
+                "balanced_load": BALANCED_BUS3_LOAD_NAME,
+                "note": (
+                    "The checked-in OpenDSS load file splits Bus 3 unevenly; every "
+                    "sample rebalances it so the labeled bus is the only unbalance source."
+                ),
+            },
         ),
     )
     # --- OpenDSS init (compile once) ---
@@ -355,6 +427,11 @@ def generate_dataset(
                 raise RuntimeError("Unexpected branch order from OpenDSS extractor.")
 
             three_phase_voltages = extract_three_phase_voltage_measurements()
+            branch_currents = add_branch_current_noise(
+                extract_three_phase_branch_current_measurements(),
+                rng,
+                float(branch_current_noise_pu),
+            )
 
             # Positive-sequence reference with same total load scaling (for analysis/labeling)
             ppc_scaled = _scale_pypower_loads(ppc_base, alpha)
@@ -369,6 +446,10 @@ def generate_dataset(
                 z_true=z_true,
                 z_obs=[float(x) for x in z_obs],
                 three_phase_voltages=three_phase_voltages,
+                **{
+                    BRANCH_CURRENT_CHANNEL: branch_currents,
+                    BRANCH_CURRENT_SIGMA_KEY: float(declared_current_sigma),
+                },
                 label=dict(
                     error_type="three_phase_imbalance",
                     unbalance_bus=int(target_bus[1:]),
@@ -394,6 +475,18 @@ def main() -> None:
         default=3.0,
         help="Larger -> more balanced phase split; smaller -> more extreme imbalance.",
     )
+    p.add_argument(
+        "--branch-current-noise-pu",
+        type=float,
+        default=0.0,
+        help="Applied per-component Gaussian noise on branch-current phasors (pu); 0 keeps them clean.",
+    )
+    p.add_argument(
+        "--branch-current-sigma-pu",
+        type=float,
+        default=DEFAULT_BRANCH_CURRENT_SIGMA_PU,
+        help="Declared nominal branch-current sensor sigma (pu) used to weight the channel.",
+    )
     args = p.parse_args()
 
     generate_dataset(
@@ -404,6 +497,8 @@ def main() -> None:
         load_scale_min=args.load_scale_min,
         load_scale_max=args.load_scale_max,
         dirichlet_alpha=args.dirichlet_alpha,
+        branch_current_noise_pu=float(args.branch_current_noise_pu),
+        branch_current_sigma_pu=float(args.branch_current_sigma_pu),
     )
     print(f"Wrote imbalance dataset to: {args.out}")
 

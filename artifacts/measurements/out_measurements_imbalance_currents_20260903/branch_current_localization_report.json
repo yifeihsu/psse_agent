@@ -1,0 +1,25 @@
+{
+  "rows": 220,
+  "rows_by_scenario": {
+    "three_phase_imbalance": 220
+  },
+  "rows_with_branch_currents": 220,
+  "samples": "artifacts\\measurements\\out_measurements_imbalance_currents_20260903\\samples.jsonl",
+  "unbalance": {
+    "family": "three_phase_unbalance",
+    "line_differential_null_quiet_rate": 1.0,
+    "misses": {
+      "expected_b10_got_b7": 1,
+      "expected_b12_got_b7": 1,
+      "expected_b2_got_b11": 1,
+      "expected_b5_got_b1": 1,
+      "expected_b5_got_b8": 1
+    },
+    "rows_scored": 220,
+    "separation_ratio_median": 16.50267808447591,
+    "separation_ratio_p10": 2.270338618999157,
+    "top1_accuracy": 0.9772727272727273,
+    "top1_significant_rate": 0.9681818181818181,
+    "top3_accuracy": 0.9954545454545455
+  }
+}

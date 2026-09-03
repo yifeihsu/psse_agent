@@ -1127,6 +1127,8 @@ def make_hif_context_payload(rec: Mapping[str, Any], case_path: str) -> Dict[str
             "case_path": case_path,
             "z_obs": rec.get("z_obs", []),
             "three_phase_voltages": rec.get("three_phase_voltages", []),
+            "three_phase_branch_currents": rec.get("three_phase_branch_currents", []),
+            "branch_current_sigma_pu": rec.get("branch_current_sigma_pu"),
             "scan_window_path": f"bound://hif_window/{rec.get('id')}",
             "scans": rec.get("scans", []),
             "sigma_z": rec.get("sigma_z"),
@@ -1144,12 +1146,18 @@ def make_hif_context_payload(rec: Mapping[str, Any], case_path: str) -> Dict[str
 
 
 def make_imbalance_followup_payload(rec: Mapping[str, Any]) -> Dict[str, Any]:
-    return round_user_payload(
-        {
-            "three_phase_voltages": rec.get("three_phase_voltages", []),
-            "note": "Per-bus three-phase VLN voltage measurements from substations.",
-        }
-    )
+    payload: Dict[str, Any] = {
+        "three_phase_voltages": rec.get("three_phase_voltages", []),
+        "note": "Per-bus three-phase VLN voltage measurements from substations.",
+    }
+    if rec.get("three_phase_branch_currents"):
+        payload["three_phase_branch_currents"] = rec.get("three_phase_branch_currents")
+        payload["branch_current_sigma_pu"] = rec.get("branch_current_sigma_pu")
+        payload["note"] = (
+            "Per-bus three-phase VLN voltages and per-phase branch terminal "
+            "current phasors from substations."
+        )
+    return round_user_payload(payload)
 
 
 def make_verification_snapshot_payload(

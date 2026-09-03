@@ -38,6 +38,10 @@ from three_phase_nlm.hif_parameter_estimator import (  # noqa: E402
     _simulate_candidate,
 )
 from three_phase_nlm.ieee14_adapter import branch_info_for_row0  # noqa: E402
+from three_phase_nlm.branch_current_analysis import (  # noqa: E402
+    BRANCH_CURRENT_CHANNEL,
+    branch_current_rows_valid,
+)
 
 
 TRANSFORMER_ROWS = [
@@ -316,6 +320,7 @@ def main() -> None:
     physics_vectors: list[list[float]] = []
     window_fingerprints: set[str] = set()
     duplicate_windows = 0
+    branch_current_scan_count = 0
 
     schemas_equal = True
     points_unique = True
@@ -360,6 +365,17 @@ def main() -> None:
             if not _phasors_valid(scan.get("three_phase_voltages")):
                 issues["bad_three_phase_voltages"] += 1
                 values_finite = False
+            branch_currents = scan.get(BRANCH_CURRENT_CHANNEL)
+            if branch_currents is not None:
+                branch_current_scan_count += 1
+                if not branch_current_rows_valid(branch_currents, expected_branches=20):
+                    issues["bad_three_phase_branch_currents"] += 1
+                    values_finite = False
+                clean_currents = scan.get(f"{BRANCH_CURRENT_CHANNEL}_clean")
+                if args.strict_physics and not branch_current_rows_valid(
+                    clean_currents, expected_branches=20
+                ):
+                    issues["missing_clean_branch_currents"] += 1
             topology_ids.add(str(scan.get("topology_id", row.get("topology_id"))))
             if "label" in scan or "shared_label" in scan:
                 issues["label_leakage_inside_scan"] += 1
@@ -405,6 +421,7 @@ def main() -> None:
         "meta": str(args.meta),
         "event_count": len(rows),
         "snapshot_count": sum(len(row.get("scans", [])) for row in rows),
+        "branch_current_scan_count": int(branch_current_scan_count),
         "expected_scans_per_event": expected_scans,
         "operating_point_checks": operating_checks,
         "rank_diagnostics": {

@@ -10,6 +10,13 @@ import numpy as np
 
 from hif_search_limits import validate_hif_search_limits
 
+from .branch_current_analysis import (
+    BRANCH_CURRENT_CHANNEL,
+    BRANCH_CURRENT_SIGMA_KEY,
+    DEFAULT_BRANCH_CURRENT_SIGMA_PU,
+    branch_current_rows_to_phasors,
+    terminal_current_hif_localization_multiscan,
+)
 from .dss_hif_injector import _phase_number
 from .hif_parameter_estimator import (
     _candidate_payload,
@@ -18,7 +25,9 @@ from .hif_parameter_estimator import (
     _resolve_model_dir,
     _simulate_base,
     _simulate_candidate,
+    _terminal_seed_points,
     classify_parameter_certainty,
+    terminal_current_branch_evidence,
 )
 from .hif_operating_point import canonicalize_ieee14_operating_point
 from .ieee14_adapter import branch_info_for_row0
@@ -28,6 +37,19 @@ _PHASES = ("A", "B", "C")
 _SELECTION_MODES = {"all", "diversity_greedy", "information_greedy"}
 _RESISTANCE_MODES = {"shared", "scan_specific_smooth"}
 _ROBUST_LOSSES = {"linear", "soft_l1", "huber"}
+#: A single scan counts as identifiable on its own only when its Cramer-Rao
+#: standard deviation of ``alpha`` is within the release-audit tolerance.
+SINGLE_SCAN_ALPHA_STD_LIMIT = 0.05
+
+
+def _alpha_crlb_std(jacobian: np.ndarray) -> float | None:
+    """Cramer-Rao standard deviation of alpha from one scan's weighted Jacobian."""
+    try:
+        covariance = np.linalg.pinv(jacobian.T @ jacobian, rcond=1e-12)
+        value = float(covariance[0, 0])
+    except Exception:
+        return None
+    return math.sqrt(value) if math.isfinite(value) and value >= 0.0 else None
 
 
 @dataclass(frozen=True)
@@ -38,6 +60,100 @@ class HIFScan:
     op_point: Mapping[str, Any]
     sigma_z: np.ndarray | None = None
     three_phase_sigma: float = 5e-3
+    three_phase_branch_currents: Any = None
+    branch_current_sigma: float = DEFAULT_BRANCH_CURRENT_SIGMA_PU
+
+
+def _aggregate_terminal_estimates(
+    estimates: Sequence[Mapping[str, Any]],
+    *,
+    r_hif_pu_min: float,
+    r_hif_pu_max: float,
+) -> dict[str, Any] | None:
+    """Combine per-scan closed-form estimates into one seed with a phase vote."""
+    if not estimates:
+        return None
+    phase_votes: dict[str, float] = {}
+    for item in estimates:
+        phase = str(item.get("phase") or "")
+        if phase:
+            phase_votes[phase] = phase_votes.get(phase, 0.0) + 1.0
+    if not phase_votes:
+        return None
+    majority = max(sorted(phase_votes), key=lambda phase: phase_votes[phase])
+    agreeing = [item for item in estimates if str(item.get("phase")) == majority]
+    alphas = [
+        float(item["alpha_from_from_bus"])
+        for item in agreeing
+        if item.get("alpha_from_from_bus") is not None
+        and math.isfinite(float(item["alpha_from_from_bus"]))
+    ]
+    log_rs = [
+        math.log(float(item["r_hif_pu"]))
+        for item in agreeing
+        if item.get("r_hif_pu") is not None
+        and math.isfinite(float(item["r_hif_pu"]))
+        and float(item["r_hif_pu"]) > 0.0
+    ]
+    if not alphas:
+        return None
+    r_seed = math.exp(float(np.median(log_rs))) if log_rs else math.sqrt(
+        float(r_hif_pu_min) * float(r_hif_pu_max)
+    )
+    confident = [item for item in estimates if bool(item.get("phase_confident"))]
+    phase_confident = bool(
+        len(confident) >= max(1, math.ceil(len(estimates) / 2.0))
+        and all(str(item.get("phase")) == majority for item in confident)
+    )
+    detected_fraction = float(
+        sum(1 for item in estimates if bool(item.get("differential_detected"))) / len(estimates)
+    )
+    consistency = [
+        float(item["consistency_ratio"])
+        for item in agreeing
+        if item.get("consistency_ratio") is not None
+        and math.isfinite(float(item["consistency_ratio"]))
+    ]
+    x_values = [
+        float(item["x_hif_pu"])
+        for item in agreeing
+        if item.get("x_hif_pu") is not None and math.isfinite(float(item["x_hif_pu"]))
+    ]
+    return {
+        "method": str(estimates[0].get("method") or "terminal_current_differential"),
+        "branch_row0": estimates[0].get("branch_row0"),
+        "dss_element": estimates[0].get("dss_element"),
+        "phase": majority,
+        "phase_votes": {phase: int(count) for phase, count in sorted(phase_votes.items())},
+        "phase_confident": phase_confident,
+        "alpha_from_from_bus": float(np.median(alphas)),
+        "alpha_interval": [min(alphas), max(alphas)],
+        "r_hif_pu": float(r_seed),
+        "r_hif_pu_interval": [math.exp(min(log_rs)), math.exp(max(log_rs))] if log_rs else None,
+        "x_hif_pu": float(np.median(x_values)) if x_values else None,
+        "consistency_ratio": float(np.median(consistency)) if consistency else None,
+        "endpoint_ambiguous": bool(
+            float(np.median(alphas)) <= 0.02 or float(np.median(alphas)) >= 0.98
+        ),
+        # Per-scan detection; the coherent window detection is filled in by
+        # the estimator once it has averaged the differential across scans.
+        "differential_detected_scan_fraction": detected_fraction,
+        "differential_detected": bool(detected_fraction >= 0.5),
+        "scan_count": len(estimates),
+        "agreeing_scan_count": len(agreeing),
+        "per_scan": [
+            {
+                "scan_index": item.get("scan_index"),
+                "phase": item.get("phase"),
+                "alpha_from_from_bus": item.get("alpha_from_from_bus"),
+                "r_hif_pu": item.get("r_hif_pu"),
+                "i_hif_pu": item.get("i_hif_pu"),
+                "differential_detected": item.get("differential_detected"),
+                "phase_confident": item.get("phase_confident"),
+            }
+            for item in estimates
+        ],
+    }
 
 
 def _finite_float(value: Any, *, field: str) -> float:
@@ -143,6 +259,18 @@ def _parse_scans(
         )
         if three_phase_sigma <= 0.0:
             raise ValueError("three_phase_sigma must be positive")
+        branch_current_sigma = _finite_float(
+            item.get(
+                BRANCH_CURRENT_SIGMA_KEY,
+                window.get(BRANCH_CURRENT_SIGMA_KEY, DEFAULT_BRANCH_CURRENT_SIGMA_PU),
+            ),
+            field=f"scan {position} {BRANCH_CURRENT_SIGMA_KEY}",
+        )
+        if branch_current_sigma <= 0.0:
+            raise ValueError(f"{BRANCH_CURRENT_SIGMA_KEY} must be positive")
+        branch_currents = item.get(BRANCH_CURRENT_CHANNEL)
+        if branch_currents is not None and not branch_current_rows_to_phasors(branch_currents):
+            raise ValueError(f"scan {position} {BRANCH_CURRENT_CHANNEL} carries no usable phasors")
         parsed.append(
             HIFScan(
                 scan_index=int(item.get("scan_index", position)),
@@ -151,6 +279,8 @@ def _parse_scans(
                 op_point=canonicalize_ieee14_operating_point(op_point),
                 sigma_z=sigma,
                 three_phase_sigma=three_phase_sigma,
+                three_phase_branch_currents=branch_currents,
+                branch_current_sigma=branch_current_sigma,
             )
         )
     if len(topology_ids) > 1:
@@ -198,6 +328,9 @@ def _scan_residual(scan: HIFScan, simulated: Mapping[str, Any]) -> np.ndarray:
         simulated_three_phase_voltages=simulated.get("three_phase_voltages"),
         sigma_z=scan.sigma_z,
         three_phase_sigma=scan.three_phase_sigma,
+        observed_branch_currents=scan.three_phase_branch_currents,
+        simulated_branch_currents=simulated.get(BRANCH_CURRENT_CHANNEL),
+        branch_current_sigma=scan.branch_current_sigma,
     )
 
 
@@ -220,6 +353,12 @@ def _weighted_simulation_difference(
     positive: Mapping[str, Any],
     negative: Mapping[str, Any],
 ) -> np.ndarray:
+    # Sensitivities only include the current block when the scan observes it,
+    # so the information matrix reflects the telemetry actually available.
+    currents_observed = bool(
+        scan.three_phase_branch_currents
+        and branch_current_rows_to_phasors(scan.three_phase_branch_currents)
+    )
     return _residual_vector(
         observed_z=positive["z"],
         simulated_z=negative["z"],
@@ -227,6 +366,9 @@ def _weighted_simulation_difference(
         simulated_three_phase_voltages=negative.get("three_phase_voltages"),
         sigma_z=scan.sigma_z,
         three_phase_sigma=scan.three_phase_sigma,
+        observed_branch_currents=positive.get(BRANCH_CURRENT_CHANNEL) if currents_observed else None,
+        simulated_branch_currents=negative.get(BRANCH_CURRENT_CHANNEL) if currents_observed else None,
+        branch_current_sigma=scan.branch_current_sigma,
     )
 
 
@@ -349,16 +491,52 @@ def _observability_payload(
     condition_limit: float,
     correlation_limit: float,
     diagnostic_method: str,
+    per_scan_alpha_std: Sequence[float] | None = None,
+    single_scan_alpha_std_limit: float = SINGLE_SCAN_ALPHA_STD_LIMIT,
+    effective_alpha_std: float | None = None,
 ) -> dict[str, Any]:
     rank, singular, condition = _matrix_rank_and_condition(effective_information)
-    single_ranks = [_matrix_rank_and_condition(item)[0] for item in per_scan_information]
+    single_stats = [_matrix_rank_and_condition(item) for item in per_scan_information]
+    single_ranks = [stat[0] for stat in single_stats]
     best_single_rank = max(single_ranks, default=0)
-    correlation = None
-    if rank == 2:
-        covariance = np.linalg.pinv(effective_information, rcond=1e-12)
+
+    def _correlation(information: np.ndarray) -> float | None:
+        covariance = np.linalg.pinv(information, rcond=1e-12)
         denom = math.sqrt(max(float(covariance[0, 0] * covariance[1, 1]), 0.0))
-        if denom > 0.0:
-            correlation = float(np.clip(covariance[0, 1] / denom, -1.0, 1.0))
+        if denom <= 0.0:
+            return None
+        return float(np.clip(covariance[0, 1] / denom, -1.0, 1.0))
+
+    correlation = _correlation(effective_information) if rank == 2 else None
+    # Two-terminal current telemetry can make a single snapshot identifiable
+    # on its own; repeated scans then average noise rather than supply the
+    # missing sensitivity direction, which is not the "noise_averaging_only"
+    # failure mode of the voltage-only measurement set.  Conditioning alone
+    # cannot show this (it is scale-invariant and the voltage-only matrix is
+    # also numerically full rank), so the claim is tied to an absolute
+    # sensitivity: the Cramer-Rao standard deviation of ``alpha`` from that
+    # scan's weighted residuals must sit inside the audit tolerance.
+    single_scan_identifiable = False
+    single_scan_alpha_std_min = None
+    if per_scan_alpha_std is not None:
+        finite_stds = [
+            float(value) for value in per_scan_alpha_std
+            if value is not None and math.isfinite(float(value))
+        ]
+        single_scan_alpha_std_min = min(finite_stds) if finite_stds else None
+        for (single_rank, _values, single_condition), item, alpha_std in zip(
+            single_stats, per_scan_information, per_scan_alpha_std
+        ):
+            if single_rank != 2 or single_condition is None or single_condition > float(condition_limit):
+                continue
+            if alpha_std is None or not math.isfinite(float(alpha_std)):
+                continue
+            if float(alpha_std) > float(single_scan_alpha_std_limit):
+                continue
+            single_correlation = _correlation(item)
+            if single_correlation is not None and abs(single_correlation) <= float(correlation_limit):
+                single_scan_identifiable = True
+                break
 
     trace_scale = max(
         [float(np.trace(effective_information)), *[float(np.trace(item)) for item in per_scan_information], 1.0]
@@ -379,6 +557,17 @@ def _observability_payload(
         weighted_residual_norm > 3.0
         and (residual_reduction is None or float(residual_reduction) < 0.20)
     )
+    # Window-level precision claim: the Cramer-Rao spread of alpha from every
+    # selected scan together.  When the caller supplies it, identifiability
+    # also requires it to sit inside the audit tolerance, and a low-diversity
+    # window that nevertheless reaches that precision is genuine averaging of
+    # an observable parameter rather than the voltage-only failure mode.
+    effective_std = (
+        float(effective_alpha_std)
+        if effective_alpha_std is not None and math.isfinite(float(effective_alpha_std))
+        else None
+    )
+    precision_ok = effective_std is None or effective_std <= float(single_scan_alpha_std_limit)
     identifiable = bool(
         rank == 2
         and condition is not None
@@ -386,12 +575,18 @@ def _observability_payload(
         and correlation is not None
         and abs(correlation) <= float(correlation_limit)
         and not model_mismatch
+        and precision_ok
     )
     if rank < 2:
         status = "rank_deficient"
     elif model_mismatch:
         status = "model_mismatch_suspected"
-    elif scan_count > 1 and diversity < 0.05:
+    elif (
+        scan_count > 1
+        and diversity < 0.05
+        and not single_scan_identifiable
+        and not (effective_std is not None and effective_std <= float(single_scan_alpha_std_limit))
+    ):
         status = "noise_averaging_only"
     elif identifiable:
         status = "full_rank_well_conditioned"
@@ -403,6 +598,11 @@ def _observability_payload(
         "parameter_coordinates": ["alpha", "log_r_hif_pu"],
         "effective_rank": int(rank),
         "best_single_scan_rank": int(best_single_rank),
+        "single_scan_identifiable": bool(single_scan_identifiable),
+        "single_scan_alpha_std_min": single_scan_alpha_std_min,
+        "alpha_crlb_std_effective": effective_std,
+        "alpha_crlb_std_limit": float(single_scan_alpha_std_limit),
+        "single_scan_alpha_std_limit": float(single_scan_alpha_std_limit),
         "rank_gain_vs_best_single_scan": int(rank - best_single_rank),
         "smallest_singular_value": float(singular[-1]) if singular.size else None,
         "largest_singular_value": float(singular[0]) if singular.size else None,
@@ -604,6 +804,74 @@ def estimate_hif_location_magnitude_multiscan(
     phase_candidates = [str(candidate_phase).strip().upper()] if candidate_phase else list(_PHASES)
     for phase in phase_candidates:
         _phase_number(phase)
+
+    # Per-scan closed-form terminal-current evidence, aggregated into one
+    # seed and a phase vote.  The OpenDSS search still verifies the seed.
+    per_scan_terminal: list[dict[str, Any]] = []
+    for scan in parsed_scans:
+        try:
+            evidence = terminal_current_branch_evidence(
+                scan.three_phase_voltages,
+                scan.three_phase_branch_currents,
+                branch_row0=int(candidate_branch_row0),
+                candidate_phase=candidate_phase,
+                sigma=float(scan.branch_current_sigma),
+            )
+        except Exception:
+            evidence = None
+        if evidence is not None:
+            evidence = dict(evidence)
+            evidence["scan_index"] = int(scan.scan_index)
+            per_scan_terminal.append(evidence)
+    terminal_estimate = _aggregate_terminal_estimates(
+        per_scan_terminal,
+        r_hif_pu_min=float(r_hif_pu_min),
+        r_hif_pu_max=float(r_hif_pu_max),
+    )
+    if terminal_estimate is not None:
+        # Coherent window detection: average the complex differential across
+        # scans so a persistent fault below the single-scan floor still
+        # registers, and require it to land on the candidate line.
+        try:
+            coherent = terminal_current_hif_localization_multiscan(
+                [
+                    {
+                        "scan_index": scan.scan_index,
+                        "three_phase_voltages": scan.three_phase_voltages,
+                        BRANCH_CURRENT_CHANNEL: scan.three_phase_branch_currents,
+                    }
+                    for scan in parsed_scans
+                    if scan.three_phase_branch_currents
+                ],
+                top_k=3,
+                sigma_pu=float(np.median([scan.branch_current_sigma for scan in parsed_scans])),
+            )
+        except Exception:
+            coherent = None
+        if coherent is not None:
+            coherent_top = int(coherent["top_hif_groups"][0]["branch_row0"])
+            terminal_estimate.update(
+                {
+                    "coherent_top_branch_row0": coherent_top,
+                    "coherent_separation_ratio": coherent.get("separation_ratio"),
+                    "coherent_differential_detected": bool(coherent.get("differential_detected")),
+                    "differential_detected": bool(
+                        coherent.get("differential_detected")
+                        and coherent_top == int(candidate_branch_row0)
+                    ),
+                }
+            )
+    phase_restricted = False
+    if (
+        terminal_estimate is not None
+        and candidate_phase is None
+        and bool(terminal_estimate.get("phase_confident"))
+    ):
+        phase_candidates = [str(terminal_estimate["phase"])]
+        phase_restricted = True
+    branch_currents_used = any(
+        bool(scan.three_phase_branch_currents) for scan in parsed_scans
+    )
 
     simulation_cache: dict[tuple[str, float, float, str], dict[str, Any]] = {}
     base_cache: dict[str, dict[str, Any]] = {}
@@ -814,6 +1082,36 @@ def estimate_hif_location_magnitude_multiscan(
                 if candidate is not None:
                     all_candidates.append(candidate)
 
+    terminal_seeded = False
+    if terminal_estimate is not None and str(terminal_estimate.get("phase")) in phase_candidates:
+        per_scan_r = {
+            int(item["scan_index"]): float(item["r_hif_pu"])
+            for item in per_scan_terminal
+            if item.get("r_hif_pu") is not None
+            and math.isfinite(float(item["r_hif_pu"]))
+            and float(item["r_hif_pu"]) > 0.0
+        }
+        for alpha, r_seed, phase in _terminal_seed_points(
+            terminal_estimate,
+            r_hif_pu_min=float(r_hif_pu_min),
+            r_hif_pu_max=float(r_hif_pu_max),
+        ):
+            if mode == "shared":
+                candidate = shared_candidate(float(alpha), float(r_seed), phase, "terminal_current_seed")
+            else:
+                ratio = float(r_seed) / float(terminal_estimate["r_hif_pu"])
+                scan_r = [
+                    min(
+                        float(r_hif_pu_max),
+                        max(float(r_hif_pu_min), per_scan_r.get(int(scan.scan_index), float(r_seed)) * ratio),
+                    )
+                    for scan in selected_scans
+                ]
+                candidate = varying_candidate(float(alpha), scan_r, phase, "terminal_current_seed")
+            if candidate is not None:
+                all_candidates.append(candidate)
+                terminal_seeded = True
+
     if not all_candidates:
         return {
             "success": False,
@@ -966,15 +1264,24 @@ def estimate_hif_location_magnitude_multiscan(
         if not jacobians:
             raise RuntimeError("No selected scan produced finite-difference sensitivities")
         per_scan_information = [jac.T @ jac / max(jac.shape[0], 1) for jac in jacobians]
+        per_scan_alpha_std = [_alpha_crlb_std(jac) for jac in jacobians]
         if mode == "shared":
             effective_information = np.sum(per_scan_information, axis=0)
             diagnostic_method = "finite_difference_reduced_information"
+            # Unnormalized Fisher information of the whole window.
+            effective_alpha_std = _alpha_crlb_std(np.vstack(jacobians))
         else:
             effective_information = _profile_scan_specific_information(
                 jacobians,
                 smoothness_lambda=float(smoothness_lambda),
             )
             diagnostic_method = "finite_difference_profiled_information_with_resistance_smoothness"
+            try:
+                profiled_covariance = np.linalg.pinv(effective_information, rcond=1e-12)
+                value = float(profiled_covariance[0, 0])
+                effective_alpha_std = math.sqrt(value) if math.isfinite(value) and value >= 0.0 else None
+            except Exception:
+                effective_alpha_std = None
         observability = _with_diagnostic_coverage(
             _observability_payload(
                 effective_information=effective_information,
@@ -985,6 +1292,8 @@ def estimate_hif_location_magnitude_multiscan(
                 condition_limit=float(condition_number_limit),
                 correlation_limit=float(absolute_correlation_limit),
                 diagnostic_method=diagnostic_method,
+                per_scan_alpha_std=per_scan_alpha_std,
+                effective_alpha_std=effective_alpha_std,
             ),
             requested_scan_count=len(selected_scans),
             successful_scan_indices=diagnostic_scan_indices,
@@ -1092,6 +1401,7 @@ def estimate_hif_location_magnitude_multiscan(
             _multiscan_candidate_payload(item, rank)
             for rank, item in enumerate(top_candidates, start=1)
         ],
+        "terminal_current_estimate": terminal_estimate,
         "scan_selection": {
             "requested": selection_mode,
             "applied": applied_selection,
@@ -1116,6 +1426,9 @@ def estimate_hif_location_magnitude_multiscan(
             "cache_reused_across_identical_operating_points": True,
             "local_refinement_requested": bool(seeds and int(local_max_nfev) > 0),
             "candidate_errors": candidate_errors[:8],
+            "branch_current_block": bool(branch_currents_used),
+            "phase_restricted_by_terminal_currents": phase_restricted,
+            "terminal_current_seeded": terminal_seeded,
         },
         "window_id": window.get("id"),
     }

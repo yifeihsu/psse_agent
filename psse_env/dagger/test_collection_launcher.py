@@ -133,10 +133,13 @@ exec /usr/bin/date "$@"
             """#!/bin/bash
 set -u
 header='timestamp, index, uuid, name, utilization.gpu [%], memory.used [MiB], memory.total [MiB], power.draw [W], clocks.sm [MHz]'
+# Each fake monitor must release only its matching job attempt.
+ready_marker="$D1_DIR/nvml_stub_ready.${SLURM_JOB_ID:?}.${SLURM_RESTART_COUNT:?}"
 if [[ "$*" == *"--format=csv,noheader,nounits"* ]]; then
     printf '%s\n' 'GPU-a1b2, NVIDIA H200, 143771'
     exit 0
 fi
+sleep "${MONITOR_START_DELAY_SECONDS:-0}"
 now_timestamp() { date '+%Y/%m/%d %H:%M:%S.000'; }
 case "${MONITOR_MODE:-good}" in
     good)
@@ -215,7 +218,7 @@ PY
         exit 98
         ;;
 esac
-: > "$D1_DIR/nvml_stub_ready"
+: > "$ready_marker"
 if [[ "${MONITOR_MODE:-good}" != "stubborn" \
     && "${MONITOR_MODE:-good}" != "signal_finalize" ]]; then
     trap 'exit 0' INT TERM
@@ -227,13 +230,15 @@ while :; do sleep 1; done
             self.repo / "scripts" / "run_dagger1_collection.sh",
             """#!/bin/bash
 set -euo pipefail
+# Match only this monitor attempt; prior attempt markers may remain.
+ready_marker="$D1_DIR/nvml_stub_ready.${SLURM_JOB_ID:?}.${SLURM_RESTART_COUNT:?}"
 case "${COLLECTOR_MODE:-success}" in
     success)
         # Synchronize the fast collector stub with monitor initialization. A
         # loaded Linux runner may otherwise finish this 0.2-second collector
         # before the monitor process receives its first scheduling slice.
         for _ in $(seq 1 200); do
-            [[ -e "$D1_DIR/nvml_stub_ready" ]] && break
+            [[ -e "$ready_marker" ]] && break
             sleep 0.01
         done
         sleep 0.2
@@ -244,7 +249,7 @@ case "${COLLECTOR_MODE:-success}" in
         # fake monitor winning an unrelated scheduling race on a loaded Linux
         # runner.  Synchronize with the same ready marker as the fast stub.
         for _ in $(seq 1 200); do
-            [[ -e "$D1_DIR/nvml_stub_ready" ]] && break
+            [[ -e "$ready_marker" ]] && break
             sleep 0.01
         done
         sleep 1
@@ -359,6 +364,7 @@ esac
         fail_receipt_rollback_fsync: str = "0",
         fail_receipt_temp_unlink: str = "0",
         delay_collection_interval_date: str = "0",
+        monitor_start_delay_seconds: str = "0",
     ) -> subprocess.CompletedProcess[bytes]:
         posix = self.posix_root
         assignments = {
@@ -400,6 +406,7 @@ esac
             "FAIL_RECEIPT_ROLLBACK_FSYNC": fail_receipt_rollback_fsync,
             "FAIL_RECEIPT_TEMP_UNLINK": fail_receipt_temp_unlink,
             "DELAY_COLLECTION_INTERVAL_DATE": delay_collection_interval_date,
+            "MONITOR_START_DELAY_SECONDS": monitor_start_delay_seconds,
         }
         prefix = "".join(
             f"export {name}={shlex.quote(value)}\n"
@@ -817,7 +824,11 @@ esac
             {"warning": 75.0, "cancellation_risk": 60.0},
         )
 
-        low_result = self._run(job_id="7012", monitor_mode="low")
+        low_result = self._run(
+            job_id="7012",
+            monitor_mode="low",
+            monitor_start_delay_seconds="0.5",
+        )
         low_receipt = self._receipt("7012")
         self.assertEqual(low_result.returncode, 0, low_result.stderr.decode())
         self.assertTrue(low_receipt["nvml_telemetry_requirement_met"])

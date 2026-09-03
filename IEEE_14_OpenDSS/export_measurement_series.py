@@ -51,6 +51,51 @@ def _phase_terminal_complex_powers(
     return terminal_powers
 
 
+def _phase_terminal_complex_currents(
+    currents,
+    node_order,
+    *,
+    n_conductors,
+    n_terminals,
+    phase_nodes=(1, 2, 3),
+):
+    """Split an OpenDSS current array by terminal and order phase conductors.
+
+    Returns one ``[Ia, Ib, Ic]`` list of complex amps per terminal.  Conductors
+    are matched by node number so four-conductor transformer terminals drop
+    the neutral, and a missing phase node yields ``0j`` rather than shifting
+    the remaining phases.
+    """
+    n_conductors = int(n_conductors)
+    n_terminals = int(n_terminals)
+    if n_conductors < 1 or n_terminals < 1:
+        raise ValueError("n_conductors and n_terminals must be positive")
+
+    raw = np.asarray(currents, dtype=float).reshape(-1)
+    if raw.size % 2:
+        raise ValueError(f"Unexpected odd current-array size: {raw.size}")
+    complex_currents = raw[0::2] + 1j * raw[1::2]
+    expected = n_conductors * n_terminals
+    if complex_currents.size != expected:
+        raise ValueError(
+            f"Unexpected current-array size: got {complex_currents.size}, expected {expected}"
+        )
+    nodes = [int(node) for node in node_order]
+    if len(nodes) != expected:
+        raise ValueError(f"Unexpected NodeOrder size: got {len(nodes)}, expected {expected}")
+
+    terminal_currents = []
+    for terminal in range(n_terminals):
+        start = terminal * n_conductors
+        stop = start + n_conductors
+        by_node = {
+            node: value
+            for value, node in zip(complex_currents[start:stop], nodes[start:stop])
+        }
+        terminal_currents.append([complex(by_node.get(int(node), 0j)) for node in phase_nodes])
+    return terminal_currents
+
+
 def element_pq_3ph_per_terminal():
     """
     Return list of (P_MW, Q_Mvar) per terminal for the active CktElement,
@@ -127,6 +172,104 @@ def _normalize_branch_overrides(branch_element_overrides):
     if not branch_element_overrides:
         return {}
     return {str(key).lower(): value for key, value in dict(branch_element_overrides).items()}
+
+
+def _terminal_bus_name(terminal):
+    names = dss.CktElement.BusNames() or []
+    if len(names) <= int(terminal):
+        raise ValueError(
+            f"Element {dss.CktElement.Name()} has no terminal {terminal}"
+        )
+    return str(names[int(terminal)]).split(".")[0].lower()
+
+
+def _bus_current_base_amps(bus, *, mva_base=100.0):
+    """Per-phase current base: (S_base / 3) / V_LN,base."""
+    dss.Circuit.SetActiveBus(bus)
+    kvbase_ln = float(dss.Bus.kVBase() or 0.0)
+    if kvbase_ln <= 0.0:
+        raise ValueError(f"OpenDSS reports no LN base kV for bus {bus}")
+    return (float(mva_base) * 1e6 / 3.0) / (kvbase_ln * 1000.0)
+
+
+def _element_terminal_current_phasors(elem, terminal):
+    if not dss.Circuit.SetActiveElement(elem):
+        raise ValueError(f"OpenDSS element not found: {elem}")
+    terminals = _phase_terminal_complex_currents(
+        dss.CktElement.Currents(),
+        dss.CktElement.NodeOrder(),
+        n_conductors=dss.CktElement.NumConductors(),
+        n_terminals=dss.CktElement.NumTerminals(),
+    )
+    if len(terminals) <= int(terminal):
+        raise ValueError(f"Element {elem} has no terminal {terminal}")
+    return terminals[int(terminal)], _terminal_bus_name(terminal)
+
+
+def extract_three_phase_branch_current_measurements(
+    *, branch_names=None, branch_element_overrides=None, mva_base=100.0
+):
+    """
+    Extract per-branch, per-terminal, per-phase current phasors in per-unit.
+
+    Every phasor is the current flowing *into* the branch from that terminal,
+    the native OpenDSS ``CktElement.Currents()`` convention, so the two
+    terminal currents of a healthy line sum to its charging current and a
+    mid-span shunt fault appears as a per-phase differential.
+
+    Returns a list aligned to ``branch_names`` (default ``BRANCH_ORDER``) with
+    entries::
+
+        {branch, branch_row0, from_bus, to_bus,
+         ibase_from_a, ibase_to_a,
+         i_from_pu: [Ia, Ib, Ic], ang_from_deg: [...],
+         i_to_pu:   [Ia, Ib, Ic], ang_to_deg:   [...]}
+
+    ``branch_element_overrides`` uses the same mapping as
+    ``extract_measurement_series`` so hidden split-line HIF scenarios keep the
+    external branch identity and terminal buses.
+    """
+    branch_names = BRANCH_ORDER if branch_names is None else list(branch_names)
+    overrides = _normalize_branch_overrides(branch_element_overrides)
+    rows = []
+    for row0, elem in enumerate(branch_names):
+        override = overrides.get(str(elem).lower())
+        if isinstance(override, dict):
+            terminal_specs = (
+                (override.get("from", elem), int(override.get("from_terminal", 0))),
+                (override.get("to", elem), int(override.get("to_terminal", 1))),
+            )
+        else:
+            terminal_specs = ((elem, 0), (elem, 1))
+        terminal_payloads = []
+        for element_name, terminal in terminal_specs:
+            phasors, bus = _element_terminal_current_phasors(element_name, terminal)
+            ibase = _bus_current_base_amps(bus, mva_base=mva_base)
+            per_unit = [value / ibase for value in phasors]
+            terminal_payloads.append(
+                {
+                    "bus": bus,
+                    "ibase": float(ibase),
+                    "magnitude": [float(abs(value)) for value in per_unit],
+                    "angle": [float(np.degrees(np.angle(value))) for value in per_unit],
+                }
+            )
+        from_payload, to_payload = terminal_payloads
+        rows.append(
+            dict(
+                branch=str(elem),
+                branch_row0=int(row0),
+                from_bus=from_payload["bus"],
+                to_bus=to_payload["bus"],
+                ibase_from_a=from_payload["ibase"],
+                ibase_to_a=to_payload["ibase"],
+                i_from_pu=from_payload["magnitude"],
+                ang_from_deg=from_payload["angle"],
+                i_to_pu=to_payload["magnitude"],
+                ang_to_deg=to_payload["angle"],
+            )
+        )
+    return rows
 
 
 def _branch_terminal_pq(elem, terminal):
