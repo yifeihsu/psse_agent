@@ -955,6 +955,78 @@ class CandidateQualityTests(unittest.TestCase):
         result = self.assess({}, {"target_fixed": True, "remaining_fault_count": 1})
         self.assertEqual(result.disposition, CandidateDisposition.ACCEPT_PARTIAL)
 
+    def test_parameter_repair_with_marginal_target_on_clean_solve_is_accept_final(self):
+        # Frozen root r0_8c0755fce51c after the 2026-09-03 Jacobian repair:
+        # the true line's multiplier settles at 3.13 against the 3.0 cutoff
+        # while the solve is globally clean (79 against 130) and nothing else
+        # remains suspect.  Rejecting it sent the expert to healthy lines.
+        action = {"tool": "correct_parameters", "arguments": {"line_index": 7}}
+        # In-memory case pair: only row 6's reactance changes, so the
+        # fail-closed structural collateral check sees a clean single-row edit.
+        parent_rows = [
+            {"branch_id": f"L{index + 1}", "r": 0.01 * (index + 1), "x": 0.05 * (index + 1)}
+            for index in range(20)
+        ]
+        candidate_rows = [dict(row) for row in parent_rows]
+        candidate_rows[6]["x"] = 0.0129
+        measurements = [1.0] * 122
+        parent = {
+            **self.parent,
+            "case": {"baseMVA": 100.0, "branch": parent_rows},
+            "measurements": list(measurements),
+        }
+        candidate = {
+            **self.candidate,
+            "case": {"baseMVA": 100.0, "branch": candidate_rows},
+            "measurements": list(measurements),
+        }
+        verification = {
+            "evidence_source": "deployment_wls:lagrangian_port",
+            "target_fixed": False,
+            "target_progress": 0.0,
+            "target_metric_kind": "max_abs_branch_multiplier",
+            "target_metric_value": 3.1286,
+            "target_metric_threshold": 3.0,
+            "remaining_suspect_count": 0,
+            "post_action_resolved": True,
+            "globally_resolved": False,
+            "no_material_anomaly_remaining": True,
+            "global_progress": 0.62,
+            "physical_constraints_ok": True,
+        }
+
+        def assess(verification_output, source_action=action):
+            return self.oracle.label_candidate(
+                parent_state=parent,
+                source_action=source_action,
+                candidate_state=candidate,
+                verification_output=verification_output,
+                hidden_truth=None,
+            )
+
+        result = assess(verification)
+        self.assertEqual(result.disposition, CandidateDisposition.ACCEPT_FINAL)
+        self.assertEqual(result.progress_class, "observable_resolved_marginal_target")
+
+        # Outside the tolerance band, with another suspect left, or with the
+        # anomaly remaining, no final acceptance.
+        cases = (
+            ({"target_metric_value": 4.0}, CandidateDisposition.REJECT),
+            ({"remaining_suspect_count": 1}, CandidateDisposition.REJECT),
+            (
+                {"post_action_resolved": False, "no_material_anomaly_remaining": False},
+                CandidateDisposition.REJECT,
+            ),
+        )
+        for override, expected in cases:
+            with self.subTest(override=override):
+                self.assertEqual(assess({**verification, **override}).disposition, expected)
+        # A topology edit never uses this basis (its target test is structural).
+        topology = {"tool": "correct_topology", "arguments": {"line_index": 7, "status": 0}}
+        self.assertNotEqual(
+            assess(verification, topology).disposition, CandidateDisposition.ACCEPT_FINAL
+        )
+
     def test_wrong_family_candidate_is_reject(self):
         result = self.assess(
             {},

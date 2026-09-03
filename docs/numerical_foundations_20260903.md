@@ -155,6 +155,50 @@ updated.
 The immediate next step is a deterministic expert-validation matrix under the
 corrected tools, not another DAgger round.
 
+## Follow-up: frozen parameter routes under the corrected multipliers (2026-09-03)
+
+`test_every_frozen_parameter_route_repairs_then_hands_off` (30 frozen
+parameter and measurement+parameter roots) passed before this repair and
+failed on two roots after it, both by committing a parameter correction on a
+healthy line.  Replaying them against the pre-repair commit isolated two
+different mechanisms.
+
+**`r0_8c0755fce51c` (forced_error_recovery): a correct repair rejected by a
+marginal target test.**  After the meter fix the true line (row 6) is the
+top multiplier at 11.8.  Correcting it brings the WLS objective from 208 to
+79 against a 130 threshold and leaves no other meter or branch suspect, but
+the corrected line's own multiplier settles at 3.13 against the 3.0
+per-branch cutoff, so `target_fixed` is false and the candidate was
+rejected.  The expert then walked down the ranking: healthy row 3 was
+accepted as partial (its own multiplier is small by construction once it is
+adjusted, and the objective moved 35 percent) and healthy row 2 as final.
+Before the repair the same correction reported a multiplier of 2.10 and
+passed; the corrected Jacobian changed the scale, not the physics.  Fix: a
+parameter candidate whose own solve passes the global test, leaves no other
+suspect, and whose only crossing is its target multiplier inside the
+existing 1.25 tolerance band is accepted as final
+(`CandidateQualityOracle`, progress class
+`observable_resolved_marginal_target`), with the same rule mirrored in the
+observable teacher's disposition reconstruction so the teacher and the
+environment cannot deadlock on it.  The chi-square test is the
+goodness-of-fit statistic; one normalized multiplier among all branches
+exceeding a 3-sigma cutoff by a few percent on a clean solve is not
+evidence against the repair.
+
+**`r0_b8173b30f6a6` (invalid_action_recovery): adjacent-line ambiguity.**
+The true fault is on Line.3-4 (row 5); with the meter error still present
+the healthy neighbour Line.2-3 ranks first at 21.6 against 19.0, a
+dominance ratio of 1.14.  Correcting either line explains the data equally:
+338.5 versus 340.7 with the meter error, 86.9 versus 90.1 (both resolved)
+after it.  No observable acceptance rule separates them, and the production
+factory sets `BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD = 1.0`, which
+disables the dominance gate, so the expert commits the top line.  Before
+the repair the wrong-sign multipliers happened to rank the true line first.
+This root is unidentifiable under the corrected physics and must be
+re-audited in the re-freeze this note already calls for; the safe expert
+behaviour for a non-dominant ranking is to escalate rather than commit a
+healthy-line adjustment, which is a release-policy decision.
+
 ## Not changed (out of scope for research use)
 
 Legacy MATLAB scripts (`Transmission/SE.m`, `SEwithtopo.m`, `WLAV.m`) and the

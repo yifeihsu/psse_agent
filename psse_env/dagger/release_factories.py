@@ -507,6 +507,31 @@ def _observable_candidate_disposition(
     if branch_material_progress and global_resolved is False:
         return "commit"
 
+    # Mirror of CandidateQualityOracle's marginal-target-on-clean-solve rule:
+    # a parameter repair whose own solve passes the global anomaly test,
+    # leaves no other meter or branch suspect, and whose target multiplier
+    # sits inside the 1.25 tolerance band above its cutoff is accepted as
+    # final.  ``globally_resolved`` cannot be used here because the
+    # deployment WLS provider folds the per-target test into it; the solve's
+    # own verdict is ``post_action_resolved``.  Must stay aligned with
+    # label_candidate or the teacher proposes a rollback that the
+    # environment's lifecycle gate refuses, and the episode deadlocks.
+    solve_resolved_value = verification.get("post_action_resolved")
+    if solve_resolved_value is None:
+        solve_resolved_value = verification.get("no_material_anomaly_remaining")
+    remaining_suspects = _finite_float(verification.get("remaining_suspect_count"))
+    if (
+        family == "parameter"
+        and solve_resolved_value is True
+        and remaining_suspects is not None
+        and remaining_suspects == 0
+        and target_metric is not None
+        and target_threshold is not None
+        and target_threshold > 0.0
+        and target_metric <= 1.25 * target_threshold
+    ):
+        return "commit"
+
     # Deployment verification exposes an explicit target metric and threshold.
     # When that target is still at or above its threshold, the deployment
     # CandidateQualityOracle rejects the candidate unless a parameter/topology

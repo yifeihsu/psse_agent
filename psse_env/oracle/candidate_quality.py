@@ -215,6 +215,32 @@ class CandidateQualityOracle:
                 if remaining_true_faults is not None
                 else None
             )
+        # A parameter repair whose candidate solve passes the global chi-square
+        # test, leaves no other meter or branch suspect, and whose only
+        # remaining threshold crossing is the corrected branch's own
+        # multiplier sitting marginally above the per-branch cutoff.  The
+        # chi-square test is the authoritative goodness-of-fit statistic; one
+        # normalized multiplier among every branch exceeding a 3-sigma cutoff
+        # by a few percent has a material false-rejection rate on a clean
+        # solve, and refusing such a repair sends the expert on to healthy
+        # lines that fit the same data worse (frozen root r0_8c0755fce51c
+        # after the 2026-09-03 Jacobian repair: true line 7 rejected at 3.13
+        # with the solve at 79 against 130, then healthy lines 4 and 3
+        # committed).  The tolerance band is the one already used for
+        # marginal partial branch progress.
+        solve_resolved = self._solve_resolved(verification)
+        branch_target_marginal_on_clean_solve = bool(
+            not synthetic_truth
+            and target_fixed is False
+            and action_family == "parameter"
+            and solve_resolved is True
+            and self._remaining_suspects(verification) == 0
+            and target_metric_value is not None
+            and target_metric_threshold is not None
+            and target_metric_threshold > 0.0
+            and target_metric_value
+            <= self.max_branch_target_threshold_ratio * target_metric_threshold
+        )
         collateral_damage = self._collateral_damage(
             action, verification, truth, candidate_meta, parent, candidate
         )
@@ -362,6 +388,16 @@ class CandidateQualityOracle:
             disposition = CandidateDisposition.INCONCLUSIVE
             progress_class = "target_fixed_global_status_unknown"
             rationale.extend(["target_fixed", "global_resolution_not_established"])
+        elif branch_target_marginal_on_clean_solve:
+            disposition = CandidateDisposition.ACCEPT_FINAL
+            progress_class = "observable_resolved_marginal_target"
+            rationale.extend(
+                [
+                    "global_test_resolved",
+                    "no_remaining_suspects",
+                    "target_marginally_above_threshold",
+                ]
+            )
         elif branch_target_materially_improved and global_resolved is False:
             # The exact context-supported branch target improved materially
             # and is now only marginally above its local cutoff.  Retain the
@@ -878,6 +914,27 @@ class CandidateQualityOracle:
             return True
         if any(value is True for value in convergence_values) and violations is not None:
             return True
+        return None
+
+    def _solve_resolved(self, verification: Mapping[str, Any]) -> bool | None:
+        """Did the candidate's own solve pass the global anomaly test?
+
+        Distinct from :meth:`_global_resolved`: the deployment WLS provider
+        folds the per-target test into ``globally_resolved`` (resolved *and*
+        target fixed), so a clean solve with a marginal target multiplier
+        reports ``globally_resolved=False`` while ``post_action_resolved`` and
+        the statistic itself say the anomaly is gone.
+        """
+        explicit = _first_present(
+            verification.get("post_action_resolved"),
+            verification.get("no_material_anomaly_remaining"),
+        )
+        if explicit is not None:
+            return bool(explicit)
+        score = verification.get("remaining_anomaly_score")
+        threshold = verification.get("anomaly_threshold", verification.get("chi_square_threshold"))
+        if score is not None and threshold is not None:
+            return float(score) < float(threshold)
         return None
 
     def _global_resolved(self, verification: Mapping[str, Any]) -> bool | None:
