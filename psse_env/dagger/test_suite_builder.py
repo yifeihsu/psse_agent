@@ -111,7 +111,14 @@ class BC0SuiteBuilderTests(unittest.TestCase):
             "psse_env.dagger.suite_builder._opendss_runtime_version",
             return_value="approved native runtime",
         ):
-            self.assertEqual(validate_builder_environment(), descriptor)
+            self.assertEqual(
+                validate_builder_environment(),
+                {
+                    **descriptor,
+                    "local_diagnostic_build": False,
+                    "release_reproducible": True,
+                },
+            )
 
         self.assertEqual(BC0_BUILDER_PYTHON_MAJOR_MINOR, (3, 12))
 

@@ -25,10 +25,10 @@ DEFAULT_STUDY_MANIFEST = (
 # Updated only through explicit protocol review.  This pins the raw LF-normalized
 # bytes; .gitattributes preserves that representation on Windows and Linux.
 EXPECTED_STUDY_MANIFEST_SHA256 = (
-    "3b3a59b79e39544c5faa6aa20512511e69fc28b49d533101d6a2b991c9ae2696"
+    "206ee008477dac92f53744b3107231e15e8d7de2064d3989c7e9687daa7853b3"
 )
 EXPECTED_STUDY_MANIFEST_CONTENT_SHA256 = (
-    "5c19d2430f19d5742302b43d38d626b1f8b083493c57bc0b288cf3258fd3371f"
+    "e588f6f98c3d1423d0756c7baa41b4cf0cf13336407f02b593c2622c4ac18191"
 )
 EXPECTED_COMPARISON_POLICY_SHA256 = (
     "9763dc426de33e328a06cd5abfb4f5788a05ef91fac6cb4113e30680f8c2c550"
@@ -37,7 +37,7 @@ EXPECTED_OBJECTIVE_THRESHOLDS_SHA256 = (
     "1d5b32c6cde50b1c554878f9b3b20853d3c35e50c698de1c80edb409c4af2189"
 )
 EXPECTED_STABILITY_SCOPE_POLICY_SHA256 = (
-    "ee0466ade2da7d981979e6d3546f20818f60ea61c5c164f64de3df33925c7ffa"
+    "f713c5763157f0dd88751fd605f6cb63c71d2fb5abd83a6be91a661d31ce9a00"
 )
 
 PINNED_BASE_MODEL_ID = "unsloth/gemma-4-31B-it"
@@ -54,13 +54,17 @@ TRAINING_RNG_ENGINES = (
     "torch_cpu",
     "torch_cuda_all",
 )
+# Research-mode binding: these pins follow the current BC0 freeze (2026-09-03
+# re-freeze under the 1.2 dominance contract) rather than the originally
+# preregistered instrument.  Re-pin them together with bc0_evaluation_policy.json
+# whenever the suite is rebuilt.
 PINNED_SUITE_PATH = "psse_env/dagger/suites/bc0_eval_suite_v1.json"
 PINNED_SUITE_SHA256 = (
-    "195cc7acfcffafbcbf8fc6a52a5eed5111f42eec586187ab051f62b0a7892081"
+    "613bba87413071782786fa18089624f0f5d431c98d783a9a24203bd8c76c029a"
 )
 PINNED_POLICY_PATH = "psse_env/dagger/bc0_evaluation_policy.json"
 PINNED_POLICY_SHA256 = (
-    "7cc2c94ba0c326d245d147d82fd03d547e7242b98b9c43b86b0a5c2e52c1f0bb"
+    "18ac8330f17f58bb20757237c8b2f50befb20784097224d1a94dd54101ab3852"
 )
 DEVELOPMENT_EVALUATION_PROTOCOL_CONTRACT = (
     "dagger_development_evaluation_protocol_v1"

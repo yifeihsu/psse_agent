@@ -9,6 +9,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import psse_env.dagger.build_dagger1_development_holdout as holdout_module
+from psse_env.dagger.release_factories import (
+    BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD,
+)
 from psse_env.dagger.evaluator import validate_release_scenario_suites
 from psse_env.sft.provenance import file_sha256, stable_json_sha256
 
@@ -130,7 +133,9 @@ def _write_boundaries(
                 ),
                 "release_evidence_eligible": False,
                 "source_partition": "train",
-                "parameter_ranking_dominance_threshold": 1.0,
+                "parameter_ranking_dominance_threshold": (
+                    BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD
+                ),
                 "source_state": SOURCE_STATE,
                 "output_sha256": file_sha256(training_path),
                 "scenario_count": 1,

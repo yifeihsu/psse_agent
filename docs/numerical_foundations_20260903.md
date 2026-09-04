@@ -199,6 +199,96 @@ re-audited in the re-freeze this note already calls for; the safe expert
 behaviour for a non-dominant ranking is to escalate rather than commit a
 healthy-line adjustment, which is a release-policy decision.
 
+## Resolution: BC0 dominance threshold raised to 1.2 and suite re-frozen (2026-09-03)
+
+`BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD` in `release_factories.py` is now
+1.2, the same admission ratio training uses, so a non-dominant parameter
+ranking hands off to the operator instead of committing an R/X change on a
+healthy line.
+
+Raising the evaluation threshold alone was not enough.  The suite builder
+constructed its generator without a threshold, and for the evaluation
+partition the generator resolves that to a 1.0 gate with dominance
+enforcement switched off, so a first rebuild still froze eight parameter
+roots the release teacher could not act on; under the 1.2 contract the
+teacher then fell through to topology flips and healthy-meter corrections on
+those roots.  `Round0ScenarioGenerator` therefore gained an explicit
+`enforce_parameter_ranking_dominance` override (default unchanged: partition
+based), and `build_bc0_suite` passes the BC0 threshold with enforcement on,
+so frozen roots are admitted under the same rule the release teacher
+evaluates them with.
+
+`bc0_eval_suite_v1.json` was rebuilt with `scripts/build_bc0_evaluation_suite.py`
+under the repaired estimator and this contract (a deterministic `--check`
+rebuild reproduces it byte for byte), and `bc0_evaluation_policy.json` was
+re-pinned (suite hash, per-suite manifests, `release_factories.py` source
+hash).
+
+* 115 roots, same family quotas; 29 roots differ from the previous freeze
+  (efficiency 2, forced_error_recovery 6, invalid_action_recovery 10,
+  partial_success_retention 9, standard_success 11).  The builder rejected
+  10 corpus parameter rows as `parameter_context_target_not_dominant`; every
+  root that had been on the `prior_failures` list in
+  `test_release_factories.py` (including `r0_b8173b30f6a6`) was among the
+  non-dominant ones and is gone, so that list is now empty.  All 30 frozen
+  parameter-family roots rank their target line at 1.2 or better at the
+  state the contract evaluates (one mixed root, `r0_9ab3b0e75e75`, reaches
+  it only after its meter error is repaired, which is the staged order the
+  mixed-family gate validates).
+* The rebuild ran as a `PSSE_LOCAL_DIAGNOSTIC_BUILD=1` build: this machine has
+  Python 3.13.7, numpy 1.26.4, scipy 1.15.2, and fastmcp 2.12.3 against the
+  pinned 3.12 / 2.3.5 / 1.16.3 / 2.12.4.  The builder report is stamped
+  `release_reproducible: false`; the frozen bytes are not guaranteed to
+  reproduce under the release environment and should be rebuilt there before
+  any release attestation.
+* `build_dagger1_development_holdout` checked the *training* scenario
+  manifest's threshold against the development holdout's own constant; the
+  training boundary is produced under the BC0 contract, so that check now
+  binds to `BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD`.
+  `DAGGER1_DEVELOPMENT_PARAMETER_RANKING_THRESHOLD` itself stays 1.0.
+  Historical DAgger-1 scenario manifests that recorded 1.0 now fail the
+  release-contract binding, which is the intended fail-closed behaviour for
+  artifacts built under the superseded contract.
+* Research-mode relaxations (this project is not a production release):
+  the study manifest `dagger_multi_error_comparison_v1`
+  (`psse_env/dagger/studies/dagger_multiseed_study_v1.json`) and the pins in
+  `study_manifest.py` (`PINNED_SUITE_SHA256`, `PINNED_POLICY_SHA256`,
+  `EXPECTED_STUDY_MANIFEST_SHA256`, `EXPECTED_STUDY_MANIFEST_CONTENT_SHA256`,
+  `EXPECTED_STABILITY_SCOPE_POLICY_SHA256`) now follow the current freeze
+  instead of the originally preregistered instrument; re-pin them together
+  whenever the suite is rebuilt.  The historical expert-closure registry
+  keeps its recorded hashes (it describes past artifacts).  The Linux-only
+  collection-launcher tests skip where `setsid`/`ps` are absent, and the
+  scaffold routing test now encodes the V2-A post-commit branch re-screen.
+
+## Does the revised toolchain work?  Expert over all 115 frozen roots
+
+The observable release expert (no hidden truth) was run over every root of
+the re-frozen suite through the release evaluator.  "Handoff" is the
+contract's terminal for repaired non-diagnostic roots (repair, verify,
+commit, then escalate to the operator); the success measures are that every
+true target was covered and no healthy component was modified.
+
+| family | roots | targets covered & healthy preserved | false commit / finalize / rollback | invalid actions | mean steps |
+| --- | --- | --- | --- | --- | --- |
+| no_error | 4 | 4 (resolved) | 0 / 0 / 0 | 0 | 2.0 |
+| measurement | 8 | 8 | 0 / 0 / 0 | 0 | 7.8 |
+| multi_measurement | 20 | 19 (one 4-error root repaired 3 of 4) | 0 / 0 / 0 | 0 | 19.4 |
+| parameter | 8 | 8 | 0 / 0 / 0 | 0 | 7.4 |
+| topology | 8 | 8 | 0 / 0 / 0 | 0 | 8.4 |
+| measurement+parameter | 22 | 22 | 0 / 0 / 0 | 0 | 11.5 |
+| measurement+topology | 22 | 22 | 0 / 0 / 0 | 0 | 12.5 |
+| harmonic | 4 | 4 (resolved) | 0 / 0 / 0 | 0 | 4.0 |
+| hif | 17 | 17 (localized, diagnosis-only) | 0 / 0 / 0 | 0 | 4.0 |
+| measurement+hif | 2 | 0 of 2 meter errors repaired (HIF localized) | 0 / 0 / 0 | 0 | 4.0 |
+
+115 of 115 episodes terminate, none loops, no healthy component is modified
+anywhere, and every parameter and topology root is repaired on the true
+branch.  The two uncovered items are teacher-policy scope (the HIF route is
+diagnosis-only and does not continue into meter repair; one four-meter chain
+stops after three accepted repairs), not estimator failures.
+
+
 ## Not changed (out of scope for research use)
 
 Legacy MATLAB scripts (`Transmission/SE.m`, `SEwithtopo.m`, `WLAV.m`) and the

@@ -359,6 +359,7 @@ class Round0ScenarioGenerator:
         noise_profile_rows: int = 200,
         source_partition: str | None = None,
         parameter_ranking_dominance_threshold: float | None = None,
+        enforce_parameter_ranking_dominance: bool | None = None,
         unbalance_vuf_threshold: float = DEFAULT_UNBALANCE_VUF_THRESHOLD,
     ) -> None:
         if source_partition not in (None, "train", "evaluation"):
@@ -410,11 +411,18 @@ class Round0ScenarioGenerator:
         # The frozen evaluation suite deliberately preserves its previously
         # approved physical roots, including hard/ambiguous parameter cases.
         # Dominance is a single-label *training admission* requirement, not a
-        # reason to rewrite a pinned holdout.  The evaluation builder therefore
-        # uses the legacy rank-one inventory threshold while train/unspecified
-        # generation enforces the release threshold below.
+        # reason to rewrite a pinned holdout.  By default the evaluation
+        # partition therefore keeps the legacy rank-one inventory (gate off,
+        # threshold 1.0) while train/unspecified generation enforces the
+        # release threshold below.  A builder whose release contract gates
+        # parameter routes at evaluation time (the BC0 suite builder since the
+        # 2026-09-03 re-freeze) passes ``enforce_parameter_ranking_dominance``
+        # explicitly so frozen roots are admitted under the same rule the
+        # release teacher evaluates them with.
         self._enforce_parameter_ranking_dominance = (
             source_partition != "evaluation"
+            if enforce_parameter_ranking_dominance is None
+            else bool(enforce_parameter_ranking_dominance)
         )
         default_parameter_threshold = (
             1.0

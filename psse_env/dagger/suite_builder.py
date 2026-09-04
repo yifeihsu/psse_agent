@@ -23,6 +23,9 @@ from typing import Any
 
 from mcp_server.matpower_server import _load_python_case
 
+from psse_env.dagger.release_factories import (
+    BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD,
+)
 from psse_env.dagger.evaluator import (
     EVALUATION_SUITES,
     fingerprint_evaluation_suites,
@@ -871,6 +874,15 @@ def build_bc0_suite(
             seed=seed,
             validate=validate_physics,
             source_partition=BC0_SUITE_SOURCE_PARTITION,
+            # Admit parameter roots under the same dominance contract the
+            # release environment evaluates them with.  Left unset, the
+            # generator resolves the evaluation partition to a 1.0 gate and
+            # freezes roots whose ranking the release teacher then refuses
+            # to act on.
+            parameter_ranking_dominance_threshold=(
+                BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD
+            ),
+            enforce_parameter_ranking_dominance=True,
             tracked_inputs=tracked_inputs,
         )
         generated = generator.build(plan)

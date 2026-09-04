@@ -16,6 +16,9 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from psse_env.dagger.release_factories import (
+    BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD,
+)
 from psse_env.dagger.dataset_builder import load_jsonl
 from psse_env.dagger.suite_builder import partition_release_scenario_v1
 from psse_env.providers.scenario_generator import Round0ScenarioGenerator
@@ -337,9 +340,13 @@ def _require_current_training_boundary(
         and manifest.get("release_evidence_eligible") is False,
         "source_partition": isinstance(manifest, Mapping)
         and manifest.get("source_partition") == "train",
+        # The training boundary is produced by build_dagger1_scenarios under
+        # the BC0 release contract, so it is bound to that constant; the
+        # development holdout's own (diagnostic-only) admission ratio is a
+        # separate contract checked on the holdout manifest below.
         "parameter_threshold": isinstance(manifest, Mapping)
         and manifest.get("parameter_ranking_dominance_threshold")
-        == DAGGER1_DEVELOPMENT_PARAMETER_RANKING_THRESHOLD,
+        == BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD,
         "source_commit": isinstance(manifest_source, Mapping)
         and manifest_source.get("release_eligible_source") is True
         and manifest_source.get("source_commit") == source_state.get("source_commit"),

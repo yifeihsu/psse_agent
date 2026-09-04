@@ -95,9 +95,11 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
             env.kwargs["parameter_ranking_dominance_threshold"],
             factories.BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD,
         )
+        # Reviewed admission ratio shared with training: ambiguous adjacent-line
+        # rankings hand off instead of modifying a healthy branch.
         self.assertEqual(
             factories.BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD,
-            1.0,
+            1.2,
         )
         self.assertEqual(
             env.kwargs["hif_alpha_grid_size"],
@@ -638,15 +640,14 @@ class RealProductionExpertRecoveryTests(unittest.TestCase):
         self.assertEqual(sum(len(rows) for rows in selected.values()), 30)
 
         observed_regressions: set[str] = set()
-        prior_failures = {
-            "r0_a80744a6c25e",
-            "r0_b8173b30f6a6",
-            "r0_8e0647a30ae4",
-            "r0_b91e784871bd",
-            "r0_026579c5ac67",
-            "r0_33817d90f478",
-            "r0_14bf9b268327",
-        }
+        # Historically failing roots that the frozen suite must keep
+        # exercising.  Every root that was on this list before the 2026-09-03
+        # re-freeze had a non-dominant parameter ranking (ratio below the 1.2
+        # release contract) and is no longer an admissible release root now
+        # that the suite builder enforces that contract with the repaired
+        # branch Jacobian; add ids here again only for roots that regress
+        # under the current contract.
+        prior_failures: set[str] = set()
         for suite_name, scenarios in selected.items():
             result = self._evaluator(required_suite=suite_name).evaluate(
                 {suite_name: scenarios}

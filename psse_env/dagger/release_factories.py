@@ -103,14 +103,17 @@ BASE_SNAPSHOT_OPTIONAL_FILE_MANIFEST: dict[str, tuple[int, str, str]] = {
 }
 MODEL_TREE_DIGEST_VERSION = "bc0-peft-tree-sha256-v1"
 BC0_CHI2_ALPHA = DEFAULT_CHI2_ALPHA
-# Training admission requires a 1.2 top-to-runner-up parameter ranking so one
-# supervised target is unambiguous.  Closed-loop release evaluation instead
-# preserves the frozen holdout's legacy rank-one inventory at 1.0: the expert
-# may try ranked alternatives, but every proposed correction still has to pass
-# the deployment candidate-quality gate before it can be committed.  Pin this
-# explicitly so the release factory cannot silently inherit the provider's
-# stricter single-label default and strand observably recoverable holdout roots.
-BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD = 1.0
+# Parameter corrections are only proposed when the top-ranked line's normalized
+# multiplier exceeds the runner-up by this ratio.  Release evaluation used to
+# pin 1.0 (the gate effectively off) to preserve a legacy rank-one inventory;
+# after the 2026-09-03 branch-Jacobian repair that let the expert commit an R/X
+# correction on a healthy line adjacent to the true fault (frozen root
+# r0_b8173b30f6a6, ratio 1.14), because the candidate-quality gate cannot
+# distinguish two adjacent lines that both reduce the global objective.  Pin
+# the reviewed 1.2 admission ratio here, the same one training admission uses,
+# so ambiguous roots hand off to the operator instead of modifying a healthy
+# branch.  The frozen suite is re-built under this contract.
+BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD = 1.2
 # Release evaluation uses the same bounded HIF search resolution as the
 # reviewed round-0 aggregate builder.  The general provider defaults remain
 # available outside this frozen release path, but a learner cannot turn one

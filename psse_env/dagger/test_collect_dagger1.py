@@ -50,6 +50,9 @@ from psse_env.dagger.collect_dagger1 import (
     validate_training_scenarios,
     write_failed_collection_evidence_bundle,
 )
+from psse_env.dagger.release_factories import (
+    BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD,
+)
 from psse_env.dagger.build_dagger1_development_holdout import (
     DAGGER1_DEVELOPMENT_HOLDOUT_CONTRACT,
     DAGGER1_DEVELOPMENT_SPLIT,
@@ -200,7 +203,7 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
             "parameter_ranking_admission": {
                 "contract": "distinct_line_abs_lambda_dominance_v1",
                 "enforced": True,
-                "threshold": 1.0,
+                "threshold": BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD,
             },
         }
 
@@ -1648,7 +1651,9 @@ class Dagger1CollectionSafetyTests(unittest.TestCase):
                 "release_evidence_eligible": False,
                 "source_state": source_state,
                 "source_partition": "train",
-                "parameter_ranking_dominance_threshold": 1.0,
+                "parameter_ranking_dominance_threshold": (
+                    BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD
+                ),
                 "seed": collect_module.DAGGER1_SCENARIO_SEED,
                 "plan": collect_module.DAGGER1_PRIMARY_PLAN,
                 "primary_plan": collect_module.DAGGER1_PRIMARY_PLAN,

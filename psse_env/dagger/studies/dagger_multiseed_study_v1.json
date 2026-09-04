@@ -22,9 +22,9 @@
     },
     "evaluation": {
       "suite_path": "psse_env/dagger/suites/bc0_eval_suite_v1.json",
-      "suite_sha256": "195cc7acfcffafbcbf8fc6a52a5eed5111f42eec586187ab051f62b0a7892081",
+      "suite_sha256": "613bba87413071782786fa18089624f0f5d431c98d783a9a24203bd8c76c029a",
       "policy_path": "psse_env/dagger/bc0_evaluation_policy.json",
-      "policy_sha256": "7cc2c94ba0c326d245d147d82fd03d547e7242b98b9c43b86b0a5c2e52c1f0bb",
+      "policy_sha256": "18ac8330f17f58bb20757237c8b2f50befb20784097224d1a94dd54101ab3852",
       "policy_id": "bc0_closed_loop_hard_gate_v3",
       "evaluator_seed": 20260719,
       "max_steps": 24,
@@ -445,7 +445,7 @@
     },
     "frozen_suite": {
       "artifact_role": "evaluation",
-      "suite_sha256": "195cc7acfcffafbcbf8fc6a52a5eed5111f42eec586187ab051f62b0a7892081",
+      "suite_sha256": "613bba87413071782786fa18089624f0f5d431c98d783a9a24203bd8c76c029a",
       "release_qualification_allowed": true
     },
     "require_both_scopes_for_stability_decision": true,

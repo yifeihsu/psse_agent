@@ -1670,7 +1670,11 @@ class ExpertPolicyTests(unittest.TestCase):
         }
         self.assertEqual(self.oracle.next_actions(state)[0]["tool"], "get_parameter_context")
 
-    def test_accepted_partial_measurement_fix_refreshes_measurement_context(self):
+    def test_accepted_partial_measurement_fix_rescreens_branch_context_first(self):
+        # V2-A continuation contract: after an accepted partial commit the
+        # teacher re-screens the branch routes on the committed state before
+        # returning to the measurement context, so a still-dominant branch
+        # multiplier is read first rather than skipped.
         state = {
             "active_state_id": "e:s1",
             "unresolved_signatures": [
@@ -1683,7 +1687,9 @@ class ExpertPolicyTests(unittest.TestCase):
                 }
             ],
         }
-        self.assertEqual(self.oracle.next_actions(state)[0]["tool"], "get_measurement_context")
+        tools = [action["tool"] for action in self.oracle.next_actions(state)]
+        self.assertEqual(tools[0], "get_parameter_context")
+        self.assertIn("get_measurement_context", tools)
 
     def test_expert_does_not_repeat_rejected_action_signature(self):
         rejected = correct_measurement("e:s0")

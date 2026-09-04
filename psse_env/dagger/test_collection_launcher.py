@@ -366,6 +366,10 @@ esac
         delay_collection_interval_date: str = "0",
         monitor_start_delay_seconds: str = "0",
     ) -> subprocess.CompletedProcess[bytes]:
+        if not (shutil.which("setsid") and shutil.which("ps")):
+            # The launcher script itself refuses to run without these
+            # process-group tools (Linux/HPC only); skip on other platforms.
+            self.skipTest("setsid and ps are required by the collection launcher")
         posix = self.posix_root
         assignments = {
             "PATH": f"{posix}/bin:{self.bash_path}",
