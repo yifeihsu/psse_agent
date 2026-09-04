@@ -97,18 +97,26 @@ def test_summary_tabulates_outcomes_per_family(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     for label, outcomes in (("bc0", ("resolved", "operator_escalation")), ("r1", ("resolved", "resolved"))):
+        # The evaluator nests per-suite episode lists under ``metrics``.
         payload = {
             "suite_metrics": {"overall": {}},
-            "episodes": [
-                {
-                    "physical_root": root,
-                    "family": "unknown-until-joined",
-                    "terminal": True,
-                    "terminal_outcome": outcome,
-                    "steps": 3,
+            "score": 0.0,
+            "metrics": {
+                "suites": {
+                    "standard_success": {
+                        "episodes": [
+                            {
+                                "physical_root": root,
+                                "family": "unknown-until-joined",
+                                "terminal": True,
+                                "terminal_outcome": outcome,
+                                "steps": 3,
+                            }
+                            for root, outcome in zip(("root_hif", "root_unb"), outcomes)
+                        ]
+                    }
                 }
-                for root, outcome in zip(("root_hif", "root_unb"), outcomes)
-            ],
+            },
         }
         (collection / "evaluation" / f"{label}_eval.json").write_text(json.dumps(payload), encoding="utf-8")
     summary = summarize.build_summary(collection_dir=collection, training_done=None, prerequisites=None)

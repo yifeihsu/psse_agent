@@ -64,16 +64,28 @@ def family_by_root(development: list[Mapping[str, Any]]) -> dict[str, str]:
     return result
 
 
-def _episodes(payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    episodes = payload.get("episodes")
-    if isinstance(episodes, list):
-        return [row for row in episodes if isinstance(row, Mapping)]
-    suites = payload.get("suites")
+def _episodes(payload: Any) -> list[Mapping[str, Any]]:
+    """Every evaluator episode record in the payload, wherever it is nested.
+
+    ``evaluate_rollout_suites`` nests its per-suite ``episodes`` lists under
+    ``metrics``; an episode record is recognised by its ``physical_root``
+    field rather than by a fixed path so a report re-shape cannot silently
+    empty the per-family table.
+    """
     found: list[Mapping[str, Any]] = []
-    if isinstance(suites, Mapping):
-        for suite in suites.values():
-            if isinstance(suite, Mapping) and isinstance(suite.get("episodes"), list):
-                found.extend(row for row in suite["episodes"] if isinstance(row, Mapping))
+    if isinstance(payload, Mapping):
+        episodes = payload.get("episodes")
+        if isinstance(episodes, list) and episodes and all(
+            isinstance(row, Mapping) and "physical_root" in row for row in episodes
+        ):
+            found.extend(episodes)
+        for value in payload.values():
+            if isinstance(value, (Mapping, list)):
+                found.extend(_episodes(value))
+    elif isinstance(payload, list):
+        for value in payload:
+            if isinstance(value, (Mapping, list)):
+                found.extend(_episodes(value))
     return found
 
 
