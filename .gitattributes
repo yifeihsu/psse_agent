@@ -22,3 +22,6 @@ trace_protocol.py text eol=lf
 psse_env/sft/release_hardware.py text eol=lf
 research/hpc/occupancy_cell_20260827/*.sh text eol=lf
 research/hpc/exposure_curve_20260828/*.sh text eol=lf
+research/hpc/diagnostic_round_20260903/*.sh text eol=lf
+research/hpc/diagnostic_round_20260903/*.sbatch text eol=lf
+research/hpc/diagnostic_round_20260903/round.env text eol=lf
