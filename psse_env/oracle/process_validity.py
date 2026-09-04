@@ -27,6 +27,7 @@ from psse_env.actions import (
     safe_normalize_action,
     terminal_explanation_signatures,
     unexplained_signatures,
+    waveform_anomaly_signatures,
 )
 from psse_env.state_store import SYNTHETIC_TERMINAL_COMPATIBILITY_KEY
 
@@ -141,6 +142,17 @@ class ProcessValidityOracle:
                 error_detail = (
                     f"{family}_autonomous_correction_blocked_for_operator_review"
                 )
+            elif waveform_anomaly_signatures(state.get("unresolved_signatures") or []):
+                # A waveform-level anomaly (harmonic, unbalance, HIF) is on the
+                # network whether or not a diagnostic has explained it.  The
+                # fundamental-frequency residuals then attribute the event
+                # itself, and a "correction" against them would only mask it,
+                # so no correction route is actionable while the signature
+                # stands.  Explanation-only families terminate by diagnosis
+                # or operator handoff, never by repair.
+                family = _CORRECTION_CONTEXT_FAMILY[tool]
+                error_code = "correction_route_not_actionable"
+                error_detail = f"{family}_fundamental_route_blocked_by_waveform_anomaly"
             elif tool == CORRECT_PARAMETERS and not self._context_is_fresh(state, "parameter"):
                 error_code, error_detail = "missing_precondition", "parameter_context_missing"
             elif tool == CORRECT_TOPOLOGY and not self._context_is_fresh(state, "topology"):

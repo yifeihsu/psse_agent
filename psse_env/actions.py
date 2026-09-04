@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Mapping
 
 
@@ -112,6 +113,34 @@ ANOMALY_FAMILY_MARKERS: dict[str, tuple[str, ...]] = {
         "zero_sequence_hif",
     ),
 }
+
+
+#: Families whose anomaly is a physical waveform-level event.  An accepted
+#: explanation closes such a signature for termination, but it does not remove
+#: the event from the network: the fundamental-frequency operator vector stays
+#: inconsistent with the balanced model, so residual-based bad-data routes
+#: remain unreliable for as long as the signature stands.
+WAVEFORM_ANOMALY_FAMILIES = ("harmonic", "three_phase_unbalance", "hif")
+
+
+def waveform_anomaly_signatures(unresolved: Any) -> list[str]:
+    """Observable waveform-family signatures in ``unresolved``, explained or not.
+
+    Word-boundary marker matching on the lower-cased signature text, the same
+    rule the routing helpers use, so a signature that routes to a diagnostic
+    is the same signature that blocks the fundamental-frequency routes.
+    """
+    patterns = tuple(
+        re.compile(rf"(?<![a-z0-9]){re.escape(marker.lower())}(?![a-z0-9])")
+        for family in WAVEFORM_ANOMALY_FAMILIES
+        for marker in ANOMALY_FAMILY_MARKERS[family]
+    )
+    found: list[str] = []
+    for item in unresolved or []:
+        text = str(item).lower()
+        if any(pattern.search(text) for pattern in patterns):
+            found.append(str(item))
+    return found
 
 
 def unexplained_signatures(

@@ -111,6 +111,7 @@ def test_summary_tabulates_outcomes_per_family(tmp_path: Path) -> None:
                                 "terminal": True,
                                 "terminal_outcome": outcome,
                                 "steps": 3,
+                                "audit": {"diagnostics": {"diagnostic_truth_matched": root == "root_hif"}},
                             }
                             for root, outcome in zip(("root_hif", "root_unb"), outcomes)
                         ]
@@ -128,6 +129,8 @@ def test_summary_tabulates_outcomes_per_family(tmp_path: Path) -> None:
     assert bc0["outcomes"]["three_phase_unbalance"]["terminal_outcome"] == {"operator_escalation": 1}
     assert summary["per_family"]["r1"]["outcomes"]["three_phase_unbalance"]["terminal_outcome"] == {"resolved": 1}
     assert bc0["unmatched_episodes"] == 0
+    assert bc0["outcomes"]["hif"]["audit.diagnostic_truth_matched"] == {"True": 1}
+    assert bc0["outcomes"]["three_phase_unbalance"]["audit.diagnostic_truth_matched"] == {"False": 1}
 
 
 def _chat_row(root: str, family: str, source: str) -> dict:

@@ -65,6 +65,37 @@ the training and evaluation jobs were already queued when the filter was
 added, `amend_train_chain.sh COLLECT_JOB_ID` cancels them and resubmits the
 staged scripts behind the running collection.
 
+## First run (2026-09-04) and the repeat
+
+The first chain (jobs 16920762, 16923642, 16923643) completed with the
+stale-HIF filter in place. On the 18 development roots the candidate fixed
+the HIF ladder (6 of 6, three steps per episode, versus 5 of 6 at 5.2 steps
+for BC0) but regressed on unbalance (4 of 6 versus 6 of 6): after a failed
+escalation on an explained unbalance root, the recovery expert's generic WLS
+fallback had become a teacher target, the post-explanation WLS minted
+residual signatures from the still-unbalanced operator vector, and the
+classical route chased them into false commits. Measurement+HIF finalized
+after the HIF explanation for both adapters; by decision that is the intended
+terminal for that family, and the strict audit keeps counting the remaining
+meter as unresolved, so read that family's row as "HIF identified".
+
+The environment and expert fixes (waveform signatures block the
+fundamental-frequency routes whether or not they are explained; the recovery
+expert defers to the diagnostic ladder; the classical experts stand down) are
+in `psse_env`. To repeat the round on the fixed source without touching the
+first run's receipts, deploy into a fresh directory:
+
+```bash
+git bundle create dw_round.bundle local/relaxed-current
+wsl -- scp dw_round.bundle torch:/scratch/yx3882/research_diag_round_20260904/dw_round.bundle
+wsl -- ssh torch bash -s -- /scratch/yx3882/research_diag_round_20260904/dw_round.bundle local/relaxed-current "$(git rev-parse HEAD)" /scratch/yx3882/research_diag_round_20260904 \
+  < research/hpc/diagnostic_round_20260903/deploy_remote.sh
+wsl -- ssh torch bash /scratch/yx3882/research_diag_round_20260904/submit_diag.sh
+```
+
+The same seed reproduces the same 36 training and 18 development roots, so
+the repeat is a paired comparison against the first run.
+
 ## What this round cannot claim
 
 These families terminate through an accepted anomaly explanation or an

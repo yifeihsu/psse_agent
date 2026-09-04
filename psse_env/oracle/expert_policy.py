@@ -21,6 +21,7 @@ from psse_env.actions import (
     action_signature,
     safe_normalize_action,
     terminal_explanation_signatures,
+    waveform_anomaly_signatures,
 )
 from psse_env.oracle.candidate_quality import CandidateQualityOracle
 from psse_env.oracle.diagnostics_expert import DiagnosticsExpert
@@ -256,6 +257,20 @@ class ExpertPolicyOracle:
                 hif_fault_present="hif" in context.oracle_fault_families,
             )
         )
+        # While a waveform-family signature stands, explained or not, the
+        # fundamental-frequency families have no actionable route: the
+        # providers offer no corrections and the process gate refuses them.
+        # Their proposals would only be context requests and WLS repeats that
+        # teach a student to chase the waveform event as a meter or branch
+        # fault, so the combined stage keeps the diagnostics expert alone.
+        if waveform_anomaly_signatures(
+            self._get(policy, "unresolved_signatures", []) or []
+        ):
+            proposals = [
+                proposal
+                for proposal in proposals
+                if proposal.source_expert == "diagnostics_expert"
+            ]
         # MeasurementExpert contributes RUN_WLS as the generic observable
         # fallback when it has no family-specific proposal of its own.  Once
         # the combined diagnosis stage has any concrete domain action, that

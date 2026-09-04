@@ -738,5 +738,115 @@ class TerminalCurrentRoutingTests(unittest.TestCase):
         self.assertNotIn("candidate_phase", proposals[0].action["arguments"])
 
 
+class WaveformRouteStandDownTests(unittest.TestCase):
+    """A waveform-family signature keeps the fundamental-frequency routes shut.
+
+    Observed in the 2026-09-03 diagnostic round: after a student's failed
+    escalation on an explained unbalance root, the generic WLS recovery
+    fallback became a teacher target, WLS then minted residual signatures from
+    the still-unbalanced operator vector, and the classical route chased them
+    into false commits.  Explanation closes the obligation, not the event.
+    """
+
+    UNBALANCE = "three_phase_unbalance phase_current_spread_detected"
+
+    def _explained_unbalance_state(self, **overrides) -> dict:
+        state = _policy_state(
+            unresolved_signatures=[self.UNBALANCE],
+            explained_anomalies=[
+                {
+                    "family": "three_phase_unbalance",
+                    "explained_signatures": [self.UNBALANCE],
+                    "evidence_source": "deployment_diagnostic:sequence_voltage_unbalance+branch_currents",
+                }
+            ],
+            available_evidence=["three_phase_voltages", "three_phase_branch_currents"],
+            remaining_anomaly_score=12.0,
+            last_tool="ask_for_more_evidence",
+            last_tool_status="failure",
+            last_tool_output={
+                "execution_status": "failure",
+                "error_code": "recovery_evidence_inventory_incomplete",
+            },
+        )
+        state.update(overrides)
+        return state
+
+    def test_waveform_signature_helper_uses_word_boundaries(self) -> None:
+        from psse_env.actions import waveform_anomaly_signatures
+
+        self.assertEqual(
+            waveform_anomaly_signatures(
+                [self.UNBALANCE, "hif_suspected_zero_sequence", "wls_residual_outlier", "search_marker"]
+            ),
+            [self.UNBALANCE, "hif_suspected_zero_sequence"],
+        )
+        self.assertEqual(waveform_anomaly_signatures([]), [])
+
+    def test_recovery_expert_defers_on_waveform_roots_without_a_candidate(self) -> None:
+        from psse_env.oracle.recovery_expert import RecoveryExpert
+
+        expert = RecoveryExpert()
+        self.assertEqual(expert.propose(self._explained_unbalance_state(), []), [])
+        classical = _policy_state(
+            unresolved_signatures=["wls_residual_outlier_dominant"],
+            last_tool="ask_for_more_evidence",
+            last_tool_status="failure",
+            last_tool_output={
+                "execution_status": "failure",
+                "error_code": "recovery_evidence_inventory_incomplete",
+            },
+        )
+        fallback = expert.propose(classical, [])
+        self.assertTrue(fallback)
+        self.assertEqual(fallback[0].action["tool"], "run_wls")
+
+    def test_process_gate_refuses_corrections_under_a_waveform_signature(self) -> None:
+        from psse_env.oracle import ProcessValidityOracle
+
+        gate = ProcessValidityOracle()
+        state = self._explained_unbalance_state(has_fresh_measurement_context=True)
+        verdict = gate.check(
+            state,
+            {
+                "tool": "correct_measurements",
+                "arguments": {"state_id": "episode:s0", "measurement_updates": {8: 0.5}},
+            },
+        )
+        self.assertFalse(verdict["process_valid"])
+        self.assertEqual(verdict["error_code"], "correction_route_not_actionable")
+        self.assertEqual(
+            verdict["error_detail"],
+            "measurement_fundamental_route_blocked_by_waveform_anomaly",
+        )
+
+    def test_orchestrator_finalizes_an_explained_root_after_a_failed_action(self) -> None:
+        oracle = ExpertPolicyOracle()
+        actions = oracle.next_actions(
+            self._explained_unbalance_state(),
+            [
+                _successful_step("run_three_phase_nlm_from_path"),
+                _failed_step("ask_for_more_evidence", "recovery_evidence_inventory_incomplete"),
+            ],
+        )
+        self.assertTrue(actions)
+        self.assertEqual(actions[0]["tool"], "finalize_diagnosis")
+
+    def test_orchestrator_routes_unexplained_waveform_roots_to_diagnostics_after_failure(self) -> None:
+        oracle = ExpertPolicyOracle()
+        state = _policy_state(
+            unresolved_signatures=[self.UNBALANCE],
+            available_evidence=["three_phase_voltages", "three_phase_branch_currents"],
+            last_tool="get_measurement_context",
+            last_tool_status="failure",
+            last_tool_output={"execution_status": "failure", "error_code": "unknown_state_id"},
+        )
+        actions = oracle.next_actions(
+            state, [_failed_step("get_measurement_context", "unknown_state_id")]
+        )
+        self.assertTrue(actions)
+        self.assertEqual(actions[0]["tool"], "run_three_phase_nlm_from_path")
+
+
 if __name__ == "__main__":
     unittest.main()

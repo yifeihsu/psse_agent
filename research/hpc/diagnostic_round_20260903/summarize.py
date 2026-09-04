@@ -89,6 +89,23 @@ def _episodes(payload: Any) -> list[Mapping[str, Any]]:
     return found
 
 
+def _nested_flag(value: Any, key: str) -> Any:
+    """First value stored under ``key`` anywhere inside a nested mapping."""
+    if isinstance(value, Mapping):
+        if key in value:
+            return value[key]
+        for child in value.values():
+            found = _nested_flag(child, key)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = _nested_flag(child, key)
+            if found is not None:
+                return found
+    return None
+
+
 def per_family_outcomes(
     payload: Mapping[str, Any], families: Mapping[str, str]
 ) -> dict[str, Any]:
@@ -110,6 +127,13 @@ def per_family_outcomes(
                 value = episode[field]
                 key = json.dumps(value, sort_keys=True) if isinstance(value, (dict, list)) else str(value)
                 tables[family][field][key] += 1
+        # For explanation-only families the outcome that matters is whether
+        # the diagnostic localized the true event; the strict audit records it
+        # separately from physical resolution, which a remaining meter fault
+        # (measurement+HIF) deliberately keeps false.
+        matched = _nested_flag(episode.get("audit"), "diagnostic_truth_matched")
+        if matched is not None:
+            tables[family]["audit.diagnostic_truth_matched"][str(matched)] += 1
     return {
         "episodes_per_family": dict(sorted(episodes_per_family.items())),
         "unmatched_episodes": unmatched,

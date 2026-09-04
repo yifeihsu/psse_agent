@@ -1,18 +1,26 @@
 #!/usr/bin/env bash
 # Cluster side of the deployment.  Run after the git bundle has been uploaded:
 #
-#   ssh torch bash -s -- BUNDLE BRANCH EXPECTED_COMMIT < deploy_remote.sh
+#   ssh torch bash -s -- BUNDLE BRANCH EXPECTED_COMMIT [ROUND_DIR] < deploy_remote.sh
 #
 # Clones the bundle into the round's source tree, stages the round scripts,
 # syntax-checks them, records their digests, and runs the dry-run
 # prerequisites (no tests, no GPU) so submission can refuse a broken setup.
+#
+# The committed scripts spell the original round directory literally (Slurm
+# `--output` lines cannot take variables).  Passing ROUND_DIR stages the same
+# scripts into a fresh directory with that path substituted, so a repeat of
+# the round on a newer source commit never overwrites the first run's
+# receipts; the substitution is recorded in deploy.json.
 set -euo pipefail
 BUNDLE=${1:?bundle path}
 BRANCH=${2:?branch name}
 EXPECTED=${3:?expected 40-hex commit}
-ROUND=/scratch/yx3882/research_diag_round_20260903
+SOURCE_ROUND=/scratch/yx3882/research_diag_round_20260903
+ROUND=${4:-$SOURCE_ROUND}
 CELL=research/hpc/diagnostic_round_20260903
 [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ ]] || { echo "expected commit must be 40 hex" >&2; exit 2; }
+[[ "$ROUND" =~ ^/[A-Za-z0-9_./-]+$ ]] || { echo "round directory must be an absolute plain path" >&2; exit 2; }
 mkdir -p "$ROUND/logs" "$ROUND/out"
 if [[ ! -d "$ROUND/source/.git" ]]; then
   git clone -q -b "$BRANCH" "$BUNDLE" "$ROUND/source"
@@ -22,8 +30,10 @@ HEAD=$(git -C "$ROUND/source" rev-parse HEAD)
 printf '%s\n' "$HEAD" > "$ROUND/source_commit.txt"
 for name in round.env prerequisites.sh summarize.py filter_mixture.py submit_diag.sh \
   status_diag.sh amend_train_chain.sh diag_collect.sbatch diag_train.sbatch diag_eval.sbatch; do
-  cp "$ROUND/source/$CELL/$name" "$ROUND/$name"
+  sed "s#${SOURCE_ROUND}#${ROUND}#g" "$ROUND/source/$CELL/$name" > "$ROUND/$name"
 done
+printf '{"contract": "research_diagnostic_round_deploy_v1", "round_dir": "%s", "source_round_dir": "%s", "source_commit": "%s", "branch": "%s", "deployed_at_utc": "%s"}\n' \
+  "$ROUND" "$SOURCE_ROUND" "$HEAD" "$BRANCH" "$(date -u +%FT%TZ)" > "$ROUND/deploy.json"
 chmod +x "$ROUND"/*.sh
 for f in "$ROUND"/*.sh "$ROUND"/*.sbatch "$ROUND"/round.env; do
   bash -n "$f"

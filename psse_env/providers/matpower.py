@@ -39,6 +39,7 @@ from typing import Any, Mapping, Sequence
 from hif_search_limits import validate_hif_search_limits
 from psse_env.actions import (
     ANOMALY_FAMILY_MARKERS,
+    waveform_anomaly_signatures,
     ASK_FOR_MORE_EVIDENCE,
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
@@ -1172,26 +1173,17 @@ class MatpowerDeploymentProviders:
             if not str(signature).startswith("wls_")
         ]
         signatures = list(preserved)
-        # While an unexplained waveform-level anomaly (harmonic distortion or
-        # a suspected HIF) stands, the fundamental-frequency solve's bad-data
-        # attributions are physically unreliable: the chi-square elevation is
-        # (at least partly) the waveform event itself, and "correcting" SCADA
-        # measurements against it would mask the true anomaly.  The solve
-        # still reports its metrics but mints no signatures until the
-        # specialized diagnostics have explained the sensor-sourced ones.
-        waveform_markers = (
-            ANOMALY_FAMILY_MARKERS["harmonic"]
-            + ANOMALY_FAMILY_MARKERS["three_phase_unbalance"]
-            + ANOMALY_FAMILY_MARKERS["hif"]
-        )
-        unexplained_sensor = [
-            signature
-            for signature in unexplained_signatures(
-                preserved, observation.get("explained_anomalies") or []
-            )
-            if _matches_any_marker(str(signature), waveform_markers)
-        ]
-        if statistic >= threshold and not unexplained_sensor:
+        # While a waveform-level anomaly (harmonic distortion, three-phase
+        # unbalance, or a suspected HIF) stands, the fundamental-frequency
+        # solve's bad-data attributions are physically unreliable: the
+        # chi-square elevation is (at least partly) the waveform event itself,
+        # and "correcting" SCADA measurements against it would mask the true
+        # anomaly.  This holds whether or not a diagnostic has explained the
+        # signature: an explanation closes the episode's obligation, it does
+        # not remove the event from the network.  The solve still reports its
+        # metrics but mints no signatures while such a sensor signature stands.
+        waveform_sensor = waveform_anomaly_signatures(preserved)
+        if statistic >= threshold and not waveform_sensor:
             lambda_values = [float(value) for value in payload.get("lambdaN") or []]
             max_abs_lambda = max((abs(value) for value in lambda_values), default=0.0)
             # Classical Lagrangian discrimination: a gross measurement error
@@ -1558,10 +1550,20 @@ class MatpowerDeploymentProviders:
             if terminal_closure_action is not None
             else []
         )
+        waveform_block = self._waveform_route_block(state)
+        if waveform_block:
+            # Residual findings stay visible as evidence, but no meter
+            # correction is offered: on a waveform-distorted operator vector
+            # the residuals attribute the event itself, not a bad sensor.
+            supported = []
+            terminal_closure_action = None
+            terminal_closure_targets = []
+            terminal_closure_evidence = {}
         return {
             **self._binding(state),
             "evidence_source": "deployment_context:wls_residuals",
             "context_tool": GET_MEASUREMENT_CONTEXT,
+            "fundamental_route_blocked_by_waveform_anomaly": waveform_block,
             "finding_count": len(evidence),
             "measurement_findings": evidence,
             "supported_corrections": supported,
@@ -2046,10 +2048,15 @@ class MatpowerDeploymentProviders:
             if not findings
             else _ROUTE_UNAVAILABLE
         )
+        waveform_block = self._waveform_route_block(state)
+        if waveform_block:
+            supported = []
+            route_status = _ROUTE_COMPLETE_NEGATIVE
         return {
             **self._binding(state),
             "evidence_source": "deployment_context:wls_lagrange",
             "context_tool": GET_PARAMETER_CONTEXT,
+            "fundamental_route_blocked_by_waveform_anomaly": waveform_block,
             "finding_count": len(findings),
             "parameter_findings": findings,
             "parameter_scans_available": scans_usable,
@@ -2167,10 +2174,15 @@ class MatpowerDeploymentProviders:
             if supported
             else _ROUTE_COMPLETE_NEGATIVE
         )
+        waveform_block = self._waveform_route_block(state)
+        if waveform_block:
+            supported = []
+            route_status = _ROUTE_COMPLETE_NEGATIVE
         return {
             **self._binding(state),
             "evidence_source": "deployment_context:wls_lagrange_candidate_screened",
             "context_tool": GET_TOPOLOGY_CONTEXT,
+            "fundamental_route_blocked_by_waveform_anomaly": waveform_block,
             "finding_count": len(findings),
             "topology_findings": findings,
             "supported_corrections": supported,
@@ -2584,6 +2596,15 @@ class MatpowerDeploymentProviders:
         observation = state.get("policy_observation")
         observation = observation if isinstance(observation, Mapping) else {}
         return [str(item) for item in observation.get("unresolved_signatures") or []]
+
+    @classmethod
+    def _waveform_route_block(cls, state: Mapping[str, Any]) -> list[str]:
+        """Waveform-family signatures that block fundamental-frequency routes.
+
+        Explained or not: the event is still on the network, so residual and
+        multiplier evidence cannot be attributed to a meter or a branch.
+        """
+        return waveform_anomaly_signatures(cls._observable_signatures(state))
 
     @classmethod
     def _has_family_signature(cls, state: Mapping[str, Any], family: str) -> bool:

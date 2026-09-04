@@ -1515,7 +1515,14 @@ class WlsSignatureEmissionTests(unittest.TestCase):
         signatures = metrics["unresolved_signatures"]
         self.assertIn("harmonic_distortion_detected", signatures)
         self.assertNotIn("wls_residual_outlier index=99 channel=Qt", signatures)
-        self.assertTrue(any("index=5" in sig for sig in signatures))
+        # The explanation closes the harmonic obligation, but the distortion is
+        # still on the network, so the refreshed solve mints no residual
+        # attribution at all: the stale wls_ signature is dropped and no new
+        # one replaces it while the waveform signature stands.
+        self.assertFalse(
+            any(sig.startswith("wls_") for sig in signatures), signatures
+        )
+        self.assertEqual(signatures, ["harmonic_distortion_detected"])
 
     def test_unexplained_waveform_signature_suppresses_wls_signatures(self) -> None:
         z = list(self.clean_z)

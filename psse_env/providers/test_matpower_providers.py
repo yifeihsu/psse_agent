@@ -1554,6 +1554,63 @@ class BranchCurrentDiagnosticProviderTests(unittest.TestCase):
         self.assertEqual(acceptance["acceptance_basis"], "shunt_power_spread_source")
         self.assertEqual(output["tool_metrics"]["anomaly_explanation"]["detail"]["bus_1based"], 3)
 
+    def test_fundamental_route_stays_blocked_after_unbalance_explanation(self) -> None:
+        from psse_env.oracle import ExpertPolicyOracle
+
+        env = self._env(
+            self._unbalance_metadata(source_bus=2),
+            unresolved_signatures=[self.UNBALANCE_SIGNATURE],
+            semantic_field_provenance=self.SENSOR_PROVENANCE,
+        )
+        active = env.current_state()["active_state_id"]
+        _, output = env.step(
+            {"tool": "run_three_phase_nlm_from_path", "arguments": {"state_id": active}}
+        )
+        self.assertTrue(output["tool_metrics"]["diagnostic_acceptance"]["accepted"])
+        # A student may still run WLS after the explanation.  The unbalance is
+        # still on the network, so the solve mints no residual signatures and
+        # every fundamental-frequency context offers no correction.
+        _, wls = env.step({"tool": "run_wls", "arguments": {"state_id": active}})
+        self.assertEqual(wls["execution_status"], "success")
+        self.assertEqual(
+            env.get_policy_observation().unresolved_signatures, [self.UNBALANCE_SIGNATURE]
+        )
+        for tool in (
+            "get_measurement_context",
+            "get_parameter_context",
+            "get_topology_context",
+        ):
+            _, context = env.step({"tool": tool, "arguments": {"state_id": active}})
+            self.assertEqual(context["execution_status"], "success", tool)
+            metrics = context["tool_metrics"]
+            self.assertEqual(metrics["supported_corrections"], [], tool)
+            self.assertEqual(
+                metrics["fundamental_route_blocked_by_waveform_anomaly"],
+                [self.UNBALANCE_SIGNATURE],
+                tool,
+            )
+        verdict = env.process_oracle.check(
+            env.current_state(),
+            {
+                "tool": "correct_measurements",
+                "arguments": {"state_id": active, "suspect_group": [8]},
+            },
+            store=env.store,
+        )
+        self.assertFalse(verdict["process_valid"])
+        self.assertEqual(verdict["error_code"], "correction_route_not_actionable")
+        # The expert's rank-one action from this wandered state is to finish
+        # the explained episode, not to chase the residuals.
+        oracle = ExpertPolicyOracle(
+            process_oracle=env.process_oracle,
+            candidate_oracle=env.candidate_quality_oracle,
+        )
+        actions = oracle.next_actions(env.get_oracle_state(env.history), env.history)
+        self.assertEqual(actions[0]["tool"], "finalize_diagnosis")
+        _, final = env.step(actions[0])
+        self.assertEqual(final["execution_status"], "success")
+        self.assertTrue(env.is_terminal())
+
     def test_hif_acceptance_uses_terminal_current_evidence_when_reduction_is_marginal(self) -> None:
         def payload(**terminal_overrides):
             terminal = {

@@ -136,11 +136,20 @@ confidence on a dominant signature (`dominance_confidence`), and the
 measurement expert stands down while branch evidence is dominant — until both
 branch families have had a hypothesis rejected by verification — because a measurement
 correction can zero the residuals of a wrong model and mask a branch fault.
-Two more physical guards close that masking channel: while an unexplained
-harmonic/unbalance/HIF sensor signature stands, `run_wls` mints no `wls_*` signatures at
-all (the fundamental-frequency solve is unreliable under waveform anomalies),
-and `get_topology_context` filters supported status flips that would island
-the network (an EMS would never offer that switching action). A candidate
+Two more physical guards close that masking channel: while a
+harmonic/unbalance/HIF sensor signature stands, explained or not, `run_wls`
+mints no `wls_*` signatures at all, the three context providers offer no
+supported corrections (findings stay visible as evidence, with
+`fundamental_route_blocked_by_waveform_anomaly` naming the signatures), the
+process gate refuses every correction as `correction_route_not_actionable`,
+the recovery expert defers to the diagnostic ladder instead of its generic
+WLS fallback, and the classical family experts stand down in the combined
+stage. An accepted explanation closes the episode's obligation; it does not
+remove the event from the network, so the fundamental-frequency solve stays
+unreliable for as long as the signature is present, and explanation-only
+families terminate by diagnosis or operator handoff, never by repair.
+Separately, `get_topology_context` filters supported status flips that would
+island the network (an EMS would never offer that switching action). A candidate
 whose verification solve itself fails is recorded as verified-REJECT — the
 solver failure is observable rejection evidence — so the episode retains a
 legal rollback path instead of deadlocking on an unverifiable candidate.

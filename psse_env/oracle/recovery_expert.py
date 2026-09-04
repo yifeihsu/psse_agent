@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-from psse_env.actions import COMMIT_STATE, ROLLBACK_STATE, RUN_WLS
+from psse_env.actions import (
+    COMMIT_STATE,
+    ROLLBACK_STATE,
+    RUN_WLS,
+    waveform_anomaly_signatures,
+)
 from psse_env.oracle.expert_types import ExpertActionProposal, state_value
 from psse_env.oracle.process_validity import ProcessValidityOracle
 
@@ -45,6 +50,18 @@ class RecoveryExpert:
             return []
         if not error_code:
             error_code = "policy_exception"
+
+        # A failed action on a waveform-anomaly root (harmonic, unbalance,
+        # HIF) with no transaction open leaves the state consistent: the
+        # generic WLS fallback would only start a fundamental-frequency route
+        # that the event makes unreliable, and it was exactly that fallback,
+        # recorded as a teacher target, that taught a student to open unbalance
+        # episodes with WLS.  Defer to the diagnostic ladder and termination
+        # experts, which own these families.
+        if not state_value(state, "candidate_state_id") and waveform_anomaly_signatures(
+            state_value(state, "unresolved_signatures", []) or []
+        ):
+            return []
 
         actions = self.process_oracle.repair_actions(state, str(error_code), error_detail)
         if not actions:
