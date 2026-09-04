@@ -26,6 +26,7 @@ from psse_env.actions import (
     action_signature,
     safe_normalize_action,
     terminal_explanation_signatures,
+    three_phase_screening_pending,
     unexplained_signatures,
     waveform_anomaly_signatures,
 )
@@ -153,6 +154,19 @@ class ProcessValidityOracle:
                 family = _CORRECTION_CONTEXT_FAMILY[tool]
                 error_code = "correction_route_not_actionable"
                 error_detail = f"{family}_fundamental_route_blocked_by_waveform_anomaly"
+            elif three_phase_screening_pending(
+                unresolved=state.get("unresolved_signatures") or [],
+                available_evidence=state.get("available_evidence") or [],
+                tried_action_signatures=state.get("tried_action_signatures") or [],
+                active_state_id=active_id,
+            ):
+                # An unflagged fundamental-frequency anomaly on a root with
+                # three-phase telemetry has not been screened yet; the
+                # residuals may be a waveform event, so no correction is
+                # actionable until run_three_phase_nlm_from_path has looked.
+                family = _CORRECTION_CONTEXT_FAMILY[tool]
+                error_code = "correction_route_not_actionable"
+                error_detail = f"{family}_three_phase_screening_pending"
             elif tool == CORRECT_PARAMETERS and not self._context_is_fresh(state, "parameter"):
                 error_code, error_detail = "missing_precondition", "parameter_context_missing"
             elif tool == CORRECT_TOPOLOGY and not self._context_is_fresh(state, "topology"):

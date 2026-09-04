@@ -222,18 +222,54 @@ class ScenarioConstructionTests(unittest.TestCase):
         )
         self.assertTrue(scenario["hidden_truth"]["true_hif_errors"])
 
-    def test_unbalance_scenario_uses_distinct_observable_signature(self) -> None:
+    def test_unbalance_scenario_is_discovered_by_default(self) -> None:
+        # The operator starts from the positive-sequence snapshot alone: no
+        # sensor flag is seeded, the row is WLS-anomalous, the telemetry is
+        # present, and the withheld flags are recorded on the audit side.
         scenario = self.by_family["three_phase_unbalance"]
+        self.assertNotIn("unresolved_signatures", scenario)
+        self.assertNotIn("unresolved_signatures", scenario["semantic_field_provenance"])
+        audit = scenario["release_audit"]
+        self.assertEqual(audit["signature_mode"], "discovered")
+        self.assertTrue(audit["sensor_signatures_withheld"])
+        self.assertTrue(
+            set(audit["sensor_signatures_withheld"])
+            <= {UNBALANCE_SIGNATURE, UNBALANCE_CURRENT_SIGNATURE}
+        )
+        self.assertGreater(
+            self.generator._chi2_statistic("case14", scenario["measurements"]),
+            self.generator.anomaly_margin * self.generator.chi2_limit,
+        )
+        self.assertTrue(scenario["metadata"]["three_phase_voltages"])
+        self.assertTrue(scenario["metadata"]["three_phase_branch_currents"])
+        self.assertTrue(scenario["hidden_truth"]["true_unbalance_errors"])
+        self.assertEqual(scenario["error_cardinality"], 1)
+        hif = self.by_family["hif"]
+        self.assertEqual(hif["release_audit"]["signature_mode"], "flagged")
+        self.assertEqual(hif["unresolved_signatures"], ["hif_suspected_zero_sequence"])
+
+    def test_flagged_mode_seeds_the_observable_unbalance_signature(self) -> None:
+        generator = Round0ScenarioGenerator(
+            seed=20260719,
+            waveform_signature_mode={"three_phase_unbalance": "flagged"},
+        )
+        scenario = generator.build({"three_phase_unbalance": 1})[0]
         signatures = scenario["unresolved_signatures"]
         self.assertTrue(signatures)
         self.assertTrue(
             set(signatures) <= {UNBALANCE_SIGNATURE, UNBALANCE_CURRENT_SIGNATURE},
             signatures,
         )
-        self.assertTrue(scenario["metadata"]["three_phase_voltages"])
-        self.assertTrue(scenario["metadata"]["three_phase_branch_currents"])
-        self.assertTrue(scenario["hidden_truth"]["true_unbalance_errors"])
-        self.assertEqual(scenario["error_cardinality"], 1)
+        self.assertEqual(
+            scenario["semantic_field_provenance"]["unresolved_signatures"],
+            "deployment_sensor:waveform_capture",
+        )
+        self.assertEqual(scenario["release_audit"]["signature_mode"], "flagged")
+        self.assertEqual(scenario["release_audit"]["sensor_signatures_withheld"], [])
+        with self.assertRaises(ValueError):
+            Round0ScenarioGenerator(waveform_signature_mode={"three_phase_unbalance": "guessed"})
+        with self.assertRaises(ValueError):
+            Round0ScenarioGenerator(waveform_signature_mode={"harmonic": "flagged"})
 
     def test_unbalance_signatures_describe_the_row_telemetry(self) -> None:
         # The signature text is policy-visible: the VUF flag may only appear

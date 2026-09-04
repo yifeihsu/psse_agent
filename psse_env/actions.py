@@ -143,6 +143,51 @@ def waveform_anomaly_signatures(unresolved: Any) -> list[str]:
     return found
 
 
+#: Telemetry channels that let the three-phase state be screened directly.
+THREE_PHASE_TELEMETRY_CHANNELS = frozenset(
+    {"three_phase_voltages", "three_phase_branch_currents"}
+)
+
+
+def three_phase_screening_pending(
+    *,
+    unresolved: Any,
+    available_evidence: Any,
+    tried_action_signatures: Any,
+    active_state_id: Any,
+) -> bool:
+    """Whether an unflagged WLS anomaly still awaits its three-phase screening.
+
+    True when a ``wls_*`` signature stands with no waveform-family signature,
+    the active state carries three-phase telemetry, and no
+    ``run_three_phase_nlm_from_path`` call bound to this active state has been
+    tried.  Everything here is policy-visible, so the gate, the context
+    providers, and the expert agree on the same predicate.
+    """
+    signatures = [str(item) for item in (unresolved or [])]
+    if not any(item.startswith("wls_") for item in signatures):
+        return False
+    if waveform_anomaly_signatures(signatures):
+        return False
+    channels = {str(item) for item in (available_evidence or [])}
+    if not (channels & THREE_PHASE_TELEMETRY_CHANNELS):
+        return False
+    active = str(active_state_id or "")
+    for signature in tried_action_signatures or []:
+        text = str(signature)
+        tool, _, encoded = text.partition(":")
+        if tool != RUN_THREE_PHASE_NLM_FROM_PATH:
+            continue
+        try:
+            arguments = json.loads(encoded) if encoded else {}
+        except ValueError:
+            continue
+        requested = str((arguments or {}).get("state_id") or "")
+        if not active or not requested or requested == active:
+            return False
+    return True
+
+
 def unexplained_signatures(
     unresolved: Any,
     explained_records: Any,

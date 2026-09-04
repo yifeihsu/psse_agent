@@ -33,6 +33,7 @@ from psse_env.actions import (
     RUN_THREE_PHASE_NLM_FROM_PATH,
     safe_normalize_action,
     unexplained_signatures,
+    waveform_anomaly_signatures,
 )
 from psse_env.oracle.expert_types import (
     ExpertActionProposal,
@@ -205,6 +206,57 @@ class DiagnosticsExpert:
                     )
                 )
         return proposals
+
+    def three_phase_screening_proposals(
+        self,
+        state: Any,
+        history: Sequence[Mapping[str, Any]] | None = None,
+    ) -> list[ExpertActionProposal]:
+        """Screen an unflagged fundamental-frequency anomaly against three-phase telemetry.
+
+        An operator who only holds the positive-sequence snapshot first sees a
+        WLS anomaly.  When three-phase telemetry is available, the balanced
+        model's residuals must not be attributed to a meter or a branch until
+        that telemetry has been checked for the event the model cannot
+        represent (an unbalance source or an HIF-like line differential), so
+        this is a mandatory stage ahead of every correction route.  It runs
+        once per active state and never on a root a sensor already flagged,
+        which the ordinary diagnostic ladder owns.
+        """
+        state = policy_state_view(state)
+        active_id = state_value(state, "active_state_id")
+        if not active_id or state_value(state, "has_open_candidate"):
+            return []
+        raw_unresolved = state_value(state, "unresolved_signatures", []) or []
+        if waveform_anomaly_signatures(raw_unresolved):
+            return []
+        unresolved = unexplained_signatures(
+            raw_unresolved, state_value(state, "explained_anomalies", [])
+        )
+        fundamental = [str(item) for item in unresolved if str(item).startswith("wls_")]
+        if not fundamental:
+            return []
+        available = {str(item) for item in state_value(state, "available_evidence", []) or []}
+        if not (available & {"three_phase_voltages", "three_phase_branch_currents"}):
+            return []
+        completed = self._completed_diagnostics(
+            history or [], active_state_id=str(active_id)
+        )
+        if RUN_THREE_PHASE_NLM_FROM_PATH in completed:
+            return []
+        return [
+            self._proposal(
+                RUN_THREE_PHASE_NLM_FROM_PATH,
+                {"state_id": active_id},
+                confidence=0.95,
+                evidence=[
+                    "fundamental_anomaly_detected",
+                    "three_phase_telemetry_available",
+                    "three_phase_screening_before_correction",
+                    *fundamental[:3],
+                ],
+            )
+        ]
 
     def _proposal(
         self,

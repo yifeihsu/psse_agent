@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 from .actions import (
     ANOMALY_FAMILY_MARKERS,
+    WAVEFORM_ANOMALY_FAMILIES,
     ASK_FOR_MORE_EVIDENCE,
     DIAGNOSTIC_TOOLS,
     COMMIT_STATE,
@@ -1061,6 +1062,7 @@ class TransactionalPSSEEnv:
                     valid_next_actions=[],
                 )
             if tool in DIAGNOSTIC_TOOLS:
+                self._apply_minted_signatures(tool, metrics)
                 self._record_anomaly_explanation(tool, target_id, metrics)
             if (
                 tool == ASK_FOR_MORE_EVIDENCE
@@ -1355,16 +1357,33 @@ class TransactionalPSSEEnv:
             return
 
         if tool == RUN_THREE_PHASE_NLM_FROM_PATH:
-            if not hif_codes and not unbalance_codes:
+            # Discovery: with no sensor flag, a fundamental-frequency anomaly
+            # (a wls_ signature) plus available three-phase telemetry is the
+            # observable reason to screen the three-phase state before any
+            # residual is attributed to a meter or a branch.
+            fundamental_codes = [
+                str(item) for item in unresolved if str(item).startswith("wls_")
+            ]
+            three_phase_channels = {"three_phase_voltages", "three_phase_branch_currents"}
+            screening = bool(
+                fundamental_codes
+                and (available & three_phase_channels)
+                and not hif_codes
+                and not unbalance_codes
+            )
+            if not hif_codes and not unbalance_codes and not screening:
                 raise ValueError(
                     "Production training row for run_three_phase_nlm_from_path lacks "
-                    "an observable HIF or three-phase-unbalance signature."
+                    "an observable HIF or three-phase-unbalance signature, or a "
+                    "fundamental-frequency anomaly with three-phase telemetry to screen."
                 )
             # Per-phase branch-current telemetry localizes both HIF lines and
             # unbalance sources directly, so it satisfies the channel gate on
             # its own; a stored NLM diagnostic remains sufficient as before.
             required_channels = (
-                {"nlm_diagnostic", "three_phase_branch_currents"}
+                three_phase_channels
+                if screening
+                else {"nlm_diagnostic", "three_phase_branch_currents"}
                 if hif_codes
                 else {"nlm_diagnostic", "three_phase_voltages", "three_phase_branch_currents"}
             )
@@ -3426,6 +3445,31 @@ class TransactionalPSSEEnv:
             return
         unresolved = list(self.current_state().get("unresolved_signatures") or [])
         explained = matching_evidence_codes(unresolved, *markers)
+        minted: str | None = None
+        if family in WAVEFORM_ANOMALY_FAMILIES:
+            if not explained:
+                # Discovery path: no sensor flagged the event, the operator
+                # reached the diagnostic from a fundamental-frequency anomaly
+                # and three-phase telemetry.  The diagnostic's own finding is
+                # the observable signature, minted here so the same
+                # explained-anomaly closure applies as for a flagged root.
+                minted = f"{family} localized_by_diagnostic"
+                signatures = list(self.context_flags.get("unresolved_signatures") or [])
+                if minted not in signatures:
+                    signatures.append(minted)
+                self.context_flags["unresolved_signatures"] = signatures
+                self._set_semantic_provenance(
+                    "unresolved_signatures", f"deployment_diagnostic:{tool}"
+                )
+                explained = [minted]
+            # The fundamental-frequency signatures minted before the event was
+            # known attribute the event itself, so the explanation covers them
+            # too; a later solve mints none while the waveform signature stands.
+            explained = explained + [
+                str(signature)
+                for signature in unresolved
+                if str(signature).startswith("wls_") and str(signature) not in explained
+            ]
         record = policy_safe_copy(
             {
                 "tool": tool,
@@ -3435,9 +3479,34 @@ class TransactionalPSSEEnv:
                 "detail": explanation.get("detail") or {},
                 "evidence_source": metrics.get("evidence_source"),
                 "explained_signatures": explained,
+                "minted_signature": minted,
             }
         )
         self.context_flags.setdefault("explained_anomalies", []).append(record)
+
+    def _apply_minted_signatures(self, tool: str, metrics: Mapping[str, Any]) -> None:
+        """Add observable signatures a diagnostic minted from telemetry.
+
+        Only three-phase screening mints one today (an HIF-like line
+        differential on an unflagged root); the signature carries the family
+        marker so routing, evidence gates, and closure treat it exactly like
+        a sensor flag, with the diagnostic recorded as its provenance.
+        """
+        minted = metrics.get("minted_signatures")
+        if not isinstance(minted, (list, tuple)) or not minted:
+            return
+        signatures = list(self.context_flags.get("unresolved_signatures") or [])
+        added = False
+        for item in minted:
+            text = str(item).strip()
+            if text and text not in signatures:
+                signatures.append(text)
+                added = True
+        if added:
+            self.context_flags["unresolved_signatures"] = signatures
+            self._set_semantic_provenance(
+                "unresolved_signatures", f"deployment_diagnostic:{tool}"
+            )
 
     def _invalidate_context_flags(self) -> None:
         for family in ("measurement", "parameter", "topology"):

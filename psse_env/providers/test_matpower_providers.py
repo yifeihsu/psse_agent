@@ -1554,6 +1554,118 @@ class BranchCurrentDiagnosticProviderTests(unittest.TestCase):
         self.assertEqual(acceptance["acceptance_basis"], "shunt_power_spread_source")
         self.assertEqual(output["tool_metrics"]["anomaly_explanation"]["detail"]["bus_1based"], 3)
 
+    def test_unflagged_unbalance_is_discovered_from_the_wls_anomaly(self) -> None:
+        from psse_env.oracle import ExpertPolicyOracle
+
+        # No sensor flag: the operator holds the positive-sequence snapshot
+        # (here made anomalous) and the balanced model, plus the three-phase
+        # channels an EMS could query.
+        anomalous = list(self.data["z_obs"])
+        anomalous[5] += 5.0
+        env = self._env(self._unbalance_metadata(source_bus=2), measurements=anomalous)
+        oracle = ExpertPolicyOracle(
+            process_oracle=env.process_oracle,
+            candidate_oracle=env.candidate_quality_oracle,
+        )
+
+        def expert():
+            return oracle.next_actions(env.get_oracle_state(env.history), env.history)[0]
+
+        first = expert()
+        self.assertEqual(first["tool"], "run_wls")
+        _, wls = env.step(first)
+        self.assertEqual(wls["execution_status"], "success")
+        observation = env.get_policy_observation()
+        self.assertTrue(
+            any(str(sig).startswith("wls_") for sig in observation.unresolved_signatures),
+            observation.unresolved_signatures,
+        )
+        # Screening comes before any context request or correction.
+        screening = expert()
+        self.assertEqual(screening["tool"], "run_three_phase_nlm_from_path")
+        # A student that asks for meter context first gets findings but no
+        # correction: the residuals may still be the waveform event.
+        _, context = env.step(
+            {"tool": "get_measurement_context", "arguments": {"state_id": first["arguments"]["state_id"]}}
+        )
+        self.assertEqual(context["execution_status"], "success")
+        self.assertTrue(context["tool_metrics"]["three_phase_screening_pending"])
+        self.assertEqual(context["tool_metrics"]["supported_corrections"], [])
+        self.assertTrue(context["tool_metrics"]["measurement_findings"])
+        _, refused = env.step(
+            {
+                "tool": "correct_measurements",
+                "arguments": {"state_id": first["arguments"]["state_id"], "suspect_group": [5]},
+            }
+        )
+        self.assertEqual(refused["execution_status"], "failure")
+        self.assertIn(
+            refused["error_code"],
+            {"correction_route_not_actionable", "correction_not_supported_by_current_context"},
+        )
+        self.assertIsNone(env.get_policy_observation().candidate_state_id)
+        screening = expert()
+        self.assertEqual(screening["tool"], "run_three_phase_nlm_from_path")
+        env.assert_training_decision_evidence(screening)
+        _, nlm = env.step(screening)
+        self.assertEqual(nlm["execution_status"], "success")
+        summary = nlm["tool_metrics"]["nlm_summary"]
+        self.assertTrue(summary["screening_mode"])
+        self.assertEqual(summary["diagnostic_classification"], "three_phase_unbalance")
+        self.assertEqual(nlm["tool_metrics"]["anomaly_explanation"]["detail"]["bus_1based"], 2)
+        observation = env.get_policy_observation()
+        record = observation.explained_anomalies[0]
+        self.assertEqual(record["minted_signature"], "three_phase_unbalance localized_by_diagnostic")
+        self.assertIn(record["minted_signature"], observation.unresolved_signatures)
+        # The residual signatures minted before the event was known are
+        # attributed to it, so the episode closes without any correction.
+        for signature in observation.unresolved_signatures:
+            self.assertIn(signature, record["explained_signatures"])
+        final = expert()
+        self.assertEqual(final["tool"], "finalize_diagnosis")
+        env.assert_training_decision_evidence(final)
+        _, done = env.step(final)
+        self.assertEqual(done["execution_status"], "success")
+        self.assertTrue(env.is_terminal())
+
+    def test_balanced_screening_leaves_the_classical_route_open(self) -> None:
+        from three_phase_nlm.synthetic_branch_telemetry import synthetic_unbalance_rows
+
+        voltages, currents = synthetic_unbalance_rows(
+            source_bus=2, split=(1 / 3, 1 / 3, 1 / 3)
+        )
+        anomalous = list(self.data["z_obs"])
+        anomalous[5] += 5.0
+        env = self._env(
+            {
+                "three_phase_voltages": voltages,
+                "three_phase_branch_currents": currents,
+                "branch_current_sigma_pu": 1e-3,
+            },
+            measurements=anomalous,
+        )
+        active = env.current_state()["active_state_id"]
+        env.step({"tool": "run_wls", "arguments": {"state_id": active}})
+        _, nlm = env.step(
+            {"tool": "run_three_phase_nlm_from_path", "arguments": {"state_id": active}}
+        )
+        self.assertEqual(nlm["execution_status"], "success")
+        summary = nlm["tool_metrics"]["nlm_summary"]
+        self.assertTrue(summary["screening_mode"])
+        self.assertEqual(summary["diagnostic_classification"], "balanced_three_phase")
+        self.assertNotIn("anomaly_explanation", nlm["tool_metrics"])
+        observation = env.get_policy_observation()
+        self.assertFalse(observation.explained_anomalies)
+        self.assertFalse(
+            any("unbalance" in str(sig) or "hif" in str(sig) for sig in observation.unresolved_signatures)
+        )
+        _, context = env.step(
+            {"tool": "get_measurement_context", "arguments": {"state_id": active}}
+        )
+        self.assertEqual(context["execution_status"], "success")
+        self.assertEqual(context["tool_metrics"]["fundamental_route_blocked_by_waveform_anomaly"], [])
+        self.assertTrue(context["tool_metrics"]["supported_corrections"])
+
     def test_fundamental_route_stays_blocked_after_unbalance_explanation(self) -> None:
         from psse_env.oracle import ExpertPolicyOracle
 

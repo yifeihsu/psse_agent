@@ -309,6 +309,21 @@ HIF window fails the case14 chi-square test on its own), so an overlaid bad
 meter is not separable by the fundamental-frequency residuals; measurement+HIF
 already carries the same caveat under its explicit handoff allowance.
 
+**Discovery instead of a seeded flag (2026-09-04).** An operator who only
+holds the 122-entry positive-sequence vector and the balanced model cannot
+see an unbalance flag; the first observable evidence is the WLS anomaly. The
+generator therefore defaults unbalance roots to `discovered`: no sensor
+signature is seeded (the withheld flags are recorded on the audit side), the
+row must register as a chi-square anomaly, and the expert's mandatory
+screening stage runs the three-phase check right after the baseline solve.
+The check classifies the three-phase state as balanced, an unbalance source
+(explanation plus a minted `three_phase_unbalance localized_by_diagnostic`
+signature that also covers the residual signatures), or HIF-like (a minted
+`hif_suspected_line_differential` signature hands over to the estimator
+ladder). Because every corrected unbalance row and every HIF window fails
+the case14 chi-square test on its own, discovery loses no roots. HIF keeps
+its zero-sequence relay flag by default.
+
 ## Artifacts
 
 - `artifacts/measurements/out_measurements_imbalance_currents_20260903/` (220 rows, `branch_current_localization_report.json`)

@@ -221,6 +221,19 @@ HIF_SIGNATURE = "hif_suspected_zero_sequence"
 # source with a quiet line-differential null.
 UNBALANCE_SIGNATURE = "three_phase_unbalance vuf_threshold_exceeded"
 UNBALANCE_CURRENT_SIGNATURE = "three_phase_unbalance phase_current_spread_detected"
+# How a waveform family's root announces itself.  ``flagged`` seeds the
+# sensor signature at reset, as if a power-quality monitor or relay had raised
+# it.  ``discovered`` withholds it: the operator starts from the
+# positive-sequence snapshot and the balanced model alone, the first
+# observable evidence is the WLS anomaly, and the three-phase telemetry has
+# to be screened before the anomaly can be attributed.  Unbalance defaults to
+# discovery because no positive-sequence SCADA flags it; a mid-span HIF keeps
+# its zero-sequence relay flag by default.
+WAVEFORM_SIGNATURE_MODES = ("flagged", "discovered")
+DEFAULT_WAVEFORM_SIGNATURE_MODE = {
+    "three_phase_unbalance": "discovered",
+    "hif": "flagged",
+}
 
 # The tabular measurement corpus is shared by both the round-0 aggregate and
 # the frozen evaluation-suite builder.  Assign its physical source rows before
@@ -361,6 +374,7 @@ class Round0ScenarioGenerator:
         parameter_ranking_dominance_threshold: float | None = None,
         enforce_parameter_ranking_dominance: bool | None = None,
         unbalance_vuf_threshold: float = DEFAULT_UNBALANCE_VUF_THRESHOLD,
+        waveform_signature_mode: Mapping[str, str] | None = None,
     ) -> None:
         if source_partition not in (None, "train", "evaluation"):
             raise ValueError(
@@ -408,6 +422,16 @@ class Round0ScenarioGenerator:
         if not (0.0 < float(unbalance_vuf_threshold) < 1.0):
             raise ValueError("unbalance_vuf_threshold must be a fraction in (0, 1)")
         self.unbalance_vuf_threshold = float(unbalance_vuf_threshold)
+        modes = dict(DEFAULT_WAVEFORM_SIGNATURE_MODE)
+        for family, mode in dict(waveform_signature_mode or {}).items():
+            if family not in modes:
+                raise ValueError(f"unknown waveform signature family: {family!r}")
+            if mode not in WAVEFORM_SIGNATURE_MODES:
+                raise ValueError(
+                    f"waveform signature mode for {family!r} must be one of {WAVEFORM_SIGNATURE_MODES}"
+                )
+            modes[family] = str(mode)
+        self.waveform_signature_mode = modes
         # The frozen evaluation suite deliberately preserves its previously
         # approved physical roots, including hard/ambiguous parameter cases.
         # Dominance is a single-label *training admission* requirement, not a
@@ -1433,10 +1457,14 @@ class Round0ScenarioGenerator:
         )
         scenario["clean_case"] = "case14"
         scenario["clean_measurements"] = [float(value) for value in row["z_true"]]
-        scenario["unresolved_signatures"] = [HIF_SIGNATURE]
-        scenario["semantic_field_provenance"]["unresolved_signatures"] = (
-            _WAVEFORM_PROVENANCE
-        )
+        hif_mode = self.waveform_signature_mode["hif"]
+        if hif_mode == "discovered":
+            self._require_anomalous("case14", z_obs, "hif")
+        else:
+            scenario["unresolved_signatures"] = [HIF_SIGNATURE]
+            scenario["semantic_field_provenance"]["unresolved_signatures"] = (
+                _WAVEFORM_PROVENANCE
+            )
         scenario["metadata"]["nlm_diagnostic"] = copy.deepcopy(dict(diagnostic))
         scenario["metadata"]["hif_runtime"] = {
             "z_obs": z_obs,
@@ -1475,9 +1503,11 @@ class Round0ScenarioGenerator:
                     current_sigma
                 )
         scenario["hidden_truth"] = {"true_hif_errors": [copy.deepcopy(label)]}
-        scenario["release_audit"] = copy.deepcopy(
-            _EXPLANATION_ONLY_RELEASE_AUDIT
-        )
+        scenario["release_audit"] = {
+            **copy.deepcopy(_EXPLANATION_ONLY_RELEASE_AUDIT),
+            "signature_mode": hif_mode,
+            "sensor_signatures_withheld": [HIF_SIGNATURE] if hif_mode == "discovered" else [],
+        }
         return scenario
 
     @staticmethod
@@ -1557,7 +1587,12 @@ class Round0ScenarioGenerator:
         if not signatures:
             raise ScenarioRejected("unbalance_not_observable", str(row.get("id")))
         z_obs = [float(value) for value in row["z_obs"]]
-        if self.validate:
+        mode = self.waveform_signature_mode["three_phase_unbalance"]
+        if mode == "discovered":
+            # The operator starts from the positive-sequence snapshot alone,
+            # so the unbalance must at least register as a WLS anomaly.
+            self._require_anomalous("case14", z_obs, "three_phase_unbalance")
+        elif self.validate:
             self._chi2_statistic("case14", z_obs)
         scenario = self._base_scenario(
             self._scenario_id("three_phase_unbalance", row.get("id"), index),
@@ -1567,10 +1602,11 @@ class Round0ScenarioGenerator:
         )
         scenario["clean_case"] = "case14"
         scenario["clean_measurements"] = [float(value) for value in row["z_true"]]
-        scenario["unresolved_signatures"] = signatures
-        scenario["semantic_field_provenance"]["unresolved_signatures"] = (
-            _WAVEFORM_PROVENANCE
-        )
+        if mode == "flagged":
+            scenario["unresolved_signatures"] = signatures
+            scenario["semantic_field_provenance"]["unresolved_signatures"] = (
+                _WAVEFORM_PROVENANCE
+            )
         scenario["metadata"]["three_phase_voltages"] = copy.deepcopy(list(voltages))
         branch_currents = row.get(BRANCH_CURRENT_CHANNEL)
         if branch_currents and branch_current_rows_to_phasors(branch_currents):
@@ -1580,9 +1616,11 @@ class Round0ScenarioGenerator:
                     row[BRANCH_CURRENT_SIGMA_KEY]
                 )
         scenario["hidden_truth"] = {"true_unbalance_errors": [label]}
-        scenario["release_audit"] = copy.deepcopy(
-            _EXPLANATION_ONLY_RELEASE_AUDIT
-        )
+        scenario["release_audit"] = {
+            **copy.deepcopy(_EXPLANATION_ONLY_RELEASE_AUDIT),
+            "signature_mode": mode,
+            "sensor_signatures_withheld": list(signatures) if mode == "discovered" else [],
+        }
         return scenario
 
     def _telemetry_no_disturbance_scenario(
@@ -2992,6 +3030,8 @@ __all__ = [
     "CURRENT_TELEMETRY_IMBALANCE_SAMPLE_PATH",
     "UNBALANCE_SIGNATURE",
     "UNBALANCE_CURRENT_SIGNATURE",
+    "WAVEFORM_SIGNATURE_MODES",
+    "DEFAULT_WAVEFORM_SIGNATURE_MODE",
     "DEFAULT_BALANCED_ARTIFACT_DIR",
     "DEFAULT_CHI2_ALPHA",
     "SYNTHESIZED_MEASUREMENT_CANONICALIZATION_CONTRACT",

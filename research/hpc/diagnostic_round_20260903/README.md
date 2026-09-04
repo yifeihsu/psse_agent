@@ -96,6 +96,19 @@ wsl -- ssh torch bash /scratch/yx3882/research_diag_round_20260904/submit_diag.s
 The same seed reproduces the same 36 training and 18 development roots, so
 the repeat is a paired comparison against the first run.
 
+## Discovery mode
+
+The first two runs seeded the unbalance sensor flag at reset. From commit
+`3b4ea03`'s successor onward the research script defaults
+`--unbalance-signature-mode discovered`: the operator starts from the
+positive-sequence snapshot and the balanced model, the baseline WLS mints the
+fundamental anomaly, and the expert screens the three-phase telemetry before
+any correction route (see `psse_env/README.md`). HIF keeps its zero-sequence
+relay flag (`--hif-signature-mode flagged`). Signatures do not enter the
+physical root fingerprint, so a discovery round on the same seed is still a
+paired comparison with the flagged runs; the modes are recorded in the run
+config's `research_profile.scenario_sources.signature_modes`.
+
 ## What this round cannot claim
 
 These families terminate through an accepted anomaly explanation or an

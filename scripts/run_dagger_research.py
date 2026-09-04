@@ -42,6 +42,8 @@ from psse_env.oracle.expert_policy import ExpertPolicyOracle  # noqa: E402
 from psse_env.providers.scenario_generator import (  # noqa: E402
     CURRENT_TELEMETRY_HIF_SAMPLE_PATHS,
     CURRENT_TELEMETRY_IMBALANCE_SAMPLE_PATH,
+    DEFAULT_WAVEFORM_SIGNATURE_MODE,
+    WAVEFORM_SIGNATURE_MODES,
     Round0ScenarioGenerator,
 )
 from psse_env.research_models import (  # noqa: E402
@@ -130,12 +132,16 @@ def resolve_scenario_sources(
     plan_families: Iterable[str],
     hif_sample_paths: Sequence[Path | str] | None = None,
     imbalance_sample_path: Path | str | None = None,
+    signature_modes: Mapping[str, str] | None = None,
 ) -> dict[str, Any] | None:
     """Corpus paths for the generator, or ``None`` for its legacy defaults.
 
     Diagnostic-telemetry families default to the per-phase branch-current
     corpora; explicit paths always win.  A core-only plan with no explicit
     paths keeps the generator defaults so earlier runs still resume.
+    ``signature_modes`` (family -> ``flagged``/``discovered``) is recorded
+    beside the corpora whenever they are resolved, so a resumed run cannot
+    silently switch between a sensor-flagged and a discovered root.
     """
     needs_telemetry = bool(set(plan_families) & DIAGNOSTIC_TELEMETRY_FAMILIES)
     hif = (
@@ -153,6 +159,15 @@ def resolve_scenario_sources(
     for path in [*(hif or []), *([imbalance] if imbalance is not None else [])]:
         if not Path(path).is_file():
             raise FileNotFoundError(f"scenario source corpus is missing: {path}")
+    modes = {
+        str(family): str(mode)
+        for family, mode in sorted(dict(signature_modes or {}).items())
+    }
+    for family, mode in modes.items():
+        if family not in DEFAULT_WAVEFORM_SIGNATURE_MODE:
+            raise ValueError(f"unknown waveform signature family {family!r}")
+        if mode not in WAVEFORM_SIGNATURE_MODES:
+            raise ValueError(f"unknown waveform signature mode {mode!r} for {family!r}")
     return {
         "hif_sample_paths": (
             [str(Path(path).resolve()) for path in hif] if hif else None
@@ -160,6 +175,7 @@ def resolve_scenario_sources(
         "imbalance_sample_path": (
             str(Path(imbalance).resolve()) if imbalance is not None else None
         ),
+        "signature_modes": modes or None,
     }
 
 
@@ -634,6 +650,10 @@ def prepare_scenario_split(
             if sources.get("imbalance_sample_path"):
                 generator_kwargs["imbalance_sample_path"] = Path(
                     sources["imbalance_sample_path"]
+                )
+            if sources.get("signature_modes"):
+                generator_kwargs["waveform_signature_mode"] = dict(
+                    sources["signature_modes"]
                 )
             # Keep every scan of a ten-scan current-telemetry window so the
             # research estimator budget can use the whole window.
@@ -1321,6 +1341,25 @@ def parser() -> argparse.ArgumentParser:
         ),
     )
     result.add_argument(
+        "--unbalance-signature-mode",
+        choices=WAVEFORM_SIGNATURE_MODES,
+        default=DEFAULT_WAVEFORM_SIGNATURE_MODE["three_phase_unbalance"],
+        help=(
+            "discovered: the operator starts from the positive-sequence snapshot "
+            "and must screen three-phase telemetry after the WLS anomaly; flagged: "
+            "a power-quality monitor seeds the unbalance signature at reset"
+        ),
+    )
+    result.add_argument(
+        "--hif-signature-mode",
+        choices=WAVEFORM_SIGNATURE_MODES,
+        default=DEFAULT_WAVEFORM_SIGNATURE_MODE["hif"],
+        help=(
+            "flagged: a zero-sequence relay seeds the HIF signature at reset; "
+            "discovered: screening must find the line differential first"
+        ),
+    )
+    result.add_argument(
         "--hif-search-profile",
         choices=HIF_SEARCH_PROFILES,
         default="auto",
@@ -1390,6 +1429,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         plan_families=plan_families,
         hif_sample_paths=args.hif_sample_paths,
         imbalance_sample_path=args.imbalance_sample_path,
+        signature_modes={
+            "three_phase_unbalance": args.unbalance_signature_mode,
+            "hif": args.hif_signature_mode,
+        },
     )
     hif_search_profile = resolve_hif_search_profile(
         args.hif_search_profile, plan_families

@@ -149,7 +149,24 @@ remove the event from the network, so the fundamental-frequency solve stays
 unreliable for as long as the signature is present, and explanation-only
 families terminate by diagnosis or operator handoff, never by repair.
 Separately, `get_topology_context` filters supported status flips that would
-island the network (an EMS would never offer that switching action). A candidate
+island the network (an EMS would never offer that switching action).
+
+Waveform roots come in two signature modes. `flagged` seeds the sensor
+signature at reset, as if a power-quality monitor or a zero-sequence relay
+had raised it. `discovered` withholds it: the operator starts from the
+positive-sequence snapshot and the balanced model alone, the observable
+baseline `run_wls` mints the fundamental-frequency anomaly, and, because the
+active state carries three-phase telemetry, the orchestrator's mandatory
+screening stage runs `run_three_phase_nlm_from_path` before any correction
+route. Screening classifies the three-phase state as `balanced_three_phase`
+(no explanation; the classical routes stand), an unbalance source
+(explanation recorded, the diagnostic mints its own
+`three_phase_unbalance localized_by_diagnostic` signature and covers the
+`wls_*` signatures minted before the event was known), or `hif_suspected`
+(the provider mints `hif_suspected_line_differential` and the ordinary HIF
+ladder takes over). The generator defaults unbalance to `discovered` because
+no positive-sequence SCADA flags it, and HIF to `flagged`; the physical root
+fingerprint ignores signatures, so the two modes share roots. A candidate
 whose verification solve itself fails is recorded as verified-REJECT — the
 solver failure is observable rejection evidence — so the episode retains a
 legal rollback path instead of deadlocking on an unverifiable candidate.

@@ -138,6 +138,24 @@ class ExpertPolicyOracle:
             policy, context.history
         )
 
+        # An unflagged fundamental-frequency anomaly on a root that carries
+        # three-phase telemetry is screened for a waveform event before any
+        # correction route, including a correction retry the recovery expert
+        # would otherwise issue after a failed learner correction.  Screening
+        # is a read-only evidence action and returns nothing while a
+        # transaction is open, so lifecycle recovery still comes first then.
+        screening = self.diagnostics_expert.three_phase_screening_proposals(
+            policy, context.history
+        )
+        if screening:
+            return self._rank_and_filter(
+                screening,
+                policy,
+                seen_signatures=seen_signatures,
+                blocked_correction_tools=blocked_correction_tools,
+                mandatory=True,
+            )
+
         recovery = self.recovery_expert.repair_actions(policy, context.history)
         if recovery:
             return self._rank_and_filter(

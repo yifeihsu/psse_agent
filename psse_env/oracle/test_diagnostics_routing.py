@@ -613,6 +613,33 @@ class ProductionDiagnosticEvidenceGateTests(unittest.TestCase):
                 }
             )
 
+    def test_wls_anomaly_with_three_phase_telemetry_admits_screening_target(self) -> None:
+        from three_phase_nlm.synthetic_branch_telemetry import synthetic_unbalance_rows
+
+        voltages, currents = synthetic_unbalance_rows(source_bus=2, split=(0.5, 0.3, 0.2))
+        anomalous = list(self.data["z_obs"])
+        anomalous[5] += 5.0
+        state = self.env.reset(
+            self._scenario(
+                measurements=anomalous,
+                metadata={
+                    "three_phase_voltages": voltages,
+                    "three_phase_branch_currents": currents,
+                    "branch_current_sigma_pu": 1e-3,
+                },
+            )
+        )
+        nlm_action = {
+            "tool": "run_three_phase_nlm_from_path",
+            "arguments": {"state_id": state["active_state_id"]},
+        }
+        # Before the baseline solve there is no observable anomaly to screen.
+        with self.assertRaisesRegex(ValueError, "observable .*signature"):
+            self.env.assert_training_decision_evidence(nlm_action)
+        _, wls = self.env.step({"tool": "run_wls", "arguments": {"state_id": state["active_state_id"]}})
+        self.assertEqual(wls["execution_status"], "success")
+        self.env.assert_training_decision_evidence(nlm_action)
+
     def test_hif_estimator_target_must_come_from_latest_nlm_output(self) -> None:
         state = self.env.reset(
             self._scenario(
@@ -736,6 +763,136 @@ class TerminalCurrentRoutingTests(unittest.TestCase):
         ]
         proposals = self.expert.propose(state, history)
         self.assertNotIn("candidate_phase", proposals[0].action["arguments"])
+
+
+class ThreePhaseScreeningTests(unittest.TestCase):
+    """Discovery: an unflagged WLS anomaly is screened against three-phase telemetry first."""
+
+    CHANNELS = ["three_phase_voltages", "three_phase_branch_currents"]
+
+    def setUp(self) -> None:
+        self.expert = DiagnosticsExpert()
+
+    def _anomalous_state(self, **overrides) -> dict:
+        state = _policy_state(
+            unresolved_signatures=["wls_residual_outlier_dominant index=5 channel=Vm"],
+            available_evidence=list(self.CHANNELS),
+            last_tool="run_wls",
+            last_tool_status="success",
+        )
+        state.update(overrides)
+        return state
+
+    def test_screening_proposes_nlm_on_wls_anomaly_with_telemetry(self) -> None:
+        proposals = self.expert.three_phase_screening_proposals(self._anomalous_state(), [])
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0].action["tool"], "run_three_phase_nlm_from_path")
+        self.assertIn("three_phase_screening_before_correction", proposals[0].evidence_codes)
+
+    def test_screening_needs_telemetry_an_anomaly_and_no_flag(self) -> None:
+        self.assertEqual(
+            self.expert.three_phase_screening_proposals(
+                self._anomalous_state(available_evidence=["nlm_diagnostic"]), []
+            ),
+            [],
+        )
+        self.assertEqual(
+            self.expert.three_phase_screening_proposals(
+                self._anomalous_state(unresolved_signatures=[]), []
+            ),
+            [],
+        )
+        # A flagged root is owned by the ordinary ladder, not by screening.
+        self.assertEqual(
+            self.expert.three_phase_screening_proposals(
+                self._anomalous_state(
+                    unresolved_signatures=["hif_suspected_zero_sequence", "wls_residual_outlier index=5"]
+                ),
+                [],
+            ),
+            [],
+        )
+        self.assertEqual(
+            self.expert.three_phase_screening_proposals(
+                self._anomalous_state(), [_successful_step("run_three_phase_nlm_from_path")]
+            ),
+            [],
+        )
+
+    def test_orchestrator_screens_before_any_correction_route(self) -> None:
+        oracle = ExpertPolicyOracle()
+        actions = oracle.next_actions(
+            self._anomalous_state(), [_successful_step("run_wls")]
+        )
+        self.assertTrue(actions)
+        self.assertEqual(actions[0]["tool"], "run_three_phase_nlm_from_path")
+
+    def test_orchestrator_without_telemetry_keeps_the_classical_route(self) -> None:
+        oracle = ExpertPolicyOracle()
+        actions = oracle.next_actions(
+            self._anomalous_state(available_evidence=[]), [_successful_step("run_wls")]
+        )
+        self.assertTrue(actions)
+        self.assertNotEqual(actions[0]["tool"], "run_three_phase_nlm_from_path")
+
+    def test_screening_outranks_the_recovery_retry_after_a_failed_correction(self) -> None:
+        oracle = ExpertPolicyOracle()
+        state = self._anomalous_state(
+            has_fresh_measurement_context=True,
+            last_tool="correct_measurements",
+            last_tool_status="failure",
+            last_tool_output={
+                "execution_status": "failure",
+                "error_code": "correction_not_supported_by_current_context",
+                "error_detail": "measurement_target_not_in_context",
+            },
+        )
+        actions = oracle.next_actions(
+            state,
+            [
+                _successful_step("run_wls"),
+                _successful_step("get_measurement_context"),
+                _failed_step("correct_measurements", "correction_not_supported_by_current_context"),
+            ],
+        )
+        self.assertTrue(actions)
+        self.assertEqual(actions[0]["tool"], "run_three_phase_nlm_from_path")
+
+    def test_gate_refuses_corrections_while_screening_is_pending(self) -> None:
+        from psse_env.actions import three_phase_screening_pending
+        from psse_env.oracle import ProcessValidityOracle
+
+        gate = ProcessValidityOracle()
+        state = self._anomalous_state(has_fresh_measurement_context=True)
+        verdict = gate.check(
+            state,
+            {
+                "tool": "correct_measurements",
+                "arguments": {"state_id": "episode:s0", "measurement_updates": {5: 1.0}},
+            },
+        )
+        self.assertFalse(verdict["process_valid"])
+        self.assertEqual(verdict["error_code"], "correction_route_not_actionable")
+        self.assertEqual(verdict["error_detail"], "measurement_three_phase_screening_pending")
+        # Once the NLM check has been tried on this state, the rule lifts.
+        tried = 'run_three_phase_nlm_from_path:{"state_id":"episode:s0"}'
+        self.assertFalse(
+            three_phase_screening_pending(
+                unresolved=state["unresolved_signatures"],
+                available_evidence=state["available_evidence"],
+                tried_action_signatures=[tried],
+                active_state_id="episode:s0",
+            )
+        )
+        # A screening bound to an earlier active state does not count.
+        self.assertTrue(
+            three_phase_screening_pending(
+                unresolved=state["unresolved_signatures"],
+                available_evidence=state["available_evidence"],
+                tried_action_signatures=['run_three_phase_nlm_from_path:{"state_id":"episode:s9"}'],
+                active_state_id="episode:s0",
+            )
+        )
 
 
 class WaveformRouteStandDownTests(unittest.TestCase):

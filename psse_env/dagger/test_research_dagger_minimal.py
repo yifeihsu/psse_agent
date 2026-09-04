@@ -410,6 +410,31 @@ class DiagnosticFamilyPresetTests(unittest.TestCase):
         for path in sources["hif_sample_paths"]:
             self.assertIn("currents", path)
 
+    def test_signature_modes_are_recorded_with_the_corpora(self) -> None:
+        sources = resolve_scenario_sources(
+            plan_families={"three_phase_unbalance"},
+            signature_modes={"three_phase_unbalance": "discovered", "hif": "flagged"},
+        )
+        assert sources is not None
+        self.assertEqual(
+            sources["signature_modes"],
+            {"hif": "flagged", "three_phase_unbalance": "discovered"},
+        )
+        with self.assertRaises(ValueError):
+            resolve_scenario_sources(
+                plan_families={"hif"}, signature_modes={"hif": "guessed"}
+            )
+        with self.assertRaises(ValueError):
+            resolve_scenario_sources(
+                plan_families={"hif"}, signature_modes={"harmonic": "flagged"}
+            )
+        self.assertIsNone(
+            resolve_scenario_sources(
+                plan_families=set(DEFAULT_TRAIN_PLAN),
+                signature_modes={"three_phase_unbalance": "discovered"},
+            )
+        )
+
     def test_explicit_corpus_paths_win_and_must_exist(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             corpus = Path(tmp) / "samples.jsonl"

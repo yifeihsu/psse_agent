@@ -39,6 +39,8 @@ from typing import Any, Mapping, Sequence
 from hif_search_limits import validate_hif_search_limits
 from psse_env.actions import (
     ANOMALY_FAMILY_MARKERS,
+    THREE_PHASE_TELEMETRY_CHANNELS,
+    three_phase_screening_pending,
     waveform_anomaly_signatures,
     ASK_FOR_MORE_EVIDENCE,
     CORRECT_MEASUREMENTS,
@@ -104,6 +106,10 @@ from trace_protocol import (  # noqa: E402  (repo-root module)
 # rejected refinement plus one normal correction/verification transaction.
 _COUPLED_REFINEMENT_MAX_ANOMALY_RATIO = 1.10
 _COUPLED_REFINEMENT_MIN_REMAINING_BUDGET = 8
+#: Signature minted when three-phase screening finds an HIF-like line
+#: differential on a root no sensor had flagged; it carries the HIF family
+#: marker so the existing estimator ladder takes over.
+HIF_SCREENING_SIGNATURE = "hif_suspected_line_differential"
 _ROUTE_ACTIONABLE = "actionable"
 _ROUTE_COMPLETE_NEGATIVE = "complete_negative"
 _ROUTE_UNAVAILABLE = "unavailable_or_inconclusive"
@@ -1551,10 +1557,13 @@ class MatpowerDeploymentProviders:
             else []
         )
         waveform_block = self._waveform_route_block(state)
-        if waveform_block:
+        screening_pending = self._screening_pending(state)
+        if waveform_block or screening_pending:
             # Residual findings stay visible as evidence, but no meter
             # correction is offered: on a waveform-distorted operator vector
-            # the residuals attribute the event itself, not a bad sensor.
+            # the residuals attribute the event itself, not a bad sensor, and
+            # until an unflagged anomaly has been screened against the
+            # three-phase telemetry that possibility is still open.
             supported = []
             terminal_closure_action = None
             terminal_closure_targets = []
@@ -1564,6 +1573,7 @@ class MatpowerDeploymentProviders:
             "evidence_source": "deployment_context:wls_residuals",
             "context_tool": GET_MEASUREMENT_CONTEXT,
             "fundamental_route_blocked_by_waveform_anomaly": waveform_block,
+            "three_phase_screening_pending": screening_pending,
             "finding_count": len(evidence),
             "measurement_findings": evidence,
             "supported_corrections": supported,
@@ -2049,14 +2059,18 @@ class MatpowerDeploymentProviders:
             else _ROUTE_UNAVAILABLE
         )
         waveform_block = self._waveform_route_block(state)
-        if waveform_block:
+        screening_pending = self._screening_pending(state)
+        if waveform_block or screening_pending:
             supported = []
-            route_status = _ROUTE_COMPLETE_NEGATIVE
+            route_status = (
+                _ROUTE_COMPLETE_NEGATIVE if waveform_block else _ROUTE_UNAVAILABLE
+            )
         return {
             **self._binding(state),
             "evidence_source": "deployment_context:wls_lagrange",
             "context_tool": GET_PARAMETER_CONTEXT,
             "fundamental_route_blocked_by_waveform_anomaly": waveform_block,
+            "three_phase_screening_pending": screening_pending,
             "finding_count": len(findings),
             "parameter_findings": findings,
             "parameter_scans_available": scans_usable,
@@ -2175,14 +2189,18 @@ class MatpowerDeploymentProviders:
             else _ROUTE_COMPLETE_NEGATIVE
         )
         waveform_block = self._waveform_route_block(state)
-        if waveform_block:
+        screening_pending = self._screening_pending(state)
+        if waveform_block or screening_pending:
             supported = []
-            route_status = _ROUTE_COMPLETE_NEGATIVE
+            route_status = (
+                _ROUTE_COMPLETE_NEGATIVE if waveform_block else _ROUTE_UNAVAILABLE
+            )
         return {
             **self._binding(state),
             "evidence_source": "deployment_context:wls_lagrange_candidate_screened",
             "context_tool": GET_TOPOLOGY_CONTEXT,
             "fundamental_route_blocked_by_waveform_anomaly": waveform_block,
+            "three_phase_screening_pending": screening_pending,
             "finding_count": len(findings),
             "topology_findings": findings,
             "supported_corrections": supported,
@@ -2607,6 +2625,31 @@ class MatpowerDeploymentProviders:
         return waveform_anomaly_signatures(cls._observable_signatures(state))
 
     @classmethod
+    def _screening_pending(cls, state: Mapping[str, Any]) -> bool:
+        """Unflagged WLS anomaly with three-phase telemetry not yet screened.
+
+        Until the three-phase state has been checked, the residuals may be
+        the event the balanced model cannot represent, so no correction is
+        offered; the channels are read from the state's own metadata.
+        """
+        observation = state.get("policy_observation")
+        observation = observation if isinstance(observation, Mapping) else {}
+        metadata = cls._metadata(state)
+        runtime = metadata.get("hif_runtime")
+        runtime = runtime if isinstance(runtime, Mapping) else {}
+        channels = [
+            channel
+            for channel in THREE_PHASE_TELEMETRY_CHANNELS
+            if metadata.get(channel) or runtime.get(channel)
+        ]
+        return three_phase_screening_pending(
+            unresolved=observation.get("unresolved_signatures") or [],
+            available_evidence=channels,
+            tried_action_signatures=observation.get("tried_action_signatures") or [],
+            active_state_id=observation.get("active_state_id") or state.get("state_id"),
+        )
+
+    @classmethod
     def _has_family_signature(cls, state: Mapping[str, Any], family: str) -> bool:
         return any(
             _matches_any_marker(signature, ANOMALY_FAMILY_MARKERS[family])
@@ -2889,7 +2932,15 @@ class MatpowerDeploymentProviders:
             "three_phase_voltages"
         )
         branch_currents, current_sigma = self._branch_current_channel(state)
-        if unbalance_signal and not hif_signal and three_phase_voltages:
+        # Screening: no sensor has flagged a waveform anomaly, so the operator
+        # only holds the positive-sequence snapshot and a fundamental-frequency
+        # anomaly.  Before any residual is attributed to a meter or a branch,
+        # the three-phase telemetry is checked for the event the balanced
+        # model cannot represent: a source of unbalance, an HIF-like line
+        # differential, or neither (balanced, and the classical routes stand).
+        screening = not (unbalance_signal or hif_signal or self._waveform_route_block(state))
+        screening_hif_like = False
+        if (unbalance_signal or screening) and not hif_signal and three_phase_voltages:
             vuf_evidence = _three_phase_vuf_evidence(
                 three_phase_voltages, top_k=self.top_k
             )
@@ -2970,11 +3021,16 @@ class MatpowerDeploymentProviders:
                         "diagnostic_classification": (
                             "three_phase_unbalance"
                             if accepted
-                            else ("hif_suspected" if hif_like else "unresolved")
+                            else (
+                                "hif_suspected"
+                                if hif_like
+                                else ("balanced_three_phase" if screening else "unresolved")
+                            )
                         ),
                         "line_differential_null": null_test,
                     }
                 )
+                screening_hif_like = bool(screening and hif_like and not accepted)
                 if localization is not None:
                     summary["localization"] = {
                         key: localization[key]
@@ -3009,6 +3065,14 @@ class MatpowerDeploymentProviders:
                 "nlm_summary": summary,
                 "diagnostic_acceptance": acceptance,
             }
+            if screening:
+                summary["screening_mode"] = True
+                if not accepted and not screening_hif_like:
+                    summary["diagnostic_classification"] = (
+                        "balanced_three_phase"
+                        if branch_currents or max_vuf < self.unbalance_vuf_threshold
+                        else summary["diagnostic_classification"]
+                    )
             if accepted:
                 metrics["anomaly_explanation"] = {
                     "family": "three_phase_unbalance",
@@ -3019,7 +3083,11 @@ class MatpowerDeploymentProviders:
                     ),
                     "detail": detail,
                 }
-            return metrics
+            if not screening_hif_like:
+                return metrics
+            # An HIF-like line differential during screening: fall through to
+            # the terminal-current localization so the ladder gets a ranked
+            # line and phase, and mint the HIF signature the ladder keys on.
 
         if three_phase_voltages and branch_currents:
             # Two-terminal differential currents name the faulted line and
@@ -3059,11 +3127,16 @@ class MatpowerDeploymentProviders:
                         if isinstance(first, Mapping) and first.get("branch_row0") is not None:
                             summary["legacy_nlm_top_branch_row0"] = int(first["branch_row0"])
                             summary["legacy_nlm_method"] = diagnostic.get("method")
-                return {
+                localized_metrics: dict[str, Any] = {
                     **self._binding(state),
                     "evidence_source": "deployment_diagnostic:terminal_current_differential",
                     "nlm_summary": summary,
                 }
+                if screening_hif_like:
+                    summary["screening_mode"] = True
+                    summary["diagnostic_classification"] = "hif_suspected"
+                    localized_metrics["minted_signatures"] = [HIF_SCREENING_SIGNATURE]
+                return localized_metrics
 
         if not isinstance(diagnostic, Mapping) and not (pristine_dir and faulted_dir):
             return self._failure(
