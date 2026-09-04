@@ -113,6 +113,7 @@ def build_summary(
     collection_dir: Path,
     training_done: Path | None,
     prerequisites: Path | None,
+    mixture_filter: Path | None = None,
 ) -> dict[str, Any]:
     report = _read_json(collection_dir / "research_run_report.json")
     comparison = _read_json(collection_dir / "evaluation" / "comparison.json")
@@ -142,6 +143,8 @@ def build_summary(
         summary["training"] = _read_json(training_done)
     if prerequisites is not None and prerequisites.is_file():
         summary["prerequisites"] = _read_json(prerequisites)
+    if mixture_filter is not None and mixture_filter.is_file():
+        summary["mixture_filter"] = _read_json(mixture_filter)
     return summary
 
 
@@ -150,12 +153,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--collection-dir", required=True, type=Path)
     parser.add_argument("--training-done", type=Path)
     parser.add_argument("--prerequisites", type=Path)
+    parser.add_argument("--mixture-filter", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
     summary = build_summary(
         collection_dir=args.collection_dir,
         training_done=args.training_done,
         prerequisites=args.prerequisites,
+        mixture_filter=args.mixture_filter,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")

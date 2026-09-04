@@ -48,5 +48,6 @@ PY
   --collection-dir "$COLLECTION_DIR" \
   --training-done "$OUT/training.done" \
   --prerequisites "$OUT/prerequisites.json" \
+  --mixture-filter "$COLLECTION_DIR/mixture_filter_report.json" \
   --output "$OUT/round_summary.json"
 echo diag-eval-complete

@@ -51,6 +51,20 @@ a preempted job resumes on requeue. Receipts land in `out/`:
 `round_summary.json` (overall suite metrics for both adapters, their
 difference, and per-family outcome counts on the development roots).
 
+## Stale D0 HIF rows
+
+The round-0 aggregate predates branch-current telemetry, so all 91 of its
+HIF and measurement+HIF rows (49 + 42 of 1280) teach an operator handoff
+after both estimators are exhausted, the opposite of what the diagnostic D1
+rows teach for the same signature. The training stage therefore rebuilds the
+1:1 mixture from the D0 pool with those two families removed
+(`filter_mixture.py`, asserting exactly 91 dropped rows) and trains on
+`round1.train.filtered.jsonl`. The collection stage's unfiltered
+`round1.train.jsonl` is left in place as the recorded mixture identity. If
+the training and evaluation jobs were already queued when the filter was
+added, `amend_train_chain.sh COLLECT_JOB_ID` cancels them and resubmits the
+staged scripts behind the running collection.
+
 ## What this round cannot claim
 
 These families terminate through an accepted anomaly explanation or an

@@ -11,15 +11,26 @@ import pytest
 
 CELL = Path(__file__).resolve().parent / "hpc" / "diagnostic_round_20260903"
 SBATCH_FILES = ("diag_collect.sbatch", "diag_train.sbatch", "diag_eval.sbatch")
-SHELL_FILES = ("prerequisites.sh", "submit_diag.sh", "status_diag.sh", "deploy_remote.sh", "round.env")
+SHELL_FILES = (
+    "prerequisites.sh",
+    "submit_diag.sh",
+    "status_diag.sh",
+    "deploy_remote.sh",
+    "amend_train_chain.sh",
+    "round.env",
+)
 
 
-def _load_summarize():
-    spec = importlib.util.spec_from_file_location("diag_summarize", CELL / "summarize.py")
+def _load_module(name: str, filename: str):
+    spec = importlib.util.spec_from_file_location(name, CELL / filename)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def _load_summarize():
+    return _load_module("diag_summarize", "summarize.py")
 
 
 @pytest.mark.parametrize("name", SBATCH_FILES)
@@ -109,3 +120,84 @@ def test_summary_tabulates_outcomes_per_family(tmp_path: Path) -> None:
     assert bc0["outcomes"]["three_phase_unbalance"]["terminal_outcome"] == {"operator_escalation": 1}
     assert summary["per_family"]["r1"]["outcomes"]["three_phase_unbalance"]["terminal_outcome"] == {"resolved": 1}
     assert bc0["unmatched_episodes"] == 0
+
+
+def _chat_row(root: str, family: str, source: str) -> dict:
+    return {
+        "example_id": f"{source}_{root}",
+        "physical_root_fingerprint": root,
+        "metadata": {"scenario_family": family},
+        "messages": [{"role": "user", "content": root}],
+    }
+
+
+def _write_jsonl(path: Path, rows: list[dict]) -> None:
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+
+def test_training_stage_trains_on_the_filtered_mixture() -> None:
+    text = (CELL / "diag_train.sbatch").read_text(encoding="utf-8")
+    assert "filter_mixture.py" in text
+    assert "--train \"$FILTERED\"" in text
+    assert "--expected-dropped \"$EXPECTED_STALE_D0_ROWS\"" in text
+    env = (CELL / "round.env").read_text(encoding="utf-8")
+    assert "STALE_D0_FAMILIES=\"hif,measurement+hif\"" in env
+    assert "EXPECTED_STALE_D0_ROWS=91" in env
+
+
+def test_filter_drops_stale_families_before_sampling_and_keeps_one_to_one(tmp_path: Path) -> None:
+    from scripts.run_dagger_research import build_research_mixture
+
+    filter_mixture = _load_module("diag_filter_mixture", "filter_mixture.py")
+    d0 = [_chat_row(f"d0_param_{i}", "parameter", "d0") for i in range(6)]
+    d0 += [_chat_row(f"d0_hif_{i}", "hif", "d0") for i in range(2)]
+    d0 += [_chat_row("d0_mhif_0", "measurement+hif", "d0")]
+    d1 = [_chat_row(f"d1_hif_{i}", "hif", "d1") for i in range(3)]
+    d0_path, d1_path = tmp_path / "d0.jsonl", tmp_path / "d1.jsonl"
+    _write_jsonl(d0_path, d0)
+    _write_jsonl(d1_path, d1)
+    output, report_path = tmp_path / "filtered.jsonl", tmp_path / "report.json"
+    report = filter_mixture.build(
+        d0_path=d0_path,
+        d1_path=d1_path,
+        stale_families=["hif", "measurement+hif"],
+        expected_dropped=3,
+        d1_share=0.5,
+        d1_cap=200,
+        seed=7,
+        output=output,
+        report_path=report_path,
+        mixture_builder=build_research_mixture,
+    )
+    assert report["dropped_by_family"] == {"hif": 2, "measurement+hif": 1}
+    assert report["d0_rows_after"] == 6
+    assert report["d0_families_after"] == {"parameter": 6}
+    assert report["mixture_sources"] == {"d0": 3, "d1": 3}
+    rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 6
+    d0_selected = [row for row in rows if row["research_mixture_source"] == "d0"]
+    assert all(filter_mixture.row_family(row) == "parameter" for row in d0_selected)
+    assert json.loads(report_path.read_text(encoding="utf-8"))["output_sha256"] == report["output_sha256"]
+    with pytest.raises(ValueError, match="expected to drop 4"):
+        filter_mixture.build(
+            d0_path=d0_path,
+            d1_path=d1_path,
+            stale_families=["hif", "measurement+hif"],
+            expected_dropped=4,
+            d1_share=0.5,
+            d1_cap=200,
+            seed=7,
+            output=tmp_path / "other.jsonl",
+            report_path=tmp_path / "other.json",
+            mixture_builder=build_research_mixture,
+        )
+
+
+def test_filter_fails_closed_on_a_row_without_a_family() -> None:
+    filter_mixture = _load_module("diag_filter_mixture_2", "filter_mixture.py")
+    with pytest.raises(ValueError, match="carries no scenario family"):
+        filter_mixture.filter_rows([{"example_id": "x", "metadata": {}}], ["hif"])
+    kept, dropped = filter_mixture.filter_rows(
+        [{"scenario_family": "topology"}, {"grouping": {"scenario_family": "hif"}}], ["hif"]
+    )
+    assert len(kept) == 1 and dict(dropped) == {"hif": 1}

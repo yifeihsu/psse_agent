@@ -20,15 +20,15 @@ fi
 HEAD=$(git -C "$ROUND/source" rev-parse HEAD)
 [[ "$HEAD" == "$EXPECTED" ]] || { echo "deployed $HEAD differs from expected $EXPECTED" >&2; exit 2; }
 printf '%s\n' "$HEAD" > "$ROUND/source_commit.txt"
-for name in round.env prerequisites.sh summarize.py submit_diag.sh status_diag.sh \
-  diag_collect.sbatch diag_train.sbatch diag_eval.sbatch; do
+for name in round.env prerequisites.sh summarize.py filter_mixture.py submit_diag.sh \
+  status_diag.sh amend_train_chain.sh diag_collect.sbatch diag_train.sbatch diag_eval.sbatch; do
   cp "$ROUND/source/$CELL/$name" "$ROUND/$name"
 done
 chmod +x "$ROUND"/*.sh
 for f in "$ROUND"/*.sh "$ROUND"/*.sbatch "$ROUND"/round.env; do
   bash -n "$f"
 done
-python3 -m py_compile "$ROUND/summarize.py"
-(cd "$ROUND" && sha256sum round.env ./*.sh ./*.sbatch summarize.py > scripts.sha256)
+python3 -m py_compile "$ROUND/summarize.py" "$ROUND/filter_mixture.py"
+(cd "$ROUND" && sha256sum round.env ./*.sh ./*.sbatch ./*.py > scripts.sha256)
 bash "$ROUND/prerequisites.sh" --output "$ROUND/out/prerequisites.dryrun.json"
 echo "deploy-complete $HEAD"
