@@ -221,8 +221,8 @@ evaluates them with.
 `bc0_eval_suite_v1.json` was rebuilt with `scripts/build_bc0_evaluation_suite.py`
 under the repaired estimator and this contract (a deterministic `--check`
 rebuild reproduces it byte for byte), and `bc0_evaluation_policy.json` was
-re-pinned (suite hash, per-suite manifests, `release_factories.py` source
-hash).
+re-pinned (suite hash, per-suite manifests).  The `release_factories.py`
+source digests were dropped from the policy on 2026-09-05; see below.
 
 * 115 roots, same family quotas; 29 roots differ from the previous freeze
   (efficiency 2, forced_error_recovery 6, invalid_action_recovery 10,
@@ -251,12 +251,16 @@ hash).
   artifacts built under the superseded contract.
 * Research-mode relaxations (this project is not a production release):
   the study manifest `dagger_multi_error_comparison_v1`
-  (`psse_env/dagger/studies/dagger_multiseed_study_v1.json`) and the pins in
-  `study_manifest.py` (`PINNED_SUITE_SHA256`, `PINNED_POLICY_SHA256`,
-  `EXPECTED_STUDY_MANIFEST_SHA256`, `EXPECTED_STUDY_MANIFEST_CONTENT_SHA256`,
-  `EXPECTED_STABILITY_SCOPE_POLICY_SHA256`) now follow the current freeze
-  instead of the originally preregistered instrument; re-pin them together
-  whenever the suite is rebuilt.  The historical expert-closure registry
+  (`psse_env/dagger/studies/dagger_multiseed_study_v1.json`) records the
+  suite, policy, and dependency-lock digests as provenance only.  On
+  2026-09-05 the byte pins were removed (`PINNED_SUITE_SHA256`,
+  `PINNED_POLICY_SHA256`, `EXPECTED_STUDY_MANIFEST_SHA256`,
+  `EXPECTED_STUDY_MANIFEST_CONTENT_SHA256`, `TRAINING_DEPENDENCY_LOCK_SHA256`,
+  the `source_sha256` rows of `bc0_evaluation_policy.json`, and the
+  aggregate builder's expert/factory source comparisons), so editing a
+  factory, the expert, or the policy never needs a re-pin; a run artifact
+  binds the digest of the manifest it was validated against, computed at
+  load time.  The historical expert-closure registry
   keeps its recorded hashes (it describes past artifacts).  The Linux-only
   collection-launcher tests skip where `setsid`/`ps` are absent, and the
   scaffold routing test now encodes the V2-A post-commit branch re-screen.

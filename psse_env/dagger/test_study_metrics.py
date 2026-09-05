@@ -38,15 +38,17 @@ from psse_env.dagger.study_metrics import (
 from psse_env.dagger.study_manifest import (
     EXPECTED_DEVELOPMENT_EVALUATION_CONTRACT_SHA256,
     EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256,
-    EXPECTED_STUDY_MANIFEST_SHA256,
     build_production_d1_quarantine_binding,
     build_training_protocol_binding,
     canonical_production_d1_quarantine_binding,
     canonical_training_rng_attestation,
     load_study_manifest,
+    study_manifest_sha256,
 )
 from psse_env.sft.provenance import stable_json_sha256
 from psse_env.state_store import PolicyObservation
+
+MANIFEST_SHA256 = study_manifest_sha256()
 
 
 HASH = "a" * 64
@@ -902,7 +904,7 @@ def _checkpoint(
         "artifact_schema_version": 1,
         "artifact_role": "checkpoint",
         "variant_id": variant_id,
-        "study_manifest_sha256": EXPECTED_STUDY_MANIFEST_SHA256,
+        "study_manifest_sha256": MANIFEST_SHA256,
         "reviewed_source_commit": SOURCE_COMMIT,
         "base_model_id": manifest["bindings"]["base_model"]["model_id"],
         "base_model_revision": manifest["bindings"]["base_model"]["model_revision"],
@@ -969,7 +971,7 @@ def _bound_evaluation(
                 RECOVERY_STRESS_SCOPE: "recovery_stress_evaluation",
             }[scope],
             "variant_id": variant_id,
-            "study_manifest_sha256": EXPECTED_STUDY_MANIFEST_SHA256,
+            "study_manifest_sha256": MANIFEST_SHA256,
             "reviewed_source_commit": SOURCE_COMMIT,
             "model_id": model_id,
             "model_revision": model_revision,

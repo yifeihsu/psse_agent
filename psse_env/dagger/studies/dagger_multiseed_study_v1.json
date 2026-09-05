@@ -24,7 +24,7 @@
       "suite_path": "psse_env/dagger/suites/bc0_eval_suite_v1.json",
       "suite_sha256": "613bba87413071782786fa18089624f0f5d431c98d783a9a24203bd8c76c029a",
       "policy_path": "psse_env/dagger/bc0_evaluation_policy.json",
-      "policy_sha256": "ff1c72971d7c221a4f7a38e45c6be4c94a035f021e99f673e8a4653922def1da",
+      "policy_sha256": "0ebd65c229312b9a956e83776bf997c03027d2c9da9e5c4cbc51aecc0c788c51",
       "policy_id": "bc0_closed_loop_hard_gate_v3",
       "evaluator_seed": 20260719,
       "max_steps": 24,

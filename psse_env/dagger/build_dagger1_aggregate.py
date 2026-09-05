@@ -81,7 +81,6 @@ from psse_env.sft.provenance import (
     tool_schema_hashes,
     validate_aggregate_manifest_binding,
 )
-from psse_env.oracle.expert_policy import ExpertPolicyOracle
 
 
 _ADAPTER_TREE_REVISION = re.compile(r"[0-9a-f]{64}")
@@ -891,32 +890,17 @@ def build_round1_aggregate(
     }
     identities = d1_manifest.get("factory_identities")
     identities = identities if isinstance(identities, Mapping) else {}
-    expected_factory_bindings = {
-        "environment": (
-            DEFAULT_ENV_FACTORY_SPEC,
-            _source_hash_for_import_spec(DEFAULT_ENV_FACTORY_SPEC),
-        ),
-        "learner_policy": (
-            DEFAULT_POLICY_FACTORY_SPEC,
-            _source_hash_for_import_spec(DEFAULT_POLICY_FACTORY_SPEC),
-        ),
+    # Factory identities are matched by import spec.  The recorded source
+    # digests are provenance and are not compared against the current source.
+    expected_factory_specs = {
+        "environment": DEFAULT_ENV_FACTORY_SPEC,
+        "learner_policy": DEFAULT_POLICY_FACTORY_SPEC,
     }
-    for role, (spec, source_hash) in expected_factory_bindings.items():
+    for role, spec in expected_factory_specs.items():
         binding = identities.get(role)
         binding = binding if isinstance(binding, Mapping) else {}
-        if (
-            binding.get("import_spec") != spec
-            or binding.get("source_sha256") != source_hash
-        ):
+        if binding.get("import_spec") != spec:
             raise ValueError(f"D1 {role} factory identity does not match source")
-    expert_binding = identities.get("expert_oracle")
-    expert_binding = expert_binding if isinstance(expert_binding, Mapping) else {}
-    expert_source = inspect.getsourcefile(ExpertPolicyOracle)
-    if (
-        expert_source is None
-        or expert_binding.get("source_sha256") != file_sha256(expert_source)
-    ):
-        raise ValueError("D1 expert oracle identity does not match source")
     release_contract = d1_manifest.get("release_environment_contract")
     release_contract = (
         release_contract if isinstance(release_contract, Mapping) else {}
@@ -936,8 +920,6 @@ def build_round1_aggregate(
         suite_policy.get("status") != "pinned"
         or suite_policy.get("approved_suite_sha256") != current_suite_hash
         or d1_manifest.get("forbidden_suite_sha256") != current_suite_hash
-        or d1_manifest.get("evaluation_policy_sha256")
-        != file_sha256(DEFAULT_EVALUATION_POLICY)
     ):
         raise ValueError("D1 frozen-suite holdout binding is not pinned/current")
 

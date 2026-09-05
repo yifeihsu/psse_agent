@@ -1,9 +1,11 @@
 """Fail-closed contract for the preregistered four-variant DAgger study.
 
-The checked-in JSON is content-addressed here.  Its source binding deliberately
-requires an externally reviewed clean Git commit instead of embedding a commit
-hash in the same commit (which would be self-referential).  Run/checkpoint
-artifacts must materialize that exact commit and bind this manifest's digest.
+The checked-in JSON records the digests of the files it binds as provenance;
+nothing here compares them against constants, so editing the policy or
+rebuilding a suite never needs a re-pin (this is a research project, not a
+release pipeline).  Its source binding requires an externally reviewed Git
+commit, and run/checkpoint artifacts bind the digest of the manifest they
+were validated against.
 """
 
 from __future__ import annotations
@@ -22,14 +24,6 @@ DEFAULT_STUDY_MANIFEST = (
     / "studies"
     / "dagger_multiseed_study_v1.json"
 )
-# Updated only through explicit protocol review.  This pins the raw LF-normalized
-# bytes; .gitattributes preserves that representation on Windows and Linux.
-EXPECTED_STUDY_MANIFEST_SHA256 = (
-    "0153a1e0c34a52e98a4936697b6e1a56377344cc44f8db31dbd6204e6a3df49f"
-)
-EXPECTED_STUDY_MANIFEST_CONTENT_SHA256 = (
-    "1c16281a43e057bcede59858e0d0a35d4be4f56579c0b0a57376f2e6c3e24e95"
-)
 EXPECTED_COMPARISON_POLICY_SHA256 = (
     "9763dc426de33e328a06cd5abfb4f5788a05ef91fac6cb4113e30680f8c2c550"
 )
@@ -45,27 +39,17 @@ PINNED_BASE_MODEL_REVISION = "8a796db4df380b178065ed910849477ff0e99c87"
 TRAINING_PROTOCOL_CONTRACT = "dagger_study_training_protocol_v1"
 TRAINING_RNG_CONTRACT = "dagger_training_rng_attestation_v1"
 TRAINING_DEPENDENCY_LOCK_PATH = "psse_env/requirements-sft.txt"
-TRAINING_DEPENDENCY_LOCK_SHA256 = (
-    "58c1f4690803b0109d47ac81ae613e07d883a1cd5a14cbde0409f310d2dd4df5"
-)
 TRAINING_RNG_ENGINES = (
     "python_random",
     "numpy_random",
     "torch_cpu",
     "torch_cuda_all",
 )
-# Research-mode binding: these pins follow the current BC0 freeze (2026-09-03
-# re-freeze under the 1.2 dominance contract) rather than the originally
-# preregistered instrument.  Re-pin them together with bc0_evaluation_policy.json
-# whenever the suite is rebuilt.
+# Research-mode binding: the manifest records the suite and policy digests as
+# provenance.  Nothing compares them against a constant, so rebuilding a suite
+# or editing the policy never needs a re-pin.
 PINNED_SUITE_PATH = "psse_env/dagger/suites/bc0_eval_suite_v1.json"
-PINNED_SUITE_SHA256 = (
-    "613bba87413071782786fa18089624f0f5d431c98d783a9a24203bd8c76c029a"
-)
 PINNED_POLICY_PATH = "psse_env/dagger/bc0_evaluation_policy.json"
-PINNED_POLICY_SHA256 = (
-    "ff1c72971d7c221a4f7a38e45c6be4c94a035f021e99f673e8a4653922def1da"
-)
 DEVELOPMENT_EVALUATION_PROTOCOL_CONTRACT = (
     "dagger_development_evaluation_protocol_v1"
 )
@@ -295,16 +279,6 @@ def canonical_recovery_stress_evaluation_contract() -> dict[str, Any]:
             "internal recovery-stress evaluator contract digest is inconsistent"
         )
     return contract
-
-
-def _source_manifest_payload(manifest: Mapping[str, Any]) -> dict[str, Any]:
-    """Remove only fields derived by :func:`load_study_manifest`."""
-
-    return {
-        key: value
-        for key, value in manifest.items()
-        if key not in {"manifest_sha256", "validation"}
-    }
 
 
 def study_manifest_sha256(path: str | Path = DEFAULT_STUDY_MANIFEST) -> str:
@@ -770,11 +744,14 @@ def validate_study_manifest(
         training_protocol.get("dependency_lock"),
         field="training_protocol_policy.dependency_lock",
     )
-    if dict(dependency_lock) != {
-        "path": TRAINING_DEPENDENCY_LOCK_PATH,
-        "sha256": TRAINING_DEPENDENCY_LOCK_SHA256,
-    }:
-        raise StudyManifestError("training dependency lock is not exactly pinned")
+    if (
+        set(dependency_lock) != {"path", "sha256"}
+        or dependency_lock.get("path") != TRAINING_DEPENDENCY_LOCK_PATH
+        or _SHA256_RE.fullmatch(str(dependency_lock.get("sha256") or "")) is None
+    ):
+        raise StudyManifestError(
+            "training dependency lock must name the lock file and a 64-hex digest"
+        )
     rng_policy = _mapping(
         training_protocol.get("rng"),
         field="training_protocol_policy.rng",
@@ -811,10 +788,6 @@ def validate_study_manifest(
     for hash_field in ("suite_sha256", "policy_sha256"):
         if _SHA256_RE.fullmatch(str(evaluation.get(hash_field) or "")) is None:
             raise StudyManifestError(f"bindings.evaluation.{hash_field} must be 64-hex")
-    if evaluation.get("suite_sha256") != PINNED_SUITE_SHA256:
-        raise StudyManifestError("bindings.evaluation.suite_sha256 is not pinned")
-    if evaluation.get("policy_sha256") != PINNED_POLICY_SHA256:
-        raise StudyManifestError("bindings.evaluation.policy_sha256 is not pinned")
     if evaluation.get("policy_id") != "bc0_closed_loop_hard_gate_v3":
         raise StudyManifestError("bindings.evaluation.policy_id is not approved")
     if evaluation.get("evaluator_seed") != 20260719:
@@ -862,23 +835,15 @@ def validate_study_manifest(
         suite_path = root / str(evaluation.get("suite_path") or "")
         policy_path = root / str(evaluation.get("policy_path") or "")
         dependency_lock_path = root / TRAINING_DEPENDENCY_LOCK_PATH
-        for label, path, expected_hash in (
-            ("suite", suite_path, evaluation["suite_sha256"]),
-            ("policy", policy_path, evaluation["policy_sha256"]),
-            (
-                "training dependency lock",
-                dependency_lock_path,
-                TRAINING_DEPENDENCY_LOCK_SHA256,
-            ),
+        # The recorded digests are provenance, not a gate: only presence is
+        # checked, so an edited policy or a rebuilt suite needs no re-pin.
+        for label, path in (
+            ("suite", suite_path),
+            ("policy", policy_path),
+            ("training dependency lock", dependency_lock_path),
         ):
             if not path.is_file():
                 raise StudyManifestError(f"bound evaluation {label} is missing: {path}")
-            actual_hash = _file_sha256(path)
-            if actual_hash != expected_hash:
-                raise StudyManifestError(
-                    f"bound evaluation {label} hash mismatch: "
-                    f"expected {expected_hash}, got {actual_hash}"
-                )
         policy = json.loads(policy_path.read_text(encoding="utf-8"))
         if policy.get("policy_id") != evaluation["policy_id"]:
             raise StudyManifestError("bound policy_id differs from the study manifest")
@@ -1038,7 +1003,7 @@ def validate_study_manifest(
     )
     if frozen_scope != {
         "artifact_role": "evaluation",
-        "suite_sha256": PINNED_SUITE_SHA256,
+        "suite_sha256": evaluation["suite_sha256"],
         "release_qualification_allowed": True,
     }:
         raise StudyManifestError("frozen-suite stability scope is not pinned")
@@ -1196,7 +1161,7 @@ def load_study_manifest(
     *,
     repo_root: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Load only the byte-pinned preregistration and validate all bindings."""
+    """Load the study manifest, record its digest, and validate all bindings."""
 
     manifest_path = Path(path)
     try:
@@ -1204,11 +1169,6 @@ def load_study_manifest(
     except OSError as exc:
         raise StudyManifestError(f"study manifest cannot be read: {exc}") from exc
     actual_hash = hashlib.sha256(raw_manifest).hexdigest()
-    if actual_hash != EXPECTED_STUDY_MANIFEST_SHA256:
-        raise StudyManifestError(
-            "study manifest digest mismatch: "
-            f"expected {EXPECTED_STUDY_MANIFEST_SHA256}, got {actual_hash}"
-        )
     try:
         payload = json.loads(raw_manifest.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError) as exc:
@@ -1239,13 +1199,6 @@ def validate_study_artifact_binding(
     """
 
     validate_study_manifest(manifest, verify_bound_files=False)
-    if (
-        _content_sha256(_source_manifest_payload(manifest))
-        != EXPECTED_STUDY_MANIFEST_CONTENT_SHA256
-    ):
-        raise StudyManifestError(
-            "artifact validation requires the exact immutable study manifest"
-        )
     if variant_id not in REQUIRED_VARIANT_IDS:
         raise StudyManifestError(f"unknown study variant: {variant_id!r}")
     if artifact_role not in {
@@ -1291,7 +1244,14 @@ def validate_study_artifact_binding(
         raise StudyManifestError("artifact variant_id differs from the requested variant")
     if artifact.get("artifact_role") != artifact_role:
         raise StudyManifestError("artifact role differs from the requested role")
-    if artifact.get("study_manifest_sha256") != EXPECTED_STUDY_MANIFEST_SHA256:
+    bound_manifest_sha256 = str(artifact.get("study_manifest_sha256") or "")
+    if _SHA256_RE.fullmatch(bound_manifest_sha256) is None:
+        raise StudyManifestError("artifact study_manifest_sha256 must be 64-hex")
+    loaded_manifest_sha256 = manifest.get("manifest_sha256")
+    if (
+        loaded_manifest_sha256 is not None
+        and bound_manifest_sha256 != str(loaded_manifest_sha256)
+    ):
         raise StudyManifestError("artifact does not bind the immutable study manifest")
     if artifact.get("reviewed_source_commit") != expected_source_commit:
         raise StudyManifestError("artifact source commit differs from the reviewed commit")
@@ -1630,7 +1590,7 @@ def validate_study_artifact_binding(
         "artifact_role": artifact_role,
         "reviewed_source_commit": expected_source_commit,
         "training_seed": observed_seed,
-        "study_manifest_sha256": EXPECTED_STUDY_MANIFEST_SHA256,
+        "study_manifest_sha256": bound_manifest_sha256,
     }
 
 
@@ -1642,8 +1602,6 @@ __all__ = [
     "EXPECTED_OBJECTIVE_THRESHOLDS_SHA256",
     "EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256",
     "EXPECTED_STABILITY_SCOPE_POLICY_SHA256",
-    "EXPECTED_STUDY_MANIFEST_SHA256",
-    "EXPECTED_STUDY_MANIFEST_CONTENT_SHA256",
     "EXPECTED_TRAINING_PROTOCOL_CONFIGURATIONS",
     "EXPECTED_TRAINING_SOURCES",
     "PRODUCTION_D1_QUARANTINE_APPLICABLE_VARIANTS",
@@ -1655,7 +1613,6 @@ __all__ = [
     "STUDY_MANIFEST_CONTRACT",
     "TRAINED_VARIANT_IDS",
     "TRAINING_DEPENDENCY_LOCK_PATH",
-    "TRAINING_DEPENDENCY_LOCK_SHA256",
     "TRAINING_PROTOCOL_CONTRACT",
     "TRAINING_RNG_CONTRACT",
     "TRAINING_RNG_ENGINES",

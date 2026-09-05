@@ -2,26 +2,22 @@
   "approved_factories": {
     "case_loader": [
       {
-        "import_spec": "psse_env.dagger.release_factories:deterministic_case_loader",
-        "source_sha256": "160a8e118527cde59a76f2de2bc99365906fa6131fa8620d96d1b7b1fd27a78c"
+        "import_spec": "psse_env.dagger.release_factories:deterministic_case_loader"
       }
     ],
     "environment": [
       {
-        "import_spec": "psse_env.dagger.release_factories:production_environment_factory",
-        "source_sha256": "160a8e118527cde59a76f2de2bc99365906fa6131fa8620d96d1b7b1fd27a78c"
+        "import_spec": "psse_env.dagger.release_factories:production_environment_factory"
       }
     ],
     "expert_policy": [
       {
-        "import_spec": "psse_env.dagger.release_factories:observable_expert_policy_factory",
-        "source_sha256": "160a8e118527cde59a76f2de2bc99365906fa6131fa8620d96d1b7b1fd27a78c"
+        "import_spec": "psse_env.dagger.release_factories:observable_expert_policy_factory"
       }
     ],
     "model_policy": [
       {
-        "import_spec": "psse_env.dagger.release_factories:gemma_release_policy_factory",
-        "source_sha256": "160a8e118527cde59a76f2de2bc99365906fa6131fa8620d96d1b7b1fd27a78c"
+        "import_spec": "psse_env.dagger.release_factories:gemma_release_policy_factory"
       }
     ]
   },

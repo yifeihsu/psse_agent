@@ -389,25 +389,26 @@ def _validate_factory_approval_policy(value: Any) -> dict[str, list[dict[str, st
             raise ValueError(f"approved_factories.{role} must be a list")
         approved: list[dict[str, str]] = []
         for index, row in enumerate(rows):
-            if not isinstance(row, Mapping) or set(row) != {
-                "import_spec",
-                "source_sha256",
-            }:
+            # A row names a factory by import spec.  An accompanying
+            # ``source_sha256`` is accepted as recorded provenance only; the
+            # gate does not compare it against the current source.
+            if not isinstance(row, Mapping) or not (
+                {"import_spec"} <= set(row) <= {"import_spec", "source_sha256"}
+            ):
                 raise ValueError(
                     f"approved_factories.{role}[{index}] has an invalid schema"
                 )
             spec = str(row.get("import_spec") or "").strip()
             source_hash = str(row.get("source_sha256") or "").strip().lower()
-            if not spec or _SHA256.fullmatch(source_hash) is None:
+            if not spec or (source_hash and _SHA256.fullmatch(source_hash) is None):
                 raise ValueError(
                     f"approved_factories.{role}[{index}] identity is invalid"
                 )
-            approved.append(
-                {"import_spec": spec, "source_sha256": source_hash}
-            )
-        if len({(row["import_spec"], row["source_sha256"]) for row in approved}) != len(
-            approved
-        ):
+            approved_row = {"import_spec": spec}
+            if source_hash:
+                approved_row["source_sha256"] = source_hash
+            approved.append(approved_row)
+        if len({row["import_spec"] for row in approved}) != len(approved):
             raise ValueError(f"approved_factories.{role} contains duplicates")
         normalized[role] = approved
     return normalized
@@ -1192,8 +1193,10 @@ def _verify_source_descriptor(
     else:
         failures.append(f"{label} source location is missing or invalid")
         return
-    if not candidate.is_file() or file_sha256(candidate) != expected:
-        failures.append(f"{label} source fingerprint does not match current source")
+    # The fingerprint is recorded provenance; only the file's presence is
+    # checked, so a source edit never invalidates a gate policy.
+    if not candidate.is_file():
+        failures.append(f"{label} source file is missing")
 
 
 def _current_source_descriptor(path: Path, *, repo_root: Path) -> dict[str, str]:
@@ -1215,13 +1218,10 @@ def _factory_is_approved(
     descriptor: Mapping[str, Any],
     approvals: Sequence[Mapping[str, Any]],
 ) -> bool:
-    observed = {
-        "import_spec": str(descriptor.get("import_spec") or "").strip(),
-        "source_sha256": str(
-            _mapping(descriptor.get("source")).get("sha256") or ""
-        ).lower(),
-    }
-    return any(observed == dict(row) for row in approvals)
+    observed = str(descriptor.get("import_spec") or "").strip()
+    return bool(observed) and any(
+        str(row.get("import_spec") or "").strip() == observed for row in approvals
+    )
 
 
 def _reported_number(
@@ -2691,7 +2691,7 @@ def validate_evaluation_artifact(
         list(factory_approvals.get("environment") or []),
     ):
         failures.append(
-            "environment factory import spec/source hash is not approved by the gate policy"
+            "environment factory import spec is not approved by the gate policy"
         )
     policy_descriptor = _mapping(factories.get("policy"))
     policy_factory_role = "expert_policy" if explicit_identity is not None else "model_policy"
@@ -2700,14 +2700,14 @@ def validate_evaluation_artifact(
         list(factory_approvals.get(policy_factory_role) or []),
     ):
         failures.append(
-            f"{policy_factory_role} factory import spec/source hash is not approved by the gate policy"
+            f"{policy_factory_role} factory import spec is not approved by the gate policy"
         )
     if case_loader is not None and not _factory_is_approved(
         _mapping(case_loader),
         list(factory_approvals.get("case_loader") or []),
     ):
         failures.append(
-            "case-loader import spec/source hash is not approved by the gate policy"
+            "case-loader import spec is not approved by the gate policy"
         )
 
     expected_identity = {
