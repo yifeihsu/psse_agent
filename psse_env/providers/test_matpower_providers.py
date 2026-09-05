@@ -25,6 +25,19 @@ def _fixture() -> dict:
     return json.loads(FIXTURE.read_text())
 
 
+def _acquire_three_phase(test: unittest.TestCase, env: TransactionalPSSEEnv) -> dict:
+    """Establish real WLS/acquisition prerequisites before provider checks."""
+    active = env.store.active_state_id
+    if not env.get_policy_observation().fresh_context_evidence["wls"]["successful"]:
+        _, wls = env.step({"tool": "run_wls", "arguments": {"state_id": active}})
+        test.assertEqual(wls["execution_status"], "success")
+    action = {"tool": "get_three_phase_context", "arguments": {"state_id": active}}
+    env.assert_training_decision_evidence(action)
+    _, output = env.step(action)
+    test.assertEqual(output["execution_status"], "success", output)
+    return output["tool_metrics"]
+
+
 class WlsRunnerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.providers = MatpowerDeploymentProviders()
@@ -1077,6 +1090,10 @@ class DiagnosticProviderTests(unittest.TestCase):
     def test_harmonic_context_and_hse_run_through_the_environment(self) -> None:
         env = self._env(self._harmonic_metadata())
         active = env.current_state()["active_state_id"]
+        self.assertEqual(env.get_policy_observation().available_evidence, [])
+        _, wls_output = env.step({"tool": "run_wls", "arguments": {"state_id": active}})
+        self.assertEqual(wls_output["execution_status"], "success")
+        self.assertNotIn("harmonic_measurements", env.get_policy_observation().available_evidence)
         _, context_output = env.step(
             {"tool": "get_harmonic_context", "arguments": {"state_id": active}}
         )
@@ -1084,6 +1101,8 @@ class DiagnosticProviderTests(unittest.TestCase):
         metrics = context_output["tool_metrics"]
         self.assertEqual(metrics["harmonic_orders"], [5])
         self.assertEqual(metrics["finding_count"], 14)
+        self.assertTrue(metrics["harmonic_distortion_detected"])
+        self.assertIn("harmonic_measurements", env.get_policy_observation().available_evidence)
 
         _, hse_output = env.step({"tool": "run_hse_from_path", "arguments": {"state_id": active}})
         self.assertEqual(hse_output["execution_status"], "success")
@@ -1130,10 +1149,15 @@ class DiagnosticProviderTests(unittest.TestCase):
             }
         ]
 
-    def test_three_phase_voltage_channel_is_model_visible(self) -> None:
+    def test_three_phase_voltage_channel_is_hidden_until_acquisition(self) -> None:
         env = self._env(
             {"three_phase_voltages": self._three_phase_voltages(unbalanced=True)}
         )
+        self.assertEqual(env.get_policy_observation().available_evidence, [])
+        _, wls = env.step({"tool": "run_wls", "arguments": {"state_id": env.store.active_state_id}})
+        self.assertEqual(wls["execution_status"], "success")
+        self.assertEqual(env.get_policy_observation().available_evidence, [])
+        _acquire_three_phase(self, env)
         self.assertIn(
             "three_phase_voltages", env.get_policy_observation().available_evidence
         )
@@ -1150,7 +1174,7 @@ class DiagnosticProviderTests(unittest.TestCase):
         )
         oracle = ExpertPolicyOracle(process_oracle=env.process_oracle)
         executed: list[str] = []
-        for _ in range(3):
+        for _ in range(4):
             if env.is_terminal():
                 break
             actions = oracle.next_actions(env.get_oracle_state(env.history), env.history)
@@ -1161,7 +1185,7 @@ class DiagnosticProviderTests(unittest.TestCase):
             self.assertEqual(output["execution_status"], "success")
             executed.append(actions[0]["tool"])
         self.assertEqual(
-            executed, ["run_three_phase_nlm_from_path", "finalize_diagnosis"]
+            executed, ["run_wls", "get_three_phase_context", "run_three_phase_nlm_from_path", "finalize_diagnosis"]
         )
         self.assertTrue(env.is_terminal())
         explanation = env.get_policy_observation().explained_anomalies[0]
@@ -1176,6 +1200,7 @@ class DiagnosticProviderTests(unittest.TestCase):
             },
         )
         active = env.current_state()["active_state_id"]
+        _acquire_three_phase(self, env)
         _, output = env.step(
             {"tool": "run_three_phase_nlm_from_path", "arguments": {"state_id": active}}
         )
@@ -1321,11 +1346,27 @@ class DiagnosticProviderTests(unittest.TestCase):
     def test_diagnostics_without_runtime_data_fail_closed_as_noop(self) -> None:
         env = self._env()
         active = env.current_state()["active_state_id"]
+        # WLS must justify requesting additional measurements.  An unavailable
+        # acquisition is a successful inventory response, not a diagnosis.
+        _, early = env.step({"tool": "get_harmonic_context", "arguments": {"state_id": active}})
+        self.assertEqual(early["execution_status"], "failure")
+        self.assertEqual(early["error_code"], "missing_precondition")
+        _, wls = env.step({"tool": "run_wls", "arguments": {"state_id": active}})
+        self.assertEqual(wls["execution_status"], "success")
         before_hash = env.store.episode_hash()
+        _, context = env.step({"tool": "get_harmonic_context", "arguments": {"state_id": active}})
+        self.assertEqual(context["execution_status"], "success")
+        self.assertEqual(context["tool_metrics"]["harmonic_context_status"], "unavailable")
+        self.assertEqual(context["tool_metrics"]["available_evidence_channels"], [])
+        self.assertFalse(context["tool_metrics"]["harmonic_distortion_detected"])
+        self.assertFalse(context["state_mutated"])
+        self.assertEqual(env.get_policy_observation().explained_anomalies, [])
+        phases = _acquire_three_phase(self, env)
+        self.assertEqual(phases["three_phase_context_status"], "unavailable")
+        self.assertEqual(phases["available_evidence_channels"], [])
         for tool, expected_code in (
-            ("get_harmonic_context", "harmonic_context_missing"),
-            ("run_hse_from_path", "hse_runtime_missing"),
-            ("run_three_phase_nlm_from_path", "nlm_runtime_missing"),
+            ("run_hse_from_path", "missing_precondition"),
+            ("run_three_phase_nlm_from_path", "missing_precondition"),
         ):
             _, output = env.step({"tool": tool, "arguments": {"state_id": active}})
             self.assertEqual(output["execution_status"], "failure", tool)
@@ -1353,9 +1394,16 @@ class DiagnosticProviderTests(unittest.TestCase):
         self.assertEqual(output["error_code"], "hif_target_missing")
 
     def test_diagnostics_are_blocked_while_candidate_is_unverified(self) -> None:
-        env = self._env(self._harmonic_metadata())
+        # A measurement-error root can open a correction candidate once the
+        # additional scan request reports no harmonic telemetry.  A positive
+        # harmonic scan would correctly prohibit fundamental corrections.
+        env = self._env()
         active = env.current_state()["active_state_id"]
         env.step({"tool": "run_wls", "arguments": {"state_id": active}})
+        _, requested = env.step({"tool": "get_harmonic_context", "arguments": {"state_id": active}})
+        self.assertEqual(requested["execution_status"], "success")
+        self.assertEqual(requested["tool_metrics"]["harmonic_context_status"], "unavailable")
+        self.assertEqual(_acquire_three_phase(self, env)["three_phase_context_status"], "unavailable")
         _, ctx = env.step({"tool": "get_measurement_context", "arguments": {"state_id": active}})
         _, correction = env.step(ctx["tool_metrics"]["supported_corrections"][0])
         self.assertEqual(correction["execution_status"], "success")
@@ -1389,6 +1437,11 @@ class EndToEndEnvironmentTests(unittest.TestCase):
         _, wls_output = env.step({"tool": "run_wls", "arguments": {"state_id": active}})
         self.assertEqual(wls_output["execution_status"], "success")
         self.assertIn("chi_square_statistic", wls_output["tool_metrics"])
+
+        _, requested = env.step({"tool": "get_harmonic_context", "arguments": {"state_id": active}})
+        self.assertEqual(requested["execution_status"], "success")
+        self.assertEqual(requested["tool_metrics"]["harmonic_context_status"], "unavailable")
+        self.assertEqual(_acquire_three_phase(self, env)["three_phase_context_status"], "unavailable")
 
         _, context_output = env.step(
             {"tool": "get_measurement_context", "arguments": {"state_id": active}}
@@ -1461,8 +1514,13 @@ class BranchCurrentDiagnosticProviderTests(unittest.TestCase):
             "branch_current_sigma_pu": 1e-3,
         }
 
-    def test_branch_current_channel_is_model_visible(self) -> None:
+    def test_branch_current_channels_are_hidden_until_acquisition(self) -> None:
         env = self._env(self._unbalance_metadata())
+        self.assertEqual(env.get_policy_observation().available_evidence, [])
+        _, wls = env.step({"tool": "run_wls", "arguments": {"state_id": env.store.active_state_id}})
+        self.assertEqual(wls["execution_status"], "success")
+        self.assertEqual(env.get_policy_observation().available_evidence, [])
+        _acquire_three_phase(self, env)
         available = env.get_policy_observation().available_evidence
         self.assertIn("three_phase_branch_currents", available)
         self.assertIn("three_phase_voltages", available)
@@ -1474,6 +1532,7 @@ class BranchCurrentDiagnosticProviderTests(unittest.TestCase):
             semantic_field_provenance=self.SENSOR_PROVENANCE,
         )
         active = env.current_state()["active_state_id"]
+        _acquire_three_phase(self, env)
         _, output = env.step(
             {"tool": "run_three_phase_nlm_from_path", "arguments": {"state_id": active}}
         )
@@ -1514,6 +1573,7 @@ class BranchCurrentDiagnosticProviderTests(unittest.TestCase):
             semantic_field_provenance=self.SENSOR_PROVENANCE,
         )
         active = env.current_state()["active_state_id"]
+        _acquire_three_phase(self, env)
         _, output = env.step(
             {"tool": "run_three_phase_nlm_from_path", "arguments": {"state_id": active}}
         )
@@ -1544,6 +1604,7 @@ class BranchCurrentDiagnosticProviderTests(unittest.TestCase):
             semantic_field_provenance=self.SENSOR_PROVENANCE,
         )
         active = env.current_state()["active_state_id"]
+        _acquire_three_phase(self, env)
         _, output = env.step(
             {"tool": "run_three_phase_nlm_from_path", "arguments": {"state_id": active}}
         )
@@ -1580,7 +1641,23 @@ class BranchCurrentDiagnosticProviderTests(unittest.TestCase):
             any(str(sig).startswith("wls_") for sig in observation.unresolved_signatures),
             observation.unresolved_signatures,
         )
-        # Screening comes before any context request or correction.
+        # The generic request is independent of this root's hidden family.
+        # No harmonic scan is available, so the expert continues to NLM.
+        acquisition = expert()
+        self.assertEqual(acquisition["tool"], "get_harmonic_context")
+        env.assert_training_decision_evidence(acquisition)
+        _, acquired = env.step(acquisition)
+        self.assertEqual(acquired["execution_status"], "success")
+        self.assertEqual(acquired["tool_metrics"]["harmonic_context_status"], "unavailable")
+        self.assertFalse(acquired["tool_metrics"]["harmonic_distortion_detected"])
+        self.assertEqual(env.get_policy_observation().available_evidence, [])
+        phase_request = expert()
+        self.assertEqual(phase_request["tool"], "get_three_phase_context")
+        env.assert_training_decision_evidence(phase_request)
+        _, phases = env.step(phase_request)
+        self.assertEqual(phases["execution_status"], "success")
+        self.assertEqual(phases["tool_metrics"]["three_phase_context_status"], "available")
+        # Three-phase screening precedes correction investigation.
         screening = expert()
         self.assertEqual(screening["tool"], "run_three_phase_nlm_from_path")
         # A student that asks for meter context first gets findings but no
@@ -1646,6 +1723,10 @@ class BranchCurrentDiagnosticProviderTests(unittest.TestCase):
         )
         active = env.current_state()["active_state_id"]
         env.step({"tool": "run_wls", "arguments": {"state_id": active}})
+        _, acquired = env.step({"tool": "get_harmonic_context", "arguments": {"state_id": active}})
+        self.assertEqual(acquired["execution_status"], "success")
+        self.assertEqual(acquired["tool_metrics"]["harmonic_context_status"], "unavailable")
+        _acquire_three_phase(self, env)
         _, nlm = env.step(
             {"tool": "run_three_phase_nlm_from_path", "arguments": {"state_id": active}}
         )
@@ -1675,6 +1756,7 @@ class BranchCurrentDiagnosticProviderTests(unittest.TestCase):
             semantic_field_provenance=self.SENSOR_PROVENANCE,
         )
         active = env.current_state()["active_state_id"]
+        _acquire_three_phase(self, env)
         _, output = env.step(
             {"tool": "run_three_phase_nlm_from_path", "arguments": {"state_id": active}}
         )

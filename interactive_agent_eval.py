@@ -8,6 +8,7 @@ from typing import Any
 
 import torch
 from trace_protocol import (
+    acquired_three_phase_context,
     canonical_tool_schemas,
     CONTEXT_TOOL_NAMES,
     extract_conversation_context,
@@ -18,6 +19,7 @@ from trace_protocol import (
 )
 
 from mcp_server.matpower_server import (
+    _get_three_phase_context_logic,
     correct_measurements_from_path,
     correct_parameters_from_path,
     correct_topology_from_path,
@@ -414,6 +416,27 @@ def execute_context_tool(
         payload = tool_context.get("harmonic_context")
         if isinstance(payload, dict):
             hidden_context["harmonic_context"] = payload
+    elif tool_name == "get_three_phase_context":
+        hidden_context.pop("three_phase_context", None)
+        source = tool_context.get("three_phase_context")
+        if not isinstance(source, dict):
+            source = tool_context.get("hif_context")
+        source = source if isinstance(source, dict) else {}
+        requested_case = str(resolve_case_path_alias(arguments.get("case_path") or source.get("case_path") or "", hidden_context or runtime_context))
+        source_case = str(resolve_case_path_alias(source.get("case_path") or requested_case, hidden_context or runtime_context))
+        if source_case != requested_case:
+            source = {}
+        acquired = {
+            key: source[key] for key in (
+                "case_path", "three_phase_voltages", "three_phase_branch_currents", "branch_current_sigma_pu"
+            ) if key in source
+        }
+        payload = _get_three_phase_context_logic(
+            case_path=requested_case,
+            three_phase_voltages=acquired.get("three_phase_voltages"),
+            three_phase_branch_currents=acquired.get("three_phase_branch_currents"),
+        )
+        hidden_context["three_phase_context"] = {**acquired, **payload}
     elif tool_name == "get_verification_snapshot":
         stage = arguments.get("stage")
         payload = (tool_context.get("verification_snapshots") or {}).get(stage)
@@ -431,22 +454,60 @@ def execute_tool(
     runtime_context: dict[str, Any] | None = None,
     hidden_context: dict[str, Any] | None = None,
 ) -> Any:
+    hidden = hidden_context if hidden_context is not None else {}
+    controller = hidden.setdefault("_three_phase_acquisition_controller", {})
+    requested_case = str(resolve_case_path_alias(arguments.get("case_path") or "", hidden or runtime_context))
+    if tool_name in {"get_three_phase_context", "run_three_phase_nlm_from_path"}:
+        if requested_case != controller.get("wls_case_path"):
+            controller["wls_completed"] = False
+            hidden.pop("three_phase_context", None)
+        if not controller.get("wls_completed"):
+            return {
+                "success": False, "tool_error_type": "controller_precondition",
+                "error": "Run successful wls_from_path on this case before requesting or analyzing three-phase measurements.",
+                "allowed_next_tools": ["wls_from_path"],
+            }
+        if tool_name == "run_three_phase_nlm_from_path" and acquired_three_phase_context(hidden, requested_case) is None:
+            return {
+                "success": False, "tool_error_type": "controller_precondition",
+                "error": "NLM requires a successful available get_three_phase_context request for this case.",
+                "allowed_next_tools": ["get_three_phase_context"],
+            }
+
+    def record_result(result: Any) -> Any:
+        if tool_name == "wls_from_path":
+            controller["wls_completed"] = isinstance(result, dict) and result.get("success") is True
+            controller["wls_case_path"] = requested_case
+            hidden.pop("three_phase_context", None)
+        elif (
+            tool_name.startswith("correct_") or tool_name == "get_verification_snapshot"
+        ) and isinstance(result, dict) and result.get("success") is not False:
+            controller["wls_completed"] = False
+            hidden.pop("three_phase_context", None)
+        return result
+
     if tool_name in CONTEXT_TOOL_NAMES:
-        return execute_context_tool(tool_name, arguments, runtime_context, hidden_context or {})
+        try:
+            result = execute_context_tool(tool_name, arguments, runtime_context, hidden)
+        except Exception as exc:
+            result = {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+        return record_result(result)
     if tool_name not in TOOL_MAP:
         return {"success": False, "error": f"Unknown tool requested by model: {tool_name}"}
     tool = TOOL_MAP[tool_name]
     try:
         call_args = dict(arguments)
+        if tool_name == "run_three_phase_nlm_from_path":
+            call_args, _ = protocol_hydrate_tool_arguments(tool_name, call_args, [], hidden_context=hidden)
         if "case_path" in call_args:
-            call_args["case_path"] = resolve_case_path_alias(call_args["case_path"], hidden_context or runtime_context)
+            call_args["case_path"] = resolve_case_path_alias(call_args["case_path"], hidden or runtime_context)
         if callable(tool):
-            return tool(**call_args)
+            return record_result(tool(**call_args))
         if hasattr(tool, "fn") and callable(tool.fn):
-            return tool.fn(**call_args)
+            return record_result(tool.fn(**call_args))
         return {"success": False, "error": f"Tool {tool_name} is not directly callable and exposes no callable fn."}
     except Exception as exc:
-        return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+        return record_result({"success": False, "error": f"{type(exc).__name__}: {exc}"})
 
 
 def save_run(output_file: Path, payload: dict[str, Any]) -> None:

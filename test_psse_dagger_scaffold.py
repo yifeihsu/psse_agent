@@ -1675,8 +1675,21 @@ class ExpertPolicyTests(unittest.TestCase):
         # teacher re-screens the branch routes on the committed state before
         # returning to the measurement context, so a still-dominant branch
         # multiplier is read first rather than skipped.
+        # Both telemetry requests were already answered "unavailable" on this
+        # root, so the request stage yields nothing and the classical routes
+        # are what the expert proposes on the committed state.
+        answered = {
+            family: {
+                "state_id": "e:s1",
+                "request_attempted": True,
+                f"{family}_context_status": "unavailable",
+                "available_evidence_channels": [],
+            }
+            for family in ("harmonic", "three_phase")
+        }
         state = {
             "active_state_id": "e:s1",
+            "fresh_context_evidence": answered,
             "unresolved_signatures": [
                 "wls_branch_multiplier_dominant line_status_or_parameter line=7"
             ],
@@ -1688,8 +1701,14 @@ class ExpertPolicyTests(unittest.TestCase):
             ],
         }
         tools = [action["tool"] for action in self.oracle.next_actions(state)]
-        self.assertEqual(tools[0], "get_parameter_context")
-        self.assertIn("get_measurement_context", tools)
+        # The telemetry requests precede every route on a new state; among
+        # the classical routes the branch rescreen still comes first.
+        classical = [
+            tool for tool in tools
+            if tool not in {"get_harmonic_context", "get_three_phase_context"}
+        ]
+        self.assertEqual(classical[0], "get_parameter_context")
+        self.assertIn("get_measurement_context", classical)
 
     def test_expert_does_not_repeat_rejected_action_signature(self):
         rejected = correct_measurement("e:s0")

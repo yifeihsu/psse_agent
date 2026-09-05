@@ -183,18 +183,42 @@ class ScenarioConstructionTests(unittest.TestCase):
             ),
         )
 
-    def test_harmonic_scenario_routes_by_sensor_signature(self) -> None:
+    def test_harmonic_scenario_is_discovered_by_default(self) -> None:
         scenario = self.by_family["harmonic"]
+        self.assertNotIn("unresolved_signatures", scenario)
+        self.assertNotIn("unresolved_signatures", scenario["semantic_field_provenance"])
+        audit = scenario["release_audit"]
+        self.assertEqual(audit["signature_mode"], "discovered")
         self.assertEqual(
-            scenario["unresolved_signatures"], ["harmonic_distortion_detected"]
+            audit["sensor_signatures_withheld"], ["harmonic_distortion_detected"]
         )
-        self.assertTrue(
-            scenario["semantic_field_provenance"]["unresolved_signatures"].startswith(
-                "deployment_sensor"
-            )
+        self.assertGreater(
+            self.generator._chi2_statistic("case14", scenario["measurements"]),
+            self.generator.anomaly_margin * self.generator.chi2_limit,
         )
         self.assertTrue(scenario["metadata"]["harmonic_measurements"])
         self.assertTrue(scenario["hidden_truth"]["true_harmonic_errors"])
+
+    def test_flagged_harmonic_mode_preserves_legacy_monitor_alarm(self) -> None:
+        generator = Round0ScenarioGenerator(
+            seed=20260719, waveform_signature_mode={"harmonic": "flagged"}
+        )
+        scenario = generator.build({"harmonic": 1})[0]
+        self.assertEqual(
+            scenario["unresolved_signatures"], ["harmonic_distortion_detected"]
+        )
+        self.assertEqual(
+            scenario["semantic_field_provenance"]["unresolved_signatures"],
+            "deployment_sensor:power_quality",
+        )
+        self.assertEqual(scenario["release_audit"]["signature_mode"], "flagged")
+        self.assertEqual(scenario["release_audit"]["sensor_signatures_withheld"], [])
+
+    def test_discovered_harmonic_requires_detectable_wls_anomaly(self) -> None:
+        row = self.generator._corpus()["harmonic_anomaly"][0]
+        with patch.object(self.generator, "_chi2_statistic", return_value=0.0):
+            with self.assertRaisesRegex(ScenarioRejected, "anomaly_not_detectable"):
+                self.generator._harmonic_scenario(row, 0)
 
     def test_diagnostic_families_emit_explanation_only_audit_contract(self) -> None:
         for family in ("harmonic", "hif", "three_phase_unbalance"):
@@ -269,7 +293,7 @@ class ScenarioConstructionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Round0ScenarioGenerator(waveform_signature_mode={"three_phase_unbalance": "guessed"})
         with self.assertRaises(ValueError):
-            Round0ScenarioGenerator(waveform_signature_mode={"harmonic": "flagged"})
+            Round0ScenarioGenerator(waveform_signature_mode={"unknown_family": "flagged"})
 
     def test_unbalance_signatures_describe_the_row_telemetry(self) -> None:
         # The signature text is policy-visible: the VUF flag may only appear
@@ -1760,6 +1784,11 @@ class EndToEndRound0EpisodeTests(unittest.TestCase):
             tools,
             [
                 "run_wls",
+                # A gross meter error is a narrow anomaly: the phase-resolved
+                # request comes first, then spectra; both return nothing and
+                # ordinary investigation follows.
+                "get_three_phase_context",
+                "get_harmonic_context",
                 "get_measurement_context",
                 "correct_measurements",
                 "run_wls",

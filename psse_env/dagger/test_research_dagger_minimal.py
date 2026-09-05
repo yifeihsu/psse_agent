@@ -18,6 +18,7 @@ from scripts.run_dagger_research import (
     is_research_dagger_row,
     load_protected_suite_roots,
     mark_research_label_eligibility,
+    parser,
     plan_preset,
     prepare_scenario_split,
     refresh_d0_training_view,
@@ -383,7 +384,13 @@ class DiagnosticFamilyPresetTests(unittest.TestCase):
         train, development = plan_preset("diagnostic")
         self.assertEqual(
             set(train),
-            {"hif", "measurement+hif", "three_phase_unbalance", "telemetry_no_disturbance"},
+            {
+                "hif",
+                "measurement+hif",
+                "three_phase_unbalance",
+                "harmonic",
+                "telemetry_no_disturbance",
+            },
         )
         self.assertEqual(set(train), set(development))
         for family, count in train.items():
@@ -426,13 +433,45 @@ class DiagnosticFamilyPresetTests(unittest.TestCase):
             )
         with self.assertRaises(ValueError):
             resolve_scenario_sources(
-                plan_families={"hif"}, signature_modes={"harmonic": "flagged"}
+                plan_families={"hif"}, signature_modes={"unknown_family": "flagged"}
             )
         self.assertIsNone(
             resolve_scenario_sources(
                 plan_families=set(DEFAULT_TRAIN_PLAN),
                 signature_modes={"three_phase_unbalance": "discovered"},
             )
+        )
+
+    def test_harmonic_only_plan_records_modes_without_telemetry_corpora(self) -> None:
+        sources = resolve_scenario_sources(plan_families={"harmonic"})
+        self.assertEqual(
+            sources,
+            {
+                "hif_sample_paths": None,
+                "imbalance_sample_path": None,
+                "signature_modes": {"harmonic": "discovered"},
+            },
+        )
+        flagged = resolve_scenario_sources(
+            plan_families={"harmonic"}, signature_modes={"harmonic": "flagged"}
+        )
+        self.assertEqual(flagged["signature_modes"], {"harmonic": "flagged"})
+        self.assertNotEqual(flagged, sources)
+        with self.assertRaises(ValueError):
+            resolve_scenario_sources(
+                plan_families={"harmonic"}, signature_modes={"harmonic": "guessed"}
+            )
+
+    def test_harmonic_mode_cli_defaults_to_discovered_and_allows_legacy_flag(self) -> None:
+        required = [
+            "--d0-raw", "raw.jsonl", "--d0-train", "train.jsonl",
+            "--adapter-path", "adapter", "--output-dir", "output",
+        ]
+        self.assertEqual(parser().parse_args(required).harmonic_signature_mode, "discovered")
+        self.assertEqual(
+            parser().parse_args(required + ["--harmonic-signature-mode", "flagged"])
+            .harmonic_signature_mode,
+            "flagged",
         )
 
     def test_explicit_corpus_paths_win_and_must_exist(self) -> None:

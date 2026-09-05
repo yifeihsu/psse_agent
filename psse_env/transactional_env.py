@@ -22,6 +22,7 @@ from .actions import (
     ESTIMATE_HIF_MULTISCAN_FROM_PATH,
     FINALIZE_DIAGNOSIS,
     GET_HARMONIC_CONTEXT,
+    GET_THREE_PHASE_CONTEXT,
     GET_MEASUREMENT_CONTEXT,
     GET_PARAMETER_CONTEXT,
     GET_TOPOLOGY_CONTEXT,
@@ -646,12 +647,77 @@ class TransactionalPSSEEnv:
         self.terminal_outcome = None
         return self.current_state()
 
+    def _rebind_telemetry_requests(self, active_id: str, active_hash: str) -> None:
+        """Keep the telemetry-request ledger consistent with the active state.
+
+        Acquired measurements are bound to the exact state they were taken
+        on and are dropped once that state changes.  Whether a substation can
+        supply spectra or phase measurements is a property of the substation,
+        not of the estimator state, so a request that came back
+        ``unavailable`` stays answered for the rest of the episode and is
+        rebound to the new active state instead of being asked again after
+        every commit.
+        """
+        ledger = self.context_flags.get("fresh_context_evidence")
+        if not isinstance(ledger, dict):
+            return
+        for family in ("harmonic", "three_phase"):
+            context = ledger.get(family)
+            if not isinstance(context, Mapping):
+                continue
+            bound = (
+                str(context.get("state_id") or "") == active_id
+                and str(context.get("state_hash") or "") == active_hash
+            )
+            if bound:
+                continue
+            unavailable = (
+                context.get("request_attempted") is True
+                and str(context.get(f"{family}_context_status") or "") == "unavailable"
+                and not context.get("available_evidence_channels")
+            )
+            if unavailable:
+                carried = dict(context)
+                carried["carried_from_state_id"] = context.get("state_id")
+                carried["state_id"] = active_id
+                carried["state_hash"] = active_hash
+                ledger[family] = carried
+            else:
+                ledger.pop(family, None)
+
     def current_state(self) -> dict[str, Any]:
-        return self.store.decision_summary(
+        # Measurement requests and WLS evidence are bound to exact contents,
+        # and survive a truncated model history without surviving a mutation.
+        active_id = str(self.store.active_state_id)
+        active_hash = str(self.store.state_hash(active_id))
+        self._rebind_telemetry_requests(active_id, active_hash)
+        summary = self.store.decision_summary(
             candidate_state_id=self.current_candidate_id,
             remaining_budget=max(self.max_steps - len(self.history), 0),
             context_flags=self.context_flags,
         )
+        contexts = summary["fresh_context_evidence"]
+        wls = self._latest_bound_successful_tool_metrics((RUN_WLS, VERIFY_CANDIDATE))
+        # Explicit negative proof prevents legacy provenance from reviving a
+        # failed or stale WLS result. It exposes no private state hash at reset.
+        contexts["wls"] = {"successful": False}
+        if wls is not None:
+            contexts["wls"] = {
+                "state_id": active_id,
+                "state_hash": active_hash,
+                "evidence_source": wls["evidence_source"],
+                "successful": True,
+                "anomalous": any(
+                    str(item).startswith("wls_")
+                    for item in wls.get("unresolved_signatures") or []
+                ),
+                # Residual breadth decides which additional measurement the
+                # expert requests first; keep it in the durable ledger so the
+                # choice survives a truncated model history.
+                "anomaly_breadth": wls.get("anomaly_breadth"),
+                "dominant_residual_block": wls.get("dominant_residual_block"),
+            }
+        return summary
 
     _EVIDENCE_CHANNEL_KEYS = (
         "harmonic_measurements",
@@ -664,11 +730,13 @@ class TransactionalPSSEEnv:
     )
 
     def _observable_evidence_channels(self) -> list[str]:
-        """Telemetry channels present on the active state's metadata.
+        """Channels the operator has acquired, without a root-family hint.
 
-        Which data streams exist (harmonic scans, HIF scan windows, repeated
-        parameter scans) is deployment-observable operator knowledge; the
-        channel *contents* stay out of the policy observation.
+        Waveform scans remain provider-side data until a successful context
+        request reports their availability.  An unflagged root starts with
+        only its positive-sequence snapshot and model; metadata key presence
+        cannot reveal which additional measurement stream will be available.
+        Legacy sensor-flagged HIF diagnostics retain their inventory.
         """
         try:
             payload = self.store.get_state(str(self.store.active_state_id))
@@ -677,7 +745,33 @@ class TransactionalPSSEEnv:
         metadata = payload.get("metadata")
         if not isinstance(metadata, Mapping):
             return []
-        return [key for key in self._EVIDENCE_CHANNEL_KEYS if metadata.get(key)]
+        signatures = self.context_flags.get("unresolved_signatures") or []
+        legacy_flagged = bool(
+            matching_evidence_codes(
+                signatures,
+                *ANOMALY_FAMILY_MARKERS["hif"],
+            )
+        )
+        channels = [
+            key
+            for key in self._EVIDENCE_CHANNEL_KEYS
+            if key not in {"harmonic_measurements", "three_phase_voltages", "three_phase_branch_currents"}
+            and metadata.get(key)
+            and (self.history or legacy_flagged)
+        ]
+        context = self._latest_bound_successful_tool_metrics(GET_HARMONIC_CONTEXT)
+        if context is not None and "harmonic_measurements" in (
+            context.get("available_evidence_channels") or []
+        ):
+            channels.insert(0, "harmonic_measurements")
+        three_phase = self._latest_bound_successful_tool_metrics(GET_THREE_PHASE_CONTEXT)
+        acquired = set(
+            three_phase.get("available_evidence_channels") or []
+        ) if three_phase is not None and three_phase.get("three_phase_context_status") == "available" else set()
+        for key in ("three_phase_voltages", "three_phase_branch_currents"):
+            if key in acquired or (legacy_flagged and metadata.get(key)):
+                channels.append(key)
+        return channels
 
     def get_policy_observation(
         self,
@@ -1008,8 +1102,42 @@ class TransactionalPSSEEnv:
             provider = self.evidence_providers.get(tool)
             target_id = str(args.get("state_id") or self.current_candidate_id or self.store.active_state_id)
             provider_state = self.store.get_state(target_id)
+            measurement_request: dict[str, Any] | None = None
+            request_family = {
+                GET_HARMONIC_CONTEXT: "harmonic",
+                GET_THREE_PHASE_CONTEXT: "three_phase",
+            }.get(tool)
+            if request_family is not None:
+                # Only a process-valid request reaches dispatch.  Remember
+                # that acquisition was attempted even if the sensor/provider
+                # fails, while invalid pre-WLS calls cannot skip acquisition.
+                # A refresh also retires any earlier positive scan result.
+                measurement_request = {
+                    "state_id": target_id,
+                    "state_hash": provider_state["state_hash"],
+                    "evidence_source": f"controller_default:{request_family}_measurement_request",
+                    "request_attempted": True,
+                    f"{request_family}_context_status": "pending",
+                    "available_evidence_channels": [],
+                }
+                if request_family == "harmonic":
+                    measurement_request["harmonic_distortion_detected"] = False
+                self.context_flags.setdefault("fresh_context_evidence", {})[request_family] = measurement_request
+            elif tool == RUN_THREE_PHASE_NLM_FROM_PATH:
+                context = self.context_flags.get("fresh_context_evidence", {}).get("three_phase")
+                if isinstance(context, dict) and (
+                    str(context.get("state_id")) == target_id
+                    and str(context.get("state_hash")) == str(provider_state["state_hash"])
+                ):
+                    # Invalid learner calls never reach dispatch, so they
+                    # cannot consume this once-per-acquisition diagnostic.
+                    context["nlm_attempted"] = True
             provider_state["policy_observation"] = self.get_policy_observation().as_dict()
             provider_state["evidence_request"] = args.get("request")
+            if measurement_request is not None:
+                # Every early failure or provider exception retains an
+                # attempted-but-unsuccessful acquisition, never stale data.
+                measurement_request[f"{request_family}_context_status"] = "failed"
             if provider is None and self.production_dataset_mode:
                 return self.record_noop_failure(
                     action=action,
@@ -1062,6 +1190,34 @@ class TransactionalPSSEEnv:
                     valid_next_actions=[],
                 )
             if tool in DIAGNOSTIC_TOOLS:
+                if request_family is not None and evidence_bound:
+                    contexts = self.context_flags.setdefault("fresh_context_evidence", {})
+                    contexts[request_family] = policy_safe_copy(
+                        {
+                            "request_attempted": True,
+                            **{
+                                key: metrics[key]
+                                for key in (
+                                    "state_id",
+                                    "state_hash",
+                                    "evidence_source",
+                                    "available_evidence_channels",
+                                    "harmonic_distortion_detected",
+                                    "measurement_status",
+                                    "harmonic_context_status",
+                                    "three_phase_context_status",
+                                    "harmonic_screening",
+                                    "finding_count",
+                                    "harmonic_orders",
+                                    "measured_buses",
+                                    "measured_branch_count",
+                                    "three_phase_summary",
+                                    "harmonic_summary",
+                                )
+                                if key in metrics
+                            },
+                        }
+                    )
                 self._apply_minted_signatures(tool, metrics)
                 self._record_anomaly_explanation(tool, target_id, metrics)
             if (
@@ -1338,25 +1494,68 @@ class TransactionalPSSEEnv:
             )
 
         available = set(self._observable_evidence_channels())
-        if tool in {GET_HARMONIC_CONTEXT, RUN_HSE_FROM_PATH}:
+        if tool == GET_HARMONIC_CONTEXT:
+            # Requesting additional measurements is justified by a generic
+            # WLS anomaly, before the operator knows whether a harmonic scan
+            # exists or what it contains.  Metadata is not evidence.
+            wls = self._latest_bound_successful_tool_metrics(RUN_WLS)
+            wls_signatures = (wls.get("unresolved_signatures") or []) if wls else []
+            if not harmonic_codes and not any(
+                str(item).startswith("wls_") for item in wls_signatures
+            ):
+                raise ValueError(
+                    "Production training row for get_harmonic_context lacks "
+                    "successful current-state anomalous WLS evidence."
+                )
+            return
+        if tool == RUN_HSE_FROM_PATH:
+            context = self._latest_bound_successful_tool_metrics(GET_HARMONIC_CONTEXT)
+            if context is None:
+                raise ValueError(
+                    "Production training row for run_hse_from_path lacks fresh "
+                    "successful observable harmonic context."
+                )
             if not harmonic_codes:
                 raise ValueError(
                     f"Production training row for {tool} lacks an observable harmonic signature."
+                )
+            if context.get("harmonic_distortion_detected") is not True:
+                raise ValueError(
+                    "Production training row for run_hse_from_path lacks "
+                    "harmonic distortion detected by the acquired measurements."
                 )
             if "harmonic_measurements" not in available:
                 raise ValueError(
                     f"Production training row for {tool} lacks harmonic_measurements telemetry."
                 )
-            if tool == RUN_HSE_FROM_PATH and self._latest_successful_tool_metrics(
-                GET_HARMONIC_CONTEXT
-            ) is None:
+            return
+
+        if tool == GET_THREE_PHASE_CONTEXT:
+            wls = self._latest_bound_successful_tool_metrics((RUN_WLS, VERIFY_CANDIDATE))
+            wls_signatures = (wls.get("unresolved_signatures") or []) if wls else []
+            if not unbalance_codes and not hif_codes and not any(
+                str(item).startswith("wls_") for item in wls_signatures
+            ):
                 raise ValueError(
-                    "Production training row for run_hse_from_path lacks successful "
-                    "observable harmonic context."
+                    "Production training row for get_three_phase_context lacks "
+                    "successful current-state anomalous WLS evidence."
                 )
             return
 
         if tool == RUN_THREE_PHASE_NLM_FROM_PATH:
+            if not hif_codes:
+                wls = self._latest_bound_successful_tool_metrics((RUN_WLS, VERIFY_CANDIDATE))
+                if wls is None:
+                    raise ValueError(
+                        "Production training row for run_three_phase_nlm_from_path "
+                        "lacks successful current-state WLS evidence."
+                    )
+                context = self._latest_bound_successful_tool_metrics(GET_THREE_PHASE_CONTEXT)
+                if context is None or context.get("three_phase_context_status") != "available":
+                    raise ValueError(
+                        "Production training row for run_three_phase_nlm_from_path "
+                        "lacks fresh acquired three-phase measurements."
+                    )
             # Discovery: with no sensor flag, a fundamental-frequency anomaly
             # (a wls_ signature) plus available three-phase telemetry is the
             # observable reason to screen the three-phase state before any
@@ -2043,6 +2242,13 @@ class TransactionalPSSEEnv:
                 and signature not in safety_blocked_recovery_targets
                 and signature.split(":", 1)[0] not in exhausted_families
             ]
+            # A telemetry request answered on this state is an investigation
+            # as well: it is the operator's first step after an anomaly, and a
+            # budget handoff must be able to close an episode whose budget
+            # ends there.  Only a successful, state-bound request counts.
+            for telemetry_tool in (GET_HARMONIC_CONTEXT, GET_THREE_PHASE_CONTEXT):
+                if latest_success(telemetry_tool) is not None:
+                    investigation_tools.append(telemetry_tool)
             if not investigation_tools and not post_correction_budget_deferral:
                 missing.append("same_state_investigation_evidence_missing")
             if request == RECOVERY_OPTIONS_EXHAUSTED_REQUEST:
@@ -2141,6 +2347,46 @@ class TransactionalPSSEEnv:
                 return None
             metrics = output.get("tool_metrics")
             return metrics if isinstance(metrics, Mapping) else None
+        return None
+
+    def _latest_bound_successful_tool_metrics(
+        self, tool: str | tuple[str, ...]
+    ) -> Mapping[str, Any] | None:
+        """Latest successful result for the active state's exact contents.
+
+        Unlike the historical diagnostic helper, this rejects results from a
+        different active state or from before a physical state mutation.
+        A failed retry invalidates the previous result for the same state.
+        """
+        active_id = str(self.store.active_state_id)
+        active_hash = str(self.store.state_hash(active_id))
+        tool_names = (tool,) if isinstance(tool, str) else tool
+        for event in reversed(self.history):
+            if not isinstance(event, Mapping):
+                continue
+            action = safe_normalize_action(event.get("action") or {})
+            if action["tool"] not in tool_names:
+                continue
+            requested_id = (
+                action["arguments"].get("state_id")
+                or action["arguments"].get("candidate_state_id")
+                or event.get("state_id")
+            )
+            if str(requested_id) != active_id:
+                continue
+            output = event.get("tool_output")
+            if not isinstance(output, Mapping) or output.get("execution_status") != "success":
+                return None
+            metrics = output.get("tool_metrics")
+            if not isinstance(metrics, Mapping):
+                return None
+            if (
+                str(metrics.get("state_id")) != active_id
+                or str(metrics.get("state_hash")) != active_hash
+                or not _observable_provenance_source(metrics.get("evidence_source"))
+            ):
+                return None
+            return metrics
         return None
 
     def _latest_successful_wls_score(self, state_id: str) -> float | None:
@@ -3512,7 +3758,22 @@ class TransactionalPSSEEnv:
         for family in ("measurement", "parameter", "topology"):
             self.context_flags[f"has_fresh_{family}_context"] = False
             self.context_flags[f"{family}_context_state_id"] = None
-        self.context_flags["fresh_context_evidence"] = {}
+        # Acquired evidence is bound to the state it was taken on and is
+        # dropped with it.  A telemetry request answered "unavailable" is a
+        # fact about the substation and stays answered; the next
+        # ``current_state`` rebinds it to the new active state.
+        previous = self.context_flags.get("fresh_context_evidence") or {}
+        retained: dict[str, Any] = {}
+        for family in ("harmonic", "three_phase"):
+            context = previous.get(family) if isinstance(previous, Mapping) else None
+            if (
+                isinstance(context, Mapping)
+                and context.get("request_attempted") is True
+                and str(context.get(f"{family}_context_status") or "") == "unavailable"
+                and not context.get("available_evidence_channels")
+            ):
+                retained[family] = dict(context)
+        self.context_flags["fresh_context_evidence"] = retained
         # Rejected candidates are evidence about alternatives to the old
         # active parent.  They remain durable across a same-state rollback, but
         # become stale as soon as another candidate is committed.

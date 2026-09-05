@@ -25,10 +25,10 @@ DEFAULT_STUDY_MANIFEST = (
 # Updated only through explicit protocol review.  This pins the raw LF-normalized
 # bytes; .gitattributes preserves that representation on Windows and Linux.
 EXPECTED_STUDY_MANIFEST_SHA256 = (
-    "206ee008477dac92f53744b3107231e15e8d7de2064d3989c7e9687daa7853b3"
+    "0153a1e0c34a52e98a4936697b6e1a56377344cc44f8db31dbd6204e6a3df49f"
 )
 EXPECTED_STUDY_MANIFEST_CONTENT_SHA256 = (
-    "e588f6f98c3d1423d0756c7baa41b4cf0cf13336407f02b593c2622c4ac18191"
+    "1c16281a43e057bcede59858e0d0a35d4be4f56579c0b0a57376f2e6c3e24e95"
 )
 EXPECTED_COMPARISON_POLICY_SHA256 = (
     "9763dc426de33e328a06cd5abfb4f5788a05ef91fac6cb4113e30680f8c2c550"
@@ -64,7 +64,7 @@ PINNED_SUITE_SHA256 = (
 )
 PINNED_POLICY_PATH = "psse_env/dagger/bc0_evaluation_policy.json"
 PINNED_POLICY_SHA256 = (
-    "18ac8330f17f58bb20757237c8b2f50befb20784097224d1a94dd54101ab3852"
+    "ff1c72971d7c221a4f7a38e45c6be4c94a035f021e99f673e8a4653922def1da"
 )
 DEVELOPMENT_EVALUATION_PROTOCOL_CONTRACT = (
     "dagger_development_evaluation_protocol_v1"

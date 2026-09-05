@@ -38,6 +38,41 @@ def _successful_step(tool: str, metrics: dict | None = None) -> dict:
     }
 
 
+def _record_acquired_discovery_context(state: dict) -> None:
+    """Start a routing fixture after WLS and explicit measurement requests."""
+    active = state["active_state_id"]
+    channels = [
+        item for item in state.get("available_evidence", [])
+        if item in {"three_phase_voltages", "three_phase_branch_currents"}
+    ]
+    contexts = state.setdefault("fresh_context_evidence", {})
+    contexts["wls"] = {
+        "state_id": active,
+        "state_hash": "fixture-current-state",
+        "evidence_source": "deployment_wls:fixture",
+        "successful": True,
+        "anomalous": bool(state.get("unresolved_signatures")),
+    }
+    contexts["harmonic"] = {
+        "state_id": active,
+        "state_hash": "fixture-current-state",
+        "evidence_source": "deployment_context:harmonic_measurements",
+        "request_attempted": True,
+        "harmonic_context_status": "unavailable",
+        "available_evidence_channels": [],
+        "harmonic_distortion_detected": False,
+    }
+    contexts["three_phase"] = {
+        "state_id": active,
+        "state_hash": "fixture-current-state",
+        "evidence_source": "deployment_context:three_phase_measurements",
+        "request_attempted": True,
+        "three_phase_context_status": "available" if channels else "unavailable",
+        "available_evidence_channels": channels,
+        "nlm_attempted": False,
+    }
+
+
 def _failed_step(tool: str, error_code: str) -> dict:
     return {
         "action": {"tool": tool, "arguments": {"state_id": "episode:s0"}},
@@ -53,9 +88,9 @@ class DiagnosticsExpertRoutingTests(unittest.TestCase):
     def setUp(self) -> None:
         self.expert = DiagnosticsExpert()
 
-    def test_no_route_without_telemetry_channel(self) -> None:
+    def test_flagged_legacy_root_can_request_an_unadvertised_channel(self) -> None:
         state = _policy_state(unresolved_signatures=["harmonic_distortion_detected"])
-        self.assertEqual(self.expert.propose(state, []), [])
+        self.assertEqual(self.expert.propose(state, [])[0].action["tool"], "get_harmonic_context")
 
     def test_no_route_without_observable_or_privileged_signal(self) -> None:
         state = _policy_state(available_evidence=["harmonic_measurements"])
@@ -316,13 +351,22 @@ class DiagnosticsExpertRoutingTests(unittest.TestCase):
             available_evidence=["three_phase_voltages"],
         )
         first = self.expert.propose(state, [])
-        self.assertEqual(first[0].action["tool"], "run_three_phase_nlm_from_path")
+        self.assertEqual(first[0].action["tool"], "run_wls")
+        state["fresh_context_evidence"] = {
+            "wls": {"state_id": state["active_state_id"], "successful": True}
+        }
+        request = self.expert.propose(state, [])
+        self.assertEqual(request[0].action["tool"], "get_three_phase_context")
+        _record_acquired_discovery_context(state)
+        acquired = self.expert.propose(state, [])
+        self.assertEqual(acquired[0].action["tool"], "run_three_phase_nlm_from_path")
 
         nlm_metrics = {
             "nlm_summary": {
                 "top_hif_groups": [{"rank": 1, "branch_row0": 12, "score": 0.91}]
             }
         }
+        state["fresh_context_evidence"]["three_phase"]["nlm_attempted"] = True
         done = self.expert.propose(
             state, [_successful_step("run_three_phase_nlm_from_path", nlm_metrics)]
         )
@@ -381,9 +425,11 @@ class OrchestratorRoutingTests(unittest.TestCase):
         }
         for name, (signature, expected_tools) in cases.items():
             with self.subTest(name=name):
-                actions = oracle.next_actions(
-                    _policy_state(unresolved_signatures=[signature]), []
+                state = _policy_state(
+                    unresolved_signatures=[signature],
                 )
+                _record_acquired_discovery_context(state)
+                actions = oracle.next_actions(state, [])
                 tools = {action["tool"] for action in actions}
                 self.assertEqual(tools, expected_tools)
                 self.assertNotIn("run_wls", tools)
@@ -523,9 +569,9 @@ class EndToEndHarmonicRoutingTests(unittest.TestCase):
                 "scenario_id": "harmonic_route",
                 "case": data["case_path"],
                 "measurements": list(data["z_obs"]),
-                "unresolved_signatures": ["harmonic_distortion_detected"],
+                "unresolved_signatures": [],
                 "semantic_field_provenance": {
-                    "unresolved_signatures": "deployment_sensor:power_quality"
+                    "unresolved_signatures": "controller_default"
                 },
                 "metadata": {
                     "harmonic_measurements": [
@@ -542,7 +588,7 @@ class EndToEndHarmonicRoutingTests(unittest.TestCase):
             }
         )
         observation = env.get_policy_observation()
-        self.assertIn("harmonic_measurements", observation.available_evidence)
+        self.assertEqual(observation.available_evidence, [])
 
         executed: list[str] = []
         for _ in range(5):
@@ -556,9 +602,21 @@ class EndToEndHarmonicRoutingTests(unittest.TestCase):
                 output["execution_status"], "success", f"{actions[0]} -> {output}"
             )
             executed.append(actions[0]["tool"])
+        # This fixture carries the clean positive-sequence snapshot with
+        # synthetic spectra attached, so the WLS anomaly is narrow and the
+        # phase-resolved request goes first; it returns nothing, the spectral
+        # request follows, and the harmonic route completes.  Real harmonic
+        # rows are broad and request spectra directly (see
+        # test_harmonic_discovery).
         self.assertEqual(
             executed,
-            ["get_harmonic_context", "run_hse_from_path", "finalize_diagnosis"],
+            [
+                "run_wls",
+                "get_three_phase_context",
+                "get_harmonic_context",
+                "run_hse_from_path",
+                "finalize_diagnosis",
+            ],
         )
         self.assertTrue(env.is_terminal())
         # The recorded explanation is model-visible and covers the signature.
@@ -566,9 +624,8 @@ class EndToEndHarmonicRoutingTests(unittest.TestCase):
         self.assertTrue(final_observation.explained_anomalies)
         record = final_observation.explained_anomalies[0]
         self.assertEqual(record["family"], "harmonic")
-        self.assertEqual(
-            record["explained_signatures"], ["harmonic_distortion_detected"]
-        )
+        self.assertIn("harmonic distortion_detected_by_context", record["explained_signatures"])
+        self.assertTrue(any(item.startswith("wls_") for item in record["explained_signatures"]))
 
 
 class ProductionDiagnosticEvidenceGateTests(unittest.TestCase):
@@ -592,7 +649,7 @@ class ProductionDiagnosticEvidenceGateTests(unittest.TestCase):
         scenario.update(overrides)
         return scenario
 
-    def test_hidden_truth_and_channel_cannot_bypass_signature_gate(self) -> None:
+    def test_hidden_truth_and_channel_cannot_bypass_wls_evidence_gate(self) -> None:
         state = self.env.reset(
             self._scenario(
                 metadata={
@@ -605,7 +662,7 @@ class ProductionDiagnosticEvidenceGateTests(unittest.TestCase):
                 hidden_truth={"true_hif_errors": [{"branch_row0": 12}]},
             )
         )
-        with self.assertRaisesRegex(ValueError, "observable .*signature"):
+        with self.assertRaisesRegex(ValueError, "successful current-state WLS"):
             self.env.assert_training_decision_evidence(
                 {
                     "tool": "run_three_phase_nlm_from_path",
@@ -613,7 +670,7 @@ class ProductionDiagnosticEvidenceGateTests(unittest.TestCase):
                 }
             )
 
-    def test_wls_anomaly_with_three_phase_telemetry_admits_screening_target(self) -> None:
+    def test_wls_anomaly_requires_phase_acquisition_before_screening_target(self) -> None:
         from three_phase_nlm.synthetic_branch_telemetry import synthetic_unbalance_rows
 
         voltages, currents = synthetic_unbalance_rows(source_bus=2, split=(0.5, 0.3, 0.2))
@@ -634,10 +691,19 @@ class ProductionDiagnosticEvidenceGateTests(unittest.TestCase):
             "arguments": {"state_id": state["active_state_id"]},
         }
         # Before the baseline solve there is no observable anomaly to screen.
-        with self.assertRaisesRegex(ValueError, "observable .*signature"):
+        with self.assertRaisesRegex(ValueError, "successful current-state WLS"):
             self.env.assert_training_decision_evidence(nlm_action)
         _, wls = self.env.step({"tool": "run_wls", "arguments": {"state_id": state["active_state_id"]}})
         self.assertEqual(wls["execution_status"], "success")
+        self.assertNotIn("three_phase_voltages", self.env.get_policy_observation().available_evidence)
+        with self.assertRaisesRegex(ValueError, "fresh acquired three-phase measurements"):
+            self.env.assert_training_decision_evidence(nlm_action)
+        for tool in ("get_harmonic_context", "get_three_phase_context"):
+            action = {"tool": tool, "arguments": {"state_id": state["active_state_id"]}}
+            self.env.assert_training_decision_evidence(action)
+            _, output = self.env.step(action)
+            self.assertEqual(output["execution_status"], "success", output)
+        self.assertIn("three_phase_voltages", self.env.get_policy_observation().available_evidence)
         self.env.assert_training_decision_evidence(nlm_action)
 
     def test_hif_estimator_target_must_come_from_latest_nlm_output(self) -> None:
@@ -709,6 +775,7 @@ class TerminalCurrentRoutingTests(unittest.TestCase):
             unresolved_signatures=["three_phase_unbalance vuf_threshold_exceeded"],
             available_evidence=["three_phase_branch_currents"],
         )
+        _record_acquired_discovery_context(state)
         proposals = self.expert.propose(state, [])
         self.assertEqual(proposals[0].action["tool"], "run_three_phase_nlm_from_path")
 
@@ -781,6 +848,9 @@ class ThreePhaseScreeningTests(unittest.TestCase):
             last_tool_status="success",
         )
         state.update(overrides)
+        # These fixtures isolate NLM screening after completed same-state
+        # WLS, harmonic acquisition, and three-phase acquisition.
+        _record_acquired_discovery_context(state)
         return state
 
     def test_screening_proposes_nlm_on_wls_anomaly_with_telemetry(self) -> None:
@@ -812,9 +882,11 @@ class ThreePhaseScreeningTests(unittest.TestCase):
             ),
             [],
         )
+        screened = self._anomalous_state()
+        screened["fresh_context_evidence"]["three_phase"]["nlm_attempted"] = True
         self.assertEqual(
             self.expert.three_phase_screening_proposals(
-                self._anomalous_state(), [_successful_step("run_three_phase_nlm_from_path")]
+                screened, [_successful_step("run_three_phase_nlm_from_path")]
             ),
             [],
         )
@@ -998,11 +1070,64 @@ class WaveformRouteStandDownTests(unittest.TestCase):
             last_tool_status="failure",
             last_tool_output={"execution_status": "failure", "error_code": "unknown_state_id"},
         )
+        _record_acquired_discovery_context(state)
         actions = oracle.next_actions(
             state, [_failed_step("get_measurement_context", "unknown_state_id")]
         )
         self.assertTrue(actions)
         self.assertEqual(actions[0]["tool"], "run_three_phase_nlm_from_path")
+
+
+class RequestOrderTests(unittest.TestCase):
+    """The WLS residual breadth decides which measurement request goes first."""
+
+    def _state(self, breadth, **overrides) -> dict:
+        state = _policy_state(
+            unresolved_signatures=["wls_residual_outlier_dominant index=5 channel=Qinj"],
+            fresh_context_evidence={
+                "wls": {
+                    "state_id": "episode:s0",
+                    "successful": True,
+                    "anomalous": True,
+                    "anomaly_breadth": breadth,
+                }
+            },
+        )
+        state.update(overrides)
+        return state
+
+    def test_breadth_selects_the_first_request(self) -> None:
+        from psse_env.actions import preferred_first_request, wls_anomaly_breadth
+
+        self.assertEqual(wls_anomaly_breadth(self._state(0.66)), 0.66)
+        self.assertEqual(preferred_first_request(self._state(0.66)), "get_harmonic_context")
+        self.assertEqual(preferred_first_request(self._state(0.07)), "get_three_phase_context")
+        self.assertEqual(preferred_first_request(self._state(0.5)), "get_harmonic_context")
+        # Without a breadth statistic the spectral request keeps precedence.
+        self.assertEqual(preferred_first_request(self._state(None)), "get_harmonic_context")
+        self.assertEqual(
+            preferred_first_request(self._state(0.07, fresh_context_evidence={"wls": {"successful": False}})),
+            "get_harmonic_context",
+        )
+
+    def test_breadth_is_read_from_the_last_wls_output_when_the_ledger_is_absent(self) -> None:
+        from psse_env.actions import preferred_first_request
+
+        state = _policy_state(
+            unresolved_signatures=["wls_residual_outlier index=5 channel=Qinj"],
+            last_tool="run_wls",
+            last_tool_status="success",
+            last_tool_output={"execution_status": "success", "tool_metrics": {"anomaly_breadth": 0.08}},
+        )
+        state.pop("fresh_context_evidence", None)
+        self.assertEqual(preferred_first_request(state), "get_three_phase_context")
+
+    def test_orchestrator_orders_the_requests_by_breadth(self) -> None:
+        oracle = ExpertPolicyOracle()
+        narrow = oracle.next_actions(self._state(0.07), [_successful_step("run_wls")])
+        self.assertEqual(narrow[0]["tool"], "get_three_phase_context")
+        broad = oracle.next_actions(self._state(0.66), [_successful_step("run_wls")])
+        self.assertEqual(broad[0]["tool"], "get_harmonic_context")
 
 
 if __name__ == "__main__":

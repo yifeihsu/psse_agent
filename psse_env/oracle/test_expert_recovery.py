@@ -24,6 +24,31 @@ def _context_event(tool: str, state_id: str, corrections: list[dict]) -> dict:
     }
 
 
+def _record_unavailable_spectral_request(state: dict) -> None:
+    """Classical fixtures follow WLS and both unavailable telemetry requests."""
+    state.setdefault("fresh_context_evidence", {})["wls"] = {
+        "state_id": state["active_state_id"],
+        "evidence_source": "deployment_wls:diagnosis",
+        "successful": True,
+        "anomalous": True,
+    }
+    state["fresh_context_evidence"]["three_phase"] = {
+        "state_id": state["active_state_id"],
+        "evidence_source": "deployment_context:three_phase_measurements",
+        "request_attempted": True,
+        "three_phase_context_status": "unavailable",
+        "available_evidence_channels": [],
+    }
+    state.setdefault("fresh_context_evidence", {})["harmonic"] = {
+        "state_id": state["active_state_id"],
+        "evidence_source": "deployment_context:harmonic_measurements",
+        "request_attempted": True,
+        "harmonic_context_status": "unavailable",
+        "available_evidence_channels": [],
+        "harmonic_distortion_detected": False,
+    }
+
+
 class SequentialRecoveryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.oracle = ExpertPolicyOracle()
@@ -148,6 +173,7 @@ class SequentialRecoveryTests(unittest.TestCase):
             "rejected_hypotheses": [{"source_action": wrong}],
         }
 
+        _record_unavailable_spectral_request(state)
         actions = self.oracle.next_actions(state, history)
 
         self.assertTrue(actions)
@@ -215,6 +241,7 @@ class SequentialRecoveryTests(unittest.TestCase):
                 executor_hydrated_corrections=True
             )
         )
+        _record_unavailable_spectral_request(state)
         actions = release_oracle.next_actions(state, history)
 
         self.assertTrue(actions)
@@ -284,6 +311,7 @@ class SequentialRecoveryTests(unittest.TestCase):
             "topology_context_state_id": state_id,
         }
 
+        _record_unavailable_spectral_request(state)
         actions = self.oracle.next_actions(state, history)
 
         self.assertTrue(actions)
@@ -310,6 +338,7 @@ class SequentialRecoveryTests(unittest.TestCase):
             "topology_context_state_id": None,
         }
 
+        _record_unavailable_spectral_request(state)
         actions = self.oracle.next_actions(state, history)
 
         self.assertTrue(actions)
@@ -351,6 +380,7 @@ class SequentialRecoveryTests(unittest.TestCase):
             "accepted_corrections": [{"source_action": old_action}],
         }
 
+        _record_unavailable_spectral_request(state)
         actions = self.oracle.next_actions(state, history)
 
         self.assertIn(refreshed_action, actions)
@@ -519,6 +549,7 @@ class SequentialRecoveryTests(unittest.TestCase):
             )
         )
 
+        _record_unavailable_spectral_request(state)
         actions = oracle.next_actions(state, history)
         self.assertEqual(actions[0]["tool"], "get_measurement_context")
         self.assertNotIn(next_branch, actions)

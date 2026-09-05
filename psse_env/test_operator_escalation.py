@@ -47,17 +47,29 @@ class _UnboundEvidenceProvider:
 
 class OperatorEscalationContractTests(unittest.TestCase):
     @staticmethod
-    def _environment(seed: int = 20260719):
+    def _environment(seed: int = 20260719, max_steps: int = 24):
         scenario = _truth_free(
             Round0ScenarioGenerator(seed=seed).build({"multi_measurement": 1})[0]
         )
         providers = MatpowerDeploymentProviders(chi2_alpha=0.01)
         env = TransactionalPSSEEnv(
-            **providers.env_kwargs(), production_dataset_mode=True, max_steps=24
+            **providers.env_kwargs(), production_dataset_mode=True, max_steps=max_steps
         )
         oracle = ExpertPolicyOracle(process_oracle=env.process_oracle)
         env.reset(scenario)
         return env, oracle
+
+    @staticmethod
+    def _acquire_telemetry(env, active_id: str) -> None:
+        """Answer both telemetry requests (unavailable on these roots).
+
+        After a WLS anomaly the expert requests phase-resolved and spectral
+        measurements before any correction route; a classical fixture has
+        neither, and the answered requests stay valid for the episode.
+        """
+        for tool in ("get_three_phase_context", "get_harmonic_context"):
+            _, output = env.step({"tool": tool, "arguments": {"state_id": active_id}})
+            assert output["execution_status"] == "success", output
 
     def _joint_fallback_audit_fixture(
         self,
@@ -68,6 +80,7 @@ class OperatorEscalationContractTests(unittest.TestCase):
         env, _ = self._environment(seed=31)
         active_id = env.current_state()["active_state_id"]
         env.step({"tool": "run_wls", "arguments": {"state_id": active_id}})
+        self._acquire_telemetry(env, active_id)
         env.step(
             {"tool": "get_measurement_context", "arguments": {"state_id": active_id}}
         )
@@ -227,6 +240,7 @@ class OperatorEscalationContractTests(unittest.TestCase):
         env, _ = self._environment()
         active_id = env.current_state()["active_state_id"]
         env.step({"tool": "run_wls", "arguments": {"state_id": active_id}})
+        self._acquire_telemetry(env, active_id)
         _, context_output = env.step(
             {"tool": "get_measurement_context", "arguments": {"state_id": active_id}}
         )
@@ -305,6 +319,7 @@ class OperatorEscalationContractTests(unittest.TestCase):
         env, _ = self._environment()
         active_id = env.current_state()["active_state_id"]
         env.step({"tool": "run_wls", "arguments": {"state_id": active_id}})
+        self._acquire_telemetry(env, active_id)
         env.step(
             {"tool": "get_measurement_context", "arguments": {"state_id": active_id}}
         )
@@ -343,6 +358,7 @@ class OperatorEscalationContractTests(unittest.TestCase):
         env, _ = self._environment()
         active_id = env.current_state()["active_state_id"]
         env.step({"tool": "run_wls", "arguments": {"state_id": active_id}})
+        self._acquire_telemetry(env, active_id)
         env.step(
             {"tool": "get_measurement_context", "arguments": {"state_id": active_id}}
         )
@@ -385,9 +401,11 @@ class OperatorEscalationContractTests(unittest.TestCase):
 
     def test_handoff_is_illegal_with_an_open_candidate(self) -> None:
         env, oracle = self._environment(seed=29)
-        for _ in range(3):
+        for _ in range(8):
             action = oracle.next_actions(env.get_oracle_state(env.history), env.history)[0]
             env.step(action)
+            if env.current_state()["has_open_candidate"]:
+                break
         self.assertTrue(env.current_state()["has_open_candidate"])
         action = {
             "tool": ASK_FOR_MORE_EVIDENCE,
@@ -420,7 +438,9 @@ class OperatorEscalationContractTests(unittest.TestCase):
         self.assertEqual(first["tool"], "run_wls")
         env.step(first)
         second = oracle.next_actions(env.get_oracle_state(env.history), env.history)[0]
-        self.assertEqual(second["tool"], "get_measurement_context")
+        # The first investigation after the anomaly is the phase-resolved
+        # telemetry request; with one step left the expert then hands off.
+        self.assertEqual(second["tool"], "get_three_phase_context")
         env.step(second)
         handoff = oracle.next_actions(env.get_oracle_state(env.history), env.history)[0]
 
@@ -438,9 +458,11 @@ class OperatorEscalationContractTests(unittest.TestCase):
         # Seed 31 is the deterministic safe-handoff episode.  The former
         # default fixture now resolves autonomously, so it cannot exercise an
         # unbound escalation-provider response.
-        env, oracle = self._environment(seed=31)
+        # The two telemetry requests after the baseline solve add two steps
+        # to this episode; the exhaustion handoff needs the budget they use.
+        env, oracle = self._environment(seed=31, max_steps=30)
         escalation = None
-        for _ in range(24):
+        for _ in range(30):
             actions = oracle.next_actions(env.get_oracle_state(env.history), env.history)
             self.assertTrue(actions)
             if actions[0]["tool"] == ASK_FOR_MORE_EVIDENCE:

@@ -54,6 +54,7 @@ _PRIORITY_TOOLS = (
     "get_parameter_context",
     "get_topology_context",
     "get_harmonic_context",
+    "get_three_phase_context",
     "get_verification_snapshot",
     "get_measurement_context",
     "correct_measurements_from_path",

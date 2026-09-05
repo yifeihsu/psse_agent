@@ -39,7 +39,8 @@ from typing import Any, Mapping, Sequence
 from hif_search_limits import validate_hif_search_limits
 from psse_env.actions import (
     ANOMALY_FAMILY_MARKERS,
-    THREE_PHASE_TELEMETRY_CHANNELS,
+    harmonic_screening_pending,
+    three_phase_acquisition_pending,
     three_phase_screening_pending,
     waveform_anomaly_signatures,
     ASK_FOR_MORE_EVIDENCE,
@@ -49,6 +50,7 @@ from psse_env.actions import (
     ESTIMATE_HIF_FROM_PATH,
     ESTIMATE_HIF_MULTISCAN_FROM_PATH,
     GET_HARMONIC_CONTEXT,
+    GET_THREE_PHASE_CONTEXT,
     GET_MEASUREMENT_CONTEXT,
     GET_PARAMETER_CONTEXT,
     GET_TOPOLOGY_CONTEXT,
@@ -319,6 +321,34 @@ def _dedupe(values: Sequence[str]) -> list[str]:
     return list(dict.fromkeys(values))
 
 
+def _residual_breadth_metrics(
+    residuals: Sequence[float],
+    index_map: Mapping[str, Any],
+    *,
+    threshold: float,
+) -> dict[str, Any]:
+    """Share of normalized residuals above ``threshold`` and the top block."""
+    values = [abs(float(value)) for value in residuals]
+    count = sum(1 for value in values if value > float(threshold))
+    breadth = count / len(values) if values else 0.0
+    dominant = None
+    if values:
+        top = max(range(len(values)), key=lambda index: values[index])
+        for name, bounds in (index_map or {}).items():
+            try:
+                start, end = int(bounds[0]), int(bounds[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if start <= top < end:
+                dominant = str(name)
+                break
+    return {
+        "anomaly_breadth": float(breadth),
+        "anomaly_breadth_count": int(count),
+        "dominant_residual_block": dominant,
+    }
+
+
 def _matches_any_marker(text: str, markers: Sequence[str]) -> bool:
     """Word-boundary marker matching, consistent with expert routing."""
     lowered = text.lower()
@@ -501,6 +531,7 @@ class MatpowerDeploymentProviders:
             "evidence_providers": {
                 ASK_FOR_MORE_EVIDENCE: self.request_additional_evidence,
                 GET_HARMONIC_CONTEXT: self.get_harmonic_context,
+                GET_THREE_PHASE_CONTEXT: self.get_three_phase_context,
                 RUN_HSE_FROM_PATH: self.run_hse,
                 RUN_THREE_PHASE_NLM_FROM_PATH: self.run_three_phase_nlm,
                 ESTIMATE_HIF_FROM_PATH: self.estimate_hif,
@@ -544,6 +575,11 @@ class MatpowerDeploymentProviders:
                 GET_MEASUREMENT_CONTEXT,
                 GET_PARAMETER_CONTEXT,
                 GET_TOPOLOGY_CONTEXT,
+                # The telemetry requests are the operator's first
+                # investigation after an anomaly; a budget handoff must be
+                # able to close an episode whose budget ends right there.
+                GET_HARMONIC_CONTEXT,
+                GET_THREE_PHASE_CONTEXT,
                 CORRECT_MEASUREMENTS,
                 CORRECT_PARAMETERS,
                 CORRECT_TOPOLOGY,
@@ -1237,6 +1273,16 @@ class MatpowerDeploymentProviders:
             "chi_square_threshold": threshold,
             "chi_square_dof": dof,
             "max_normalized_residual": max_abs_residual,
+            # Breadth of the anomaly: the share of normalized residuals above
+            # the outlier threshold, and the channel block of the largest one.
+            # A waveform-distorted operator vector is inconsistent with the
+            # balanced model almost everywhere (spectral distortion elevates
+            # well over half the channels), whereas a load unbalance or a bad
+            # meter stays narrow.  Observable, so the expert can choose which
+            # additional measurement to request first without a family hint.
+            **_residual_breadth_metrics(
+                residuals, solved["index_map"], threshold=self.residual_threshold
+            ),
             "anomaly_threshold": 1.0,
             "remaining_anomaly_score": statistic / threshold if threshold else None,
             "no_material_anomaly_remaining": bool(statistic < threshold),
@@ -2626,27 +2672,29 @@ class MatpowerDeploymentProviders:
 
     @classmethod
     def _screening_pending(cls, state: Mapping[str, Any]) -> bool:
-        """Unflagged WLS anomaly with three-phase telemetry not yet screened.
-
-        Until the three-phase state has been checked, the residuals may be
-        the event the balanced model cannot represent, so no correction is
-        offered; the channels are read from the state's own metadata.
-        """
+        """Unflagged WLS anomaly with acquisition or screening still pending."""
         observation = state.get("policy_observation")
         observation = observation if isinstance(observation, Mapping) else {}
-        metadata = cls._metadata(state)
-        runtime = metadata.get("hif_runtime")
-        runtime = runtime if isinstance(runtime, Mapping) else {}
-        channels = [
-            channel
-            for channel in THREE_PHASE_TELEMETRY_CHANNELS
-            if metadata.get(channel) or runtime.get(channel)
-        ]
-        return three_phase_screening_pending(
+        if harmonic_screening_pending(
             unresolved=observation.get("unresolved_signatures") or [],
-            available_evidence=channels,
             tried_action_signatures=observation.get("tried_action_signatures") or [],
             active_state_id=observation.get("active_state_id") or state.get("state_id"),
+            context_evidence=observation.get("fresh_context_evidence"),
+        ):
+            return True
+        if three_phase_acquisition_pending(
+            unresolved=observation.get("unresolved_signatures") or [],
+            tried_action_signatures=observation.get("tried_action_signatures") or [],
+            active_state_id=observation.get("active_state_id") or state.get("state_id"),
+            context_evidence=observation.get("fresh_context_evidence"),
+        ):
+            return True
+        return three_phase_screening_pending(
+            unresolved=observation.get("unresolved_signatures") or [],
+            available_evidence=observation.get("available_evidence") or [],
+            tried_action_signatures=observation.get("tried_action_signatures") or [],
+            active_state_id=observation.get("active_state_id") or state.get("state_id"),
+            context_evidence=observation.get("fresh_context_evidence"),
         )
 
     @classmethod
@@ -2801,14 +2849,81 @@ class MatpowerDeploymentProviders:
             return False, "phase_disagreement_with_model_search"
         return True, "detected_consistent_resistive_differential"
 
+    def get_three_phase_context(
+        self, state: Mapping[str, Any], action: Mapping[str, Any] | None = None
+    ) -> dict[str, Any]:
+        from mcp_server.matpower_server import _get_three_phase_context_logic
+
+        metadata = self._metadata(state)
+        runtime = metadata.get("hif_runtime")
+        runtime = runtime if isinstance(runtime, Mapping) else {}
+        metrics = _get_three_phase_context_logic(
+            case_path=self._case_path(state),
+            three_phase_voltages=(
+                metadata.get("three_phase_voltages") or runtime.get("three_phase_voltages")
+            ),
+            three_phase_branch_currents=(
+                metadata.get(BRANCH_CURRENT_CHANNEL) or runtime.get(BRANCH_CURRENT_CHANNEL)
+            ),
+        )
+        metrics.pop("case_path", None)
+        return {**self._binding(state), **metrics}
+
     def get_harmonic_context(
         self, state: Mapping[str, Any], action: Mapping[str, Any] | None = None
     ) -> dict[str, Any]:
+        # Requesting a measurement channel does not imply that it exists or
+        # that the unknown event is harmonic. Availability is learned here,
+        # after WLS, rather than advertised from hidden scenario metadata.
+        if not self._metadata(state).get("harmonic_measurements"):
+            return {
+                **self._binding(state),
+                "evidence_source": "deployment_context:harmonic_measurements",
+                "context_tool": GET_HARMONIC_CONTEXT,
+                "harmonic_context_status": "unavailable",
+                "available_evidence_channels": [],
+                "harmonic_distortion_detected": False,
+                "finding_count": 0,
+                "harmonic_summary": {
+                    "measurement_count": 0,
+                    "note": "No spectral measurements were returned by the measurement request; the cause remains unknown.",
+                },
+            }
         try:
             measurements = self._harmonic_measurements(state)
             case_path = self._case_path(state)
             orders = self._metadata(state).get("harmonic_orders") or _infer_harmonic_orders(
                 measurements
+            )
+            observed = self._measurements(state)
+            nb = int(_load_python_case(case_path)["bus"].shape[0])
+            energy: dict[int, float] = {}
+            noise_energy: dict[int, float] = {}
+            for item in measurements:
+                if int(item["h"]) <= 1:
+                    continue
+                bus = int(item["bus"])
+                if "V_real" in item and "V_imag" in item:
+                    voltage = complex(float(item["V_real"]), float(item["V_imag"]))
+                else:
+                    voltage = cmath.rect(float(item["Vm"]), math.radians(float(item.get("Va_deg", 0))))
+                sigma = float(item.get("sigma", 1e-4))
+                if not (math.isfinite(abs(voltage)) and math.isfinite(sigma) and sigma > 0):
+                    raise ValueError("Harmonic measurement and positive noise scale must be finite")
+                energy[bus] = energy.get(bus, 0.0) + abs(voltage) ** 2
+                noise_energy[bus] = noise_energy.get(bus, 0.0) + sigma ** 2
+            ratios: dict[int, float] = {}
+            for bus, squared in energy.items():
+                if not 1 <= bus <= min(nb, len(observed)):
+                    raise ValueError("Harmonic monitor has no corresponding SCADA voltage")
+                reference = float(observed[bus - 1])
+                if not math.isfinite(reference) or reference <= 0:
+                    raise ValueError("Spectral screening requires a positive measured voltage")
+                ratios[bus] = 100 * math.sqrt(squared) / reference
+            detected = any(
+                ratio >= self.harmonic_thd_threshold_percent
+                and energy[bus] > 9 * noise_energy[bus]
+                for bus, ratio in ratios.items()
             )
         except Exception as exc:
             return self._failure("harmonic_context_missing", f"{type(exc).__name__}: {exc}")
@@ -2826,6 +2941,19 @@ class MatpowerDeploymentProviders:
             "evidence_source": "deployment_context:harmonic_measurements",
             "context_tool": GET_HARMONIC_CONTEXT,
             "finding_count": len(measurements),
+            "harmonic_context_status": "available",
+            "available_evidence_channels": ["harmonic_measurements"],
+            "harmonic_distortion_detected": detected,
+            "harmonic_screening": {
+                "detected": detected,
+                # The input SCADA Vm may be total RMS. Do not label this
+                # acquisition-stage ratio as fundamental-referenced THD.
+                "maximum_harmonic_to_scada_voltage_percent": max(ratios.values(), default=0.0),
+                "minimum_ratio_percent": self.harmonic_thd_threshold_percent,
+                "minimum_noise_energy_ratio": 9.0,
+                "source_localized": False,
+            },
+            "minted_signatures": ["harmonic distortion_detected_by_context"] if detected else [],
             "harmonic_orders": [int(order) for order in orders],
             "measured_buses": buses,
             "harmonic_summary": summary,

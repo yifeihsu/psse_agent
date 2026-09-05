@@ -50,6 +50,27 @@ def _measurement_dominant_state() -> dict:
         "has_fresh_parameter_context": True,
         "parameter_context_state_id": "episode:s0",
         "fresh_context_evidence": {
+            # These routing fixtures begin after a valid additional-measurement
+            # request returned no spectral or phase telemetry on the active state.
+            "wls": {
+                "state_id": "episode:s0", "successful": True, "anomalous": True,
+                "evidence_source": "deployment_wls:diagnosis",
+            },
+            "three_phase": {
+                "state_id": "episode:s0",
+                "evidence_source": "deployment_context:three_phase_measurements",
+                "request_attempted": True,
+                "three_phase_context_status": "unavailable",
+                "available_evidence_channels": [],
+            },
+            "harmonic": {
+                "state_id": "episode:s0",
+                "evidence_source": "deployment_context:harmonic_measurements",
+                "request_attempted": True,
+                "harmonic_context_status": "unavailable",
+                "available_evidence_channels": [],
+                "harmonic_distortion_detected": False,
+            },
             "parameter": {
                 "state_id": "episode:s0",
                 "route_status": "actionable",

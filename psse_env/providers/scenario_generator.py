@@ -225,12 +225,13 @@ UNBALANCE_CURRENT_SIGNATURE = "three_phase_unbalance phase_current_spread_detect
 # sensor signature at reset, as if a power-quality monitor or relay had raised
 # it.  ``discovered`` withholds it: the operator starts from the
 # positive-sequence snapshot and the balanced model alone, the first
-# observable evidence is the WLS anomaly, and the three-phase telemetry has
-# to be screened before the anomaly can be attributed.  Unbalance defaults to
-# discovery because no positive-sequence SCADA flags it; a mid-span HIF keeps
-# its zero-sequence relay flag by default.
+# observable evidence is the WLS anomaly.  Attributing it requires additional
+# measured telemetry; positive-sequence SCADA alone does not identify an
+# unbalance or harmonic source.  Both families default to discovery; a mid-span
+# HIF keeps its zero-sequence relay flag by default.
 WAVEFORM_SIGNATURE_MODES = ("flagged", "discovered")
 DEFAULT_WAVEFORM_SIGNATURE_MODE = {
+    "harmonic": "discovered",
     "three_phase_unbalance": "discovered",
     "hif": "flagged",
 }
@@ -1397,11 +1398,14 @@ class Round0ScenarioGenerator:
         if not harmonic_measurements:
             raise ScenarioRejected("harmonic_measurements_missing", str(row.get("id")))
         z_obs = [float(value) for value in row["z_obs"]]
-        # Harmonic distortion corrupts the fundamental snapshot too (corpus
-        # rows sit far above the chi-square threshold).  No correction can fix
-        # that vector; the episode terminates through the explained-anomaly
-        # route once HSE localizes the source, so only solvability is required.
-        if self.validate:
+        mode = self.waveform_signature_mode["harmonic"]
+        # These synthetic corpus rows also perturb the positive-sequence
+        # snapshot.  Discovery requires a WLS anomaly to justify requesting
+        # additional measurements; that anomaly alone is not harmonic evidence.
+        # The legacy monitor-flagged mode only requires WLS solvability.
+        if mode == "discovered":
+            self._require_anomalous("case14", z_obs, "harmonic")
+        elif self.validate:
             self._chi2_statistic("case14", z_obs)
         scenario = self._base_scenario(
             self._scenario_id("harmonic", row.get("id"), index),
@@ -1411,10 +1415,11 @@ class Round0ScenarioGenerator:
         )
         scenario["clean_case"] = "case14"
         scenario["clean_measurements"] = [float(value) for value in row["z_true"]]
-        scenario["unresolved_signatures"] = [HARMONIC_SIGNATURE]
-        scenario["semantic_field_provenance"]["unresolved_signatures"] = (
-            _POWER_QUALITY_PROVENANCE
-        )
+        if mode == "flagged":
+            scenario["unresolved_signatures"] = [HARMONIC_SIGNATURE]
+            scenario["semantic_field_provenance"]["unresolved_signatures"] = (
+                _POWER_QUALITY_PROVENANCE
+            )
         scenario["metadata"]["harmonic_measurements"] = [
             dict(item) for item in harmonic_measurements
         ]
@@ -1430,9 +1435,13 @@ class Round0ScenarioGenerator:
                 }
             ]
         }
-        scenario["release_audit"] = copy.deepcopy(
-            _EXPLANATION_ONLY_RELEASE_AUDIT
-        )
+        scenario["release_audit"] = {
+            **copy.deepcopy(_EXPLANATION_ONLY_RELEASE_AUDIT),
+            "signature_mode": mode,
+            "sensor_signatures_withheld": (
+                [HARMONIC_SIGNATURE] if mode == "discovered" else []
+            ),
+        }
         return scenario
 
     def _hif_scenario(self, row: Mapping[str, Any], index: int) -> dict[str, Any]:

@@ -109,6 +109,22 @@ physical root fingerprint, so a discovery round on the same seed is still a
 paired comparison with the flagged runs; the modes are recorded in the run
 config's `research_profile.scenario_sources.signature_modes`.
 
+## Round 4: measurement requests and the HSE flow
+
+From commit `48afc0f`'s successor the operator acquires additional
+measurements explicitly. After the baseline WLS the residual breadth picks
+the first request: a broad anomaly (spectral distortion elevates most of the
+122 channels) asks for spectra through `get_harmonic_context`, a narrow one
+asks for phase measurements through `get_three_phase_context`, and either
+falls back to the other when it returns nothing. Answered-unavailable
+requests stay answered for the whole episode. The resulting expert flows are
+`run_wls -> get_three_phase_context -> run_three_phase_nlm_from_path ->
+finalize_diagnosis` for unbalance and `run_wls -> get_harmonic_context ->
+run_hse_from_path -> finalize_diagnosis` for harmonics, which the
+`diagnostic` preset now includes (12 training and 6 development harmonic
+roots, discovered). Deploy into a fresh round directory as above; the same
+seed keeps the earlier families' roots paired with rounds 1 to 3.
+
 ## What this round cannot claim
 
 These families terminate through an accepted anomaly explanation or an

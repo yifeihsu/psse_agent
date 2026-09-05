@@ -37,6 +37,7 @@ POST_CORRECTION_CONFIRMATION_SIGNATURE = (
     "post_correction_resolution_confirmation_required:measurement_context"
 )
 GET_HARMONIC_CONTEXT = "get_harmonic_context"
+GET_THREE_PHASE_CONTEXT = "get_three_phase_context"
 RUN_HSE_FROM_PATH = "run_hse_from_path"
 RUN_THREE_PHASE_NLM_FROM_PATH = "run_three_phase_nlm_from_path"
 ESTIMATE_HIF_FROM_PATH = "estimate_hif_location_magnitude_from_path"
@@ -66,6 +67,7 @@ STATE_MANAGEMENT_TOOLS = {
 # and the production corpus keep one model-visible surface.
 DIAGNOSTIC_TOOLS = {
     GET_HARMONIC_CONTEXT,
+    GET_THREE_PHASE_CONTEXT,
     RUN_HSE_FROM_PATH,
     RUN_THREE_PHASE_NLM_FROM_PATH,
     ESTIMATE_HIF_FROM_PATH,
@@ -149,20 +151,221 @@ THREE_PHASE_TELEMETRY_CHANNELS = frozenset(
 )
 
 
+def harmonic_screening_pending(
+    *, unresolved: Any, tried_action_signatures: Any, active_state_id: Any,
+    context_evidence: Any = None,
+) -> bool:
+    """An observed WLS anomaly permits one request for spectral evidence.
+
+    This predicate deliberately does not inspect telemetry availability or a
+    hidden scenario family. Only a process-valid request enters the request
+    ledger. Rejected pre-WLS calls must not bypass later spectral acquisition.
+    """
+    signatures = [str(item) for item in (unresolved or [])]
+    if not any(item.startswith("wls_") for item in signatures):
+        return False
+    if waveform_anomaly_signatures(signatures):
+        return False
+    active = str(active_state_id or "")
+    if isinstance(context_evidence, Mapping):
+        request = context_evidence.get("harmonic") or {}
+        return not (
+            isinstance(request, Mapping)
+            and str(request.get("state_id") or "") == active
+            and request.get("request_attempted") is True
+        )
+    # Compatibility for legacy compact fixtures without a request ledger.
+    for signature in tried_action_signatures or []:
+        tool, _, encoded = str(signature).partition(":")
+        if tool != GET_HARMONIC_CONTEXT:
+            continue
+        try:
+            arguments = json.loads(encoded) if encoded else {}
+        except ValueError:
+            continue
+        requested = str((arguments or {}).get("state_id") or "")
+        if not active or not requested or requested == active:
+            return False
+    return True
+
+
+def three_phase_acquisition_pending(
+    *, unresolved: Any, tried_action_signatures: Any, active_state_id: Any,
+    context_evidence: Any = None,
+) -> bool:
+    """Request phase-resolved evidence after a generic WLS anomaly.
+
+    Acquisition depends on observable anomalies and the request ledger, never
+    on whether the hidden root happens to carry phase-resolved telemetry.
+    Rejected calls do not count as acquisitions.
+    """
+    signatures = [str(item) for item in (unresolved or [])]
+    if not any(item.startswith("wls_") for item in signatures):
+        return False
+    if waveform_anomaly_signatures(signatures):
+        return False
+    active = str(active_state_id or "")
+    if isinstance(context_evidence, Mapping):
+        request = context_evidence.get("three_phase") or {}
+        return not (
+            isinstance(request, Mapping)
+            and str(request.get("state_id") or "") == active
+            and request.get("request_attempted") is True
+        )
+    # Compatibility for compact fixtures predating the acquisition ledger.
+    for signature in tried_action_signatures or []:
+        tool, _, encoded = str(signature).partition(":")
+        if tool != GET_THREE_PHASE_CONTEXT:
+            continue
+        try:
+            arguments = json.loads(encoded) if encoded else {}
+        except ValueError:
+            continue
+        requested = str((arguments or {}).get("state_id") or "")
+        if not active or not requested or requested == active:
+            return False
+    return True
+
+
+def three_phase_context_available(context_evidence: Any, active_state_id: Any) -> bool:
+    """Whether a successful acquisition exposes current phase telemetry."""
+    if not isinstance(context_evidence, Mapping):
+        return False
+    context = context_evidence.get("three_phase") or {}
+    return bool(
+        isinstance(context, Mapping)
+        and str(context.get("state_id") or "") == str(active_state_id or "")
+        and context.get("request_attempted") is True
+        and context.get("three_phase_context_status") == "available"
+        and set(context.get("available_evidence_channels") or [])
+        & THREE_PHASE_TELEMETRY_CHANNELS
+    )
+
+
+#: Share of normalized residuals above the outlier threshold at which a WLS
+#: anomaly counts as broad.  Measured on the corrected corpora: spectral
+#: distortion elevates 75 to 84 of the 122 channels, a load unbalance 7 to
+#: 19, a bad meter 1 to 5, and the broadest branch fault 49, so one half
+#: separates the spectral case from everything else with margin.
+BROAD_ANOMALY_BREADTH = 0.5
+
+
+def wls_anomaly_breadth(state: Any, history: Any = None) -> float | None:
+    """Residual breadth of the current-state WLS, from the ledger or history."""
+    active = str(state.get("active_state_id") or "")
+    contexts = state.get("fresh_context_evidence") or {}
+    if isinstance(contexts, Mapping):
+        evidence = contexts.get("wls") or {}
+        if (
+            isinstance(evidence, Mapping)
+            and str(evidence.get("state_id") or "") == active
+            and evidence.get("successful") is True
+            and evidence.get("anomaly_breadth") is not None
+        ):
+            try:
+                return float(evidence["anomaly_breadth"])
+            except (TypeError, ValueError):
+                return None
+    events = list(history if history is not None else state.get("history_window") or [])
+    if state.get("last_tool") == RUN_WLS:
+        events.append(
+            {
+                "action": {"tool": RUN_WLS, "arguments": {"state_id": active}},
+                "tool_output": state.get("last_tool_output") or {},
+            }
+        )
+    for event in reversed(events):
+        if not isinstance(event, Mapping):
+            continue
+        action = safe_normalize_action(
+            event.get("action") or event.get("executed_action") or event
+        )
+        if action["tool"] != RUN_WLS:
+            continue
+        requested = str(action["arguments"].get("state_id") or "")
+        if active and requested and requested != active:
+            continue
+        output = event.get("tool_output") or event.get("outcome") or {}
+        metrics = output.get("tool_metrics") if isinstance(output, Mapping) else None
+        if not isinstance(metrics, Mapping):
+            metrics = event.get("observable_metrics")
+        if isinstance(metrics, Mapping) and metrics.get("anomaly_breadth") is not None:
+            try:
+                return float(metrics["anomaly_breadth"])
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def preferred_first_request(state: Any, history: Any = None) -> str:
+    """Which additional measurement to request first after a WLS anomaly.
+
+    A broad anomaly (most channels inconsistent with the balanced model) is
+    the signature of spectral distortion, so spectra are requested first; a
+    narrow one points at a phase-resolved event or a meter, so three-phase
+    measurements come first.  Either request falls back to the other when it
+    returns nothing.  Without a breadth statistic (compact fixtures) the
+    spectral request keeps its historical precedence.
+    """
+    breadth = wls_anomaly_breadth(state, history)
+    if breadth is not None and breadth < BROAD_ANOMALY_BREADTH:
+        return GET_THREE_PHASE_CONTEXT
+    return GET_HARMONIC_CONTEXT
+
+
+def successful_current_wls(state: Any, history: Any = None) -> bool:
+    """Read same-state WLS proof from the durable ledger or visible history."""
+    active = str(state.get("active_state_id") or "")
+    contexts = state.get("fresh_context_evidence") or {}
+    if isinstance(contexts, Mapping) and "wls" in contexts:
+        evidence = contexts.get("wls") or {}
+        return bool(
+            isinstance(evidence, Mapping)
+            and str(evidence.get("state_id") or "") == active
+            and evidence.get("successful") is True
+        )
+    provenance = state.get("semantic_field_provenance") or {}
+    source = str(provenance.get("remaining_anomaly_score") or "").lower()
+    if state.get("remaining_anomaly_score") is not None and (
+        "wls" in source or source.startswith("observable_candidate_verification")
+    ):
+        return True
+    events = list(history if history is not None else state.get("history_window") or [])
+    if state.get("last_tool") == RUN_WLS:
+        events.append({
+            "action": {"tool": RUN_WLS, "arguments": {"state_id": active}},
+            "tool_output": state.get("last_tool_output") or {},
+        })
+    for event in events:
+        if not isinstance(event, Mapping):
+            continue
+        action = safe_normalize_action(event.get("action") or event.get("executed_action") or event)
+        output = event.get("tool_output") or event.get("outcome") or {}
+        requested = action["arguments"].get("state_id")
+        if (
+            action["tool"] == RUN_WLS
+            and str(requested or "") == active
+            and isinstance(output, Mapping)
+            and output.get("execution_status") == "success"
+        ):
+            return True
+    return False
+
+
 def three_phase_screening_pending(
     *,
     unresolved: Any,
     available_evidence: Any,
     tried_action_signatures: Any,
     active_state_id: Any,
+    context_evidence: Any = None,
 ) -> bool:
     """Whether an unflagged WLS anomaly still awaits its three-phase screening.
 
-    True when a ``wls_*`` signature stands with no waveform-family signature,
-    the active state carries three-phase telemetry, and no
-    ``run_three_phase_nlm_from_path`` call bound to this active state has been
-    tried.  Everything here is policy-visible, so the gate, the context
-    providers, and the expert agree on the same predicate.
+    A ``wls_*`` signature with no waveform-family signature requires NLM once
+    a successful acquisition exposes phase telemetry. The durable ledger
+    counts process-valid NLM dispatches, so rejected premature attempts never
+    suppress later screening, even when their history has been truncated.
     """
     signatures = [str(item) for item in (unresolved or [])]
     if not any(item.startswith("wls_") for item in signatures):
@@ -173,6 +376,11 @@ def three_phase_screening_pending(
     if not (channels & THREE_PHASE_TELEMETRY_CHANNELS):
         return False
     active = str(active_state_id or "")
+    if isinstance(context_evidence, Mapping):
+        if not three_phase_context_available(context_evidence, active):
+            return False
+        context = context_evidence["three_phase"]
+        return context.get("nlm_attempted") is not True
     for signature in tried_action_signatures or []:
         text = str(signature)
         tool, _, encoded = text.partition(":")

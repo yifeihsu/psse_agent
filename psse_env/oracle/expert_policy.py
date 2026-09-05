@@ -12,6 +12,11 @@ from psse_env.actions import (
     CORRECT_TOPOLOGY,
     CORRECTION_TOOLS,
     GET_MEASUREMENT_CONTEXT,
+    GET_HARMONIC_CONTEXT,
+    GET_THREE_PHASE_CONTEXT,
+    RUN_HSE_FROM_PATH,
+    RUN_THREE_PHASE_NLM_FROM_PATH,
+    preferred_first_request,
     GET_PARAMETER_CONTEXT,
     GET_TOPOLOGY_CONTEXT,
     POST_CORRECTION_CONFIRMATION_SIGNATURE,
@@ -138,15 +143,37 @@ class ExpertPolicyOracle:
             policy, context.history
         )
 
-        # An unflagged fundamental-frequency anomaly on a root that carries
-        # three-phase telemetry is screened for a waveform event before any
+        # A remaining budget too small to close another lifecycle hands off
+        # before any further request or investigation is started.
+        budget_handoff = self._recovery_budget_proposals(policy, context.history)
+        if budget_handoff:
+            return self._rank_and_filter(
+                budget_handoff,
+                policy,
+                seen_signatures=seen_signatures,
+                blocked_correction_tools=blocked_correction_tools,
+                mandatory=False,
+            )
+
+        # An unflagged fundamental-frequency anomaly triggers acquisition of
+        # spectral and phase-resolved measurements before any
         # correction route, including a correction retry the recovery expert
         # would otherwise issue after a failed learner correction.  Screening
         # is a read-only evidence action and returns nothing while a
         # transaction is open, so lifecycle recovery still comes first then.
-        screening = self.diagnostics_expert.three_phase_screening_proposals(
-            policy, context.history
+        # The residual breadth of the current WLS decides which request goes
+        # first; the other follows only if the first returns nothing.
+        stages = (
+            self.diagnostics_expert.harmonic_screening_proposals,
+            self.diagnostics_expert.three_phase_screening_proposals,
         )
+        if preferred_first_request(policy, context.history) == GET_THREE_PHASE_CONTEXT:
+            stages = tuple(reversed(stages))
+        screening: list[ExpertActionProposal] = []
+        for stage in stages:
+            screening = stage(policy, context.history)
+            if screening:
+                break
         if screening:
             return self._rank_and_filter(
                 screening,
@@ -232,16 +259,6 @@ class ExpertPolicyOracle:
         if post_correction_handoff:
             return self._rank_and_filter(
                 post_correction_handoff,
-                policy,
-                seen_signatures=seen_signatures,
-                blocked_correction_tools=blocked_correction_tools,
-                mandatory=False,
-            )
-
-        budget_handoff = self._recovery_budget_proposals(policy, context.history)
-        if budget_handoff:
-            return self._rank_and_filter(
-                budget_handoff,
                 policy,
                 seen_signatures=seen_signatures,
                 blocked_correction_tools=blocked_correction_tools,
@@ -1101,10 +1118,29 @@ class ExpertPolicyOracle:
             == str(active_id)
             for family in ("measurement", "parameter", "topology")
         )
+        # A telemetry request answered on this very state is an investigation
+        # as well: it is the first thing an operator does after an anomaly,
+        # and a handoff must be able to close an episode whose budget ends
+        # there.  An answer carried over from an earlier state is not: after
+        # a commit the new state still owes its own investigation, exactly as
+        # the environment's escalation audit requires.
+        telemetry_contexts = self._get(policy, "fresh_context_evidence", {}) or {}
+        if isinstance(telemetry_contexts, Mapping):
+            for family in ("harmonic", "three_phase"):
+                request = telemetry_contexts.get(family) or {}
+                if (
+                    isinstance(request, Mapping)
+                    and request.get("request_attempted") is True
+                    and str(request.get("state_id") or "") == str(active_id)
+                    and not request.get("carried_from_state_id")
+                ):
+                    investigation_seen = True
         investigation_tools = {
             GET_MEASUREMENT_CONTEXT,
             GET_PARAMETER_CONTEXT,
             GET_TOPOLOGY_CONTEXT,
+            GET_HARMONIC_CONTEXT,
+            GET_THREE_PHASE_CONTEXT,
             *CORRECTION_TOOLS,
         }
         for event in history:
@@ -1233,6 +1269,45 @@ class ExpertPolicyOracle:
                     semantic = self._semantic_signature_from_text(exact or "")
                     if semantic:
                         signatures.add(semantic)
+        # A rejected prerequisite is not a performed diagnostic. Permit the
+        # same request once WLS/context has established the missing evidence.
+        latest_diagnostic: dict[str, Mapping[str, Any]] = {}
+        for item in history:
+            action = item.get("action") or item.get("executed_action") or {}
+            normalized = safe_normalize_action(action)
+            if normalized["tool"] in {
+                GET_HARMONIC_CONTEXT, RUN_HSE_FROM_PATH,
+                GET_THREE_PHASE_CONTEXT, RUN_THREE_PHASE_NLM_FROM_PATH,
+            }:
+                exact = self._signature(normalized)
+                output = item.get("tool_output") or item.get("outcome") or {}
+                if exact is not None and isinstance(output, Mapping):
+                    latest_diagnostic[exact] = output
+        for signature, output in latest_diagnostic.items():
+            if output.get("execution_status") == "failure" and output.get("error_code") == "missing_precondition":
+                signatures.discard(signature)
+        # The durable acquisition ledger survives a truncated history window.
+        # A premature rejected action appears in tried_action_signatures but
+        # must not prevent the later, now-valid request or NLM diagnosis.
+        contexts = self._get(policy, "fresh_context_evidence", {}) or {}
+        phase_context = contexts.get("three_phase") or {}
+        current_context = str(phase_context.get("state_id") or "") == str(active_id)
+        for signature in list(signatures):
+            try:
+                tool, encoded = signature.split(":", 1)
+                arguments = json.loads(encoded)
+            except (TypeError, ValueError):
+                continue
+            if str(arguments.get("state_id") or active_id) != str(active_id):
+                continue
+            if tool == GET_THREE_PHASE_CONTEXT and not (
+                current_context and phase_context.get("request_attempted") is True
+            ):
+                signatures.discard(signature)
+            if tool == RUN_THREE_PHASE_NLM_FROM_PATH and "three_phase" in contexts and not (
+                current_context and phase_context.get("nlm_attempted") is True
+            ):
+                signatures.discard(signature)
         return signatures
 
     @classmethod

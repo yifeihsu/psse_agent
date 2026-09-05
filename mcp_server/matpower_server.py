@@ -1019,6 +1019,72 @@ def _estimate_hif_location_magnitude_multiscan_logic(
         return {"success": False, "error": f"Multi-scan HIF parameter estimator failed: {e}"}
 
 
+def _get_three_phase_context_logic(
+    *,
+    case_path: str,
+    three_phase_voltages: List[Dict[str, Any]] | None = None,
+    three_phase_branch_currents: List[Dict[str, Any]] | None = None,
+) -> Dict[str, Any]:
+    """Report coverage of returned measured phasors without diagnosing them."""
+    from three_phase_nlm.branch_current_analysis import (
+        branch_current_rows_to_phasors,
+        voltage_rows_to_phasors,
+    )
+
+    voltages = voltage_rows_to_phasors(three_phase_voltages)
+    currents = branch_current_rows_to_phasors(three_phase_branch_currents)
+    channels = []
+    if voltages:
+        channels.append("three_phase_voltages")
+    if currents:
+        channels.append("three_phase_branch_currents")
+    status = {
+        channel: "available" if valid else ("invalid" if raw else "unavailable")
+        for channel, valid, raw in (
+            ("three_phase_voltages", voltages, three_phase_voltages),
+            ("three_phase_branch_currents", currents, three_phase_branch_currents),
+        )
+    }
+    return {
+        "success": True,
+        "case_path": case_path,
+        "context_tool": "get_three_phase_context",
+        "evidence_source": "deployment_context:three_phase_measurements",
+        "request_attempted": True,
+        "three_phase_context_status": "available" if channels else "unavailable",
+        "available_evidence_channels": channels,
+        "measured_buses": sorted(voltages),
+        "measured_branch_count": len(currents),
+        "measurement_status": status,
+        "finding_count": len(voltages) + len(currents),
+        "note": (
+            "Measured three-phase phasors were acquired; availability and coverage do not establish a diagnosis."
+            if channels else
+            "No usable three-phase phasors were returned; the cause of the anomaly remains unknown."
+        ),
+    }
+
+
+@mcp.tool(name="get_three_phase_context")
+def get_three_phase_context(
+    *,
+    case_path: str,
+    three_phase_voltages: List[Dict[str, Any]] | None = None,
+    three_phase_branch_currents: List[Dict[str, Any]] | None = None,
+) -> Dict[str, Any]:
+    """Request measured three-phase coverage for the current case.
+
+    The runtime supplies actual acquired telemetry. A case/model identifier
+    alone cannot generate phase measurements and returns unavailable. This
+    request performs no NLM analysis, localization, or anomaly classification.
+    """
+    return _get_three_phase_context_logic(
+        case_path=case_path,
+        three_phase_voltages=three_phase_voltages,
+        three_phase_branch_currents=three_phase_branch_currents,
+    )
+
+
 @mcp.tool(name="run_three_phase_nlm_from_path")
 def run_three_phase_nlm_from_path(
     *,

@@ -32,6 +32,7 @@ CONTEXT_TOOL_NAMES = {
     "get_parameter_context",
     "get_topology_context",
     "get_harmonic_context",
+    "get_three_phase_context",
     "get_verification_snapshot",
 }
 USER_FLOAT_DECIMALS = 6
@@ -156,13 +157,14 @@ SYSTEM_PROMPT = (
     "Use structured tool calls that match the provided tool schema.\n"
     "Use the tool name and argument keys exactly as provided.\n"
     "Large numeric payloads are provided once in user messages and should not be repeated in tool arguments.\n"
-    "If you need repeated scans, breaker context, harmonic measurements, or a post-action verification snapshot, "
+    "If you need repeated scans, breaker context, harmonic or three-phase measurements, or a post-action verification snapshot, "
     "retrieve them through the helper tools instead of asking the user for follow-up payloads.\n"
     "Available tools:\n"
     "- `wls_from_path(case_path)`: run weighted least-squares state estimation on the current user snapshot.\n"
     "- `get_parameter_context(case_path, line_index?)`: retrieve repeated scans and initial states for parameter correction.\n"
     "- `get_topology_context(case_path)`: retrieve compact breaker context for topology correction.\n"
     "- `get_harmonic_context(case_path)`: retrieve harmonic measurements for HSE.\n"
+    "- `get_three_phase_context(case_path)`: request measured three-phase phasors and report coverage before NLM analysis.\n"
     "- `get_verification_snapshot(stage?)`: retrieve the current post-action verification snapshot by stage; do not invent snapshot aliases.\n"
     "- `correct_measurements_from_path(case_path, suspect_group, ...)`: correct suspected bad measurements using the current snapshot.\n"
     "- `correct_parameters_from_path(case_path, line_index)`: correct line parameters after retrieving parameter context.\n"
@@ -176,13 +178,13 @@ SYSTEM_PROMPT = (
     "2. Use large normalized Lagrange multipliers concentrated on one branch to suspect parameter errors.\n"
     "3. Use concentrated large normalized residuals to localize likely measurement errors.\n"
     "4. If parameter context, breaker context, harmonic measurements, or verification snapshots are needed, call the matching helper tool.\n"
-    "5. If three-phase imbalance is suspected, request three-phase substation VLN voltages before finalizing.\n"
+    "5. After an unexplained WLS anomaly, use `get_three_phase_context` to request phase-resolved measurements before NLM analysis or correction; unavailable measurements leave the cause unknown.\n"
     "6. Measurement correction is only valid for localized bad-data patterns; do not use `correct_measurements_from_path` as a generic residual-reduction tool.\n"
     "7. If residuals are distributed across many channels or branches, check topology and parameter evidence before measurement cleanup.\n"
     "8. After topology or parameter correction, use measurement correction only if the remaining residuals are localized; otherwise request more data or report an unresolved model/data inconsistency.\n"
     "9. If a localized gross residual remains, correct the measurement error before running or finalizing harmonic HSE; HSE does not replace SCADA measurement cleanup.\n"
     "10. If the global residual is elevated without a dominant bad measurement and harmonic measurements are available, call `run_hse_from_path`.\n"
-    "11. If a hidden high-impedance fault is suspected, call `run_three_phase_nlm_from_path` and use top_hif_groups evidence.\n"
+    "11. When acquired three-phase measurements support further investigation, call `run_three_phase_nlm_from_path`; use its classification and localization evidence, not measurement availability, to identify a disturbance.\n"
     "12. If NLM returns a suspected HIF line and a persistent scan window is available, call `estimate_hif_location_magnitude_multiscan_from_path`; otherwise call the single-scan estimator.\n"
     "13. Report HIF line fraction and magnitude only from the parameter-estimation tool; claim a point location only when ambiguity and observability diagnostics permit it.\n"
     "14. In multi-error traces, prefer structural correction before measurement cleanup: topology, then parameter, then measurement, then harmonic follow-up.\n"
@@ -302,6 +304,24 @@ CANONICAL_POWER_TOOLS: list[dict[str, Any]] = [
             "description": (
                 "Retrieve harmonic measurements and orders for harmonic follow-up. "
                 "Returns a compact summary while the runtime binds the full measurements for HSE."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_path": {"type": "string", "description": "Case identifier or path."},
+                },
+                "required": ["case_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_three_phase_context",
+            "description": (
+                "Request additional measured three-phase voltage/current phasors after the baseline anomaly. "
+                "Reports available channels and measurement coverage only; it does not diagnose or localize a fault. "
+                "The runtime binds the acquired measurements for subsequent three-phase analysis."
             ),
             "parameters": {
                 "type": "object",
@@ -1286,6 +1306,15 @@ def summarize_verification_snapshot_payload(tool_payload: Mapping[str, Any]) -> 
     return round_assistant_payload(prune_none(summary))
 
 
+def summarize_three_phase_context_payload(tool_payload: Mapping[str, Any]) -> dict[str, Any]:
+    keys = (
+        "success", "case_path", "state_id", "state_hash", "context_tool", "evidence_source",
+        "request_attempted", "three_phase_context_status", "available_evidence_channels",
+        "measured_buses", "measured_branch_count", "measurement_status", "finding_count", "note", "error",
+    )
+    return round_assistant_payload(prune_none({key: tool_payload.get(key) for key in keys}))
+
+
 def summarize_tool_result_for_conversation(
     tool_name: str,
     tool_result: Mapping[str, Any],
@@ -1317,6 +1346,8 @@ def summarize_tool_result_for_conversation(
         return summarize_topology_context_payload(tool_result)
     if tool_name == "get_harmonic_context":
         return summarize_harmonic_context_payload(tool_result)
+    if tool_name == "get_three_phase_context":
+        return summarize_three_phase_context_payload(tool_result)
     if tool_name == "get_verification_snapshot":
         return summarize_verification_snapshot_payload(tool_result)
     return round_assistant_payload(dict(tool_result))
@@ -1416,6 +1447,27 @@ def latest_tool_payload_with_keys(
     return None
 
 
+def acquired_three_phase_context(
+    hidden_context: Mapping[str, Any], case_path: Any = None,
+) -> Mapping[str, Any] | None:
+    """Return successful acquired telemetry bound to the requested case."""
+    context = hidden_context.get("three_phase_context")
+    if not isinstance(context, Mapping) or not (
+        context.get("success") is True
+        and context.get("request_attempted") is True
+        and context.get("three_phase_context_status") == "available"
+        and set(context.get("available_evidence_channels") or [])
+        & {"three_phase_voltages", "three_phase_branch_currents"}
+        and context.get("case_path")
+    ):
+        return None
+    if case_path is not None and str(resolve_case_path_alias(case_path, hidden_context)) != str(
+        resolve_case_path_alias(context["case_path"], hidden_context)
+    ):
+        return None
+    return context
+
+
 def hydrate_tool_arguments(
     tool_name: str,
     arguments: Any,
@@ -1491,59 +1543,18 @@ def hydrate_tool_arguments(
                 notes.append("hydrated_hse_orders")
 
     if tool_name == "run_three_phase_nlm_from_path":
-        source = hidden_tool_context("hif_context")
-        source_from_hidden = isinstance(source, dict)
-        if not source_from_hidden:
-            source = latest_user_payload_with_keys(messages, ("nlm_diagnostic",))
-        if isinstance(source, dict):
-            if source.get("case_path") and (source_from_hidden or not hydrated.get("case_path")):
-                hydrated["case_path"] = source["case_path"]
-                notes.append("hydrated_hif_case_path")
-            if "nlm_diagnostic" not in hydrated and isinstance(source.get("nlm_diagnostic"), dict):
-                hydrated["nlm_diagnostic"] = source["nlm_diagnostic"]
-                notes.append("hydrated_hif_nlm_diagnostic")
-            label = source.get("label")
-            if "target_branch_row0" not in hydrated and isinstance(label, Mapping):
-                target = _maybe_int(label.get("branch_row0"))
-                if target is not None:
-                    hydrated["target_branch_row0"] = target
-                    notes.append("hydrated_hif_target_branch")
-            if "target_dss_element" not in hydrated and isinstance(label, Mapping) and label.get("dss_element"):
-                hydrated["target_dss_element"] = label.get("dss_element")
-                notes.append("hydrated_hif_target_element")
-            for key in (
-                "pristine_model_dir",
-                "faulted_model_dir",
-                "phase",
-                "r_hif_ohm",
-                "load_scale",
-            ):
-                if key not in hydrated and source.get(key) is not None:
-                    hydrated[key] = source.get(key)
-                    notes.append(f"hydrated_hif_{key}")
-            # Observable three-phase telemetry lets the NLM tool localize the
-            # faulted line and phase from the snapshot instead of a stored
-            # diagnostic; hydrate it from the bound context or the latest
-            # user payload that carries it.
-            for key in ("three_phase_voltages", "three_phase_branch_currents"):
-                if key in hydrated:
-                    continue
-                channel_source = (
-                    source
-                    if isinstance(source.get(key), list) and source.get(key)
-                    else latest_user_payload_with_keys(messages, (key,))
-                )
-                if isinstance(channel_source, dict) and isinstance(channel_source.get(key), list):
-                    hydrated[key] = channel_source[key]
-                    notes.append(f"hydrated_hif_nlm_{key}")
-                    if (
-                        key == "three_phase_branch_currents"
-                        and "branch_current_sigma_pu" not in hydrated
-                        and channel_source.get("branch_current_sigma_pu") is not None
-                    ):
-                        hydrated["branch_current_sigma_pu"] = channel_source[
-                            "branch_current_sigma_pu"
-                        ]
+        source = acquired_three_phase_context(hidden, hydrated.get("case_path"))
+        # Model-supplied arrays or hidden legacy labels cannot substitute for
+        # acquired sensor data. Only bounded execution options survive here.
+        hydrated = {key: value for key, value in hydrated.items() if key in {"case_path", "top_k"}}
+        if source is not None:
+            hydrated["case_path"] = source["case_path"]
+            for key in ("three_phase_voltages", "three_phase_branch_currents", "branch_current_sigma_pu"):
+                if source.get(key) is not None:
+                    hydrated[key] = copy.deepcopy(source[key])
+                    notes.append(f"hydrated_acquired_{key}")
+        else:
+            notes.append("three_phase_acquisition_required")
 
     if tool_name == "estimate_hif_location_magnitude_from_path":
         source = hidden_tool_context("hif_context")

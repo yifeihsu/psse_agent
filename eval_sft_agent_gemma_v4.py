@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from trace_protocol import (
+    acquired_three_phase_context,
     CONTEXT_TOOL_NAMES,
     SCADA_HARMONIC_SYSTEM_PROMPT,
     SYSTEM_PROMPT_PREFIX,
@@ -51,6 +52,7 @@ from gemma_adapter_loader import (
     resolve_tokenizer_source,
 )
 from mcp_server.matpower_server import (
+    _get_three_phase_context_logic,
     correct_measurements_from_path,
     correct_parameters_from_path,
     correct_topology_from_path,
@@ -122,6 +124,7 @@ TOOL_MAP = {
 }
 CORE_TOOL_NAMES = frozenset(
     {
+        "get_three_phase_context",
         "wls_from_path",
         "correct_measurements_from_path",
         "correct_parameters_from_path",
@@ -1345,7 +1348,7 @@ def precondition_failure(tool_name: str, message: str, allowed_tools: Sequence[s
 
 def post_wls_allowed_tools(runtime_context: Mapping[str, Any] | None) -> list[str]:
     tool_context = tool_context_from_runtime(runtime_context)
-    allowed = ["correct_measurements_from_path"]
+    allowed = ["get_three_phase_context", "correct_measurements_from_path"]
     if isinstance(tool_context.get("parameter_context"), Mapping):
         allowed.append("get_parameter_context")
     if isinstance(tool_context.get("topology_context"), Mapping):
@@ -1384,6 +1387,14 @@ def controller_allowed_next_tools(
     tool_context = tool_context_from_runtime(runtime_context)
     successful_tools = successful_tools_from_controller(hidden_context)
     allowed: list[str] = []
+    acquired_three_phase = acquired_three_phase_context(hidden_context, state.get("wls_case_path"))
+    if not isinstance(acquired_three_phase, Mapping):
+        allowed.append("get_three_phase_context")
+    elif (
+        acquired_three_phase.get("three_phase_context_status") == "available"
+        and "run_three_phase_nlm_from_path" not in successful_tools
+    ):
+        allowed.append("run_three_phase_nlm_from_path")
 
     if isinstance(tool_context.get("topology_context"), Mapping):
         if not isinstance(hidden_context.get("topology_context"), Mapping):
@@ -1407,10 +1418,8 @@ def controller_allowed_next_tools(
             allowed.append("run_hse_from_path")
 
     hif_context = tool_context.get("hif_context")
-    if isinstance(hif_context, Mapping):
-        if "run_three_phase_nlm_from_path" not in successful_tools:
-            allowed.append("run_three_phase_nlm_from_path")
-        else:
+    if isinstance(hif_context, Mapping) and acquired_three_phase is not None:
+        if "run_three_phase_nlm_from_path" in successful_tools:
             scans = hif_context.get("scans")
             estimator = (
                 "estimate_hif_location_magnitude_multiscan_from_path"
@@ -1436,6 +1445,14 @@ def runtime_tool_precondition_error(
     hidden_context: dict[str, Any],
 ) -> dict[str, Any] | None:
     state = controller_state(hidden_context)
+    requested_case = arguments.get("case_path")
+    if name in {"get_three_phase_context", "run_three_phase_nlm_from_path"} and (
+        requested_case and state.get("wls_case_path")
+        and str(resolve_case_path_alias(requested_case, hidden_context or runtime_context))
+        != str(state["wls_case_path"])
+    ):
+        hidden_context.pop("three_phase_context", None)
+        state["wls_completed"] = False
 
     if not state.get("wls_completed") and name != "wls_from_path":
         return precondition_failure(name, "Run wls_from_path before any helper, correction, or finalization step.", ["wls_from_path"])
@@ -1472,6 +1489,13 @@ def runtime_tool_precondition_error(
             name,
             "HSE requires a successful get_harmonic_context call first.",
             ["get_harmonic_context"],
+        )
+    if name == "run_three_phase_nlm_from_path" and acquired_three_phase_context(
+        hidden_context, requested_case,
+    ) is None:
+        return precondition_failure(
+            name, "NLM requires a successful available get_three_phase_context request for this case.",
+            ["get_three_phase_context"],
         )
     if name == "get_verification_snapshot":
         requested_stage = arguments.get("stage")
@@ -1514,16 +1538,25 @@ def update_runtime_controller_after_tool(
     result: Mapping[str, Any],
     *,
     hidden_context: dict[str, Any],
+    arguments: Mapping[str, Any] | None = None,
 ) -> None:
+    state = controller_state(hidden_context)
+    if name == "wls_from_path":
+        hidden_context.pop("three_phase_context", None)
+        state["wls_completed"] = result.get("success") is True
+        if arguments and arguments.get("case_path"):
+            state["wls_case_path"] = str(arguments["case_path"])
+        prior = state.get("successful_tools")
+        if isinstance(prior, list):
+            state["successful_tools"] = [tool for tool in prior if tool not in {"get_three_phase_context", "run_three_phase_nlm_from_path"}]
     if result.get("success") is False:
         return
-    state = controller_state(hidden_context)
     successful_tools = state.setdefault("successful_tools", [])
     if isinstance(successful_tools, list) and name not in successful_tools:
         successful_tools.append(name)
 
     if name == "wls_from_path":
-        state["wls_completed"] = True
+        state["wls_completed"] = result.get("success") is True
         if state.get("awaiting_verification_wls"):
             state.pop("awaiting_verification_wls", None)
             state.pop("pending_verification_stage", None)
@@ -1628,6 +1661,31 @@ def execute_context_tool(
         payload = tool_context.get("harmonic_context")
         if isinstance(payload, dict):
             hidden_context["harmonic_context"] = payload
+    elif name == "get_three_phase_context":
+        hidden_context.pop("three_phase_context", None)
+        source = tool_context.get("three_phase_context")
+        if not isinstance(source, Mapping):
+            source = tool_context.get("hif_context")
+        source = source if isinstance(source, Mapping) else {}
+        requested_case = str(resolve_case_path_alias(arguments.get("case_path") or source.get("case_path") or "", hidden_context or runtime_context))
+        source_case = str(resolve_case_path_alias(source.get("case_path") or requested_case, hidden_context or runtime_context))
+        if source_case != requested_case:
+            source = {}
+        acquired = {
+            key: source[key] for key in (
+                "case_path", "three_phase_voltages", "three_phase_branch_currents", "branch_current_sigma_pu"
+            ) if key in source
+        }
+        payload = _get_three_phase_context_logic(
+            case_path=requested_case,
+            three_phase_voltages=acquired.get("three_phase_voltages"),
+            three_phase_branch_currents=acquired.get("three_phase_branch_currents"),
+        )
+        hidden_context["three_phase_context"] = {**acquired, **payload}
+        state = controller_state(hidden_context)
+        prior = state.get("successful_tools")
+        if isinstance(prior, list):
+            state["successful_tools"] = [tool for tool in prior if tool != "run_three_phase_nlm_from_path"]
     elif name == "get_verification_snapshot":
         stage = verification_stage_for_context_call(arguments, runtime_context, hidden_context)
         payload = (tool_context.get("verification_snapshots") or {}).get(stage)
@@ -1667,8 +1725,11 @@ def execute_tool(
         return precondition_error
 
     if name in CONTEXT_TOOL_NAMES:
-        result = execute_context_tool(name, arguments, runtime_context, hidden)
-        update_runtime_controller_after_tool(name, result, hidden_context=hidden)
+        try:
+            result = execute_context_tool(name, arguments, runtime_context, hidden)
+        except Exception as exc:
+            result = {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+        update_runtime_controller_after_tool(name, result, hidden_context=hidden, arguments=arguments)
         return result
 
     tool_obj = TOOL_MAP.get(name)
@@ -1677,13 +1738,17 @@ def execute_tool(
     try:
         fn = getattr(tool_obj, "fn", tool_obj)
         call_args = dict(arguments)
+        if name == "run_three_phase_nlm_from_path":
+            call_args, _ = protocol_hydrate_tool_arguments(name, call_args, [], hidden_context=hidden)
         if "case_path" in call_args:
             call_args["case_path"] = resolve_case_path_alias(call_args["case_path"], hidden or runtime_context)
         result = fn(**call_args)
-        update_runtime_controller_after_tool(name, result, hidden_context=hidden)
+        update_runtime_controller_after_tool(name, result, hidden_context=hidden, arguments=call_args)
         return result
     except Exception as exc:  # pragma: no cover - defensive runtime wrapper
-        return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+        result = {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+        update_runtime_controller_after_tool(name, result, hidden_context=hidden, arguments=arguments)
+        return result
 
 
 def compact_tool_arguments_for_prompt(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -1692,6 +1757,7 @@ def compact_tool_arguments_for_prompt(tool_name: str, arguments: dict[str, Any])
         "get_parameter_context": {"case_path", "line_index"},
         "get_topology_context": {"case_path"},
         "get_harmonic_context": {"case_path"},
+        "get_three_phase_context": {"case_path"},
         "get_verification_snapshot": {"stage"},
         "correct_measurements_from_path": {
             "case_path",

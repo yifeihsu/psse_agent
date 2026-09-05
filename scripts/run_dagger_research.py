@@ -78,12 +78,14 @@ DIAGNOSTIC_TRAIN_PLAN = {
     "hif": 12,
     "measurement+hif": 6,
     "three_phase_unbalance": 12,
+    "harmonic": 12,
     "telemetry_no_disturbance": 6,
 }
 DIAGNOSTIC_DEVELOPMENT_PLAN = {
     "hif": 6,
     "measurement+hif": 3,
     "three_phase_unbalance": 6,
+    "harmonic": 6,
     "telemetry_no_disturbance": 3,
 }
 PLAN_PRESETS: dict[str, tuple[dict[str, int], dict[str, int]]] = {
@@ -96,7 +98,13 @@ PLAN_PRESETS: dict[str, tuple[dict[str, int], dict[str, int]]] = {
 }
 #: Families whose rows need the per-phase branch-current corpora.
 DIAGNOSTIC_TELEMETRY_FAMILIES = frozenset(
-    {"hif", "measurement+hif", "three_phase_unbalance", "telemetry_no_disturbance"}
+    {
+        "hif",
+        "measurement+hif",
+        "three_phase_unbalance",
+        "harmonic",
+        "telemetry_no_disturbance",
+    }
 )
 HIF_FAMILIES = frozenset({"hif", "measurement+hif"})
 #: OpenDSS search budget for the research HIF estimators.  The release
@@ -140,10 +148,12 @@ def resolve_scenario_sources(
     corpora; explicit paths always win.  A core-only plan with no explicit
     paths keeps the generator defaults so earlier runs still resume.
     ``signature_modes`` (family -> ``flagged``/``discovered``) is recorded
-    beside the corpora whenever they are resolved, so a resumed run cannot
-    silently switch between a sensor-flagged and a discovered root.
+    beside the corpora whenever they are resolved, including harmonic-only
+    plans with default corpus paths, so a resumed run cannot silently switch
+    between a sensor-flagged and a discovered root.
     """
-    needs_telemetry = bool(set(plan_families) & DIAGNOSTIC_TELEMETRY_FAMILIES)
+    families = set(plan_families)
+    needs_telemetry = bool(families & DIAGNOSTIC_TELEMETRY_FAMILIES)
     hif = (
         [Path(path) for path in hif_sample_paths]
         if hif_sample_paths
@@ -154,7 +164,7 @@ def resolve_scenario_sources(
         if imbalance_sample_path
         else (CURRENT_TELEMETRY_IMBALANCE_SAMPLE_PATH if needs_telemetry else None)
     )
-    if hif is None and imbalance is None:
+    if hif is None and imbalance is None and "harmonic" not in families:
         return None
     for path in [*(hif or []), *([imbalance] if imbalance is not None else [])]:
         if not Path(path).is_file():
@@ -163,6 +173,8 @@ def resolve_scenario_sources(
         str(family): str(mode)
         for family, mode in sorted(dict(signature_modes or {}).items())
     }
+    if "harmonic" in families:
+        modes.setdefault("harmonic", DEFAULT_WAVEFORM_SIGNATURE_MODE["harmonic"])
     for family, mode in modes.items():
         if family not in DEFAULT_WAVEFORM_SIGNATURE_MODE:
             raise ValueError(f"unknown waveform signature family {family!r}")
@@ -1341,6 +1353,16 @@ def parser() -> argparse.ArgumentParser:
         ),
     )
     result.add_argument(
+        "--harmonic-signature-mode",
+        choices=WAVEFORM_SIGNATURE_MODES,
+        default=DEFAULT_WAVEFORM_SIGNATURE_MODE["harmonic"],
+        help=(
+            "discovered: start from positive-sequence measurements and the model, "
+            "assess WLS, then request measured harmonic evidence; flagged: "
+            "seed the legacy power-quality alarm at reset for reproduction"
+        ),
+    )
+    result.add_argument(
         "--unbalance-signature-mode",
         choices=WAVEFORM_SIGNATURE_MODES,
         default=DEFAULT_WAVEFORM_SIGNATURE_MODE["three_phase_unbalance"],
@@ -1430,6 +1452,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         hif_sample_paths=args.hif_sample_paths,
         imbalance_sample_path=args.imbalance_sample_path,
         signature_modes={
+            "harmonic": args.harmonic_signature_mode,
             "three_phase_unbalance": args.unbalance_signature_mode,
             "hif": args.hif_signature_mode,
         },

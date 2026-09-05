@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from psse_env.actions import (
+    ANOMALY_FAMILY_MARKERS,
     ASK_FOR_MORE_EVIDENCE,
     COMMIT_STATE,
     CONTEXT_TOOLS,
@@ -13,6 +14,10 @@ from psse_env.actions import (
     DIAGNOSTIC_TOOLS,
     FINALIZE_DIAGNOSIS,
     GET_MEASUREMENT_CONTEXT,
+    GET_HARMONIC_CONTEXT,
+    GET_THREE_PHASE_CONTEXT,
+    RUN_HSE_FROM_PATH,
+    RUN_THREE_PHASE_NLM_FROM_PATH,
     GET_PARAMETER_CONTEXT,
     GET_TOPOLOGY_CONTEXT,
     INVALID_ACTION,
@@ -24,13 +29,18 @@ from psse_env.actions import (
     RUN_WLS,
     VERIFY_CANDIDATE,
     action_signature,
+    harmonic_screening_pending,
     safe_normalize_action,
+    successful_current_wls,
     terminal_explanation_signatures,
     three_phase_screening_pending,
+    three_phase_acquisition_pending,
+    three_phase_context_available,
     unexplained_signatures,
     waveform_anomaly_signatures,
 )
 from psse_env.state_store import SYNTHETIC_TERMINAL_COMPATIBILITY_KEY
+from psse_env.oracle.expert_types import matching_evidence_codes
 
 
 _CORRECTION_CONTEXT_FAMILY = {
@@ -154,11 +164,30 @@ class ProcessValidityOracle:
                 family = _CORRECTION_CONTEXT_FAMILY[tool]
                 error_code = "correction_route_not_actionable"
                 error_detail = f"{family}_fundamental_route_blocked_by_waveform_anomaly"
+            elif harmonic_screening_pending(
+                unresolved=state.get("unresolved_signatures") or [],
+                tried_action_signatures=state.get("tried_action_signatures") or [],
+                active_state_id=active_id,
+                context_evidence=state.get("fresh_context_evidence"),
+            ):
+                family = _CORRECTION_CONTEXT_FAMILY[tool]
+                error_code = "correction_route_not_actionable"
+                error_detail = f"{family}_harmonic_evidence_request_pending"
+            elif three_phase_acquisition_pending(
+                unresolved=state.get("unresolved_signatures") or [],
+                tried_action_signatures=state.get("tried_action_signatures") or [],
+                active_state_id=active_id,
+                context_evidence=state.get("fresh_context_evidence"),
+            ):
+                family = _CORRECTION_CONTEXT_FAMILY[tool]
+                error_code = "correction_route_not_actionable"
+                error_detail = f"{family}_three_phase_evidence_request_pending"
             elif three_phase_screening_pending(
                 unresolved=state.get("unresolved_signatures") or [],
                 available_evidence=state.get("available_evidence") or [],
                 tried_action_signatures=state.get("tried_action_signatures") or [],
                 active_state_id=active_id,
+                context_evidence=state.get("fresh_context_evidence"),
             ):
                 # An unflagged fundamental-frequency anomaly on a root with
                 # three-phase telemetry has not been screened yet; the
@@ -260,6 +289,46 @@ class ProcessValidityOracle:
                 error_code, error_detail = "unknown_state_id", str(requested)
             elif str(requested) != str(expected):
                 error_code, error_detail = "state_reference_mismatch", "evidence_state_not_current_target"
+            elif tool == GET_HARMONIC_CONTEXT and not any(
+                str(item).startswith("wls_") or "harmonic" in str(item).lower()
+                for item in state.get("unresolved_signatures") or []
+            ):
+                error_code, error_detail = "missing_precondition", "harmonic_context_requires_observable_wls_anomaly"
+            elif tool == RUN_HSE_FROM_PATH:
+                contexts = state.get("fresh_context_evidence") or {}
+                context = contexts.get("harmonic") or {}
+                if (
+                    str(context.get("state_id") or "") != str(expected)
+                    or not context.get("harmonic_distortion_detected")
+                    or "harmonic_measurements" not in context.get("available_evidence_channels", [])
+                ):
+                    error_code, error_detail = "missing_precondition", "hse_requires_acquired_harmonic_context"
+            elif tool == GET_THREE_PHASE_CONTEXT:
+                signatures = state.get("unresolved_signatures") or []
+                flagged = matching_evidence_codes(
+                    signatures, *ANOMALY_FAMILY_MARKERS["three_phase_unbalance"],
+                    *ANOMALY_FAMILY_MARKERS["hif"],
+                )
+                if not flagged and not (
+                    successful_current_wls(state)
+                    and any(str(item).startswith("wls_") for item in signatures)
+                ):
+                    error_code, error_detail = "missing_precondition", "three_phase_context_requires_observable_wls_anomaly"
+            elif tool == RUN_THREE_PHASE_NLM_FROM_PATH:
+                # Explicitly flagged legacy HIF roots retain their direct
+                # diagnostic ladder. Unbalance and discovery paths acquire
+                # phase measurements after a current WLS solve.
+                hif_flagged = matching_evidence_codes(
+                    state.get("unresolved_signatures") or [],
+                    *ANOMALY_FAMILY_MARKERS["hif"],
+                )
+                if not hif_flagged:
+                    if not successful_current_wls(state):
+                        error_code, error_detail = "missing_precondition", "nlm_requires_current_wls_baseline"
+                    elif not three_phase_context_available(
+                        state.get("fresh_context_evidence"), expected,
+                    ):
+                        error_code, error_detail = "missing_precondition", "nlm_requires_acquired_three_phase_context"
 
         process_valid = error_code is None
         repairs = [] if process_valid else self.repair_actions(state, error_code, error_detail)
@@ -540,6 +609,33 @@ class ProcessValidityOracle:
         if error_code in {"json_parse_error", "argument_decode_error", "schema_error", "policy_exception"}:
             return self._safe_actions_for_state(state)
         if error_code == "missing_precondition":
+            if error_detail in {
+                "three_phase_context_requires_observable_wls_anomaly",
+                "nlm_requires_current_wls_baseline",
+                "nlm_requires_acquired_three_phase_context",
+            }:
+                if not successful_current_wls(state):
+                    tool = RUN_WLS
+                elif harmonic_screening_pending(
+                    unresolved=state.get("unresolved_signatures") or [],
+                    tried_action_signatures=state.get("tried_action_signatures") or [],
+                    active_state_id=active_id,
+                    context_evidence=state.get("fresh_context_evidence"),
+                ):
+                    tool = GET_HARMONIC_CONTEXT
+                else:
+                    tool = GET_THREE_PHASE_CONTEXT
+                return [{"tool": tool, "arguments": {"state_id": active_id}}]
+            if error_detail in {
+                "harmonic_context_requires_observable_wls_anomaly",
+                "hse_requires_acquired_harmonic_context",
+            }:
+                has_anomaly = any(
+                    str(item).startswith("wls_") or "harmonic" in str(item).lower()
+                    for item in state.get("unresolved_signatures") or []
+                )
+                tool = GET_HARMONIC_CONTEXT if has_anomaly else RUN_WLS
+                return [{"tool": tool, "arguments": {"state_id": active_id}}]
             tool = {
                 "parameter_context_missing": GET_PARAMETER_CONTEXT,
                 "topology_context_missing": GET_TOPOLOGY_CONTEXT,

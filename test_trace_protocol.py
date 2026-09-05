@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -904,13 +905,12 @@ class TraceProtocolTests(unittest.TestCase):
             messages,
             hidden_context=hidden_context,
         )
-        self.assertEqual(args["target_branch_row0"], 2)
-        self.assertEqual(args["target_dss_element"], "Line.2-3")
-        self.assertIn("hydrated_hif_nlm_diagnostic", notes)
+        self.assertEqual(args, {"case_path": "case14"})
+        self.assertIn("three_phase_acquisition_required", notes)
 
         compact = summarize_tool_result_for_conversation(
             "run_three_phase_nlm_from_path",
-            args["nlm_diagnostic"],
+            hidden_context["hif_context"]["nlm_diagnostic"],
             {},
             {},
         )
@@ -1829,6 +1829,115 @@ class TraceProtocolTests(unittest.TestCase):
             multi_error_semantic_rejection_reason(rec, final),
             "parameter_topology_physical_coupling_rejects_sequence_only",
         )
+
+
+class ThreePhaseRuntimeAcquisitionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        import eval_sft_agent_gemma_v4
+        import interactive_agent_eval
+
+        self.runtimes = (eval_sft_agent_gemma_v4, interactive_agent_eval)
+        self.voltages = [{"bus": "b1", "vln_pu": [1.02, 1.0, 0.98], "ang_deg": [0.0, -120.0, 120.0]}]
+        self.runtime_context = {"tool_context": {"three_phase_context": {
+            "case_path": "case14", "three_phase_voltages": self.voltages,
+            "label": {"branch_row0": 99}, "nlm_diagnostic": {"success": True},
+        }}}
+
+    def _call(self, runtime, hidden, name, context=None, **arguments):
+        return runtime.execute_tool(
+            name, {"case_path": "case14", **arguments},
+            runtime_context=self.runtime_context if context is None else context,
+            hidden_context=hidden,
+        )
+
+    def test_both_runners_require_wls_then_available_acquisition_and_bind_real_data(self) -> None:
+        for runtime in self.runtimes:
+            with self.subTest(runtime=runtime.__name__):
+                hidden = {}
+                calls = []
+                def nlm(**arguments):
+                    calls.append(arguments)
+                    return {"success": True}
+                with patch.dict(runtime.TOOL_MAP, {"wls_from_path": lambda **_: {"success": True}, "run_three_phase_nlm_from_path": nlm}):
+                    self.assertFalse(self._call(runtime, hidden, "get_three_phase_context")["success"])
+                    self.assertTrue(self._call(runtime, hidden, "wls_from_path")["success"])
+                    bypass = self._call(runtime, hidden, "run_three_phase_nlm_from_path", three_phase_voltages=self.voltages)
+                    self.assertFalse(bypass["success"])
+                    self.assertFalse(calls)
+                    acquired = self._call(runtime, hidden, "get_three_phase_context")
+                    self.assertEqual(acquired["three_phase_context_status"], "available")
+                    result = self._call(runtime, hidden, "run_three_phase_nlm_from_path", three_phase_voltages=[{"fabricated": True}], nlm_diagnostic={"hidden": True}, target_branch_row0=99)
+                    self.assertTrue(result["success"])
+                    self.assertEqual(calls[0]["three_phase_voltages"], self.voltages)
+                    self.assertNotIn("nlm_diagnostic", calls[0])
+                    self.assertNotIn("target_branch_row0", calls[0])
+
+    def test_unavailable_refresh_and_failed_wls_clear_prior_positive_acquisition(self) -> None:
+        for runtime in self.runtimes:
+            with self.subTest(runtime=runtime.__name__):
+                hidden = {}
+                with patch.dict(runtime.TOOL_MAP, {"wls_from_path": lambda **_: {"success": True}}):
+                    self._call(runtime, hidden, "wls_from_path")
+                    self._call(runtime, hidden, "get_three_phase_context")
+                    refresh = self._call(runtime, hidden, "get_three_phase_context", context={})
+                    self.assertEqual(refresh["three_phase_context_status"], "unavailable")
+                    self.assertFalse(self._call(runtime, hidden, "run_three_phase_nlm_from_path", three_phase_voltages=self.voltages)["success"])
+                    self._call(runtime, hidden, "get_three_phase_context")
+                with patch.dict(runtime.TOOL_MAP, {"wls_from_path": lambda **_: {"success": False}}):
+                    self._call(runtime, hidden, "wls_from_path")
+                self.assertNotIn("three_phase_context", hidden)
+                self.assertFalse(self._call(runtime, hidden, "get_three_phase_context")["success"])
+                self.assertFalse(self._call(runtime, hidden, "run_three_phase_nlm_from_path")["success"])
+
+    def test_case_change_and_new_wls_invalidate_acquisition_in_both_runners(self) -> None:
+        for runtime in self.runtimes:
+            for trigger in ("different_case", "new_wls"):
+                with self.subTest(runtime=runtime.__name__, trigger=trigger):
+                    hidden = {}
+                    with patch.dict(runtime.TOOL_MAP, {"wls_from_path": lambda **_: {"success": True}}):
+                        self._call(runtime, hidden, "wls_from_path")
+                        self._call(runtime, hidden, "get_three_phase_context")
+                        if trigger == "different_case":
+                            result = self._call(runtime, hidden, "run_three_phase_nlm_from_path", case_path="other_case")
+                        else:
+                            self._call(runtime, hidden, "wls_from_path")
+                            result = self._call(runtime, hidden, "run_three_phase_nlm_from_path")
+                        self.assertFalse(result["success"])
+                        self.assertNotIn("three_phase_context", hidden)
+
+    def test_request_exception_clears_previous_positive_context(self) -> None:
+        for runtime in self.runtimes:
+            with self.subTest(runtime=runtime.__name__):
+                hidden = {}
+                with patch.dict(runtime.TOOL_MAP, {"wls_from_path": lambda **_: {"success": True}}):
+                    self._call(runtime, hidden, "wls_from_path")
+                    self._call(runtime, hidden, "get_three_phase_context")
+                with patch.object(runtime, "_get_three_phase_context_logic", side_effect=ValueError("sensor request failed")):
+                    failure = self._call(runtime, hidden, "get_three_phase_context")
+                self.assertFalse(failure["success"])
+                self.assertNotIn("three_phase_context", hidden)
+                self.assertFalse(self._call(runtime, hidden, "run_three_phase_nlm_from_path", three_phase_voltages=self.voltages)["success"])
+
+    def test_eval_does_not_advertise_nlm_from_private_hif_context(self) -> None:
+        runtime = self.runtimes[0]
+        hidden = {}
+        raw_context = {"tool_context": {"hif_context": self.runtime_context["tool_context"]["three_phase_context"]}}
+        with patch.dict(runtime.TOOL_MAP, {"wls_from_path": lambda **_: {"success": True}}):
+            self._call(runtime, hidden, "wls_from_path", context=raw_context)
+        allowed = runtime.controller_allowed_next_tools(raw_context, hidden)
+        self.assertIn("get_three_phase_context", allowed)
+        self.assertNotIn("run_three_phase_nlm_from_path", allowed)
+        self._call(runtime, hidden, "get_three_phase_context", context=raw_context)
+        self.assertIn("run_three_phase_nlm_from_path", runtime.controller_allowed_next_tools(raw_context, hidden))
+        self._call(runtime, hidden, "get_three_phase_context", context={})
+        self.assertNotIn("run_three_phase_nlm_from_path", runtime.controller_allowed_next_tools(raw_context, hidden))
+
+    def test_nlm_hydration_never_reads_unacquired_hif_labels_or_user_phase_arrays(self) -> None:
+        hidden = {"hif_context": {"case_path": "case14", "three_phase_voltages": self.voltages, "label": {"branch_row0": 99}, "nlm_diagnostic": {"success": True}}}
+        messages = [{"role": "user", "content": json.dumps({"case_path": "case14", "three_phase_voltages": self.voltages, "nlm_diagnostic": {"success": True}})}]
+        arguments, notes = hydrate_tool_arguments("run_three_phase_nlm_from_path", {"case_path": "case14", "three_phase_voltages": self.voltages, "target_branch_row0": 99}, messages, hidden)
+        self.assertEqual(arguments, {"case_path": "case14"})
+        self.assertIn("three_phase_acquisition_required", notes)
 
 
 if __name__ == "__main__":

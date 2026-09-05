@@ -10,7 +10,8 @@ observation fixed must hold the production target action fixed too.
 The intended escalation ladders are:
 
 - harmonic: ``get_harmonic_context`` -> ``run_hse_from_path``;
-- three-phase unbalance: ``run_three_phase_nlm_from_path`` -> an observable
+- three-phase unbalance: ``run_wls`` -> ``get_three_phase_context`` ->
+  ``run_three_phase_nlm_from_path`` -> an observable
   non-HIF unbalance classification (recorded by the provider);
 - HIF: ``run_three_phase_nlm_from_path`` (line-level localization) ->
   ``estimate_hif_location_magnitude_multiscan_from_path`` when a persistent
@@ -28,10 +29,17 @@ from psse_env.actions import (
     ESTIMATE_HIF_FROM_PATH,
     ESTIMATE_HIF_MULTISCAN_FROM_PATH,
     GET_HARMONIC_CONTEXT,
+    GET_THREE_PHASE_CONTEXT,
     HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
     RUN_HSE_FROM_PATH,
     RUN_THREE_PHASE_NLM_FROM_PATH,
+    RUN_WLS,
     safe_normalize_action,
+    harmonic_screening_pending,
+    successful_current_wls,
+    three_phase_acquisition_pending,
+    three_phase_context_available,
+    three_phase_screening_pending,
     unexplained_signatures,
     waveform_anomaly_signatures,
 )
@@ -86,7 +94,7 @@ class DiagnosticsExpert:
         proposals: list[ExpertActionProposal] = []
 
         harmonic_signal = bool(harmonic_codes)
-        if harmonic_signal and "harmonic_measurements" in available:
+        if harmonic_signal:
             if GET_HARMONIC_CONTEXT not in completed:
                 proposals.append(
                     self._proposal(
@@ -94,12 +102,15 @@ class DiagnosticsExpert:
                         {"state_id": active_id},
                         confidence=0.86,
                         evidence=[
-                            "harmonic_telemetry_available",
+                            "harmonic_measurements_requested",
                             *harmonic_codes,
                         ],
                     )
                 )
-            elif RUN_HSE_FROM_PATH not in completed:
+            elif (
+                RUN_HSE_FROM_PATH not in completed
+                and "harmonic_measurements" in available
+            ):
                 proposals.append(
                     self._proposal(
                         RUN_HSE_FROM_PATH,
@@ -111,6 +122,24 @@ class DiagnosticsExpert:
 
         hif_signal = bool(hif_codes)
         unbalance_signal = bool(unbalance_codes)
+        phase_contexts = state_value(state, "fresh_context_evidence") or {}
+        phase_context = phase_contexts.get("three_phase") or {}
+        phase_acquired = three_phase_context_available(phase_contexts, active_id)
+        phase_attempted = (
+            str(phase_context.get("state_id") or "") == str(active_id)
+            and phase_context.get("request_attempted") is True
+        )
+        if unbalance_signal and not hif_signal:
+            if not successful_current_wls(state, history):
+                return [self._proposal(
+                    RUN_WLS, {"state_id": active_id}, confidence=0.95,
+                    evidence=["unbalance_requires_current_wls_baseline"],
+                )]
+            if not phase_attempted:
+                return [self._proposal(
+                    GET_THREE_PHASE_CONTEXT, {"state_id": active_id}, confidence=0.95,
+                    evidence=["three_phase_measurements_requested", *unbalance_codes],
+                )]
         current_channel_available = "three_phase_branch_currents" in available
         nlm_channel_available = bool(
             "nlm_diagnostic" in available
@@ -120,8 +149,19 @@ class DiagnosticsExpert:
         nlm_metrics = completed.get(RUN_THREE_PHASE_NLM_FROM_PATH)
         hif_branch = self._nlm_top_branch(nlm_metrics)
         hif_phase = self._nlm_suspected_phase(nlm_metrics)
-        if (hif_signal or unbalance_signal) and nlm_channel_available and (
-            RUN_THREE_PHASE_NLM_FROM_PATH not in completed
+        nlm_attempted = (
+            str(phase_context.get("state_id") or "") == str(active_id)
+            and phase_context.get("nlm_attempted") is True
+        )
+        # A new acquisition retires the previous scan's NLM outcome. The
+        # durable ledger is authoritative even when older successful/rejected
+        # diagnostics remain in the visible history window.
+        nlm_completed = (
+            nlm_attempted if phase_attempted
+            else RUN_THREE_PHASE_NLM_FROM_PATH in completed
+        )
+        if (hif_signal or (unbalance_signal and phase_acquired)) and nlm_channel_available and (
+            not nlm_completed
         ):
             evidence_codes = hif_codes if hif_signal else unbalance_codes
             proposals.append(
@@ -207,22 +247,36 @@ class DiagnosticsExpert:
                 )
         return proposals
 
+    def harmonic_screening_proposals(
+        self, state: Any, history: Sequence[Mapping[str, Any]] | None = None,
+    ) -> list[ExpertActionProposal]:
+        """Request additional measurements after WLS, without a family hint."""
+        state = policy_state_view(state)
+        active_id = state_value(state, "active_state_id")
+        if not active_id or state_value(state, "has_open_candidate"):
+            return []
+        if not harmonic_screening_pending(
+            unresolved=state_value(state, "unresolved_signatures", []),
+            tried_action_signatures=state_value(state, "tried_action_signatures", []),
+            active_state_id=active_id,
+            context_evidence=state_value(state, "fresh_context_evidence"),
+        ):
+            return []
+        if GET_HARMONIC_CONTEXT in self._completed_diagnostics(
+            history or [], active_state_id=str(active_id)
+        ):
+            return []
+        return [self._proposal(
+            GET_HARMONIC_CONTEXT, {"state_id": active_id}, confidence=0.95,
+            evidence=["fundamental_anomaly_detected", "request_spectral_evidence_before_correction"],
+        )]
+
     def three_phase_screening_proposals(
         self,
         state: Any,
         history: Sequence[Mapping[str, Any]] | None = None,
     ) -> list[ExpertActionProposal]:
-        """Screen an unflagged fundamental-frequency anomaly against three-phase telemetry.
-
-        An operator who only holds the positive-sequence snapshot first sees a
-        WLS anomaly.  When three-phase telemetry is available, the balanced
-        model's residuals must not be attributed to a meter or a branch until
-        that telemetry has been checked for the event the model cannot
-        represent (an unbalance source or an HIF-like line differential), so
-        this is a mandatory stage ahead of every correction route.  It runs
-        once per active state and never on a root a sensor already flagged,
-        which the ordinary diagnostic ladder owns.
-        """
+        """Acquire phase measurements, then screen an unflagged WLS anomaly."""
         state = policy_state_view(state)
         active_id = state_value(state, "active_state_id")
         if not active_id or state_value(state, "has_open_candidate"):
@@ -236,13 +290,34 @@ class DiagnosticsExpert:
         fundamental = [str(item) for item in unresolved if str(item).startswith("wls_")]
         if not fundamental:
             return []
+        contexts = state_value(state, "fresh_context_evidence")
+        if three_phase_acquisition_pending(
+            unresolved=unresolved,
+            tried_action_signatures=state_value(state, "tried_action_signatures", []),
+            active_state_id=active_id,
+            context_evidence=contexts,
+        ):
+            tool = GET_THREE_PHASE_CONTEXT if successful_current_wls(state, history) else RUN_WLS
+            return [self._proposal(
+                tool, {"state_id": active_id}, confidence=0.95,
+                evidence=["fundamental_anomaly_detected", "request_three_phase_evidence_before_correction"],
+            )]
         available = {str(item) for item in state_value(state, "available_evidence", []) or []}
-        if not (available & {"three_phase_voltages", "three_phase_branch_currents"}):
+        if not three_phase_screening_pending(
+            unresolved=unresolved, available_evidence=available,
+            tried_action_signatures=state_value(state, "tried_action_signatures", []),
+            active_state_id=active_id, context_evidence=contexts,
+        ):
             return []
+        if not successful_current_wls(state, history):
+            return [self._proposal(
+                RUN_WLS, {"state_id": active_id}, confidence=0.95,
+                evidence=["three_phase_screening_requires_current_wls_baseline"],
+            )]
         completed = self._completed_diagnostics(
             history or [], active_state_id=str(active_id)
         )
-        if RUN_THREE_PHASE_NLM_FROM_PATH in completed:
+        if not isinstance(contexts, Mapping) and RUN_THREE_PHASE_NLM_FROM_PATH in completed:
             return []
         return [
             self._proposal(
@@ -324,6 +399,12 @@ class DiagnosticsExpert:
             else:
                 status, metrics, error_code = None, None, None
             if status in {"success", "failure"}:
+                if (
+                    tool in {GET_HARMONIC_CONTEXT, RUN_HSE_FROM_PATH,
+                             GET_THREE_PHASE_CONTEXT, RUN_THREE_PHASE_NLM_FROM_PATH}
+                    and status == "failure" and error_code == "missing_precondition"
+                ):
+                    continue
                 observed = dict(metrics) if isinstance(metrics, Mapping) else {}
                 observed["_execution_status"] = status
                 if error_code is not None:

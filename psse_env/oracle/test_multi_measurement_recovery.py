@@ -25,6 +25,31 @@ def _state(signatures: list[str]) -> dict:
     }
 
 
+def _record_unavailable_spectral_request(state: dict) -> None:
+    """Model WLS and both unavailable requests before classical recovery."""
+    state.setdefault("fresh_context_evidence", {})["wls"] = {
+        "state_id": state["active_state_id"],
+        "evidence_source": "deployment_wls:diagnosis",
+        "successful": True,
+        "anomalous": True,
+    }
+    state["fresh_context_evidence"]["three_phase"] = {
+        "state_id": state["active_state_id"],
+        "evidence_source": "deployment_context:three_phase_measurements",
+        "request_attempted": True,
+        "three_phase_context_status": "unavailable",
+        "available_evidence_channels": [],
+    }
+    state.setdefault("fresh_context_evidence", {})["harmonic"] = {
+        "state_id": state["active_state_id"],
+        "evidence_source": "deployment_context:harmonic_measurements",
+        "request_attempted": True,
+        "harmonic_context_status": "unavailable",
+        "available_evidence_channels": [],
+        "harmonic_distortion_detected": False,
+    }
+
+
 class MultiMeasurementContinuationTests(unittest.TestCase):
     @staticmethod
     def _rejected_singleton_history(
@@ -270,6 +295,7 @@ class MultiMeasurementContinuationTests(unittest.TestCase):
             )
         )
 
+        _record_unavailable_spectral_request(state)
         actions = oracle.next_actions(state, history)
 
         self.assertTrue(actions)
@@ -987,6 +1013,7 @@ class MultiMeasurementContinuationTests(unittest.TestCase):
                 ),
             }
         )
+        _record_unavailable_spectral_request(state)
         return state, measurement_action
 
     @staticmethod
@@ -2210,7 +2237,7 @@ class MultiMeasurementEndToEndRoutingTests(unittest.TestCase):
             if tool in {"get_parameter_context", "get_topology_context"}:
                 self.assertIn(
                     "commit_state",
-                    tools[max(0, index - 3) : index],
+                    tools[max(0, index - 4) : index],
                     f"branch context screened outside a post-commit re-screen at step {index}",
                 )
         self.assertGreaterEqual(tools.count("commit_state"), 1)
@@ -2224,7 +2251,10 @@ class MultiMeasurementEndToEndRoutingTests(unittest.TestCase):
         )
 
     def test_partial_commit_continues_recovery_before_safe_handoff(self) -> None:
-        env, actions = self._run(20260719)
+        # Telemetry requests answered "unavailable" are not repeated on a
+        # newly committed state, so the window after a commit holds the
+        # branch rescreen, the measurement context, and the next correction.
+        env, actions = self._run(20260719, max_steps=32)
         tools = [action["tool"] for action in actions]
 
         # V2-A continuation contract: the first accepted correction no longer
@@ -2235,11 +2265,19 @@ class MultiMeasurementEndToEndRoutingTests(unittest.TestCase):
         self.assertGreaterEqual(tools.count("commit_state"), 2)
         first_commit = tools.index("commit_state")
         committed_state = actions[first_commit]["arguments"]["candidate_state_id"]
-        window = tools[first_commit + 1 : first_commit + 4]
+        window = tools[first_commit + 1 : first_commit + 6]
+        # Telemetry availability is a property of the substation: the requests
+        # answered "unavailable" before the commit are not repeated on the
+        # committed state, so the branch rescreen starts at once.
+        self.assertNotIn("get_three_phase_context", window)
+        self.assertNotIn("get_harmonic_context", window)
         self.assertIn("get_parameter_context", window)
         self.assertIn("get_topology_context", window)
         self.assertIn("get_measurement_context", window)
-        for offset in range(first_commit + 1, first_commit + 4):
+        # The three contexts and the next correction are bound to the
+        # committed state; the fifth action is already that correction's
+        # verification solve on the new candidate.
+        for offset in range(first_commit + 1, first_commit + 5):
             self.assertEqual(
                 actions[offset]["arguments"]["state_id"], committed_state
             )

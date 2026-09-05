@@ -48,8 +48,8 @@ versus partial deployment acceptance uses target improvement plus the global
 anomaly test. Synthetic truth remains separate as
 `remaining_true_fault_count`.
 
-The five specialized diagnostics — `get_harmonic_context`,
-`run_hse_from_path`, `run_three_phase_nlm_from_path`, and both HIF
+The six specialized diagnostics — `get_harmonic_context`,
+`get_three_phase_context`, `run_hse_from_path`, `run_three_phase_nlm_from_path`, and both HIF
 estimators — are first-class macro actions sharing their canonical deployment
 names. The process gate treats them as read-only evidence actions (legal on
 the active state, or on an INCONCLUSIVE candidate), and the environment
@@ -58,16 +58,27 @@ estimator arguments (candidate branch, phase, grid options) reach the tool.
 The deployment bundle wraps the real HSE, three-phase NLM, and HIF estimation
 stacks; runtime side data comes from state metadata
 (`harmonic_measurements`/`harmonic_orders`, `three_phase_voltages`,
-`nlm_diagnostic` or OpenDSS model dirs, `hif_runtime`, `hif_scan_window`) and each tool fails closed as a
-collectable no-op when its data is absent. The protocol bridge maps
+`nlm_diagnostic` or OpenDSS model dirs, `hif_runtime`, `hif_scan_window`). A
+harmonic-context request without spectral measurements succeeds with
+`harmonic_context_status=unavailable`; it does not classify the network as
+clean or explain its anomaly. Estimators fail closed as collectable no-ops
+when their required data is absent. The protocol bridge maps
 `state_id` to `case_path` (or `scan_window_path` for the multi-scan
 estimator) so exported targets and generated calls stay canonical.
 
-`PolicyObservation.available_evidence` lists which telemetry channels exist
-on the active state (deployment-observable operator knowledge; channel
-contents stay out of the observation). `DiagnosticsExpert` routes on it plus
-unresolved-signature markers: harmonic signals escalate
-`get_harmonic_context` -> `run_hse_from_path`; pure three-phase-unbalance
+An unflagged root exposes only positive-sequence measurements and model
+information initially. `PolicyObservation.available_evidence` does not
+advertise private spectral data or its availability at reset. After a WLS
+anomaly, `get_harmonic_context` explicitly requests additional measured
+spectra and reports which channels were acquired. Spectral measurements are
+not inferred or fabricated from the positive-sequence snapshot. The same
+request is proposed for the same observable WLS anomaly whether or not the
+provider has spectra, and independent of the hidden fault family.
+
+`DiagnosticsExpert` routes on acquired telemetry and observable signatures.
+A harmonic-context result mints a harmonic signature only when the returned
+measurements pass its distortion/noise screen; the expert then calls
+`run_hse_from_path`. Pure three-phase-unbalance
 signals stop at a VUF/null-gated non-HIF classification; HIF-specific signals escalate
 `run_three_phase_nlm_from_path` -> the multi-scan estimator when a persistent
 scan window exists, else the single-scan estimator, carrying the NLM top
@@ -153,19 +164,57 @@ island the network (an EMS would never offer that switching action).
 
 Waveform roots come in two signature modes. `flagged` seeds the sensor
 signature at reset, as if a power-quality monitor or a zero-sequence relay
-had raised it. `discovered` withholds it: the operator starts from the
-positive-sequence snapshot and the balanced model alone, the observable
-baseline `run_wls` mints the fundamental-frequency anomaly, and, because the
-active state carries three-phase telemetry, the orchestrator's mandatory
-screening stage runs `run_three_phase_nlm_from_path` before any correction
-route. Screening classifies the three-phase state as `balanced_three_phase`
+had raised it. `discovered` withholds it. Harmonic roots default to
+`discovered`: the operator starts from positive-sequence measurements and
+the model, runs `run_wls`, then requests additional spectral measurements
+through `get_harmonic_context` if WLS reports an anomaly. On the current
+synthetic harmonic roots the expert sequence is `run_wls` ->
+`get_harmonic_context` -> `run_hse_from_path` -> `finalize_diagnosis`.
+The WLS anomaly justifies further investigation; it does not identify
+harmonics. HSE requires same-state acquired spectral evidence and a measured
+harmonic signature, so a learner cannot skip the initial WLS/acquisition
+steps. A clean WLS control finalizes without requesting spectra. If spectra
+are unavailable, the anomaly remains unresolved and ordinary investigation
+continues without a harmonic diagnosis. An accepted HSE explanation covers
+the discovered harmonic signature and the preceding WLS anomaly.
+
+For unbalance discovery, three-phase channel availability also stays hidden
+until an explicit `get_three_phase_context` request succeeds. The default
+expert sequence on the current unbalance roots is `run_wls` ->
+`get_three_phase_context` -> `run_three_phase_nlm_from_path` ->
+`finalize_diagnosis`. Both measurement requests follow an observable WLS
+anomaly regardless of the hidden family or provider-side data availability;
+which one goes first is decided by the residual breadth the solve reports
+(`anomaly_breadth`, the share of normalized residuals above the outlier
+threshold, kept in the durable WLS ledger). Spectral distortion makes the
+operator vector inconsistent with the balanced model almost everywhere
+(75 to 84 of 122 channels on the corrected corpora), so a broad anomaly (at
+least one half) requests spectra first; a load unbalance, a bad meter, or a
+branch fault stays narrow (at most 49) and requests phase measurements
+first. Either request falls back to the other when it returns nothing, so
+a classical root sees both requests before ordinary investigation. The
+three-phase request reports measured coverage without diagnosing or
+localizing a fault. If no phase measurements are available, its successful
+`unavailable` response leaves the WLS anomaly unresolved and permits ordinary
+investigation.
+
+For non-HIF paths, runtime execution and training-label gates both require
+successful current-state WLS and fresh acquired three-phase measurements
+before NLM. A failed early call cannot expose phase channels or count as a
+completed acquisition. State changes and failed refreshes invalidate the
+acquired evidence; the request and WLS records survive bounded model history.
+Explicit legacy HIF sensor flags retain their existing diagnostic route.
+
+The orchestrator screens acquired three-phase telemetry with
+`run_three_phase_nlm_from_path` before correction. Screening
+classifies the three-phase state as `balanced_three_phase`
 (no explanation; the classical routes stand), an unbalance source
 (explanation recorded, the diagnostic mints its own
 `three_phase_unbalance localized_by_diagnostic` signature and covers the
 `wls_*` signatures minted before the event was known), or `hif_suspected`
 (the provider mints `hif_suspected_line_differential` and the ordinary HIF
-ladder takes over). The generator defaults unbalance to `discovered` because
-no positive-sequence SCADA flags it, and HIF to `flagged`; the physical root
+ladder takes over). The generator defaults harmonic and unbalance to
+`discovered`, and HIF to `flagged`; the physical root
 fingerprint ignores signatures, so the two modes share roots. A candidate
 whose verification solve itself fails is recorded as verified-REJECT — the
 solver failure is observable rejection evidence — so the episode retains a
@@ -239,6 +288,16 @@ factory module is not modified. See
 passes its physical validation gate, and scenario IDs are opaque hashes;
 family, cardinality, network case, and source tier remain audit/split metadata
 rather than policy-visible hints.
+
+Harmonic roots can be included through explicit `--train-plan` and
+`--development-plan` quotas. `--harmonic-signature-mode discovered` is the
+default; `flagged` is retained only for reproducing legacy monitor-alarm
+roots. The mode is recorded in the research configuration even for a
+harmonic-only plan, while withheld signatures stay in the private release
+audit. Changing the mode cannot silently resume an existing run with a
+different recorded configuration. Existing collected traces and trained
+checkpoints are unchanged by this generator/policy revision; new collection
+is needed to train or evaluate the WLS-first behavior.
 
 `examples/generate_round0_aggregate.py` is expert-only collection at
 `β=1.0`. It produces a candidate BC0 behavioral-cloning corpus, not a DAgger

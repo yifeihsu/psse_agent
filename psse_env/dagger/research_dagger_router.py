@@ -57,6 +57,7 @@ _CONTEXT_TOOLS = frozenset(
         "get_parameter_context",
         "get_topology_context",
         "get_harmonic_context",
+        "get_three_phase_context",
     }
 )
 _SIMPLE_ACTIVE_TOOLS = frozenset(
@@ -84,6 +85,7 @@ _TRIED_TOOL_NAMES = (
     "get_parameter_context",
     "get_topology_context",
     "get_harmonic_context",
+    "get_three_phase_context",
     "correct_measurements",
     "correct_parameters",
     "correct_topology",

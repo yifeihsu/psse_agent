@@ -9,12 +9,14 @@ from psse_env.actions import (
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,
     FINALIZE_DIAGNOSIS,
+    GET_HARMONIC_CONTEXT,
     GET_MEASUREMENT_CONTEXT,
     GET_PARAMETER_CONTEXT,
     GET_TOPOLOGY_CONTEXT,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     ROLLBACK_STATE,
     RUN_WLS,
+    RUN_HSE_FROM_PATH,
 )
 from psse_env.dagger.rollout_collector import (
     DaggerRolloutCollector,
@@ -129,6 +131,170 @@ def _measurement_scenario():
             }
         ],
     }
+
+
+class HarmonicMeasurementBoundaryTests(unittest.TestCase):
+    """Additional scans are acquired evidence, never an initial family label."""
+
+    @staticmethod
+    def _env(*, has_scan=True, detected=True, measurements=None):
+        @_deterministic_adapter
+        def wls(state):
+            metrics = _wls_adapter(state)
+            metrics["unresolved_signatures"] = (
+                ["wls_bad_data_detected"] if metrics["remaining_anomaly_score"] else []
+            )
+            return metrics
+
+        env = _production_env(wls=wls)
+
+        def context(state, action):
+            del action
+            available = bool(state["metadata"].get("harmonic_measurements"))
+            return {
+                "evidence_source": "deployment_context:harmonic_measurements",
+                "available_evidence_channels": ["harmonic_measurements"] if available else [],
+                "harmonic_distortion_detected": bool(available and detected),
+                "measurement_status": "acquired" if available else "unavailable",
+                "minted_signatures": ["harmonic distortion_detected_by_context"]
+                if available and detected else [],
+            }
+
+        env.evidence_providers[GET_HARMONIC_CONTEXT] = context
+        metadata = {
+            "three_phase_voltages": [{"bus": "b1"}],
+            "parameter_scans": [{"scan": 1}],
+        }
+        if has_scan:
+            metadata["harmonic_measurements"] = [{"h": 5, "bus": 2, "V_real": 0.1}]
+        env.reset({
+            "scenario_id": "additional-measurements",
+            "case": {},
+            "measurements": [9.0] if measurements is None else measurements,
+            "metadata": metadata,
+        })
+        return env
+
+    def _run(self, env, tool):
+        action = {"tool": tool, "arguments": {"state_id": env.store.active_state_id}}
+        _, output = env.step(action)
+        self.assertEqual(output["execution_status"], "success", output)
+        return action, output
+
+    def test_initial_observation_does_not_reveal_additional_channel_presence(self):
+        observations = []
+        for has_scan in (False, True):
+            env = self._env(has_scan=has_scan)
+            observation = env.get_policy_observation().as_dict()
+            self.assertEqual(observation["available_evidence"], [])
+            self.assertEqual(observation["unresolved_signatures"], [])
+            self.assertEqual(observation["fresh_context_evidence"], {"wls": {"successful": False}})
+            observations.append(observation)
+        self.assertEqual(observations[0], observations[1])
+
+    def test_generic_wls_anomaly_justifies_request_without_scan_or_signature(self):
+        env = self._env(has_scan=False)
+        self._run(env, RUN_WLS)
+        request = {"tool": GET_HARMONIC_CONTEXT, "arguments": {"state_id": env.store.active_state_id}}
+        env.assert_training_decision_evidence(request)
+        self._run(env, GET_HARMONIC_CONTEXT)
+        observation = env.get_policy_observation()
+        self.assertNotIn("harmonic_measurements", observation.available_evidence)
+        self.assertFalse(observation.fresh_context_evidence["harmonic"]["harmonic_distortion_detected"])
+        self.assertFalse(any("harmonic" in item for item in observation.unresolved_signatures))
+        with self.assertRaises(ValueError):
+            env.assert_training_decision_evidence({"tool": RUN_HSE_FROM_PATH, "arguments": {}})
+
+    def test_request_requires_actual_current_anomalous_wls_result(self):
+        for measurements in ([9.0], [1.0]):
+            env = self._env(measurements=measurements)
+            request = {"tool": GET_HARMONIC_CONTEXT, "arguments": {}}
+            if measurements == [1.0]:
+                self._run(env, RUN_WLS)
+            else:
+                # An externally seeded generic flag does not substitute for
+                # running and assessing WLS on this state.
+                env.context_flags["unresolved_signatures"] = ["wls_bad_data_detected"]
+                env.context_flags["semantic_field_provenance"]["unresolved_signatures"] = "observable_input"
+            with self.assertRaisesRegex(ValueError, "anomalous WLS"):
+                env.assert_training_decision_evidence(request)
+
+    def test_invalid_early_request_does_not_skip_post_wls_acquisition(self):
+        env = self._env()
+        request = {"tool": GET_HARMONIC_CONTEXT, "arguments": {"state_id": env.store.active_state_id}}
+        _, early = env.step(request)
+        self.assertEqual(early["execution_status"], "failure")
+        self.assertEqual(early["error_code"], "missing_precondition")
+        self.assertNotIn("harmonic", env.get_policy_observation().fresh_context_evidence)
+        self._run(env, RUN_WLS)
+        expert = ExpertPolicyOracle(process_oracle=env.process_oracle)
+        actions = expert.next_actions(env.get_oracle_state(env.history), env.history)
+        self.assertTrue(actions)
+        self.assertEqual(actions[0]["tool"], GET_HARMONIC_CONTEXT)
+        env.assert_training_decision_evidence(actions[0])
+        _, acquired = env.step(actions[0])
+        self.assertEqual(acquired["execution_status"], "success")
+        self.assertTrue(acquired["tool_metrics"]["harmonic_distortion_detected"])
+        self.assertTrue(env.get_policy_observation().fresh_context_evidence["harmonic"]["request_attempted"])
+
+    def test_hse_requires_acquired_positive_and_bound_context(self):
+        env = self._env()
+        self._run(env, RUN_WLS)
+        hse = {"tool": RUN_HSE_FROM_PATH, "arguments": {"state_id": env.store.active_state_id}}
+        with self.assertRaisesRegex(ValueError, "fresh.*context"):
+            env.assert_training_decision_evidence(hse)
+        self.assertNotIn("harmonic_measurements", env.get_policy_observation().available_evidence)
+        self._run(env, GET_HARMONIC_CONTEXT)
+        observation = env.get_policy_observation(history_window=0)
+        self.assertIn("harmonic_measurements", observation.available_evidence)
+        context = observation.fresh_context_evidence["harmonic"]
+        self.assertEqual(context["state_id"], env.store.active_state_id)
+        self.assertEqual(context["state_hash"], env.store.state_hash(env.store.active_state_id))
+        env.assert_training_decision_evidence(hse)
+        env.history[-1]["tool_output"]["tool_metrics"]["state_hash"] = "stale"
+        self.assertNotIn("harmonic_measurements", env.get_policy_observation().available_evidence)
+        with self.assertRaisesRegex(ValueError, "fresh.*context"):
+            env.assert_training_decision_evidence(hse)
+
+    def test_negative_scan_does_not_authorize_hse(self):
+        env = self._env(detected=False)
+        self._run(env, RUN_WLS)
+        self._run(env, GET_HARMONIC_CONTEXT)
+        self.assertIn("harmonic_measurements", env.get_policy_observation().available_evidence)
+        self.assertFalse(any("harmonic" in item for item in env.current_state()["unresolved_signatures"]))
+        with self.assertRaises(ValueError):
+            env.assert_training_decision_evidence({"tool": RUN_HSE_FROM_PATH, "arguments": {}})
+
+    def test_failed_context_refresh_invalidates_acquired_evidence(self):
+        env = self._env()
+        self._run(env, RUN_WLS)
+        self._run(env, GET_HARMONIC_CONTEXT)
+        env.evidence_providers[GET_HARMONIC_CONTEXT] = lambda state, action: {
+            "execution_status": "failure", "error_code": "sensor_unavailable"
+        }
+        _, output = env.step({"tool": GET_HARMONIC_CONTEXT, "arguments": {"state_id": env.store.active_state_id}})
+        self.assertEqual(output["execution_status"], "failure")
+        observation = env.get_policy_observation()
+        self.assertNotIn("harmonic_measurements", observation.available_evidence)
+        request = observation.fresh_context_evidence["harmonic"]
+        self.assertTrue(request["request_attempted"])
+        self.assertEqual(request["harmonic_context_status"], "failed")
+        self.assertEqual(request["available_evidence_channels"], [])
+        self.assertFalse(request["harmonic_distortion_detected"])
+        with self.assertRaises(ValueError):
+            env.assert_training_decision_evidence({"tool": RUN_HSE_FROM_PATH, "arguments": {}})
+
+    def test_active_state_change_invalidates_old_scan(self):
+        env = self._env()
+        self._run(env, RUN_WLS)
+        self._run(env, GET_HARMONIC_CONTEXT)
+        env.store.create_root(case={}, measurements=[9.0], episode_id="next-physical-state")
+        env._invalidate_context_flags()
+        observation = env.get_policy_observation()
+        self.assertNotIn("harmonic_measurements", observation.available_evidence)
+        self.assertNotIn("harmonic", observation.fresh_context_evidence)
+        with self.assertRaisesRegex(ValueError, "fresh.*context"):
+            env.assert_training_decision_evidence({"tool": RUN_HSE_FROM_PATH, "arguments": {}})
 
 
 class ProductionConfigurationTests(unittest.TestCase):
@@ -548,7 +714,9 @@ class ProductionEvidenceTests(unittest.TestCase):
         )
         observation = env.get_policy_observation()
 
-        self.assertEqual(observation.fresh_context_evidence, {})
+        self.assertEqual(set(observation.fresh_context_evidence), {"wls"})
+        self.assertTrue(observation.fresh_context_evidence["wls"]["successful"])
+        self.assertEqual(observation.fresh_context_evidence["wls"]["state_id"], candidate_id)
         self.assertFalse(observation.has_fresh_measurement_context)
         self.assertEqual(observation.rejected_hypotheses, [])
 
@@ -595,7 +763,9 @@ class ProductionEvidenceTests(unittest.TestCase):
         self.assertEqual(output["execution_status"], "failure")
         observation = env.get_policy_observation()
         self.assertFalse(observation.has_fresh_measurement_context)
-        self.assertEqual(observation.fresh_context_evidence, {})
+        self.assertEqual(set(observation.fresh_context_evidence), {"wls"})
+        self.assertTrue(observation.fresh_context_evidence["wls"]["successful"])
+        self.assertEqual(observation.fresh_context_evidence["wls"]["state_id"], active_id)
 
     def test_production_branch_route_contract_rejects_incoherent_status(self):
         missing = object()
@@ -1019,7 +1189,7 @@ class ProductionEvidenceTests(unittest.TestCase):
         self.assertFalse(observation.has_fresh_measurement_context)
         self.assertFalse(observation.has_fresh_parameter_context)
         self.assertFalse(observation.has_fresh_topology_context)
-        self.assertEqual(observation.fresh_context_evidence, {})
+        self.assertEqual(observation.fresh_context_evidence, {"wls": {"successful": False}})
 
     def test_nonactionable_route_inventory_is_not_an_observable_expert_hint(self):
         active_id = "episode:s1"
