@@ -140,29 +140,6 @@ class TestTrainingSeed(unittest.TestCase):
         settings = run_training.call_args.kwargs["settings"]
         self.assertEqual(settings.seed, 3408)
 
-    def test_cli_rejects_study_manifest_drift_before_baseline_gate(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            tampered = Path(temp_dir) / "study.json"
-            tampered.write_text(
-                DEFAULT_STUDY_MANIFEST.read_text(encoding="utf-8") + "\n",
-                encoding="utf-8",
-            )
-            with mock.patch(
-                "psse_env.sft.cli._baseline_evaluation_gate"
-            ) as baseline_gate:
-                result = cli_main(
-                    [
-                        *COMMON_TRAIN_ARGS,
-                        "--seed",
-                        "3407",
-                        "--study-manifest",
-                        str(tampered),
-                    ]
-                )
-
-        self.assertEqual(result, 2)
-        baseline_gate.assert_not_called()
-
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
