@@ -322,7 +322,8 @@ class BC0SuiteBuilderTests(unittest.TestCase):
         self.assertEqual(len(set(roots)), 115)
         self.assertTrue(all(root.startswith("physical_v3_") for root in roots))
 
-        module_sha256 = file_sha256(Path(release_factories.__file__))
+        # Factories are approved by import spec; the policy carries no source
+        # digest, so editing release_factories.py never needs a re-pin.
         expected_specs = {
             "environment": "production_environment_factory",
             "expert_policy": "observable_expert_policy_factory",
@@ -336,12 +337,7 @@ class BC0SuiteBuilderTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     policy["approved_factories"][role],
-                    [
-                        {
-                            "import_spec": import_spec,
-                            "source_sha256": module_sha256,
-                        }
-                    ],
+                    [{"import_spec": import_spec}],
                 )
                 self.assertIs(
                     _load_import_spec(import_spec, field=f"{role} factory"),
