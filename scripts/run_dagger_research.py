@@ -96,15 +96,11 @@ PLAN_PRESETS: dict[str, tuple[dict[str, int], dict[str, int]]] = {
         {**DEFAULT_DEVELOPMENT_PLAN, **DIAGNOSTIC_DEVELOPMENT_PLAN},
     ),
 }
-#: Families whose rows need the per-phase branch-current corpora.
+#: Families whose rows need the per-phase branch-current corpora.  Harmonic
+#: roots come from the tabular corpus, so a harmonic-only plan records its
+#: signature mode without resolving those paths.
 DIAGNOSTIC_TELEMETRY_FAMILIES = frozenset(
-    {
-        "hif",
-        "measurement+hif",
-        "three_phase_unbalance",
-        "harmonic",
-        "telemetry_no_disturbance",
-    }
+    {"hif", "measurement+hif", "three_phase_unbalance", "telemetry_no_disturbance"}
 )
 HIF_FAMILIES = frozenset({"hif", "measurement+hif"})
 #: OpenDSS search budget for the research HIF estimators.  The release
