@@ -69,6 +69,28 @@ def test_round_env_declares_every_setting_the_stages_use() -> None:
     assert "RESEARCH_MAX_INPUT_TOKENS=32768" in text
     assert "PLAN_PRESET=diagnostic" in text
     assert "SEED=20260903" in text
+    assert "--train-plan \"$TRAIN_PLAN\"" in text
+    assert "--development-plan \"$DEVELOPMENT_PLAN\"" in text
+    assert "source \"$ROUND/round.overrides.env\"" in text
+
+
+def test_scale_overrides_keep_the_diagnostic_families() -> None:
+    text = (CELL / "overrides" / "scale_20260906.env").read_text(encoding="utf-8")
+    assert "\r" not in text
+    plans = {}
+    for name in ("TRAIN_PLAN", "DEVELOPMENT_PLAN"):
+        match = re.search(rf"^{name}='(.*)'$", text, flags=re.MULTILINE)
+        assert match, name
+        plans[name] = json.loads(match.group(1))
+    families = {"hif", "measurement+hif", "three_phase_unbalance", "harmonic", "telemetry_no_disturbance"}
+    assert set(plans["TRAIN_PLAN"]) == families
+    assert set(plans["DEVELOPMENT_PLAN"]) == families
+    # Three times the diagnostic preset, and within the corpora: 102 HIF
+    # windows, 220 unbalance rows (also feeding the control), 500 harmonic rows.
+    assert plans["TRAIN_PLAN"] == {"hif": 36, "measurement+hif": 18, "three_phase_unbalance": 36, "harmonic": 36, "telemetry_no_disturbance": 18}
+    assert plans["DEVELOPMENT_PLAN"] == {"hif": 18, "measurement+hif": 9, "three_phase_unbalance": 18, "harmonic": 18, "telemetry_no_disturbance": 9}
+    assert plans["TRAIN_PLAN"]["hif"] + plans["DEVELOPMENT_PLAN"]["hif"] <= 102
+    assert "D1_CAP=1000" in text
 
 
 def test_training_uses_the_proven_12b_layout() -> None:

@@ -156,6 +156,28 @@ recorded estimates under 0.10 gives the candidate HIF 5 of 6 (the miss is
 0.1005) and 20 of 24 overall (0.833), and BC0 HIF 4 of 6 and 9 of 24
 (0.375); the summary file itself still carries the 0.05 audit.
 
+## Round 5: the scale round (2026-09-06)
+
+Same protocol as round 4 (BC0 warm start, one pass, paired evaluation) on
+three times the diagnostic plan, so each family's development outcome rests
+on 18 roots (9 for measurement+HIF and the control) instead of 6. The plan
+sizes live in `overrides/scale_20260906.env` (training 36/18/36/36/18,
+development 18/9/18/18/9, mixture cap 1000 so every safe D1 row is used at
+the 1:1 share); `deploy_remote.sh` stages that file as
+`round.overrides.env`, which `round.env` sources last. Corpus capacity: 102
+HIF windows shared by the two HIF families, 220 unbalance rows that also
+feed the balanced control, 500 harmonic rows. Expected cost from round 4's
+rates: about eight GPU hours of collection (144 roots), half an hour of
+training, and four to five hours of evaluation (72 roots, two adapters).
+The audit uses the 0.10 alpha tolerance from the start.
+
+```bash
+git bundle create dw_round.bundle local/relaxed-current
+wsl -- scp dw_round.bundle torch:/scratch/yx3882/research_diag_round_20260906_scale/dw_round.bundle
+wsl -- ssh torch bash -s -- /scratch/yx3882/research_diag_round_20260906_scale/dw_round.bundle local/relaxed-current "$(git rev-parse HEAD)" /scratch/yx3882/research_diag_round_20260906_scale scale_20260906.env   < research/hpc/diagnostic_round_20260903/deploy_remote.sh
+wsl -- ssh torch bash /scratch/yx3882/research_diag_round_20260906_scale/submit_diag.sh
+```
+
 ## What this round cannot claim
 
 These families terminate through an accepted anomaly explanation or an
