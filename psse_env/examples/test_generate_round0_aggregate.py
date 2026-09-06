@@ -397,7 +397,7 @@ class Round0FinalObservableStateTests(unittest.TestCase):
             rebound["active_state_id"],
         )
 
-    def test_terminal_transition_disagreement_fails_closed(self) -> None:
+    def test_terminal_transition_disagreement_is_recorded_not_fatal(self) -> None:
         terminal_state = _post_correction_final_state()
         transition = terminal_state["history_window"][-1]
         final_row = {
@@ -409,13 +409,22 @@ class Round0FinalObservableStateTests(unittest.TestCase):
         final_row["executed_action"]["arguments"]["state_id"] = "other-state"
         store_state = copy.deepcopy(terminal_state)
         store_state.pop("history_window")
-        env = SimpleNamespace()
+        env = SimpleNamespace(
+            get_policy_observation=lambda history: {
+                **copy.deepcopy(terminal_state),
+                "history_window": copy.deepcopy(list(history)),
+            }
+        )
 
-        with self.assertRaisesRegex(
-            RuntimeError,
-            "final transition disagrees with row action",
-        ):
-            _round0_final_observable_state(env, [final_row], store_state)
+        final_state = _round0_final_observable_state(env, [final_row], store_state)
+
+        # The row's own transition stays authoritative; the research
+        # aggregate records what the re-rendered history disagreed on.
+        self.assertEqual(
+            final_state["round0_final_state_disagreements"],
+            {"action": {"differing_keys": ["arguments"]}},
+        )
+        self.assertEqual(final_state["active_state_id"], terminal_state["active_state_id"])
 
 
 class TerminalScenarioMatrixTests(unittest.TestCase):
