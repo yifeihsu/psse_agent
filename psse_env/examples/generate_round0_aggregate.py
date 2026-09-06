@@ -2677,6 +2677,20 @@ def _input_artifact_release_failures(
     return failures
 
 
+def _load_plan_argument(value: str) -> dict[str, int]:
+    """A plan given as a JSON file path or as inline JSON.
+
+    Inline JSON can exceed the filesystem's name length, in which case the
+    path probe itself raises; that is not a file.
+    """
+
+    try:
+        is_file = Path(value).is_file()
+    except (OSError, ValueError):
+        is_file = False
+    return json.loads(Path(value).read_text()) if is_file else json.loads(value)
+
+
 def generate(args: argparse.Namespace) -> dict[str, Any]:
     # Aggregate topology roots and their physical-v3 fingerprints depend on
     # the same numerical stack as the frozen evaluation suite.  Validate it
@@ -2685,7 +2699,7 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
     builder_environment = validate_builder_environment()
     plan = {family: count * args.scale for family, count in DEFAULT_PLAN.items()}
     if args.plan:
-        plan = json.loads(Path(args.plan).read_text()) if Path(args.plan).is_file() else json.loads(args.plan)
+        plan = _load_plan_argument(args.plan)
     generation_descriptor = _generation_descriptor(
         args,
         plan,

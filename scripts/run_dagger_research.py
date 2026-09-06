@@ -580,9 +580,14 @@ def _parse_plan(value: str, default: Mapping[str, int]) -> dict[str, int]:
     if not value:
         return dict(default)
     candidate = Path(value)
+    try:
+        is_file = candidate.is_file()
+    except (OSError, ValueError):
+        # Inline JSON longer than the filesystem's name limit is not a path.
+        is_file = False
     payload = (
         json.loads(candidate.read_text(encoding="utf-8"))
-        if candidate.is_file()
+        if is_file
         else json.loads(value)
     )
     if not isinstance(payload, Mapping):

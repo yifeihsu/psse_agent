@@ -38,10 +38,11 @@ cd "$SRC"
 if [[ ! -s "$OUT/d0.done" ]]; then
   rm -rf "$D0_DIR"
   mkdir -p "$D0_DIR"
+  printf '%s\n' "$D0_PLAN" > "$OUT/d0_plan.json"
   "$PY" -m psse_env.examples.generate_round0_aggregate \
     --research \
     --output-dir "$D0_DIR" \
-    --plan "$D0_PLAN" \
+    --plan "$OUT/d0_plan.json" \
     --seed "$SEED_D0" \
     --protocol canonical \
     --max-steps "$D0_MAX_STEPS" \

@@ -62,7 +62,11 @@ def split_rounds(
 
 def _plan(value: str) -> dict[str, int]:
     candidate = Path(value)
-    payload = json.loads(candidate.read_text(encoding="utf-8")) if candidate.is_file() else json.loads(value)
+    try:
+        is_file = candidate.is_file()
+    except (OSError, ValueError):
+        is_file = False
+    payload = json.loads(candidate.read_text(encoding="utf-8")) if is_file else json.loads(value)
     if not isinstance(payload, dict):
         raise ValueError("plan must be a JSON object")
     return {str(k): int(v) for k, v in sorted(payload.items())}
