@@ -178,6 +178,26 @@ wsl -- ssh torch bash -s -- /scratch/yx3882/research_diag_round_20260906_scale/d
 wsl -- ssh torch bash /scratch/yx3882/research_diag_round_20260906_scale/submit_diag.sh
 ```
 
+**Round 5 result** (collect 17052259 after two cancelled attempts, train
+17052260, eval 17052261, source `bf8cd54`): 144 of 144 training roots,
+label yield 0.833, 310 safe rows (HIF 96, unbalance 94, harmonic 91,
+control 15, measurement+HIF 14), mixture 620 rows, 155 optimizer steps.
+On the 72 development roots the candidate scores 62 of 72 truth-audited
+(0.861) against BC0's 29 of 72 (0.403), one root short of the 63-root
+ceiling that the measurement+HIF decision leaves:
+
+| Family | BC0 | Candidate | Candidate flow |
+| --- | --- | --- | --- |
+| harmonic | 3/18 | 18/18 | WLS, spectra request, HSE, finalize (4 steps) |
+| unbalance | 2/18 | 18/18 | WLS, phase request, NLM, finalize on 15 roots; 3 roots ask for spectra first and fall back (4.2 steps) |
+| HIF | 15/18 | 17/18 | NLM, multiscan, finalize (3 steps); the miss is an alpha error of 0.115 |
+| measurement+HIF | 0/9 | 0/9 | by decision; fault identified 9/9 |
+| control | 9/9 | 9/9 | WLS, finalize |
+
+The candidate has no escalations, loops, invalid actions, or false commits
+(BC0: 32 escalations, 17 invalid actions, loop rate 0.15). Mean steps 3.5
+against 5.1.
+
 ### GPU utilization and the parallel HIF search
 
 The cluster cancels jobs whose average GPU utilization stays under about
