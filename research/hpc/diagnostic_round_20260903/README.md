@@ -202,6 +202,19 @@ without altering the estimates:
 * Collection and evaluation request 16 CPUs (the GPU nodes carry 16 to 20
   cores per GPU) and sample `nvidia-smi` utilization once a minute into
   `logs/gpu-util-<stage>-<job>.csv`, so the run keeps its own record.
+* The pool alone was not enough on the cluster: a probe inside the
+  allocation measured 105 to 315 ms of wall time per candidate simulation
+  against 7 to 11 ms of CPU when the model lived on `/scratch`, because
+  OpenDSS re-reads the model files on every `Redirect` and the Lustre opens
+  dominated; the same simulation from `/dev/shm` took 7 ms. The stages
+  therefore copy `IEEE_14_OpenDSS` to `/dev/shm` and export
+  `PSSE_OPENDSS_MODEL_DIR`, which the estimator substitutes for the
+  repository default only.
+
+With both changes the scale round's last 70 training roots collected in
+30 minutes: measurement+HIF steps took 8 s (down from 60 to 80 s),
+unbalance 4.6 s, control 3.9 s, and the sampled GPU utilization averaged
+48 % with half the samples at or above 50 %.
 
 ## What this round cannot claim
 
