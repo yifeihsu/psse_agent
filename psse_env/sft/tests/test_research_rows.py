@@ -42,7 +42,7 @@ def _row(index: int, tool: str, *, cohort: str = "d0") -> dict:
 
 
 class ResearchRowNormalizationTests(unittest.TestCase):
-    def test_validates_raw_registry_then_replaces_only_deep_copies(self) -> None:
+    def test_replaces_registry_only_in_deep_copies(self) -> None:
         source = _row(0, "wls_from_path")
         original = copy.deepcopy(source)
         normalized, report = normalize_research_rows([source], source_label="test")
@@ -50,15 +50,17 @@ class ResearchRowNormalizationTests(unittest.TestCase):
         self.assertEqual(source, original)
         self.assertEqual(normalized[0]["tools"], canonical_prompt_tool_schemas())
         self.assertNotEqual(normalized[0]["tools"], original["tools"])
-        self.assertTrue(report["source_registry_validated"])
+        self.assertTrue(report["source_registry_replaced"])
         self.assertEqual(report["rows_changed"], 1)
         self.assertFalse(report["strict_release_rows_mutated"])
 
-    def test_rejects_stale_source_before_normalization(self) -> None:
+    def test_normalizes_rows_rendered_under_an_older_registry(self) -> None:
         source = _row(0, "wls_from_path")
         source["tools"] = source["tools"][:-1]
-        with self.assertRaisesRegex(GateError, "source registry validation failed"):
-            normalize_research_rows([source], source_label="stale")
+        normalized, report = normalize_research_rows([source], source_label="older")
+        self.assertEqual(normalized[0]["tools"], canonical_prompt_tool_schemas())
+        self.assertEqual(report["rows_changed"], 1)
+        self.assertEqual(len(report["source_registry_digests"]), 1)
 
     def test_rejects_noncanonical_protocol_before_relabeling_tools(self) -> None:
         source = _row(0, "wls_from_path")
