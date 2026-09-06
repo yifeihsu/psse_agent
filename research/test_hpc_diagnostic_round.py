@@ -47,6 +47,9 @@ def test_sbatch_headers_follow_the_cluster_routing_rules(name: str) -> None:
     # beside the policy GPU; training needs no more than the default.
     expected_cpus = 8 if name == "diag_train.sbatch" else 16
     assert f"#SBATCH --cpus-per-task={expected_cpus}" in header
+    if name != "diag_train.sbatch":
+        assert 'export PSSE_OPENDSS_MODEL_DIR="$OPENDSS_LOCAL"' in text
+        assert 'cp -r "$SRC/IEEE_14_OpenDSS" "$OPENDSS_LOCAL"' in text
     assert not any(line.startswith("#SBATCH --partition") for line in header)
     assert "source \"$ROUND/round.env\"" in text
     assert "round_environment" in text

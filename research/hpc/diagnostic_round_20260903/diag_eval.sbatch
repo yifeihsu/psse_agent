@@ -30,7 +30,15 @@ nvidia-smi --query-gpu=name,memory.total,uuid,driver_version --format=csv,nohead
 nvidia-smi --query-gpu=timestamp,utilization.gpu,memory.used --format=csv,noheader -l 60 \
   >> "$LOGS/gpu-util-eval-${SLURM_JOB_ID:-manual}.csv" 2>/dev/null &
 GPU_SAMPLER_PID=$!
-trap 'kill "$GPU_SAMPLER_PID" 2>/dev/null || true' EXIT
+# OpenDSS re-reads the IEEE-14 model on every candidate simulation; on the
+# shared filesystem those opens dominated the HIF search, so the search reads
+# a node-local copy (three_phase_nlm.hif_parameter_estimator honours the
+# variable for the repository default only).
+OPENDSS_LOCAL=/dev/shm/psse_opendss_${SLURM_JOB_ID:-manual}
+rm -rf "$OPENDSS_LOCAL" && cp -r "$SRC/IEEE_14_OpenDSS" "$OPENDSS_LOCAL"
+export PSSE_OPENDSS_MODEL_DIR="$OPENDSS_LOCAL"
+stage_cleanup() { kill "$GPU_SAMPLER_PID" 2>/dev/null || true; rm -rf "$OPENDSS_LOCAL"; }
+trap stage_cleanup EXIT
 
 cd "$SRC"
 collection_args

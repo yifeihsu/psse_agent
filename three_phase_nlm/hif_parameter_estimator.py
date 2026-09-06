@@ -31,6 +31,12 @@ from .branch_current_analysis import (
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_PRISTINE_MODEL_DIR = _REPO_ROOT / "IEEE_14_OpenDSS"
+#: A node-local copy of the default IEEE-14 OpenDSS model directory.  Every
+#: candidate simulation re-reads the model through ``Redirect``; on a shared
+#: parallel filesystem those opens dominate the search, so a job copies the
+#: directory to local storage and names it here.  The override replaces only
+#: the repository default: a scan window's own pristine model is kept.
+OPENDSS_MODEL_DIR_ENV = "PSSE_OPENDSS_MODEL_DIR"
 _PHASES = ("A", "B", "C")
 #: Phase restriction from terminal currents requires the faulted phase's
 #: differential to exceed the runner-up phase by this factor.
@@ -73,8 +79,18 @@ def _resolve_model_dir(pristine_model_dir: str | None, case_path: str | None) ->
         if not candidate.is_absolute():
             candidate = (_REPO_ROOT / candidate).resolve()
         if candidate.is_dir() and (candidate / "Run_IEEE14Bus.dss").exists():
-            return candidate
+            return _local_model_dir_override(candidate)
     raise FileNotFoundError("No IEEE-14 OpenDSS model directory with Run_IEEE14Bus.dss was found.")
+
+
+def _local_model_dir_override(resolved: Path) -> Path:
+    override = os.environ.get(OPENDSS_MODEL_DIR_ENV, "").strip()
+    if not override or resolved != _DEFAULT_PRISTINE_MODEL_DIR.resolve():
+        return resolved
+    local = Path(override).expanduser()
+    if local.is_dir() and (local / "Run_IEEE14Bus.dss").exists():
+        return local
+    return resolved
 
 
 def _line_tokens(model_dir: Path, dss_element: str) -> tuple[list[str], dict[str, str]]:

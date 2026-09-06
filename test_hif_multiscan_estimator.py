@@ -351,6 +351,34 @@ class HIFMultiscanEstimatorTests(unittest.TestCase):
         self.assertAlmostEqual(searched["estimated"]["r_hif_pu"], 100.0, places=9)
         self.assertEqual(set(searched["phase_scores"]), {"A", "B", "C"})
 
+    def test_local_model_dir_override_replaces_only_the_repository_default(self) -> None:
+        import os
+        import shutil
+        from unittest import mock
+
+        from three_phase_nlm.hif_parameter_estimator import (
+            _DEFAULT_PRISTINE_MODEL_DIR,
+            OPENDSS_MODEL_DIR_ENV,
+            _resolve_model_dir,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local = Path(temp_dir) / "model"
+            shutil.copytree(_DEFAULT_PRISTINE_MODEL_DIR, local)
+            other = Path(temp_dir) / "other"
+            shutil.copytree(_DEFAULT_PRISTINE_MODEL_DIR, other)
+            with mock.patch.dict(os.environ, {OPENDSS_MODEL_DIR_ENV: str(local)}):
+                self.assertEqual(_resolve_model_dir(None, "case14"), local)
+                self.assertEqual(_resolve_model_dir(str(other), "case14"), other.resolve())
+            with mock.patch.dict(os.environ, {OPENDSS_MODEL_DIR_ENV: str(Path(temp_dir) / "missing")}):
+                self.assertEqual(
+                    _resolve_model_dir(None, "case14"), _DEFAULT_PRISTINE_MODEL_DIR.resolve()
+                )
+            with mock.patch.dict(os.environ, {OPENDSS_MODEL_DIR_ENV: ""}):
+                self.assertEqual(
+                    _resolve_model_dir(None, "case14"), _DEFAULT_PRISTINE_MODEL_DIR.resolve()
+                )
+
     @unittest.skipUnless(importlib.util.find_spec("opendssdirect"), "opendssdirect is not installed")
     def test_parallel_workers_reproduce_the_serial_search(self) -> None:
         from three_phase_nlm.hif_parameter_estimator import (
