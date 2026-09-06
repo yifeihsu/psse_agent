@@ -146,10 +146,11 @@ plan gained a family; adapters are compared within a round.
 The four HIF misses are the estimator, not the policy: on every HIF root both
 adapters pick the true branch, and the multiscan estimate's alpha error is
 0.055 to 0.10 against the audit's tolerance of 0.05 at the time. Under the
-research search budget the estimator's alpha error over the 17-window corpus
-has a median of 0.027 and a 90th percentile of 0.103 (11 of 16 windows
-within 0.05, 12 of 16 within 0.10), so a 0.05 per-episode tolerance turned
-HIF success into a draw of the root. `ReleaseAuditTolerances.hif_alpha_abs`
+research search budget the estimator's alpha error has a median of 0.020
+and a 90th percentile of 0.092 over the 85-window training corpus (67 of 84
+localized windows within 0.05, 77 of 84 within 0.10; the 17-window corpus
+gives 0.027, 0.103, 11 of 16, and 12 of 16), so a 0.05 per-episode tolerance
+turned HIF success into a draw of the root. `ReleaseAuditTolerances.hif_alpha_abs`
 is therefore 0.10 from commit `aad2b0c`'s successor. Re-reading round 4's
 recorded estimates under 0.10 gives the candidate HIF 5 of 6 (the miss is
 0.1005) and 20 of 24 overall (0.833), and BC0 HIF 4 of 6 and 9 of 24
