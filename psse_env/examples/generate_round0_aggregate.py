@@ -3313,6 +3313,15 @@ def main() -> None:
         default=scenario_generator_module.DEFAULT_IMBALANCE_SAMPLE_PATH,
         help="Three-phase-unbalance JSONL corpus.",
     )
+    parser.add_argument(
+        "--research",
+        action="store_true",
+        help=(
+            "Research corpus: exit 0 whether or not the aggregate is "
+            "release-eligible; the verdict and its reasons stay in the "
+            "generation provenance."
+        ),
+    )
     args = parser.parse_args()
     report = generate(args)
     print(
@@ -3332,7 +3341,10 @@ def main() -> None:
             sort_keys=True,
         )
     )
-    if report["generation_provenance"].get("release_eligible") is not True:
+    if (
+        report["generation_provenance"].get("release_eligible") is not True
+        and not args.research
+    ):
         raise SystemExit(1)
 
 

@@ -590,6 +590,65 @@ def _parse_plan(value: str, default: Mapping[str, int]) -> dict[str, int]:
     return _normalize_plan(payload)
 
 
+def research_scenario_generator(
+    *, seed: int, research_profile: Mapping[str, Any] | None = None
+) -> Round0ScenarioGenerator:
+    """The scenario generator behind a research profile.
+
+    Draws from the train partition of the tabular corpus with the profile's
+    branch-current corpora and signature modes, keeping every scan of a
+    ten-scan window so the research estimator budget can use it.
+    """
+
+    profile = dict(research_profile or LEGACY_RESEARCH_PROFILE)
+    generator_kwargs: dict[str, Any] = {
+        "seed": int(seed),
+        "source_partition": "train",
+        "parameter_ranking_dominance_threshold": 1.0,
+    }
+    sources = profile.get("scenario_sources")
+    if isinstance(sources, Mapping):
+        if sources.get("hif_sample_paths"):
+            generator_kwargs["hif_sample_paths"] = [
+                Path(path) for path in sources["hif_sample_paths"]
+            ]
+        if sources.get("imbalance_sample_path"):
+            generator_kwargs["imbalance_sample_path"] = Path(
+                sources["imbalance_sample_path"]
+            )
+        if sources.get("signature_modes"):
+            generator_kwargs["waveform_signature_mode"] = dict(
+                sources["signature_modes"]
+            )
+        # Keep every scan of a ten-scan current-telemetry window so the
+        # research estimator budget can use the whole window.
+        generator_kwargs["hif_max_scans"] = RESEARCH_HIF_SEARCH_BUDGET[
+            "hif_max_scans"
+        ]
+    return Round0ScenarioGenerator(**generator_kwargs)
+
+
+def load_scenario_suite(path: str | Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Load a saved scenario list and describe it for the run configuration."""
+
+    resolved = Path(path).expanduser().resolve(strict=True)
+    payload = _read_json(resolved)
+    if not isinstance(payload, list) or not all(isinstance(row, Mapping) for row in payload):
+        raise ValueError(f"scenario suite must be a JSON list of scenarios: {resolved}")
+    rows = [copy.deepcopy(dict(row)) for row in payload]
+    roots = [_row_root(row) for row in rows]
+    if not rows or "" in roots:
+        raise ValueError(f"every scenario in {resolved} needs a physical root")
+    if len(set(roots)) != len(roots):
+        raise ValueError(f"scenario suite repeats a physical root: {resolved}")
+    return rows, {
+        "path": str(resolved),
+        "sha256": hashlib.sha256(resolved.read_bytes()).hexdigest(),
+        "rows": len(rows),
+        "families": dict(sorted(Counter(_scenario_family(row) for row in rows).items())),
+    }
+
+
 def prepare_scenario_split(
     *,
     output_dir: Path,
@@ -602,9 +661,22 @@ def prepare_scenario_split(
     run_descriptor: Mapping[str, Any],
     protected_roots: set[str] | None = None,
     research_profile: Mapping[str, Any] | None = None,
+    fixed_training: Sequence[Mapping[str, Any]] | None = None,
+    fixed_development: Sequence[Mapping[str, Any]] | None = None,
+    scenario_suite: Mapping[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Generate or adopt the run's training and development scenarios.
+
+    With ``fixed_training``/``fixed_development`` (a saved suite) nothing is
+    generated: the lists are checked for unique roots disjoint from D0, the
+    protected suites, and each other, then written beside the config so every
+    later stage and every later round reads the same roots.
+    """
+
     protected_roots = set(protected_roots or set())
     profile = dict(research_profile or LEGACY_RESEARCH_PROFILE)
+    if (fixed_training is None) != (fixed_development is None):
+        raise ValueError("fixed training and development suites come together")
     train_path = output_dir / "training_scenarios.json"
     development_path = output_dir / "development_scenarios.json"
     config_path = output_dir / "config.json"
@@ -623,6 +695,8 @@ def prepare_scenario_split(
         }
         if protected_roots:
             expected["protected_roots"] = sorted(protected_roots)
+        if scenario_suite is not None:
+            expected["scenario_suite"] = dict(scenario_suite)
         # Runs recorded before the research profile existed used the legacy
         # core preset with generator-default corpora; only a non-legacy
         # request or a recorded profile participates in the resume check.
@@ -637,50 +711,49 @@ def prepare_scenario_split(
         training = _read_json(train_path)
         development = _read_json(development_path)
     else:
-        if candidate_multiplier <= 0:
-            raise ValueError("candidate_multiplier must be positive")
-        requested = {
-            family: (int(train_plan.get(family, 0)) + int(development_plan.get(family, 0)))
-            * int(candidate_multiplier)
-            for family in set(train_plan) | set(development_plan)
-        }
-        generator_kwargs: dict[str, Any] = {
-            "seed": int(seed),
-            "source_partition": "train",
-            "parameter_ranking_dominance_threshold": 1.0,
-        }
-        sources = profile.get("scenario_sources")
-        if isinstance(sources, Mapping):
-            if sources.get("hif_sample_paths"):
-                generator_kwargs["hif_sample_paths"] = [
-                    Path(path) for path in sources["hif_sample_paths"]
-                ]
-            if sources.get("imbalance_sample_path"):
-                generator_kwargs["imbalance_sample_path"] = Path(
-                    sources["imbalance_sample_path"]
+        if fixed_training is not None and fixed_development is not None:
+            training = [copy.deepcopy(dict(row)) for row in fixed_training]
+            development = [copy.deepcopy(dict(row)) for row in fixed_development]
+            forbidden = set(d0_roots) | protected_roots
+            training_roots = {_row_root(row) for row in training}
+            development_roots = {_row_root(row) for row in development}
+            if "" in training_roots or "" in development_roots:
+                raise ValueError("Fixed scenario suites need a physical root on every row")
+            if len(training_roots) != len(training) or len(development_roots) != len(development):
+                raise ValueError("Fixed scenario suites repeat a physical root")
+            overlap = training_roots & development_roots
+            if overlap:
+                raise ValueError(
+                    "Fixed training and development suites share roots: "
+                    f"{sorted(overlap)[:8]}"
                 )
-            if sources.get("signature_modes"):
-                generator_kwargs["waveform_signature_mode"] = dict(
-                    sources["signature_modes"]
+            excluded = (training_roots | development_roots) & forbidden
+            if excluded:
+                raise ValueError(
+                    "Fixed scenario suites reuse D0 or protected roots: "
+                    f"{sorted(excluded)[:8]}"
                 )
-            # Keep every scan of a ten-scan current-telemetry window so the
-            # research estimator budget can use the whole window.
-            generator_kwargs["hif_max_scans"] = RESEARCH_HIF_SEARCH_BUDGET[
-                "hif_max_scans"
+        else:
+            if candidate_multiplier <= 0:
+                raise ValueError("candidate_multiplier must be positive")
+            requested = {
+                family: (int(train_plan.get(family, 0)) + int(development_plan.get(family, 0)))
+                * int(candidate_multiplier)
+                for family in set(train_plan) | set(development_plan)
+            }
+            generator = research_scenario_generator(seed=seed, research_profile=profile)
+            candidates = [
+                partition_release_scenario_v1(row, split="dagger_train")
+                for row in generator.build(requested)
             ]
-        generator = Round0ScenarioGenerator(**generator_kwargs)
-        candidates = [
-            partition_release_scenario_v1(row, split="dagger_train")
-            for row in generator.build(requested)
-        ]
-        training, development = allocate_scenarios(
-            candidates,
-            d0_roots=d0_roots,
-            train_plan=train_plan,
-            development_plan=development_plan,
-            seed=seed,
-            protected_roots=protected_roots,
-        )
+            training, development = allocate_scenarios(
+                candidates,
+                d0_roots=d0_roots,
+                train_plan=train_plan,
+                development_plan=development_plan,
+                seed=seed,
+                protected_roots=protected_roots,
+            )
         source = git_source_state(Path(__file__).resolve().parents[1])
         config = {
             "contract": RESEARCH_CONTRACT,
@@ -698,6 +771,8 @@ def prepare_scenario_split(
         }
         if protected_roots:
             config["protected_roots"] = sorted(protected_roots)
+        if scenario_suite is not None:
+            config["scenario_suite"] = dict(scenario_suite)
         if profile != LEGACY_RESEARCH_PROFILE:
             config["research_profile"] = profile
         _write_json(train_path, training)
@@ -1319,6 +1394,23 @@ def parser() -> argparse.ArgumentParser:
         ),
     )
     result.add_argument(
+        "--training-scenarios",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Saved training scenario list to adopt instead of generating one; "
+            "requires --development-scenarios and makes the plans informational"
+        ),
+    )
+    result.add_argument(
+        "--development-scenarios",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Saved development scenario list to adopt; requires --training-scenarios",
+    )
+    result.add_argument(
         "--train-plan",
         default="",
         help="JSON object or JSON file; default comes from --plan-preset",
@@ -1442,6 +1534,22 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     train_default, development_default = plan_preset(args.plan_preset)
     train_plan = _parse_plan(args.train_plan, train_default)
     development_plan = _parse_plan(args.development_plan, development_default)
+    fixed_training = fixed_development = None
+    scenario_suite = None
+    if args.training_scenarios is not None or args.development_scenarios is not None:
+        if args.training_scenarios is None or args.development_scenarios is None:
+            raise ValueError(
+                "--training-scenarios and --development-scenarios come together"
+            )
+        fixed_training, training_suite = load_scenario_suite(args.training_scenarios)
+        fixed_development, development_suite = load_scenario_suite(
+            args.development_scenarios
+        )
+        scenario_suite = {"training": training_suite, "development": development_suite}
+        # The plans record what the suites hold so corpus resolution and the
+        # run configuration describe the adopted roots, not a preset.
+        train_plan = dict(training_suite["families"])
+        development_plan = dict(development_suite["families"])
     plan_families = set(train_plan) | set(development_plan)
     scenario_sources = resolve_scenario_sources(
         plan_families=plan_families,
@@ -1488,6 +1596,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         seed=args.seed,
         run_descriptor=run_descriptor,
         research_profile=research_profile,
+        fixed_training=fixed_training,
+        fixed_development=fixed_development,
+        scenario_suite=scenario_suite,
     )
     _write_jsonl(output_dir / "d0.train.current.jsonl", d0_train_rows)
     _write_json(

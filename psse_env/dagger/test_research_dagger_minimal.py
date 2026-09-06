@@ -372,6 +372,100 @@ class ResearchSplitAndResumeTests(unittest.TestCase):
         self.assertEqual(comparison["r1_minus_bc0"]["resolved_episodes"], 1.0)
 
 
+class FixedScenarioSuiteTests(unittest.TestCase):
+    """A saved suite is adopted as-is and pinned in the run configuration."""
+
+    @staticmethod
+    def _scenario(family: str, root: str) -> dict:
+        return {
+            "scenario_id": f"{family}-{root}",
+            "grouping": {"scenario_family": family, "physical_root_fingerprint": root},
+        }
+
+    def test_fixed_suites_are_written_and_pinned_without_generation(self) -> None:
+        from scripts.run_dagger_research import prepare_scenario_split
+
+        training = [self._scenario("hif", "t1"), self._scenario("harmonic", "t2")]
+        development = [self._scenario("hif", "d1")]
+        suite = {"training": {"sha256": "a" * 64}, "development": {"sha256": "b" * 64}}
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp)
+            common = dict(
+                output_dir=output,
+                d0_raw_path=output / "d0.jsonl",
+                d0_roots={"d0"},
+                train_plan={"hif": 1, "harmonic": 1},
+                development_plan={"hif": 1},
+                candidate_multiplier=3,
+                seed=7,
+                run_descriptor={"adapter_path": "x"},
+                protected_roots={"p"},
+            )
+            got_training, got_development = prepare_scenario_split(
+                **common,
+                fixed_training=training,
+                fixed_development=development,
+                scenario_suite=suite,
+            )
+            self.assertEqual([r["scenario_id"] for r in got_training], ["hif-t1", "harmonic-t2"])
+            self.assertEqual([r["scenario_id"] for r in got_development], ["hif-d1"])
+            config = json.loads((output / "config.json").read_text(encoding="utf-8"))
+            self.assertEqual(config["scenario_suite"], suite)
+            self.assertEqual(config["training_roots"], ["t1", "t2"])
+            # Resume with the same suite reads the stored files back.
+            again, _ = prepare_scenario_split(
+                **common,
+                fixed_training=training,
+                fixed_development=development,
+                scenario_suite=suite,
+            )
+            self.assertEqual(again, got_training)
+            with self.assertRaisesRegex(RuntimeError, "differs on: scenario_suite"):
+                prepare_scenario_split(
+                    **common,
+                    fixed_training=training,
+                    fixed_development=development,
+                    scenario_suite={**suite, "training": {"sha256": "c" * 64}},
+                )
+
+    def test_fixed_suites_reject_d0_protected_and_shared_roots(self) -> None:
+        from scripts.run_dagger_research import prepare_scenario_split
+
+        base = dict(
+            d0_roots={"d0"},
+            train_plan={"hif": 1},
+            development_plan={"hif": 1},
+            candidate_multiplier=3,
+            seed=7,
+            run_descriptor={},
+            protected_roots={"p"},
+        )
+        cases = {
+            "D0 or protected": ([self._scenario("hif", "d0")], [self._scenario("hif", "x")]),
+            "D0 or protected roots": ([self._scenario("hif", "t")], [self._scenario("hif", "p")]),
+            "share roots": ([self._scenario("hif", "s")], [self._scenario("hif", "s")]),
+        }
+        for message, (training, development) in cases.items():
+            with tempfile.TemporaryDirectory() as temp:
+                with self.assertRaisesRegex(ValueError, message):
+                    prepare_scenario_split(
+                        output_dir=Path(temp),
+                        d0_raw_path=Path(temp) / "d0.jsonl",
+                        fixed_training=training,
+                        fixed_development=development,
+                        scenario_suite={},
+                        **base,
+                    )
+        with tempfile.TemporaryDirectory() as temp:
+            with self.assertRaisesRegex(ValueError, "come together"):
+                prepare_scenario_split(
+                    output_dir=Path(temp),
+                    d0_raw_path=Path(temp) / "d0.jsonl",
+                    fixed_training=[self._scenario("hif", "t")],
+                    **base,
+                )
+
+
 class DiagnosticFamilyPresetTests(unittest.TestCase):
     def test_core_preset_is_the_legacy_default_plan(self) -> None:
         train, development = plan_preset("core")
