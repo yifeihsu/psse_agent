@@ -2737,6 +2737,32 @@ class MatpowerDeploymentProviders:
                 break
         return [dict(item) for item in rows if isinstance(item, Mapping)], sigma
 
+    #: Most recent multi-scan HIF searches, keyed by their complete inputs.
+    #: The search is deterministic and costs tens of seconds, and a learner
+    #: that loops on a state repeats it with identical inputs.
+    _HIF_MULTISCAN_MEMO_LIMIT = 16
+
+    def _memoized_hif_multiscan(self, **kwargs: Any) -> dict[str, Any]:
+        memo = getattr(self, "_hif_multiscan_memo", None)
+        if memo is None:
+            memo = {}
+            self._hif_multiscan_memo = memo
+        try:
+            key = hashlib.sha256(
+                json.dumps(kwargs, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+            ).hexdigest()
+        except (TypeError, ValueError):
+            return _estimate_hif_location_magnitude_multiscan_logic(**kwargs)
+        cached = memo.get(key)
+        if cached is None:
+            cached = _estimate_hif_location_magnitude_multiscan_logic(**kwargs)
+            if isinstance(cached, Mapping) and cached.get("success"):
+                if len(memo) >= self._HIF_MULTISCAN_MEMO_LIMIT:
+                    memo.pop(next(iter(memo)))
+                memo[key] = cached
+            return cached
+        return copy.deepcopy(cached)
+
     def _hif_diagnostic_acceptance(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         """Apply a fail-closed HIF-vs-null goodness-of-fit gate."""
         fit = payload.get("fit")
@@ -3432,7 +3458,7 @@ class MatpowerDeploymentProviders:
             case_path = self._case_path(state)
         except Exception as exc:
             return self._failure("hif_input_error", f"{type(exc).__name__}: {exc}")
-        payload = _estimate_hif_location_magnitude_multiscan_logic(
+        payload = self._memoized_hif_multiscan(
             scan_window_path=str(window.get("scan_window_path") or state.get("state_id") or "scan_window"),
             candidate_branch_row0=int(arguments["candidate_branch_row0"]),
             scans=[dict(scan) for scan in scans],

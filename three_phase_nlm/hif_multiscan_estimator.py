@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import atexit
 import json
 import math
+import multiprocessing
+import os
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -26,6 +30,7 @@ from .hif_parameter_estimator import (
     _simulate_base,
     _simulate_candidate,
     _terminal_seed_points,
+    _voltage_rows_to_phasors,
     classify_parameter_certainty,
     terminal_current_branch_evidence,
 )
@@ -34,6 +39,53 @@ from .ieee14_adapter import branch_info_for_row0
 
 
 _PHASES = ("A", "B", "C")
+
+#: Environment variable that sets the default number of simulation worker
+#: processes for the multi-scan search (``workers=None``).  Unset or ``1``
+#: keeps the search serial.
+HIF_WORKERS_ENV = "PSSE_HIF_WORKERS"
+_SIMULATION_POOL: ProcessPoolExecutor | None = None
+_SIMULATION_POOL_SIZE = 0
+
+
+def _simulation_workers(requested: int | None) -> int:
+    if requested is None:
+        raw = os.environ.get(HIF_WORKERS_ENV, "").strip()
+        requested = int(raw) if raw else 1
+    return max(1, int(requested))
+
+
+def _shutdown_simulation_pool() -> None:
+    global _SIMULATION_POOL, _SIMULATION_POOL_SIZE
+    pool = _SIMULATION_POOL
+    _SIMULATION_POOL = None
+    _SIMULATION_POOL_SIZE = 0
+    if pool is not None:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _simulation_pool(workers: int) -> ProcessPoolExecutor:
+    """One spawn-context process pool per interpreter, resized on demand.
+
+    Each worker owns its own OpenDSS engine, which is a per-process singleton,
+    so candidate simulations run side by side without sharing circuit state.
+    The spawn context keeps the workers free of the parent's CUDA and thread
+    state; the pool is created on first use and reused by later searches.
+    """
+
+    global _SIMULATION_POOL, _SIMULATION_POOL_SIZE
+    if _SIMULATION_POOL is None or _SIMULATION_POOL_SIZE != workers:
+        _shutdown_simulation_pool()
+        _SIMULATION_POOL = ProcessPoolExecutor(
+            max_workers=workers, mp_context=multiprocessing.get_context("spawn")
+        )
+        _SIMULATION_POOL_SIZE = workers
+        atexit.register(_shutdown_simulation_pool)
+    return _SIMULATION_POOL
+
+
+def _simulate_candidate_task(kwargs: Mapping[str, Any]) -> dict[str, Any]:
+    return _simulate_candidate(**kwargs)
 _SELECTION_MODES = {"all", "diversity_greedy", "information_greedy"}
 _RESISTANCE_MODES = {"shared", "scan_specific_smooth"}
 _ROBUST_LOSSES = {"linear", "soft_l1", "huber"}
@@ -62,6 +114,32 @@ class HIFScan:
     three_phase_sigma: float = 5e-3
     three_phase_branch_currents: Any = None
     branch_current_sigma: float = DEFAULT_BRANCH_CURRENT_SIGMA_PU
+    #: Parsed once at scan construction so residual evaluations do not
+    #: re-parse the observed rows.
+    voltage_phasors: Any = None
+    current_phasors: Any = None
+
+
+def _simulation_phasors(
+    simulated: Mapping[str, Any],
+    parsed_cache: dict[int, tuple[Any, Any, Any]] | None,
+) -> tuple[Any, Any]:
+    """Parsed voltage and current phasors of one simulation, cached per object.
+
+    The cache keeps a reference to the simulation it parsed, so an ``id`` can
+    never be served for a different object.
+    """
+
+    key = id(simulated)
+    if parsed_cache is not None:
+        entry = parsed_cache.get(key)
+        if entry is not None and entry[0] is simulated:
+            return entry[1], entry[2]
+    voltages = _voltage_rows_to_phasors(simulated.get("three_phase_voltages"))
+    currents = branch_current_rows_to_phasors(simulated.get(BRANCH_CURRENT_CHANNEL))
+    if parsed_cache is not None:
+        parsed_cache[key] = (simulated, voltages, currents)
+    return voltages, currents
 
 
 def _aggregate_terminal_estimates(
@@ -281,6 +359,8 @@ def _parse_scans(
                 three_phase_sigma=three_phase_sigma,
                 three_phase_branch_currents=branch_currents,
                 branch_current_sigma=branch_current_sigma,
+                voltage_phasors=_voltage_rows_to_phasors(item.get("three_phase_voltages")),
+                current_phasors=branch_current_rows_to_phasors(branch_currents),
             )
         )
     if len(topology_ids) > 1:
@@ -320,16 +400,25 @@ def _robust_mean_loss(residual: np.ndarray, loss: str) -> float:
     return float(np.mean(values))
 
 
-def _scan_residual(scan: HIFScan, simulated: Mapping[str, Any]) -> np.ndarray:
+def _scan_residual(
+    scan: HIFScan,
+    simulated: Mapping[str, Any],
+    parsed_cache: dict[int, tuple[Any, Any, Any]] | None = None,
+) -> np.ndarray:
+    simulated_voltages, simulated_currents = _simulation_phasors(simulated, parsed_cache)
     return _residual_vector(
         observed_z=scan.z_obs,
         simulated_z=simulated["z"],
-        observed_three_phase_voltages=scan.three_phase_voltages,
-        simulated_three_phase_voltages=simulated.get("three_phase_voltages"),
+        observed_three_phase_voltages=(
+            scan.voltage_phasors if scan.voltage_phasors is not None else scan.three_phase_voltages
+        ),
+        simulated_three_phase_voltages=simulated_voltages,
         sigma_z=scan.sigma_z,
         three_phase_sigma=scan.three_phase_sigma,
-        observed_branch_currents=scan.three_phase_branch_currents,
-        simulated_branch_currents=simulated.get(BRANCH_CURRENT_CHANNEL),
+        observed_branch_currents=(
+            scan.current_phasors if scan.current_phasors is not None else scan.three_phase_branch_currents
+        ),
+        simulated_branch_currents=simulated_currents,
         branch_current_sigma=scan.branch_current_sigma,
     )
 
@@ -352,22 +441,28 @@ def _weighted_simulation_difference(
     scan: HIFScan,
     positive: Mapping[str, Any],
     negative: Mapping[str, Any],
+    parsed_cache: dict[int, tuple[Any, Any, Any]] | None = None,
 ) -> np.ndarray:
     # Sensitivities only include the current block when the scan observes it,
     # so the information matrix reflects the telemetry actually available.
-    currents_observed = bool(
-        scan.three_phase_branch_currents
-        and branch_current_rows_to_phasors(scan.three_phase_branch_currents)
-    )
+    if scan.current_phasors is not None:
+        currents_observed = bool(scan.current_phasors)
+    else:
+        currents_observed = bool(
+            scan.three_phase_branch_currents
+            and branch_current_rows_to_phasors(scan.three_phase_branch_currents)
+        )
+    positive_voltages, positive_currents = _simulation_phasors(positive, parsed_cache)
+    negative_voltages, negative_currents = _simulation_phasors(negative, parsed_cache)
     return _residual_vector(
         observed_z=positive["z"],
         simulated_z=negative["z"],
-        observed_three_phase_voltages=positive.get("three_phase_voltages"),
-        simulated_three_phase_voltages=negative.get("three_phase_voltages"),
+        observed_three_phase_voltages=positive_voltages,
+        simulated_three_phase_voltages=negative_voltages,
         sigma_z=scan.sigma_z,
         three_phase_sigma=scan.three_phase_sigma,
-        observed_branch_currents=positive.get(BRANCH_CURRENT_CHANNEL) if currents_observed else None,
-        simulated_branch_currents=negative.get(BRANCH_CURRENT_CHANNEL) if currents_observed else None,
+        observed_branch_currents=positive_currents if currents_observed else None,
+        simulated_branch_currents=negative_currents if currents_observed else None,
         branch_current_sigma=scan.branch_current_sigma,
     )
 
@@ -760,7 +855,16 @@ def estimate_hif_location_magnitude_multiscan(
     uncertainty_tolerance: float = 0.01,
     condition_number_limit: float = 1e6,
     absolute_correlation_limit: float = 0.98,
+    workers: int | None = None,
 ) -> dict[str, Any]:
+    """Multi-scan HIF location/magnitude search over an OpenDSS candidate grid.
+
+    ``workers`` is the number of processes that evaluate candidate simulations
+    side by side (``None`` reads ``PSSE_HIF_WORKERS``; ``1`` is serial).  The
+    parallel search fills the same per-call simulation cache with the same
+    numbers, so the estimate does not depend on the worker count.
+    """
+
     alpha_grid_size, r_grid_size, validated_max_scans = validate_hif_search_limits(
         alpha_grid_size=alpha_grid_size,
         r_grid_size=r_grid_size,
@@ -874,25 +978,72 @@ def estimate_hif_location_magnitude_multiscan(
     )
 
     simulation_cache: dict[tuple[str, float, float, str], dict[str, Any]] = {}
+    simulation_failures: dict[tuple[str, float, float, str], BaseException] = {}
     base_cache: dict[str, dict[str, Any]] = {}
+    parsed_cache: dict[int, tuple[Any, Any, Any]] = {}
     candidate_errors: list[str] = []
+    pool_workers = _simulation_workers(workers)
+
+    def simulation_key(scan: HIFScan, alpha: float, r_hif_pu: float, phase: str) -> tuple[str, float, float, str]:
+        return (str(phase), round(float(alpha), 11), round(float(r_hif_pu), 9), _json_cache_key(scan.op_point))
+
+    def simulation_kwargs(scan: HIFScan, alpha: float, r_hif_pu: float, phase: str) -> dict[str, Any]:
+        return {
+            "model_dir": model_dir,
+            "original_tokens": original_tokens,
+            "dss_element": dss_element,
+            "alpha": float(alpha),
+            "phase": str(phase),
+            "r_hif_pu": float(r_hif_pu),
+            "op_point": scan.op_point,
+        }
 
     def simulate(scan: HIFScan, alpha: float, r_hif_pu: float, phase: str) -> dict[str, Any]:
-        op_key = _json_cache_key(scan.op_point)
-        key = (str(phase), round(float(alpha), 11), round(float(r_hif_pu), 9), op_key)
+        key = simulation_key(scan, alpha, r_hif_pu, phase)
+        if key in simulation_failures:
+            raise simulation_failures[key]
         if key not in simulation_cache:
-            simulation_cache[key] = _simulate_candidate(
-                model_dir=model_dir,
-                original_tokens=original_tokens,
-                dss_element=dss_element,
-                alpha=float(alpha),
-                phase=str(phase),
-                r_hif_pu=float(r_hif_pu),
-                op_point=scan.op_point,
-            )
+            kwargs = simulation_kwargs(scan, alpha, r_hif_pu, phase)
+            if pool_workers > 1:
+                # Every simulation runs in a worker while a pool is active: the
+                # parent's OpenDSS engine is a singleton, and the refinement
+                # threads must never drive it concurrently.
+                future = _simulation_pool(pool_workers).submit(_simulate_candidate_task, kwargs)
+                try:
+                    simulation_cache[key] = future.result()
+                except Exception as exc:  # noqa: BLE001 - re-raised below
+                    simulation_failures[key] = exc
+                    raise
+            else:
+                simulation_cache[key] = _simulate_candidate(**kwargs)
         return simulation_cache[key]
 
-    def finite_difference_jacobian(scan: HIFScan, alpha: float, r_hif_pu: float, phase: str) -> np.ndarray:
+    def prefetch(requests: Sequence[tuple[HIFScan, float, float, str]]) -> None:
+        """Evaluate uncached simulations side by side, then serve them from the cache.
+
+        Failures are cached too, so ``simulate`` re-raises them without a second
+        simulation; the serial path sees exactly the values it would compute.
+        """
+
+        if pool_workers <= 1:
+            return
+        pending: dict[tuple[str, float, float, str], dict[str, Any]] = {}
+        for scan, alpha, r_hif_pu, phase in requests:
+            key = simulation_key(scan, alpha, r_hif_pu, phase)
+            if key in simulation_cache or key in simulation_failures or key in pending:
+                continue
+            pending[key] = simulation_kwargs(scan, alpha, r_hif_pu, phase)
+        if not pending:
+            return
+        pool = _simulation_pool(pool_workers)
+        futures = {key: pool.submit(_simulate_candidate_task, kwargs) for key, kwargs in pending.items()}
+        for key, future in futures.items():
+            try:
+                simulation_cache[key] = future.result()
+            except Exception as exc:  # noqa: BLE001 - surfaced by simulate()
+                simulation_failures[key] = exc
+
+    def finite_difference_points(alpha: float, r_hif_pu: float) -> tuple[float, float, float, float]:
         alpha_step = min(0.01, max(0.0025, 0.25 / max(int(alpha_grid_size) - 1, 1)))
         alpha_low = max(0.01, float(alpha) - alpha_step)
         alpha_high = min(0.99, float(alpha) + alpha_step)
@@ -902,15 +1053,35 @@ def estimate_hif_location_magnitude_multiscan(
         rho_high = min(math.log(float(r_hif_pu_max)), rho + rho_step)
         if alpha_high <= alpha_low or rho_high <= rho_low:
             raise ValueError("Finite-difference point is pinned at a parameter bound")
+        return alpha_low, alpha_high, rho_low, rho_high
+
+    def finite_difference_requests(
+        scan: HIFScan, alpha: float, r_hif_pu: float, phase: str
+    ) -> list[tuple[HIFScan, float, float, str]]:
+        try:
+            alpha_low, alpha_high, rho_low, rho_high = finite_difference_points(alpha, r_hif_pu)
+        except ValueError:
+            return []
+        return [
+            (scan, alpha_high, float(r_hif_pu), phase),
+            (scan, alpha_low, float(r_hif_pu), phase),
+            (scan, float(alpha), math.exp(rho_high), phase),
+            (scan, float(alpha), math.exp(rho_low), phase),
+        ]
+
+    def finite_difference_jacobian(scan: HIFScan, alpha: float, r_hif_pu: float, phase: str) -> np.ndarray:
+        alpha_low, alpha_high, rho_low, rho_high = finite_difference_points(alpha, r_hif_pu)
         alpha_diff = _weighted_simulation_difference(
             scan,
             simulate(scan, alpha_high, r_hif_pu, phase),
             simulate(scan, alpha_low, r_hif_pu, phase),
+            parsed_cache,
         ) / (alpha_high - alpha_low)
         rho_diff = _weighted_simulation_difference(
             scan,
             simulate(scan, alpha, math.exp(rho_high), phase),
             simulate(scan, alpha, math.exp(rho_low), phase),
+            parsed_cache,
         ) / (rho_high - rho_low)
         return np.column_stack([alpha_diff, rho_diff])
 
@@ -928,6 +1099,14 @@ def estimate_hif_location_magnitude_multiscan(
         pilot_r = math.sqrt(float(r_hif_pu_min) * float(r_hif_pu_max))
         pilot_positions: list[int] = []
         pilot_information: list[np.ndarray] = []
+        prefetch(
+            [
+                request
+                for scan in parsed_scans
+                for pilot_phase in phase_candidates
+                for request in finite_difference_requests(scan, pilot_alpha, pilot_r, pilot_phase)
+            ]
+        )
         for position, scan in enumerate(parsed_scans):
             try:
                 phase_information = []
@@ -961,10 +1140,11 @@ def estimate_hif_location_magnitude_multiscan(
     def shared_residual(alpha: float, r_hif_pu: float, phase: str) -> tuple[np.ndarray, list[np.ndarray], list[dict[str, Any]]]:
         blocks: list[np.ndarray] = []
         simulations: list[dict[str, Any]] = []
+        prefetch([(scan, alpha, r_hif_pu, phase) for scan in selected_scans])
         for scan in selected_scans:
             simulated = simulate(scan, alpha, r_hif_pu, phase)
             simulations.append(simulated)
-            blocks.append(_scan_residual(scan, simulated))
+            blocks.append(_scan_residual(scan, simulated, parsed_cache))
         return _normalized_joint_residual(blocks), blocks, simulations
 
     def shared_candidate(alpha: float, r_hif_pu: float, phase: str, stage: str) -> dict[str, Any] | None:
@@ -994,10 +1174,11 @@ def estimate_hif_location_magnitude_multiscan(
     ) -> tuple[np.ndarray, list[np.ndarray], list[dict[str, Any]]]:
         blocks: list[np.ndarray] = []
         simulations: list[dict[str, Any]] = []
+        prefetch([(scan, alpha, float(r_value), phase) for scan, r_value in zip(selected_scans, r_values_by_scan)])
         for scan, r_value in zip(selected_scans, r_values_by_scan):
             simulated = simulate(scan, alpha, float(r_value), phase)
             simulations.append(simulated)
-            blocks.append(_scan_residual(scan, simulated))
+            blocks.append(_scan_residual(scan, simulated, parsed_cache))
         residual = _normalized_joint_residual(blocks)
         return residual, blocks, simulations
 
@@ -1037,6 +1218,15 @@ def estimate_hif_location_magnitude_multiscan(
     alphas = np.linspace(0.05, 0.95, int(alpha_grid_size))
     r_values = np.geomspace(float(r_hif_pu_min), float(r_hif_pu_max), int(r_grid_size))
     all_candidates: list[dict[str, Any]] = []
+    prefetch(
+        [
+            (scan, float(alpha), float(r_value), phase)
+            for phase in phase_candidates
+            for alpha in alphas
+            for r_value in r_values
+            for scan in selected_scans
+        ]
+    )
 
     if mode == "shared":
         for phase in phase_candidates:
@@ -1054,7 +1244,9 @@ def estimate_hif_location_magnitude_multiscan(
                 for scan_idx, scan in enumerate(selected_scans):
                     for r_idx, r_value in enumerate(r_values):
                         try:
-                            residual = _scan_residual(scan, simulate(scan, float(alpha), float(r_value), phase))
+                            residual = _scan_residual(
+                                scan, simulate(scan, float(alpha), float(r_value), phase), parsed_cache
+                            )
                             loss_matrix[scan_idx, r_idx] = _robust_mean_loss(residual, loss)
                         except Exception as exc:
                             if len(candidate_errors) < 8:
@@ -1130,7 +1322,7 @@ def estimate_hif_location_magnitude_multiscan(
         try:
             from scipy.optimize import least_squares  # type: ignore
 
-            for seed in seeds:
+            def refine(seed: Mapping[str, Any]) -> dict[str, Any] | None:
                 phase = str(seed["phase"])
                 if mode == "shared":
                     x0 = np.asarray([float(seed["alpha"]), math.log(float(seed["r_hif_pu"]))], dtype=float)
@@ -1184,6 +1376,19 @@ def estimate_hif_location_magnitude_multiscan(
                         phase,
                         "bounded_local_refinement",
                     )
+                return refined
+
+            # The seeds refine independently; with a worker pool they run in
+            # threads so their simulation batches overlap, and their results
+            # are appended in seed order so the outcome matches a serial run.
+            if pool_workers > 1 and len(seeds) > 1:
+                from concurrent.futures import ThreadPoolExecutor
+
+                with ThreadPoolExecutor(max_workers=min(len(seeds), pool_workers)) as refiners:
+                    refined_candidates = list(refiners.map(refine, seeds))
+            else:
+                refined_candidates = [refine(seed) for seed in seeds]
+            for refined in refined_candidates:
                 if refined is not None:
                     all_candidates.append(refined)
         except Exception as exc:
@@ -1224,7 +1429,7 @@ def estimate_hif_location_magnitude_multiscan(
             key = _json_cache_key(scan.op_point)
             if key not in base_cache:
                 base_cache[key] = _simulate_base(model_dir, op_point=scan.op_point)
-            base_blocks.append(_scan_residual(scan, base_cache[key]))
+            base_blocks.append(_scan_residual(scan, base_cache[key], parsed_cache))
         except Exception as exc:
             if len(candidate_errors) < 8:
                 candidate_errors.append(f"base_simulation: {exc}")
@@ -1240,6 +1445,13 @@ def estimate_hif_location_magnitude_multiscan(
     diagnostic_scan_indices: list[int] = []
     diagnostic_failures: list[dict[str, Any]] = []
     observability_error = None
+    prefetch(
+        [
+            request
+            for scan, r_value in zip(selected_scans, best_r_values)
+            for request in finite_difference_requests(scan, float(best["alpha"]), float(r_value), str(best["phase"]))
+        ]
+    )
     try:
         for scan, r_value in zip(selected_scans, best_r_values):
             try:

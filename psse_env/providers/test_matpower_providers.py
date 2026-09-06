@@ -1285,6 +1285,50 @@ class DiagnosticProviderTests(unittest.TestCase):
             accepted["anomaly_explanation"]["kind"], "hif_model_accepted_over_null"
         )
 
+    def test_hif_multiscan_search_is_memoized_by_its_inputs(self) -> None:
+        # The search is deterministic and slow; a learner that loops on a
+        # state repeats it with identical inputs, which must not re-run it.
+        state = {
+            "state_id": "episode:s0",
+            "state_hash": "hash0",
+            "case": self.data["case_path"],
+            "measurements": list(self.data["z_obs"]),
+            "metadata": {
+                "hif_scan_window": {
+                    "scans": [
+                        {"scan_index": 0, "z_obs": list(self.data["z_obs"]), "op_point": {"load_scale": 1.0}},
+                        {"scan_index": 1, "z_obs": list(self.data["z_obs"]), "op_point": {"load_scale": 1.02}},
+                    ]
+                }
+            },
+        }
+        action = {
+            "tool": "estimate_hif_location_magnitude_multiscan_from_path",
+            "arguments": {"candidate_branch_row0": 2, "max_scans": 2},
+        }
+        payload = {
+            "success": True,
+            "candidate_branch_row0": 2,
+            "estimated": {"alpha_from_from_bus": 0.5, "r_hif_pu": 100.0},
+            "fit": {"weighted_residual_norm": 1.0, "residual_reduction_vs_no_hif": 0.50},
+        }
+        providers = MatpowerDeploymentProviders(hif_max_scans=3)
+        with patch(
+            "psse_env.providers.matpower._estimate_hif_location_magnitude_multiscan_logic",
+            return_value=payload,
+        ) as executor:
+            first = providers.estimate_hif_multiscan(state, action)
+            second = providers.estimate_hif_multiscan(state, action)
+            self.assertEqual(executor.call_count, 1)
+            changed = providers.estimate_hif_multiscan(
+                state, {**action, "arguments": {**action["arguments"], "candidate_branch_row0": 3}}
+            )
+            self.assertEqual(executor.call_count, 2)
+        self.assertTrue(first["diagnostic_acceptance"]["accepted"])
+        self.assertEqual(second, first)
+        self.assertIsNot(second["hif_summary"], first["hif_summary"])
+        self.assertTrue(changed["diagnostic_acceptance"]["accepted"])
+
     def test_hif_search_budget_rejects_oversized_model_grid_before_executor(self) -> None:
         providers = MatpowerDeploymentProviders(
             hif_alpha_grid_size=5,

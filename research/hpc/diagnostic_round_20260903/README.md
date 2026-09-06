@@ -178,6 +178,31 @@ wsl -- ssh torch bash -s -- /scratch/yx3882/research_diag_round_20260906_scale/d
 wsl -- ssh torch bash /scratch/yx3882/research_diag_round_20260906_scale/submit_diag.sh
 ```
 
+### GPU utilization and the parallel HIF search
+
+The cluster cancels jobs whose average GPU utilization stays under about
+50 % for two hours. The first scale-round collection was cancelled that way
+after 60 of 144 roots: harmonic and unbalance episodes take a few seconds
+per step, but each HIF step ran a serial OpenDSS grid search of several
+hundred simulations (about 80 s on a cluster core) while the policy GPU
+idled, for an average utilization near 4 %. Three changes address it, all
+without altering the estimates:
+
+* `three_phase_nlm.hif_multiscan_estimator` evaluates candidate simulations
+  in a spawn-context process pool sized by `PSSE_HIF_WORKERS` (`round.env`
+  sets it to the allocated CPUs; unset keeps the search serial), prefetching
+  the pilot sensitivities, the coarse grid, every residual batch of the local
+  refinement, and the final observability points, and refining the top seeds
+  concurrently. Observed rows are parsed to phasors once per scan instead of
+  on every residual. Serial and parallel runs agree to floating-point
+  rounding (`test_hif_multiscan_estimator.py`); on a workstation the
+  research-budget search dropped from 21 s to 6 s per call with 8 workers.
+* The provider memoizes the multi-scan search by its complete inputs, so a
+  learner that loops on a state does not repeat it.
+* Collection and evaluation request 16 CPUs (the GPU nodes carry 16 to 20
+  cores per GPU) and sample `nvidia-smi` utilization once a minute into
+  `logs/gpu-util-<stage>-<job>.csv`, so the run keeps its own record.
+
 ## What this round cannot claim
 
 These families terminate through an accepted anomaly explanation or an

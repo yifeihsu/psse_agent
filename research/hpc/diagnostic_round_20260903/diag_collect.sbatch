@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=16
 #SBATCH --mem=96G
 #SBATCH --time=12:00:00
 #SBATCH --requeue
@@ -32,6 +32,12 @@ if [[ ! -s "$OUT/prerequisites.json" ]]; then
 fi
 nvidia-smi --query-gpu=name,memory.total,uuid,driver_version --format=csv,noheader \
   > "$LOGS/gpu-collect-${SLURM_JOB_ID:-manual}-r${SLURM_RESTART_COUNT:-0}.csv" || true
+# Sample GPU utilization once a minute for the run's own record (the cluster
+# cancels jobs whose average utilization stays low); stopped with the stage.
+nvidia-smi --query-gpu=timestamp,utilization.gpu,memory.used --format=csv,noheader -l 60 \
+  >> "$LOGS/gpu-util-collect-${SLURM_JOB_ID:-manual}.csv" 2>/dev/null &
+GPU_SAMPLER_PID=$!
+trap 'kill "$GPU_SAMPLER_PID" 2>/dev/null || true' EXIT
 
 cd "$SRC"
 collection_args

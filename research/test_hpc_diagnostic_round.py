@@ -43,6 +43,10 @@ def test_sbatch_headers_follow_the_cluster_routing_rules(name: str) -> None:
     assert "#SBATCH --comment=preemption=yes;requeue=true" in header
     assert "#SBATCH --requeue" in header
     assert "#SBATCH --gres=gpu:1" in header
+    # Collection and evaluation run the parallel OpenDSS search on the CPUs
+    # beside the policy GPU; training needs no more than the default.
+    expected_cpus = 8 if name == "diag_train.sbatch" else 16
+    assert f"#SBATCH --cpus-per-task={expected_cpus}" in header
     assert not any(line.startswith("#SBATCH --partition") for line in header)
     assert "source \"$ROUND/round.env\"" in text
     assert "round_environment" in text
@@ -67,6 +71,7 @@ def test_round_env_declares_every_setting_the_stages_use() -> None:
     assert "--plan-preset \"$PLAN_PRESET\"" in text
     assert "--hif-search-profile auto" in text
     assert "RESEARCH_MAX_INPUT_TOKENS=32768" in text
+    assert 'export PSSE_HIF_WORKERS="${SLURM_CPUS_PER_TASK:-8}"' in text
     assert "PLAN_PRESET=diagnostic" in text
     assert "SEED=20260903" in text
     assert "--train-plan \"$TRAIN_PLAN\"" in text

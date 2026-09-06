@@ -343,8 +343,11 @@ def _voltage_rows_to_phasors(rows: Any) -> dict[str, list[complex]]:
 
 
 def _three_phase_voltage_residual(observed: Any, simulated: Any, *, sigma: float = 5e-3) -> list[float]:
-    obs = _voltage_rows_to_phasors(observed)
-    sim = _voltage_rows_to_phasors(simulated)
+    # Either side may already be the parsed phasor map (a dict), which lets a
+    # search parse each observation and simulation once instead of on every
+    # residual evaluation.
+    obs = observed if isinstance(observed, dict) else _voltage_rows_to_phasors(observed)
+    sim = simulated if isinstance(simulated, dict) else _voltage_rows_to_phasors(simulated)
     if not obs or not sim:
         return []
     residuals: list[float] = []
@@ -366,8 +369,8 @@ def _branch_current_residual(
     sigma: float = DEFAULT_BRANCH_CURRENT_SIGMA_PU,
 ) -> list[float]:
     """Weighted per-phase terminal-current residuals (real and imaginary parts)."""
-    obs = branch_current_rows_to_phasors(observed)
-    sim = branch_current_rows_to_phasors(simulated)
+    obs = observed if isinstance(observed, dict) else branch_current_rows_to_phasors(observed)
+    sim = simulated if isinstance(simulated, dict) else branch_current_rows_to_phasors(simulated)
     if not obs or not sim:
         return []
     weight = max(float(sigma), 1e-12)

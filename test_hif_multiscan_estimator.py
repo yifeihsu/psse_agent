@@ -352,6 +352,69 @@ class HIFMultiscanEstimatorTests(unittest.TestCase):
         self.assertEqual(set(searched["phase_scores"]), {"A", "B", "C"})
 
     @unittest.skipUnless(importlib.util.find_spec("opendssdirect"), "opendssdirect is not installed")
+    def test_parallel_workers_reproduce_the_serial_search(self) -> None:
+        from three_phase_nlm.hif_parameter_estimator import (
+            _line_tokens,
+            _resolve_model_dir,
+            _simulate_candidate,
+        )
+        from three_phase_nlm.ieee14_adapter import branch_info_for_row0
+
+        branch = 0
+        branch_info = branch_info_for_row0(branch)
+        model_dir = _resolve_model_dir(None, "case14")
+        tokens, _ = _line_tokens(model_dir, branch_info["dss_element"])
+        operating_points = [
+            {"load_scale": 1.0, "bus_load_scales": {"b2": 0.93, "b4": 1.08}},
+            {"load_scale": 1.0},
+        ]
+        scans = []
+        for scan_index, op_point in enumerate(operating_points):
+            simulated = _simulate_candidate(
+                model_dir=model_dir,
+                original_tokens=tokens,
+                dss_element=branch_info["dss_element"],
+                alpha=0.35,
+                phase="B",
+                r_hif_pu=120.0,
+                op_point=op_point,
+            )
+            scans.append(
+                {
+                    "scan_index": scan_index,
+                    "z_obs": simulated["z"],
+                    "three_phase_voltages": simulated["three_phase_voltages"],
+                    "op_point": op_point,
+                }
+            )
+        common = {
+            "candidate_branch_row0": branch,
+            "scans": scans,
+            "candidate_phase": "B",
+            "scan_selection": "information_greedy",
+            "max_scans": 2,
+            "alpha_grid_size": 3,
+            "r_grid_size": 3,
+            "r_hif_pu_min": 50.0,
+            "r_hif_pu_max": 200.0,
+            "robust_loss": "linear",
+            "refine_top_n": 1,
+            "local_max_nfev": 4,
+        }
+        serial = estimate_hif_location_magnitude_multiscan(**common, workers=1)
+        parallel = estimate_hif_location_magnitude_multiscan(**common, workers=2)
+
+        self.assertTrue(serial["success"])
+        self.assertEqual(parallel["success"], serial["success"])
+        self.assertEqual(parallel["selected_scan_indices"], serial["selected_scan_indices"])
+        self.assertEqual(parallel["estimated"], serial["estimated"])
+        self.assertEqual(parallel["fit"], serial["fit"])
+        self.assertEqual(parallel["top_parameter_candidates"], serial["top_parameter_candidates"])
+        self.assertEqual(parallel["phase_scores"], serial["phase_scores"])
+        self.assertEqual(parallel["uncertainty"], serial["uncertainty"])
+        self.assertEqual(parallel["observability"], serial["observability"])
+
+    @unittest.skipUnless(importlib.util.find_spec("opendssdirect"), "opendssdirect is not installed")
     def test_canonical_operating_point_replays_clean_measurements(self) -> None:
         from three_phase_nlm.hif_parameter_estimator import (
             _line_tokens,
