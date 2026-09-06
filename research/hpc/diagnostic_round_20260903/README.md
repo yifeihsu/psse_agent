@@ -122,8 +122,36 @@ requests stay answered for the whole episode. The resulting expert flows are
 finalize_diagnosis` for unbalance and `run_wls -> get_harmonic_context ->
 run_hse_from_path -> finalize_diagnosis` for harmonics, which the
 `diagnostic` preset now includes (12 training and 6 development harmonic
-roots, discovered). Deploy into a fresh round directory as above; the same
-seed keeps the earlier families' roots paired with rounds 1 to 3.
+roots, discovered). Deploy into a fresh round directory as above.
+
+**Round 4 result** (`/scratch/yx3882/research_diag_round_20260905_requests/`,
+collect 17015054 on `9ca833c`, train 17022616 and eval 17022617 on
+`aad2b0c`; the first train attempt failed on the stale-registry gate that
+`aad2b0c` removed). Collection: 48 of 48 roots after two preemptions, label
+yield 0.77, 88 safe rows (harmonic 30, unbalance 24, HIF 23, control 6,
+measurement+HIF 5), mixture 176 rows, 44 optimizer steps. On the 24
+development roots the candidate scores 17 of 24 truth-audited (0.708)
+against BC0's 7 of 24 (0.292): harmonic 6 of 6 in four steps
+(`run_wls -> get_harmonic_context -> run_hse_from_path -> finalize`),
+unbalance 6 of 6 in five steps (the candidate asks for spectra first, gets
+nothing, then asks for phase measurements; the expert would have asked for
+phase measurements first, so that step is a correction target for a later
+round), control 3 of 3, measurement+HIF 0 of 3 by decision with the fault
+identified 3 of 3, and HIF 2 of 6 with the branch identified 6 of 6. BC0
+escalates on 11 of the 12 harmonic and unbalance roots after three steps.
+
+Two caveats. First, **round 4 is not root-paired with rounds 1 to 3**: the
+generator draws every family from one random stream in `SCENARIO_FAMILIES`
+order, and `harmonic` precedes `hif` in that order, so adding harmonic to the
+plan changed every later family's draws; none of the 24 development roots
+appears in the earlier rounds. Round 4's roots are the reference for further
+rounds with this family set. Second, the four HIF misses are the estimator,
+not the policy: on every HIF root both adapters pick the true branch and the
+multiscan estimate's alpha error is 0.055 to 0.10 against the audit's 0.05
+tolerance (`ReleaseAuditTolerances.hif_alpha_abs`), while the estimator's own
+validation gates are a median error of 0.05 and a 90th percentile of 0.10.
+Rounds 1 to 3 drew six HIF roots whose errors all fell under 0.036. Read the
+HIF row the way the measurement+HIF row is read: branch identified.
 
 ## What this round cannot claim
 
