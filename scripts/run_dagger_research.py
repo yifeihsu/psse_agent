@@ -1269,8 +1269,20 @@ def evaluate_paired_adapters(
     prompt_profile: str | None = None,
     architecture: str | None = None,
     policy_cache_clear: Callable[[], None] | None = None,
+    case_loader: Callable[[Any], Any] | None = None,
 ) -> dict[str, Any]:
-    """Run BC0 and R1 on the exact same saved development scenarios."""
+    """Run BC0 and R1 on the exact same saved development scenarios.
+
+    ``case_loader`` resolves the case references an episode records into
+    loaded cases so the strict audit can compare parameter and topology
+    corrections against the clean case; without it every such correction is
+    scored as evidence missing.  It defaults to the production parser.
+    """
+
+    if case_loader is None:
+        from psse_env.dagger.release_factories import deterministic_case_loader
+
+        case_loader = deterministic_case_loader
 
     roots = [_row_root(row) for row in development_scenarios]
     if not roots or "" in roots or len(roots) != len(set(roots)):
@@ -1300,6 +1312,7 @@ def evaluate_paired_adapters(
             minimum_roots_per_suite=1,
             require_release_environment=False,
             require_policy_identity=False,
+            case_loader=case_loader,
         )
         payload = result.as_dict()
         payloads[label] = payload

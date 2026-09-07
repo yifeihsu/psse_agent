@@ -344,6 +344,8 @@ class ResearchSplitAndResumeTests(unittest.TestCase):
                     },
                 }
 
+        loaders = []
+
         def evaluator(suites, *, policy_factory, **_kwargs):
             roots = [
                 row["grouping"]["physical_root_fingerprint"]
@@ -351,6 +353,7 @@ class ResearchSplitAndResumeTests(unittest.TestCase):
             ]
             policy = policy_factory()
             observed.append((policy, roots))
+            loaders.append(_kwargs.get("case_loader"))
             return Result(0 if policy.endswith("bc0") else 1)
 
         with tempfile.TemporaryDirectory() as directory:
@@ -370,6 +373,12 @@ class ResearchSplitAndResumeTests(unittest.TestCase):
         self.assertEqual(observed[0][1], observed[1][1])
         self.assertEqual(observed[0][1], ["dev_a", "dev_b"])
         self.assertEqual(comparison["r1_minus_bc0"]["resolved_episodes"], 1.0)
+        # The strict audit needs a case loader to compare parameter and
+        # topology corrections against the clean case; the production parser
+        # is the default so those families are never scored evidence-missing.
+        from psse_env.dagger.release_factories import deterministic_case_loader
+
+        self.assertEqual(loaders, [deterministic_case_loader, deterministic_case_loader])
 
 
 class FixedScenarioSuiteTests(unittest.TestCase):
