@@ -3316,7 +3316,12 @@ def main() -> None:
     parser.add_argument("--scale", type=int, default=1, help="Multiply the default plan.")
     parser.add_argument("--plan", type=str, default=None, help="JSON plan or path to one.")
     parser.add_argument("--protocol", choices=("controller", "canonical"), default="canonical")
-    parser.add_argument("--max-steps", type=int, default=24)
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=40,
+        help="Expert episode horizon; 40 matches the production factory.",
+    )
     parser.add_argument("--counterfactuals-per-scenario", type=int, default=3)
     parser.add_argument(
         "--evaluation-suite",

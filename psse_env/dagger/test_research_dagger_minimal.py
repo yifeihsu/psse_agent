@@ -381,6 +381,23 @@ class ResearchSplitAndResumeTests(unittest.TestCase):
         self.assertEqual(loaders, [deterministic_case_loader, deterministic_case_loader])
 
 
+class ResearchEpisodeBudgetTests(unittest.TestCase):
+    """The research environment keeps the production factory's episode horizon."""
+
+    def test_research_budget_matches_the_production_factory(self) -> None:
+        import inspect
+        import re
+
+        from psse_env.dagger import release_factories
+        from scripts.run_dagger_research import RESEARCH_EPISODE_BUDGET, parser
+
+        source = inspect.getsource(release_factories.production_environment_factory)
+        production = int(re.search(r"max_steps=(\d+)", source).group(1))
+        self.assertEqual(RESEARCH_EPISODE_BUDGET, production)
+        self.assertEqual(RESEARCH_EPISODE_BUDGET, 40)
+        self.assertEqual(parser().get_default("eval_max_steps"), production)
+
+
 class FixedScenarioSuiteTests(unittest.TestCase):
     """A saved suite is adopted as-is and pinned in the run configuration."""
 

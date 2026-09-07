@@ -114,6 +114,11 @@ RESEARCH_HIF_SEARCH_BUDGET = {
     "hif_max_scans": 10,
 }
 HIF_SEARCH_PROFILES = ("auto", "release", "research")
+#: Episode horizon of the research environment and the paired evaluation,
+#: the production factory's 40-step budget (teacher V2-B).  A multi-meter
+#: root corrected one meter per commit needs about six steps per meter after
+#: the two measurement requests, so 24 could not hold four or five meters.
+RESEARCH_EPISODE_BUDGET = 40
 LEGACY_RESEARCH_PROFILE = {
     "plan_preset": "core",
     "hif_search_profile": "release",
@@ -202,9 +207,8 @@ def research_diagnostic_environment_factory(
 
     Identical to ``production_environment_factory`` (same chi-square level,
     dominance threshold, production dataset mode, deployment candidate oracle,
-    and 24-step horizon) except for the bounded OpenDSS estimator budget in
-    ``RESEARCH_HIF_SEARCH_BUDGET``.  It is research-only: the release factory
-    module is content-pinned by the evaluation policy and is not modified.
+    and the 40-step horizon of the V2-B teacher) except for the bounded
+    OpenDSS estimator budget in ``RESEARCH_HIF_SEARCH_BUDGET``.
     """
 
     del seed, rng
@@ -225,7 +229,7 @@ def research_diagnostic_environment_factory(
     env = TransactionalPSSEEnv(
         **providers.env_kwargs(),
         production_dataset_mode=True,
-        max_steps=24,
+        max_steps=RESEARCH_EPISODE_BUDGET,
         history_window=4,
     )
     if env.production_dataset_mode is not True:
@@ -1510,7 +1514,7 @@ def parser() -> argparse.ArgumentParser:
         type=Path,
         help="After collection/training, run paired BC0/R1 evaluation on the saved development roots",
     )
-    result.add_argument("--eval-max-steps", type=int, default=24)
+    result.add_argument("--eval-max-steps", type=int, default=RESEARCH_EPISODE_BUDGET)
     return result
 
 
