@@ -600,21 +600,34 @@ def _parse_plan(value: str, default: Mapping[str, int]) -> dict[str, int]:
 
 
 def research_scenario_generator(
-    *, seed: int, research_profile: Mapping[str, Any] | None = None
+    *,
+    seed: int,
+    research_profile: Mapping[str, Any] | None = None,
+    parameter_ranking_dominance_threshold: float = 1.0,
+    parameter_target_rank_allowance: int | None = None,
 ) -> Round0ScenarioGenerator:
     """The scenario generator behind a research profile.
 
     Draws from the train partition of the tabular corpus with the profile's
     branch-current corpora and signature modes, keeping every scan of a
     ten-scan window so the research estimator budget can use it.
+
+    ``parameter_ranking_dominance_threshold`` decides which parameter roots
+    are admitted: the production 1.2 keeps only roots the deployed context
+    can correct on the first pass, while 1.0 is the detection threshold and
+    keeps the adjacent-line ambiguity the network really has.
+    ``parameter_target_rank_allowance`` additionally admits roots whose true
+    line ranks within that many candidates rather than first.
     """
 
     profile = dict(research_profile or LEGACY_RESEARCH_PROFILE)
     generator_kwargs: dict[str, Any] = {
         "seed": int(seed),
         "source_partition": "train",
-        "parameter_ranking_dominance_threshold": 1.0,
+        "parameter_ranking_dominance_threshold": float(parameter_ranking_dominance_threshold),
     }
+    if parameter_target_rank_allowance is not None:
+        generator_kwargs["parameter_target_rank_allowance"] = int(parameter_target_rank_allowance)
     sources = profile.get("scenario_sources")
     if isinstance(sources, Mapping):
         if sources.get("hif_sample_paths"):
@@ -1274,8 +1287,14 @@ def evaluate_paired_adapters(
     architecture: str | None = None,
     policy_cache_clear: Callable[[], None] | None = None,
     case_loader: Callable[[Any], Any] | None = None,
+    expert_policy_factory: Callable[[], Any] | None = None,
 ) -> dict[str, Any]:
     """Run BC0 and R1 on the exact same saved development scenarios.
+
+    With ``expert_policy_factory`` the teacher itself is rolled out on the
+    same roots under the same observation boundary and written beside the
+    adapters as ``expert_eval.json``: its score is the ceiling the students
+    are measured against, which matters on roots the teacher cannot solve.
 
     ``case_loader`` resolves the case references an episode records into
     loaded cases so the strict audit can compare parameter and topology
@@ -1293,17 +1312,23 @@ def evaluate_paired_adapters(
         raise ValueError("Paired evaluation requires unique development physical roots")
     suite = {"standard_success": list(development_scenarios)}
     payloads: dict[str, dict[str, Any]] = {}
-    for label, adapter in (("bc0", bc0_adapter), ("r1", r1_adapter)):
-        policy = policy_loader(
-            adapter,
-            base_model=base_model,
-            base_revision=base_revision,
-            load_in_4bit=load_in_4bit,
-            local_files_only=local_files_only,
-            trust_remote_code=trust_remote_code,
-            prompt_profile=prompt_profile,
-            architecture=architecture,
-        )
+    comparators: list[tuple[str, Any]] = [("bc0", bc0_adapter), ("r1", r1_adapter)]
+    if expert_policy_factory is not None:
+        comparators.append(("expert", None))
+    for label, adapter in comparators:
+        if adapter is None:
+            policy = expert_policy_factory()
+        else:
+            policy = policy_loader(
+                adapter,
+                base_model=base_model,
+                base_revision=base_revision,
+                load_in_4bit=load_in_4bit,
+                local_files_only=local_files_only,
+                trust_remote_code=trust_remote_code,
+                prompt_profile=prompt_profile,
+                architecture=architecture,
+            )
         result = evaluator(
             suite,
             env_factory=environment_factory,
@@ -1343,11 +1368,15 @@ def evaluate_paired_adapters(
         and isinstance(r1_overall[key], (int, float))
         and not isinstance(r1_overall[key], bool)
     )
+    expert_overall = (
+        payloads["expert"]["suite_metrics"]["overall"] if "expert" in payloads else None
+    )
     comparison = {
         "contract": RESEARCH_CONTRACT,
         "paired_physical_roots": roots,
         "seed": seed,
         "max_steps": max_steps,
+        "expert_overall": expert_overall,
         "bc0_adapter": str(bc0_adapter),
         "r1_adapter": str(r1_adapter),
         "bc0_overall": bc0_overall,
@@ -1515,6 +1544,14 @@ def parser() -> argparse.ArgumentParser:
         help="After collection/training, run paired BC0/R1 evaluation on the saved development roots",
     )
     result.add_argument("--eval-max-steps", type=int, default=RESEARCH_EPISODE_BUDGET)
+    result.add_argument(
+        "--eval-expert",
+        action="store_true",
+        help=(
+            "Also roll the expert oracle out on the development roots under the "
+            "policy observation boundary and record it as the teacher ceiling"
+        ),
+    )
     return result
 
 
@@ -1689,6 +1726,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.eval_r1_adapter is not None:
         from psse_env.dagger.evaluator import evaluate_rollout_suites
 
+        expert_policy_factory = None
+        if args.eval_expert:
+            from psse_env.dagger.release_factories import ObservableExpertPolicy
+            from psse_env.oracle.expert_policy import ExpertPolicyOracle
+
+            def expert_policy_factory() -> Any:
+                # The teacher judges validity with the same process oracle the
+                # research environment uses, and sees only the policy
+                # observation through the same wrapper the release factories
+                # use, exactly like the adapters it is compared with.
+                return ObservableExpertPolicy(
+                    ExpertPolicyOracle(process_oracle=environment_factory().process_oracle)
+                )
+
         comparison = evaluate_paired_adapters(
             development_scenarios=development,
             bc0_adapter=adapter,
@@ -1707,6 +1758,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             prompt_profile=model_spec.prompt_profile,
             architecture=model_spec.architecture,
             policy_cache_clear=clear_research_policy_cache,
+            expert_policy_factory=expert_policy_factory,
         )
     report = {
         "passed": True,

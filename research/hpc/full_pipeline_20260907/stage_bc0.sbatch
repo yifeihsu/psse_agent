@@ -11,7 +11,7 @@
 #SBATCH --requeue
 #SBATCH --comment=preemption=yes;requeue=true
 #SBATCH --open-mode=append
-#SBATCH --output=/scratch/yx3882/research_full_pipeline_20260907/logs/bc0-%j.out
+#SBATCH --output=/scratch/yx3882/research_full_pipeline_20260908/logs/bc0-%j.out
 # Full pipeline, stage 1: BC0 from the base model on the expert aggregate.
 #
 # The full-BC0 recipe: 4-bit base plus rank-16 LoRA, micro-batch 1 with four
@@ -21,7 +21,7 @@
 # aggregate's root-disjoint validation split so each evaluation pass stays
 # short; the same subset monitors every later round.
 set -euo pipefail
-PIPE=/scratch/yx3882/research_full_pipeline_20260907
+PIPE=/scratch/yx3882/research_full_pipeline_20260908
 # shellcheck source=pipeline.env
 source "$PIPE/pipeline.env"
 pipeline_environment
@@ -35,6 +35,12 @@ GPU_SAMPLER_PID=$!
 stage_cleanup() { kill "$GPU_SAMPLER_PID" 2>/dev/null || true; }
 trap stage_cleanup EXIT
 
+reuse_previous_stage bc0 bc0.done
+if [[ -s "$OUT/bc0.done" && -s "$BC0_DIR/lora/adapter_model.safetensors" ]]; then
+  echo "[bc0] adapter present with receipt; nothing to train"
+  echo fp-bc0-complete
+  exit 0
+fi
 mkdir -p "$BC0_DIR"
 VALIDATION_SUBSET=$BC0_DIR/validation.subset.jsonl
 if [[ ! -s "$VALIDATION_SUBSET" ]]; then

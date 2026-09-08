@@ -9,7 +9,7 @@
 #SBATCH --time=24:00:00
 #SBATCH --requeue
 #SBATCH --open-mode=append
-#SBATCH --output=/scratch/yx3882/research_full_pipeline_20260907/logs/d0-%j.out
+#SBATCH --output=/scratch/yx3882/research_full_pipeline_20260908/logs/d0-%j.out
 # Full pipeline, stage 0 (CPU only): the expert aggregate that trains BC0,
 # then the DAgger suite drawn around it.
 #
@@ -20,7 +20,7 @@
 # the per-round training roots and the shared development roots excluding
 # every D0 and protected root.
 set -euo pipefail
-PIPE=/scratch/yx3882/research_full_pipeline_20260907
+PIPE=/scratch/yx3882/research_full_pipeline_20260908
 # shellcheck source=pipeline.env
 source "$PIPE/pipeline.env"
 pipeline_environment
@@ -35,6 +35,7 @@ stage_cleanup() { rm -rf "$OPENDSS_LOCAL"; }
 trap stage_cleanup EXIT
 
 cd "$SRC"
+reuse_previous_stage d0 d0.done
 if [[ ! -s "$OUT/d0.done" ]]; then
   rm -rf "$D0_DIR"
   mkdir -p "$D0_DIR"
@@ -124,6 +125,9 @@ if [[ ! -s "$OUT/suite.done" ]]; then
     --rounds "$DAGGER_ROUNDS" \
     --seed "$SEED_SUITE" \
     --candidate-multiplier "$CANDIDATE_MULTIPLIER" \
+    --training-threshold "$SUITE_TRAINING_THRESHOLD" \
+    --development-threshold "$SUITE_DEVELOPMENT_THRESHOLD" \
+    --development-rank-allowance "$SUITE_DEVELOPMENT_RANK_ALLOWANCE" \
     --output-dir "$SUITE_DIR" \
     > "$OUT/suite_console.json"
   cp "$SUITE_DIR/manifest.json" "$OUT/suite.done"

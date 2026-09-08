@@ -4,14 +4,23 @@
 The suite is drawn once, after the expert aggregate exists, with the research
 generator (train partition, branch-current corpora, discovered harmonic and
 unbalance signatures) and excludes every D0 root and every protected root.
-Training roots are split across the DAgger rounds family by family so the
-rounds roll out on disjoint roots while the development set stays the same
-for every evaluation.
 
-    build_suite.py --source-root SRC --d0-raw D0/aggregate.raw.jsonl \
-        --protected-suite SUITE [--protected-suite ...] \
-        --round-train-plan JSON --development-plan JSON --rounds 2 \
-        --seed N --candidate-multiplier 3 --output-dir OUT/suite
+Training roots are drawn at the production parameter-ranking threshold, so
+every root the students learn from is one the teacher can correct on the
+first pass, and are dealt across the DAgger rounds family by family so the
+rounds roll out on disjoint roots.  The development set is drawn at the
+detection threshold with a rank allowance, so it keeps the adjacent-line
+ambiguity the network really has; each development root records its
+parameter-ranking stratum (``dominant``, ``ambiguous``, or
+``not_applicable``) so results can be read per stratum against the teacher's
+own ceiling.
+
+    build_suite.py --source-root SRC --d0-raw D0/aggregate.raw.jsonl \\
+        --protected-suite SUITE [--protected-suite ...] \\
+        --round-train-plan JSON --development-plan JSON --rounds 2 \\
+        --seed N --candidate-multiplier 3 --output-dir OUT/suite \\
+        [--training-threshold 1.2] [--development-threshold 1.0] \\
+        [--development-rank-allowance 2]
 """
 
 from __future__ import annotations
@@ -24,6 +33,11 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+PARAMETER_FAMILIES = ("parameter", "measurement+parameter")
+DEFAULT_TRAINING_THRESHOLD = 1.2
+DEFAULT_DEVELOPMENT_THRESHOLD = 1.0
+DEFAULT_DEVELOPMENT_RANK_ALLOWANCE = 2
 
 
 def load_research_script(source_root: Path):
@@ -60,6 +74,57 @@ def split_rounds(
     return dealt
 
 
+def parameter_ranking_stratum(
+    row: Mapping[str, Any], *, family: str, dominance_threshold: float
+) -> dict[str, Any]:
+    """Classify a root by what the deployed parameter context saw on it.
+
+    ``dominant``: the true line ranks first and clears the dominance
+    threshold, so the teacher corrects it on the first pass.  ``ambiguous``:
+    the true line is among the ranked candidates but the ranking does not
+    clear the threshold or the true line is not first, so the teacher tests
+    the candidates in rank order and may hand off bounded to them.
+    ``not_applicable``: the family carries no parameter fault.
+    """
+
+    if family not in PARAMETER_FAMILIES:
+        return {"stratum": "not_applicable", "dominance_ratio": None, "true_line_rank": None}
+    ranking = row.get("parameter_ranking")
+    if ranking is None and isinstance(row.get("audit"), Mapping):
+        ranking = row["audit"].get("parameter_ranking")
+    ranking = ranking if isinstance(ranking, Mapping) else {}
+    ratio = ranking.get("parameter_ranking_dominance_ratio")
+    rank = ranking.get("true_line_rank")
+    singleton = ranking.get("parameter_ranking_singleton") is True
+    try:
+        ratio_value = float(ratio) if ratio is not None else None
+    except (TypeError, ValueError):
+        ratio_value = None
+    dominant = bool(
+        (rank is None or int(rank) == 1)
+        and (singleton or (ratio_value is not None and ratio_value >= dominance_threshold))
+    )
+    return {
+        "stratum": "dominant" if dominant else "ambiguous",
+        "dominance_ratio": ratio_value,
+        "true_line_rank": rank,
+    }
+
+
+def stratified_envelope(research, row: Mapping[str, Any], *, dominance_threshold: float) -> dict[str, Any]:
+    """Partition a generator row and record its stratum under ``audit``."""
+
+    envelope = research.partition_release_scenario_v1(row, split="dagger_train")
+    family = str(row.get("scenario_family") or "")
+    info = parameter_ranking_stratum(row, family=family, dominance_threshold=dominance_threshold)
+    ranking = row.get("parameter_ranking")
+    envelope["audit"]["parameter_ranking"] = {
+        **info,
+        "generation": dict(ranking) if isinstance(ranking, Mapping) else None,
+    }
+    return envelope
+
+
 def _plan(value: str) -> dict[str, int]:
     candidate = Path(value)
     try:
@@ -86,6 +151,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rounds", type=int, default=2)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--candidate-multiplier", type=int, default=3)
+    parser.add_argument("--training-threshold", type=float, default=DEFAULT_TRAINING_THRESHOLD)
+    parser.add_argument("--development-threshold", type=float, default=DEFAULT_DEVELOPMENT_THRESHOLD)
+    parser.add_argument(
+        "--development-rank-allowance", type=int, default=DEFAULT_DEVELOPMENT_RANK_ALLOWANCE
+    )
     parser.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args(argv)
 
@@ -104,23 +174,57 @@ def main(argv: list[str] | None = None) -> int:
         "hif_search_profile": "research",
         "scenario_sources": sources,
     }
-    requested = {
-        family: (train_plan.get(family, 0) + development_plan.get(family, 0)) * args.candidate_multiplier
-        for family in families
-    }
-    generator = research.research_scenario_generator(seed=args.seed, research_profile=profile)
-    candidates = [
-        research.partition_release_scenario_v1(row, split="dagger_train")
-        for row in generator.build(requested)
+
+    # Training: the teacher-solvable population at the production threshold.
+    train_generator = research.research_scenario_generator(
+        seed=args.seed,
+        research_profile=profile,
+        parameter_ranking_dominance_threshold=args.training_threshold,
+    )
+    train_requested = {family: count * args.candidate_multiplier for family, count in train_plan.items()}
+    train_candidates = [
+        stratified_envelope(research, row, dominance_threshold=args.training_threshold)
+        for row in train_generator.build(train_requested)
     ]
-    training, development = research.allocate_scenarios(
-        candidates,
+    training, _ = research.allocate_scenarios(
+        train_candidates,
         d0_roots=d0_roots,
         train_plan=train_plan,
-        development_plan=development_plan,
+        development_plan={},
         seed=args.seed,
         protected_roots=protected_roots,
     )
+    training_roots = {research._row_root(row) for row in training}
+
+    # Development: the realistic population at the detection threshold, with
+    # the true line allowed anywhere within the ambiguity allowance.
+    dev_generator = research.research_scenario_generator(
+        seed=args.seed + 1,
+        research_profile=profile,
+        parameter_ranking_dominance_threshold=args.development_threshold,
+        parameter_target_rank_allowance=args.development_rank_allowance,
+    )
+    dev_requested = {
+        family: count * args.candidate_multiplier for family, count in development_plan.items()
+    }
+    dev_candidates = [
+        stratified_envelope(research, row, dominance_threshold=args.training_threshold)
+        for row in dev_generator.build(dev_requested)
+    ]
+    _, development = research.allocate_scenarios(
+        dev_candidates,
+        d0_roots=d0_roots | training_roots,
+        train_plan={},
+        development_plan=development_plan,
+        seed=args.seed + 1,
+        protected_roots=protected_roots,
+    )
+    strata: dict[str, dict[str, Any]] = {}
+    for row in development:
+        info = dict(row["audit"]["parameter_ranking"])
+        info.pop("generation", None)
+        strata[research._row_root(row)] = {"family": research._scenario_family(row), **info}
+
     per_round = split_rounds(
         training,
         rounds=args.rounds,
@@ -144,11 +248,15 @@ def main(argv: list[str] | None = None) -> int:
     development_path.write_text(
         json.dumps(development, indent=1, sort_keys=True) + "\n", encoding="utf-8"
     )
+    stratum_counts: dict[str, Counter] = defaultdict(Counter)
+    for info in strata.values():
+        stratum_counts[info["family"]][info["stratum"]] += 1
     written["development"] = {
         "path": str(development_path),
         "rows": len(development),
         "sha256": _sha256(development_path),
         "families": dict(sorted(Counter(research._scenario_family(r) for r in development).items())),
+        "strata": {family: dict(counts) for family, counts in sorted(stratum_counts.items())},
     }
     all_roots = [research._row_root(r) for bucket in per_round for r in bucket] + [
         research._row_root(r) for r in development
@@ -159,18 +267,24 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("suite roots overlap D0 or protected roots")
     source = research.git_source_state(args.source_root.resolve())
     manifest = {
-        "contract": "research_full_pipeline_suite_v1",
+        "contract": "research_full_pipeline_suite_v2",
         "seed": int(args.seed),
         "rounds": int(args.rounds),
         "round_train_plan": round_plan,
         "development_plan": development_plan,
         "candidate_multiplier": int(args.candidate_multiplier),
-        "candidates_built": len(candidates),
-        "generator_report": generator.report(),
+        "training_threshold": float(args.training_threshold),
+        "development_threshold": float(args.development_threshold),
+        "development_rank_allowance": int(args.development_rank_allowance),
+        "training_candidates_built": len(train_candidates),
+        "development_candidates_built": len(dev_candidates),
+        "training_generator_report": train_generator.report(),
+        "development_generator_report": dev_generator.report(),
         "research_profile": profile,
         "d0_raw": {"path": str(args.d0_raw.resolve()), "roots": len(d0_roots)},
         "protected_roots": len(protected_roots),
         "files": written,
+        "development_strata": strata,
         "physical_root_count": len(all_roots),
         "physical_roots_sha256": hashlib.sha256(
             "\n".join(sorted(all_roots)).encode("utf-8")
@@ -180,7 +294,14 @@ def main(argv: list[str] | None = None) -> int:
     (output / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    print(json.dumps({k: v["rows"] for k, v in written.items()} | {"families": {k: v["families"] for k, v in written.items()}}, indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            {k: v["rows"] for k, v in written.items()}
+            | {"strata": written["development"]["strata"]},
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 

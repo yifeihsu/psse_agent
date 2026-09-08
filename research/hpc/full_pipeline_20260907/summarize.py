@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
-"""Per-family outcome tables for one DAgger round and for the whole pipeline.
+"""Per-family and per-stratum outcome tables for a DAgger round and the pipeline.
 
 A round summary reads the research run report and the paired evaluation of
 its student (the adapter that collected) against its candidate (the adapter
-it trained).  The pipeline summary joins the rounds: BC0 and R1 from round
-1, R1 and R2 from round 2, all on the same development roots, with a check
-that R1 scores identically in both rounds.  Nothing here touches hidden
-truth; every field is read from evaluator receipts.
+it trained), plus the teacher's own evaluation on the same roots when the
+round recorded one.  Every table is also split by the development root's
+parameter-ranking stratum (``dominant``, ``ambiguous``, ``not_applicable``),
+so a student can be read against the teacher's ceiling on the roots the
+teacher itself cannot solve outright.  The pipeline summary joins the
+rounds: BC0 and R1 from round 1, R1 and R2 from round 2, all on the same
+development roots, with a check that R1 scores identically in both rounds.
+Nothing here touches hidden truth; every field is read from evaluator
+receipts.
 """
 
 from __future__ import annotations
@@ -53,6 +58,18 @@ def family_by_root(development: list[Mapping[str, Any]]) -> dict[str, str]:
     return result
 
 
+def stratum_by_root(development: list[Mapping[str, Any]]) -> dict[str, str]:
+    """Each root's parameter-ranking stratum, recorded by the suite builder under audit."""
+
+    result = {}
+    for row in development:
+        audit = row.get("audit") if isinstance(row.get("audit"), Mapping) else {}
+        ranking = audit.get("parameter_ranking")
+        ranking = ranking if isinstance(ranking, Mapping) else {}
+        result[_row_root(row)] = str(ranking.get("stratum") or "not_applicable")
+    return result
+
+
 def _episodes(payload: Any) -> list[Mapping[str, Any]]:
     if isinstance(payload, Mapping):
         episodes = payload.get("episodes")
@@ -81,9 +98,13 @@ def _nested_flag(value: Any, key: str) -> Any:
     return None
 
 
-def per_family_outcomes(payload: Any, families: Mapping[str, str]) -> dict[str, Any]:
+def per_family_outcomes(
+    payload: Any, families: Mapping[str, str], strata: Mapping[str, str] | None = None
+) -> dict[str, Any]:
     tables: dict[str, dict[str, Counter]] = defaultdict(lambda: defaultdict(Counter))
     counts: Counter = Counter()
+    by_stratum: dict[str, dict[str, list[int]]] = defaultdict(lambda: defaultdict(lambda: [0, 0]))
+    bases: dict[str, Counter] = defaultdict(Counter)
     unmatched = 0
     for episode in _episodes(payload):
         root = str(episode.get("physical_root") or _row_root(episode) or "")
@@ -97,14 +118,33 @@ def per_family_outcomes(payload: Any, families: Mapping[str, str]) -> dict[str, 
         matched = _nested_flag(episode.get("audit"), "diagnostic_truth_matched")
         if matched is not None:
             tables[family]["audit.diagnostic_truth_matched"][str(matched)] += 1
-        success = _nested_flag(episode.get("audit"), "truth_audited_task_success")
-        if success is not None:
-            tables[family]["truth_audited_task_success"][str(bool(success))] += 1
+        assessment = (episode.get("audit") or {}).get("truth_audited_task_assessment")
+        assessment = assessment if isinstance(assessment, Mapping) else {}
+        success = assessment.get("eligible")
+        if success is None:
+            success = _nested_flag(episode.get("audit"), "truth_audited_task_success")
+        success = bool(success)
+        tables[family]["truth_audited_task_success"][str(success)] += 1
+        basis = assessment.get("basis")
+        if success and basis:
+            bases[family][str(basis)] += 1
+        stratum = (strata or {}).get(root, "not_applicable")
+        cell = by_stratum[family][stratum]
+        cell[1] += 1
+        cell[0] += int(success)
     return {
         "episodes_per_family": dict(sorted(counts.items())),
         "outcomes": {
             family: {field: dict(sorted(values.items())) for field, values in sorted(table.items())}
             for family, table in sorted(tables.items())
+        },
+        "success_basis": {family: dict(sorted(c.items())) for family, c in sorted(bases.items())},
+        "success_by_stratum": {
+            family: {
+                stratum: {"successes": cell[0], "episodes": cell[1]}
+                for stratum, cell in sorted(cells.items())
+            }
+            for family, cells in sorted(by_stratum.items())
         },
         "unmatched_episodes": unmatched,
     }
@@ -120,19 +160,32 @@ def success_table(outcomes: Mapping[str, Any]) -> dict[str, dict[str, int]]:
     return table
 
 
+def stratum_table(outcomes: Mapping[str, Any]) -> dict[str, dict[str, int]]:
+    """stratum -> {successes, episodes} summed over families."""
+
+    table: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    for cells in (outcomes.get("success_by_stratum") or {}).values():
+        for stratum, cell in cells.items():
+            table[stratum][0] += int(cell["successes"])
+            table[stratum][1] += int(cell["episodes"])
+    return {s: {"successes": v[0], "episodes": v[1]} for s, v in sorted(table.items())}
+
+
 def round_summary(round_dir: Path, round_name: str) -> dict[str, Any]:
     collection = round_dir / "collection"
     report = _read_json(collection / "research_run_report.json")
     comparison = _read_json(collection / "evaluation" / "comparison.json")
     development = _read_json(collection / "development_scenarios.json")
     families = family_by_root(development)
+    strata = stratum_by_root(development)
     per_adapter: dict[str, Any] = {}
-    for file_label, name in (("bc0", STUDENT_LABEL[round_name]), ("r1", CANDIDATE_LABEL[round_name])):
+    labels = [("bc0", STUDENT_LABEL[round_name]), ("r1", CANDIDATE_LABEL[round_name]), ("expert", "expert")]
+    for file_label, name in labels:
         path = collection / "evaluation" / f"{file_label}_eval.json"
         if path.is_file():
-            per_adapter[name] = per_family_outcomes(_read_json(path), families)
+            per_adapter[name] = per_family_outcomes(_read_json(path), families, strata)
     summary = {
-        "contract": "research_full_pipeline_round_summary_v1",
+        "contract": "research_full_pipeline_round_summary_v2",
         "round": round_name,
         "student": STUDENT_LABEL[round_name],
         "candidate": CANDIDATE_LABEL[round_name],
@@ -141,14 +194,17 @@ def round_summary(round_dir: Path, round_name: str) -> dict[str, Any]:
         "collection_metrics": report.get("collection_metrics"),
         "mixture": report.get("mixture"),
         "development_families": dict(sorted(Counter(families.values()).items())),
+        "development_strata": dict(sorted(Counter(strata.values()).items())),
         "paired_evaluation": {
             "paired_physical_roots": len(comparison.get("paired_physical_roots") or []),
             "student_overall": comparison.get("bc0_overall"),
             "candidate_overall": comparison.get("r1_overall"),
             "candidate_minus_student": comparison.get("r1_minus_bc0"),
+            "expert_overall": comparison.get("expert_overall"),
         },
         "per_family": per_adapter,
         "success_by_family": {name: success_table(block) for name, block in per_adapter.items()},
+        "success_by_stratum": {name: stratum_table(block) for name, block in per_adapter.items()},
     }
     training_done = round_dir / "training.done"
     if training_done.is_file():
@@ -163,12 +219,18 @@ def pipeline_summary(out_dir: Path) -> dict[str, Any]:
         if path.is_file():
             rounds[name] = _read_json(path)
     adapters: dict[str, Any] = {}
+    strata_tables: dict[str, Any] = {}
+    per_family_strata: dict[str, Any] = {}
     consistency: dict[str, Any] = {}
     for name, summary in rounds.items():
         for adapter, table in summary.get("success_by_family", {}).items():
             if adapter in adapters and adapters[adapter] != table:
                 consistency[adapter] = {"first": adapters[adapter], "second": table}
             adapters.setdefault(adapter, table)
+            strata_tables.setdefault(adapter, summary.get("success_by_stratum", {}).get(adapter))
+            per_family_strata.setdefault(
+                adapter, (summary.get("per_family", {}).get(adapter) or {}).get("success_by_stratum")
+            )
     overall = {
         adapter: {
             "successes": sum(v["successes"] for v in table.values()),
@@ -179,10 +241,12 @@ def pipeline_summary(out_dir: Path) -> dict[str, Any]:
     for value in overall.values():
         value["rate"] = value["successes"] / value["episodes"] if value["episodes"] else None
     result = {
-        "contract": "research_full_pipeline_summary_v1",
+        "contract": "research_full_pipeline_summary_v2",
         "release_evidence": False,
         "rounds": {name: summary.get("paired_evaluation") for name, summary in rounds.items()},
         "success_by_family": adapters,
+        "success_by_stratum": strata_tables,
+        "success_by_family_and_stratum": per_family_strata,
         "overall": overall,
         "adapter_consistency_across_rounds": consistency or "consistent",
     }

@@ -369,16 +369,23 @@ class ResearchSplitAndResumeTests(unittest.TestCase):
                 policy_loader=policy_loader,
                 environment_factory=lambda **_kwargs: object(),
                 evaluator=evaluator,
+                expert_policy_factory=lambda: "expert",
             )
+            written = sorted(path.name for path in (Path(directory) / "evaluation").iterdir())
         self.assertEqual(observed[0][1], observed[1][1])
         self.assertEqual(observed[0][1], ["dev_a", "dev_b"])
         self.assertEqual(comparison["r1_minus_bc0"]["resolved_episodes"], 1.0)
+        # The teacher itself is rolled out on the same roots as the ceiling.
+        self.assertEqual([policy for policy, _ in observed], ["bc0", "r1", "expert"])
+        self.assertEqual(observed[2][1], ["dev_a", "dev_b"])
+        self.assertEqual(comparison["expert_overall"]["resolved_episodes"], 1)
+        self.assertIn("expert_eval.json", written)
         # The strict audit needs a case loader to compare parameter and
         # topology corrections against the clean case; the production parser
         # is the default so those families are never scored evidence-missing.
         from psse_env.dagger.release_factories import deterministic_case_loader
 
-        self.assertEqual(loaders, [deterministic_case_loader, deterministic_case_loader])
+        self.assertEqual(loaders, [deterministic_case_loader] * 3)
 
 
 class ResearchEpisodeBudgetTests(unittest.TestCase):

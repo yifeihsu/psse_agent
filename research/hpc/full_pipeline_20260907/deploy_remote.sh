@@ -11,7 +11,7 @@ set -euo pipefail
 BUNDLE=${1:?bundle path}
 BRANCH=${2:?branch name}
 EXPECTED=${3:?expected 40-hex commit}
-SOURCE_PIPE=/scratch/yx3882/research_full_pipeline_20260907
+SOURCE_PIPE=/scratch/yx3882/research_full_pipeline_20260908
 PIPE=${4:-$SOURCE_PIPE}
 OVERRIDES=${5:-}
 CELL=research/hpc/full_pipeline_20260907

@@ -11,12 +11,12 @@
 #SBATCH --requeue
 #SBATCH --comment=preemption=yes;requeue=true
 #SBATCH --open-mode=append
-#SBATCH --output=/scratch/yx3882/research_full_pipeline_20260907/logs/eval-%j.out
+#SBATCH --output=/scratch/yx3882/research_full_pipeline_20260908/logs/eval-%j.out
 # Full pipeline, paired evaluation for PIPELINE_ROUND (r1 or r2): the round's
 # student against its candidate on the shared development suite, then the
 # round summary; after round 2 the pipeline summary joins BC0, R1, and R2.
 set -euo pipefail
-PIPE=/scratch/yx3882/research_full_pipeline_20260907
+PIPE=/scratch/yx3882/research_full_pipeline_20260908
 # shellcheck source=pipeline.env
 source "$PIPE/pipeline.env"
 pipeline_environment
@@ -35,9 +35,13 @@ trap stage_cleanup EXIT
 
 cd "$SRC"
 collection_args "$ROUND"
+# Round 1 also rolls the teacher out on the development roots: its score is
+# the ceiling every student is read against, per family and per stratum.
+expert_args=()
+[[ "$ROUND" == r1 ]] && expert_args=(--eval-expert)
 if [[ ! -s "$COLLECTION_DIR/evaluation/comparison.json" ]]; then
   "$PY" scripts/run_dagger_research.py "${COLLECTION_ARGS[@]}" \
-    --eval-r1-adapter "$CANDIDATE" > "$ROUND_DIR/evaluation_console.json"
+    --eval-r1-adapter "$CANDIDATE" "${expert_args[@]}" > "$ROUND_DIR/evaluation_console.json"
 fi
 "$PY" - "$COLLECTION_DIR/round1.train.jsonl" "$ROUND_DIR/collection.done" <<'PY'
 import hashlib

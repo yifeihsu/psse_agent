@@ -69,6 +69,8 @@ def test_pipeline_env_declares_every_setting_the_stages_use() -> None:
         "HIF_MAX_SCANS", "BC0_LEARNING_RATE", "BC0_EPOCHS", "BC0_SAVE_EVAL_STEPS",
         "VALIDATION_ROWS", "ROUND_LEARNING_RATE", "ROUND_SAVE_EVAL_STEPS", "TRAIN_MAX_LENGTH",
         "COLLECTION_BETA", "COLLECTION_MAX_STEPS", "EVAL_MAX_STEPS", "D1_CAP", "D1_SHARE",
+        "PREVIOUS_PIPE", "SUITE_TRAINING_THRESHOLD", "SUITE_DEVELOPMENT_THRESHOLD",
+        "SUITE_DEVELOPMENT_RANK_ALLOWANCE",
     ):
         assert name in declared, name
     assert 'export PSSE_HIF_WORKERS="${SLURM_CPUS_PER_TASK:-8}"' in text
@@ -100,6 +102,51 @@ def test_plans_cover_every_family_and_respect_corpus_capacity() -> None:
     assert total["hif"] <= 102 and total["measurement+hif"] <= 102
     assert total["three_phase_unbalance"] <= 220 and total["telemetry_no_disturbance"] <= 220
     assert 300 <= sum(total.values()) <= 1000
+
+
+def test_development_stratum_reads_the_recorded_ranking() -> None:
+    build_suite = _load("build_suite.py")
+    def row(ratio, rank, singleton=False):
+        return {"parameter_ranking": {
+            "parameter_ranking_dominance_ratio": ratio,
+            "true_line_rank": rank,
+            "parameter_ranking_singleton": singleton,
+        }}
+    classify = lambda r, fam="parameter": build_suite.parameter_ranking_stratum(
+        r, family=fam, dominance_threshold=1.2
+    )["stratum"]
+    assert classify(row(1.5, 1)) == "dominant"
+    assert classify(row(None, 1, singleton=True)) == "dominant"
+    assert classify(row(1.1, 1)) == "ambiguous"
+    assert classify(row(1.5, 2)) == "ambiguous"
+    assert classify(row(1.5, 1), fam="topology") == "not_applicable"
+    assert classify({"audit": row(1.1, 2)}) == "ambiguous"
+
+
+def test_summary_tables_split_by_stratum_and_carry_the_expert() -> None:
+    summarize = _load("summarize.py")
+    development = [
+        {"grouping": {"scenario_family": "parameter", "physical_root_fingerprint": "a"}, "audit": {"parameter_ranking": {"stratum": "dominant"}}},
+        {"grouping": {"scenario_family": "parameter", "physical_root_fingerprint": "b"}, "audit": {"parameter_ranking": {"stratum": "ambiguous"}}},
+    ]
+    families = summarize.family_by_root(development)
+    strata = summarize.stratum_by_root(development)
+    def episode(root, ok, basis=None):
+        return {"physical_root": root, "steps": 3, "audit": {"truth_audited_task_assessment": {"eligible": ok, "basis": basis}}}
+    block = summarize.per_family_outcomes(
+        {"episodes": [episode("a", True, "counterfactual_resolution"), episode("b", True, "bounded_localization_handoff")]},
+        families,
+        strata,
+    )
+    assert block["success_by_stratum"]["parameter"] == {
+        "ambiguous": {"successes": 1, "episodes": 1},
+        "dominant": {"successes": 1, "episodes": 1},
+    }
+    assert block["success_basis"]["parameter"] == {"bounded_localization_handoff": 1, "counterfactual_resolution": 1}
+    assert summarize.stratum_table(block) == {
+        "ambiguous": {"successes": 1, "episodes": 1},
+        "dominant": {"successes": 1, "episodes": 1},
+    }
 
 
 def test_split_rounds_deals_each_family_across_rounds() -> None:

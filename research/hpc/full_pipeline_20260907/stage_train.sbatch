@@ -11,12 +11,12 @@
 #SBATCH --requeue
 #SBATCH --comment=preemption=yes;requeue=true
 #SBATCH --open-mode=append
-#SBATCH --output=/scratch/yx3882/research_full_pipeline_20260907/logs/train-%j.out
+#SBATCH --output=/scratch/yx3882/research_full_pipeline_20260908/logs/train-%j.out
 # Full pipeline, DAgger training for PIPELINE_ROUND (r1 or r2): continue the
 # round's student for one pass over the 1:1 mixture (micro-batch 1 x 4
 # accumulation, lr 3e-5) and keep the final adapter as the candidate.
 set -euo pipefail
-PIPE=/scratch/yx3882/research_full_pipeline_20260907
+PIPE=/scratch/yx3882/research_full_pipeline_20260908
 # shellcheck source=pipeline.env
 source "$PIPE/pipeline.env"
 pipeline_environment
