@@ -58,9 +58,13 @@ teacher on them:
 - **Labels.** A non-correction preferred action that is the ladder's first
   proposal is a deterministic research label; the rank-one proof no longer
   quarantines context fetches at states with two admissible proposals.
-- **Reporting.** `summarize.py` splits every family by stratum
-  (`dominant`, `ambiguous`, `not_applicable`) and carries the expert's own
-  score on the development roots as the ceiling.
+- **Reporting.** `summarize.py` splits every family by stratum and carries
+  the expert's own score on the development roots as the ceiling. Strata:
+  `dominant` (true line first, ratio >= 1.2), `ambiguous` (true line first,
+  ratio < 1.2: the candidates are tested in rank order), `misranked` (a
+  neighbour outranks the true line: the teacher tests the neighbour first
+  and, when that correction fits the measurements too, commits it and is
+  wrong; this is the rule-based ceiling), `not_applicable`.
 
 ## Stages
 

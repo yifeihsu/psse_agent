@@ -118,19 +118,24 @@ def test_development_stratum_reads_the_recorded_ranking() -> None:
     assert classify(row(1.5, 1)) == "dominant"
     assert classify(row(None, 1, singleton=True)) == "dominant"
     assert classify(row(1.1, 1)) == "ambiguous"
-    assert classify(row(1.5, 2)) == "ambiguous"
+    assert classify(row(1.5, 2)) == "misranked"
+    assert classify(row(1.1, 2)) == "misranked"
     assert classify(row(1.5, 1), fam="topology") == "not_applicable"
-    assert classify({"audit": row(1.1, 2)}) == "ambiguous"
+    assert classify({"audit": row(1.1, 1)}) == "ambiguous"
 
 
 def test_summary_tables_split_by_stratum_and_carry_the_expert() -> None:
     summarize = _load("summarize.py")
     development = [
         {"grouping": {"scenario_family": "parameter", "physical_root_fingerprint": "a"}, "audit": {"parameter_ranking": {"stratum": "dominant"}}},
-        {"grouping": {"scenario_family": "parameter", "physical_root_fingerprint": "b"}, "audit": {"parameter_ranking": {"stratum": "ambiguous"}}},
+        # The recorded fields win over the stored label (a suite built before
+        # the misranked stratum existed labelled this root ambiguous).
+        {"grouping": {"scenario_family": "parameter", "physical_root_fingerprint": "b"}, "audit": {"parameter_ranking": {"stratum": "ambiguous", "generation": {"parameter_ranking_dominance_ratio": 1.1, "true_line_rank": 1}}}},
+        {"grouping": {"scenario_family": "parameter", "physical_root_fingerprint": "c"}, "audit": {"parameter_ranking": {"stratum": "ambiguous", "generation": {"parameter_ranking_dominance_ratio": 1.3, "true_line_rank": 2}}}},
     ]
     families = summarize.family_by_root(development)
     strata = summarize.stratum_by_root(development)
+    assert strata == {"a": "dominant", "b": "ambiguous", "c": "misranked"}
     def episode(root, ok, basis=None):
         return {"physical_root": root, "steps": 3, "audit": {"truth_audited_task_assessment": {"eligible": ok, "basis": basis}}}
     block = summarize.per_family_outcomes(

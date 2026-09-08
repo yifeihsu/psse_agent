@@ -11,7 +11,7 @@ first pass, and are dealt across the DAgger rounds family by family so the
 rounds roll out on disjoint roots.  The development set is drawn at the
 detection threshold with a rank allowance, so it keeps the adjacent-line
 ambiguity the network really has; each development root records its
-parameter-ranking stratum (``dominant``, ``ambiguous``, or
+parameter-ranking stratum (``dominant``, ``ambiguous``, ``misranked``, or
 ``not_applicable``) so results can be read per stratum against the teacher's
 own ceiling.
 
@@ -81,9 +81,11 @@ def parameter_ranking_stratum(
 
     ``dominant``: the true line ranks first and clears the dominance
     threshold, so the teacher corrects it on the first pass.  ``ambiguous``:
-    the true line is among the ranked candidates but the ranking does not
-    clear the threshold or the true line is not first, so the teacher tests
-    the candidates in rank order and may hand off bounded to them.
+    the true line ranks first but the ranking does not clear the threshold,
+    so the context offers the top candidates and the teacher tests them in
+    rank order.  ``misranked``: a neighbouring line outranks the true one;
+    the teacher tests the neighbour first and, when that correction also
+    fits the measurements, commits it and is wrong (the rule-based ceiling).
     ``not_applicable``: the family carries no parameter fault.
     """
 
@@ -100,12 +102,16 @@ def parameter_ranking_stratum(
         ratio_value = float(ratio) if ratio is not None else None
     except (TypeError, ValueError):
         ratio_value = None
-    dominant = bool(
-        (rank is None or int(rank) == 1)
-        and (singleton or (ratio_value is not None and ratio_value >= dominance_threshold))
-    )
+    first = rank is None or int(rank) == 1
+    clears = singleton or (ratio_value is not None and ratio_value >= dominance_threshold)
+    if not first:
+        stratum = "misranked"
+    elif clears:
+        stratum = "dominant"
+    else:
+        stratum = "ambiguous"
     return {
-        "stratum": "dominant" if dominant else "ambiguous",
+        "stratum": stratum,
         "dominance_ratio": ratio_value,
         "true_line_rank": rank,
     }

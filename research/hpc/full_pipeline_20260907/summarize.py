@@ -18,9 +18,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Mapping
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from build_suite import parameter_ranking_stratum  # noqa: E402
+
+PARAMETER_RANKING_DOMINANCE_THRESHOLD = 1.2
 
 OUTCOME_FIELDS = (
     "terminal",
@@ -59,14 +65,30 @@ def family_by_root(development: list[Mapping[str, Any]]) -> dict[str, str]:
 
 
 def stratum_by_root(development: list[Mapping[str, Any]]) -> dict[str, str]:
-    """Each root's parameter-ranking stratum, recorded by the suite builder under audit."""
+    """Each root's parameter-ranking stratum from the ranking the suite recorded.
+
+    The stratum is re-derived from the recorded dominance ratio and true-line
+    rank (under ``audit.parameter_ranking``) so the classification can be
+    refined without redrawing a suite; the label the builder stored is used
+    only when the underlying fields are absent.
+    """
 
     result = {}
+    families = family_by_root(development)
     for row in development:
         audit = row.get("audit") if isinstance(row.get("audit"), Mapping) else {}
         ranking = audit.get("parameter_ranking")
         ranking = ranking if isinstance(ranking, Mapping) else {}
-        result[_row_root(row)] = str(ranking.get("stratum") or "not_applicable")
+        root = _row_root(row)
+        generation = ranking.get("generation")
+        if isinstance(generation, Mapping):
+            result[root] = parameter_ranking_stratum(
+                {"parameter_ranking": generation},
+                family=families.get(root, ""),
+                dominance_threshold=PARAMETER_RANKING_DOMINANCE_THRESHOLD,
+            )["stratum"]
+        else:
+            result[root] = str(ranking.get("stratum") or "not_applicable")
     return result
 
 
