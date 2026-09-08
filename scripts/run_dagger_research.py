@@ -114,6 +114,9 @@ RESEARCH_HIF_SEARCH_BUDGET = {
     "hif_max_scans": 10,
 }
 HIF_SEARCH_PROFILES = ("auto", "release", "research")
+#: Research environment ablations, set from the command line before the
+#: environment factory is first called and recorded in the run report.
+RESEARCH_ENVIRONMENT_OPTIONS: dict[str, Any] = {"branch_first_partial": False}
 #: Episode horizon of the research environment and the paired evaluation,
 #: the production factory's 40-step budget (teacher V2-B).  A multi-meter
 #: root corrected one meter per commit needs about six steps per meter after
@@ -223,6 +226,9 @@ def research_diagnostic_environment_factory(
         chi2_alpha=BC0_CHI2_ALPHA,
         parameter_ranking_dominance_threshold=(
             BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD
+        ),
+        branch_first_partial=bool(
+            RESEARCH_ENVIRONMENT_OPTIONS.get("branch_first_partial", False)
         ),
         **RESEARCH_HIF_SEARCH_BUDGET,
     )
@@ -1288,8 +1294,12 @@ def evaluate_paired_adapters(
     policy_cache_clear: Callable[[], None] | None = None,
     case_loader: Callable[[Any], Any] | None = None,
     expert_policy_factory: Callable[[], Any] | None = None,
+    evaluation_dirname: str = "evaluation",
 ) -> dict[str, Any]:
     """Run BC0 and R1 on the exact same saved development scenarios.
+
+    ``evaluation_dirname`` names the output subdirectory, so an ablation can
+    be evaluated beside a finished round without touching its results.
 
     With ``expert_policy_factory`` the teacher itself is rolled out on the
     same roots under the same observation boundary and written beside the
@@ -1345,7 +1355,7 @@ def evaluate_paired_adapters(
         )
         payload = result.as_dict()
         payloads[label] = payload
-        _write_json(output_dir / "evaluation" / f"{label}_eval.json", payload)
+        _write_json(output_dir / evaluation_dirname / f"{label}_eval.json", payload)
         del result, policy
         if policy_cache_clear is not None:
             policy_cache_clear()
@@ -1386,7 +1396,7 @@ def evaluate_paired_adapters(
             for key in shared_numeric
         },
     }
-    _write_json(output_dir / "evaluation" / "comparison.json", comparison)
+    _write_json(output_dir / evaluation_dirname / "comparison.json", comparison)
     return comparison
 
 
@@ -1545,6 +1555,19 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--eval-max-steps", type=int, default=RESEARCH_EPISODE_BUDGET)
     result.add_argument(
+        "--eval-output-name",
+        default="evaluation",
+        help="Subdirectory for the paired evaluation (an ablation names its own)",
+    )
+    result.add_argument(
+        "--branch-first-partial",
+        action="store_true",
+        help=(
+            "Research ablation: keep a branch repair whose own multiplier is "
+            "resolved as partial progress even below the global-progress floor"
+        ),
+    )
+    result.add_argument(
         "--eval-expert",
         action="store_true",
         help=(
@@ -1623,12 +1646,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     hif_search_profile = resolve_hif_search_profile(
         args.hif_search_profile, plan_families
     )
+    RESEARCH_ENVIRONMENT_OPTIONS["branch_first_partial"] = bool(args.branch_first_partial)
     environment_factory = resolve_environment_factory(hif_search_profile)
     research_profile = {
         "plan_preset": str(args.plan_preset),
         "hif_search_profile": hif_search_profile,
         "scenario_sources": scenario_sources,
     }
+    if args.branch_first_partial:
+        research_profile["environment_options"] = dict(RESEARCH_ENVIRONMENT_OPTIONS)
     run_descriptor = {
         "adapter_path": str(adapter),
         "model_choice": model_spec.key,
@@ -1759,6 +1785,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             architecture=model_spec.architecture,
             policy_cache_clear=clear_research_policy_cache,
             expert_policy_factory=expert_policy_factory,
+            evaluation_dirname=str(args.eval_output_name),
         )
     report = {
         "passed": True,
@@ -1787,7 +1814,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     }
     if args.protected_suite:
         report["protected_suites"] = protected_suites
-    _write_json(output_dir / "research_run_report.json", report)
+    # An ablation evaluation keeps the round's original report intact and
+    # writes its own beside it.
+    report_name = (
+        "research_run_report.json"
+        if args.eval_output_name == "evaluation"
+        else f"research_run_report.{args.eval_output_name}.json"
+    )
+    _write_json(output_dir / report_name, report)
     return report
 
 

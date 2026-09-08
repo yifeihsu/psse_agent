@@ -194,22 +194,31 @@ def stratum_table(outcomes: Mapping[str, Any]) -> dict[str, dict[str, int]]:
     return {s: {"successes": v[0], "episodes": v[1]} for s, v in sorted(table.items())}
 
 
-def round_summary(round_dir: Path, round_name: str) -> dict[str, Any]:
+def round_summary(
+    round_dir: Path, round_name: str, evaluation_name: str = "evaluation"
+) -> dict[str, Any]:
     collection = round_dir / "collection"
-    report = _read_json(collection / "research_run_report.json")
-    comparison = _read_json(collection / "evaluation" / "comparison.json")
+    report_name = (
+        "research_run_report.json"
+        if evaluation_name == "evaluation"
+        else f"research_run_report.{evaluation_name}.json"
+    )
+    report = _read_json(collection / report_name)
+    comparison = _read_json(collection / evaluation_name / "comparison.json")
     development = _read_json(collection / "development_scenarios.json")
     families = family_by_root(development)
     strata = stratum_by_root(development)
     per_adapter: dict[str, Any] = {}
     labels = [("bc0", STUDENT_LABEL[round_name]), ("r1", CANDIDATE_LABEL[round_name]), ("expert", "expert")]
     for file_label, name in labels:
-        path = collection / "evaluation" / f"{file_label}_eval.json"
+        path = collection / evaluation_name / f"{file_label}_eval.json"
         if path.is_file():
             per_adapter[name] = per_family_outcomes(_read_json(path), families, strata)
     summary = {
         "contract": "research_full_pipeline_round_summary_v2",
         "round": round_name,
+        "evaluation_name": evaluation_name,
+        "environment_options": (report.get("research_profile") or {}).get("environment_options"),
         "student": STUDENT_LABEL[round_name],
         "candidate": CANDIDATE_LABEL[round_name],
         "release_evidence": False,
@@ -287,12 +296,13 @@ def main(argv: list[str] | None = None) -> int:
     one.add_argument("--round-dir", required=True, type=Path)
     one.add_argument("--round", required=True, choices=("r1", "r2"))
     one.add_argument("--output", required=True, type=Path)
+    one.add_argument("--evaluation-name", default="evaluation")
     whole = sub.add_parser("pipeline")
     whole.add_argument("--out-dir", required=True, type=Path)
     whole.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
     if args.command == "round":
-        summary = round_summary(args.round_dir, args.round)
+        summary = round_summary(args.round_dir, args.round, args.evaluation_name)
         shown = summary["paired_evaluation"]
     else:
         summary = pipeline_summary(args.out_dir)

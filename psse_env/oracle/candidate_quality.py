@@ -85,6 +85,7 @@ class CandidateQualityOracle:
         max_new_violations: int = 0,
         coupled_measurement_partial: bool = True,
         accepted_channel_measurement_partial: bool = True,
+        branch_first_partial: bool = False,
         mode: str = "auto",
         case_differ: Any = None,
         case_loader: Any = None,
@@ -120,6 +121,21 @@ class CandidateQualityOracle:
         self.accepted_channel_measurement_partial = bool(
             accepted_channel_measurement_partial
         )
+        # Research ablation (2026-09-08): let a branch repair be kept as
+        # partial progress on its own local evidence even when a gross meter
+        # error still holds the global statistic up.  On a
+        # measurement+parameter root a correct line fix removes only 15-20%
+        # of the chi-square while the bad meter stays, so the 30% branch
+        # floor refuses it and the student, having chosen the branch route
+        # first, has nowhere to go but a rollback loop.  The waiver needs the
+        # line's own multiplier materially resolved (the same local test as
+        # ``branch_target_materially_improved``), non-negative global
+        # progress, and a residual outlier still flagged so a meter route
+        # remains to explain the remainder.  A wrong neighbouring line rarely
+        # clears its own multiplier, which is what keeps this from opening
+        # the masking risk the floor guards against; the strict audit still
+        # scores any healthy-line edit as a failure.
+        self.branch_first_partial = bool(branch_first_partial)
         if mode not in {"auto", "synthetic", "deployment"}:
             raise ValueError("mode must be 'auto', 'synthetic', or 'deployment'.")
         self.mode = mode
@@ -302,6 +318,20 @@ class CandidateQualityOracle:
             and global_progress is not None
             and global_progress < partial_global_progress_floor
         ):
+            branch_first_route = bool(
+                self.branch_first_partial
+                and not synthetic_truth
+                and action_family in {"parameter", "topology"}
+                and global_progress >= 0.0
+                and target_progress is not None
+                and target_progress >= self.min_branch_target_progress
+                and target_metric_value is not None
+                and target_metric_threshold is not None
+                and target_metric_threshold > 0.0
+                and target_metric_value
+                <= self.max_branch_target_threshold_ratio * target_metric_threshold
+                and self._residual_outlier_remains(verification)
+            )
             halved_floor_measurement_singleton = bool(
                 not synthetic_truth
                 and action_family == "measurement"
@@ -333,7 +363,19 @@ class CandidateQualityOracle:
                 and verification.get("measurement_target_rank_one") is True
                 and verification.get("measurement_branch_routes_closed") is True
             )
-            if coupled_cluster_route:
+            if branch_first_route:
+                disposition = CandidateDisposition.ACCEPT_PARTIAL
+                progress_class = "branch_first_partial"
+                rationale.extend(
+                    [
+                        "target_fixed",
+                        "branch_target_resolved",
+                        "residual_outlier_remains",
+                        "branch_partial_floor_waived",
+                        "global_anomaly_remains",
+                    ]
+                )
+            elif coupled_cluster_route:
                 disposition = CandidateDisposition.ACCEPT_PARTIAL
                 progress_class = "coupled_measurement_partial"
                 rationale.extend(
@@ -968,6 +1010,15 @@ class CandidateQualityOracle:
                 or violation_count > self.max_new_violations
             ),
         }
+
+    @staticmethod
+    def _residual_outlier_remains(verification: Mapping[str, Any]) -> bool:
+        """Does the candidate solve still flag a meter residual outlier?"""
+
+        raw = verification.get("unresolved_signatures")
+        if not isinstance(raw, (list, tuple, set)):
+            return False
+        return any(str(item).startswith("wls_residual_outlier") for item in raw)
 
     @staticmethod
     def _singleton_measurement_action(action: Mapping[str, Any]) -> bool:

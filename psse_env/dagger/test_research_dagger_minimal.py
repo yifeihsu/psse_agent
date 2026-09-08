@@ -404,6 +404,23 @@ class ResearchEpisodeBudgetTests(unittest.TestCase):
         self.assertEqual(RESEARCH_EPISODE_BUDGET, 40)
         self.assertEqual(parser().get_default("eval_max_steps"), production)
 
+    def test_branch_first_partial_option_reaches_the_candidate_oracle(self) -> None:
+        from scripts import run_dagger_research as research
+
+        self.assertFalse(parser().get_default("branch_first_partial"))
+        self.assertEqual(parser().get_default("eval_output_name"), "evaluation")
+        original = dict(research.RESEARCH_ENVIRONMENT_OPTIONS)
+        try:
+            research.RESEARCH_ENVIRONMENT_OPTIONS["branch_first_partial"] = True
+            env = research.research_diagnostic_environment_factory()
+            self.assertTrue(env.candidate_quality_oracle.branch_first_partial)
+            research.RESEARCH_ENVIRONMENT_OPTIONS["branch_first_partial"] = False
+            env = research.research_diagnostic_environment_factory()
+            self.assertFalse(env.candidate_quality_oracle.branch_first_partial)
+        finally:
+            research.RESEARCH_ENVIRONMENT_OPTIONS.clear()
+            research.RESEARCH_ENVIRONMENT_OPTIONS.update(original)
+
 
 class FixedScenarioSuiteTests(unittest.TestCase):
     """A saved suite is adopted as-is and pinned in the run configuration."""

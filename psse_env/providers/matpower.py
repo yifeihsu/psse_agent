@@ -460,8 +460,12 @@ class MatpowerDeploymentProviders:
         parameter_ranking_dominance_threshold: float = (
             PARAMETER_RANKING_DOMINANCE_THRESHOLD
         ),
+        branch_first_partial: bool = False,
     ) -> None:
         self.top_k = int(top_k)
+        # Research ablation: waive the branch partial-progress floor when the
+        # branch target itself is resolved (see CandidateQualityOracle).
+        self.branch_first_partial = bool(branch_first_partial)
         self.residual_threshold = float(residual_threshold)
         self.lambda_threshold = float(lambda_threshold)
         self.chi2_alpha = float(chi2_alpha)
@@ -542,8 +546,7 @@ class MatpowerDeploymentProviders:
             },
         }
 
-    @staticmethod
-    def _deployment_candidate_quality_oracle() -> Any:
+    def _deployment_candidate_quality_oracle(self) -> Any:
         """Build the one deployment verdict policy used by screen and commit."""
 
         from psse_env.oracle import CandidateQualityOracle
@@ -552,6 +555,7 @@ class MatpowerDeploymentProviders:
             mode="deployment",
             case_differ=matpower_case_differ,
             case_loader=_load_python_case,
+            branch_first_partial=self.branch_first_partial,
         )
 
     def request_additional_evidence(self, state: Mapping[str, Any]) -> dict[str, Any]:
