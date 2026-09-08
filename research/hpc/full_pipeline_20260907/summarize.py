@@ -28,11 +28,12 @@ from build_suite import parameter_ranking_stratum  # noqa: E402
 
 PARAMETER_RANKING_DOMINANCE_THRESHOLD = 1.2
 
+# ``truth_audited_task_success`` is tallied separately from the audit
+# assessment (which also carries the success basis), not from this list.
 OUTCOME_FIELDS = (
     "terminal",
     "terminal_outcome",
     "final_physical_success",
-    "truth_audited_task_success",
     "false_commit_count",
     "invalid_action_count",
     "loop_detected",

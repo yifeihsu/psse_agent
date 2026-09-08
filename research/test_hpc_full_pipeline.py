@@ -137,7 +137,9 @@ def test_summary_tables_split_by_stratum_and_carry_the_expert() -> None:
     strata = summarize.stratum_by_root(development)
     assert strata == {"a": "dominant", "b": "ambiguous", "c": "misranked"}
     def episode(root, ok, basis=None):
-        return {"physical_root": root, "steps": 3, "audit": {"truth_audited_task_assessment": {"eligible": ok, "basis": basis}}}
+        # Evaluator episodes carry the success flag at top level as well as
+        # inside the audit assessment; it must be counted exactly once.
+        return {"physical_root": root, "steps": 3, "truth_audited_task_success": ok, "audit": {"truth_audited_task_assessment": {"eligible": ok, "basis": basis}}}
     block = summarize.per_family_outcomes(
         {"episodes": [episode("a", True, "counterfactual_resolution"), episode("b", True, "bounded_localization_handoff")]},
         families,
@@ -152,6 +154,7 @@ def test_summary_tables_split_by_stratum_and_carry_the_expert() -> None:
         "ambiguous": {"successes": 1, "episodes": 1},
         "dominant": {"successes": 1, "episodes": 1},
     }
+    assert summarize.success_table(block) == {"parameter": {"successes": 2, "episodes": 2}}
 
 
 def test_split_rounds_deals_each_family_across_rounds() -> None:
