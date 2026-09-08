@@ -24,7 +24,9 @@ from numbers import Real
 from typing import Any, Callable, Mapping, Sequence
 
 from psse_env.actions import (
+    AMBIGUOUS_BRANCH_CANDIDATES_REQUEST,
     ASK_FOR_MORE_EVIDENCE,
+    PARAMETER_RANKING_AMBIGUITY_CANDIDATES,
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,
@@ -2083,6 +2085,85 @@ def _task_success_evidence_gap(problem: str) -> bool:
     )
 
 
+# Problems the strict resolved-state audit reports purely because the branch
+# fault was left in place for the operator.  A bounded handoff may carry
+# these and nothing else: any accepted target outside the truth or any
+# modified healthy component still fails it.
+_UNREPAIRED_BRANCH_PROBLEMS = frozenset(
+    {
+        "resolved_episode_has_remaining_true_faults",
+        "final_case_outside_clean_tolerance",
+        "final_measurements_outside_clean_tolerance",
+    }
+)
+
+
+def _bounded_branch_handoff(
+    scenario: Mapping[str, Any],
+    final_state: Mapping[str, Any],
+    audit_problems: Sequence[str],
+) -> dict[str, Any]:
+    """Credit an operator handoff bounded to the ranked branch candidates.
+
+    The episode ended with ``operator_escalation:ambiguous_branch_candidates``
+    after every ranked parameter candidate was rejected by verification.  The
+    diagnosis is correct when the scenario carries exactly one true branch
+    fault and that line is among the named candidates, the candidate set is
+    no larger than the ambiguity allowance, and the only audit problems are
+    the ones an unrepaired fault necessarily produces.
+    """
+
+    output = final_state.get("last_tool_output")
+    output = output if isinstance(output, Mapping) else {}
+    metrics = output.get("tool_metrics")
+    metrics = metrics if isinstance(metrics, Mapping) else {}
+    escalation = metrics.get("operator_escalation_audit")
+    escalation = escalation if isinstance(escalation, Mapping) else {}
+    result: dict[str, Any] = {
+        "contract": "bounded_branch_handoff_v1",
+        "passed": False,
+        "request": escalation.get("request"),
+        "candidate_lines": [],
+        "true_lines": [],
+        "reasons": [],
+    }
+    if escalation.get("request") != AMBIGUOUS_BRANCH_CANDIDATES_REQUEST:
+        result["reasons"].append("handoff_not_bounded_to_branch_candidates")
+        return result
+    candidates = [
+        int(line)
+        for line in escalation.get("candidate_lines") or []
+        if isinstance(line, int) and not isinstance(line, bool)
+    ]
+    result["candidate_lines"] = candidates
+    if not candidates or len(candidates) > PARAMETER_RANKING_AMBIGUITY_CANDIDATES:
+        result["reasons"].append("candidate_set_missing_or_too_wide")
+    true_lines: list[int] = []
+    for key in ("true_parameter_errors", "true_topology_errors"):
+        for fault in _as_sequence(scenario.get(key, [])) or []:
+            if not isinstance(fault, Mapping):
+                continue
+            line = fault.get("line_index1")
+            if line is None and fault.get("branch_row0") is not None:
+                line = int(fault["branch_row0"]) + 1
+            if line is None and fault.get("line_index") is not None:
+                line = int(fault["line_index"])
+            if line is not None:
+                true_lines.append(int(line))
+    result["true_lines"] = true_lines
+    if len(true_lines) != 1:
+        result["reasons"].append("bounded_handoff_requires_exactly_one_true_branch_fault")
+    elif true_lines[0] not in candidates:
+        result["reasons"].append("true_branch_not_among_candidates")
+    unexpected = sorted(
+        problem for problem in audit_problems if problem not in _UNREPAIRED_BRANCH_PROBLEMS
+    )
+    if unexpected:
+        result["reasons"].append("audit_problems_beyond_unrepaired_fault:" + ",".join(unexpected))
+    result["passed"] = not result["reasons"]
+    return result
+
+
 def audit_truth_audited_task_success(
     scenario: Mapping[str, Any],
     final_state: Mapping[str, Any],
@@ -2194,6 +2275,13 @@ def audit_truth_audited_task_success(
         and counterfactual.get("quarantined") is False
         and audit_problems == []
     )
+    basis = "counterfactual_resolution" if success else None
+    bounded_handoff = None
+    if not success and evidence_known and actual_terminal_outcome == "operator_escalation":
+        bounded_handoff = _bounded_branch_handoff(scenario, final_state, audit_problems)
+        if bounded_handoff.get("passed") is True:
+            success = True
+            basis = "bounded_localization_handoff"
     reasons = list(
         dict.fromkeys(unique_evidence_reasons + ([] if success else audit_problems))
     )
@@ -2201,6 +2289,8 @@ def audit_truth_audited_task_success(
         "assessment_version": TRUTH_AUDITED_TASK_SUCCESS_CONTRACT,
         "status": "passed" if success else "failed" if evidence_known else "unknown",
         "eligible": success,
+        "basis": basis,
+        "bounded_branch_handoff": bounded_handoff,
         "evidence_known": evidence_known,
         "faulted": faulted,
         "fault_presence_known": canonical_fault_presence_known,

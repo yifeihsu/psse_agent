@@ -38,7 +38,10 @@ from typing import Any, Mapping, Sequence
 
 from hif_search_limits import validate_hif_search_limits
 from psse_env.actions import (
+    AMBIGUOUS_BRANCH_CANDIDATES_REQUEST,
     ANOMALY_FAMILY_MARKERS,
+    PARAMETER_RANKING_AMBIGUITY_CANDIDATES,
+    ambiguous_branch_candidate_lines,
     harmonic_screening_pending,
     three_phase_acquisition_pending,
     three_phase_screening_pending,
@@ -567,6 +570,28 @@ class MatpowerDeploymentProviders:
             str(signature).split(":", 1)[0]
             for signature in observation.get("tried_action_signatures") or []
         }
+        if request == AMBIGUOUS_BRANCH_CANDIDATES_REQUEST:
+            candidates = self._ambiguous_branch_candidates(observation)
+            if candidates is None:
+                return self._failure(
+                    "ambiguous_branch_candidates_unsupported",
+                    "the parameter route is not ambiguous on this state or its "
+                    "ranked candidates have not all been rejected by verification",
+                )
+            available = {
+                str(item) for item in observation.get("available_evidence") or []
+            }
+            return {
+                **self._binding(state),
+                "evidence_source": "deployment_diagnostic:ambiguous_branch_candidate_inventory",
+                "request": AMBIGUOUS_BRANCH_CANDIDATES_REQUEST,
+                "family": "ambiguous_branch",
+                "candidate_lines": candidates,
+                "additional_evidence_available": False,
+                "operator_review_required": True,
+                "attempted_tools": sorted(attempted),
+                "available_evidence_channels": sorted(available),
+            }
         if request in {
             RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
             RECOVERY_BUDGET_EXHAUSTED_REQUEST,
@@ -1604,12 +1629,17 @@ class MatpowerDeploymentProviders:
         )
         waveform_block = self._waveform_route_block(state)
         screening_pending = self._screening_pending(state)
-        if waveform_block or screening_pending:
+        branch_dominance_block = self._branch_dominance_block(state)
+        if waveform_block or screening_pending or branch_dominance_block:
             # Residual findings stay visible as evidence, but no meter
             # correction is offered: on a waveform-distorted operator vector
-            # the residuals attribute the event itself, not a bad sensor, and
+            # the residuals attribute the event itself, not a bad sensor;
             # until an unflagged anomaly has been screened against the
-            # three-phase telemetry that possibility is still open.
+            # three-phase telemetry that possibility is still open; and while
+            # branch evidence dominates the solve a meter correction can zero
+            # the residuals of a wrong model and mask the branch fault, so the
+            # meter route stays shut until both branch families have had a
+            # hypothesis rejected by verification on this state.
             supported = []
             terminal_closure_action = None
             terminal_closure_targets = []
@@ -1620,6 +1650,7 @@ class MatpowerDeploymentProviders:
             "context_tool": GET_MEASUREMENT_CONTEXT,
             "fundamental_route_blocked_by_waveform_anomaly": waveform_block,
             "three_phase_screening_pending": screening_pending,
+            "measurement_route_blocked_by_branch_dominance": branch_dominance_block,
             "finding_count": len(evidence),
             "measurement_findings": evidence,
             "supported_corrections": supported,
@@ -2083,6 +2114,19 @@ class MatpowerDeploymentProviders:
         # same provider is guaranteed to reject; the expert can proceed to the
         # independently observable topology route without manufacturing an
         # invalid-action recovery example.
+        # When no line dominates, the top-ranked candidates are still the
+        # only physically plausible parameter hypotheses.  Offer them in rank
+        # order so the expert can test them under verification and, if every
+        # one is rejected, hand the operator a diagnosis bounded to that set
+        # rather than falling through to a masking meter correction.
+        ranking_ambiguous = bool(scans_usable and ranked_lines and not ranking_dominant)
+        candidate_rows = (
+            list(ranked_lines)
+            if ranking_dominant
+            else list(ranked_lines[:PARAMETER_RANKING_AMBIGUITY_CANDIDATES])
+            if ranking_ambiguous
+            else []
+        )
         supported = (
             [
                 {
@@ -2092,11 +2136,12 @@ class MatpowerDeploymentProviders:
                         "line_index": int(item["line_index1"]),
                     },
                 }
-                for item in ranked_lines
+                for item in candidate_rows
             ]
-            if scans_usable and ranking_dominant
+            if scans_usable
             else []
         )
+        candidate_lines = [int(item["line_index1"]) for item in candidate_rows]
         route_status = (
             _ROUTE_ACTIONABLE
             if supported
@@ -2134,10 +2179,14 @@ class MatpowerDeploymentProviders:
             ),
             "parameter_ranking_singleton": singleton,
             "parameter_ranking_dominant": ranking_dominant,
+            "parameter_ranking_ambiguous": ranking_ambiguous,
+            "parameter_ranking_candidate_lines": candidate_lines,
             "supported_corrections": supported,
             "route_status": route_status,
             "route_status_reason": (
-                "supported_parameter_candidates"
+                "parameter_ranking_ambiguous_top_candidates"
+                if route_status == _ROUTE_ACTIONABLE and ranking_ambiguous
+                else "supported_parameter_candidates"
                 if route_status == _ROUTE_ACTIONABLE
                 else "no_parameter_findings"
                 if route_status == _ROUTE_COMPLETE_NEGATIVE
@@ -2660,6 +2709,46 @@ class MatpowerDeploymentProviders:
         observation = state.get("policy_observation")
         observation = observation if isinstance(observation, Mapping) else {}
         return [str(item) for item in observation.get("unresolved_signatures") or []]
+
+    @classmethod
+    def _branch_dominance_block(cls, state: Mapping[str, Any]) -> bool:
+        """Branch evidence dominates and both branch routes are still open.
+
+        Mirrors the measurement expert's stand-down rule as an environment
+        contract: the meter route is not actionable while the solve is
+        branch-multiplier dominant (and not residual-outlier dominant) unless
+        a parameter hypothesis and a topology hypothesis have each been
+        rejected by verification on the active state.
+        """
+        observation = state.get("policy_observation")
+        observation = observation if isinstance(observation, Mapping) else state
+        signatures = [str(item) for item in cls._observable_signatures(state)]
+        branch_dominant = any("wls_branch_multiplier_dominant" in item for item in signatures)
+        meter_dominant = any("wls_residual_outlier_dominant" in item for item in signatures)
+        if not branch_dominant or meter_dominant:
+            return False
+        active_id = str(observation.get("active_state_id") or state.get("state_id") or "")
+        rejected_families: set[str] = set()
+        for record in observation.get("rejected_hypotheses") or []:
+            if not isinstance(record, Mapping):
+                continue
+            parent = record.get("candidate_parent_id")
+            if parent is not None and active_id and str(parent) != active_id:
+                continue
+            source = record.get("source_action")
+            tool = source.get("tool") if isinstance(source, Mapping) else None
+            if tool == CORRECT_PARAMETERS:
+                rejected_families.add("parameter")
+            elif tool == CORRECT_TOPOLOGY:
+                rejected_families.add("topology")
+        return not {"parameter", "topology"} <= rejected_families
+
+    @staticmethod
+    def _ambiguous_branch_candidates(
+        observation: Mapping[str, Any]
+    ) -> list[int] | None:
+        """Ranked parameter candidates that were all tested and rejected here."""
+        return ambiguous_branch_candidate_lines(observation)
 
     @classmethod
     def _waveform_route_block(cls, state: Mapping[str, Any]) -> list[str]:

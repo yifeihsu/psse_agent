@@ -760,10 +760,26 @@ class MeasurementContextTests(unittest.TestCase):
         self.assertIn("parameter_findings", parameter)
         self.assertIs(parameter["parameter_scans_available"], True)
         self.assertEqual(parameter["parameter_scan_count"], 1)
-        expected_actionable = parameter["parameter_ranking_dominant"]
+        # A dominant ranking offers every ranked line; an ambiguous one still
+        # offers the top-ranked candidates for verification-bounded testing.
+        expected_actionable = bool(
+            parameter["parameter_ranking_dominant"]
+            or parameter["parameter_ranking_ambiguous"]
+        )
         self.assertEqual(
             bool(parameter["supported_corrections"]), expected_actionable
         )
+        if parameter["parameter_ranking_ambiguous"]:
+            self.assertFalse(parameter["parameter_ranking_dominant"])
+            self.assertLessEqual(len(parameter["supported_corrections"]), 2)
+            self.assertEqual(
+                parameter["route_status_reason"],
+                "parameter_ranking_ambiguous_top_candidates",
+            )
+            self.assertEqual(
+                [p["arguments"]["line_index"] for p in parameter["supported_corrections"]],
+                parameter["parameter_ranking_candidate_lines"],
+            )
         self.assertEqual(
             parameter["route_status"],
             (
@@ -840,7 +856,7 @@ class MeasurementContextTests(unittest.TestCase):
             [1, 3, 2],
         )
 
-    def test_parameter_context_withholds_ambiguous_inventory_but_keeps_evidence(
+    def test_parameter_context_offers_ranked_ambiguity_candidates_and_keeps_evidence(
         self,
     ) -> None:
         findings = [
@@ -861,13 +877,19 @@ class MeasurementContextTests(unittest.TestCase):
             ambiguous["parameter_ranking_dominance_ratio"], 6.0 / 5.5
         )
         self.assertIs(ambiguous["parameter_ranking_dominant"], False)
-        self.assertEqual(ambiguous["supported_corrections"], [])
+        # No line dominates, so the route offers the top-ranked candidates in
+        # rank order for verification-bounded testing and says so; the
+        # evidence stays visible either way.
+        self.assertIs(ambiguous["parameter_ranking_ambiguous"], True)
         self.assertEqual(
-            ambiguous["route_status"], "unavailable_or_inconclusive"
+            [p["arguments"]["line_index"] for p in ambiguous["supported_corrections"]],
+            [5, 6],
         )
+        self.assertEqual(ambiguous["parameter_ranking_candidate_lines"], [5, 6])
+        self.assertEqual(ambiguous["route_status"], "actionable")
         self.assertEqual(
             ambiguous["route_status_reason"],
-            "parameter_target_not_observably_dominant",
+            "parameter_ranking_ambiguous_top_candidates",
         )
 
         with patch.object(

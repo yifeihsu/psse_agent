@@ -27,6 +27,62 @@ RECOVERY_OPTIONS_EXHAUSTED_REQUEST = (
 RECOVERY_BUDGET_EXHAUSTED_REQUEST = (
     "operator_escalation:recovery_budget_exhausted"
 )
+# A branch fault whose top-ranked line does not dominate its runner-up under
+# the parameter-ranking contract.  The ranked candidates are tested under
+# verification; once every one of them is rejected the diagnosis is handed to
+# the operator bounded to that candidate set, instead of falling through to a
+# meter correction that would only mask the fault.
+AMBIGUOUS_BRANCH_CANDIDATES_REQUEST = (
+    "operator_escalation:ambiguous_branch_candidates"
+)
+#: How many ranked lines the parameter context offers when no line dominates.
+PARAMETER_RANKING_AMBIGUITY_CANDIDATES = 2
+
+
+def ambiguous_branch_candidate_lines(observation: Mapping[str, Any]) -> list[int] | None:
+    """The ranked parameter candidates that were all rejected on this state.
+
+    ``None`` unless the fresh parameter context on the active state declared
+    the ranking ambiguous, named its candidate lines, and every one of those
+    lines has a verification-rejected ``correct_parameters`` hypothesis whose
+    parent is the active state.  This is the policy-visible precondition of
+    the bounded operator handoff; the expert, the escalation provider, and
+    the environment audit all read the same evidence.
+    """
+
+    contexts = observation.get("fresh_context_evidence")
+    contexts = contexts if isinstance(contexts, Mapping) else {}
+    evidence = contexts.get("parameter")
+    evidence = evidence if isinstance(evidence, Mapping) else {}
+    if evidence.get("parameter_ranking_ambiguous") is not True:
+        return None
+    active_id = str(observation.get("active_state_id") or "")
+    if active_id and str(evidence.get("state_id") or "") != active_id:
+        return None
+    candidates = [
+        int(line)
+        for line in evidence.get("parameter_ranking_candidate_lines") or []
+        if isinstance(line, int) and not isinstance(line, bool)
+    ]
+    if not candidates:
+        return None
+    rejected: set[int] = set()
+    for record in observation.get("rejected_hypotheses") or []:
+        if not isinstance(record, Mapping):
+            continue
+        parent = record.get("candidate_parent_id")
+        if parent is not None and active_id and str(parent) != active_id:
+            continue
+        source = record.get("source_action")
+        if not isinstance(source, Mapping) or source.get("tool") != CORRECT_PARAMETERS:
+            continue
+        arguments = source.get("arguments")
+        line = arguments.get("line_index") if isinstance(arguments, Mapping) else None
+        if isinstance(line, int) and not isinstance(line, bool):
+            rejected.add(int(line))
+    if not set(candidates) <= rejected:
+        return None
+    return candidates
 # An accepted correction can make the candidate WLS statistic quiescent
 # without proving that every physical error has been removed.  Production
 # mode persists this policy-visible protocol obligation until a same-state

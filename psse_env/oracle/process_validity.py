@@ -196,6 +196,15 @@ class ProcessValidityOracle:
                 family = _CORRECTION_CONTEXT_FAMILY[tool]
                 error_code = "correction_route_not_actionable"
                 error_detail = f"{family}_three_phase_screening_pending"
+            elif tool == CORRECT_MEASUREMENTS and self._measurement_route_blocked_by_branch_dominance(
+                state, active_id
+            ):
+                # The fresh measurement context declared the meter route shut:
+                # branch evidence dominates and neither branch family has had
+                # a hypothesis rejected on this state, so a meter correction
+                # would only mask the branch fault.
+                error_code = "correction_route_not_actionable"
+                error_detail = "measurement_route_blocked_by_branch_dominance"
             elif tool == CORRECT_PARAMETERS and not self._context_is_fresh(state, "parameter"):
                 error_code, error_detail = "missing_precondition", "parameter_context_missing"
             elif tool == CORRECT_TOPOLOGY and not self._context_is_fresh(state, "topology"):
@@ -394,6 +403,19 @@ class ProcessValidityOracle:
                 payload.get(key) is not None for key in ("status", "expected_status")
             )) or any(key in payload for key in ("case", "case_updates"))
         return False
+
+    @staticmethod
+    def _measurement_route_blocked_by_branch_dominance(
+        state: Mapping[str, Any], active_id: Any
+    ) -> bool:
+        contexts = state.get("fresh_context_evidence")
+        contexts = contexts if isinstance(contexts, Mapping) else {}
+        evidence = contexts.get("measurement")
+        evidence = evidence if isinstance(evidence, Mapping) else {}
+        if evidence.get("measurement_route_blocked_by_branch_dominance") is not True:
+            return False
+        bound = str(evidence.get("state_id") or "")
+        return not bound or not active_id or bound == str(active_id)
 
     @staticmethod
     def _context_is_fresh(state: Any, context_family: str) -> bool:

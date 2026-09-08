@@ -374,6 +374,7 @@ class Round0ScenarioGenerator:
         source_partition: str | None = None,
         parameter_ranking_dominance_threshold: float | None = None,
         enforce_parameter_ranking_dominance: bool | None = None,
+        parameter_target_rank_allowance: int | None = None,
         unbalance_vuf_threshold: float = DEFAULT_UNBALANCE_VUF_THRESHOLD,
         waveform_signature_mode: Mapping[str, str] | None = None,
     ) -> None:
@@ -449,6 +450,20 @@ class Round0ScenarioGenerator:
             if enforce_parameter_ranking_dominance is None
             else bool(enforce_parameter_ranking_dominance)
         )
+        # ``None`` keeps the release rule that the deployed parameter context
+        # must rank the true line first.  A positive allowance admits a root
+        # whose true line ranks anywhere within that many candidates, which is
+        # how a development suite drawn at the detection threshold keeps the
+        # adjacent-line ambiguity the network really has; the recorded rank
+        # stratifies the results afterwards.
+        self._parameter_target_rank_allowance = (
+            None if parameter_target_rank_allowance is None else int(parameter_target_rank_allowance)
+        )
+        if (
+            self._parameter_target_rank_allowance is not None
+            and self._parameter_target_rank_allowance < 1
+        ):
+            raise ValueError("parameter_target_rank_allowance must be positive")
         default_parameter_threshold = (
             1.0
             if source_partition == "evaluation"
@@ -1009,7 +1024,19 @@ class Round0ScenarioGenerator:
             )
         first_supported_line = supported_lines[0]
         metrics["parameter_context_first_line_index1"] = first_supported_line
-        if first_supported_line != line_index1:
+        true_line_rank = (
+            supported_lines.index(line_index1) + 1
+            if line_index1 in supported_lines
+            else None
+        )
+        metrics["parameter_context_true_line_rank"] = true_line_rank
+        allowance = self._parameter_target_rank_allowance
+        admitted_by_rank = (
+            true_line_rank is not None and true_line_rank <= allowance
+            if allowance is not None
+            else first_supported_line == line_index1
+        )
+        if not admitted_by_rank:
             raise ScenarioRejected(
                 "parameter_context_target_ambiguous",
                 (
@@ -1022,6 +1049,8 @@ class Round0ScenarioGenerator:
             "corrected_case_path": corrected_case_path,
             "corrected_r": corrected_r,
             "corrected_x": corrected_x,
+            "parameter_context_ranking": copy.deepcopy(parameter_ranking),
+            "parameter_context_true_line_rank": true_line_rank,
             "base_candidate_metrics": {
                 key: candidate_metrics.get(key)
                 for key in (
@@ -1300,6 +1329,31 @@ class Round0ScenarioGenerator:
             "z_scans": [[float(v) for v in scan] for scan in row["z_scans"]],
             "initial_state_strategy": "observed_vm_plus_configured_case_angles_v1",
         }
+        # The ranking the deployed parameter context produced on this root
+        # is part of the root's identity for research reporting: a suite
+        # drawn at the detection threshold records which roots sit inside
+        # the dominance band, so results can be stratified by ambiguity.
+        ranking = (
+            gate_result.get("parameter_context_ranking")
+            if isinstance(gate_result, Mapping)
+            else None
+        )
+        if isinstance(ranking, Mapping):
+            scenario["parameter_ranking"] = {
+                **{
+                    key: copy.deepcopy(ranking.get(key))
+                    for key in (
+                        "parameter_ranking_dominance_ratio",
+                        "parameter_ranking_top_abs_lambda",
+                        "parameter_ranking_runner_up_abs_lambda",
+                        "parameter_ranking_singleton",
+                    )
+                },
+                "true_line_rank": gate_result.get("parameter_context_true_line_rank"),
+                "generation_threshold": self.parameter_ranking_dominance_threshold,
+                "enforced": bool(self._enforce_parameter_ranking_dominance),
+                "rank_allowance": self._parameter_target_rank_allowance,
+            }
         if gate_result is not None:
             self._parameter_gate_results[scenario["scenario_id"]] = gate_result
         return scenario
@@ -1714,7 +1768,7 @@ class Round0ScenarioGenerator:
         scenarios.
         """
         if not self.validate:
-            return
+            return None
         gate_result = self._parameter_gate_results.get(str(base_scenario_id))
         parameter_faults = scenario.get("true_parameter_errors") or []
         measurement_faults = scenario.get("true_measurement_errors") or []
@@ -1892,10 +1946,25 @@ class Round0ScenarioGenerator:
                         "parameter context produced no correction",
                         failed_stage="parameter_context",
                     )
-                action = copy.deepcopy(dict(supported[0]))
-                observed_line = int(action.get("arguments", {}).get("line_index", -1))
+                supported_lines = [
+                    int(dict(item).get("arguments", {}).get("line_index", -1))
+                    for item in supported
+                ]
+                observed_line = supported_lines[0]
                 stage_metrics["rank_one_line_index1"] = observed_line
-                if observed_line != expected_line:
+                true_line_rank = (
+                    supported_lines.index(expected_line) + 1
+                    if expected_line in supported_lines
+                    else None
+                )
+                stage_metrics["true_line_rank"] = true_line_rank
+                allowance = self._parameter_target_rank_allowance
+                admitted_by_rank = (
+                    true_line_rank is not None and true_line_rank <= allowance
+                    if allowance is not None
+                    else observed_line == expected_line
+                )
+                if not admitted_by_rank:
                     metrics["stages"].append(stage_metrics)
                     reject(
                         "mixed_parameter_recovery_target_mismatch",
@@ -1905,6 +1974,9 @@ class Round0ScenarioGenerator:
                         ),
                         failed_stage="parameter_context",
                     )
+                # The offline route is validated on the true line's correction;
+                # a rank allowance only decides admission.
+                action = copy.deepcopy(dict(supported[true_line_rank - 1]))
                 candidate_case = str(gate_result["corrected_case_path"])
                 candidate_measurements = list(current_measurements)
                 progress_floor = float(
@@ -1990,6 +2062,7 @@ class Round0ScenarioGenerator:
                 "two-stage configured recovery did not reach a clean terminal candidate",
                 failed_stage="terminal_verification",
             )
+        return metrics
 
     def _require_mixed_topology_recovery_realizable(
         self,
@@ -2801,10 +2874,37 @@ class Round0ScenarioGenerator:
         if family == "measurement+topology":
             self._require_mixed_topology_recovery_realizable(composed)
         if family == "measurement+parameter":
-            self._require_mixed_parameter_recovery_realizable(
+            mixed_metrics = self._require_mixed_parameter_recovery_realizable(
                 composed,
                 base_scenario_id=base_scenario_id,
             )
+            # The deployed ranking on the composed root (with the bad meter in
+            # place) is what a diagnosis faces, so it replaces the base root's.
+            parameter_stage = next(
+                (
+                    stage
+                    for stage in (mixed_metrics or {}).get("stages", [])
+                    if isinstance(stage, Mapping) and "parameter_ranking" in stage
+                ),
+                None,
+            )
+            if parameter_stage is not None:
+                ranking = parameter_stage["parameter_ranking"]
+                composed["parameter_ranking"] = {
+                    **{
+                        key: copy.deepcopy(ranking.get(key))
+                        for key in (
+                            "parameter_ranking_dominance_ratio",
+                            "parameter_ranking_top_abs_lambda",
+                            "parameter_ranking_runner_up_abs_lambda",
+                            "parameter_ranking_singleton",
+                        )
+                    },
+                    "true_line_rank": parameter_stage.get("true_line_rank"),
+                    "generation_threshold": self.parameter_ranking_dominance_threshold,
+                    "enforced": bool(self._enforce_parameter_ranking_dominance),
+                    "rank_allowance": self._parameter_target_rank_allowance,
+                }
         return composed
 
     # ---------------------------------------------------------------- driver

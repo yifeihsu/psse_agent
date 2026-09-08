@@ -1364,7 +1364,79 @@ class ValidationGateTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result["corrected_r"], 0.01)
         self.assertEqual(result["corrected_x"], 0.05)
+        self.assertEqual(result["parameter_context_true_line_rank"], 1)
         mocked.assert_called_once()
+
+    @patch(
+        "psse_env.providers.scenario_generator._param_correction_json",
+        return_value={"success": True, "corrected_params": [0.01, 0.05]},
+    )
+    def test_parameter_context_rank_allowance_admits_a_second_ranked_true_line(
+        self, mocked
+    ) -> None:
+        """A development draw may keep a root whose true line ranks second.
+
+        The deployed context still ranks the neighbour first; the recorded
+        rank stratifies the root as ambiguous instead of rejecting it.
+        """
+
+        scan = json.loads(FIXTURE.read_text())["z_obs"]
+        context = {
+            **self._parameter_ranking((2, 9.0), (1, 3.0)),
+            "supported_corrections": [
+                {
+                    "tool": "correct_parameters",
+                    "arguments": {
+                        "state_id": "offline_parameter_context:l1",
+                        "line_index": 2,
+                    },
+                },
+                {
+                    "tool": "correct_parameters",
+                    "arguments": {
+                        "state_id": "offline_parameter_context:l1",
+                        "line_index": 1,
+                    },
+                },
+            ],
+        }
+        wls = {
+            "target_fixed": True,
+            "post_action_resolved": True,
+            "globally_resolved": True,
+            "physical_constraints_ok": True,
+        }
+        with self.assertRaises(ValueError):
+            Round0ScenarioGenerator(seed=5, parameter_target_rank_allowance=0)
+
+        admitting = Round0ScenarioGenerator(seed=5, parameter_target_rank_allowance=2)
+        admitting._parameter_gate_provider.run_wls = Mock(return_value=wls)
+        admitting._parameter_gate_provider.get_parameter_context = Mock(return_value=context)
+        result = admitting._require_parameter_correction_realizable(
+            line_row0=0,
+            clean_r=0.01,
+            clean_x=0.05,
+            z_scans=[scan],
+            measurements=scan,
+            final_case_abs_tolerance=0.02,
+        )
+        self.assertEqual(result["parameter_context_true_line_rank"], 2)
+
+        strict = Round0ScenarioGenerator(seed=5, parameter_target_rank_allowance=1)
+        strict._parameter_gate_provider.run_wls = Mock(return_value=wls)
+        strict._parameter_gate_provider.get_parameter_context = Mock(return_value=context)
+        with self.assertRaises(ScenarioRejected) as caught:
+            strict._require_parameter_correction_realizable(
+                line_row0=0,
+                clean_r=0.01,
+                clean_x=0.05,
+                z_scans=[scan],
+                measurements=scan,
+                final_case_abs_tolerance=0.02,
+            )
+        self.assertEqual(caught.exception.reason, "parameter_context_target_ambiguous")
+        self.assertEqual(caught.exception.metrics["parameter_context_true_line_rank"], 2)
+        self.assertEqual(mocked.call_count, 2)
 
     @patch(
         "psse_env.providers.scenario_generator._param_correction_json",
@@ -1495,6 +1567,99 @@ class ValidationGateTests(unittest.TestCase):
             "mixed_parameter_recovery_context_not_dominant",
         )
         self.assertEqual(caught.exception.metrics["stages"][-1]["parameter_ranking"], ranking)
+
+    def test_mixed_parameter_rank_allowance_validates_the_true_line_route(self) -> None:
+        """With an allowance the composed gate admits a second-ranked true line.
+
+        The offline route is still validated on the true line's correction,
+        and the recorded rank marks the root ambiguous for stratification.
+        """
+
+        def build(allowance):
+            generator = Round0ScenarioGenerator(
+                seed=5, validate=True, parameter_target_rank_allowance=allowance
+            )
+            provider = Mock()
+            provider.run_wls.side_effect = [
+                {
+                    "unresolved_signatures": [
+                        "wls_residual_outlier_dominant index=1 channel=Vm"
+                    ],
+                    "remaining_anomaly_score": 10.0,
+                },
+                {
+                    "target_fixed": True,
+                    "post_action_resolved": False,
+                    "physical_constraints_ok": True,
+                    "remaining_anomaly_score": 5.0,
+                },
+                {
+                    "target_fixed": True,
+                    "post_action_resolved": True,
+                    "physical_constraints_ok": True,
+                    "remaining_anomaly_score": 0.0,
+                },
+            ]
+            provider.get_measurement_context.return_value = {
+                "supported_corrections": [
+                    {
+                        "tool": "correct_measurements",
+                        "arguments": {
+                            "state_id": "offline_mixed_parameter_gate:measurement_context_0",
+                            "suspect_group": [1],
+                        },
+                    }
+                ]
+            }
+            provider.correct_measurements.return_value = {
+                "modification": {"measurement_updates": {"1": 0.5}}
+            }
+            provider.get_parameter_context.return_value = {
+                **self._parameter_ranking((2, 9.0), (1, 3.0)),
+                "supported_corrections": [
+                    {
+                        "tool": "correct_parameters",
+                        "arguments": {
+                            "state_id": "offline_mixed_parameter_gate:parameter_context_1",
+                            "line_index": line,
+                        },
+                    }
+                    for line in (2, 1)
+                ],
+            }
+            generator._parameter_gate_provider = provider
+            generator._parameter_gate_results["base-root"] = {
+                "corrected_case_path": "corrected_case.py"
+            }
+            return generator, provider
+
+        scenario = {
+            "case": "case14",
+            "measurements": [1.0, 1.5],
+            "metadata": {"parameter_scans": {"z_scans": [[1.0, 2.0, 3.0]]}},
+            "true_parameter_errors": [{"line_index1": 1}],
+            "true_measurement_errors": [{"index": 1, "clean": 0.5}],
+        }
+
+        strict, _ = build(None)
+        with self.assertRaises(ScenarioRejected) as caught:
+            strict._require_mixed_parameter_recovery_realizable(
+                scenario, base_scenario_id="base-root"
+            )
+        self.assertEqual(
+            caught.exception.reason, "mixed_parameter_recovery_target_mismatch"
+        )
+        self.assertEqual(caught.exception.metrics["stages"][-1]["true_line_rank"], 2)
+
+        admitting, provider = build(2)
+        metrics = admitting._require_mixed_parameter_recovery_realizable(
+            scenario, base_scenario_id="base-root"
+        )
+        parameter_stage = metrics["stages"][-1]
+        self.assertEqual(parameter_stage["rank_one_line_index1"], 2)
+        self.assertEqual(parameter_stage["true_line_rank"], 2)
+        candidate_state = provider.run_wls.call_args_list[-1].args[0]
+        self.assertEqual(candidate_state["source_action"]["arguments"]["line_index"], 1)
 
     def test_known_ambiguous_parameter_root_is_rejected_by_dominance_gate(
         self,

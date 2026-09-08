@@ -311,6 +311,24 @@ def observable_rank_one_target_proof(
             "basis": "singleton_expert_target",
             "expert_action_count": 1,
         }
+    correction_tools = {
+        "correct_measurements",
+        "correct_parameters",
+        "correct_parameters_from_path",
+        "correct_topology",
+    }
+    if preferred["tool"] not in correction_tools:
+        # A context fetch, a request, a solve, a commit, or a handoff is a
+        # deterministic ladder choice: the first proposal is the target, and
+        # the runners-up are the same ladder's later rungs, not competing
+        # physical hypotheses.  Rank-one proof is a property of correction
+        # targets only.
+        return {
+            "contract": "observable_rank_one_target_v1",
+            "passed": True,
+            "basis": "deterministic_non_correction_target",
+            "expert_action_count": len(actions),
+        }
 
     parameter_tools = {"correct_parameters", "correct_parameters_from_path"}
     if preferred["tool"] not in parameter_tools or any(
@@ -412,19 +430,28 @@ def observable_rank_one_target_proof(
     action_state_ids = {
         str(action["arguments"].get("state_id") or "") for action in actions
     }
+    # The proof asks for a strict ranking, not for dominance at the route's
+    # threshold: the top-ranked line is a deterministic first target whether
+    # the ranking clears the dominance threshold (the route is actionable
+    # outright) or falls inside the ambiguity band (the top candidates are
+    # tested in rank order under verification).  Ties remain unprovable.
     passed = bool(
         scores_consistent
         and top_score > runner_score
         and ratio > 1.0
-        and threshold == 1.0
-        and evidence.get("parameter_ranking_dominant") is True
         and preferred_line == top_line > 0
         and action_state_ids == {active_state_id}
     )
     return {
         "contract": "observable_rank_one_target_v1",
         "passed": passed,
-        "basis": "strict_observable_parameter_ranking" if passed else None,
+        "basis": (
+            None
+            if not passed
+            else "strict_observable_parameter_ranking"
+            if evidence.get("parameter_ranking_dominant") is True
+            else "ranked_ambiguity_candidate"
+        ),
         "reason": None if passed else "parameter_ranking_not_strict_or_target_mismatch",
         "expert_action_count": len(actions),
         "active_state_id": active_state_id,

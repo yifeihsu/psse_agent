@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterable
 from typing import Any, Mapping
 
 from .actions import (
+    AMBIGUOUS_BRANCH_CANDIDATES_REQUEST,
     ANOMALY_FAMILY_MARKERS,
     WAVEFORM_ANOMALY_FAMILIES,
     ASK_FOR_MORE_EVIDENCE,
@@ -1191,6 +1192,15 @@ class TransactionalPSSEEnv:
                 )
             if tool in DIAGNOSTIC_TOOLS:
                 if request_family is not None and evidence_bound:
+                    # A structural context fetched while the acquisition was
+                    # pending offered no corrections; once the request is
+                    # answered those screens must be taken again rather than
+                    # counted as complete, or the ladder falls through to the
+                    # meter route on a branch fault.
+                    for family in ("measurement", "parameter", "topology"):
+                        self.context_flags[f"has_fresh_{family}_context"] = False
+                        self.context_flags[f"{family}_context_state_id"] = None
+                        self.context_flags.get("fresh_context_evidence", {}).pop(family, None)
                     contexts = self.context_flags.setdefault("fresh_context_evidence", {})
                     contexts[request_family] = policy_safe_copy(
                         {
@@ -1227,6 +1237,7 @@ class TransactionalPSSEEnv:
                     HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
                     RECOVERY_BUDGET_EXHAUSTED_REQUEST,
                     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                    AMBIGUOUS_BRANCH_CANDIDATES_REQUEST,
                 }
             ):
                 escalation_audit = self._operator_escalation_audit(
@@ -1667,6 +1678,7 @@ class TransactionalPSSEEnv:
             HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
             RECOVERY_BUDGET_EXHAUSTED_REQUEST,
             RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+            AMBIGUOUS_BRANCH_CANDIDATES_REQUEST,
         }
         if request not in supported_requests:
             missing.append("escalation_request_invalid")
@@ -2262,6 +2274,17 @@ class TransactionalPSSEEnv:
                     and not post_correction_confirmation_handoff
                 ):
                     missing.append("same_state_supported_corrections_unexhausted")
+            elif request == AMBIGUOUS_BRANCH_CANDIDATES_REQUEST:
+                # The bounded handoff: every ranked parameter candidate on
+                # this state was tested and rejected.  The meter route is shut
+                # by branch dominance, so the measurement context is not a
+                # required investigation here.
+                if outstanding_recovery_targets:
+                    missing.append("same_state_supported_corrections_unexhausted")
+                if not isinstance(provider_metrics, Mapping) or not provider_metrics.get(
+                    "candidate_lines"
+                ):
+                    missing.append("ambiguous_branch_candidates_missing")
             else:
                 if not 0 < remaining_budget < 4:
                     missing.append("autonomous_recovery_budget_not_exhausted")
@@ -2288,6 +2311,8 @@ class TransactionalPSSEEnv:
         additional_evidence_available = (
             True
             if request == RECOVERY_BUDGET_EXHAUSTED_REQUEST
+            else False
+            if request == AMBIGUOUS_BRANCH_CANDIDATES_REQUEST
             else bool(missing_required_contexts or outstanding_recovery_targets)
         )
         ledger = {
@@ -2299,7 +2324,15 @@ class TransactionalPSSEEnv:
                 if request == HIF_DIAGNOSTICS_EXHAUSTED_REQUEST
                 else "recovery_budget"
                 if request == RECOVERY_BUDGET_EXHAUSTED_REQUEST
+                else "ambiguous_branch"
+                if request == AMBIGUOUS_BRANCH_CANDIDATES_REQUEST
                 else "mixed_or_unresolved"
+            ),
+            "candidate_lines": (
+                [int(line) for line in provider_metrics.get("candidate_lines") or []]
+                if request == AMBIGUOUS_BRANCH_CANDIDATES_REQUEST
+                and isinstance(provider_metrics, Mapping)
+                else []
             ),
             "unexplained_signature_count": len(unresolved),
             "required_estimators": (

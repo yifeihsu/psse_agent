@@ -5,7 +5,9 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from psse_env.actions import (
+    AMBIGUOUS_BRANCH_CANDIDATES_REQUEST,
     ASK_FOR_MORE_EVIDENCE,
+    ambiguous_branch_candidate_lines,
     CONTEXT_TOOLS,
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
@@ -998,6 +1000,34 @@ class ExpertPolicyOracle:
         )
         if not (successful_current_wls and investigation_seen):
             return []
+        # A branch fault whose ranked candidates were all tested and rejected
+        # is handed over bounded to that candidate set: the operator gets a
+        # diagnosis, not a generic exhaustion, and the meter route never
+        # opens on a branch-dominant solve.
+        ambiguous_candidates = ambiguous_branch_candidate_lines(
+            policy if isinstance(policy, Mapping) else policy.as_dict()
+        )
+        if ambiguous_candidates:
+            return [
+                ExpertActionProposal(
+                    action={
+                        "tool": ASK_FOR_MORE_EVIDENCE,
+                        "arguments": {
+                            "state_id": active_id,
+                            "request": AMBIGUOUS_BRANCH_CANDIDATES_REQUEST,
+                        },
+                    },
+                    source_expert="recovery_expert",
+                    confidence=1.0,
+                    evidence_codes=[
+                        "ambiguous_branch_candidates_rejected",
+                        "operator_handoff_bounded_to_candidates",
+                        *[f"candidate_line={line}" for line in ambiguous_candidates],
+                    ],
+                    admissible=True,
+                    estimated_immediate_risk=0.0,
+                )
+            ]
         return [
             ExpertActionProposal(
                 action={
