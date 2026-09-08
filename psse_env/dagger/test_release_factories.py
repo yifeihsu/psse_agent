@@ -909,7 +909,7 @@ class CheckpointTreeIdentityTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "symlink"):
                 factories.checkpoint_tree_sha256(root)
 
-    def test_digest_rejects_symlinked_parent_and_hardlinks(self) -> None:
+    def test_digest_follows_symlinked_parent_and_rejects_hardlinks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             parent = Path(directory)
             real_parent = parent / "real"
@@ -922,8 +922,12 @@ class CheckpointTreeIdentityTests(unittest.TestCase):
                 linked_parent.symlink_to(real_parent, target_is_directory=True)
             except (OSError, NotImplementedError):
                 self.skipTest("filesystem does not permit symlinks")
-            with self.assertRaisesRegex(ValueError, "path contains a symlink"):
-                factories.checkpoint_tree_sha256(linked_parent / "checkpoint")
+            # Research cells link a finished adapter from an earlier run into
+            # place; the digest reads through the link and is the same tree.
+            self.assertEqual(
+                factories.checkpoint_tree_sha256(linked_parent / "checkpoint"),
+                factories.checkpoint_tree_sha256(checkpoint),
+            )
 
             linked_parent.unlink()
             duplicate = checkpoint / "duplicate.bin"

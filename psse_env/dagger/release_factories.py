@@ -676,24 +676,9 @@ def deterministic_case_loader(value: Any) -> dict[str, Any]:
     return dict(loaded)
 
 
-def _reject_symlink_path_components(path: Path) -> None:
-    """Reject a symlink at the root or in any existing parent component."""
-
-    absolute = Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
-    current = Path(absolute.anchor)
-    for component in absolute.parts[1:]:
-        current /= component
-        try:
-            metadata = current.lstat()
-        except FileNotFoundError:
-            # The caller reports a more specific missing-root error.
-            return
-        if stat.S_ISLNK(metadata.st_mode):
-            raise ValueError(f"PEFT checkpoint path contains a symlink: {current}")
-
-
 def _checkpoint_files(root: Path) -> list[Path]:
-    _reject_symlink_path_components(root)
+    # Research cells link a finished adapter from an earlier run into place,
+    # so a symlink anywhere in the checkpoint path is an ordinary layout here.
     if not root.is_dir():
         raise ValueError(f"PEFT checkpoint is not a directory: {root}")
     files: list[Path] = []
