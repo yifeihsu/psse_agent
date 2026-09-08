@@ -1653,8 +1653,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "hif_search_profile": hif_search_profile,
         "scenario_sources": scenario_sources,
     }
-    if args.branch_first_partial:
-        research_profile["environment_options"] = dict(RESEARCH_ENVIRONMENT_OPTIONS)
+    # The environment ablation is recorded on the report, not in the research
+    # profile: the profile is pinned against the collection's configuration,
+    # and an evaluation-only ablation must run beside an unchanged collection.
     run_descriptor = {
         "adapter_path": str(adapter),
         "model_choice": model_spec.key,
@@ -1800,6 +1801,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "purpose": model_spec.purpose,
         },
         "research_profile": research_profile,
+        "environment_options": dict(RESEARCH_ENVIRONMENT_OPTIONS),
         "collection_metrics": metrics,
         "mixture": mixture_report,
         "paired_evaluation": comparison,

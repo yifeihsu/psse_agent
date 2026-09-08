@@ -218,7 +218,7 @@ def round_summary(
         "contract": "research_full_pipeline_round_summary_v2",
         "round": round_name,
         "evaluation_name": evaluation_name,
-        "environment_options": (report.get("research_profile") or {}).get("environment_options"),
+        "environment_options": report.get("environment_options"),
         "student": STUDENT_LABEL[round_name],
         "candidate": CANDIDATE_LABEL[round_name],
         "release_evidence": False,
