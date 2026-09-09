@@ -611,6 +611,7 @@ def research_scenario_generator(
     research_profile: Mapping[str, Any] | None = None,
     parameter_ranking_dominance_threshold: float = 1.0,
     parameter_target_rank_allowance: int | None = None,
+    min_measurement_error_sigma: float | None = None,
 ) -> Round0ScenarioGenerator:
     """The scenario generator behind a research profile.
 
@@ -634,6 +635,8 @@ def research_scenario_generator(
     }
     if parameter_target_rank_allowance is not None:
         generator_kwargs["parameter_target_rank_allowance"] = int(parameter_target_rank_allowance)
+    if min_measurement_error_sigma is not None:
+        generator_kwargs["min_measurement_error_sigma"] = float(min_measurement_error_sigma)
     sources = profile.get("scenario_sources")
     if isinstance(sources, Mapping):
         if sources.get("hif_sample_paths"):

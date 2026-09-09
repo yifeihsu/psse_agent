@@ -70,7 +70,7 @@ def test_pipeline_env_declares_every_setting_the_stages_use() -> None:
         "VALIDATION_ROWS", "ROUND_LEARNING_RATE", "ROUND_SAVE_EVAL_STEPS", "TRAIN_MAX_LENGTH",
         "COLLECTION_BETA", "COLLECTION_MAX_STEPS", "EVAL_MAX_STEPS", "D1_CAP", "D1_SHARE",
         "PREVIOUS_PIPE", "SUITE_TRAINING_THRESHOLD", "SUITE_DEVELOPMENT_THRESHOLD",
-        "SUITE_DEVELOPMENT_RANK_ALLOWANCE",
+        "SUITE_DEVELOPMENT_RANK_ALLOWANCE", "MEASUREMENT_ERROR_MIN_SIGMA",
     ):
         assert name in declared, name
     assert 'export PSSE_HIF_WORKERS="${SLURM_CPUS_PER_TASK:-8}"' in text

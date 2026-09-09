@@ -162,6 +162,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--development-rank-allowance", type=int, default=DEFAULT_DEVELOPMENT_RANK_ALLOWANCE
     )
+    parser.add_argument(
+        "--min-measurement-error-sigma",
+        type=float,
+        default=None,
+        help="Lift injected meter errors to at least this many noise sigmas (both draws)",
+    )
     parser.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args(argv)
 
@@ -186,6 +192,7 @@ def main(argv: list[str] | None = None) -> int:
         seed=args.seed,
         research_profile=profile,
         parameter_ranking_dominance_threshold=args.training_threshold,
+        min_measurement_error_sigma=args.min_measurement_error_sigma,
     )
     train_requested = {family: count * args.candidate_multiplier for family, count in train_plan.items()}
     train_candidates = [
@@ -209,6 +216,7 @@ def main(argv: list[str] | None = None) -> int:
         research_profile=profile,
         parameter_ranking_dominance_threshold=args.development_threshold,
         parameter_target_rank_allowance=args.development_rank_allowance,
+        min_measurement_error_sigma=args.min_measurement_error_sigma,
     )
     dev_requested = {
         family: count * args.candidate_multiplier for family, count in development_plan.items()
@@ -282,6 +290,7 @@ def main(argv: list[str] | None = None) -> int:
         "training_threshold": float(args.training_threshold),
         "development_threshold": float(args.development_threshold),
         "development_rank_allowance": int(args.development_rank_allowance),
+        "min_measurement_error_sigma": args.min_measurement_error_sigma,
         "training_candidates_built": len(train_candidates),
         "development_candidates_built": len(dev_candidates),
         "training_generator_report": train_generator.report(),

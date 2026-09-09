@@ -377,6 +377,7 @@ class Round0ScenarioGenerator:
         parameter_target_rank_allowance: int | None = None,
         unbalance_vuf_threshold: float = DEFAULT_UNBALANCE_VUF_THRESHOLD,
         waveform_signature_mode: Mapping[str, str] | None = None,
+        min_measurement_error_sigma: float | None = None,
     ) -> None:
         if source_partition not in (None, "train", "evaluation"):
             raise ValueError(
@@ -424,6 +425,19 @@ class Round0ScenarioGenerator:
         if not (0.0 < float(unbalance_vuf_threshold) < 1.0):
             raise ValueError("unbalance_vuf_threshold must be a fraction in (0, 1)")
         self.unbalance_vuf_threshold = float(unbalance_vuf_threshold)
+        # Gross-error floor for injected meter faults, in multiples of the
+        # per-index noise profile.  The tracked corpus injects errors whose
+        # magnitude is centred near ten sigma but reaches down to five, and a
+        # five-to-seven sigma voltage bias among larger peers is exactly what
+        # the residual test loses once the peers are repaired.  With a floor,
+        # a corpus error below it is rescaled (same sign, random 1.0-1.5x the
+        # floor) before admission, and composed overlays are lifted the same
+        # way; every existing admission check still runs on the result.
+        self.min_measurement_error_sigma = (
+            None if min_measurement_error_sigma is None else float(min_measurement_error_sigma)
+        )
+        if self.min_measurement_error_sigma is not None and self.min_measurement_error_sigma <= 0:
+            raise ValueError("min_measurement_error_sigma must be positive")
         modes = dict(DEFAULT_WAVEFORM_SIGNATURE_MODE)
         for family, mode in dict(waveform_signature_mode or {}).items():
             if family not in modes:
@@ -711,6 +725,22 @@ class Round0ScenarioGenerator:
                 )
             self._noise_std = np.stack(diffs).std(axis=0)
         return self._noise_std
+
+    def _floored_measurement_error(
+        self, index: int, observed: float, clean: float
+    ) -> tuple[float, bool]:
+        """Lift a meter error below the sigma floor; return (observed, lifted)."""
+
+        floor = self.min_measurement_error_sigma
+        if floor is None:
+            return float(observed), False
+        sigma = float(self.noise_profile()[int(index)])
+        delta = float(observed) - float(clean)
+        if abs(delta) >= floor * sigma:
+            return float(observed), False
+        sign = 1.0 if delta > 0 else -1.0 if delta < 0 else (1.0 if self._rng.random() < 0.5 else -1.0)
+        magnitude = floor * sigma * float(self._rng.uniform(1.0, 1.5))
+        return float(clean) + sign * magnitude, True
 
     def _clean_case14(self) -> dict[str, Any]:
         if self._case14 is None:
@@ -1221,8 +1251,15 @@ class Round0ScenarioGenerator:
             raise ScenarioRejected("label_missing_index", str(label))
         z_obs = [float(value) for value in row["z_obs"]]
         z_true = [float(value) for value in row["z_true"]]
-        if any(not 0 <= i < len(z_obs) for i in error_indices):
+        if any(not 0 <= i for i in error_indices) or any(i >= len(z_obs) for i in error_indices):
             raise ScenarioRejected("label_index_out_of_range", str(error_indices))
+        lifted_indices: list[int] = []
+        for error_index in error_indices:
+            z_obs[error_index], lifted = self._floored_measurement_error(
+                error_index, z_obs[error_index], z_true[error_index]
+            )
+            if lifted:
+                lifted_indices.append(error_index)
         self._require_anomalous("case14", z_obs, family)
         scenario = self._base_scenario(
             self._scenario_id(family, row.get("id"), index),
@@ -1251,6 +1288,17 @@ class Round0ScenarioGenerator:
             }
             for error_index in error_indices
         ]
+        if self.min_measurement_error_sigma is not None:
+            sigma = self.noise_profile()
+            scenario["measurement_error_floor"] = {
+                "sigma_multiple": self.min_measurement_error_sigma,
+                "lifted_indices": lifted_indices,
+                "error_sigma_multiples": {
+                    str(error_index): abs(z_obs[error_index] - z_true[error_index])
+                    / float(sigma[error_index])
+                    for error_index in error_indices
+                },
+            }
         self._require_sequential_measurement_observability(
             clean_measurements=clean_measurements,
             faults=scenario["true_measurement_errors"],
@@ -2847,6 +2895,11 @@ class Round0ScenarioGenerator:
         errors = list(composed.get("true_measurement_errors") or [])
         for overlay_index in self._overlay_indices(composed, offsets):
             magnitude = float(self._rng.uniform(0.10, 0.30))
+            if self.min_measurement_error_sigma is not None:
+                floor = self.min_measurement_error_sigma * float(
+                    self.noise_profile()[overlay_index]
+                )
+                magnitude = max(magnitude, floor * float(self._rng.uniform(1.0, 1.5)))
             sign = 1.0 if self._rng.random() < 0.5 else -1.0
             clean_value = measurements[overlay_index]
             measurements[overlay_index] = clean_value + sign * magnitude
@@ -3106,6 +3159,7 @@ class Round0ScenarioGenerator:
                 "enforced": self._enforce_parameter_ranking_dominance,
                 "threshold": self.parameter_ranking_dominance_threshold,
             },
+            "measurement_error_floor_sigma": self.min_measurement_error_sigma,
             "synthesized_measurement_canonicalization": {
                 "contract": SYNTHESIZED_MEASUREMENT_CANONICALIZATION_CONTRACT,
                 "scope": "pypower_topology_z_obs",

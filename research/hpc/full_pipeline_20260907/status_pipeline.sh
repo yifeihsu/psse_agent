@@ -2,7 +2,7 @@
 # Queue state, receipts, and progress for the full pipeline.
 set -uo pipefail
 export PATH=/opt/slurm/bin:$PATH
-PIPE=/scratch/yx3882/research_full_pipeline_20260908
+PIPE=/scratch/yx3882/research_full_pipeline_20260909
 PY=/scratch/yx3882/.conda/envs/gemma4_research_5104/bin/python
 squeue -u "$USER" -o "%.12i %.10j %.8T %.10M %.6D %.24R"
 echo ---

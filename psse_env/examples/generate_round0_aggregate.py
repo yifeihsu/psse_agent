@@ -1980,6 +1980,7 @@ def _generation_descriptor(
             "hif_alpha_grid": args.hif_alpha_grid,
             "hif_r_grid": args.hif_r_grid,
             "hif_max_scans": args.hif_max_scans,
+            "min_measurement_error_sigma": args.min_measurement_error_sigma,
             "family_release_policy": BC0_FAMILY_RELEASE_POLICY,
             "critical_split_minimums": {"validation": 5, "test": 5},
             # This is recorded for the next phase but is not applied to the
@@ -2780,6 +2781,7 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         source_partition=BC0_AGGREGATE_SOURCE_PARTITION,
         chi2_alpha=args.chi2_alpha,
         hif_max_scans=args.hif_max_scans,
+        min_measurement_error_sigma=args.min_measurement_error_sigma,
     )
     scenarios = generator.build(plan)
     if not scenarios:
@@ -3349,6 +3351,15 @@ def main() -> None:
     parser.add_argument("--hif-alpha-grid", type=int, default=5)
     parser.add_argument("--hif-r-grid", type=int, default=7)
     parser.add_argument("--hif-max-scans", type=int, default=3)
+    parser.add_argument(
+        "--min-measurement-error-sigma",
+        type=float,
+        default=None,
+        help=(
+            "Lift every injected meter error to at least this many noise sigmas "
+            "(corpus errors below it are rescaled before admission)"
+        ),
+    )
     parser.add_argument(
         "--measurement-corpus",
         type=Path,

@@ -1,18 +1,22 @@
-# Full research pipeline (2026-09-07, re-run 2026-09-08)
+# Full research pipeline (2026-09-07; re-runs 2026-09-08 and 2026-09-09)
 
 Expanded IEEE-14 dataset over every error family designed so far and their
 existing combinations, a BC0 student trained from the base model on an
 expert aggregate, then two DAgger rounds, all as one Slurm chain. Research
 only; nothing here is release evidence.
 
-The 2026-09-08 re-run keeps the first run's expert aggregate and BC0 (linked
-from `PREVIOUS_PIPE`) and redraws the suite under the ambiguity design
-below, so only the suite build and the DAgger rounds execute.
+The 2026-09-08 re-run kept the first run's expert aggregate and BC0 (linked
+from `PREVIOUS_PIPE`) and redrew the suite under the ambiguity design
+below. The 2026-09-09 run regenerates everything from a larger 548-root
+expert aggregate with every injected meter error lifted to at least ten
+noise sigmas (`MEASUREMENT_ERROR_MIN_SIGMA`) and the HIF localization
+tolerance widened to 0.15 of line length.
 
 | Item | Value |
 | --- | --- |
 | Families | no_error, measurement, multi_measurement, parameter, topology, harmonic, hif, measurement+parameter, measurement+topology, measurement+hif, three_phase_unbalance, telemetry_no_disturbance |
-| Expert aggregate (D0) | 438 roots (plan in `pipeline.env`), expert episodes, three counterfactual recovery branches per root, truth-audited; split 75/15/10 by root into train, validation, test; parameter roots at the production ranking threshold 1.2 |
+| Expert aggregate (D0) | 548 roots planned (plan in `pipeline.env`; 438 in the first run), expert episodes, three counterfactual recovery branches per root, truth-audited; split 75/15/10 by root into train, validation, test; parameter roots at the production ranking threshold 1.2 |
+| Meter errors | every injected meter error (corpus rows and composed overlays) lifted to at least 10 noise sigmas; the tracked corpus centres near 10 sigma and reaches down to 5 |
 | DAgger suite | 122 training roots per round, two rounds on disjoint roots, 160 shared development roots; drawn after D0 and excluding every D0 and protected root |
 | Training draw | parameter-ranking threshold 1.2 (teacher corrects the true line on the first pass) |
 | Development draw | detection threshold 1.0 with the true line admitted anywhere in the top 2 of the deployed ranking; each root records its stratum |
@@ -27,7 +31,7 @@ Capacity that bounds the plans: 102 HIF windows serve `hif` and
 `measurement+hif` separately, 220 unbalance rows serve `three_phase_unbalance`
 and the balanced control separately, and the train partition of the tabular
 corpus (four fifths of 304 single-meter, 226 multi-meter, 620 parameter, and
-500 harmonic rows) serves the rest. Total roots: 438 + 244 + 160 = 842.
+500 harmonic rows) serves the rest. Total roots: 548 + 244 + 160 = 952.
 
 ## Ambiguity design (ranked testing with escalation fallback)
 
@@ -100,11 +104,11 @@ From the `local/relaxed-current` worktree:
 
 ```bash
 git bundle create dw_pipeline.bundle local/relaxed-current
-wsl -- scp dw_pipeline.bundle torch:/scratch/yx3882/research_full_pipeline_20260908/dw_pipeline.bundle
-wsl -- ssh torch bash -s -- /scratch/yx3882/research_full_pipeline_20260908/dw_pipeline.bundle local/relaxed-current "$(git rev-parse HEAD)" \
+wsl -- scp dw_pipeline.bundle torch:/scratch/yx3882/research_full_pipeline_20260909/dw_pipeline.bundle
+wsl -- ssh torch bash -s -- /scratch/yx3882/research_full_pipeline_20260909/dw_pipeline.bundle local/relaxed-current "$(git rev-parse HEAD)" \
   < research/hpc/full_pipeline_20260907/deploy_remote.sh
-wsl -- ssh torch bash /scratch/yx3882/research_full_pipeline_20260908/submit_pipeline.sh
-wsl -- ssh torch bash /scratch/yx3882/research_full_pipeline_20260908/status_pipeline.sh
+wsl -- ssh torch bash /scratch/yx3882/research_full_pipeline_20260909/submit_pipeline.sh
+wsl -- ssh torch bash /scratch/yx3882/research_full_pipeline_20260909/status_pipeline.sh
 ```
 
 `deploy_remote.sh BUNDLE BRANCH COMMIT [PIPE_DIR] [OVERRIDES]` stages the cell
