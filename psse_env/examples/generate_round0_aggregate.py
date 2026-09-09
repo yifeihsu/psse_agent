@@ -1980,7 +1980,7 @@ def _generation_descriptor(
             "hif_alpha_grid": args.hif_alpha_grid,
             "hif_r_grid": args.hif_r_grid,
             "hif_max_scans": args.hif_max_scans,
-            "min_measurement_error_sigma": args.min_measurement_error_sigma,
+            "min_measurement_error_sigma": getattr(args, "min_measurement_error_sigma", None),
             "family_release_policy": BC0_FAMILY_RELEASE_POLICY,
             "critical_split_minimums": {"validation": 5, "test": 5},
             # This is recorded for the next phase but is not applied to the
@@ -2781,7 +2781,7 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         source_partition=BC0_AGGREGATE_SOURCE_PARTITION,
         chi2_alpha=args.chi2_alpha,
         hif_max_scans=args.hif_max_scans,
-        min_measurement_error_sigma=args.min_measurement_error_sigma,
+        min_measurement_error_sigma=getattr(args, "min_measurement_error_sigma", None),
     )
     scenarios = generator.build(plan)
     if not scenarios:
