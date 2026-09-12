@@ -1,4 +1,4 @@
-# Full research pipeline (2026-09-07; re-runs 2026-09-08 and 2026-09-09)
+# Full research pipeline (2026-09-07; re-runs 2026-09-08, 2026-09-09 and 2026-09-12)
 
 Expanded IEEE-14 dataset over every error family designed so far and their
 existing combinations, a BC0 student trained from the base model on an
@@ -11,6 +11,15 @@ below. The 2026-09-09 run regenerates everything from a larger 548-root
 expert aggregate with every injected meter error lifted to at least ten
 noise sigmas (`MEASUREMENT_ERROR_MIN_SIGMA`) and the HIF localization
 tolerance widened to 0.15 of line length.
+The 2026-09-12 run keeps every setting of the 2026-09-09 run and changes
+only the topology family: its roots are breaker-status errors in the full
+IEEE-14 node/breaker model with substation telemetry (`TOPOLOGY_EFFECTS`,
+isolated line terminals and bus splits), the agent requests the substation
+measurements and identifies the breaker with the node/breaker
+normalized-multiplier estimator, and the correction names the breaker
+(`docs/ieee14_node_breaker_nlm_20260912.md`). Everything is regenerated
+because the expert aggregate contains topology roots. Cluster directory
+`research_full_pipeline_20260912`, seeds unchanged.
 
 | Item | Value |
 | --- | --- |
@@ -104,11 +113,11 @@ From the `local/relaxed-current` worktree:
 
 ```bash
 git bundle create dw_pipeline.bundle local/relaxed-current
-wsl -- scp dw_pipeline.bundle torch:/scratch/yx3882/research_full_pipeline_20260909/dw_pipeline.bundle
-wsl -- ssh torch bash -s -- /scratch/yx3882/research_full_pipeline_20260909/dw_pipeline.bundle local/relaxed-current "$(git rev-parse HEAD)" \
+wsl -- scp dw_pipeline.bundle torch:/scratch/yx3882/research_full_pipeline_20260912/dw_pipeline.bundle
+wsl -- ssh torch bash -s -- /scratch/yx3882/research_full_pipeline_20260912/dw_pipeline.bundle local/relaxed-current "$(git rev-parse HEAD)" \
   < research/hpc/full_pipeline_20260907/deploy_remote.sh
-wsl -- ssh torch bash /scratch/yx3882/research_full_pipeline_20260909/submit_pipeline.sh
-wsl -- ssh torch bash /scratch/yx3882/research_full_pipeline_20260909/status_pipeline.sh
+wsl -- ssh torch bash /scratch/yx3882/research_full_pipeline_20260912/submit_pipeline.sh
+wsl -- ssh torch bash /scratch/yx3882/research_full_pipeline_20260912/status_pipeline.sh
 ```
 
 `deploy_remote.sh BUNDLE BRANCH COMMIT [PIPE_DIR] [OVERRIDES]` stages the cell

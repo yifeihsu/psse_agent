@@ -168,6 +168,12 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Lift injected meter errors to at least this many noise sigmas (both draws)",
     )
+    parser.add_argument(
+        "--topology-effects",
+        type=lambda value: tuple(item.strip() for item in str(value).split(",") if item.strip()),
+        default=None,
+        help="Comma-separated breaker-error classes of the topology family (both draws)",
+    )
     parser.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args(argv)
 
@@ -193,6 +199,7 @@ def main(argv: list[str] | None = None) -> int:
         research_profile=profile,
         parameter_ranking_dominance_threshold=args.training_threshold,
         min_measurement_error_sigma=args.min_measurement_error_sigma,
+        topology_effects=args.topology_effects,
     )
     train_requested = {family: count * args.candidate_multiplier for family, count in train_plan.items()}
     train_candidates = [
@@ -217,6 +224,7 @@ def main(argv: list[str] | None = None) -> int:
         parameter_ranking_dominance_threshold=args.development_threshold,
         parameter_target_rank_allowance=args.development_rank_allowance,
         min_measurement_error_sigma=args.min_measurement_error_sigma,
+        topology_effects=args.topology_effects,
     )
     dev_requested = {
         family: count * args.candidate_multiplier for family, count in development_plan.items()
@@ -291,6 +299,7 @@ def main(argv: list[str] | None = None) -> int:
         "development_threshold": float(args.development_threshold),
         "development_rank_allowance": int(args.development_rank_allowance),
         "min_measurement_error_sigma": args.min_measurement_error_sigma,
+        "topology_effects": list(args.topology_effects) if args.topology_effects else None,
         "training_candidates_built": len(train_candidates),
         "development_candidates_built": len(dev_candidates),
         "training_generator_report": train_generator.report(),

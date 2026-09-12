@@ -11,12 +11,12 @@
 #SBATCH --requeue
 #SBATCH --comment=preemption=yes;requeue=true
 #SBATCH --open-mode=append
-#SBATCH --output=/scratch/yx3882/research_full_pipeline_20260909/logs/eval-%j.out
+#SBATCH --output=/scratch/yx3882/research_full_pipeline_20260912/logs/eval-%j.out
 # Full pipeline, paired evaluation for PIPELINE_ROUND (r1 or r2): the round's
 # student against its candidate on the shared development suite, then the
 # round summary; after round 2 the pipeline summary joins BC0, R1, and R2.
 set -euo pipefail
-PIPE=/scratch/yx3882/research_full_pipeline_20260909
+PIPE=/scratch/yx3882/research_full_pipeline_20260912
 # shellcheck source=pipeline.env
 source "$PIPE/pipeline.env"
 pipeline_environment

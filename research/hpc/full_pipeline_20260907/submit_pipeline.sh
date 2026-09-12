@@ -8,7 +8,7 @@
 # already exist.
 set -euo pipefail
 export PATH=/opt/slurm/bin:$PATH
-PIPE=/scratch/yx3882/research_full_pipeline_20260909
+PIPE=/scratch/yx3882/research_full_pipeline_20260912
 cd "$PIPE"
 [[ -s out/prerequisites.dryrun.json ]] || { echo "run prerequisites.sh --output out/prerequisites.dryrun.json first" >&2; exit 2; }
 if squeue -u "$USER" -h -o "%j" | grep -Eq '^fp-'; then

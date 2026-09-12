@@ -11,7 +11,7 @@
 #SBATCH --requeue
 #SBATCH --comment=preemption=yes;requeue=true
 #SBATCH --open-mode=append
-#SBATCH --output=/scratch/yx3882/research_full_pipeline_20260909/logs/bc0-%j.out
+#SBATCH --output=/scratch/yx3882/research_full_pipeline_20260912/logs/bc0-%j.out
 # Full pipeline, stage 1: BC0 from the base model on the expert aggregate.
 #
 # The full-BC0 recipe: 4-bit base plus rank-16 LoRA, micro-batch 1 with four
@@ -21,7 +21,7 @@
 # aggregate's root-disjoint validation split so each evaluation pass stays
 # short; the same subset monitors every later round.
 set -euo pipefail
-PIPE=/scratch/yx3882/research_full_pipeline_20260909
+PIPE=/scratch/yx3882/research_full_pipeline_20260912
 # shellcheck source=pipeline.env
 source "$PIPE/pipeline.env"
 pipeline_environment

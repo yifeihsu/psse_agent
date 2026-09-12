@@ -1981,6 +1981,13 @@ def _generation_descriptor(
             "hif_r_grid": args.hif_r_grid,
             "hif_max_scans": args.hif_max_scans,
             "min_measurement_error_sigma": getattr(args, "min_measurement_error_sigma", None),
+            # Breaker-error classes of the topology family; None keeps the
+            # generator default.
+            "topology_effects": (
+                list(getattr(args, "topology_effects"))
+                if getattr(args, "topology_effects", None)
+                else None
+            ),
             "family_release_policy": BC0_FAMILY_RELEASE_POLICY,
             "critical_split_minimums": {"validation": 5, "test": 5},
             # This is recorded for the next phase but is not applied to the
@@ -2731,6 +2738,13 @@ def _load_plan_argument(value: str) -> dict[str, int]:
     return json.loads(Path(value).read_text()) if is_file else json.loads(value)
 
 
+def _parse_topology_effects(value: str) -> tuple[str, ...]:
+    effects = tuple(item.strip() for item in str(value).split(",") if item.strip())
+    if not effects:
+        raise argparse.ArgumentTypeError("--topology-effects needs at least one class")
+    return effects
+
+
 def generate(args: argparse.Namespace) -> dict[str, Any]:
     # Aggregate topology roots and their physical-v3 fingerprints depend on
     # the same numerical stack as the frozen evaluation suite.  Validate it
@@ -2782,6 +2796,11 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         chi2_alpha=args.chi2_alpha,
         hif_max_scans=args.hif_max_scans,
         min_measurement_error_sigma=getattr(args, "min_measurement_error_sigma", None),
+        **(
+            {"topology_effects": tuple(getattr(args, "topology_effects"))}
+            if getattr(args, "topology_effects", None)
+            else {}
+        ),
     )
     scenarios = generator.build(plan)
     if not scenarios:
@@ -3358,6 +3377,16 @@ def main() -> None:
         help=(
             "Lift every injected meter error to at least this many noise sigmas "
             "(corpus errors below it are rescaled before admission)"
+        ),
+    )
+    parser.add_argument(
+        "--topology-effects",
+        type=_parse_topology_effects,
+        default=None,
+        help=(
+            "Comma-separated breaker-error classes of the topology family "
+            "(dangling_line_terminal, bus_split, merge); omitted keeps the "
+            "generator default"
         ),
     )
     parser.add_argument(

@@ -11,7 +11,7 @@
 #SBATCH --requeue
 #SBATCH --comment=preemption=yes;requeue=true
 #SBATCH --open-mode=append
-#SBATCH --output=/scratch/yx3882/research_full_pipeline_20260909/logs/collect-%j.out
+#SBATCH --output=/scratch/yx3882/research_full_pipeline_20260912/logs/collect-%j.out
 # Full pipeline, DAgger collection for PIPELINE_ROUND (r1 or r2).
 #
 # The round's student rolls out on its training suite with the expert
@@ -21,7 +21,7 @@
 # is D2 against D0 + D1.  The collector keeps a completed-root ledger, so a
 # requeue resumes.
 set -euo pipefail
-PIPE=/scratch/yx3882/research_full_pipeline_20260909
+PIPE=/scratch/yx3882/research_full_pipeline_20260912
 # shellcheck source=pipeline.env
 source "$PIPE/pipeline.env"
 pipeline_environment

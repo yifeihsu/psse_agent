@@ -9,7 +9,7 @@
 #SBATCH --time=24:00:00
 #SBATCH --requeue
 #SBATCH --open-mode=append
-#SBATCH --output=/scratch/yx3882/research_full_pipeline_20260909/logs/d0-%j.out
+#SBATCH --output=/scratch/yx3882/research_full_pipeline_20260912/logs/d0-%j.out
 # Full pipeline, stage 0 (CPU only): the expert aggregate that trains BC0,
 # then the DAgger suite drawn around it.
 #
@@ -20,7 +20,7 @@
 # the per-round training roots and the shared development roots excluding
 # every D0 and protected root.
 set -euo pipefail
-PIPE=/scratch/yx3882/research_full_pipeline_20260909
+PIPE=/scratch/yx3882/research_full_pipeline_20260912
 # shellcheck source=pipeline.env
 source "$PIPE/pipeline.env"
 pipeline_environment
@@ -52,6 +52,7 @@ if [[ ! -s "$OUT/d0.done" ]]; then
     --hif-r-grid "$HIF_R_GRID" \
     --hif-max-scans "$HIF_MAX_SCANS" \
     --min-measurement-error-sigma "$MEASUREMENT_ERROR_MIN_SIGMA" \
+    --topology-effects "$TOPOLOGY_EFFECTS" \
     --hif-corpus "$HIF_CORPUS_TRAIN" \
     --hif-corpus "$HIF_CORPUS_VALID" \
     --imbalance-corpus "$IMBALANCE_CORPUS" \
@@ -130,6 +131,7 @@ if [[ ! -s "$OUT/suite.done" ]]; then
     --development-threshold "$SUITE_DEVELOPMENT_THRESHOLD" \
     --development-rank-allowance "$SUITE_DEVELOPMENT_RANK_ALLOWANCE" \
     --min-measurement-error-sigma "$MEASUREMENT_ERROR_MIN_SIGMA" \
+    --topology-effects "$TOPOLOGY_EFFECTS" \
     --output-dir "$SUITE_DIR" \
     > "$OUT/suite_console.json"
   cp "$SUITE_DIR/manifest.json" "$OUT/suite.done"
