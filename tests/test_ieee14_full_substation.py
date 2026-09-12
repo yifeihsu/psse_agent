@@ -120,3 +120,26 @@ def test_bus_split_renders_one_more_bus_and_verifies_clean(model, meters, cb_nam
     normal_layout = operator_model_from_map(clean, model, {}, meters)[1]
     reported = _wls_json("case14", operator_vector_for_layout(telemetry, normal_layout).tolist())
     assert reported["global_residual_sum"] > 3 * chi2_threshold(122 - 27, 0.01)
+
+
+def test_merge_renders_one_bus_fewer_and_verifies_clean(model, meters):
+    clean = _load_python_case("case14")
+    status_map = {"CB_Y1014_14B_10N1": True}
+    rendered, layout = operator_model_from_map(clean, model, status_map, meters)
+    assert layout["bus_count"] == 13
+    merged = layout["main_section_by_bus"]["10"]
+    assert layout["main_section_by_bus"]["14"] == merged
+    assert layout["sections"][str(merged)]["planning_buses"] == [10, 14]
+    # Bus 14's load joins bus 10's row and its two lines now land on that bus.
+    assert rendered["bus"][merged - 1][2] == pytest.approx(clean["bus"][9][2] + clean["bus"][13][2])
+    for k in range(20):
+        assert rendered["branch"][k][10] == 1.0
+    telemetry = _telemetry(model, status_map, 8)
+    z = operator_vector_for_layout(telemetry, layout)
+    assert len(z) == 3 * 13 + 4 * 20
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "rendered.m")
+        Path(path).write_text(_render_matpower_case(rendered, "derived_test"), encoding="utf-8")
+        payload = _wls_json(path, z.tolist())
+    assert payload["success"]
+    assert payload["global_residual_sum"] < chi2_threshold(len(z) - (2 * 13 - 1), 0.01)

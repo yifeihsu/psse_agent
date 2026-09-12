@@ -102,6 +102,13 @@ DEFAULT_CHI2_ALPHA = 0.01
 # DEFAULTS).  Synthesized families draw from the same range and solver so no
 # family is identifiable by its dispatch or load level.
 SYNTHESIZED_LOAD_SCALE_RANGE = (0.80, 1.25)
+# Breaker-error classes the topology family can sample; catalogue categories
+# such as ``merge_10_14`` map onto ``merge``.
+TOPOLOGY_EFFECTS = frozenset({"dangling_line_terminal", "bus_split", "merge"})
+
+
+def _breaker_effect_class(category: str) -> str:
+    return "merge" if str(category).startswith("merge") else str(category)
 # Legacy harmonic synthesis controls (Transmission/generate_measurements.py
 # HARMONIC_DEFAULT_CANDIDATES and make_harmonic_anomaly_record).
 HARMONIC_SOURCE_CANDIDATES = (2, 3, 4, 5, 9, 10, 11, 12, 13, 14)
@@ -417,6 +424,7 @@ class Round0ScenarioGenerator:
         topology_noise_scale: float = 1.0,
         enforce_topology_ranking: bool = True,
         topology_effects: Sequence[str] = ("dangling_line_terminal", "bus_split"),
+        require_branch_dominant_topology: bool = True,
         hif_max_scans: int = 8,
         noise_profile_rows: int = 200,
         source_partition: str | None = None,
@@ -486,13 +494,19 @@ class Round0ScenarioGenerator:
         self.enforce_topology_ranking = bool(enforce_topology_ranking)
         # Breaker-error classes offered as topology roots.  An isolated line
         # terminal keeps the 14-bus operator layout; a bus split re-renders the
-        # operator model with one more bus once the breaker is corrected.
+        # operator model with one more bus and a merge with one fewer once the
+        # breaker is corrected.  "merge" is supported but not a default: on the
+        # operator's 14-bus model the 10/14 merge is residual-dominant (it looks
+        # like a bad meter), so the branch-dominance admission below rejects
+        # every merge draw; sampling merges needs that gate off and accepts a
+        # measurement-first deployed route.
         self.topology_effects = tuple(str(effect) for effect in topology_effects)
-        unknown_effects = set(self.topology_effects) - {"dangling_line_terminal", "bus_split"}
+        self.require_branch_dominant_topology = bool(require_branch_dominant_topology)
+        unknown_effects = set(self.topology_effects) - TOPOLOGY_EFFECTS
         if unknown_effects or not self.topology_effects:
             raise ValueError(
                 "topology_effects must be a non-empty subset of "
-                f"{{'dangling_line_terminal', 'bus_split'}}, got {sorted(unknown_effects)}"
+                f"{sorted(TOPOLOGY_EFFECTS)}, got {sorted(unknown_effects)}"
             )
         self.hif_max_scans = int(hif_max_scans)
         self.noise_profile_rows = int(noise_profile_rows)
@@ -1583,15 +1597,40 @@ class Round0ScenarioGenerator:
             self._full_topology_fingerprint = self._full_topology.fingerprint()
         return self._full_topology
 
+    def _require_branch_dominant_wls_evidence(self, z_obs: Sequence[float], cb_name: str) -> None:
+        """Admit a topology root only when the operator's WLS evidence routes to a branch.
+
+        The deployed solve tags its signatures by the classical discrimination
+        between the largest normalized residual and the largest normalized branch
+        multiplier (``MatpowerDeploymentProviders.run_wls``).  A breaker error whose
+        operator-model anomaly is weak enough for a single residual to dominate
+        sends the expert down the measurement route first, where it would commit
+        a false meter correction before the topology route repairs the switch.
+        Such draws are rejected, exactly as parameter roots are admitted only when
+        their ranking is dominant.
+        """
+        if not self.validate or not self.require_branch_dominant_topology:
+            return
+        payload = _wls_json(self.case_path, [float(value) for value in z_obs])
+        if not payload.get("success"):
+            raise ScenarioRejected("wls_failure", str(payload.get("error")))
+        max_residual = max((abs(float(v)) for v in payload.get("r") or []), default=0.0)
+        max_multiplier = max((abs(float(v)) for v in payload.get("lambdaN") or []), default=0.0)
+        if not max_multiplier > 1.2 * max_residual:
+            raise ScenarioRejected(
+                "topology_root_not_branch_dominant",
+                f"{cb_name}: max |lambda| {max_multiplier:.1f} <= 1.2 x max |r| {max_residual:.1f}",
+            )
+
     def _breaker_error_catalogue(self) -> list[dict[str, Any]]:
         """Single breaker-status errors of the sampled classes."""
         if self._breaker_errors is None:
             from Transmission.ieee14_full_measurements import single_flip_catalogue
 
             self._breaker_errors = [
-                entry
+                {**entry, "effect": _breaker_effect_class(entry["category"])}
                 for entry in single_flip_catalogue(self._full_topology_model())
-                if entry["category"] in self.topology_effects
+                if _breaker_effect_class(entry["category"]) in self.topology_effects
             ]
             if not self._breaker_errors:
                 raise RuntimeError(
@@ -1606,13 +1645,15 @@ class Round0ScenarioGenerator:
         """One breaker-status error in the full IEEE-14 node/breaker model.
 
         The physical truth is a switch whose real state differs from the reported
-        schematic-normal state.  Two classes are sampled (``topology_effects``):
+        schematic-normal state.  Three classes are sampled (``topology_effects``):
         a switch that isolates exactly one line terminal, which the operator's
-        topology processor renders as that line out of service, and a switch that
-        splits a bus into two energized sections, which it renders as one more
-        bus.  The fix is a breaker-level ``correct_topology`` naming the switch.
-        The 10/14 merge and islanded bays stay out: the first is marginal for the
-        operator's WLS, the second is an equipment outage.
+        topology processor renders as that line out of service; a switch that
+        splits a bus into two energized sections, rendered as one more bus; and a
+        switch that joins two buses (the shared 10/14 yard), rendered as one bus
+        fewer.  The fix is a breaker-level ``correct_topology`` naming the switch.
+        Islanded bays stay out: they are equipment outages the operator's WLS
+        cannot see.  A merge is marginal for that WLS at light load, so the
+        anomaly gate below rejects the draws it does not flag.
 
         Telemetry is one physical solution: an AC OPF on the true contracted
         topology at a corpus-range load scale fixes the dispatch, and a power flow
@@ -1641,13 +1682,13 @@ class Round0ScenarioGenerator:
 
         model = self._full_topology_model()
         allowed = set(effects or self.topology_effects)
-        errors = [e for e in self._breaker_error_catalogue() if e["category"] in allowed]
+        errors = [e for e in self._breaker_error_catalogue() if e["effect"] in allowed]
         if not errors:
             raise ScenarioRejected("topology_effects_unavailable", str(sorted(allowed)))
         error = errors[int(self._rng.integers(len(errors)))]
         cb_name = str(error["cb_name"])
         true_closed = bool(error["true_closed"])
-        category = str(error["category"])
+        category = str(error["effect"])
         load_scale = self._draw_load_scale()
         reference = self._scaled_case14(load_scale)
         truth_case, info, removed = flipped_case(
@@ -1709,6 +1750,7 @@ class Round0ScenarioGenerator:
             )
         self._require_anomalous(self.case_path, z_obs, "topology")
         self._require_clean(corrected_case, clean_measurements, "topology")
+        self._require_branch_dominant_wls_evidence(z_obs, cb_name)
 
         reported_labels = status_labels(model)
         reported_estimate = gse_topology_nlm(model, reference, {}, telemetry)

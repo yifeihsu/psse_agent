@@ -357,3 +357,114 @@ class BusSplitTopologyScenarioTests(unittest.TestCase):
             remaining_truth=None,
         )
         self.assertEqual(audit["problems"], [])
+
+
+class MergeTopologyScenarioTests(unittest.TestCase):
+    """A breaker in the shared 10/14 yard that is truly closed while reported open:
+    buses 10 and 14 are one electrical bus and the operator model loses a bus.
+
+    On the operator's 14-bus model a merge is residual-dominant, so the default
+    admission (branch-dominant WLS evidence) rejects every merge draw; these
+    tests switch that gate off to exercise the breaker-level machinery.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.generator = Round0ScenarioGenerator(
+            seed=31, topology_effects=("merge",), require_branch_dominant_topology=False
+        )
+        cls.scenario = cls.generator.build({"topology": 1})[0]
+        cls.truth = cls.scenario["true_topology_errors"][0]
+        cls.providers = MatpowerDeploymentProviders(chi2_alpha=0.01)
+
+    def test_merge_root_declares_a_structural_truth(self) -> None:
+        self.assertEqual(self.truth["physical_effect"], "merge")
+        self.assertEqual(self.truth["expected_status"], 1)
+        self.assertEqual(self.truth["affected_planning_buses"], [10, 14])
+        self.assertEqual(self.truth["operator_bus_count_after_fix"], 13)
+        self.assertNotIn("branch_row0", self.truth)
+        self.assertEqual(len(self.scenario["clean_measurements"]), 3 * 13 + 80)
+        self.assertEqual(self.scenario["metadata"]["reported_breaker_status"][self.truth["cb_name"]], "open")
+        self.assertEqual(self.scenario["topology_ranking"]["true_breaker_rank"], 1)
+
+    def test_context_offers_closing_the_merge_breaker(self) -> None:
+        context = self.providers.get_topology_context(_state(self.scenario))
+        self.assertEqual(context["route_status"], "actionable")
+        finding = context["breaker_findings"][0]
+        self.assertEqual(finding["cb_name"], self.truth["cb_name"])
+        self.assertEqual(finding["bus_branch_effect"], "merge")
+        self.assertEqual(finding["proposed_status"], "closed")
+        arguments = context["supported_corrections"][0]["arguments"]
+        self.assertEqual(set(arguments), {"state_id", "cb_name", "status"})
+        self.assertEqual(arguments["status"], 1)
+
+    def test_merge_correction_renders_thirteen_buses_and_verifies(self) -> None:
+        state = _state(self.scenario)
+        action = {
+            "tool": "correct_topology",
+            "arguments": {"state_id": "episode:s0", "cb_name": self.truth["cb_name"], "status": 1},
+        }
+        result = self.providers.correct_topology(state, action)
+        self.assertNotIn("execution_status", result)
+        self.assertEqual(result["breaker_effect"], "merge")
+        self.assertEqual(result["operator_bus_count"], 13)
+        modification = result["modification"]
+        self.assertEqual(len(modification["measurements"]), 3 * 13 + 80)
+        layout = modification["metadata_updates"]["operator_layout"]
+        self.assertEqual(layout["main_section_by_bus"]["14"], layout["main_section_by_bus"]["10"])
+        candidate = {
+            **state,
+            "state_id": "episode:s1",
+            "status": "candidate",
+            "case": modification["case"],
+            "measurements": modification["measurements"],
+            "metadata": {**state["metadata"], **modification["metadata_updates"]},
+            "source_action": action,
+        }
+        verification = self.providers.run_wls(candidate)
+        self.assertNotIn("execution_status", verification)
+        self.assertTrue(verification["target_fixed"])
+        self.assertEqual(verification["topology_target_effect"], "merge")
+        self.assertTrue(verification["no_material_anomaly_remaining"])
+
+    def test_default_admission_rejects_merges_as_residual_dominant(self) -> None:
+        generator = Round0ScenarioGenerator(seed=31, topology_effects=("merge",))
+        self.assertEqual(generator.build({"topology": 1}), [])
+        reasons = {record["reason"] for record in generator.skipped}
+        self.assertIn("topology_root_not_branch_dominant", reasons)
+
+    def test_expert_fixes_the_merge_through_the_breaker_route(self) -> None:
+        # The operator-level route reaches the breaker fix; because the merge is
+        # residual-dominant on the 14-bus model the expert may try a meter
+        # correction first, which is why merges are not in the default mix.
+        from psse_env.oracle import ExpertPolicyOracle
+        from psse_env.transactional_env import TransactionalPSSEEnv
+
+        env = TransactionalPSSEEnv(
+            **self.providers.env_kwargs(), production_dataset_mode=True, max_steps=18
+        )
+        oracle = ExpertPolicyOracle(process_oracle=env.process_oracle)
+        env.reset(self.scenario)
+        executed = []
+        for _ in range(18):
+            if env.is_terminal():
+                break
+            actions = oracle.next_actions(env.get_oracle_state(env.history), env.history)
+            self.assertTrue(actions, f"expert stalled after {executed}")
+            _, output = env.step(actions[0])
+            executed.append((actions[0], output))
+        self.assertTrue(env.is_terminal())
+        corrections = [
+            action["arguments"]
+            for action, output in executed
+            if action["tool"] == "correct_topology" and output["execution_status"] == "success"
+        ]
+        self.assertEqual(corrections[-1]["cb_name"], self.truth["cb_name"])
+        self.assertEqual(corrections[-1]["status"], 1)
+        self.assertFalse(env.get_oracle_state().true_topology_errors)
+        final = env.current_state()
+        active = env.store.get_state(str(final["active_state_id"]))
+        self.assertEqual(len(active["measurements"]), 3 * 13 + 80)
+        self.assertEqual(
+            active["metadata"]["reported_breaker_status"][self.truth["cb_name"]], "closed"
+        )

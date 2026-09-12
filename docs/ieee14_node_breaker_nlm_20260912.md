@@ -139,7 +139,13 @@ map reproduces `case14` exactly and a split appends bus 15.
 substation meters: section voltage at the meter node, injection as the sum of the
 section's unit and load meters, terminal flows unchanged.
 
-- **Generator.** `topology_effects` defaults to dangling terminals and bus splits.
+- **Generator.** `topology_effects` defaults to dangling terminals and bus splits;
+  `merge` is a supported third class (rendered as 13 buses) but not a default, see
+  below. A topology root is admitted only when the operator's WLS evidence is
+  branch-dominant (largest normalized multiplier above 1.2 times the largest
+  normalized residual), the discrimination the deployed solve routes on; otherwise
+  the expert would take the measurement route first and commit a false meter fix.
+  `require_branch_dominant_topology` switches the gate.
   A split root's `clean_case` is the rendered 15-bus case of the true map and its
   `clean_measurements` the projection into that layout; the root itself stays on
   `case14` with 122 measurements. The truth names the breaker, its expected status,
@@ -168,15 +174,23 @@ render 15 buses and the projected vector verifies clean (J 74 to 124 against a l
 of 131) while the reported 14-bus model shows J from 527 to 52,731; the expert fixes a
 split root end to end with the private truth retired and the release audit clean.
 The tenth split, `CB_13R4_13R1`, leaves the OPF infeasible at most load scales and is
-rejected per draw. The 10/14 merge stays unsampled (marginal for the operator WLS),
-though the executor renders it.
+rejected per draw. The three 10/14 merges are the only merges the model can produce
+(no other yard serves two planning buses, and no pair of wrongly closed breakers joins
+any other pair of buses); the estimator ranks each first with a clean flip, and the
+rendered 13-bus case verifies clean. On the operator's 14-bus model, however, a merge is
+decisively residual-dominant: over 26 draws the largest normalized branch multiplier
+was 2.5 to 3.9 against a largest residual of 5 to 9 (ratio 0.25 to 0.64), while every
+admitted dangling or split root shows ratios of 1.4 to 2.5. The ordinary WLS therefore
+detects a merge but attributes it to a meter, and with the dominance gate off the
+expert commits a false meter correction before the breaker route repairs the merge.
+That is why merges stay out of the default mix even though the breaker-level tools
+handle them.
 
 ## Limits
 
 Islanded bays are ranked and confirmed by the estimator like any other breaker, but
 their corrections are refused with the effect named: they are equipment outages the
-operator's WLS cannot see. The 10/14 merge is renderable and correctable but not
-sampled. Eight candidates are confirmed per context call; the audit never needed
+operator's WLS cannot see. Eight candidates are confirmed per context call; the audit never needed
 more than seven. After a split, later meter-index bookkeeping (mixed roots,
 research truth metrics keyed by line index) assumes the 14-bus layout, which is
 why compositions draw dangling terminals only.
