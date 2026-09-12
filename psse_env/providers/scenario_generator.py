@@ -9,9 +9,16 @@ from three physically consistent sources:
 - the OpenDSS HIF sample sets (``artifacts/measurements/hif_multiscan_*``)
   for high-impedance-fault snapshots with real NLM diagnostics and persistent
   scan windows;
-- direct power-flow synthesis (PYPOWER + the Lagrangian measurement model)
-  for topology errors, because the corpus topology rows are node-breaker CB
-  events that a case14 branch-status correction cannot represent.
+- direct synthesis on AC-OPF operating points for topology errors and
+  harmonic distortion.  Topology roots are single breaker-status errors in the
+  full IEEE-14 node/breaker model (``Transmission/ieee14_full_topology.py``)
+  whose effect the operator's branch-status correction can represent; the
+  corpus topology rows are pocket-model CB events without that guarantee.
+  Harmonic roots re-run the legacy harmonic synthesis on a load-scaled OPF
+  point because every tracked harmonic row sits at unit load on planning
+  voltages.  Both families draw the load scale from the corpus range and use
+  the corpus solver and noise, so no family is identifiable by its dispatch,
+  load level or noise floor.
 
 Multi-error compositions overlay gross sensor offsets on any base snapshot:
 a gross measurement error is additive on ``z``, so the combined vector stays
@@ -27,6 +34,12 @@ correction families must present a clearly detectable anomaly on the
 agent-visible model and must return below the chi-square threshold on the
 corrected configuration; explanation families (harmonic, HIF) must solve.
 Rows that fail validation are skipped and recorded in ``skipped``.
+
+Fresh balanced corpora can select a registered system explicitly. IEEE 57
+currently supports clean, measurement, parameter and their measurement
+compositions. ``admission_mode='physical'`` preserves physically validated
+development roots without conditioning on WLS detection or teacher success;
+the default ``recoverable`` retains the existing IEEE 14 admission behavior.
 """
 
 from __future__ import annotations
@@ -79,9 +92,20 @@ from psse_env.providers.matpower import (
     parameter_ranking_contract_is_dominant,
 )
 from psse_env.state_store import _state_content_hash, apply_modification
+from psse_env.systems import resolve_system
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CHI2_ALPHA = 0.01
+
+# The tabular corpus families were synthesized on AC-OPF operating points with
+# loads scaled uniformly over this range (Transmission/generate_measurements.py
+# DEFAULTS).  Synthesized families draw from the same range and solver so no
+# family is identifiable by its dispatch or load level.
+SYNTHESIZED_LOAD_SCALE_RANGE = (0.80, 1.25)
+# Legacy harmonic synthesis controls (Transmission/generate_measurements.py
+# HARMONIC_DEFAULT_CANDIDATES and make_harmonic_anomaly_record).
+HARMONIC_SOURCE_CANDIDATES = (2, 3, 4, 5, 9, 10, 11, 12, 13, 14)
+HARMONIC_THD_RANGE = (0.10, 0.20)
 
 SYNTHESIZED_MEASUREMENT_CANONICALIZATION_CONTRACT = (
     "bc0_synthesized_measurement_decimal12_half_even_v1"
@@ -245,11 +269,10 @@ _SOURCE_PARTITION_FAMILIES = (
     "measurement",
     "multi_measurement",
     "parameter",
-    "harmonic",
     "measurement+parameter",
 )
 _SOURCE_PARTITION_CORPUS_SCENARIOS = frozenset(
-    {"no_error", "measurement_error", "parameter_error", "harmonic_anomaly"}
+    {"no_error", "measurement_error", "parameter_error"}
 )
 _SOURCE_PARTITION_MODULUS = 5
 _SOURCE_PARTITION_EVALUATION_BUCKETS = frozenset({0})
@@ -322,6 +345,27 @@ def _canonicalize_synthesized_measurement_vector(
     return canonical
 
 
+def _canonicalize_telemetry(telemetry: Mapping[str, Any]) -> dict[str, Any]:
+    """Project every substation reading onto the release decimal lattice."""
+
+    canonical = copy.deepcopy(dict(telemetry))
+    for key in ("node_vm", "node_pinj", "node_qinj", "cb_p", "cb_q"):
+        values = canonical.get(key)
+        if isinstance(values, Mapping) and values:
+            names = list(values)
+            quantized = _canonicalize_synthesized_measurement_vector(
+                [float(values[name]) for name in names]
+            )
+            canonical[key] = dict(zip(names, quantized))
+    for key in ("branch_pf", "branch_qf", "branch_pt", "branch_qt"):
+        values = canonical.get(key)
+        if isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
+            canonical[key] = _canonicalize_synthesized_measurement_vector(
+                [float(value) for value in values]
+            )
+    return canonical
+
+
 def build_measurement_vector(ppc: Mapping[str, Any]) -> np.ndarray:
     """Evaluate the WLS measurement function ``h(x)`` at the case's stored state.
 
@@ -358,6 +402,8 @@ class Round0ScenarioGenerator:
     def __init__(
         self,
         *,
+        system: str = "case14",
+        admission_mode: str = "recoverable",
         corpus_path: str | Path | None = None,
         hif_sample_paths: Sequence[str | Path] | None = None,
         imbalance_sample_path: str | Path | None = None,
@@ -368,7 +414,8 @@ class Round0ScenarioGenerator:
         validate: bool = True,
         chi2_alpha: float = DEFAULT_CHI2_ALPHA,
         anomaly_margin: float = 1.25,
-        topology_noise_scale: float = 0.8,
+        topology_noise_scale: float = 1.0,
+        enforce_topology_ranking: bool = True,
         hif_max_scans: int = 8,
         noise_profile_rows: int = 200,
         source_partition: str | None = None,
@@ -379,6 +426,19 @@ class Round0ScenarioGenerator:
         waveform_signature_mode: Mapping[str, str] | None = None,
         min_measurement_error_sigma: float | None = None,
     ) -> None:
+        self.system = resolve_system(system)
+        self.case_path = self.system.case_path
+        self.nb, self.nl = self.system.nb, self.system.nl
+        self.nz, self.state_count = self.system.nz, self.system.state_count
+        if admission_mode not in {"recoverable", "physical"}:
+            raise ValueError("admission_mode must be 'recoverable' or 'physical'")
+        self.admission_mode = admission_mode
+        if self.system.case_id != "case14":
+            if corpus_path is None or balanced_artifact_dir is None:
+                raise ValueError("non-IEEE14 systems require an explicit fresh corpus and artifact directory")
+            if hif_sample_paths or imbalance_sample_path or waveform_signature_mode:
+                raise ValueError("waveform/three-phase sources are unsupported for this system")
+            hif_sample_paths = []
         if source_partition not in (None, "train", "evaluation"):
             raise ValueError(
                 "source_partition must be None, 'train', or 'evaluation'"
@@ -419,6 +479,10 @@ class Round0ScenarioGenerator:
         self.chi2_alpha = float(chi2_alpha)
         self.anomaly_margin = float(anomaly_margin)
         self.topology_noise_scale = float(topology_noise_scale)
+        # A topology root is admitted only if the node/breaker estimator ranks
+        # the true breaker first on the reported statuses, so the substation
+        # investigation the operator performs can identify it.
+        self.enforce_topology_ranking = bool(enforce_topology_ranking)
         self.hif_max_scans = int(hif_max_scans)
         self.noise_profile_rows = int(noise_profile_rows)
         self.source_partition = source_partition
@@ -536,11 +600,15 @@ class Round0ScenarioGenerator:
         self.skipped: list[dict[str, Any]] = []
         self._rng = np.random.default_rng(self.seed)
         self._corpus_by_class: dict[str, list[dict[str, Any]]] | None = None
+        self._fresh_corpus = False
         self._hif_samples: list[dict[str, Any]] | None = None
         self._imbalance_samples: list[dict[str, Any]] | None = None
         self._hif_order_population_size: int | None = None
         self._noise_std: np.ndarray | None = None
-        self._case14: dict[str, Any] | None = None
+        self._base_case: dict[str, Any] | None = None
+        self._full_topology = None
+        self._full_topology_fingerprint: str | None = None
+        self._dangling_errors: list[dict[str, Any]] | None = None
         self._chi2_cache: dict[tuple[str, str], float] = {}
 
     # ------------------------------------------------------------ data access
@@ -557,6 +625,14 @@ class Round0ScenarioGenerator:
         the corresponding case file must not cross the partition boundary.
         """
 
+        # Fresh corpora retain a parent operating-window identity across noise
+        # variants and overlays. Legacy corpora retain their exact old hashes.
+        if row.get("source_realization_id"):
+            return hashlib.sha256(json.dumps({
+                "network_case": row.get("network_case"),
+                "base_case_hash": row.get("base_case_hash"),
+                "source_realization_id": row["source_realization_id"],
+            }, sort_keys=True).encode("utf-8")).hexdigest()
         physical = {
             str(key): value
             for key, value in row.items()
@@ -590,6 +666,34 @@ class Round0ScenarioGenerator:
             return "evaluation"
         return "train"
 
+    def _validate_source_row(self, row: Mapping[str, Any]) -> None:
+        """Fail on mixed system/layout inputs before any family selection."""
+        declared = row.get("network_case")
+        fresh = declared is not None or self.system.case_id != "case14"
+        if not fresh and self.admission_mode == "recoverable":
+            return  # Preserve the existing IEEE14 corpus and admission contract.
+        if fresh and declared != self.system.case_id:
+            raise ValueError(f"corpus system mismatch: expected {self.system.case_id}, got {declared!r}")
+        if fresh and row.get("base_case_hash") != self.system.base_case_hash:
+            raise ValueError("corpus base-case hash does not match the selected system")
+        if fresh and row.get("sigmas") != {"vm": 0.001, "inj": 0.01, "flow": 0.01}:
+            raise ValueError("corpus covariance differs from the deployed WLS noise model")
+        self._fresh_corpus = self._fresh_corpus or fresh
+        if fresh or self.admission_mode == "physical":
+            validation = row.get("physical_validation") or {}
+            if validation.get("passed") is not True:
+                raise ValueError("fresh/physical corpus rows require passed physical validation")
+            if not str(row.get("source_realization_id") or "").strip():
+                raise ValueError("fresh corpus row is missing parent realization identity")
+        for key in ("z_obs", "z_true"):
+            values = np.asarray(row.get(key), dtype=float)
+            if values.shape != (self.nz,) or not np.isfinite(values).all():
+                raise ValueError(f"{key} must contain {self.nz} finite measurements for {self.system.case_id}")
+        if row.get("z_scans") is not None:
+            scans = np.asarray(row["z_scans"], dtype=float)
+            if scans.ndim != 2 or scans.shape[1] != self.nz or not np.isfinite(scans).all():
+                raise ValueError("parameter scan layout does not match the selected system")
+
     def _corpus(self) -> dict[str, list[dict[str, Any]]]:
         if self._corpus_by_class is None:
             grouped: dict[str, list[dict[str, Any]]] = {}
@@ -600,6 +704,7 @@ class Round0ScenarioGenerator:
             with open(self.corpus_path, encoding="utf-8") as handle:
                 for line in handle:
                     row = json.loads(line)
+                    self._validate_source_row(row)
                     corpus_scenario = str(row.get("scenario"))
                     if corpus_scenario in _SOURCE_PARTITION_CORPUS_SCENARIOS:
                         total_rows[corpus_scenario] = (
@@ -713,6 +818,10 @@ class Round0ScenarioGenerator:
 
     def noise_profile(self) -> np.ndarray:
         """Per-index measurement noise std estimated from no-error corpus rows."""
+        if self.system.case_id != "case14" or self._fresh_corpus:
+            # Match the actual covariance used by every deployed balanced solver.
+            # Do not estimate a 491-channel array from an IEEE14 fallback corpus.
+            return self.system.measurement_sigma()
         if self._noise_std is None:
             diffs = [
                 np.asarray(row["z_obs"], dtype=float)
@@ -724,6 +833,8 @@ class Round0ScenarioGenerator:
                     f"corpus {self.corpus_path} carries no no_error rows for the noise profile"
                 )
             self._noise_std = np.stack(diffs).std(axis=0)
+            if self._fresh_corpus:
+                return self.system.measurement_sigma()
         return self._noise_std
 
     def _floored_measurement_error(
@@ -742,10 +853,10 @@ class Round0ScenarioGenerator:
         magnitude = floor * sigma * float(self._rng.uniform(1.0, 1.5))
         return float(clean) + sign * magnitude, True
 
-    def _clean_case14(self) -> dict[str, Any]:
-        if self._case14 is None:
-            self._case14 = _load_python_case("case14")
-        return self._case14
+    def _clean_case(self) -> dict[str, Any]:
+        if self._base_case is None:
+            self._base_case = _load_python_case(self.case_path)
+        return self._base_case
 
     # ------------------------------------------------------------- validation
 
@@ -760,11 +871,11 @@ class Round0ScenarioGenerator:
 
     @property
     def chi2_limit(self) -> float:
-        dof = max(1, NZ - _STATE_COUNT)
+        dof = max(1, self.nz - self.state_count)
         return float(chi2_threshold(dof, self.chi2_alpha))
 
     def _require_anomalous(self, case: str, z: Sequence[float], family: str) -> None:
-        if not self.validate:
+        if not self.validate or self.admission_mode == "physical":
             return
         statistic = self._chi2_statistic(case, z)
         if statistic <= self.anomaly_margin * self.chi2_limit:
@@ -774,7 +885,7 @@ class Round0ScenarioGenerator:
             )
 
     def _require_clean(self, case: str, z: Sequence[float], family: str) -> None:
-        if not self.validate:
+        if not self.validate or self.admission_mode == "physical":
             return
         statistic = self._chi2_statistic(case, z)
         if statistic >= self.chi2_limit:
@@ -801,17 +912,17 @@ class Round0ScenarioGenerator:
         comparison with the clean target are never attached to an accepted
         scenario or exposed to the online policy.
         """
-        if not self.validate:
+        if not self.validate or self.admission_mode == "physical":
             return None
         line_index1 = int(line_row0) + 1
         normalized_scans = [
             [float(value) for value in scan] for scan in z_scans
         ]
         initial_states = observable_parameter_initial_states(
-            self._clean_case14(), normalized_scans
+            self._clean_case(), normalized_scans
         )
         payload = _param_correction_json(
-            "case14",
+            self.case_path,
             line_index1,
             normalized_scans,
             initial_states,
@@ -876,7 +987,7 @@ class Round0ScenarioGenerator:
                 metrics=metrics,
             )
 
-        corrected_case = copy.deepcopy(self._clean_case14())
+        corrected_case = copy.deepcopy(self._clean_case())
         corrected_case["branch"][line_row0][2] = corrected_r
         corrected_case["branch"][line_row0][3] = corrected_x
         corrected_case_path = self._derived_case(
@@ -966,7 +1077,7 @@ class Round0ScenarioGenerator:
         context_metrics = self._parameter_gate_provider.get_parameter_context(
             {
                 "state_id": context_state_id,
-                "case": "case14",
+                "case": self.case_path,
                 "measurements": [float(value) for value in measurements],
                 "metadata": {
                     "parameter_scans": {
@@ -1100,6 +1211,8 @@ class Round0ScenarioGenerator:
     # -------------------------------------------------------------- utilities
 
     def _scenario_id(self, *parts: Any) -> str:
+        if self.system.case_id != "case14":
+            parts = (self.system.case_id, *parts)
         digest = hashlib.sha256(
             json.dumps([self.seed, *[str(part) for part in parts]]).encode("utf-8")
         ).hexdigest()[:12]
@@ -1124,8 +1237,8 @@ class Round0ScenarioGenerator:
         self.consumed_artifacts.add(local)
         return local
 
-    @staticmethod
     def _base_scenario(
+        self,
         scenario_id: str,
         *,
         case: str,
@@ -1140,7 +1253,7 @@ class Round0ScenarioGenerator:
             # release reporting. ``case`` may later become a content-addressed
             # derived artifact after a parameter/topology correction and must
             # not fragment one IEEE-14 population into one pseudo-case per root.
-            "network_case": "case14",
+            "network_case": self.case_path,
             "case": case,
             "measurements": [float(value) for value in measurements],
             "semantic_field_provenance": {"measurements": _SNAPSHOT_PROVENANCE},
@@ -1199,7 +1312,7 @@ class Round0ScenarioGenerator:
         only by silently leaving truth behind, so it is not a valid sequential
         recovery scenario even when the original combined vector is anomalous.
         """
-        if not self.validate or len(faults) <= 1:
+        if not self.validate or self.admission_mode == "physical" or len(faults) <= 1:
             return
         for fault in faults:
             index = fault.get("index")
@@ -1211,7 +1324,7 @@ class Round0ScenarioGenerator:
             index = int(index)
             probe = [float(value) for value in clean_measurements]
             probe[index] = float(observed)
-            statistic = self._chi2_statistic("case14", probe)
+            statistic = self._chi2_statistic(self.case_path, probe)
             if statistic < self.chi2_limit:
                 raise ScenarioRejected(
                     "sequential_fault_not_individually_detectable",
@@ -1224,12 +1337,12 @@ class Round0ScenarioGenerator:
     def _no_error_scenario(self, row: Mapping[str, Any], index: int) -> dict[str, Any]:
         scenario = self._base_scenario(
             self._scenario_id("no_error", row.get("id"), index),
-            case="case14",
+            case=self.case_path,
             measurements=row["z_obs"],
             family="no_error",
         )
-        self._require_clean("case14", row["z_obs"], "no_error")
-        scenario["clean_case"] = "case14"
+        self._require_clean(self.case_path, row["z_obs"], "no_error")
+        scenario["clean_case"] = self.case_path
         # A healthy sensor snapshot includes ordinary measurement noise.  The
         # release target is therefore the observed vector, not a noiseless
         # latent vector that no transactional action can reproduce.
@@ -1260,14 +1373,14 @@ class Round0ScenarioGenerator:
             )
             if lifted:
                 lifted_indices.append(error_index)
-        self._require_anomalous("case14", z_obs, family)
+        self._require_anomalous(self.case_path, z_obs, family)
         scenario = self._base_scenario(
             self._scenario_id(family, row.get("id"), index),
-            case="case14",
+            case=self.case_path,
             measurements=z_obs,
             family=family,
         )
-        scenario["clean_case"] = "case14"
+        scenario["clean_case"] = self.case_path
         clean_measurements = list(z_obs)
         for error_index in error_indices:
             clean_measurements[error_index] = z_true[error_index]
@@ -1277,7 +1390,7 @@ class Round0ScenarioGenerator:
         # channels that even this truth-restored vector fails the global gate;
         # those roots are intrinsically non-terminal and are skipped rather
         # than encouraging broad healthy-channel rewrites.
-        self._require_clean("case14", clean_measurements, family)
+        self._require_clean(self.case_path, clean_measurements, family)
         scenario["clean_measurements"] = clean_measurements
         scenario["true_measurement_errors"] = [
             {
@@ -1313,7 +1426,7 @@ class Round0ScenarioGenerator:
         if line_row0 is None:
             raise ScenarioRejected("label_missing_line_row", str(label))
         line_row0 = int(line_row0)
-        if not 0 <= line_row0 < NL:
+        if not 0 <= line_row0 < self.nl:
             raise ScenarioRejected("label_line_row_out_of_range", str(line_row0))
         if not row.get("z_scans"):
             raise ScenarioRejected("parameter_scans_missing", str(row.get("id")))
@@ -1324,9 +1437,31 @@ class Round0ScenarioGenerator:
         # The physical line changed; the agent's model database (case14) is
         # stale.  The measurements must therefore be anomalous under case14 and
         # consistent under the changed-parameter case the corpus generated.
-        self._require_anomalous("case14", z_obs, "parameter")
+        self._require_anomalous(self.case_path, z_obs, "parameter")
         self._require_clean(str(true_case), z_obs, "parameter")
         true_ppc = _load_python_case(str(true_case))
+        if self.system.case_id != "case14":
+            base = self._clean_case()
+            actual_branch = np.asarray(true_ppc["branch"], dtype=float)
+            expected_branch = np.asarray(base["branch"], dtype=float).copy()
+            if (np.asarray(true_ppc["bus"]).shape != np.asarray(base["bus"]).shape
+                or actual_branch.shape != expected_branch.shape
+                or not np.array_equal(np.asarray(true_ppc["bus"])[:, 0], np.asarray(base["bus"])[:, 0])
+                or float(true_ppc["baseMVA"]) != float(base["baseMVA"])):
+                raise ValueError("parameter artifact does not match the selected base system")
+            expected_branch[line_row0, 2:4] = actual_branch[line_row0, 2:4]
+            if not np.allclose(actual_branch, expected_branch, rtol=1e-10, atol=1e-12):
+                raise ValueError("parameter artifact changed an undeclared branch or topology field")
+            static_bus_columns = [0, 1, 4, 5, 6, 9, 10, 11, 12]
+            actual_bus = np.asarray(true_ppc["bus"], dtype=float)
+            expected_bus = np.asarray(base["bus"], dtype=float)
+            actual_gen = np.asarray(true_ppc["gen"], dtype=float)
+            expected_gen = np.asarray(base["gen"], dtype=float)
+            static_gen_columns = [i for i in range(expected_gen.shape[1]) if i not in {1, 2, 5}]
+            if (not np.allclose(actual_bus[:, static_bus_columns], expected_bus[:, static_bus_columns], rtol=1e-10, atol=1e-12)
+                or actual_gen.shape != expected_gen.shape
+                or not np.allclose(actual_gen[:, static_gen_columns], expected_gen[:, static_gen_columns], rtol=1e-10, atol=1e-12)):
+                raise ValueError("parameter artifact changed undeclared bus or generator configuration")
         clean_r = float(true_ppc["branch"][line_row0][2])
         clean_x = float(true_ppc["branch"][line_row0][3])
         # The multi-scan inverse problem identifies line impedance only within
@@ -1348,7 +1483,7 @@ class Round0ScenarioGenerator:
         )
         scenario = self._base_scenario(
             self._scenario_id("parameter", row.get("id"), index),
-            case="case14",
+            case=self.case_path,
             measurements=z_obs,
             family="parameter",
         )
@@ -1406,82 +1541,197 @@ class Round0ScenarioGenerator:
             self._parameter_gate_results[scenario["scenario_id"]] = gate_result
         return scenario
 
-    def _safe_outage_rows(self) -> list[int]:
-        from scipy.sparse import coo_matrix
-        from scipy.sparse.csgraph import connected_components
+    # ------------------------------------------------------- synthesized physics
 
-        branch = np.asarray(self._clean_case14()["branch"], dtype=float)
-        safe: list[int] = []
-        for row0 in range(branch.shape[0]):
-            keep = [i for i in range(branch.shape[0]) if i != row0]
-            from_bus = branch[keep, 0].astype(int) - 1
-            to_bus = branch[keep, 1].astype(int) - 1
-            adjacency = coo_matrix(
-                (np.ones(len(keep)), (from_bus, to_bus)), shape=(NB, NB)
-            )
-            components, _ = connected_components(adjacency, directed=False)
-            if components == 1:
-                safe.append(row0)
-        return safe
+    @staticmethod
+    def _solve_ac_opf(ppc: Mapping[str, Any]) -> dict[str, Any] | None:
+        """AC-OPF operating point: the solver every tabular corpus family was built on."""
+        from pypower.api import ppoption, runopf
+
+        result = runopf(copy.deepcopy(ppc), ppoption(VERBOSE=0, OUT_ALL=0))
+        return result if result.get("success") else None
+
+    @staticmethod
+    def _scaled_case14(load_scale: float) -> dict[str, Any]:
+        from pypower.api import case14 as pypower_case14
+
+        ppc = pypower_case14()
+        ppc["bus"][:, 2] *= load_scale
+        ppc["bus"][:, 3] *= load_scale
+        return ppc
+
+    def _draw_load_scale(self) -> float:
+        low, high = SYNTHESIZED_LOAD_SCALE_RANGE
+        return float(self._rng.uniform(low, high))
+
+    def _full_topology_model(self):
+        if self._full_topology is None:
+            from Transmission.ieee14_full_topology import build_full_topology
+
+            self._full_topology = build_full_topology()
+            self._full_topology_fingerprint = self._full_topology.fingerprint()
+        return self._full_topology
+
+    def _dangling_terminal_errors(self) -> list[dict[str, Any]]:
+        """Single breaker-status errors the branch-status correction can represent."""
+        if self._dangling_errors is None:
+            from Transmission.ieee14_full_measurements import dangling_terminal_errors
+
+            self._dangling_errors = dangling_terminal_errors(self._full_topology_model())
+            if not self._dangling_errors:
+                raise RuntimeError(
+                    "the full node/breaker model offers no dangling-terminal switch errors"
+                )
+        return self._dangling_errors
 
     def _topology_scenario(self, index: int) -> dict[str, Any]:
-        from pypower.api import case14 as pypower_case14
-        from pypower.api import ppoption, runpf
-        from pypower.idx_bus import BUS_I, VMAX, VMIN
-        from pypower.idx_gen import GEN_BUS, VG
+        """One breaker-status error in the full IEEE-14 node/breaker model.
 
-        safe_rows = self._safe_outage_rows()
-        row0 = int(self._rng.choice(safe_rows))
-        load_scale = float(self._rng.uniform(0.85, 1.15))
-        truth = pypower_case14()
-        truth["bus"][:, 2] *= load_scale
-        truth["bus"][:, 3] *= load_scale
-        # PYPOWER's canonical case14 ships generator voltage setpoints of 1.07
-        # and 1.09 pu at buses whose declared VMAX is 1.06 pu.  That is usable
-        # as a power-flow demo but not as a physically admissible verification
-        # fixture.  Keep synthesized telemetry inside the case's own declared
-        # voltage limits before solving instead of teaching the verifier to
-        # tolerate an actual limit violation.
-        voltage_bounds = {
-            int(row[BUS_I]): (float(row[VMIN]), float(row[VMAX]))
-            for row in truth["bus"]
-        }
-        for gen_row in truth["gen"]:
-            vmin, vmax = voltage_bounds[int(gen_row[GEN_BUS])]
-            gen_row[VG] = min(max(float(gen_row[VG]), vmin), vmax)
-        slack_rows = truth["bus"][:, 1] == 3
-        slack_buses = set(truth["bus"][slack_rows, 0].astype(int))
-        for gen_row in truth["gen"]:
-            if int(gen_row[0]) not in slack_buses:
-                gen_row[1] *= load_scale
-        truth["branch"][row0, 10] = 0
-        solution, converged = runpf(truth, ppoption(VERBOSE=0, OUT_ALL=0))
-        if not converged:
-            raise ScenarioRejected("power_flow_diverged", f"outage row0={row0}")
-        z_true = build_measurement_vector(solution)
-        noise = self._rng.normal(0.0, self.noise_profile()) * self.topology_noise_scale
-        z_obs = (z_true + noise).tolist()
+        The physical truth is a switch whose real state differs from the reported
+        schematic-normal state and whose effect isolates exactly one line terminal
+        (``dangling_line_terminal`` in ``Transmission.ieee14_full_measurements``).
+        That is the class the operator's 14-bus model can represent: the fix is a
+        breaker-level ``correct_topology`` naming the switch, which the executor
+        realizes as taking the line at that terminal out of service.  Bus splits,
+        the 10/14 merge and islanded bays are not offered until the operator model
+        can carry a variable bus count.
 
-        corrected_ppc = copy.deepcopy(self._clean_case14())
+        Telemetry is one physical solution: an AC OPF on the true contracted
+        topology at a corpus-range load scale fixes the dispatch, and a power flow
+        of the 65-node network with breakers as tiny impedances supplies both the
+        substation measurements (node voltages, unit and load meters, terminal and
+        breaker flows) and, through the fixed meter identity, the operator's
+        122-entry vector.  The scenario is admitted only if the operator's
+        bus-branch WLS flags it, the corrected operator case verifies clean, and
+        the node/breaker estimator on the reported statuses flags it, is clean on
+        the true statuses, and ranks the true breaker first.
+        """
+        from Transmission.ieee14_full_gse import gse_topology_nlm
+        from Transmission.ieee14_full_measurements import (
+            MODEL_ID,
+            flipped_case,
+            main_section_nodes,
+        )
+        from Transmission.ieee14_full_substation import (
+            add_telemetry_noise,
+            operator_vector_from_telemetry,
+            solve_node_breaker,
+            status_labels,
+            substation_telemetry,
+        )
+
+        model = self._full_topology_model()
+        errors = self._dangling_terminal_errors()
+        error = errors[int(self._rng.integers(len(errors)))]
+        cb_name = str(error["cb_name"])
+        true_closed = bool(error["true_closed"])
+        load_scale = self._draw_load_scale()
+        reference = self._scaled_case14(load_scale)
+        truth_case, info, removed = flipped_case(
+            reference, {cb_name: true_closed}, model=model
+        )
+        if removed["dead_buses"]:
+            raise ScenarioRejected(
+                "topology_flip_islands_equipment", f"{cb_name}: {removed}"
+            )
+        dispatch = self._solve_ac_opf(truth_case)
+        if dispatch is None:
+            raise ScenarioRejected(
+                "opf_diverged", f"{cb_name} load_scale={load_scale:.3f}"
+            )
+        node_to_bus = info["node_to_bus"]
+        physical, physical_info, physical_removed = solve_node_breaker(
+            model, reference, {cb_name: true_closed}, dispatch, node_to_bus
+        )
+        if physical is None:
+            raise ScenarioRejected(
+                "node_breaker_power_flow_diverged",
+                f"{cb_name} load_scale={load_scale:.3f}",
+            )
+        if physical_removed["dead_buses"]:
+            raise ScenarioRejected(
+                "topology_flip_islands_equipment", f"{cb_name}: {physical_removed}"
+            )
+        telemetry = substation_telemetry(
+            physical, model, reference, physical_info, physical_removed
+        )
+        telemetry = add_telemetry_noise(
+            telemetry, self._rng, scale=self.topology_noise_scale
+        )
+        telemetry = _canonicalize_telemetry(telemetry)
+        meter_nodes = main_section_nodes(model, node_to_bus, [])
+        z_obs = _canonicalize_synthesized_measurement_vector(
+            operator_vector_from_telemetry(telemetry, model, meter_nodes).tolist()
+        )
+
+        row0 = int(error["equivalent_branch_row0"])
+        corrected_ppc = copy.deepcopy(self._clean_case())
         corrected_ppc["branch"][row0][10] = 0.0
         corrected_case = self._derived_case(corrected_ppc, f"r0_topo_l{row0 + 1}s0")
-        self._require_anomalous("case14", z_obs, "topology")
-        self._require_clean(corrected_case, z_obs, "topology")
-        z_obs = _canonicalize_synthesized_measurement_vector(z_obs)
-        # The emitted vector, not only the native solver vector, must satisfy
-        # the same physics contract before it is persisted or fingerprinted.
-        self._require_anomalous("case14", z_obs, "topology")
+        self._require_anomalous(self.case_path, z_obs, "topology")
         self._require_clean(corrected_case, z_obs, "topology")
 
-        branch = self._clean_case14()["branch"]
+        reported_labels = status_labels(model)
+        reported_estimate = gse_topology_nlm(model, reference, {}, telemetry)
+        if not reported_estimate["success"]:
+            raise ScenarioRejected("node_breaker_estimate_diverged", cb_name)
+        gse_limit = float(
+            chi2_threshold(max(1, int(reported_estimate["dof"])), self.chi2_alpha)
+        )
+        if reported_estimate["chi_square"] <= self.anomaly_margin * gse_limit:
+            raise ScenarioRejected(
+                "breaker_error_not_detectable_at_substation",
+                f"{cb_name}: chi2 {reported_estimate['chi_square']:.1f} <= "
+                f"{self.anomaly_margin:.2f} x {gse_limit:.1f}",
+            )
+        true_estimate = gse_topology_nlm(
+            model, reference, {cb_name: true_closed}, telemetry
+        )
+        true_limit = (
+            float(chi2_threshold(max(1, int(true_estimate["dof"])), self.chi2_alpha))
+            if true_estimate["success"]
+            else 0.0
+        )
+        if not true_estimate["success"] or true_estimate["chi_square"] >= true_limit:
+            raise ScenarioRejected(
+                "true_breaker_status_not_clean_at_substation",
+                f"{cb_name}: chi2 {true_estimate['chi_square']:.1f} >= {true_limit:.1f}",
+            )
+        order = [item["cb_name"] for item in reported_estimate["ranking"]]
+        true_rank = order.index(cb_name) + 1
+        if self.enforce_topology_ranking and true_rank != 1:
+            raise ScenarioRejected(
+                "breaker_not_top_ranked",
+                f"{cb_name} ranked {true_rank} behind {order[0]}",
+            )
+
+        branch = self._clean_case()["branch"]
         scenario = self._base_scenario(
-            self._scenario_id("topology", row0, load_scale, index),
-            case="case14",
+            self._scenario_id("topology", cb_name, load_scale, index),
+            case=self.case_path,
             measurements=z_obs,
             family="topology",
         )
         scenario["clean_case"] = corrected_case
         scenario["clean_measurements"] = list(z_obs)
+        scenario["metadata"]["substation_telemetry"] = telemetry
+        scenario["metadata"]["reported_breaker_status"] = reported_labels
+        scenario["metadata"]["operator_voltage_meter_nodes"] = {
+            str(bus): node for bus, node in meter_nodes.items()
+        }
+        scenario["metadata"]["topology_model_id"] = MODEL_ID
+        scenario["metadata"]["topology_model_fingerprint"] = self._full_topology_fingerprint
+        # Ranking statistics only: the breaker names stay in the hidden truth.
+        scenario["topology_ranking"] = {
+            "true_breaker_rank": true_rank,
+            "top_score": float(reported_estimate["ranking"][0]["score"]),
+            "runner_up_score": (
+                float(reported_estimate["ranking"][1]["score"]) if len(order) > 1 else None
+            ),
+            "gse_chi_square": float(reported_estimate["chi_square"]),
+            "gse_threshold": gse_limit,
+            "enforced": bool(self.enforce_topology_ranking),
+        }
         scenario["true_topology_errors"] = [
             {
                 "branch_row0": row0,
@@ -1490,9 +1740,76 @@ class Round0ScenarioGenerator:
                 "from_bus": int(branch[row0][0]),
                 "to_bus": int(branch[row0][1]),
                 "load_scale": load_scale,
+                "operating_point": "ac_opf",
+                "cb_name": cb_name,
+                "cb_yard": str(error["yard"]),
+                "reported_cb_closed": bool(error["reported_closed"]),
+                "true_cb_closed": true_closed,
+                "physical_effect": "dangling_line_terminal",
+                "topology_model_id": MODEL_ID,
+                "topology_model_fingerprint": self._full_topology_fingerprint,
             }
         ]
         return scenario
+
+    def _synthesized_harmonic_row(self, index: int) -> dict[str, Any]:
+        """A corpus-shaped harmonic snapshot on an AC-OPF operating point.
+
+        The tracked harmonic rows were all synthesized at unit load on the stored
+        case14 planning voltages, which made load level and dispatch a family tell.
+        This draws the load scale from the corpus range, solves the fundamental
+        with the same OPF the corpus families used, and runs the legacy harmonic
+        synthesis (source buses, THD range, spectrum, transducer, noise) on that
+        operating point.
+        """
+        from Transmission.generate_hse_traces import build_trace
+
+        load_scale = self._draw_load_scale()
+        solution = self._solve_ac_opf(self._scaled_case14(load_scale))
+        if solution is None:
+            raise ScenarioRejected("opf_diverged", f"harmonic load_scale={load_scale:.3f}")
+        source_bus = int(self._rng.choice(HARMONIC_SOURCE_CANDIDATES))
+        thd_target = float(self._rng.uniform(*HARMONIC_THD_RANGE))
+        trace = build_trace(
+            source_bus,
+            thd_target,
+            int(self._rng.integers(2**31 - 1)),
+            bus=solution["bus"],
+            branch=solution["branch"],
+        )
+        harmonic_measurements: list[dict[str, Any]] = []
+        orders: set[int] = set()
+        for order_text, phasors in trace["harmonic_phasors"].items():
+            order = int(order_text)
+            orders.add(order)
+            for item in phasors:
+                real, imag = item["V_complex_noisy"]
+                harmonic_measurements.append(
+                    {
+                        "bus": int(item["bus_1based"]),
+                        "h": order,
+                        "V_real": float(real),
+                        "V_imag": float(imag),
+                        "sigma": float(item["sigma"]),
+                    }
+                )
+        return {
+            "id": f"synthesized_harmonic_{index}",
+            "scenario": "harmonic_anomaly",
+            "z_true": _canonicalize_synthesized_measurement_vector(trace["z_scada_true"]),
+            "z_obs": _canonicalize_synthesized_measurement_vector(trace["z_scada_meas"]),
+            "harmonic_measurements": harmonic_measurements,
+            "harmonic_orders": sorted(orders),
+            "label": {
+                "error_type": "harmonic_anomaly",
+                "source_bus": source_bus,
+                "thd_target": thd_target,
+                "actual_thd": float(trace["actual_thd"]),
+                "load_scale": load_scale,
+                "operating_point": "ac_opf",
+            },
+            "op_point": {"load_scale": load_scale},
+        }
 
     def _harmonic_scenario(self, row: Mapping[str, Any], index: int) -> dict[str, Any]:
         label = dict(row.get("label") or {})
@@ -1506,16 +1823,16 @@ class Round0ScenarioGenerator:
         # additional measurements; that anomaly alone is not harmonic evidence.
         # The legacy monitor-flagged mode only requires WLS solvability.
         if mode == "discovered":
-            self._require_anomalous("case14", z_obs, "harmonic")
+            self._require_anomalous(self.case_path, z_obs, "harmonic")
         elif self.validate:
-            self._chi2_statistic("case14", z_obs)
+            self._chi2_statistic(self.case_path, z_obs)
         scenario = self._base_scenario(
             self._scenario_id("harmonic", row.get("id"), index),
-            case="case14",
+            case=self.case_path,
             measurements=z_obs,
             family="harmonic",
         )
-        scenario["clean_case"] = "case14"
+        scenario["clean_case"] = self.case_path
         scenario["clean_measurements"] = [float(value) for value in row["z_true"]]
         if mode == "flagged":
             scenario["unresolved_signatures"] = [HARMONIC_SIGNATURE]
@@ -1529,14 +1846,14 @@ class Round0ScenarioGenerator:
             scenario["metadata"]["harmonic_orders"] = [
                 int(order) for order in row["harmonic_orders"]
             ]
-        scenario["hidden_truth"] = {
-            "true_harmonic_errors": [
-                {
-                    "bus_1based": label.get("source_bus"),
-                    "thd_target": label.get("thd_target"),
-                }
-            ]
+        harmonic_truth: dict[str, Any] = {
+            "bus_1based": label.get("source_bus"),
+            "thd_target": label.get("thd_target"),
         }
+        for key in ("actual_thd", "load_scale", "operating_point"):
+            if label.get(key) is not None:
+                harmonic_truth[key] = label[key]
+        scenario["hidden_truth"] = {"true_harmonic_errors": [harmonic_truth]}
         scenario["release_audit"] = {
             **copy.deepcopy(_EXPLANATION_ONLY_RELEASE_AUDIT),
             "signature_mode": mode,
@@ -1556,21 +1873,21 @@ class Round0ScenarioGenerator:
             raise ScenarioRejected("hif_scans_missing", str(row.get("id")))
         z_obs = [float(value) for value in row["z_obs"]]
         if self.validate:
-            self._chi2_statistic("case14", z_obs)  # must solve; may be subtle
+            self._chi2_statistic(self.case_path, z_obs)  # must solve; may be subtle
         if len(scans) > self.hif_max_scans:
             picks = np.linspace(0, len(scans) - 1, self.hif_max_scans).round().astype(int)
             scans = [scans[int(i)] for i in dict.fromkeys(picks.tolist())]
         scenario = self._base_scenario(
             self._scenario_id("hif", row.get("id"), index),
-            case="case14",
+            case=self.case_path,
             measurements=z_obs,
             family="hif",
         )
-        scenario["clean_case"] = "case14"
+        scenario["clean_case"] = self.case_path
         scenario["clean_measurements"] = [float(value) for value in row["z_true"]]
         hif_mode = self.waveform_signature_mode["hif"]
         if hif_mode == "discovered":
-            self._require_anomalous("case14", z_obs, "hif")
+            self._require_anomalous(self.case_path, z_obs, "hif")
         else:
             scenario["unresolved_signatures"] = [HIF_SIGNATURE]
             scenario["semantic_field_provenance"]["unresolved_signatures"] = (
@@ -1702,16 +2019,16 @@ class Round0ScenarioGenerator:
         if mode == "discovered":
             # The operator starts from the positive-sequence snapshot alone,
             # so the unbalance must at least register as a WLS anomaly.
-            self._require_anomalous("case14", z_obs, "three_phase_unbalance")
+            self._require_anomalous(self.case_path, z_obs, "three_phase_unbalance")
         elif self.validate:
-            self._chi2_statistic("case14", z_obs)
+            self._chi2_statistic(self.case_path, z_obs)
         scenario = self._base_scenario(
             self._scenario_id("three_phase_unbalance", row.get("id"), index),
-            case="case14",
+            case=self.case_path,
             measurements=z_obs,
             family="three_phase_unbalance",
         )
-        scenario["clean_case"] = "case14"
+        scenario["clean_case"] = self.case_path
         scenario["clean_measurements"] = [float(value) for value in row["z_true"]]
         if mode == "flagged":
             scenario["unresolved_signatures"] = signatures
@@ -1744,14 +2061,14 @@ class Round0ScenarioGenerator:
         if not balanced:
             raise ScenarioRejected("balanced_telemetry_control_invalid", str(row.get("id")))
         measurements = [float(value) for value in row["z_true"]]
-        self._require_clean("case14", measurements, "telemetry_no_disturbance")
+        self._require_clean(self.case_path, measurements, "telemetry_no_disturbance")
         scenario = self._base_scenario(
             self._scenario_id("telemetry_no_disturbance", row.get("id"), index),
-            case="case14",
+            case=self.case_path,
             measurements=measurements,
             family="telemetry_no_disturbance",
         )
-        scenario["clean_case"] = "case14"
+        scenario["clean_case"] = self.case_path
         scenario["clean_measurements"] = list(measurements)
         scenario["metadata"]["three_phase_voltages"] = balanced
         branch_currents = row.get(BRANCH_CURRENT_CHANNEL)
@@ -1776,7 +2093,7 @@ class Round0ScenarioGenerator:
 
     def _overlay_indices(self, scenario: Mapping[str, Any], count: int) -> list[int]:
         """Indices eligible for a gross-offset overlay on this scenario."""
-        index_map = measurement_index_map(NB, NL)
+        index_map = measurement_index_map(self.nb, self.nl)
         blocked: set[int] = set()
         for fault in scenario.get("true_measurement_errors") or []:
             if fault.get("index") is not None:
@@ -1815,7 +2132,7 @@ class Round0ScenarioGenerator:
         estimator output, or comparison metric is persisted on accepted
         scenarios.
         """
-        if not self.validate:
+        if not self.validate or self.admission_mode == "physical":
             return None
         gate_result = self._parameter_gate_results.get(str(base_scenario_id))
         parameter_faults = scenario.get("true_parameter_errors") or []
@@ -1844,7 +2161,7 @@ class Round0ScenarioGenerator:
             metrics.update(extra)
             raise ScenarioRejected(reason, detail, metrics=metrics)
 
-        current_case = str(scenario.get("case") or "case14")
+        current_case = str(scenario.get("case") or self.case_path)
         current_measurements = [float(value) for value in scenario["measurements"]]
         accepted: list[dict[str, Any]] = []
 
@@ -2219,6 +2536,13 @@ class Round0ScenarioGenerator:
                 else {"state_id", "line_index", "status"}
             )
             observed_argument_keys = set(raw_arguments)
+            # A breaker-level topology correction names the switch beside the
+            # bus-branch row it affects; both spellings are production schema.
+            if (
+                expected_tool == CORRECT_TOPOLOGY
+                and observed_argument_keys == expected_argument_keys | {"cb_name"}
+            ):
+                expected_argument_keys = observed_argument_keys
             if observed_argument_keys != expected_argument_keys:
                 reject(
                     "mixed_topology_recovery_action_schema_invalid",
@@ -2369,7 +2693,7 @@ class Round0ScenarioGenerator:
             )
 
         if (
-            not 0 <= expected_branch_row0 < NL
+            not 0 <= expected_branch_row0 < self.nl
             or expected_status not in {0, 1}
             or not 0 <= expected_measurement < len(current_measurements)
             or len(clean_measurements) != len(current_measurements)
@@ -2916,9 +3240,9 @@ class Round0ScenarioGenerator:
             composed,
             [int(item["index"]) for item in errors if item.get("index") is not None],
         )
-        self._require_anomalous("case14", measurements, family)
-        corrected_case = str(composed.get("clean_case") or "case14")
-        if corrected_case != "case14":
+        self._require_anomalous(self.case_path, measurements, family)
+        corrected_case = str(composed.get("clean_case") or self.case_path)
+        if corrected_case != self.case_path:
             # In branch+measurement recovery the branch family may correctly
             # resolve first. The independent bad meter must still be observable
             # under that repaired model; otherwise exact sequential recovery is
@@ -2967,6 +3291,12 @@ class Round0ScenarioGenerator:
         unknown = sorted(set(plan) - set(SCENARIO_FAMILIES))
         if unknown:
             raise ValueError(f"Unknown scenario families: {unknown}")
+        supported = set(self.system.supported_families)
+        if self.admission_mode == "physical":
+            supported &= {"no_error", "measurement", "multi_measurement", "parameter", "measurement+parameter"}
+        unsupported = sorted(family for family, count in plan.items() if int(count) > 0 and family not in supported)
+        if unsupported:
+            raise ValueError(f"Unsupported families for {self.system.case_id}/{self.admission_mode}: {unsupported}")
         scenarios: list[dict[str, Any]] = []
         for family in SCENARIO_FAMILIES:
             count = int(plan.get(family, 0))
@@ -2995,21 +3325,23 @@ class Round0ScenarioGenerator:
             error_cardinality = sum(
                 len(scenario.get(key) or []) for key in truth_keys
             ) + sum(len(hidden.get(key) or []) for key in diagnostic_truth_keys)
-            if family == "topology" or "topology" in family:
+            if family == "harmonic" or family == "topology" or "topology" in family:
                 source_tier = "physics_synthesized"
             elif family == "telemetry_no_disturbance":
                 source_tier = "derived_negative_control"
-            elif family in {"harmonic", "hif", "three_phase_unbalance", "measurement+hif"}:
+            elif family in {"hif", "three_phase_unbalance", "measurement+hif"}:
                 source_tier = "tracked_diagnostic_corpus"
             elif "+" in family or family == "multi_measurement":
                 source_tier = "tracked_composed_corpus"
             else:
                 source_tier = "tracked_measurement_corpus"
             scenario["network_case"] = str(
-                scenario.get("network_case") or "case14"
+                scenario.get("network_case") or self.case_path
             )
             scenario["error_cardinality"] = int(error_cardinality)
             scenario["source_tier"] = source_tier
+            if scenario.get("source_realization_id"):
+                scenario["source_tier"] = "physics_synthesized_balanced"
             self.manifest.append(
                 {
                     "scenario_id": scenario["scenario_id"],
@@ -3046,6 +3378,20 @@ class Round0ScenarioGenerator:
                     self._record_skip(family, f"synthesized_{attempts}", rejection)
             return built
 
+        if family == "harmonic":
+            while len(built) < count and attempts < count * 8:
+                attempts += 1
+                try:
+                    record(
+                        self._harmonic_scenario(
+                            self._synthesized_harmonic_row(attempts), attempts
+                        ),
+                        "synthesized_pypower_hse",
+                    )
+                except ScenarioRejected as rejection:
+                    self._record_skip(family, f"synthesized_{attempts}", rejection)
+            return built
+
         source_rows, builder = self._family_source(family)
         order_population = len(source_rows)
         if family in {"hif", "measurement+hif"}:
@@ -3066,7 +3412,12 @@ class Round0ScenarioGenerator:
             source = str(row.get("id") or position)
             attempts += 1
             try:
-                record(builder(row, attempts), source)
+                scenario = builder(row, attempts)
+                if row.get("source_realization_id"):
+                    scenario["source_realization_id"] = row["source_realization_id"]
+                    scenario["base_case_version"] = self.system.base_case_hash
+                    scenario["scenario_admission_mode"] = self.admission_mode
+                record(scenario, source)
             except ScenarioRejected as rejection:
                 self._record_skip(family, source, rejection)
         return built
@@ -3099,8 +3450,6 @@ class Round0ScenarioGenerator:
             return rows, multi_builder
         if family == "parameter":
             return corpus.get("parameter_error", []), self._parameter_scenario
-        if family == "harmonic":
-            return corpus.get("harmonic_anomaly", []), self._harmonic_scenario
         if family == "hif":
             return self._hif_rows(), self._hif_scenario
         if family == "three_phase_unbalance":
@@ -3151,12 +3500,14 @@ class Round0ScenarioGenerator:
             skip_reasons[entry["reason"]] = skip_reasons.get(entry["reason"], 0) + 1
         return {
             "seed": self.seed,
+            "system": self.system.to_manifest(),
+            "admission_mode": self.admission_mode,
             "chi2_alpha": self.chi2_alpha,
             "chi2_limit": self.chi2_limit,
             "source_partition": copy.deepcopy(self._source_partition_metadata),
             "parameter_ranking_admission": {
                 "contract": PARAMETER_RANKING_CONTRACT,
-                "enforced": self._enforce_parameter_ranking_dominance,
+                "enforced": self._enforce_parameter_ranking_dominance and self.validate and self.admission_mode == "recoverable",
                 "threshold": self.parameter_ranking_dominance_threshold,
             },
             "measurement_error_floor_sigma": self.min_measurement_error_sigma,

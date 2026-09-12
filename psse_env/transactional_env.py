@@ -44,6 +44,7 @@ from .actions import (
     unexplained_signatures,
 )
 from .oracle.candidate_quality import CandidateAssessment, CandidateDisposition, CandidateQualityOracle
+from .oracle.anomaly_evidence import normalized_residual_alarm
 from .oracle.expert_types import (
     matching_evidence_codes,
     recovery_record_applies_to_state,
@@ -329,29 +330,48 @@ def _semantic_correction_signature(action: Mapping[str, Any] | str) -> str | Non
         if group_indices is not None:
             arguments["suspect_group"] = sorted(group_indices)
     else:
-        branch_keys = [
+        numeric_keys = [
             key
-            for key in ("branch_row0", "line_index1", "line_index", "branch_id", "cb_name")
+            for key in ("branch_row0", "line_index1", "line_index")
             if arguments.get(key) is not None
         ]
-        if len(branch_keys) != 1:
+        named_keys = [
+            key for key in ("branch_id", "cb_name") if arguments.get(key) is not None
+        ]
+        # One numeric row, or one name; a breaker name may ride with the one
+        # numeric row it affects in the bus-branch model.
+        if len(numeric_keys) > 1 or len(named_keys) > 1:
             return None
-        branch_key = branch_keys[0]
-        branch_value = arguments[branch_key]
-        if branch_key in {"branch_row0", "line_index1", "line_index"}:
+        if numeric_keys and named_keys and named_keys != ["cb_name"]:
+            return None
+        if not numeric_keys and not named_keys:
+            return None
+        breaker_name: str | None = None
+        if numeric_keys:
+            branch_key = numeric_keys[0]
+            branch_value = arguments[branch_key]
             if not isinstance(branch_value, int) or isinstance(branch_value, bool):
                 return None
             row0 = branch_value if branch_key == "branch_row0" else branch_value - 1
             if row0 < 0:
                 return None
             canonical_target = ("branch_row0", row0)
+            if named_keys:
+                raw_name = arguments["cb_name"]
+                if not isinstance(raw_name, str) or not raw_name.strip():
+                    return None
+                breaker_name = raw_name.strip()
         else:
+            branch_key = named_keys[0]
+            branch_value = arguments[branch_key]
             if not isinstance(branch_value, str) or not branch_value.strip():
                 return None
             canonical_target = (branch_key, branch_value.strip())
         for key in ("branch_row0", "line_index1", "line_index", "branch_id", "cb_name"):
             arguments.pop(key, None)
         arguments[canonical_target[0]] = canonical_target[1]
+        if breaker_name is not None:
+            arguments["cb_name"] = breaker_name
 
         if tool == CORRECT_TOPOLOGY:
             statuses = [
@@ -718,9 +738,18 @@ class TransactionalPSSEEnv:
                 "anomaly_breadth": wls.get("anomaly_breadth"),
                 "dominant_residual_block": wls.get("dominant_residual_block"),
             }
+            for key in (
+                "normalized_residual_alarm",
+                "normalized_residual_threshold",
+                "max_normalized_residual",
+                "chi_square_alarm",
+            ):
+                if key in wls:
+                    contexts["wls"][key] = wls[key]
         return summary
 
     _EVIDENCE_CHANNEL_KEYS = (
+        "substation_telemetry",
         "harmonic_measurements",
         "parameter_scans",
         "hif_scan_window",
@@ -1427,6 +1456,8 @@ class TransactionalPSSEEnv:
                 )
             except (TypeError, ValueError):
                 score_resolved = False
+            residual_alarm = normalized_residual_alarm(state)
+            score_resolved = score_resolved and not residual_alarm
             accepted_corrections = state.get("accepted_corrections") or []
             if accepted_corrections:
                 raise ValueError(
@@ -1436,7 +1467,7 @@ class TransactionalPSSEEnv:
             terminal_field = None
             terminal_field = (
                 "no_material_anomaly_remaining"
-                if state.get("no_material_anomaly_remaining")
+                if state.get("no_material_anomaly_remaining") and not residual_alarm
                 else "remaining_anomaly_score"
                 if score_resolved
                 else None
@@ -1733,6 +1764,7 @@ class TransactionalPSSEEnv:
             and POST_CORRECTION_CONFIRMATION_SIGNATURE in unresolved
             and not terminal_explanation_signatures(unresolved)
             and not score_unresolved
+            and not normalized_residual_alarm(summary)
         )
         if request in {
             RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
@@ -2422,8 +2454,10 @@ class TransactionalPSSEEnv:
             return metrics
         return None
 
-    def _latest_successful_wls_score(self, state_id: str) -> float | None:
-        """Return the latest observable anomaly score bound to ``state_id``."""
+    def _latest_successful_wls_score(
+        self, state_id: str, *, metric: str = "remaining_anomaly_score"
+    ) -> float | None:
+        """Return the latest observable WLS metric bound to ``state_id``."""
         if not state_id:
             return None
         for event in reversed(self.history):
@@ -2440,7 +2474,13 @@ class TransactionalPSSEEnv:
             metrics = output.get("tool_metrics")
             if not isinstance(metrics, Mapping):
                 return None
-            value = metrics.get("remaining_anomaly_score")
+            if metric != "remaining_anomaly_score" and (
+                str(metrics.get("state_id")) != state_id
+                or str(metrics.get("state_hash")) != str(self.store.state_hash(state_id))
+                or not _observable_provenance_source(metrics.get("evidence_source"))
+            ):
+                return None
+            value = metrics.get(metric)
             try:
                 return None if value is None else float(value)
             except (TypeError, ValueError):
@@ -3247,13 +3287,30 @@ class TransactionalPSSEEnv:
             source_action = state_payload.get("source_action") or action
             parent_score = self._latest_successful_wls_score(str(parent_id or ""))
             candidate_score = metrics.get("remaining_anomaly_score")
+            dual_anomaly_test = (
+                "normalized_residual_alarm" in metrics
+                and metrics.get("normalized_residual_threshold") is not None
+            )
+            parent_progress_score = parent_score
+            candidate_progress_score = candidate_score
+            if dual_anomaly_test:
+                # The maximum of two alarm ratios is useful for stopping, but
+                # its change is not a WLS objective reduction. Keep established
+                # partial-repair progress floors on the same J-based scale.
+                parent_progress_score = self._latest_successful_wls_score(
+                    str(parent_id or ""), metric="chi_square_statistic"
+                )
+                candidate_progress_score = metrics.get("chi_square_statistic")
             try:
-                if parent_score is not None and candidate_score is not None:
-                    denominator = max(abs(float(parent_score)), 1e-12)
-                    metrics.setdefault(
-                        "global_progress",
-                        (float(parent_score) - float(candidate_score)) / denominator,
-                    )
+                if parent_progress_score is not None and candidate_progress_score is not None:
+                    denominator = max(abs(float(parent_progress_score)), 1e-12)
+                    progress = (float(parent_progress_score) - float(candidate_progress_score)) / denominator
+                    if dual_anomaly_test:
+                        metrics["global_progress"] = progress
+                        metrics["global_progress_basis"] = "chi_square_statistic"
+                    else:
+                        metrics.setdefault("global_progress", progress)
+                if parent_score is not None:
                     metrics.setdefault("parent_anomaly_score", float(parent_score))
             except (TypeError, ValueError, OverflowError):
                 pass
@@ -3858,6 +3915,15 @@ class TransactionalPSSEEnv:
                     explicit_resolution = float(score) < float(threshold)
                 except (TypeError, ValueError):
                     explicit_resolution = None
+        residual_alarm = (
+            normalized_residual_alarm(metrics)
+            if "normalized_residual_alarm" in metrics
+            else normalized_residual_alarm(
+                self._latest_bound_successful_tool_metrics((RUN_WLS, VERIFY_CANDIDATE))
+            )
+        )
+        if residual_alarm:
+            explicit_resolution = False
         if explicit_resolution is not None:
             self.context_flags["no_material_anomaly_remaining"] = bool(explicit_resolution)
             self._set_semantic_provenance("no_material_anomaly_remaining", source)
@@ -3885,6 +3951,13 @@ class TransactionalPSSEEnv:
             statistically_quiescent = bool(
                 self.context_flags.get("no_material_anomaly_remaining")
             )
+        if residual_alarm:
+            self.context_flags["unresolved_signatures"] = [
+                signature
+                for signature in self.context_flags.get("unresolved_signatures") or []
+                if signature != POST_CORRECTION_CONFIRMATION_SIGNATURE
+            ]
+            return
         if not statistically_quiescent:
             return
 
@@ -3959,6 +4032,8 @@ class TransactionalPSSEEnv:
         ) or (
             score is not None and threshold is not None and score < threshold
         )
+        residual_alarm = normalized_residual_alarm(metrics)
+        resolved = resolved and not residual_alarm
         anomaly_remains = any(
             metrics.get(key) is False
             for key in (
@@ -3968,7 +4043,7 @@ class TransactionalPSSEEnv:
             )
         ) or (
             score is not None and threshold is not None and score >= threshold
-        )
+        ) or residual_alarm
         physical_ok = metrics.get("physical_constraints_ok") is True or (
             any(
                 metrics.get(key) is True

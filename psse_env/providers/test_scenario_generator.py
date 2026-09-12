@@ -25,6 +25,7 @@ from psse_env.providers.scenario_generator import (
     ScenarioRejected,
     SYNTHESIZED_MEASUREMENT_CANONICALIZATION_CONTRACT,
     UNBALANCE_CURRENT_SIGNATURE,
+    SYNTHESIZED_LOAD_SCALE_RANGE,
     UNBALANCE_SIGNATURE,
     _canonicalize_synthesized_measurement_vector,
 )
@@ -2343,3 +2344,59 @@ class BranchCurrentChannelPropagationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SynthesizedFamilyOperatingPointTests(unittest.TestCase):
+    """Synthesized families must not be identifiable by dispatch, load or noise."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.generator = Round0ScenarioGenerator(seed=20260910)
+        cls.scenarios = cls.generator.build({"topology": 1, "harmonic": 1})
+        cls.by_family = {row["scenario_family"]: row for row in cls.scenarios}
+
+    def test_topology_root_is_a_node_breaker_switch_error(self) -> None:
+        fault = self.by_family["topology"]["true_topology_errors"][0]
+        self.assertEqual(fault["topology_model_id"], "ieee14_full_schematic_v1")
+        self.assertTrue(str(fault["cb_name"]).startswith("CB_"))
+        self.assertEqual(fault["physical_effect"], "dangling_line_terminal")
+        self.assertTrue(fault["reported_cb_closed"])
+        self.assertFalse(fault["true_cb_closed"])
+        # The bus-branch fix is still the branch at the isolated terminal.
+        self.assertEqual(int(fault["expected_status"]), 0)
+        self.assertEqual(int(fault["line_index1"]), int(fault["branch_row0"]) + 1)
+
+    def test_synthesized_roots_share_the_corpus_operating_point_contract(self) -> None:
+        low, high = SYNTHESIZED_LOAD_SCALE_RANGE
+        topology = self.by_family["topology"]["true_topology_errors"][0]
+        harmonic = self.by_family["harmonic"]["hidden_truth"]["true_harmonic_errors"][0]
+        for fault in (topology, harmonic):
+            self.assertEqual(fault["operating_point"], "ac_opf")
+            self.assertGreaterEqual(float(fault["load_scale"]), low)
+            self.assertLessEqual(float(fault["load_scale"]), high)
+        self.assertEqual(self.generator.topology_noise_scale, 1.0)
+        self.assertEqual(self.by_family["harmonic"]["source_tier"], "physics_synthesized")
+
+    def test_switch_identity_never_reaches_policy_visible_fields(self) -> None:
+        scenario = self.by_family["topology"]
+        cb_name = scenario["true_topology_errors"][0]["cb_name"]
+        # The substation channel and the reported-status inventory name every
+        # breaker of the model by construction; the reported statuses must be
+        # the schematic-normal ones so nothing there singles out the true one.
+        metadata = dict(scenario["metadata"])
+        reported = metadata.pop("reported_breaker_status")
+        telemetry = metadata.pop("substation_telemetry")
+        from Transmission.ieee14_full_substation import status_labels
+        from Transmission.ieee14_full_topology import build_full_topology
+
+        self.assertEqual(reported, status_labels(build_full_topology()))
+        self.assertEqual(set(telemetry["cb_p"]), set(reported))
+        visible = json.dumps(
+            {
+                key: (metadata if key == "metadata" else value)
+                for key, value in scenario.items()
+                if key != "true_topology_errors"
+            },
+            default=str,
+        )
+        self.assertNotIn(cb_name, visible)

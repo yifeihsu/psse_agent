@@ -36,6 +36,8 @@ import re
 import tempfile
 from typing import Any, Mapping, Sequence
 
+import numpy as np
+
 from hif_search_limits import validate_hif_search_limits
 from psse_env.actions import (
     AMBIGUOUS_BRANCH_CANDIDATES_REQUEST,
@@ -441,6 +443,9 @@ class MatpowerDeploymentProviders:
         residual_threshold: float = 3.0,
         lambda_threshold: float = 3.0,
         chi2_alpha: float = 0.05,
+        normalized_residual_threshold: float | None = None,
+        breaker_candidate_count: int = 8,
+        min_breaker_flip_progress: float = 0.5,
         derived_case_dir: str | None = None,
         max_correction_iterations: int = 2,
         error_tolerance: float = 1e-3,
@@ -469,6 +474,31 @@ class MatpowerDeploymentProviders:
         self.residual_threshold = float(residual_threshold)
         self.lambda_threshold = float(lambda_threshold)
         self.chi2_alpha = float(chi2_alpha)
+        if not math.isfinite(self.chi2_alpha) or not 0.0 < self.chi2_alpha < 1.0:
+            raise ValueError("chi2_alpha must be finite and strictly between 0 and 1")
+        # Separate the system-level alarm from the 3-sigma candidate screening
+        # cutoff. None preserves historical chi-square-only experiments.
+        self.normalized_residual_threshold = (
+            None if normalized_residual_threshold is None
+            else float(normalized_residual_threshold)
+        )
+        if self.normalized_residual_threshold is not None and (
+            not math.isfinite(self.normalized_residual_threshold)
+            or self.normalized_residual_threshold <= 0.0
+        ):
+            raise ValueError("normalized_residual_threshold must be finite and positive")
+        # How many top-ranked breakers of the node/breaker multiplier test are
+        # confirmed by re-estimation and offered to the bus-branch screening.
+        self.breaker_candidate_count = int(breaker_candidate_count)
+        if self.breaker_candidate_count < 1:
+            raise ValueError("breaker_candidate_count must be positive")
+        # When no single breaker flip leaves the substation estimate clean (another
+        # fault remains), a flip is still offered if it removes at least this
+        # share of the node/breaker chi-square; the operator-model screening
+        # then decides between a partial and a final repair.
+        self.min_breaker_flip_progress = float(min_breaker_flip_progress)
+        if not 0.0 < self.min_breaker_flip_progress <= 1.0:
+            raise ValueError("min_breaker_flip_progress must lie in (0, 1]")
         self.derived_case_dir = str(
             derived_case_dir
             or os.path.join(tempfile.gettempdir(), "psse_derived_cases")
@@ -823,6 +853,7 @@ class MatpowerDeploymentProviders:
         nl: int,
         *,
         candidate_case: Mapping[str, Any] | None = None,
+        candidate_metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Observable target-progress evidence for a candidate verification.
 
@@ -896,6 +927,22 @@ class MatpowerDeploymentProviders:
             ):
                 return None
             topology_status_matches = candidate_status == requested_status
+            # A breaker-level correction is fixed only when the derived case
+            # records that exactly the requested breaker produced the status.
+            requested_breaker = arguments.get("cb_name")
+            breaker_matches: bool | None = None
+            if requested_breaker is not None:
+                last = (
+                    candidate_metadata.get("last_topology_correction")
+                    if isinstance(candidate_metadata, Mapping)
+                    else None
+                )
+                breaker_matches = bool(
+                    isinstance(last, Mapping)
+                    and str(last.get("cb_name") or "").strip()
+                    == str(requested_breaker).strip()
+                )
+                topology_status_matches = bool(topology_status_matches and breaker_matches)
 
         if target_measurements:
             target_values = [
@@ -959,6 +1006,9 @@ class MatpowerDeploymentProviders:
                     ),
                 }
             )
+            if arguments.get("cb_name") is not None:
+                evidence["topology_target_breaker"] = str(arguments["cb_name"]).strip()
+                evidence["topology_target_breaker_matches_requested"] = bool(breaker_matches)
         return evidence
 
     def _steady_state_physical_evidence(
@@ -1207,6 +1257,43 @@ class MatpowerDeploymentProviders:
             "steady_state_physical_evidence": evidence,
         }
 
+    def _wls_detection_metrics(self, solved: Mapping[str, Any]) -> dict[str, Any]:
+        """Apply the configured global and local tests to one observable solve."""
+        payload = solved["payload"]
+        residuals = [float(value) for value in payload.get("r") or []]
+        dof = max(1, len(residuals) - (2 * int(solved["nb"]) - 1))
+        statistic = float(payload.get("global_residual_sum") or 0.0)
+        threshold = float(chi2_threshold(dof, self.chi2_alpha))
+        if (not residuals or any(not math.isfinite(value) for value in residuals)
+            or not math.isfinite(statistic) or statistic < 0.0
+            or not math.isfinite(threshold) or threshold <= 0.0):
+            raise ValueError("WLS anomaly evidence must be finite with nonempty residuals")
+        maximum = max(abs(value) for value in residuals)
+        residual_limit = self.normalized_residual_threshold
+        chi_alarm = statistic >= threshold
+        residual_alarm = residual_limit is not None and maximum >= residual_limit
+        chi_ratio = statistic / threshold
+        score = max(chi_ratio, maximum / residual_limit) if residual_limit is not None else chi_ratio
+        return {
+            "chi_square_statistic": statistic,
+            "chi_square_threshold": threshold,
+            "chi_square_dof": dof,
+            "chi_square_alpha": self.chi2_alpha,
+            "chi_square_ratio": chi_ratio,
+            "chi_square_alarm": bool(chi_alarm),
+            "max_normalized_residual": maximum,
+            "normalized_residual_threshold": residual_limit,
+            "normalized_residual_alarm": bool(residual_alarm),
+            "anomaly_detection_rule": (
+                "chi_square_or_normalized_residual" if residual_limit is not None
+                else "chi_square_only"
+            ),
+            "anomaly_threshold": 1.0,
+            "remaining_anomaly_score": score,
+            "no_material_anomaly_remaining": not (chi_alarm or residual_alarm),
+            "globally_resolved": not (chi_alarm or residual_alarm),
+        }
+
     def run_wls(self, state: Mapping[str, Any]) -> dict[str, Any]:
         try:
             solved = self._solve(state)
@@ -1221,12 +1308,15 @@ class MatpowerDeploymentProviders:
             )
         residuals = [float(value) for value in payload.get("r") or []]
         nb, nl = solved["nb"], solved["nl"]
-        state_count = 2 * nb - 1
-        dof = max(1, len(residuals) - state_count)
-        statistic = float(payload.get("global_residual_sum") or 0.0)
-        threshold = float(chi2_threshold(dof, self.chi2_alpha))
+        try:
+            detection = self._wls_detection_metrics(solved)
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            return self._failure("wls_evidence_error", str(exc))
+        statistic = detection["chi_square_statistic"]
+        threshold = detection["chi_square_threshold"]
+        resolved = detection["no_material_anomaly_remaining"]
         summary = summarize_wls_payload(
-            payload,
+            {**payload, "global_residual_threshold": threshold},
             {"nb": nb, "branch_info": payload.get("branch_info") or []},
             solved["index_map"],
         )
@@ -1254,7 +1344,7 @@ class MatpowerDeploymentProviders:
         # not remove the event from the network.  The solve still reports its
         # metrics but mints no signatures while such a sensor signature stands.
         waveform_sensor = waveform_anomaly_signatures(preserved)
-        if statistic >= threshold and not waveform_sensor:
+        if not resolved and not waveform_sensor:
             lambda_values = [float(value) for value in payload.get("lambdaN") or []]
             max_abs_lambda = max((abs(value) for value in lambda_values), default=0.0)
             # Classical Lagrangian discrimination: a gross measurement error
@@ -1298,10 +1388,7 @@ class MatpowerDeploymentProviders:
             "state_estimation_converged": True,
             "converged": True,
             "wls_objective": statistic,
-            "chi_square_statistic": statistic,
-            "chi_square_threshold": threshold,
-            "chi_square_dof": dof,
-            "max_normalized_residual": max_abs_residual,
+            **detection,
             # Breadth of the anomaly: the share of normalized residuals above
             # the outlier threshold, and the channel block of the largest one.
             # A waveform-distorted operator vector is inconsistent with the
@@ -1312,10 +1399,6 @@ class MatpowerDeploymentProviders:
             **_residual_breadth_metrics(
                 residuals, solved["index_map"], threshold=self.residual_threshold
             ),
-            "anomaly_threshold": 1.0,
-            "remaining_anomaly_score": statistic / threshold if threshold else None,
-            "no_material_anomaly_remaining": bool(statistic < threshold),
-            "globally_resolved": bool(statistic < threshold),
             "unresolved_signatures": _dedupe(signatures),
             "wls_summary": summary,
         }
@@ -1328,9 +1411,9 @@ class MatpowerDeploymentProviders:
                 [float(value) for value in payload.get("lambdaN") or []],
                 nl,
                 candidate_case=solved["ppc"],
+                candidate_metadata=self._metadata(state),
             )
             if target_evidence is not None:
-                resolved = bool(statistic < threshold)
                 metrics.update(target_evidence)
                 metrics["post_action_resolved"] = resolved
                 metrics["globally_resolved"] = resolved and target_evidence["target_fixed"]
@@ -1494,6 +1577,8 @@ class MatpowerDeploymentProviders:
         statistic = float(payload.get("global_residual_sum") or 0.0)
         dof = max(1, len(residuals) - (2 * int(solved["nb"]) - 1))
         threshold = float(chi2_threshold(dof, self.chi2_alpha))
+        detection = self._wls_detection_metrics(solved)
+        anomaly_unresolved = not detection["no_material_anomaly_remaining"]
         colocated_accepted_indices: set[int] = set()
         if accepted_branch_rows:
             for index in accepted_indices:
@@ -1522,6 +1607,7 @@ class MatpowerDeploymentProviders:
         near_threshold_refinement_override = bool(
             dominant_unaccepted_target
             and anomaly_ratio <= _COUPLED_REFINEMENT_MAX_ANOMALY_RATIO
+            and not detection["normalized_residual_alarm"]
             and remaining_budget >= _COUPLED_REFINEMENT_MIN_REMAINING_BUDGET
         )
         refinement_already_accepted = bool(
@@ -1545,7 +1631,7 @@ class MatpowerDeploymentProviders:
         # rewrite while still prioritizing clear new faults.
         coupled_refinement_ready = bool(
             len(refinement_targets) >= 2
-            and statistic >= threshold
+            and anomaly_unresolved
             and (
                 not dominant_unaccepted_target
                 or near_threshold_refinement_override
@@ -1561,7 +1647,7 @@ class MatpowerDeploymentProviders:
         post_branch_refinement_ready = bool(
             accepted_branch_rows
             and refinement_targets
-            and statistic >= threshold
+            and anomaly_unresolved
             and not refinement_already_accepted
         )
         refinement_ready = coupled_refinement_ready or post_branch_refinement_ready
@@ -1602,7 +1688,7 @@ class MatpowerDeploymentProviders:
         branch_route_screening = self._post_measurement_branch_route_screening(
             state,
             accepted_indices=accepted_indices,
-            anomaly_unresolved=statistic >= threshold,
+            anomaly_unresolved=anomaly_unresolved,
         )
         branch_routes_exhausted = bool(
             set(branch_route_screening) == {"parameter", "topology"}
@@ -1696,6 +1782,9 @@ class MatpowerDeploymentProviders:
             ),
             "chi_square_statistic": statistic,
             "chi_square_threshold": threshold,
+            "normalized_residual_threshold": detection["normalized_residual_threshold"],
+            "max_normalized_residual": detection["max_normalized_residual"],
+            "normalized_residual_alarm": detection["normalized_residual_alarm"],
         }
 
     def _post_measurement_branch_route_screening(
@@ -1908,7 +1997,9 @@ class MatpowerDeploymentProviders:
                     }
                 )
                 return None, verification, record
-            candidate_score = verification.get("remaining_anomaly_score")
+            # Progress stays a reduction in total weighted residual energy;
+            # a different meter can dominate the maximum after a valid repair.
+            candidate_score = verification.get("chi_square_ratio")
             try:
                 denominator = max(abs(float(parent_score)), 1e-12)
                 verification["global_progress"] = (
@@ -2207,6 +2298,11 @@ class MatpowerDeploymentProviders:
             return self._failure("topology_context_input_error", f"{type(exc).__name__}: {exc}")
         if not solved["payload"].get("success"):
             return self._failure("topology_context_failure", solved["payload"].get("error"))
+        binding = self._topology_binding(state)
+        if binding is not None:
+            if binding.get("error_code"):
+                return self._failure(binding["error_code"], binding.get("error_detail"))
+            return self._node_breaker_topology_context(state, solved, binding)
         findings = self._lambda_findings(solved)
         state_id = str(state.get("state_id") or "")
         branch = solved["ppc"]["branch"]
@@ -2261,7 +2357,7 @@ class MatpowerDeploymentProviders:
                         },
                     }
                 )
-        parent_score = self._remaining_anomaly_score(solved)
+        parent_score = self._wls_detection_metrics(solved)["chi_square_ratio"]
         supported: list[dict[str, Any]] = []
         candidate_screening: list[dict[str, Any]] = []
         for action in proposed:
@@ -2320,19 +2416,514 @@ class MatpowerDeploymentProviders:
             ),
         }
 
+    # ------------------------------------------------ node/breaker topology
+
+    _NODE_BREAKER_MODEL: Any = None
+
+    @classmethod
+    def _node_breaker_model(cls):
+        if cls._NODE_BREAKER_MODEL is None:
+            from Transmission.ieee14_full_topology import build_full_topology
+
+            cls._NODE_BREAKER_MODEL = build_full_topology()
+        return cls._NODE_BREAKER_MODEL
+
+    def _topology_binding(self, state: Mapping[str, Any]) -> dict[str, Any] | None:
+        """The node/breaker model, reported breaker statuses and substation telemetry
+        bound to a state, or None when the state carries no such channel.
+
+        The electrical reference is the state's current case with every physical
+        branch in service: line statuses are derived from breakers here, while an
+        accepted parameter correction must keep its corrected impedances.
+        """
+        metadata = self._metadata(state)
+        telemetry = metadata.get("substation_telemetry")
+        reported = metadata.get("reported_breaker_status")
+        if not isinstance(telemetry, Mapping) or not isinstance(reported, Mapping):
+            return None
+        from Transmission.ieee14_full_topology import MODEL_ID
+
+        model = self._node_breaker_model()
+        declared = telemetry.get("model_id") or metadata.get("topology_model_id")
+        if declared is not None and str(declared) != MODEL_ID:
+            return {
+                "error_code": "topology_model_mismatch",
+                "error_detail": f"state telemetry declares {declared!r}; provider model is {MODEL_ID!r}",
+            }
+        fingerprint = telemetry.get("model_fingerprint") or metadata.get("topology_model_fingerprint")
+        if fingerprint is not None and str(fingerprint) != model.fingerprint():
+            return {
+                "error_code": "topology_model_mismatch",
+                "error_detail": "state telemetry fingerprint differs from the provider's model",
+            }
+        try:
+            reference = copy.deepcopy(_load_python_case(self._case_path(state)))
+        except Exception as exc:
+            return {
+                "error_code": "topology_context_input_error",
+                "error_detail": f"{type(exc).__name__}: {exc}",
+            }
+        if reference["branch"].shape[1] > 10:
+            reference["branch"][:, 10] = 1.0
+        meters: dict[int, str] = {}
+        raw_meters = metadata.get("operator_voltage_meter_nodes")
+        if isinstance(raw_meters, Mapping):
+            for key, node in raw_meters.items():
+                try:
+                    meters[int(key)] = str(node)
+                except (TypeError, ValueError):
+                    continue
+        return {
+            "model": model,
+            "reference": reference,
+            "reported_labels": {str(name): str(value) for name, value in reported.items()},
+            "telemetry": telemetry,
+            "meter_nodes": meters,
+        }
+
+    def _synchronized_telemetry(
+        self, state: Mapping[str, Any], binding: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Substation telemetry with the meters shared with the operator vector
+        overwritten by the state's current measurements.
+
+        The operator's bus voltage, bus injection and terminal-flow channels are
+        readings of the same physical meters, so an accepted meter correction (or
+        a gross meter error) must reach the node/breaker estimator through them.
+        """
+        telemetry = copy.deepcopy(dict(binding["telemetry"]))
+        try:
+            z = self._measurements(state)
+        except ValueError:
+            return telemetry
+        model = binding["model"]
+        nb, nl = 14, 20
+        if len(z) != 3 * nb + 4 * nl:
+            return telemetry
+        node_vm = dict(telemetry.get("node_vm") or {})
+        node_p = dict(telemetry.get("node_pinj") or {})
+        node_q = dict(telemetry.get("node_qinj") or {})
+        for b in range(1, nb + 1):
+            meter = binding["meter_nodes"].get(b)
+            if meter in node_vm and float(node_vm[meter]) > 0.0:
+                node_vm[meter] = float(z[b - 1])
+            equipment = {
+                model.equipment[table][b]
+                for table in ("gen", "load")
+                if model.equipment[table][b] in node_p
+            }
+            if len(equipment) == 1:
+                node = equipment.pop()
+                node_p[node] = float(z[nb + b - 1])
+                node_q[node] = float(z[2 * nb + b - 1])
+        telemetry["node_vm"] = node_vm
+        telemetry["node_pinj"] = node_p
+        telemetry["node_qinj"] = node_q
+        base = 3 * nb
+        telemetry["branch_pf"] = [float(v) for v in z[base : base + nl]]
+        telemetry["branch_qf"] = [float(v) for v in z[base + nl : base + 2 * nl]]
+        telemetry["branch_pt"] = [float(v) for v in z[base + 2 * nl : base + 3 * nl]]
+        telemetry["branch_qt"] = [float(v) for v in z[base + 3 * nl : base + 4 * nl]]
+        return telemetry
+
+    @staticmethod
+    def _breaker_effect(
+        model: Any,
+        reference: Mapping[str, Any],
+        reported_labels: Mapping[str, str],
+        cb_name: str,
+        new_closed: bool,
+    ) -> dict[str, Any]:
+        """Bus-branch consequence of changing one reported breaker status.
+
+        Only a change that isolates or reconnects exactly one line terminal maps
+        onto the operator's 14-bus model as a branch status; anything else (a bus
+        split or merge, an islanded bay, or no partition change) is reported by
+        name and refused by the executor.
+        """
+        from Transmission.ieee14_full_substation import (
+            injection_metered_nodes,
+            status_map_from_labels,
+        )
+
+        old_map = status_map_from_labels(reported_labels)
+        new_map = dict(old_map)
+        new_map[cb_name] = bool(new_closed)
+        old_groups = set(model.components(old_map))
+        new_groups = set(model.components(new_map))
+        if old_groups == new_groups:
+            return {"effect": "equivalent"}
+        branch = np.asarray(reference["branch"], dtype=float)
+        bus = np.asarray(reference["bus"], dtype=float)
+        row_of: dict[tuple[int, int], int] = {}
+        for k in range(branch.shape[0]):
+            f, t = int(branch[k, 0]), int(branch[k, 1])
+            row_of[(f, t)] = k
+            row_of[(t, f)] = k
+        terminal_rows = {
+            node: row_of[(f, t)]
+            for (f, t), node in model.terminals.items()
+            if (f, t) in row_of
+        }
+        equipment = set(injection_metered_nodes(model, reference))
+        for b, node in model.equipment["shunt"].items():
+            if bus[int(b) - 1, 4] != 0 or bus[int(b) - 1, 5] != 0:
+                equipment.add(node)
+
+        def contents(group):
+            rows = sorted({terminal_rows[n] for n in group if n in terminal_rows})
+            return rows, sorted(n for n in group if n in equipment)
+
+        removed = old_groups - new_groups
+        added = new_groups - old_groups
+        if len(new_groups) > len(old_groups):
+            if len(added) != 2 or len(removed) != 1:
+                return {"effect": "bus_split"}
+            parts = [contents(g) for g in added]
+            minor = min(parts, key=lambda c: (len(c[0]) + len(c[1]), len(c[0])))
+            if len(minor[0]) == 1 and not minor[1]:
+                return {
+                    "effect": "dangling_line_terminal",
+                    "branch_row0": int(minor[0][0]),
+                    "branch_status": 0,
+                }
+            if not minor[0]:
+                return {"effect": "unsupplied_island" if minor[1] else "empty_busbar"}
+            return {"effect": "bus_split"}
+        if len(new_groups) < len(old_groups):
+            if len(removed) != 2 or len(added) != 1:
+                return {"effect": "merge"}
+            parts = [contents(g) for g in removed]
+            minor = min(parts, key=lambda c: (len(c[0]) + len(c[1]), len(c[0])))
+            if len(minor[0]) == 1 and not minor[1]:
+                return {
+                    "effect": "reconnect_line_terminal",
+                    "branch_row0": int(minor[0][0]),
+                    "branch_status": 1,
+                }
+            return {"effect": "merge"}
+        return {"effect": "reassignment"}
+
+    def _correct_breaker_status(
+        self, state: Mapping[str, Any], arguments: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Set one reported breaker status and derive the operator's bus-branch case."""
+        from Transmission.ieee14_full_topology import parse_status
+
+        binding = self._topology_binding(state)
+        if binding is None:
+            return self._failure(
+                "topology_correction_breaker_unsupported",
+                "the state carries no node/breaker binding "
+                "(substation telemetry and reported breaker statuses)",
+            )
+        if binding.get("error_code"):
+            return self._failure(binding["error_code"], binding.get("error_detail"))
+        cb_name = str(arguments.get("cb_name") or "").strip()
+        labels = binding["reported_labels"]
+        if cb_name not in labels:
+            return self._failure(
+                "topology_correction_unknown_breaker",
+                f"{cb_name!r} is not a breaker of the bound model",
+            )
+        status = arguments.get("status", arguments.get("expected_status"))
+        if arguments.get("desired_status") is not None and status is None:
+            status = arguments["desired_status"]
+        if status is None:
+            return self._failure(
+                "topology_correction_target_missing", "correct_topology requires a status"
+            )
+        try:
+            new_closed = parse_status(status)
+        except ValueError:
+            return self._failure(
+                "topology_correction_invalid_status",
+                f"status must be 0/1 or open/closed, got {status!r}",
+            )
+        new_label = "closed" if new_closed else "open"
+        try:
+            current_closed = parse_status(labels[cb_name])
+        except ValueError:
+            return self._failure(
+                "topology_correction_input_error",
+                f"unreadable reported status for {cb_name}",
+            )
+        if current_closed == new_closed:
+            return self._failure(
+                "topology_correction_no_change", f"{cb_name} is already reported {new_label}"
+            )
+        model = binding["model"]
+        effect = self._breaker_effect(model, binding["reference"], labels, cb_name, new_closed)
+        if effect["effect"] not in {"dangling_line_terminal", "reconnect_line_terminal"}:
+            return self._failure(
+                "topology_correction_unsupported_effect",
+                f"setting {cb_name} {new_label} would {effect['effect'].replace('_', ' ')}; "
+                "the operator model can represent only a single isolated or "
+                "reconnected line terminal",
+                breaker_effect=effect["effect"],
+            )
+        row0 = int(effect["branch_row0"])
+        branch_status = int(effect["branch_status"])
+        requested_row = None
+        for key in ("branch_row0", "line_index1", "line_index"):
+            if arguments.get(key) is not None:
+                try:
+                    value = int(arguments[key])
+                except (TypeError, ValueError):
+                    return self._failure(
+                        "topology_correction_input_error",
+                        f"invalid {key}={arguments[key]!r}",
+                    )
+                requested_row = value if key == "branch_row0" else value - 1
+        if requested_row is not None and requested_row != row0:
+            return self._failure(
+                "topology_correction_inconsistent_target",
+                f"{cb_name} {new_label} affects line {row0 + 1}, not line {requested_row + 1}",
+                breaker_effect=effect["effect"],
+                line_index=row0 + 1,
+            )
+        try:
+            case_path = self._case_path(state)
+            ppc = _load_python_case(case_path)
+        except Exception as exc:
+            return self._failure(
+                "topology_correction_input_error", f"{type(exc).__name__}: {exc}"
+            )
+        if ppc["branch"].shape[1] <= 10 or not 0 <= row0 < int(ppc["branch"].shape[0]):
+            return self._failure(
+                "topology_correction_unsupported", "case branch matrix cannot carry the status"
+            )
+        current_status = int(float(ppc["branch"][row0][10]))
+        if current_status == branch_status:
+            return self._failure(
+                "topology_correction_no_change",
+                f"branch row {row0} already has status {branch_status}",
+            )
+        updated = copy.deepcopy(ppc)
+        updated["branch"][row0][10] = float(branch_status)
+        tag = re.sub(r"[^A-Za-z0-9_.-]", "_", cb_name)
+        derived_path = self._derived_case(updated, f"topo_{tag}_s{int(new_closed)}")
+        new_labels = dict(labels)
+        new_labels[cb_name] = new_label
+        return {
+            "modification": {
+                "case": derived_path,
+                "metadata_updates": {
+                    "reported_breaker_status": new_labels,
+                    "last_topology_correction": {
+                        "line_index": row0 + 1,
+                        "status": branch_status,
+                        "cb_name": cb_name,
+                        "cb_status": new_label,
+                        "breaker_effect": effect["effect"],
+                    },
+                },
+            },
+            "evidence_source": "deployment_correction:breaker_status",
+            "line_index": row0 + 1,
+            "previous_status": current_status,
+            "new_status": branch_status,
+            "cb_name": cb_name,
+            "cb_previous_status": labels[cb_name],
+            "cb_new_status": new_label,
+            "breaker_effect": effect["effect"],
+        }
+
+    def _node_breaker_topology_context(
+        self,
+        state: Mapping[str, Any],
+        solved: Mapping[str, Any],
+        binding: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Request the substation measurements, run the node/breaker estimator
+        with normalized Lagrange multipliers, confirm the top-ranked breakers by
+        re-estimation, and screen the confirmed breaker flips on the operator
+        model exactly as line hypotheses are screened.
+        """
+        from Transmission.ieee14_full_gse import gse_topology_nlm, screen_breaker_flips
+        from Transmission.ieee14_full_substation import status_map_from_labels
+
+        model = binding["model"]
+        reference = binding["reference"]
+        labels = binding["reported_labels"]
+        state_id = str(state.get("state_id") or "")
+        findings = self._lambda_findings(solved)
+        telemetry = self._synchronized_telemetry(state, binding)
+        reported_map = status_map_from_labels(labels)
+        estimate = gse_topology_nlm(model, reference, reported_map, telemetry)
+        if not estimate.get("success"):
+            return self._failure(
+                "topology_context_gse_failure",
+                "node/breaker estimator did not converge in "
+                f"{estimate.get('iterations')} iterations",
+            )
+        gse_threshold = float(chi2_threshold(max(1, int(estimate["dof"])), self.chi2_alpha))
+        top = estimate["ranking"][: self.breaker_candidate_count]
+        flips = {
+            item["cb_name"]: item
+            for item in screen_breaker_flips(
+                model, reference, reported_map, telemetry, [item["cb_name"] for item in top]
+            )
+        }
+        breaker_findings: list[dict[str, Any]] = []
+        admissible: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        reported_chi_square = float(estimate["chi_square"])
+        for rank, item in enumerate(top, start=1):
+            cb_name = item["cb_name"]
+            flip = flips[cb_name]
+            proposed_closed = flip["proposed_status"] == "closed"
+            effect = self._breaker_effect(model, reference, labels, cb_name, proposed_closed)
+            flip_threshold = float(
+                chi2_threshold(max(1, int(flip["dof"])), self.chi2_alpha)
+            )
+            clean = bool(flip["success"] and flip["chi_square"] < flip_threshold)
+            progress = (
+                (reported_chi_square - float(flip["chi_square"])) / reported_chi_square
+                if flip["success"] and reported_chi_square > 0.0
+                else float("-inf")
+            )
+            representable = effect["effect"] in {
+                "dangling_line_terminal",
+                "reconnect_line_terminal",
+            }
+            finding = {
+                "cb_name": cb_name,
+                "rank": rank,
+                "score": float(item["score"]),
+                "normalized_multipliers": dict(item.get("multipliers") or {}),
+                "reported_status": item["reported_status"],
+                "proposed_status": flip["proposed_status"],
+                "gse_chi_square_after_flip": float(flip["chi_square"]),
+                "gse_threshold_after_flip": flip_threshold,
+                "gse_progress_after_flip": (
+                    float(progress) if math.isfinite(progress) else None
+                ),
+                "flip_explains_substation_measurements": clean,
+                "bus_branch_effect": effect["effect"],
+            }
+            if representable:
+                finding["line_index"] = int(effect["branch_row0"]) + 1
+                finding["branch_status"] = int(effect["branch_status"])
+            breaker_findings.append(finding)
+            if representable and (clean or progress >= self.min_breaker_flip_progress):
+                admissible.append(
+                    (
+                        finding,
+                        {
+                            "tool": CORRECT_TOPOLOGY,
+                            "arguments": {
+                                "state_id": state_id,
+                                "cb_name": cb_name,
+                                "status": int(proposed_closed),
+                                "line_index": int(effect["branch_row0"]) + 1,
+                            },
+                        },
+                    )
+                )
+        # A flip that leaves the substation estimate clean explains everything
+        # and outranks any partial explanation.  Without one (another fault
+        # remains), offer the flips that remove most of the anomaly, best first;
+        # the operator-model screening decides between partial and final.
+        clean_flips = [pair for pair in admissible if pair[0]["flip_explains_substation_measurements"]]
+        if clean_flips:
+            chosen = sorted(clean_flips, key=lambda pair: pair[0]["gse_chi_square_after_flip"])
+        else:
+            chosen = sorted(admissible, key=lambda pair: pair[0]["gse_chi_square_after_flip"])
+        proposed = [action for _, action in chosen]
+        hypothesis_source: dict[str, str] = {
+            finding["cb_name"]: (
+                "node_breaker_nlm_ranking"
+                if finding["flip_explains_substation_measurements"]
+                else "node_breaker_nlm_partial_progress"
+            )
+            for finding, _ in chosen
+        }
+        parent_score = self._wls_detection_metrics(solved)["chi_square_ratio"]
+        supported: list[dict[str, Any]] = []
+        candidate_screening: list[dict[str, Any]] = []
+        for action in proposed:
+            eligible, evidence = self._screen_topology_correction(
+                state, action, parent_score=parent_score
+            )
+            evidence["hypothesis_source"] = hypothesis_source.get(
+                action["arguments"]["cb_name"]
+            )
+            candidate_screening.append(evidence)
+            if eligible:
+                supported.append(action)
+        screening_incomplete = any(
+            item.get("screening_complete") is not True for item in candidate_screening
+        )
+        route_status = (
+            _ROUTE_UNAVAILABLE
+            if screening_incomplete
+            else _ROUTE_ACTIONABLE
+            if supported
+            else _ROUTE_COMPLETE_NEGATIVE
+        )
+        waveform_block = self._waveform_route_block(state)
+        screening_pending = self._screening_pending(state)
+        if waveform_block or screening_pending:
+            supported = []
+            route_status = (
+                _ROUTE_COMPLETE_NEGATIVE if waveform_block else _ROUTE_UNAVAILABLE
+            )
+        inventory = {
+            "node_voltages": len(telemetry.get("node_vm") or {}),
+            "injection_meters": len(telemetry.get("node_pinj") or {}),
+            "terminal_flow_channels": 4 * len(telemetry.get("branch_pf") or []),
+            "breaker_flow_channels": 2 * len(telemetry.get("cb_p") or {}),
+        }
+        return {
+            **self._binding(state),
+            "evidence_source": "deployment_context:node_breaker_nlm_candidate_screened",
+            "context_tool": GET_TOPOLOGY_CONTEXT,
+            "fundamental_route_blocked_by_waveform_anomaly": waveform_block,
+            "three_phase_screening_pending": screening_pending,
+            "substation_measurements_requested": True,
+            "substation_measurement_inventory": inventory,
+            "topology_model_id": str(telemetry.get("model_id") or ""),
+            "node_breaker_estimate": {
+                "method": "generalized_state_estimation_normalized_lagrange_multipliers",
+                "chi_square": float(estimate["chi_square"]),
+                "chi_square_threshold": gse_threshold,
+                "dof": int(estimate["dof"]),
+                "anomalous": bool(estimate["chi_square"] >= gse_threshold),
+                "iterations": int(estimate["iterations"]),
+                "n_measurements": int(estimate["n_measurements"]),
+                "n_constraints": int(estimate["n_constraints"]),
+                "n_dependent_constraints": int(estimate.get("n_dependent_constraints", 0)),
+                "max_normalized_residual": float(estimate.get("max_normalized_residual", 0.0)),
+            },
+            "breaker_findings": breaker_findings,
+            "breaker_candidate_count": int(self.breaker_candidate_count),
+            "finding_count": len(findings),
+            "topology_findings": findings,
+            "supported_corrections": supported,
+            "proposed_correction_count": len(proposed),
+            "screened_correction_count": len(candidate_screening),
+            "topology_candidate_screening": candidate_screening,
+            "enumerated_close_hypotheses": [],
+            "islanding_filtered_lines": [],
+            "route_status": route_status,
+            "route_status_reason": (
+                "candidate_screening_incomplete"
+                if route_status == _ROUTE_UNAVAILABLE
+                else "supported_topology_candidates"
+                if route_status == _ROUTE_ACTIONABLE
+                else "all_breaker_hypotheses_observably_rejected"
+                if breaker_findings
+                else "no_topology_findings"
+            ),
+        }
+
     def _remaining_anomaly_score(self, solved: Mapping[str, Any]) -> float | None:
-        """Return the same normalized chi-square score emitted by ``run_wls``."""
+        """Return the same combined alarm score emitted by ``run_wls``."""
 
         try:
-            residuals = [float(value) for value in solved["payload"].get("r") or []]
-            dof = max(1, len(residuals) - (2 * int(solved["nb"]) - 1))
-            threshold = float(chi2_threshold(dof, self.chi2_alpha))
-            statistic = float(solved["payload"].get("global_residual_sum") or 0.0)
+            return self._wls_detection_metrics(solved)["remaining_anomaly_score"]
         except (KeyError, TypeError, ValueError, OverflowError):
             return None
-        if not math.isfinite(statistic) or not math.isfinite(threshold) or threshold <= 0.0:
-            return None
-        return statistic / threshold
 
     def _screen_topology_correction(
         self,
@@ -2366,6 +2957,8 @@ class MatpowerDeploymentProviders:
             "screening_method": "deployment_candidate_quality_non_mutating",
             "screening_complete": False,
         }
+        if arguments.get("cb_name") is not None:
+            evidence["cb_name"] = str(arguments["cb_name"]).strip()
         try:
             correction = self.correct_topology(state, normalized_action)
             if correction.get("execution_status", "success") != "success":
@@ -2408,6 +3001,8 @@ class MatpowerDeploymentProviders:
                 modification=modification,
             )
             screen_suffix = f"l{line_index}s{status}"
+            if arguments.get("cb_name") is not None:
+                screen_suffix += ":" + str(arguments["cb_name"]).strip()
             candidate.update(
                 {
                     "state_id": (
@@ -2438,7 +3033,7 @@ class MatpowerDeploymentProviders:
                 )
                 return False, evidence
 
-            candidate_score = verification.get("remaining_anomaly_score")
+            candidate_score = verification.get("chi_square_ratio")
             try:
                 if parent_score is not None and candidate_score is not None:
                     denominator = max(abs(float(parent_score)), 1e-12)
@@ -2637,6 +3232,8 @@ class MatpowerDeploymentProviders:
         self, state: Mapping[str, Any], action: Mapping[str, Any]
     ) -> dict[str, Any]:
         arguments = dict(action.get("arguments") or {})
+        if arguments.get("cb_name") is not None:
+            return self._correct_breaker_status(state, arguments)
         try:
             case_path = self._case_path(state)
             ppc = _load_python_case(case_path)
