@@ -324,6 +324,17 @@ def action_targets_private_fault(
     )
     if not targets_match:
         return False
+    if family == "topology":
+        action_breaker = arguments.get("cb_name")
+        fault_breaker = fault.get("cb_name")
+        if (
+            action_breaker is not None
+            and fault_breaker is not None
+            and str(action_breaker).strip() != str(fault_breaker).strip()
+        ):
+            # Same bus-branch row, different switch: the private fault is not
+            # retired by a correction that names the wrong breaker.
+            return False
     if family == "topology" and fault.get("status_field") is not None:
         parent_row = (
             rows[action_row]

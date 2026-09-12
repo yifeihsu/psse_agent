@@ -1,0 +1,1436 @@
+{
+  "model_id": "ieee14_full_schematic_v1",
+  "reviewed_repo_commit": "a5db72c0ac6a84939b4760d8880f94262c0a4fc4",
+  "provenance": "Manual transcription of user-supplied schematic; not an official IEEE breaker inventory.",
+  "assumptions": [
+    "Solid squares are closed; hollow squares are open.",
+    "Buses 10 and 14 are separate normal topological buses within one shared switchyard.",
+    "Bus 7 retains the case14 transformer star-equivalent; bus 8 retains its generator terminal.",
+    "No breakers are invented at 7 or 8; none are visible in the supplied image.",
+    "Bus-1 slack is attached to 1N1; the second arrow is not assigned an invented load.",
+    "Bus-3 generator is at 3B1 and load at 3B2: the arrow types are not labelled in the image.",
+    "Bus-9 shunt is attached to 9|I; no separate shunt bay is drawn.",
+    "Electrical parameters and generator/load quantities come from the supplied reference case, not pixels."
+  ],
+  "nodes": [
+    {
+      "name": "1B1",
+      "planning_bus": 1,
+      "yard": "1",
+      "kind": "busbar",
+      "x": 82,
+      "y": 310
+    },
+    {
+      "name": "1B2",
+      "planning_bus": 1,
+      "yard": "1",
+      "kind": "busbar",
+      "x": 82,
+      "y": 416
+    },
+    {
+      "name": "1N1",
+      "planning_bus": 1,
+      "yard": "1",
+      "kind": "terminal",
+      "x": 58,
+      "y": 342
+    },
+    {
+      "name": "1N2",
+      "planning_bus": 1,
+      "yard": "1",
+      "kind": "terminal",
+      "x": 58,
+      "y": 379
+    },
+    {
+      "name": "1N3",
+      "planning_bus": 1,
+      "yard": "1",
+      "kind": "terminal",
+      "x": 107,
+      "y": 342
+    },
+    {
+      "name": "1N4",
+      "planning_bus": 1,
+      "yard": "1",
+      "kind": "terminal",
+      "x": 107,
+      "y": 379
+    },
+    {
+      "name": "2R1",
+      "planning_bus": 2,
+      "yard": "2",
+      "kind": "ring",
+      "x": 106,
+      "y": 565
+    },
+    {
+      "name": "2R2",
+      "planning_bus": 2,
+      "yard": "2",
+      "kind": "ring",
+      "x": 155,
+      "y": 521
+    },
+    {
+      "name": "2R3",
+      "planning_bus": 2,
+      "yard": "2",
+      "kind": "ring",
+      "x": 202,
+      "y": 521
+    },
+    {
+      "name": "2R4",
+      "planning_bus": 2,
+      "yard": "2",
+      "kind": "ring",
+      "x": 202,
+      "y": 565
+    },
+    {
+      "name": "2R5",
+      "planning_bus": 2,
+      "yard": "2",
+      "kind": "ring",
+      "x": 155,
+      "y": 565
+    },
+    {
+      "name": "3B1",
+      "planning_bus": 3,
+      "yard": "3",
+      "kind": "busbar",
+      "x": 330,
+      "y": 529
+    },
+    {
+      "name": "3B2",
+      "planning_bus": 3,
+      "yard": "3",
+      "kind": "busbar",
+      "x": 330,
+      "y": 602
+    },
+    {
+      "name": "3|L32",
+      "planning_bus": 3,
+      "yard": "3",
+      "kind": "terminal",
+      "x": 306,
+      "y": 565
+    },
+    {
+      "name": "3|L34",
+      "planning_bus": 3,
+      "yard": "3",
+      "kind": "terminal",
+      "x": 354,
+      "y": 565
+    },
+    {
+      "name": "4B1",
+      "planning_bus": 4,
+      "yard": "4",
+      "kind": "busbar",
+      "x": 445,
+      "y": 379
+    },
+    {
+      "name": "4B2",
+      "planning_bus": 4,
+      "yard": "4",
+      "kind": "busbar",
+      "x": 445,
+      "y": 486
+    },
+    {
+      "name": "4N1",
+      "planning_bus": 4,
+      "yard": "4",
+      "kind": "terminal",
+      "x": 405,
+      "y": 411
+    },
+    {
+      "name": "4N2",
+      "planning_bus": 4,
+      "yard": "4",
+      "kind": "terminal",
+      "x": 405,
+      "y": 449
+    },
+    {
+      "name": "4N3",
+      "planning_bus": 4,
+      "yard": "4",
+      "kind": "terminal",
+      "x": 445,
+      "y": 411
+    },
+    {
+      "name": "4N4",
+      "planning_bus": 4,
+      "yard": "4",
+      "kind": "terminal",
+      "x": 445,
+      "y": 449
+    },
+    {
+      "name": "4N5",
+      "planning_bus": 4,
+      "yard": "4",
+      "kind": "terminal",
+      "x": 483,
+      "y": 411
+    },
+    {
+      "name": "4N6",
+      "planning_bus": 4,
+      "yard": "4",
+      "kind": "terminal",
+      "x": 483,
+      "y": 449
+    },
+    {
+      "name": "5B1",
+      "planning_bus": 5,
+      "yard": "5",
+      "kind": "busbar",
+      "x": 256,
+      "y": 305
+    },
+    {
+      "name": "5B2",
+      "planning_bus": 5,
+      "yard": "5",
+      "kind": "busbar",
+      "x": 256,
+      "y": 379
+    },
+    {
+      "name": "5|L51",
+      "planning_bus": 5,
+      "yard": "5",
+      "kind": "terminal",
+      "x": 182,
+      "y": 343
+    },
+    {
+      "name": "5|T56",
+      "planning_bus": 5,
+      "yard": "5",
+      "kind": "terminal",
+      "x": 211,
+      "y": 343
+    },
+    {
+      "name": "5|L52",
+      "planning_bus": 5,
+      "yard": "5",
+      "kind": "terminal",
+      "x": 241,
+      "y": 343
+    },
+    {
+      "name": "5|L54",
+      "planning_bus": 5,
+      "yard": "5",
+      "kind": "terminal",
+      "x": 270,
+      "y": 343
+    },
+    {
+      "name": "5|I",
+      "planning_bus": 5,
+      "yard": "5",
+      "kind": "terminal",
+      "x": 299,
+      "y": 343
+    },
+    {
+      "name": "6B1",
+      "planning_bus": 6,
+      "yard": "6",
+      "kind": "busbar",
+      "x": 110,
+      "y": 166
+    },
+    {
+      "name": "6B2",
+      "planning_bus": 6,
+      "yard": "6",
+      "kind": "busbar",
+      "x": 110,
+      "y": 240
+    },
+    {
+      "name": "6|I",
+      "planning_bus": 6,
+      "yard": "6",
+      "kind": "terminal",
+      "x": 66,
+      "y": 203
+    },
+    {
+      "name": "6|L612",
+      "planning_bus": 6,
+      "yard": "6",
+      "kind": "terminal",
+      "x": 95,
+      "y": 203
+    },
+    {
+      "name": "6|T65",
+      "planning_bus": 6,
+      "yard": "6",
+      "kind": "terminal",
+      "x": 124,
+      "y": 203
+    },
+    {
+      "name": "6|L613",
+      "planning_bus": 6,
+      "yard": "6",
+      "kind": "terminal",
+      "x": 153,
+      "y": 203
+    },
+    {
+      "name": "6|L611",
+      "planning_bus": 6,
+      "yard": "6",
+      "kind": "terminal",
+      "x": 183,
+      "y": 203
+    },
+    {
+      "name": "7STAR",
+      "planning_bus": 7,
+      "yard": "7",
+      "kind": "transformer_star",
+      "x": 430,
+      "y": 349
+    },
+    {
+      "name": "8B",
+      "planning_bus": 8,
+      "yard": "8",
+      "kind": "generator_terminal",
+      "x": 483,
+      "y": 350
+    },
+    {
+      "name": "9B1",
+      "planning_bus": 9,
+      "yard": "9",
+      "kind": "busbar",
+      "x": 445,
+      "y": 215
+    },
+    {
+      "name": "9B2",
+      "planning_bus": 9,
+      "yard": "9",
+      "kind": "busbar",
+      "x": 445,
+      "y": 322
+    },
+    {
+      "name": "9N1",
+      "planning_bus": 9,
+      "yard": "9",
+      "kind": "terminal",
+      "x": 405,
+      "y": 247
+    },
+    {
+      "name": "9N2",
+      "planning_bus": 9,
+      "yard": "9",
+      "kind": "terminal",
+      "x": 405,
+      "y": 286
+    },
+    {
+      "name": "9N3",
+      "planning_bus": 9,
+      "yard": "9",
+      "kind": "terminal",
+      "x": 445,
+      "y": 247
+    },
+    {
+      "name": "9N4",
+      "planning_bus": 9,
+      "yard": "9",
+      "kind": "terminal",
+      "x": 445,
+      "y": 286
+    },
+    {
+      "name": "9|I",
+      "planning_bus": 9,
+      "yard": "9",
+      "kind": "terminal",
+      "x": 483,
+      "y": 266
+    },
+    {
+      "name": "14B1",
+      "planning_bus": 14,
+      "yard": "10_14",
+      "kind": "busbar",
+      "x": 445,
+      "y": 52
+    },
+    {
+      "name": "10B1",
+      "planning_bus": 10,
+      "yard": "10_14",
+      "kind": "busbar",
+      "x": 445,
+      "y": 159
+    },
+    {
+      "name": "10N1",
+      "planning_bus": 10,
+      "yard": "10_14",
+      "kind": "terminal",
+      "x": 405,
+      "y": 84
+    },
+    {
+      "name": "10N2",
+      "planning_bus": 10,
+      "yard": "10_14",
+      "kind": "terminal",
+      "x": 405,
+      "y": 122
+    },
+    {
+      "name": "14N1",
+      "planning_bus": 14,
+      "yard": "10_14",
+      "kind": "terminal",
+      "x": 445,
+      "y": 84
+    },
+    {
+      "name": "14N2",
+      "planning_bus": 14,
+      "yard": "10_14",
+      "kind": "terminal",
+      "x": 445,
+      "y": 122
+    },
+    {
+      "name": "14|I",
+      "planning_bus": 14,
+      "yard": "10_14",
+      "kind": "injection",
+      "x": 483,
+      "y": 84
+    },
+    {
+      "name": "10|I",
+      "planning_bus": 10,
+      "yard": "10_14",
+      "kind": "injection",
+      "x": 483,
+      "y": 122
+    },
+    {
+      "name": "11B1",
+      "planning_bus": 11,
+      "yard": "11",
+      "kind": "busbar",
+      "x": 313,
+      "y": 47
+    },
+    {
+      "name": "11B2",
+      "planning_bus": 11,
+      "yard": "11",
+      "kind": "busbar",
+      "x": 313,
+      "y": 121
+    },
+    {
+      "name": "11|L116",
+      "planning_bus": 11,
+      "yard": "11",
+      "kind": "terminal",
+      "x": 289,
+      "y": 85
+    },
+    {
+      "name": "11|L1110",
+      "planning_bus": 11,
+      "yard": "11",
+      "kind": "terminal",
+      "x": 338,
+      "y": 85
+    },
+    {
+      "name": "12B1",
+      "planning_bus": 12,
+      "yard": "12",
+      "kind": "busbar",
+      "x": 97,
+      "y": 36
+    },
+    {
+      "name": "12|L126",
+      "planning_bus": 12,
+      "yard": "12",
+      "kind": "terminal",
+      "x": 81,
+      "y": 81
+    },
+    {
+      "name": "12|L1213",
+      "planning_bus": 12,
+      "yard": "12",
+      "kind": "terminal",
+      "x": 114,
+      "y": 81
+    },
+    {
+      "name": "13R1",
+      "planning_bus": 13,
+      "yard": "13",
+      "kind": "ring",
+      "x": 151,
+      "y": 36
+    },
+    {
+      "name": "13R2",
+      "planning_bus": 13,
+      "yard": "13",
+      "kind": "ring",
+      "x": 198,
+      "y": 36
+    },
+    {
+      "name": "13R3",
+      "planning_bus": 13,
+      "yard": "13",
+      "kind": "ring",
+      "x": 198,
+      "y": 81
+    },
+    {
+      "name": "13R4",
+      "planning_bus": 13,
+      "yard": "13",
+      "kind": "ring",
+      "x": 151,
+      "y": 81
+    }
+  ],
+  "breakers": [
+    {
+      "name": "CB_1_B1_N1",
+      "a": "1B1",
+      "b": "1N1",
+      "closed": true,
+      "yard": "1",
+      "x": 58,
+      "y": 326.0
+    },
+    {
+      "name": "CB_1_N1_N2",
+      "a": "1N1",
+      "b": "1N2",
+      "closed": true,
+      "yard": "1",
+      "x": 58,
+      "y": 360.5
+    },
+    {
+      "name": "CB_1_N2_B2",
+      "a": "1N2",
+      "b": "1B2",
+      "closed": true,
+      "yard": "1",
+      "x": 58,
+      "y": 397.5
+    },
+    {
+      "name": "CB_1_B1_N3",
+      "a": "1B1",
+      "b": "1N3",
+      "closed": true,
+      "yard": "1",
+      "x": 107,
+      "y": 326.0
+    },
+    {
+      "name": "CB_1_N3_N4",
+      "a": "1N3",
+      "b": "1N4",
+      "closed": false,
+      "yard": "1",
+      "x": 107,
+      "y": 360.5
+    },
+    {
+      "name": "CB_1_N4_B2",
+      "a": "1N4",
+      "b": "1B2",
+      "closed": true,
+      "yard": "1",
+      "x": 107,
+      "y": 397.5
+    },
+    {
+      "name": "CB_2R1_2R2",
+      "a": "2R1",
+      "b": "2R2",
+      "closed": false,
+      "yard": "2",
+      "x": 129,
+      "y": 521
+    },
+    {
+      "name": "CB_2R2_2R3",
+      "a": "2R2",
+      "b": "2R3",
+      "closed": true,
+      "yard": "2",
+      "x": 178,
+      "y": 521
+    },
+    {
+      "name": "CB_2R3_2R4",
+      "a": "2R3",
+      "b": "2R4",
+      "closed": true,
+      "yard": "2",
+      "x": 202,
+      "y": 543
+    },
+    {
+      "name": "CB_2R4_2R5",
+      "a": "2R4",
+      "b": "2R5",
+      "closed": true,
+      "yard": "2",
+      "x": 178,
+      "y": 565
+    },
+    {
+      "name": "CB_2R5_2R1",
+      "a": "2R5",
+      "b": "2R1",
+      "closed": true,
+      "yard": "2",
+      "x": 129,
+      "y": 565
+    },
+    {
+      "name": "CB_3_L32_B1",
+      "a": "3|L32",
+      "b": "3B1",
+      "closed": false,
+      "yard": "3",
+      "x": 306,
+      "y": 547.0
+    },
+    {
+      "name": "CB_3_L32_B2",
+      "a": "3|L32",
+      "b": "3B2",
+      "closed": true,
+      "yard": "3",
+      "x": 306,
+      "y": 583.5
+    },
+    {
+      "name": "CB_3_L34_B1",
+      "a": "3|L34",
+      "b": "3B1",
+      "closed": true,
+      "yard": "3",
+      "x": 354,
+      "y": 547.0
+    },
+    {
+      "name": "CB_3_L34_B2",
+      "a": "3|L34",
+      "b": "3B2",
+      "closed": true,
+      "yard": "3",
+      "x": 354,
+      "y": 583.5
+    },
+    {
+      "name": "CB_4_B1_N1",
+      "a": "4B1",
+      "b": "4N1",
+      "closed": true,
+      "yard": "4",
+      "x": 405,
+      "y": 395.0
+    },
+    {
+      "name": "CB_4_N1_N2",
+      "a": "4N1",
+      "b": "4N2",
+      "closed": true,
+      "yard": "4",
+      "x": 405,
+      "y": 430.0
+    },
+    {
+      "name": "CB_4_N2_B2",
+      "a": "4N2",
+      "b": "4B2",
+      "closed": true,
+      "yard": "4",
+      "x": 405,
+      "y": 467.5
+    },
+    {
+      "name": "CB_4_B1_N3",
+      "a": "4B1",
+      "b": "4N3",
+      "closed": true,
+      "yard": "4",
+      "x": 445,
+      "y": 395.0
+    },
+    {
+      "name": "CB_4_N3_N4",
+      "a": "4N3",
+      "b": "4N4",
+      "closed": false,
+      "yard": "4",
+      "x": 445,
+      "y": 430.0
+    },
+    {
+      "name": "CB_4_N4_B2",
+      "a": "4N4",
+      "b": "4B2",
+      "closed": true,
+      "yard": "4",
+      "x": 445,
+      "y": 467.5
+    },
+    {
+      "name": "CB_4_B1_N5",
+      "a": "4B1",
+      "b": "4N5",
+      "closed": true,
+      "yard": "4",
+      "x": 483,
+      "y": 395.0
+    },
+    {
+      "name": "CB_4_N5_N6",
+      "a": "4N5",
+      "b": "4N6",
+      "closed": false,
+      "yard": "4",
+      "x": 483,
+      "y": 430.0
+    },
+    {
+      "name": "CB_4_N6_B2",
+      "a": "4N6",
+      "b": "4B2",
+      "closed": true,
+      "yard": "4",
+      "x": 483,
+      "y": 467.5
+    },
+    {
+      "name": "CB_5_L51_B1",
+      "a": "5|L51",
+      "b": "5B1",
+      "closed": true,
+      "yard": "5",
+      "x": 182,
+      "y": 324.0
+    },
+    {
+      "name": "CB_5_L51_B2",
+      "a": "5|L51",
+      "b": "5B2",
+      "closed": true,
+      "yard": "5",
+      "x": 182,
+      "y": 361.0
+    },
+    {
+      "name": "CB_5_T56_B1",
+      "a": "5|T56",
+      "b": "5B1",
+      "closed": true,
+      "yard": "5",
+      "x": 211,
+      "y": 324.0
+    },
+    {
+      "name": "CB_5_T56_B2",
+      "a": "5|T56",
+      "b": "5B2",
+      "closed": true,
+      "yard": "5",
+      "x": 211,
+      "y": 361.0
+    },
+    {
+      "name": "CB_5_L52_B1",
+      "a": "5|L52",
+      "b": "5B1",
+      "closed": true,
+      "yard": "5",
+      "x": 241,
+      "y": 324.0
+    },
+    {
+      "name": "CB_5_L52_B2",
+      "a": "5|L52",
+      "b": "5B2",
+      "closed": false,
+      "yard": "5",
+      "x": 241,
+      "y": 361.0
+    },
+    {
+      "name": "CB_5_L54_B1",
+      "a": "5|L54",
+      "b": "5B1",
+      "closed": true,
+      "yard": "5",
+      "x": 270,
+      "y": 324.0
+    },
+    {
+      "name": "CB_5_L54_B2",
+      "a": "5|L54",
+      "b": "5B2",
+      "closed": false,
+      "yard": "5",
+      "x": 270,
+      "y": 361.0
+    },
+    {
+      "name": "CB_5_I_B1",
+      "a": "5|I",
+      "b": "5B1",
+      "closed": true,
+      "yard": "5",
+      "x": 299,
+      "y": 324.0
+    },
+    {
+      "name": "CB_5_I_B2",
+      "a": "5|I",
+      "b": "5B2",
+      "closed": false,
+      "yard": "5",
+      "x": 299,
+      "y": 361.0
+    },
+    {
+      "name": "CB_5_B1_B2",
+      "a": "5B1",
+      "b": "5B2",
+      "closed": false,
+      "yard": "5",
+      "x": 328,
+      "y": 342
+    },
+    {
+      "name": "CB_6_B1_B2",
+      "a": "6B1",
+      "b": "6B2",
+      "closed": true,
+      "yard": "6",
+      "x": 40,
+      "y": 203
+    },
+    {
+      "name": "CB_6_I_B1",
+      "a": "6|I",
+      "b": "6B1",
+      "closed": false,
+      "yard": "6",
+      "x": 66,
+      "y": 184.5
+    },
+    {
+      "name": "CB_6_I_B2",
+      "a": "6|I",
+      "b": "6B2",
+      "closed": true,
+      "yard": "6",
+      "x": 66,
+      "y": 221.5
+    },
+    {
+      "name": "CB_6_L612_B1",
+      "a": "6|L612",
+      "b": "6B1",
+      "closed": true,
+      "yard": "6",
+      "x": 95,
+      "y": 184.5
+    },
+    {
+      "name": "CB_6_L612_B2",
+      "a": "6|L612",
+      "b": "6B2",
+      "closed": false,
+      "yard": "6",
+      "x": 95,
+      "y": 221.5
+    },
+    {
+      "name": "CB_6_T65_B1",
+      "a": "6|T65",
+      "b": "6B1",
+      "closed": true,
+      "yard": "6",
+      "x": 124,
+      "y": 184.5
+    },
+    {
+      "name": "CB_6_T65_B2",
+      "a": "6|T65",
+      "b": "6B2",
+      "closed": false,
+      "yard": "6",
+      "x": 124,
+      "y": 221.5
+    },
+    {
+      "name": "CB_6_L613_B1",
+      "a": "6|L613",
+      "b": "6B1",
+      "closed": true,
+      "yard": "6",
+      "x": 153,
+      "y": 184.5
+    },
+    {
+      "name": "CB_6_L613_B2",
+      "a": "6|L613",
+      "b": "6B2",
+      "closed": false,
+      "yard": "6",
+      "x": 153,
+      "y": 221.5
+    },
+    {
+      "name": "CB_6_L611_B1",
+      "a": "6|L611",
+      "b": "6B1",
+      "closed": false,
+      "yard": "6",
+      "x": 183,
+      "y": 184.5
+    },
+    {
+      "name": "CB_6_L611_B2",
+      "a": "6|L611",
+      "b": "6B2",
+      "closed": true,
+      "yard": "6",
+      "x": 183,
+      "y": 221.5
+    },
+    {
+      "name": "CB_9_B1_N1",
+      "a": "9B1",
+      "b": "9N1",
+      "closed": true,
+      "yard": "9",
+      "x": 405,
+      "y": 231.0
+    },
+    {
+      "name": "CB_9_N1_N2",
+      "a": "9N1",
+      "b": "9N2",
+      "closed": true,
+      "yard": "9",
+      "x": 405,
+      "y": 266.5
+    },
+    {
+      "name": "CB_9_N2_B2",
+      "a": "9N2",
+      "b": "9B2",
+      "closed": true,
+      "yard": "9",
+      "x": 405,
+      "y": 304.0
+    },
+    {
+      "name": "CB_9_B1_N3",
+      "a": "9B1",
+      "b": "9N3",
+      "closed": true,
+      "yard": "9",
+      "x": 445,
+      "y": 231.0
+    },
+    {
+      "name": "CB_9_N3_N4",
+      "a": "9N3",
+      "b": "9N4",
+      "closed": false,
+      "yard": "9",
+      "x": 445,
+      "y": 266.5
+    },
+    {
+      "name": "CB_9_N4_B2",
+      "a": "9N4",
+      "b": "9B2",
+      "closed": true,
+      "yard": "9",
+      "x": 445,
+      "y": 304.0
+    },
+    {
+      "name": "CB_9_I_B1",
+      "a": "9|I",
+      "b": "9B1",
+      "closed": false,
+      "yard": "9",
+      "x": 483,
+      "y": 240.5
+    },
+    {
+      "name": "CB_9_I_B2",
+      "a": "9|I",
+      "b": "9B2",
+      "closed": true,
+      "yard": "9",
+      "x": 483,
+      "y": 294.0
+    },
+    {
+      "name": "CB_Y1014_14B_10N1",
+      "a": "14B1",
+      "b": "10N1",
+      "closed": false,
+      "yard": "10_14",
+      "x": 405,
+      "y": 67
+    },
+    {
+      "name": "CB_Y1014_10N1_10N2",
+      "a": "10N1",
+      "b": "10N2",
+      "closed": true,
+      "yard": "10_14",
+      "x": 405,
+      "y": 103
+    },
+    {
+      "name": "CB_Y1014_10N2_10B",
+      "a": "10N2",
+      "b": "10B1",
+      "closed": true,
+      "yard": "10_14",
+      "x": 405,
+      "y": 141
+    },
+    {
+      "name": "CB_Y1014_14B_14N1",
+      "a": "14B1",
+      "b": "14N1",
+      "closed": true,
+      "yard": "10_14",
+      "x": 445,
+      "y": 67
+    },
+    {
+      "name": "CB_Y1014_14N1_14N2",
+      "a": "14N1",
+      "b": "14N2",
+      "closed": true,
+      "yard": "10_14",
+      "x": 445,
+      "y": 103
+    },
+    {
+      "name": "CB_Y1014_14N2_10B",
+      "a": "14N2",
+      "b": "10B1",
+      "closed": false,
+      "yard": "10_14",
+      "x": 445,
+      "y": 141
+    },
+    {
+      "name": "CB_Y1014_14B_I14",
+      "a": "14B1",
+      "b": "14|I",
+      "closed": true,
+      "yard": "10_14",
+      "x": 483,
+      "y": 67
+    },
+    {
+      "name": "CB_Y1014_I14_I10",
+      "a": "14|I",
+      "b": "10|I",
+      "closed": false,
+      "yard": "10_14",
+      "x": 483,
+      "y": 103
+    },
+    {
+      "name": "CB_Y1014_I10_10B",
+      "a": "10|I",
+      "b": "10B1",
+      "closed": true,
+      "yard": "10_14",
+      "x": 483,
+      "y": 141
+    },
+    {
+      "name": "CB_11_L116_B1",
+      "a": "11|L116",
+      "b": "11B1",
+      "closed": true,
+      "yard": "11",
+      "x": 289,
+      "y": 66.0
+    },
+    {
+      "name": "CB_11_L116_B2",
+      "a": "11|L116",
+      "b": "11B2",
+      "closed": true,
+      "yard": "11",
+      "x": 289,
+      "y": 103.0
+    },
+    {
+      "name": "CB_11_L1110_B1",
+      "a": "11|L1110",
+      "b": "11B1",
+      "closed": true,
+      "yard": "11",
+      "x": 338,
+      "y": 66.0
+    },
+    {
+      "name": "CB_11_L1110_B2",
+      "a": "11|L1110",
+      "b": "11B2",
+      "closed": true,
+      "yard": "11",
+      "x": 338,
+      "y": 103.0
+    },
+    {
+      "name": "CB_12_B1_L126",
+      "a": "12B1",
+      "b": "12|L126",
+      "closed": true,
+      "yard": "12",
+      "x": 81,
+      "y": 59
+    },
+    {
+      "name": "CB_12_B1_L1213",
+      "a": "12B1",
+      "b": "12|L1213",
+      "closed": true,
+      "yard": "12",
+      "x": 114,
+      "y": 59
+    },
+    {
+      "name": "CB_13R1_13R2",
+      "a": "13R1",
+      "b": "13R2",
+      "closed": true,
+      "yard": "13",
+      "x": 174,
+      "y": 36
+    },
+    {
+      "name": "CB_13R2_13R3",
+      "a": "13R2",
+      "b": "13R3",
+      "closed": false,
+      "yard": "13",
+      "x": 198,
+      "y": 59
+    },
+    {
+      "name": "CB_13R3_13R4",
+      "a": "13R3",
+      "b": "13R4",
+      "closed": true,
+      "yard": "13",
+      "x": 174,
+      "y": 81
+    },
+    {
+      "name": "CB_13R4_13R1",
+      "a": "13R4",
+      "b": "13R1",
+      "closed": true,
+      "yard": "13",
+      "x": 151,
+      "y": 59
+    }
+  ],
+  "branches": [
+    {
+      "reference_row": 0,
+      "from_bus": 1,
+      "to_bus": 2,
+      "from_node": "1N4",
+      "to_node": "2R1"
+    },
+    {
+      "reference_row": 1,
+      "from_bus": 1,
+      "to_bus": 5,
+      "from_node": "1N3",
+      "to_node": "5|L51"
+    },
+    {
+      "reference_row": 2,
+      "from_bus": 2,
+      "to_bus": 3,
+      "from_node": "2R4",
+      "to_node": "3|L32"
+    },
+    {
+      "reference_row": 3,
+      "from_bus": 2,
+      "to_bus": 4,
+      "from_node": "2R3",
+      "to_node": "4N4"
+    },
+    {
+      "reference_row": 4,
+      "from_bus": 2,
+      "to_bus": 5,
+      "from_node": "2R2",
+      "to_node": "5|L52"
+    },
+    {
+      "reference_row": 5,
+      "from_bus": 3,
+      "to_bus": 4,
+      "from_node": "3|L34",
+      "to_node": "4N6"
+    },
+    {
+      "reference_row": 6,
+      "from_bus": 4,
+      "to_bus": 5,
+      "from_node": "4N2",
+      "to_node": "5|L54"
+    },
+    {
+      "reference_row": 7,
+      "from_bus": 4,
+      "to_bus": 7,
+      "from_node": "4N3",
+      "to_node": "7STAR"
+    },
+    {
+      "reference_row": 8,
+      "from_bus": 4,
+      "to_bus": 9,
+      "from_node": "4N1",
+      "to_node": "9N2"
+    },
+    {
+      "reference_row": 9,
+      "from_bus": 5,
+      "to_bus": 6,
+      "from_node": "5|T56",
+      "to_node": "6|T65"
+    },
+    {
+      "reference_row": 10,
+      "from_bus": 6,
+      "to_bus": 11,
+      "from_node": "6|L611",
+      "to_node": "11|L116"
+    },
+    {
+      "reference_row": 11,
+      "from_bus": 6,
+      "to_bus": 12,
+      "from_node": "6|L612",
+      "to_node": "12|L126"
+    },
+    {
+      "reference_row": 12,
+      "from_bus": 6,
+      "to_bus": 13,
+      "from_node": "6|L613",
+      "to_node": "13R3"
+    },
+    {
+      "reference_row": 13,
+      "from_bus": 7,
+      "to_bus": 8,
+      "from_node": "7STAR",
+      "to_node": "8B"
+    },
+    {
+      "reference_row": 14,
+      "from_bus": 7,
+      "to_bus": 9,
+      "from_node": "7STAR",
+      "to_node": "9N4"
+    },
+    {
+      "reference_row": 15,
+      "from_bus": 9,
+      "to_bus": 10,
+      "from_node": "9N1",
+      "to_node": "10N2"
+    },
+    {
+      "reference_row": 16,
+      "from_bus": 9,
+      "to_bus": 14,
+      "from_node": "9N3",
+      "to_node": "14N2"
+    },
+    {
+      "reference_row": 17,
+      "from_bus": 10,
+      "to_bus": 11,
+      "from_node": "10N1",
+      "to_node": "11|L1110"
+    },
+    {
+      "reference_row": 18,
+      "from_bus": 12,
+      "to_bus": 13,
+      "from_node": "12|L1213",
+      "to_node": "13R4"
+    },
+    {
+      "reference_row": 19,
+      "from_bus": 13,
+      "to_bus": 14,
+      "from_node": "13R2",
+      "to_node": "14N1"
+    }
+  ],
+  "equipment": {
+    "gen": {
+      "1": "1N1",
+      "2": "2R5",
+      "3": "3B1",
+      "4": "4N5",
+      "5": "5|I",
+      "6": "6|I",
+      "7": "7STAR",
+      "8": "8B",
+      "9": "9|I",
+      "10": "10|I",
+      "11": "11B2",
+      "12": "12B1",
+      "13": "13R1",
+      "14": "14|I"
+    },
+    "ext_grid": {
+      "1": "1N1",
+      "2": "2R5",
+      "3": "3B1",
+      "4": "4N5",
+      "5": "5|I",
+      "6": "6|I",
+      "7": "7STAR",
+      "8": "8B",
+      "9": "9|I",
+      "10": "10|I",
+      "11": "11B2",
+      "12": "12B1",
+      "13": "13R1",
+      "14": "14|I"
+    },
+    "load": {
+      "1": "1N1",
+      "2": "2R5",
+      "3": "3B2",
+      "4": "4N5",
+      "5": "5|I",
+      "6": "6|I",
+      "7": "7STAR",
+      "8": "8B",
+      "9": "9|I",
+      "10": "10|I",
+      "11": "11B2",
+      "12": "12B1",
+      "13": "13R1",
+      "14": "14|I"
+    },
+    "sgen": {
+      "1": "1N1",
+      "2": "2R5",
+      "3": "3B1",
+      "4": "4N5",
+      "5": "5|I",
+      "6": "6|I",
+      "7": "7STAR",
+      "8": "8B",
+      "9": "9|I",
+      "10": "10|I",
+      "11": "11B2",
+      "12": "12B1",
+      "13": "13R1",
+      "14": "14|I"
+    },
+    "shunt": {
+      "1": "1N1",
+      "2": "2R5",
+      "3": "3B2",
+      "4": "4N5",
+      "5": "5|I",
+      "6": "6|I",
+      "7": "7STAR",
+      "8": "8B",
+      "9": "9|I",
+      "10": "10|I",
+      "11": "11B2",
+      "12": "12B1",
+      "13": "13R1",
+      "14": "14|I"
+    }
+  },
+  "voltage_anchors": {
+    "1": "1N1",
+    "2": "2R5",
+    "3": "3B1",
+    "4": "4N5",
+    "5": "5|I",
+    "6": "6|I",
+    "7": "7STAR",
+    "8": "8B",
+    "9": "9|I",
+    "10": "10|I",
+    "11": "11B2",
+    "12": "12B1",
+    "13": "13R1",
+    "14": "14|I"
+  }
+}

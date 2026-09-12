@@ -27,15 +27,25 @@ def build_trace(
     source_bus_1based: int,
     target_thd: float,
     seed: int,
-    harmonic_orders=[5, 7, 11, 13, 17, 19]
+    harmonic_orders=[5, 7, 11, 13, 17, 19],
+    bus=None,
+    branch=None,
 ):
+    """Synthesize one harmonic-distortion snapshot.
+
+    ``bus``/``branch`` optionally supply the fundamental operating point (MATPOWER
+    columns; VM/VA and PD/QD are read from ``bus``). They default to the module's
+    stored case14 planning solution, which is the legacy corpus behaviour.
+    """
     rng = np.random.default_rng(seed)
-    nb = BUS.shape[0]
+    bus = BUS if bus is None else np.asarray(bus, dtype=float)[:, :13]
+    branch = BRANCH if branch is None else np.asarray(branch, dtype=float)[:, :13]
+    nb = bus.shape[0]
     
     # 1. Fundamental
-    V1 = fundamental_bus_voltages(BUS)
-    Ybus1 = build_ybus(BUS, BRANCH, BASE_MVA)
-    I1_load = fundamental_load_currents(BUS, V1, BASE_MVA)
+    V1 = fundamental_bus_voltages(bus)
+    Ybus1 = build_ybus(bus, branch, BASE_MVA)
+    I1_load = fundamental_load_currents(bus, V1, BASE_MVA)
     
     # 2. Harmonic Injections (Unit Scale)
     src_idx = [source_bus_1based - 1]
@@ -43,7 +53,7 @@ def build_trace(
     
     # Inject at unit scale to find scaling factor
     Iinj_unit = make_harmonic_current_injections(nb, src_idx, spectrum, I1_load, rng, inj_scale=1.0)
-    V_unit = solve_all_harmonics(BUS, BRANCH, harmonic_orders, Iinj_unit, BASE_MVA, slack_bus=0)
+    V_unit = solve_all_harmonics(bus, branch, harmonic_orders, Iinj_unit, BASE_MVA, slack_bus=0)
     
     # 3. Scale to Target THD
     # THD is defined at the source bus usually, or max THD? 
@@ -58,7 +68,7 @@ def build_trace(
     Iinj_final = {h: scale * Ivec for h, Ivec in Iinj_unit.items()}
     Iinj_final[1] = Ybus1 @ V1 # Fundamental injection for SCADA consistency (net)
     
-    V_final = solve_all_harmonics(BUS, BRANCH, harmonic_orders, Iinj_final, BASE_MVA, slack_bus=0)
+    V_final = solve_all_harmonics(bus, branch, harmonic_orders, Iinj_final, BASE_MVA, slack_bus=0)
     V_final[1] = V1 # Ensure fundamental is correct
     
     # 4. Generate SCADA Measurements (Legacy Transducer)
@@ -76,9 +86,9 @@ def build_trace(
     
     for h in all_h:
         if h == 1:
-            If, It = branch_terminal_currents_both(V1, BRANCH, 1)
+            If, It = branch_terminal_currents_both(V1, branch, 1)
         else:
-            If, It = branch_terminal_currents_both(V_final[h], BRANCH, h)
+            If, It = branch_terminal_currents_both(V_final[h], branch, h)
         Ibranch_f_by_h[h] = If
         Ibranch_t_by_h[h] = It
             
@@ -105,11 +115,11 @@ def build_trace(
         z_true.append(q)
         
     # Flows
-    nl = BRANCH.shape[0]
+    nl = branch.shape[0]
     
     # Helper for branch power
     def get_flow_reading(k, side_is_to):
-        bus_idx = int(BRANCH[k, 1]) - 1 if side_is_to else int(BRANCH[k, 0]) - 1
+        bus_idx = int(branch[k, 1]) - 1 if side_is_to else int(branch[k, 0]) - 1
         I_dict = Ibranch_t_by_h if side_is_to else Ibranch_f_by_h
         
         Vpoint = {}

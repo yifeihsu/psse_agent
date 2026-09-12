@@ -403,11 +403,20 @@ def _branch_target_matches(
     action_target = canonical_branch_target(arguments)
     if action_target is None:
         return False, None
+    action_breaker = arguments.get("cb_name")
     for fault in faults:
         if not isinstance(fault, Mapping):
             continue
-        if canonical_branch_target(fault) == action_target:
-            return True, fault
+        if canonical_branch_target(fault) != action_target:
+            continue
+        fault_breaker = fault.get("cb_name")
+        if (
+            action_breaker is not None
+            and fault_breaker is not None
+            and str(action_breaker).strip() != str(fault_breaker).strip()
+        ):
+            continue
+        return True, fault
     return False, None
 
 

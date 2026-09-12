@@ -600,12 +600,23 @@ def _canonicalize_correction_arguments(tool: str, arguments: dict[str, Any]) -> 
             raise ValueError("Measurement target aliases conflict with measurement_updates.")
 
     if tool in {CORRECT_PARAMETERS, CORRECT_TOPOLOGY}:
-        branch_targets = [
+        numeric_targets = [
             key
-            for key in ("branch_id", "cb_name", "line_index", "line_index1", "branch_row0")
+            for key in ("line_index", "line_index1", "branch_row0")
             if arguments.get(key) is not None
         ]
-        if len(branch_targets) > 1:
+        named_targets = [
+            key for key in ("branch_id", "cb_name") if arguments.get(key) is not None
+        ]
+        # A breaker name identifies the switch of a node/breaker correction; it
+        # may accompany exactly one numeric row, the branch that switch affects
+        # in the operator's bus-branch model.  Every other combination is
+        # ambiguous.
+        if (
+            len(numeric_targets) > 1
+            or len(named_targets) > 1
+            or (numeric_targets and named_targets and named_targets != ["cb_name"])
+        ):
             raise ValueError("Correction must use exactly one branch target convention.")
     return arguments
 
