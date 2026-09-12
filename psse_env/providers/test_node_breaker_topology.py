@@ -22,9 +22,14 @@ def _state(scenario: dict, state_id: str = "episode:s0") -> dict:
 
 
 class NodeBreakerTopologyScenarioTests(unittest.TestCase):
+    """A breaker whose true state isolates one line terminal: the operator model
+    keeps its 14 buses and the fix takes that line out of service."""
+
     @classmethod
     def setUpClass(cls) -> None:
-        cls.generator = Round0ScenarioGenerator(seed=31)
+        cls.generator = Round0ScenarioGenerator(
+            seed=31, topology_effects=("dangling_line_terminal",)
+        )
         cls.scenario = cls.generator.build({"topology": 1})[0]
         cls.truth = cls.scenario["true_topology_errors"][0]
         cls.providers = MatpowerDeploymentProviders(chi2_alpha=0.01)
@@ -145,9 +150,15 @@ class NodeBreakerTopologyScenarioTests(unittest.TestCase):
                 {"tool": "correct_topology", "arguments": {"state_id": "episode:s0", **arguments}},
             )
 
+        # A bus split is rendered, not refused: one more bus, re-projected vector.
         split = attempt(cb_name="CB_6_B1_B2", status=0)
-        self.assertEqual(split["error_code"], "topology_correction_unsupported_effect")
+        self.assertNotIn("execution_status", split)
         self.assertEqual(split["breaker_effect"], "bus_split")
+        self.assertEqual(split["operator_bus_count"], 15)
+        self.assertEqual(len(split["modification"]["measurements"]), 125)
+        island = attempt(cb_name="CB_5_I_B1", status=0)
+        self.assertEqual(island["error_code"], "topology_correction_unsupported_effect")
+        self.assertEqual(island["breaker_effect"], "unsupplied_island")
         equivalent = attempt(cb_name="CB_5_L51_B1", status=0)
         self.assertEqual(equivalent["error_code"], "topology_correction_unsupported_effect")
         self.assertEqual(equivalent["breaker_effect"], "equivalent")
@@ -234,3 +245,115 @@ class NodeBreakerTopologyScenarioTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BusSplitTopologyScenarioTests(unittest.TestCase):
+    """A breaker whose true state splits a bus: the operator model gains a bus."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.generator = Round0ScenarioGenerator(seed=31, topology_effects=("bus_split",))
+        cls.scenario = cls.generator.build({"topology": 1})[0]
+        cls.truth = cls.scenario["true_topology_errors"][0]
+        cls.providers = MatpowerDeploymentProviders(chi2_alpha=0.01)
+
+    def test_split_root_declares_a_structural_truth_and_a_rendered_clean_case(self) -> None:
+        self.assertEqual(self.truth["physical_effect"], "bus_split")
+        self.assertNotIn("branch_row0", self.truth)
+        self.assertEqual(self.truth["operator_bus_count_after_fix"], 15)
+        self.assertEqual(len(self.scenario["measurements"]), 122)
+        self.assertEqual(len(self.scenario["clean_measurements"]), 125)
+        self.assertEqual(self.scenario["metadata"]["operator_layout"]["bus_count"], 14)
+        self.assertEqual(self.scenario["topology_ranking"]["true_breaker_rank"], 1)
+
+    def test_context_offers_the_split_breaker_without_a_line(self) -> None:
+        context = self.providers.get_topology_context(_state(self.scenario))
+        self.assertEqual(context["route_status"], "actionable")
+        finding = context["breaker_findings"][0]
+        self.assertEqual(finding["cb_name"], self.truth["cb_name"])
+        self.assertEqual(finding["bus_branch_effect"], "bus_split")
+        self.assertEqual(finding["affected_planning_buses"], self.truth["affected_planning_buses"])
+        self.assertNotIn("line_index", finding)
+        arguments = context["supported_corrections"][0]["arguments"]
+        self.assertEqual(set(arguments), {"state_id", "cb_name", "status"})
+        self.assertEqual(arguments["cb_name"], self.truth["cb_name"])
+
+    def test_split_correction_re_renders_the_operator_model(self) -> None:
+        state = _state(self.scenario)
+        action = {
+            "tool": "correct_topology",
+            "arguments": {"state_id": "episode:s0", "cb_name": self.truth["cb_name"], "status": 0},
+        }
+        result = self.providers.correct_topology(state, action)
+        self.assertNotIn("execution_status", result)
+        self.assertEqual(result["breaker_effect"], "bus_split")
+        self.assertEqual(result["operator_bus_count"], 15)
+        modification = result["modification"]
+        self.assertEqual(len(modification["measurements"]), 125)
+        updates = modification["metadata_updates"]
+        self.assertTrue(updates["last_topology_correction"]["operator_layout_changed"])
+        self.assertEqual(updates["last_topology_correction"]["derived_case"], modification["case"])
+        candidate = {
+            **state,
+            "state_id": "episode:s1",
+            "status": "candidate",
+            "case": modification["case"],
+            "measurements": modification["measurements"],
+            "metadata": {**state["metadata"], **updates},
+            "source_action": action,
+        }
+        verification = self.providers.run_wls(candidate)
+        self.assertNotIn("execution_status", verification)
+        self.assertTrue(verification["target_fixed"])
+        self.assertEqual(verification["target_metric_kind"], "breaker_status_mismatch")
+        self.assertTrue(verification["topology_target_breaker_matches_requested"])
+        self.assertEqual(verification["topology_target_effect"], "bus_split")
+        self.assertTrue(verification["no_material_anomaly_remaining"])
+        # A line index is meaningless for a split and is refused.
+        wrong = self.providers.correct_topology(
+            state,
+            {
+                "tool": "correct_topology",
+                "arguments": {"state_id": "episode:s0", "cb_name": self.truth["cb_name"], "status": 0, "line_index": 1},
+            },
+        )
+        self.assertEqual(wrong["error_code"], "topology_correction_inconsistent_target")
+
+    def test_expert_fixes_the_split_and_the_release_audit_passes(self) -> None:
+        from psse_env.examples.generate_round0_aggregate import audit_episode_against_truth
+        from psse_env.oracle import ExpertPolicyOracle
+        from psse_env.transactional_env import TransactionalPSSEEnv
+
+        env = TransactionalPSSEEnv(
+            **self.providers.env_kwargs(), production_dataset_mode=True, max_steps=18
+        )
+        oracle = ExpertPolicyOracle(process_oracle=env.process_oracle)
+        env.reset(self.scenario)
+        executed = []
+        for _ in range(18):
+            if env.is_terminal():
+                break
+            actions = oracle.next_actions(env.get_oracle_state(env.history), env.history)
+            self.assertTrue(actions, f"expert stalled after {executed}")
+            _, output = env.step(actions[0])
+            executed.append((actions[0], output))
+        self.assertTrue(env.is_terminal())
+        corrections = [
+            action["arguments"]
+            for action, output in executed
+            if action["tool"] == "correct_topology" and output["execution_status"] == "success"
+        ]
+        self.assertEqual(corrections[-1]["cb_name"], self.truth["cb_name"])
+        self.assertFalse(env.get_oracle_state().true_topology_errors)
+        final = env.current_state()
+        active = env.store.get_state(str(final["active_state_id"]))
+        self.assertEqual(len(active["measurements"]), 125)
+        audit = audit_episode_against_truth(
+            self.scenario,
+            final,
+            terminal=True,
+            terminal_outcome=env.terminal_outcome,
+            active_physical_state=active,
+            remaining_truth=None,
+        )
+        self.assertEqual(audit["problems"], [])

@@ -80,6 +80,9 @@ __all__ = [
     "injection_metered_nodes",
     "node_breaker_ppc",
     "operator_vector_from_telemetry",
+    "operator_model_from_map",
+    "operator_vector_for_layout",
+    "STRUCTURAL_EFFECTS",
     "solve_node_breaker",
     "status_map_from_labels",
     "status_labels",
@@ -346,6 +349,252 @@ def operator_vector_from_telemetry(
             seen.add(node)
             pinj[b - 1] += float(telemetry["node_pinj"][node])
             qinj[b - 1] += float(telemetry["node_qinj"][node])
+    return np.r_[
+        vm,
+        pinj,
+        qinj,
+        np.asarray(telemetry["branch_pf"], dtype=float),
+        np.asarray(telemetry["branch_qf"], dtype=float),
+        np.asarray(telemetry["branch_pt"], dtype=float),
+        np.asarray(telemetry["branch_qt"], dtype=float),
+    ]
+
+
+# ------------------------------------------------------------------ operator rendering
+
+STRUCTURAL_EFFECTS = frozenset({"bus_split", "merge"})
+
+
+def operator_model_from_map(
+    reference: Mapping[str, Any],
+    model: FullTopology,
+    reported_status: Mapping[str, Any] | None = None,
+    meter_nodes: Mapping[int, str] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Render the operator's bus-branch case for a reported breaker map.
+
+    Every connected node group of the reported map becomes a bus, the way an EMS
+    topology processor renders it: a section holding exactly one line terminal and
+    no equipment is a dangling terminal, so that line goes out of service and its
+    row stays on the main section of the terminal's planning bus; an empty section
+    is dropped; a section with equipment but no terminal is an unsupplied island,
+    so its units are switched off and its loads dropped. Bus numbers 1..14 go to
+    each planning bus's main section in planning order (a merged section takes the
+    first number it meets), and further energized sections follow in planning
+    order, so the schematic-normal map reproduces the reference numbering exactly.
+
+    ``reference`` is the operator's current case: its branch parameters are kept
+    and a line the operator already holds out of service stays out. ``meter_nodes``
+    is the operator's voltage-meter node per planning bus; the section holding it
+    is that bus's main section.
+    """
+    states = model.states(reported_status)
+    ref_bus = np.asarray(reference["bus"], dtype=float)
+    ref_gen = np.asarray(reference["gen"], dtype=float)
+    ref_branch = np.asarray(reference["branch"], dtype=float)
+    node_order = {name: i for i, name in enumerate(model.nodes)}
+    groups = [tuple(g) for g in model.components(states)]
+    group_of = {node: gi for gi, group in enumerate(groups) for node in group}
+
+    row_of: dict[tuple[int, int], int] = {}
+    for k in range(NL):
+        f, t = int(ref_branch[k, F_BUS]), int(ref_branch[k, T_BUS])
+        row_of[(f, t)] = k
+        row_of[(t, f)] = k
+    terminal_rows = {node: row_of[(f, t)] for (f, t), node in model.terminals.items()}
+    equipment_nodes = set(injection_metered_nodes(model, reference))
+    for b, node in model.equipment["shunt"].items():
+        if ref_bus[int(b) - 1, GS] != 0 or ref_bus[int(b) - 1, BS] != 0:
+            equipment_nodes.add(node)
+
+    info = []
+    for group in groups:
+        rows = sorted({terminal_rows[n] for n in group if n in terminal_rows})
+        equipment = sorted((n for n in group if n in equipment_nodes), key=node_order.get)
+        buses = sorted({model.nodes[n].planning_bus for n in group})
+        if rows and (len(rows) > 1 or equipment):
+            kind = "energized"
+        elif len(rows) == 1:
+            kind = "dangling"
+        elif equipment:
+            kind = "island"
+        else:
+            kind = "empty"
+        info.append(
+            {"nodes": list(group), "rows": rows, "equipment": equipment,
+             "planning_buses": buses, "kind": kind}
+        )
+
+    meters = {int(k): str(v) for k, v in (meter_nodes or {}).items()}
+    main: dict[int, int | None] = {}
+    for b in range(1, NB + 1):
+        candidates = [gi for gi, g in enumerate(info) if b in g["planning_buses"]]
+        energized = [gi for gi in candidates if info[gi]["kind"] == "energized"]
+        pool = energized or candidates
+        if not pool:
+            main[b] = None
+            continue
+        meter = meters.get(b)
+        holding = [gi for gi in pool if meter is not None and meter in info[gi]["nodes"]]
+        if holding:
+            main[b] = holding[0]
+        else:
+            main[b] = max(
+                pool,
+                key=lambda gi: (
+                    len(info[gi]["rows"]),
+                    len(info[gi]["equipment"]),
+                    f"{b}B1" in info[gi]["nodes"],
+                    -min(node_order[n] for n in info[gi]["nodes"]),
+                ),
+            )
+
+    number: dict[int, int] = {}
+    for b in range(1, NB + 1):
+        gi = main[b]
+        if gi is not None and gi not in number:
+            number[gi] = len(number) + 1
+    extras = sorted(
+        (gi for gi, g in enumerate(info) if g["kind"] == "energized" and gi not in number),
+        key=lambda gi: (
+            info[gi]["planning_buses"][0],
+            min(node_order[n] for n in info[gi]["nodes"]),
+        ),
+    )
+    for gi in extras:
+        number[gi] = len(number) + 1
+    n = len(number)
+    numbered = sorted(number, key=number.get)
+
+    bus = np.zeros((n, ref_bus.shape[1]))
+    for gi in numbered:
+        i = number[gi] - 1
+        representative = info[gi]["planning_buses"][0]
+        bus[i] = ref_bus[representative - 1]
+        bus[i, BUS_I] = number[gi]
+        bus[i, BUS_TYPE] = PQ
+        bus[i, PD] = bus[i, QD] = bus[i, GS] = bus[i, BS] = 0.0
+    dropped_loads: list[int] = []
+    for b in range(1, NB + 1):
+        row = ref_bus[b - 1]
+        load_group = group_of[model.equipment["load"][b]]
+        if load_group in number:
+            bus[number[load_group] - 1, PD] += row[PD]
+            bus[number[load_group] - 1, QD] += row[QD]
+        elif row[PD] != 0 or row[QD] != 0:
+            dropped_loads.append(b)
+        shunt_group = group_of[model.equipment["shunt"][b]]
+        if shunt_group in number:
+            bus[number[shunt_group] - 1, GS] += row[GS]
+            bus[number[shunt_group] - 1, BS] += row[BS]
+
+    gen = ref_gen.copy()
+    dropped_gens: list[int] = []
+    for k, row in enumerate(ref_gen):
+        b = int(row[GEN_BUS])
+        gi = group_of[model.equipment["gen"][b]]
+        if gi in number:
+            gen[k, GEN_BUS] = number[gi]
+            if row[GEN_STATUS] > 0:
+                i = number[gi] - 1
+                bus[i, BUS_TYPE] = (
+                    REF if ref_bus[b - 1, BUS_TYPE] == REF else max(bus[i, BUS_TYPE], PV)
+                )
+                bus[i, VM] = row[VG]
+        else:
+            fallback = main[b] if main[b] is not None and main[b] in number else numbered[0]
+            gen[k, GEN_BUS] = number[fallback]
+            gen[k, GEN_STATUS] = 0
+            dropped_gens.append(k)
+
+    branch = ref_branch.copy()
+    dangling_rows: list[int] = []
+    for k in range(NL):
+        f, t = int(ref_branch[k, F_BUS]), int(ref_branch[k, T_BUS])
+        endpoints = []
+        out = ref_branch[k, BR_STATUS] <= 0
+        for planning_bus, node in ((f, model.terminals[(f, t)]), (t, model.terminals[(t, f)])):
+            gi = group_of[node]
+            if gi in number:
+                endpoints.append(number[gi])
+            else:
+                out = True
+                if info[gi]["kind"] == "dangling":
+                    dangling_rows.append(k)
+                anchor = main[planning_bus]
+                endpoints.append(
+                    number[anchor] if anchor is not None and anchor in number else numbered[0]
+                )
+        if endpoints[0] == endpoints[1]:
+            out = True
+        branch[k, F_BUS], branch[k, T_BUS] = endpoints
+        branch[k, BR_STATUS] = 0.0 if out else 1.0
+
+    case = deepcopy(dict(reference))
+    case.update(bus=bus, gen=gen, branch=branch)
+    case.pop("order", None)
+    case.pop("success", None)
+    if "bus_name" in case:
+        case["bus_name"] = [" / ".join(info[gi]["nodes"]) for gi in numbered]
+
+    sections = {}
+    for gi in numbered:
+        g = info[gi]
+        meter = None
+        for b in g["planning_buses"]:
+            if meters.get(b) in g["nodes"]:
+                meter = meters[b]
+                break
+        if meter is None:
+            busbars = [x for x in g["nodes"] if model.nodes[x].kind == "busbar"]
+            meter = min(busbars or g["nodes"], key=node_order.get)
+        sections[str(number[gi])] = {
+            "nodes": sorted(g["nodes"], key=node_order.get),
+            "planning_buses": g["planning_buses"],
+            "meter_node": meter,
+            "equipment_nodes": g["equipment"],
+        }
+    layout = {
+        "bus_count": n,
+        "sections": sections,
+        "node_to_bus": {node: number.get(group_of[node]) for node in model.nodes},
+        "dangling_rows": sorted(set(dangling_rows)),
+        "dropped_sections": [
+            {"kind": g["kind"], "nodes": g["nodes"], "planning_buses": g["planning_buses"]}
+            for gi, g in enumerate(info)
+            if gi not in number
+        ],
+        "dropped_loads": dropped_loads,
+        "dropped_gen_rows": dropped_gens,
+        "main_section_by_bus": {
+            str(b): (number.get(main[b]) if main[b] is not None else None)
+            for b in range(1, NB + 1)
+        },
+    }
+    return case, layout
+
+
+def operator_vector_for_layout(
+    telemetry: Mapping[str, Any], layout: Mapping[str, Any]
+) -> np.ndarray:
+    """The operator vector of a rendered layout, read from the substation meters.
+
+    Each bus's voltage is its section's meter node, its injection the sum of the
+    injection meters in the section (zero for a section without equipment), and
+    the flows are the branch terminal readings.
+    """
+    n = int(layout["bus_count"])
+    sections = layout["sections"]
+    vm = np.zeros(n)
+    pinj = np.zeros(n)
+    qinj = np.zeros(n)
+    for i in range(n):
+        section = sections[str(i + 1)]
+        vm[i] = float(telemetry["node_vm"][section["meter_node"]])
+        for node in section["equipment_nodes"]:
+            if node in telemetry["node_pinj"]:
+                pinj[i] += float(telemetry["node_pinj"][node])
+                qinj[i] += float(telemetry["node_qinj"][node])
     return np.r_[
         vm,
         pinj,

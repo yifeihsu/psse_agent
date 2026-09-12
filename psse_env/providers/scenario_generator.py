@@ -416,6 +416,7 @@ class Round0ScenarioGenerator:
         anomaly_margin: float = 1.25,
         topology_noise_scale: float = 1.0,
         enforce_topology_ranking: bool = True,
+        topology_effects: Sequence[str] = ("dangling_line_terminal", "bus_split"),
         hif_max_scans: int = 8,
         noise_profile_rows: int = 200,
         source_partition: str | None = None,
@@ -483,6 +484,16 @@ class Round0ScenarioGenerator:
         # the true breaker first on the reported statuses, so the substation
         # investigation the operator performs can identify it.
         self.enforce_topology_ranking = bool(enforce_topology_ranking)
+        # Breaker-error classes offered as topology roots.  An isolated line
+        # terminal keeps the 14-bus operator layout; a bus split re-renders the
+        # operator model with one more bus once the breaker is corrected.
+        self.topology_effects = tuple(str(effect) for effect in topology_effects)
+        unknown_effects = set(self.topology_effects) - {"dangling_line_terminal", "bus_split"}
+        if unknown_effects or not self.topology_effects:
+            raise ValueError(
+                "topology_effects must be a non-empty subset of "
+                f"{{'dangling_line_terminal', 'bus_split'}}, got {sorted(unknown_effects)}"
+            )
         self.hif_max_scans = int(hif_max_scans)
         self.noise_profile_rows = int(noise_profile_rows)
         self.source_partition = source_partition
@@ -608,7 +619,7 @@ class Round0ScenarioGenerator:
         self._base_case: dict[str, Any] | None = None
         self._full_topology = None
         self._full_topology_fingerprint: str | None = None
-        self._dangling_errors: list[dict[str, Any]] | None = None
+        self._breaker_errors: list[dict[str, Any]] | None = None
         self._chi2_cache: dict[tuple[str, str], float] = {}
 
     # ------------------------------------------------------------ data access
@@ -1572,39 +1583,46 @@ class Round0ScenarioGenerator:
             self._full_topology_fingerprint = self._full_topology.fingerprint()
         return self._full_topology
 
-    def _dangling_terminal_errors(self) -> list[dict[str, Any]]:
-        """Single breaker-status errors the branch-status correction can represent."""
-        if self._dangling_errors is None:
-            from Transmission.ieee14_full_measurements import dangling_terminal_errors
+    def _breaker_error_catalogue(self) -> list[dict[str, Any]]:
+        """Single breaker-status errors of the sampled classes."""
+        if self._breaker_errors is None:
+            from Transmission.ieee14_full_measurements import single_flip_catalogue
 
-            self._dangling_errors = dangling_terminal_errors(self._full_topology_model())
-            if not self._dangling_errors:
+            self._breaker_errors = [
+                entry
+                for entry in single_flip_catalogue(self._full_topology_model())
+                if entry["category"] in self.topology_effects
+            ]
+            if not self._breaker_errors:
                 raise RuntimeError(
-                    "the full node/breaker model offers no dangling-terminal switch errors"
+                    "the full node/breaker model offers no switch errors of "
+                    f"{self.topology_effects}"
                 )
-        return self._dangling_errors
+        return self._breaker_errors
 
-    def _topology_scenario(self, index: int) -> dict[str, Any]:
+    def _topology_scenario(
+        self, index: int, effects: Sequence[str] | None = None
+    ) -> dict[str, Any]:
         """One breaker-status error in the full IEEE-14 node/breaker model.
 
         The physical truth is a switch whose real state differs from the reported
-        schematic-normal state and whose effect isolates exactly one line terminal
-        (``dangling_line_terminal`` in ``Transmission.ieee14_full_measurements``).
-        That is the class the operator's 14-bus model can represent: the fix is a
-        breaker-level ``correct_topology`` naming the switch, which the executor
-        realizes as taking the line at that terminal out of service.  Bus splits,
-        the 10/14 merge and islanded bays are not offered until the operator model
-        can carry a variable bus count.
+        schematic-normal state.  Two classes are sampled (``topology_effects``):
+        a switch that isolates exactly one line terminal, which the operator's
+        topology processor renders as that line out of service, and a switch that
+        splits a bus into two energized sections, which it renders as one more
+        bus.  The fix is a breaker-level ``correct_topology`` naming the switch.
+        The 10/14 merge and islanded bays stay out: the first is marginal for the
+        operator's WLS, the second is an equipment outage.
 
         Telemetry is one physical solution: an AC OPF on the true contracted
         topology at a corpus-range load scale fixes the dispatch, and a power flow
         of the 65-node network with breakers as tiny impedances supplies both the
         substation measurements (node voltages, unit and load meters, terminal and
         breaker flows) and, through the fixed meter identity, the operator's
-        122-entry vector.  The scenario is admitted only if the operator's
-        bus-branch WLS flags it, the corrected operator case verifies clean, and
-        the node/breaker estimator on the reported statuses flags it, is clean on
-        the true statuses, and ranks the true breaker first.
+        vector.  The scenario is admitted only if the operator's bus-branch WLS
+        flags it, the operator case rendered from the true statuses verifies
+        clean, and the node/breaker estimator on the reported statuses flags it,
+        is clean on the true statuses, and ranks the true breaker first.
         """
         from Transmission.ieee14_full_gse import gse_topology_nlm
         from Transmission.ieee14_full_measurements import (
@@ -1614,17 +1632,22 @@ class Round0ScenarioGenerator:
         )
         from Transmission.ieee14_full_substation import (
             add_telemetry_noise,
-            operator_vector_from_telemetry,
+            operator_model_from_map,
+            operator_vector_for_layout,
             solve_node_breaker,
             status_labels,
             substation_telemetry,
         )
 
         model = self._full_topology_model()
-        errors = self._dangling_terminal_errors()
+        allowed = set(effects or self.topology_effects)
+        errors = [e for e in self._breaker_error_catalogue() if e["category"] in allowed]
+        if not errors:
+            raise ScenarioRejected("topology_effects_unavailable", str(sorted(allowed)))
         error = errors[int(self._rng.integers(len(errors)))]
         cb_name = str(error["cb_name"])
         true_closed = bool(error["true_closed"])
+        category = str(error["category"])
         load_scale = self._draw_load_scale()
         reference = self._scaled_case14(load_scale)
         truth_case, info, removed = flipped_case(
@@ -1660,16 +1683,32 @@ class Round0ScenarioGenerator:
         )
         telemetry = _canonicalize_telemetry(telemetry)
         meter_nodes = main_section_nodes(model, node_to_bus, [])
+        # The operator's layout: the schematic-normal map rendered by the same
+        # topology processor the correction executor uses.
+        clean_case14 = self._clean_case()
+        _, normal_layout = operator_model_from_map(clean_case14, model, {}, meter_nodes)
         z_obs = _canonicalize_synthesized_measurement_vector(
-            operator_vector_from_telemetry(telemetry, model, meter_nodes).tolist()
+            operator_vector_for_layout(telemetry, normal_layout).tolist()
         )
 
-        row0 = int(error["equivalent_branch_row0"])
-        corrected_ppc = copy.deepcopy(self._clean_case())
-        corrected_ppc["branch"][row0][10] = 0.0
-        corrected_case = self._derived_case(corrected_ppc, f"r0_topo_l{row0 + 1}s0")
+        if category == "dangling_line_terminal":
+            row0 = int(error["equivalent_branch_row0"])
+            corrected_ppc = copy.deepcopy(clean_case14)
+            corrected_ppc["branch"][row0][10] = 0.0
+            corrected_case = self._derived_case(corrected_ppc, f"r0_topo_l{row0 + 1}s0")
+            clean_measurements = list(z_obs)
+        else:
+            corrected_ppc, corrected_layout = operator_model_from_map(
+                clean_case14, model, {cb_name: true_closed}, meter_nodes
+            )
+            corrected_case = self._derived_case(
+                corrected_ppc, f"r0_topo_{cb_name.lower()}_s{int(true_closed)}"
+            )
+            clean_measurements = _canonicalize_synthesized_measurement_vector(
+                operator_vector_for_layout(telemetry, corrected_layout).tolist()
+            )
         self._require_anomalous(self.case_path, z_obs, "topology")
-        self._require_clean(corrected_case, z_obs, "topology")
+        self._require_clean(corrected_case, clean_measurements, "topology")
 
         reported_labels = status_labels(model)
         reported_estimate = gse_topology_nlm(model, reference, {}, telemetry)
@@ -1705,7 +1744,7 @@ class Round0ScenarioGenerator:
                 f"{cb_name} ranked {true_rank} behind {order[0]}",
             )
 
-        branch = self._clean_case()["branch"]
+        branch = clean_case14["branch"]
         scenario = self._base_scenario(
             self._scenario_id("topology", cb_name, load_scale, index),
             case=self.case_path,
@@ -1713,12 +1752,13 @@ class Round0ScenarioGenerator:
             family="topology",
         )
         scenario["clean_case"] = corrected_case
-        scenario["clean_measurements"] = list(z_obs)
+        scenario["clean_measurements"] = list(clean_measurements)
         scenario["metadata"]["substation_telemetry"] = telemetry
         scenario["metadata"]["reported_breaker_status"] = reported_labels
         scenario["metadata"]["operator_voltage_meter_nodes"] = {
             str(bus): node for bus, node in meter_nodes.items()
         }
+        scenario["metadata"]["operator_layout"] = normal_layout
         scenario["metadata"]["topology_model_id"] = MODEL_ID
         scenario["metadata"]["topology_model_fingerprint"] = self._full_topology_fingerprint
         # Ranking statistics only: the breaker names stay in the hidden truth.
@@ -1732,24 +1772,33 @@ class Round0ScenarioGenerator:
             "gse_threshold": gse_limit,
             "enforced": bool(self.enforce_topology_ranking),
         }
-        scenario["true_topology_errors"] = [
-            {
-                "branch_row0": row0,
-                "line_index1": row0 + 1,
-                "expected_status": 0,
-                "from_bus": int(branch[row0][0]),
-                "to_bus": int(branch[row0][1]),
-                "load_scale": load_scale,
-                "operating_point": "ac_opf",
-                "cb_name": cb_name,
-                "cb_yard": str(error["yard"]),
-                "reported_cb_closed": bool(error["reported_closed"]),
-                "true_cb_closed": true_closed,
-                "physical_effect": "dangling_line_terminal",
-                "topology_model_id": MODEL_ID,
-                "topology_model_fingerprint": self._full_topology_fingerprint,
-            }
-        ]
+        truth = {
+            "expected_status": int(true_closed),
+            "load_scale": load_scale,
+            "operating_point": "ac_opf",
+            "cb_name": cb_name,
+            "cb_yard": str(error["yard"]),
+            "reported_cb_closed": bool(error["reported_closed"]),
+            "true_cb_closed": true_closed,
+            "physical_effect": category,
+            "topology_model_id": MODEL_ID,
+            "topology_model_fingerprint": self._full_topology_fingerprint,
+        }
+        if category == "dangling_line_terminal":
+            truth.update(
+                {
+                    "branch_row0": row0,
+                    "line_index1": row0 + 1,
+                    "from_bus": int(branch[row0][0]),
+                    "to_bus": int(branch[row0][1]),
+                }
+            )
+        else:
+            truth["affected_planning_buses"] = [
+                int(bus) for bus in (error.get("affected_planning_buses") or [])
+            ]
+            truth["operator_bus_count_after_fix"] = int(corrected_layout["bus_count"])
+        scenario["true_topology_errors"] = [truth]
         return scenario
 
     def _synthesized_harmonic_row(self, index: int) -> dict[str, Any]:
@@ -3367,7 +3416,9 @@ class Round0ScenarioGenerator:
             while len(built) < count and attempts < count * 8:
                 attempts += 1
                 try:
-                    base = self._topology_scenario(1000 + attempts)
+                    base = self._topology_scenario(
+                        1000 + attempts, effects=("dangling_line_terminal",)
+                    )
                     record(
                         self._compose_measurement(
                             base, offsets=1, family=family, index=attempts

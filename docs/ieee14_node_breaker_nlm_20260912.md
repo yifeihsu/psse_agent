@@ -99,7 +99,7 @@ scores without naming the breaker).
   closed) and optionally the `line_index` it affects; a breaker name may accompany
   exactly one numeric row in `psse_env/actions.py` and in the environment's action
   signature, which keeps two breakers on the same line distinguishable. Failures:
-  `topology_correction_unsupported_effect` (bus split, merge, islanded bay, equivalent),
+  `topology_correction_unsupported_effect` (islanded bay, equivalent; splits and merges are rendered, see below),
   `topology_correction_inconsistent_target`, `topology_correction_unknown_breaker`,
   `topology_correction_breaker_unsupported` (no telemetry bound),
   `topology_correction_no_change`.
@@ -123,11 +123,60 @@ Modified: `psse_env/providers/matpower.py`, `psse_env/providers/scenario_generat
 `psse_env/private_target_matching.py`, `psse_env/dagger/offline_teacher_target_audit.py`,
 `psse_env/providers/test_scenario_generator.py`.
 
+## Bus splits (added the same day)
+
+A breaker whose true state splits a bus into two energized sections is now sampled
+and correctable. The operator model is re-rendered rather than approximated:
+`Transmission/ieee14_full_substation.py::operator_model_from_map` contracts a reported
+breaker map the way an EMS topology processor does. A section with one line terminal
+and no equipment is a dangling terminal, so that line goes out of service and keeps
+its row on the main section of its planning bus; an empty section is dropped; an
+unsupplied section drops its loads and switches its units off; every other section
+is a bus. Planning buses keep numbers 1 to 14 through their main section (the one
+holding the operator's voltage meter), and further sections follow, so the normal
+map reproduces `case14` exactly and a split appends bus 15.
+`operator_vector_for_layout` reads the operator vector of any rendering from the
+substation meters: section voltage at the meter node, injection as the sum of the
+section's unit and load meters, terminal flows unchanged.
+
+- **Generator.** `topology_effects` defaults to dangling terminals and bus splits.
+  A split root's `clean_case` is the rendered 15-bus case of the true map and its
+  `clean_measurements` the projection into that layout; the root itself stays on
+  `case14` with 122 measurements. The truth names the breaker, its expected status,
+  `physical_effect: bus_split` and the affected planning bus; there is no branch row.
+  Mixed measurement-plus-topology roots keep drawing dangling terminals so the meter
+  indices of the overlaid fault stay valid.
+- **Executor.** `correct_topology(cb_name, status)` for a split or merge renders the
+  new map on the state's current case, re-projects the measurements, and records
+  the layout, the derived case and `operator_layout_changed` in the metadata. A
+  `line_index` on such a request is refused as inconsistent. Islanded bays remain
+  refused as equipment outages.
+- **Context.** Structural flips are confirmed by re-estimation like any other and
+  offered without a line index.
+- **Verification and audits.** The target test for a breaker with no branch row is
+  the recorded breaker status (`breaker_status_mismatch`); the branch-multiplier
+  ambiguity test does not apply. The candidate-quality oracle accepts the executor's
+  re-rendering when the candidate case is the recorded derived case. Private-truth
+  retirement resolves such a breaker by reported status. The release audit compares
+  the final case and measurements with the clean rendering as a whole and judges
+  non-regression on the breaker status.
+- **Synchronization.** Shared-meter synchronization follows the recorded operator
+  layout, so it works on 15-bus states.
+
+Validation: the normal map renders `case14` bit-for-bit; all nine feasible splits
+render 15 buses and the projected vector verifies clean (J 74 to 124 against a limit
+of 131) while the reported 14-bus model shows J from 527 to 52,731; the expert fixes a
+split root end to end with the private truth retired and the release audit clean.
+The tenth split, `CB_13R4_13R1`, leaves the OPF infeasible at most load scales and is
+rejected per draw. The 10/14 merge stays unsampled (marginal for the operator WLS),
+though the executor renders it.
+
 ## Limits
 
-Only breaker errors whose effect is one isolated (or reconnected) line terminal are
-sampled and correctable, because the operator model is still the 14-bus case. Bus
-splits, the 10/14 merge and islanded bays are ranked and confirmed by the estimator
-like any other breaker, but their corrections are refused with the effect named; the
-estimator itself does not need that restriction. Eight candidates are confirmed per
-context call; the audit never needed more than seven.
+Islanded bays are ranked and confirmed by the estimator like any other breaker, but
+their corrections are refused with the effect named: they are equipment outages the
+operator's WLS cannot see. The 10/14 merge is renderable and correctable but not
+sampled. Eight candidates are confirmed per context call; the audit never needed
+more than seven. After a split, later meter-index bookkeeping (mixed roots,
+research truth metrics keyed by line index) assumes the 14-bus layout, which is
+why compositions draw dangling terminals only.

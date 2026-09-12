@@ -436,6 +436,50 @@ def _clean_parameter_value(
     return _row_value(clean_row, column)
 
 
+def _reported_breaker_closed(state: Mapping[str, Any], breaker: str) -> bool | None:
+    metadata = state.get("metadata")
+    reported = metadata.get("reported_breaker_status") if isinstance(metadata, Mapping) else None
+    if not isinstance(reported, Mapping) or reported.get(breaker) is None:
+        return None
+    text = str(reported[breaker]).strip().lower()
+    if text in {"closed", "close", "1", "true"}:
+        return True
+    if text in {"open", "0", "false"}:
+        return False
+    return None
+
+
+def _breaker_status_resolution(
+    arguments: Mapping[str, Any],
+    fault: Mapping[str, Any],
+    parent_state: Mapping[str, Any],
+    candidate_state: Mapping[str, Any],
+) -> bool | None:
+    breaker = arguments.get("cb_name")
+    if breaker is None or fault.get("cb_name") is None:
+        return None
+    breaker = str(breaker).strip()
+    if breaker != str(fault["cb_name"]).strip():
+        return False
+    expected = next(
+        (fault[key] for key in ("expected_status", "clean", "true_value") if fault.get(key) is not None),
+        None,
+    )
+    if expected is None:
+        return None
+    try:
+        expected_closed = bool(int(expected)) if not isinstance(expected, str) else (
+            str(expected).strip().lower() in {"closed", "close", "1", "true"}
+        )
+    except (TypeError, ValueError):
+        return None
+    after = _reported_breaker_closed(candidate_state, breaker)
+    before = _reported_breaker_closed(parent_state, breaker)
+    if after is None or before is None:
+        return None
+    return bool(after == expected_closed and before != expected_closed)
+
+
 def correction_matches_private_fault(
     action: Mapping[str, Any],
     fault: Mapping[str, Any],
@@ -510,6 +554,11 @@ def correction_matches_private_fault(
     parent_rows = _case_rows(parent_state.get("case"), case_loader)
     action_row0 = _target_row0(action_target, parent_rows)
     if action_row0 is None:
+        if family == "topology":
+            # A breaker whose flip splits or merges buses affects no single
+            # branch row: the fault retires when the candidate's reported
+            # breaker status equals the expected one and the parent's did not.
+            return _breaker_status_resolution(arguments, fault, parent_state, candidate_state)
         return None
     effective_target = ("branch_row0", action_row0)
     parent_row = _branch_row(parent_state, effective_target, case_loader)

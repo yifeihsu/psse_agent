@@ -2014,7 +2014,10 @@ class EndToEndRound0EpisodeTests(unittest.TestCase):
         self.assertEqual(remaining_check["derived_remaining_fault_count"], 0)
 
     def test_topology_scenario_resolves_by_status_flip_on_true_line(self) -> None:
-        generator = Round0ScenarioGenerator(seed=31)
+        # The line-status route: a breaker error that isolates one line terminal.
+        generator = Round0ScenarioGenerator(
+            seed=31, topology_effects=("dangling_line_terminal",)
+        )
         scenario = generator.build({"topology": 1})[0]
         env, executed = self._run_episode(scenario)
         self.assertTrue(env.is_terminal())
@@ -2029,7 +2032,10 @@ class EndToEndRound0EpisodeTests(unittest.TestCase):
         self.assertEqual(int(flips[-1]["line_index"]), true_line)
 
     def test_branch_family_ambiguity_resolves_without_privileged_truth(self) -> None:
-        generator = Round0ScenarioGenerator(seed=31)
+        # The line-status route: a breaker error that isolates one line terminal.
+        generator = Round0ScenarioGenerator(
+            seed=31, topology_effects=("dangling_line_terminal",)
+        )
         source = generator.build({"topology": 1})[0]
         true_line = int(source["true_topology_errors"][0]["line_index1"])
         env, executed = self._run_episode(

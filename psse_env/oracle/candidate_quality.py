@@ -5,6 +5,7 @@ from enum import Enum
 from typing import Any, Mapping
 
 from psse_env.actions import CORRECT_MEASUREMENTS, CORRECT_PARAMETERS, CORRECT_TOPOLOGY
+from psse_env.oracle.anomaly_evidence import normalized_residual_alarm
 from psse_env.private_target_matching import (
     action_targets_private_fault,
     canonical_branch_target,
@@ -794,6 +795,27 @@ class CandidateQualityOracle:
         "topology": {10},  # BR_STATUS
     }
 
+    @staticmethod
+    def _breaker_structural_correction(
+        action: Mapping[str, Any], candidate_state: Mapping[str, Any]
+    ) -> bool:
+        """Whether the candidate is the executor-rendered result of a breaker flip
+        whose effect is a bus split or merge, as recorded in its metadata."""
+        args = action.get("arguments") if isinstance(action.get("arguments"), Mapping) else {}
+        breaker = args.get("cb_name")
+        if breaker is None:
+            return False
+        metadata = candidate_state.get("metadata")
+        record = metadata.get("last_topology_correction") if isinstance(metadata, Mapping) else None
+        if not isinstance(record, Mapping):
+            return False
+        if str(record.get("cb_name") or "").strip() != str(breaker).strip():
+            return False
+        if str(record.get("breaker_effect") or "") not in {"bus_split", "merge"}:
+            return False
+        derived = record.get("derived_case")
+        return derived is not None and str(candidate_state.get("case")) == str(derived)
+
     def _path_case_collateral(
         self,
         action: Mapping[str, Any],
@@ -887,6 +909,12 @@ class CandidateQualityOracle:
             return True
         if family not in {"parameter", "topology"}:
             return False
+        if family == "topology" and self._breaker_structural_correction(action, candidate_state):
+            # A breaker-level bus split or merge re-renders the operator model
+            # (bus count changes) and re-projects the operator vector from the
+            # substation meters; both are the correction, not collateral.  The
+            # executor's provenance must name the candidate case it produced.
+            return False
         if parent_measurements != candidate_measurements:
             return True
         if isinstance(parent_case, str) or isinstance(candidate_case, str):
@@ -967,6 +995,8 @@ class CandidateQualityOracle:
         reports ``globally_resolved=False`` while ``post_action_resolved`` and
         the statistic itself say the anomaly is gone.
         """
+        if normalized_residual_alarm(verification):
+            return False
         explicit = _first_present(
             verification.get("post_action_resolved"),
             verification.get("no_material_anomaly_remaining"),
@@ -980,6 +1010,8 @@ class CandidateQualityOracle:
         return None
 
     def _global_resolved(self, verification: Mapping[str, Any]) -> bool | None:
+        if normalized_residual_alarm(verification):
+            return False
         explicit = _first_present(
             verification.get("globally_resolved"),
             verification.get("post_action_resolved"),

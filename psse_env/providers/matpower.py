@@ -874,6 +874,7 @@ class MatpowerDeploymentProviders:
         arguments = dict(arguments) if isinstance(arguments, Mapping) else {}
         target_measurements: set[int] = set()
         target_rows: set[int] = set()
+        breaker_only = False
         if tool == CORRECT_MEASUREMENTS:
             group = arguments.get("suspect_group")
             updates = arguments.get("measurement_updates")
@@ -885,10 +886,15 @@ class MatpowerDeploymentProviders:
             try:
                 target_rows = {self._branch_row0(arguments, nl)}
             except ValueError:
-                return None
+                # A breaker whose flip splits or merges buses affects no single
+                # branch row; its target is the recorded breaker status.
+                if tool == CORRECT_TOPOLOGY and arguments.get("cb_name") is not None:
+                    breaker_only = True
+                else:
+                    return None
         else:
             return None
-        if not target_measurements and not target_rows:
+        if not target_measurements and not target_rows and not breaker_only:
             return None
 
         def row_lambda(row0: int) -> float:
@@ -900,7 +906,39 @@ class MatpowerDeploymentProviders:
             return max(values, default=0.0)
 
         topology_status_matches: bool | None = None
-        if tool == CORRECT_TOPOLOGY:
+        breaker_matches: bool | None = None
+        structural_effect: str | None = None
+        if tool == CORRECT_TOPOLOGY and breaker_only:
+            from Transmission.ieee14_full_topology import parse_status
+
+            requested_breaker = str(arguments["cb_name"]).strip()
+            requested_status = arguments.get("status", arguments.get("expected_status"))
+            if arguments.get("desired_status") is not None and requested_status is None:
+                requested_status = arguments["desired_status"]
+            try:
+                requested_closed = parse_status(requested_status)
+            except ValueError:
+                return None
+            metadata = candidate_metadata if isinstance(candidate_metadata, Mapping) else {}
+            last = metadata.get("last_topology_correction")
+            reported = metadata.get("reported_breaker_status")
+            breaker_matches = bool(
+                isinstance(last, Mapping)
+                and str(last.get("cb_name") or "").strip() == requested_breaker
+            )
+            structural_effect = (
+                str(last.get("breaker_effect") or "") if isinstance(last, Mapping) else None
+            )
+            recorded_closed: bool | None = None
+            if isinstance(reported, Mapping) and reported.get(requested_breaker) is not None:
+                try:
+                    recorded_closed = parse_status(reported[requested_breaker])
+                except ValueError:
+                    recorded_closed = None
+            topology_status_matches = bool(
+                breaker_matches and recorded_closed is not None and recorded_closed == requested_closed
+            )
+        elif tool == CORRECT_TOPOLOGY:
             requested_status = arguments.get("status", arguments.get("expected_status"))
             if arguments.get("desired_status") is not None and requested_status is None:
                 requested_status = int(bool(arguments["desired_status"]))
@@ -930,7 +968,6 @@ class MatpowerDeploymentProviders:
             # A breaker-level correction is fixed only when the derived case
             # records that exactly the requested breaker produced the status.
             requested_breaker = arguments.get("cb_name")
-            breaker_matches: bool | None = None
             if requested_breaker is not None:
                 last = (
                     candidate_metadata.get("last_topology_correction")
@@ -954,7 +991,9 @@ class MatpowerDeploymentProviders:
             target_metric_threshold = self.residual_threshold
         elif tool == CORRECT_TOPOLOGY:
             target_values = [0.0 if topology_status_matches else 1.0]
-            target_metric_kind = "branch_status_mismatch"
+            target_metric_kind = (
+                "breaker_status_mismatch" if breaker_only else "branch_status_mismatch"
+            )
             target_metric_threshold = 0.5
         else:
             target_values = [row_lambda(row0) for row0 in target_rows]
@@ -981,6 +1020,19 @@ class MatpowerDeploymentProviders:
             "target_metric_threshold": float(target_metric_threshold),
             "remaining_suspect_count": int(remaining),
         }
+        if tool == CORRECT_TOPOLOGY and breaker_only:
+            # No single branch row carries a split or merge, so the branch
+            # multiplier ambiguity test does not apply; the structural target
+            # is the recorded breaker status in the rendered candidate.
+            evidence.update(
+                {
+                    "topology_target_status_matches_requested": bool(topology_status_matches),
+                    "topology_target_breaker": str(arguments["cb_name"]).strip(),
+                    "topology_target_breaker_matches_requested": bool(breaker_matches),
+                    "topology_target_effect": structural_effect,
+                }
+            )
+            return evidence
         if tool == CORRECT_TOPOLOGY:
             topology_multiplier = max(
                 (row_lambda(row0) for row0 in target_rows), default=math.inf
@@ -2497,25 +2549,44 @@ class MatpowerDeploymentProviders:
         except ValueError:
             return telemetry
         model = binding["model"]
-        nb, nl = 14, 20
-        if len(z) != 3 * nb + 4 * nl:
-            return telemetry
+        nl = 20
         node_vm = dict(telemetry.get("node_vm") or {})
         node_p = dict(telemetry.get("node_pinj") or {})
         node_q = dict(telemetry.get("node_qinj") or {})
-        for b in range(1, nb + 1):
-            meter = binding["meter_nodes"].get(b)
+        # The operator layout: one (meter node, equipment nodes) pair per bus.
+        # A rendered layout is recorded after a structural breaker correction;
+        # otherwise the buses are the planning buses.
+        layout = self._metadata(state).get("operator_layout")
+        buses: list[tuple[str | None, list[str]]] = []
+        if isinstance(layout, Mapping) and isinstance(layout.get("sections"), Mapping):
+            count = int(layout.get("bus_count") or len(layout["sections"]))
+            for i in range(count):
+                section = layout["sections"].get(str(i + 1))
+                if not isinstance(section, Mapping):
+                    buses.append((None, []))
+                    continue
+                buses.append(
+                    (
+                        section.get("meter_node"),
+                        [str(node) for node in (section.get("equipment_nodes") or [])],
+                    )
+                )
+        else:
+            for b in range(1, 15):
+                equipment = sorted(
+                    {model.equipment[table][b] for table in ("gen", "load")}
+                )
+                buses.append((binding["meter_nodes"].get(b), equipment))
+        nb = len(buses)
+        if len(z) != 3 * nb + 4 * nl:
+            return telemetry
+        for i, (meter, equipment) in enumerate(buses):
             if meter in node_vm and float(node_vm[meter]) > 0.0:
-                node_vm[meter] = float(z[b - 1])
-            equipment = {
-                model.equipment[table][b]
-                for table in ("gen", "load")
-                if model.equipment[table][b] in node_p
-            }
-            if len(equipment) == 1:
-                node = equipment.pop()
-                node_p[node] = float(z[nb + b - 1])
-                node_q[node] = float(z[2 * nb + b - 1])
+                node_vm[meter] = float(z[i])
+            metered = [node for node in equipment if node in node_p]
+            if len(metered) == 1:
+                node_p[metered[0]] = float(z[nb + i])
+                node_q[metered[0]] = float(z[2 * nb + i])
         telemetry["node_vm"] = node_vm
         telemetry["node_pinj"] = node_p
         telemetry["node_qinj"] = node_q
@@ -2576,9 +2647,12 @@ class MatpowerDeploymentProviders:
 
         removed = old_groups - new_groups
         added = new_groups - old_groups
+        touched = sorted(
+            {model.nodes[n].planning_bus for g in (removed | added) for n in g}
+        )
         if len(new_groups) > len(old_groups):
             if len(added) != 2 or len(removed) != 1:
-                return {"effect": "bus_split"}
+                return {"effect": "bus_split", "affected_planning_buses": touched}
             parts = [contents(g) for g in added]
             minor = min(parts, key=lambda c: (len(c[0]) + len(c[1]), len(c[0])))
             if len(minor[0]) == 1 and not minor[1]:
@@ -2588,11 +2662,14 @@ class MatpowerDeploymentProviders:
                     "branch_status": 0,
                 }
             if not minor[0]:
-                return {"effect": "unsupplied_island" if minor[1] else "empty_busbar"}
-            return {"effect": "bus_split"}
+                return {
+                    "effect": "unsupplied_island" if minor[1] else "empty_busbar",
+                    "affected_planning_buses": touched,
+                }
+            return {"effect": "bus_split", "affected_planning_buses": touched}
         if len(new_groups) < len(old_groups):
             if len(removed) != 2 or len(added) != 1:
-                return {"effect": "merge"}
+                return {"effect": "merge", "affected_planning_buses": touched}
             parts = [contents(g) for g in removed]
             minor = min(parts, key=lambda c: (len(c[0]) + len(c[1]), len(c[0])))
             if len(minor[0]) == 1 and not minor[1]:
@@ -2601,8 +2678,8 @@ class MatpowerDeploymentProviders:
                     "branch_row0": int(minor[0][0]),
                     "branch_status": 1,
                 }
-            return {"effect": "merge"}
-        return {"effect": "reassignment"}
+            return {"effect": "merge", "affected_planning_buses": touched}
+        return {"effect": "reassignment", "affected_planning_buses": touched}
 
     def _correct_breaker_status(
         self, state: Mapping[str, Any], arguments: Mapping[str, Any]
@@ -2654,12 +2731,16 @@ class MatpowerDeploymentProviders:
             )
         model = binding["model"]
         effect = self._breaker_effect(model, binding["reference"], labels, cb_name, new_closed)
+        if effect["effect"] in {"bus_split", "merge"}:
+            return self._render_structural_breaker_correction(
+                state, binding, arguments, cb_name, new_closed, new_label, effect
+            )
         if effect["effect"] not in {"dangling_line_terminal", "reconnect_line_terminal"}:
             return self._failure(
                 "topology_correction_unsupported_effect",
                 f"setting {cb_name} {new_label} would {effect['effect'].replace('_', ' ')}; "
-                "the operator model can represent only a single isolated or "
-                "reconnected line terminal",
+                "the operator model can carry an isolated or reconnected line "
+                "terminal, a bus split or a bus merge, not an equipment outage",
                 breaker_effect=effect["effect"],
             )
         row0 = int(effect["branch_row0"])
@@ -2716,6 +2797,8 @@ class MatpowerDeploymentProviders:
                         "cb_name": cb_name,
                         "cb_status": new_label,
                         "breaker_effect": effect["effect"],
+                        "derived_case": derived_path,
+                        "operator_layout_changed": False,
                     },
                 },
             },
@@ -2727,6 +2810,90 @@ class MatpowerDeploymentProviders:
             "cb_previous_status": labels[cb_name],
             "cb_new_status": new_label,
             "breaker_effect": effect["effect"],
+        }
+
+    def _render_structural_breaker_correction(
+        self,
+        state: Mapping[str, Any],
+        binding: Mapping[str, Any],
+        arguments: Mapping[str, Any],
+        cb_name: str,
+        new_closed: bool,
+        new_label: str,
+        effect: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """A breaker flip that splits or merges buses re-renders the operator model.
+
+        The topology processor contracts the new reported map into a bus-branch
+        case whose bus count differs from the parent's, and the operator vector
+        is re-read from the substation meters in that layout, so the candidate
+        carries a new case and new measurements together with the layout the
+        estimator needs to keep syncing shared meters.
+        """
+        from Transmission.ieee14_full_substation import (
+            operator_model_from_map,
+            operator_vector_for_layout,
+            status_map_from_labels,
+        )
+
+        if any(
+            arguments.get(key) is not None
+            for key in ("branch_row0", "line_index1", "line_index")
+        ):
+            return self._failure(
+                "topology_correction_inconsistent_target",
+                f"{cb_name} {new_label} would {effect['effect'].replace('_', ' ')} the "
+                "operator model; it affects no single line",
+                breaker_effect=effect["effect"],
+            )
+        labels = binding["reported_labels"]
+        new_labels = dict(labels)
+        new_labels[cb_name] = new_label
+        try:
+            current = _load_python_case(self._case_path(state))
+        except Exception as exc:
+            return self._failure(
+                "topology_correction_input_error", f"{type(exc).__name__}: {exc}"
+            )
+        try:
+            case, layout = operator_model_from_map(
+                current, binding["model"], status_map_from_labels(new_labels), binding["meter_nodes"]
+            )
+            telemetry = self._synchronized_telemetry(state, binding)
+            measurements = operator_vector_for_layout(telemetry, layout)
+        except (KeyError, ValueError) as exc:
+            return self._failure(
+                "topology_correction_telemetry_incomplete",
+                f"{type(exc).__name__}: {exc}",
+                breaker_effect=effect["effect"],
+            )
+        tag = re.sub(r"[^A-Za-z0-9_.-]", "_", cb_name)
+        derived_path = self._derived_case(case, f"topo_{tag}_s{int(new_closed)}")
+        return {
+            "modification": {
+                "case": derived_path,
+                "measurements": [float(value) for value in measurements],
+                "metadata_updates": {
+                    "reported_breaker_status": new_labels,
+                    "operator_layout": layout,
+                    "last_topology_correction": {
+                        "cb_name": cb_name,
+                        "cb_status": new_label,
+                        "breaker_effect": effect["effect"],
+                        "affected_planning_buses": list(effect.get("affected_planning_buses") or []),
+                        "derived_case": derived_path,
+                        "operator_bus_count": int(layout["bus_count"]),
+                        "operator_layout_changed": True,
+                    },
+                },
+            },
+            "evidence_source": "deployment_correction:breaker_status",
+            "cb_name": cb_name,
+            "cb_previous_status": labels[cb_name],
+            "cb_new_status": new_label,
+            "breaker_effect": effect["effect"],
+            "affected_planning_buses": list(effect.get("affected_planning_buses") or []),
+            "operator_bus_count": int(layout["bus_count"]),
         }
 
     def _node_breaker_topology_context(
@@ -2782,7 +2949,8 @@ class MatpowerDeploymentProviders:
                 if flip["success"] and reported_chi_square > 0.0
                 else float("-inf")
             )
-            representable = effect["effect"] in {
+            structural = effect["effect"] in {"bus_split", "merge"}
+            representable = structural or effect["effect"] in {
                 "dangling_line_terminal",
                 "reconnect_line_terminal",
             }
@@ -2801,24 +2969,24 @@ class MatpowerDeploymentProviders:
                 "flip_explains_substation_measurements": clean,
                 "bus_branch_effect": effect["effect"],
             }
-            if representable:
+            if structural:
+                finding["affected_planning_buses"] = list(
+                    effect.get("affected_planning_buses") or []
+                )
+            elif representable:
                 finding["line_index"] = int(effect["branch_row0"]) + 1
                 finding["branch_status"] = int(effect["branch_status"])
             breaker_findings.append(finding)
             if representable and (clean or progress >= self.min_breaker_flip_progress):
+                action_arguments = {
+                    "state_id": state_id,
+                    "cb_name": cb_name,
+                    "status": int(proposed_closed),
+                }
+                if not structural:
+                    action_arguments["line_index"] = int(effect["branch_row0"]) + 1
                 admissible.append(
-                    (
-                        finding,
-                        {
-                            "tool": CORRECT_TOPOLOGY,
-                            "arguments": {
-                                "state_id": state_id,
-                                "cb_name": cb_name,
-                                "status": int(proposed_closed),
-                                "line_index": int(effect["branch_row0"]) + 1,
-                            },
-                        },
-                    )
+                    (finding, {"tool": CORRECT_TOPOLOGY, "arguments": action_arguments})
                 )
         # A flip that leaves the substation estimate clean explains everything
         # and outranks any partial explanation.  Without one (another fault

@@ -1053,6 +1053,72 @@ def _case_values_close(
     )
 
 
+def _reported_breaker_status_value(metadata: Any, breaker: str) -> float | None:
+    reported = metadata.get("reported_breaker_status") if isinstance(metadata, Mapping) else None
+    if not isinstance(reported, Mapping) or reported.get(breaker) is None:
+        return None
+    text = str(reported[breaker]).strip().lower()
+    if text in {"closed", "close", "1", "true"}:
+        return 1.0
+    if text in {"open", "0", "false"}:
+        return 0.0
+    return None
+
+
+def _structural_breaker_nonregression(
+    scenario: Mapping[str, Any],
+    final_metadata: Any,
+    target: tuple[str, Any],
+    topology_truth_rows: Any,
+) -> dict[str, Any] | None:
+    """Non-regression evidence for a committed breaker-level structural target."""
+    breaker = str(target[1]).strip()
+    faults = [
+        fault
+        for fault in (topology_truth_rows or [])
+        if isinstance(fault, Mapping)
+        and str(fault.get("cb_name") or "").strip() == breaker
+        and str(fault.get("physical_effect") or "") in {"bus_split", "merge"}
+    ]
+    if not faults:
+        return None
+    expected_values = {_finite_number(fault.get("expected_status")) for fault in faults}
+    initial = _reported_breaker_status_value(scenario.get("metadata"), breaker)
+    final = _reported_breaker_status_value(final_metadata, breaker)
+    record: dict[str, Any] = {"family": "topology", "target": list(target)}
+    if (
+        len(expected_values) != 1
+        or None in expected_values
+        or initial is None
+        or final is None
+    ):
+        record["status"] = "malformed"
+        return record
+    expected = expected_values.pop()
+    initial_distance = abs(initial - float(expected))
+    final_distance = abs(final - float(expected))
+    record.update(
+        {
+            "initial_distance": initial_distance,
+            "final_distance": final_distance,
+            "tolerance": 0.0,
+            "status": "passed" if final_distance <= initial_distance else "regressed",
+        }
+    )
+    return record
+
+
+def _structural_topology_truth(scenario: Mapping[str, Any]) -> bool:
+    """Whether a declared topology fault re-renders the operator case as a whole."""
+    for fault in _as_sequence(scenario.get("true_topology_errors", [])) or []:
+        if isinstance(fault, Mapping) and str(fault.get("physical_effect") or "") in {
+            "bus_split",
+            "merge",
+        }:
+            return True
+    return False
+
+
 def _target_case_fields_match(
     scenario: Mapping[str, Any],
     observed: Any,
@@ -1298,6 +1364,7 @@ def _accepted_target_nonregression(
     accepted_measurements: set[int],
     accepted_parameters: set[tuple[str, Any]],
     accepted_topology: set[tuple[str, Any]],
+    final_metadata: Mapping[str, Any] | None = None,
 ) -> tuple[list[str], list[dict[str, Any]]]:
     """Prove that every committed true target is no worse than at reset.
 
@@ -1547,6 +1614,22 @@ def _accepted_target_nonregression(
     for target in sorted(
         accepted_topology, key=lambda item: (str(item[0]), str(item[1]))
     ):
+        if target[0] != "branch_row0":
+            # A breaker whose flip splits or merges buses has no branch row;
+            # its non-regression is the reported breaker status against the
+            # expected one, at reset and at the end.
+            structural = _structural_breaker_nonregression(
+                scenario, final_metadata, target, topology_truth_rows
+            )
+            if structural is not None:
+                evidence.append(structural)
+                if structural["status"] == "regressed":
+                    problems.append("accepted_topology_target_regressed")
+                elif structural["status"] == "malformed":
+                    problems.append(
+                        "accepted_topology_nonregression_evidence_missing_or_malformed"
+                    )
+                continue
         malformed = target[0] != "branch_row0" or topology_truth_rows is None
         row0 = int(target[1]) if target[0] == "branch_row0" else -1
         initial_row = _branch_row(initial_branches, row0)
@@ -1928,6 +2011,7 @@ def audit_episode_against_truth(
             accepted_measurements=accepted_measurement_targets,
             accepted_parameters=accepted_parameter_targets,
             accepted_topology=accepted_topology_targets,
+            final_metadata=physical.get("metadata"),
         )
         record(ACCEPTED_TARGET_NONREGRESSION_CHECK, nonregression_problems)
         checks[ACCEPTED_TARGET_NONREGRESSION_CHECK]["target_evidence"] = (
@@ -1939,7 +2023,24 @@ def audit_episode_against_truth(
     healthy_measurement_problems: list[str] = []
     before = _as_sequence(initial_measurements)
     after = _as_sequence(final_measurements)
-    if before is None or after is None or len(before) != len(after):
+    clean_rows = _as_sequence(clean_measurements)
+    if (
+        before is not None
+        and after is not None
+        and len(before) != len(after)
+        and _structural_topology_truth(scenario)
+        and clean_rows is not None
+    ):
+        # A bus split or merge re-projects the operator vector from the
+        # substation meters, so its healthy state is the clean projection.
+        if len(after) != len(clean_rows) or not _values_close(
+            after,
+            clean_rows,
+            abs_tolerance=tolerance_profile.measurement_abs,
+            rel_tolerance=tolerance_profile.measurement_rel,
+        ):
+            healthy_measurement_problems.append("healthy_measurement_modified")
+    elif before is None or after is None or len(before) != len(after):
         healthy_measurement_problems.append(
             "healthy_measurement_preservation_evidence_missing_or_malformed"
         )
@@ -1983,13 +2084,24 @@ def audit_episode_against_truth(
             continue
         mutable_columns_by_row.setdefault(int(target[1]), set()).add(10)
     initial_case = scenario.get("case")
-    preserved = _healthy_case_preserved(
-        initial_case,
-        final_case,
-        mutable_columns_by_row,
-        case_loader=case_loader,
-        tolerances=tolerance_profile,
-    )
+    structural_topology = _structural_topology_truth(scenario)
+    if structural_topology:
+        # A bus split or merge re-renders the whole operator case; the only
+        # healthy-state guarantee is equality with the truth's clean case.
+        preserved = _case_values_close(
+            final_case,
+            clean_state.get("case", scenario.get("clean_case")),
+            case_loader=case_loader,
+            tolerances=tolerance_profile,
+        )
+    else:
+        preserved = _healthy_case_preserved(
+            initial_case,
+            final_case,
+            mutable_columns_by_row,
+            case_loader=case_loader,
+            tolerances=tolerance_profile,
+        )
     healthy_case_problems = (
         []
         if preserved is True
@@ -2022,12 +2134,18 @@ def audit_episode_against_truth(
     resolved_check(FINAL_MEASUREMENTS_CHECK, final_measurement_problems)
 
     clean_case = clean_state.get("case", scenario.get("clean_case"))
-    case_match = _target_case_fields_match(
-        scenario,
-        final_case,
-        clean_case,
-        case_loader=case_loader,
-        tolerances=tolerance_profile,
+    case_match = (
+        _case_values_close(
+            final_case, clean_case, case_loader=case_loader, tolerances=tolerance_profile
+        )
+        if structural_topology
+        else _target_case_fields_match(
+            scenario,
+            final_case,
+            clean_case,
+            case_loader=case_loader,
+            tolerances=tolerance_profile,
+        )
     )
     final_case_problems = (
         []
