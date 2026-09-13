@@ -2034,6 +2034,32 @@ def test_schema4_rejects_coordinated_state_and_history_forgeries() -> None:
         )
 
 
+def test_schema4_ingests_configured_normalized_residual_failure() -> None:
+    evidence = _objective_tool_evidence(
+        tool=RUN_WLS, state_id="active", state_hash="6" * 64,
+        statistic=100.0, threshold=200.0, max_residual=5.0, resolved=False,
+    )
+    evidence.update(
+        normalized_residual_threshold=4.0, normalized_residual_alarm=True,
+        chi_square_alarm=False, chi_square_alpha=0.05, chi_square_ratio=0.5,
+        anomaly_detection_rule="chi_square_or_normalized_residual",
+    )
+    episode = _schema4_episode(
+        root="root-v4-local-residual", cardinality=1, family="measurement", safe=True,
+        trace=[_schema4_trace_row(
+            step=0, action={"tool": RUN_WLS, "arguments": {"state_id": "active"}},
+            observation=_baseline_policy_observation(), family="measurement", cardinality=1,
+            terminal_outcome="resolved", tool_evidence=evidence,
+        )],
+    )
+    run = extract_artifact_metrics(
+        _schema4_artifact([episode]), variant_id="natural_dagger_probes", study_seed=3407,
+    )
+    physical = run["metrics"]["physical_recovery"]
+    assert physical["final_residual_chi_square_evaluable_episodes"] == 1
+    assert physical["final_residual_chi_square_accepted_episodes"] == 0
+
+
 def test_schema4_rejects_rehashed_trace_state_identity_substitution() -> None:
     residual = _objective_tool_evidence(
         tool=RUN_WLS,

@@ -448,6 +448,9 @@ _GROUPING_SCENARIO_KEYS = frozenset(
         "case_id",
         "split",
         "source_tier",
+        "source_realization_id",
+        "base_case_version",
+        "scenario_admission_mode",
     }
 )
 _REQUIRED_EXECUTION_SCENARIO_KEYS = frozenset({"scenario_id", "case", "measurements"})
@@ -870,6 +873,14 @@ _OBJECTIVE_TOOL_METRIC_FIELDS = (
     "power_flow_converged",
     "topology_feasible",
 )
+_OPTIONAL_OBJECTIVE_TOOL_METRIC_FIELDS = (
+    "normalized_residual_alarm",
+    "normalized_residual_threshold",
+    "chi_square_alarm",
+    "chi_square_alpha",
+    "anomaly_detection_rule",
+    "chi_square_ratio",
+)
 
 
 def objective_tool_evidence(
@@ -888,6 +899,13 @@ def objective_tool_evidence(
         **{
             field_name: copy.deepcopy(metrics.get(field_name))
             for field_name in _OBJECTIVE_TOOL_METRIC_FIELDS
+        },
+        # Old schema-v4 traces did not emit these fields. Preserve their exact
+        # certificates while retaining the configured decision rule on new runs.
+        **{
+            field_name: copy.deepcopy(metrics[field_name])
+            for field_name in _OPTIONAL_OBJECTIVE_TOOL_METRIC_FIELDS
+            if field_name in metrics
         },
     }
 
@@ -1006,6 +1024,9 @@ def _partitioned_scenario_parts(
     ):
         if not isinstance(grouping.get(key), str) or not grouping[key].strip():
             raise ValueError(f"partitioned scenario grouping.{key} must be non-empty")
+    for key in ("source_realization_id", "base_case_version", "scenario_admission_mode"):
+        if key in grouping and (not isinstance(grouping[key], str) or not grouping[key].strip()):
+            raise ValueError(f"partitioned scenario grouping.{key} must be non-empty when present")
     return execution, audit, grouping
 
 
@@ -6248,6 +6269,9 @@ def _validate_objective_tool_binding(
         "chi_square_statistic",
         "chi_square_threshold",
         "max_normalized_residual",
+        "normalized_residual_threshold",
+        "chi_square_alpha",
+        "chi_square_ratio",
     ):
         value = expected.get(name)
         if value is not None and (
@@ -6259,6 +6283,8 @@ def _validate_objective_tool_binding(
     for name in (
         "no_material_anomaly_remaining",
         "globally_resolved",
+        "normalized_residual_alarm",
+        "chi_square_alarm",
         "physical_constraints_ok",
         "physical_evidence_complete",
         "power_flow_converged",
@@ -6271,6 +6297,11 @@ def _validate_objective_tool_binding(
         value = expected.get(name)
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError(f"{label}.objective_tool_evidence.{name} is invalid")
+    rule = expected.get("anomaly_detection_rule")
+    if rule is not None and (not isinstance(rule, str) or rule not in {
+        "chi_square_only", "chi_square_or_normalized_residual"
+    }):
+        raise ValueError(f"{label}.objective_tool_evidence.anomaly_detection_rule is invalid")
     if expected.get("physical_bound_violations") is not None and not isinstance(
         expected.get("physical_bound_violations"), list
     ):

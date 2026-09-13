@@ -1,0 +1,2367 @@
+{
+  "contract": "standalone_exact_coupler_nlm_feasibility_v1",
+  "created_utc": "2026-09-13T01:48:27.026824+00:00",
+  "scope": "Fixed single-noise-draw direct-sensor PF fixtures for buses 4 and 12; feasibility, not performance or false-positive calibration. No production edits or integration.",
+  "physical_world_limitations": "Canonical dispatch with runpf; no OPF redispatch or operating-limit admission. Fresh physical worlds, not existing audit corpus.",
+  "covariance_scope": "Exact algebra for local linearized analog-noise propagation under hard independent linear constraints; not exact nonlinear finite-sample significance.",
+  "hypothesis_solver": "165 expanded states minus 26 exact linear constraints = 139 effective states. Unit voltage/zero angle/zero flow initialization, no truth state initialization.",
+  "bounds_difference": "The nullspace probe is unconstrained in voltage magnitude; existing estimator uses 0.2 to 2.0 bounds. Observed extrema are reported to check inactivity.",
+  "ranking_scope": "Max absolute normalized operational-constraint multiplier among all 13 couplers. Branch statuses held fixed; truth used only for fixture generation and evaluation labels.",
+  "acceptance_scope": "Top-ranked alternative only receives ordinary WLS plausibility verification; no full rival scan, calibration certificate, or automatic model correction is claimed.",
+  "versions": {
+    "python": "3.13.7",
+    "numpy": "1.26.4",
+    "scipy": "1.15.2"
+  },
+  "source_sha256": {
+    "logical_topology/estimation.py": "4423cf627dba23af591eba5b8268f5c72c14bb3cf2e32388e60aeccfc466f349",
+    "logical_topology/inventory.py": "10fabde5958d7e8c04bdab442806840c16e420cc73f49ceafdf9948f629375ca",
+    "logical_topology/measurements.py": "42fb7e19004f117465fb2a211d5b8b82ded5b708475fada701ac40827c0bd6b4"
+  },
+  "script_sha256": "828daacff8b76bd411ee3c73436c298d65efc6044771b182cbf797bfba2559ee",
+  "verification": {
+    "seven_prespecified_reported_models_completed": true,
+    "all_converged_and_effective_observable": true,
+    "constraints_within_1e_minus_12": true,
+    "objectives_match_contracted_within_1e_minus_6": true,
+    "predictions_match_contracted_within_1e_minus_6_pu": true,
+    "covariance_matches_independent_kkt_within_1e_minus_10_relative": true,
+    "constraint_reordering_preserves_nlm_within_1e_minus_10": true,
+    "all_three_healthy_controls_plausible": true,
+    "all_four_erroneous_models_rejected": true,
+    "all_four_errors_rank_first": true,
+    "all_four_top_ranked_alternatives_fit_and_match_truth": true
+  },
+  "all_checks_pass": true,
+  "worlds": [
+    {
+      "true_open_bus": null,
+      "physical_pf_converged": true,
+      "physical_connected": true
+    },
+    {
+      "true_open_bus": 4,
+      "physical_pf_converged": true,
+      "physical_connected": true
+    },
+    {
+      "true_open_bus": 12,
+      "physical_pf_converged": true,
+      "physical_connected": true
+    }
+  ],
+  "rows": [
+    {
+      "true_open_bus": null,
+      "error_device_for_evaluation_only": null,
+      "scenario": "healthy",
+      "noise_seed": 90200,
+      "result": {
+        "expanded_state_dimension": 165,
+        "exact_constraint_rank": 26,
+        "effective_state_dimension": 139,
+        "weighted_tangent_jacobian_rank": 139,
+        "available_measurement_count": 530,
+        "chi_square_dof": 391,
+        "converged": true,
+        "function_evaluations": 5,
+        "solver_message": "`ftol` termination condition is satisfied.",
+        "constraint_max_absolute": 1.1102230246251565e-16,
+        "tangent_gradient_max_absolute": 2.7121822313347366e-05,
+        "kkt_stationarity_max_absolute": 3.734504992003451e-05,
+        "kkt_stationarity_relative_to_gradient_scale": 1.0290146463925468e-10,
+        "minimum_voltage_magnitude_pu": 0.9348115324461886,
+        "maximum_voltage_magnitude_pu": 1.0603246733883933,
+        "J": 396.5141165915529,
+        "chi_square_threshold": 438.1057766434272,
+        "max_normalized_residual": 2.831004975096288,
+        "plausible": true,
+        "contracted_estimator_J": 396.5141165915517,
+        "contracted_estimator_max_normalized_residual": 2.831004975912751,
+        "contracted_estimator_plausible": true,
+        "J_absolute_difference_from_contracted": 1.1937117960769683e-12,
+        "prediction_max_absolute_difference_from_contracted_pu": 1.0620759063884044e-09,
+        "nlm_max_absolute_difference_after_constraint_reversal": 0.0,
+        "covariance_max_relative_difference_from_direct_kkt": 1.2169807259929567e-15,
+        "multiplier_noise_response_max_relative_difference_from_direct_kkt": 1.0057129172608316e-14,
+        "minimum_multiplier_covariance_eigenvalue": 6048.863231012244,
+        "coupler_ranking": [
+          {
+            "device_id": "case57:bus:24:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              351.3591655071786,
+              -2828.0425130951517
+            ],
+            "lambda_sd": [
+              336.35769653241084,
+              887.8039282997385
+            ],
+            "normalized_multipliers": [
+              1.0445997494019652,
+              -3.185435908704781
+            ],
+            "score_max_absolute_nlm": 3.185435908704781,
+            "joint_two_constraint_statistic": 11.277946120232162
+          },
+          {
+            "device_id": "case57:bus:4:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              1864.2384878436299,
+              229.9667002997538
+            ],
+            "lambda_sd": [
+              737.5651948575315,
+              1242.7855790170483
+            ],
+            "normalized_multipliers": [
+              2.527557564865472,
+              0.1850413331007916
+            ],
+            "score_max_absolute_nlm": 2.527557564865472,
+            "joint_two_constraint_statistic": 6.410551094278879
+          },
+          {
+            "device_id": "case57:bus:6:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              1983.9280152157517,
+              1832.0908537788482
+            ],
+            "lambda_sd": [
+              905.1533805936649,
+              1243.2029051302816
+            ],
+            "normalized_multipliers": [
+              2.1918141806138407,
+              1.473686110463886
+            ],
+            "score_max_absolute_nlm": 2.1918141806138407,
+            "joint_two_constraint_statistic": 7.140342516640421
+          },
+          {
+            "device_id": "case57:bus:41:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -271.8908840100155,
+              -1622.6245575740581
+            ],
+            "lambda_sd": [
+              228.94380126974553,
+              765.8882502443158
+            ],
+            "normalized_multipliers": [
+              -1.1875878818386045,
+              -2.118617901575649
+            ],
+            "score_max_absolute_nlm": 2.118617901575649,
+            "joint_two_constraint_statistic": 5.922119546040687
+          },
+          {
+            "device_id": "case57:bus:1:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -1366.7646340296396,
+              -66.544940436307
+            ],
+            "lambda_sd": [
+              809.7558783782865,
+              1304.056185692021
+            ],
+            "normalized_multipliers": [
+              -1.6878724446766415,
+              -0.0510291973355379
+            ],
+            "score_max_absolute_nlm": 1.6878724446766415,
+            "joint_two_constraint_statistic": 2.8670645409278617
+          },
+          {
+            "device_id": "case57:bus:12:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              1207.0383469078927,
+              989.1984755907292
+            ],
+            "lambda_sd": [
+              779.1243744636398,
+              1270.4034495893534
+            ],
+            "normalized_multipliers": [
+              1.549224214348107,
+              0.7786490786926616
+            ],
+            "score_max_absolute_nlm": 1.549224214348107,
+            "joint_two_constraint_statistic": 2.9957327778176017
+          },
+          {
+            "device_id": "case57:bus:11:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              182.8791789224024,
+              769.1752846263491
+            ],
+            "lambda_sd": [
+              144.14229791576346,
+              1123.9518792951767
+            ],
+            "normalized_multipliers": [
+              1.268740554068846,
+              0.6843489466014276
+            ],
+            "score_max_absolute_nlm": 1.268740554068846,
+            "joint_two_constraint_statistic": 2.053317209197788
+          },
+          {
+            "device_id": "case57:bus:38:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -138.39222390284192,
+              -1937.9721200541912
+            ],
+            "lambda_sd": [
+              371.9062745767581,
+              1564.6806016754526
+            ],
+            "normalized_multipliers": [
+              -0.37211586188035395,
+              -1.2385736219769197
+            ],
+            "score_max_absolute_nlm": 1.2385736219769197,
+            "joint_two_constraint_statistic": 1.683569334686528
+          },
+          {
+            "device_id": "case57:bus:56:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -185.66662594244738,
+              -536.4704969837558
+            ],
+            "lambda_sd": [
+              170.42670123075825,
+              771.1721084826678
+            ],
+            "normalized_multipliers": [
+              -1.0894221656678915,
+              -0.6956559905146168
+            ],
+            "score_max_absolute_nlm": 1.0894221656678915,
+            "joint_two_constraint_statistic": 1.6990464743086997
+          },
+          {
+            "device_id": "case57:bus:9:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -650.8089196083839,
+              1372.8338796790665
+            ],
+            "lambda_sd": [
+              880.5477189843331,
+              1371.0745396970333
+            ],
+            "normalized_multipliers": [
+              -0.7390955715143511,
+              1.0012831833216171
+            ],
+            "score_max_absolute_nlm": 1.0012831833216171,
+            "joint_two_constraint_statistic": 1.5609701736595505
+          },
+          {
+            "device_id": "case57:bus:49:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              67.81100786818598,
+              676.9343999031897
+            ],
+            "lambda_sd": [
+              779.1737268282343,
+              1074.299640837927
+            ],
+            "normalized_multipliers": [
+              0.08702938193799577,
+              0.630116937742991
+            ],
+            "score_max_absolute_nlm": 0.630116937742991,
+            "joint_two_constraint_statistic": 0.4064052948427811
+          },
+          {
+            "device_id": "case57:bus:15:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              520.5882783227121,
+              -1047.4481461498067
+            ],
+            "lambda_sd": [
+              1599.1247224341448,
+              1855.7286463081866
+            ],
+            "normalized_multipliers": [
+              0.32554576326622386,
+              -0.5644403605201737
+            ],
+            "score_max_absolute_nlm": 0.5644403605201737,
+            "joint_two_constraint_statistic": 0.4204246515528048
+          },
+          {
+            "device_id": "case57:bus:13:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              688.1776839016887,
+              438.22901920001266
+            ],
+            "lambda_sd": [
+              1293.7616619303483,
+              1798.9987041661345
+            ],
+            "normalized_multipliers": [
+              0.5319199850727513,
+              0.24359607274044093
+            ],
+            "score_max_absolute_nlm": 0.5319199850727513,
+            "joint_two_constraint_statistic": 0.34444405014975354
+          }
+        ]
+      }
+    },
+    {
+      "true_open_bus": null,
+      "error_device_for_evaluation_only": "case57:bus:4:coupler",
+      "scenario": "split",
+      "noise_seed": 90200,
+      "result": {
+        "expanded_state_dimension": 165,
+        "exact_constraint_rank": 26,
+        "effective_state_dimension": 139,
+        "weighted_tangent_jacobian_rank": 139,
+        "available_measurement_count": 530,
+        "chi_square_dof": 391,
+        "converged": true,
+        "function_evaluations": 5,
+        "solver_message": "`ftol` termination condition is satisfied.",
+        "constraint_max_absolute": 1.1102230246251565e-16,
+        "tangent_gradient_max_absolute": 8.501080924361304e-05,
+        "kkt_stationarity_max_absolute": 8.501080924361304e-05,
+        "kkt_stationarity_relative_to_gradient_scale": 9.076556637941838e-11,
+        "minimum_voltage_magnitude_pu": 0.9348103132455396,
+        "maximum_voltage_magnitude_pu": 1.060352087455211,
+        "J": 2640.8397204165767,
+        "chi_square_threshold": 438.1057766434272,
+        "max_normalized_residual": 35.013239672267005,
+        "plausible": false,
+        "contracted_estimator_J": 2640.8397204165785,
+        "contracted_estimator_max_normalized_residual": 35.01323969212824,
+        "contracted_estimator_plausible": false,
+        "J_absolute_difference_from_contracted": 1.8189894035458565e-12,
+        "prediction_max_absolute_difference_from_contracted_pu": 1.030857805367491e-09,
+        "nlm_max_absolute_difference_after_constraint_reversal": 0.0,
+        "covariance_max_relative_difference_from_direct_kkt": 1.499610606058838e-15,
+        "multiplier_noise_response_max_relative_difference_from_direct_kkt": 1.5166066767055267e-14,
+        "minimum_multiplier_covariance_eigenvalue": 6023.160198795045,
+        "coupler_ranking": [
+          {
+            "device_id": "case57:bus:4:coupler",
+            "reported_status": 0,
+            "constraint_kinds": [
+              "active_flow_zero_pu",
+              "reactive_flow_zero_pu"
+            ],
+            "lambda": [
+              4990.67298120594,
+              -113.02594186300936
+            ],
+            "lambda_sd": [
+              105.28557169294578,
+              113.09043305118192
+            ],
+            "normalized_multipliers": [
+              47.40130011128884,
+              -0.9994297378970742
+            ],
+            "score_max_absolute_nlm": 47.40130011128884,
+            "joint_two_constraint_statistic": 2251.651145706424
+          },
+          {
+            "device_id": "case57:bus:6:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              3288.379981468545,
+              4836.595830939816
+            ],
+            "lambda_sd": [
+              776.5474130191665,
+              1215.8486615311992
+            ],
+            "normalized_multipliers": [
+              4.234615847451651,
+              3.9779587575058626
+            ],
+            "score_max_absolute_nlm": 4.234615847451651,
+            "joint_two_constraint_statistic": 34.67786458941986
+          },
+          {
+            "device_id": "case57:bus:24:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              738.8016086811574,
+              -2827.041604952505
+            ],
+            "lambda_sd": [
+              335.39858295875376,
+              887.7951990752072
+            ],
+            "normalized_multipliers": [
+              2.2027570962397682,
+              -3.1843398205997957
+            ],
+            "score_max_absolute_nlm": 3.1843398205997957,
+            "joint_two_constraint_statistic": 15.074217169923667
+          },
+          {
+            "device_id": "case57:bus:13:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              3348.679926921557,
+              556.4312977302618
+            ],
+            "lambda_sd": [
+              1281.7098891718283,
+              1794.598767190541
+            ],
+            "normalized_multipliers": [
+              2.612666060558597,
+              0.3100588877598303
+            ],
+            "score_max_absolute_nlm": 2.612666060558597,
+            "joint_two_constraint_statistic": 6.935235741061884
+          },
+          {
+            "device_id": "case57:bus:9:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -2272.4457263927306,
+              1461.2828499361908
+            ],
+            "lambda_sd": [
+              872.6037846789465,
+              1370.8467263952386
+            ],
+            "normalized_multipliers": [
+              -2.604212549030855,
+              1.0659709957354326
+            ],
+            "score_max_absolute_nlm": 2.604212549030855,
+            "joint_two_constraint_statistic": 7.969138288586921
+          },
+          {
+            "device_id": "case57:bus:41:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -264.53633089149434,
+              -1622.226095044832
+            ],
+            "lambda_sd": [
+              228.94564960838701,
+              765.8876684137051
+            ],
+            "normalized_multipliers": [
+              -1.1554547175016665,
+              -2.1180992486858576
+            ],
+            "score_max_absolute_nlm": 2.1180992486858576,
+            "joint_two_constraint_statistic": 5.843988736979979
+          },
+          {
+            "device_id": "case57:bus:38:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -98.95002564129265,
+              -2034.5075824823389
+            ],
+            "lambda_sd": [
+              369.1088628203813,
+              1564.4312319527144
+            ],
+            "normalized_multipliers": [
+              -0.2680781623210291,
+              -1.3004774776471817
+            ],
+            "score_max_absolute_nlm": 1.3004774776471817,
+            "joint_two_constraint_statistic": 1.7713120026320714
+          },
+          {
+            "device_id": "case57:bus:11:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              161.57023558645602,
+              785.7819236545255
+            ],
+            "lambda_sd": [
+              144.13422534562105,
+              1123.867511171158
+            ],
+            "normalized_multipliers": [
+              1.1209706452372779,
+              0.6991766519130704
+            ],
+            "score_max_absolute_nlm": 1.1209706452372779,
+            "joint_two_constraint_statistic": 1.7230951070347582
+          },
+          {
+            "device_id": "case57:bus:56:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -181.81097580859597,
+              -535.5729708385007
+            ],
+            "lambda_sd": [
+              170.4267852016948,
+              771.1737184197906
+            ],
+            "normalized_multipliers": [
+              -1.0667981303140133,
+              -0.6944906939203549
+            ],
+            "score_max_absolute_nlm": 1.0667981303140133,
+            "joint_two_constraint_statistic": 1.6479839741930173
+          },
+          {
+            "device_id": "case57:bus:1:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -759.6494214849721,
+              124.65831890612652
+            ],
+            "lambda_sd": [
+              807.1885094120323,
+              1298.868250254219
+            ],
+            "normalized_multipliers": [
+              -0.9411053460588923,
+              0.0959745677683075
+            ],
+            "score_max_absolute_nlm": 0.9411053460588923,
+            "joint_two_constraint_statistic": 0.9263443498125153
+          },
+          {
+            "device_id": "case57:bus:15:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -820.0987718123644,
+              -1525.2841284461144
+            ],
+            "lambda_sd": [
+              1597.7112759378697,
+              1848.1710287645928
+            ],
+            "normalized_multipliers": [
+              -0.5132959779175118,
+              -0.8252938200560845
+            ],
+            "score_max_absolute_nlm": 0.8252938200560845,
+            "joint_two_constraint_statistic": 0.954623945070501
+          },
+          {
+            "device_id": "case57:bus:12:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              137.547511056723,
+              1018.3980194501719
+            ],
+            "lambda_sd": [
+              775.0524378028687,
+              1269.9759569470266
+            ],
+            "normalized_multipliers": [
+              0.17746865160071612,
+              0.801903385555709
+            ],
+            "score_max_absolute_nlm": 0.801903385555709,
+            "joint_two_constraint_statistic": 0.6730069231547613
+          },
+          {
+            "device_id": "case57:bus:49:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              44.65730937818317,
+              687.0840771700873
+            ],
+            "lambda_sd": [
+              779.1637867095142,
+              1074.2791105472395
+            ],
+            "normalized_multipliers": [
+              0.05731440569995612,
+              0.6395768757153675
+            ],
+            "score_max_absolute_nlm": 0.6395768757153675,
+            "joint_two_constraint_statistic": 0.4135707643037387
+          }
+        ]
+      },
+      "true_error_rank_for_evaluation_only": 1,
+      "top_ranked_alternative_test": {
+        "device_id": "case57:bus:4:coupler",
+        "desired_status": 1,
+        "J": 396.5141165915517,
+        "max_normalized_residual": 2.831004975912751,
+        "plausible": true,
+        "converged": true,
+        "observable": true,
+        "matches_truth_for_evaluation_only": true
+      }
+    },
+    {
+      "true_open_bus": null,
+      "error_device_for_evaluation_only": "case57:bus:12:coupler",
+      "scenario": "split",
+      "noise_seed": 90200,
+      "result": {
+        "expanded_state_dimension": 165,
+        "exact_constraint_rank": 26,
+        "effective_state_dimension": 139,
+        "weighted_tangent_jacobian_rank": 139,
+        "available_measurement_count": 530,
+        "chi_square_dof": 391,
+        "converged": true,
+        "function_evaluations": 6,
+        "solver_message": "`ftol` termination condition is satisfied.",
+        "constraint_max_absolute": 1.1102230246251565e-16,
+        "tangent_gradient_max_absolute": 0.0034963839716510847,
+        "kkt_stationarity_max_absolute": 0.0034963839716510847,
+        "kkt_stationarity_relative_to_gradient_scale": 1.265509373549008e-09,
+        "minimum_voltage_magnitude_pu": 0.9348115069901974,
+        "maximum_voltage_magnitude_pu": 1.0602191036001103,
+        "J": 22971.235753921505,
+        "chi_square_threshold": 438.1057766434272,
+        "max_normalized_residual": 81.5279814403126,
+        "plausible": false,
+        "contracted_estimator_J": 22971.235753922345,
+        "contracted_estimator_max_normalized_residual": 81.52796053096552,
+        "contracted_estimator_plausible": false,
+        "J_absolute_difference_from_contracted": 8.403731044381857e-10,
+        "prediction_max_absolute_difference_from_contracted_pu": 1.600220750352932e-07,
+        "nlm_max_absolute_difference_after_constraint_reversal": 0.0,
+        "covariance_max_relative_difference_from_direct_kkt": 1.5540575289673364e-15,
+        "multiplier_noise_response_max_relative_difference_from_direct_kkt": 1.6513366139726527e-14,
+        "minimum_multiplier_covariance_eigenvalue": 6049.393744855482,
+        "coupler_ranking": [
+          {
+            "device_id": "case57:bus:12:coupler",
+            "reported_status": 0,
+            "constraint_kinds": [
+              "active_flow_zero_pu",
+              "reactive_flow_zero_pu"
+            ],
+            "lambda": [
+              11670.22830700354,
+              11078.693446836827
+            ],
+            "lambda_sd": [
+              103.23726493060849,
+              108.50771878392798
+            ],
+            "normalized_multipliers": [
+              113.0427885206737,
+              102.10051018488271
+            ],
+            "score_max_absolute_nlm": 113.0427885206737,
+            "joint_two_constraint_statistic": 22572.297554264827
+          },
+          {
+            "device_id": "case57:bus:1:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -8614.163070342362,
+              -15125.81575208437
+            ],
+            "lambda_sd": [
+              804.0953527787973,
+              1308.4979643185345
+            ],
+            "normalized_multipliers": [
+              -10.712862648159186,
+              -11.5596784745186
+            ],
+            "score_max_absolute_nlm": 11.5596784745186,
+            "joint_two_constraint_statistic": 223.5583046009519
+          },
+          {
+            "device_id": "case57:bus:13:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              8189.906144015396,
+              -160.77174043193406
+            ],
+            "lambda_sd": [
+              1257.2882403112421,
+              1738.9869296371658
+            ],
+            "normalized_multipliers": [
+              6.513944759387857,
+              -0.09245137941633558
+            ],
+            "score_max_absolute_nlm": 6.513944759387857,
+            "joint_two_constraint_statistic": 42.4316250623532
+          },
+          {
+            "device_id": "case57:bus:9:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              2586.0507550677207,
+              8528.191951516113
+            ],
+            "lambda_sd": [
+              877.0353362989781,
+              1370.2292437801602
+            ],
+            "normalized_multipliers": [
+              2.9486277781926744,
+              6.223916173317622
+            ],
+            "score_max_absolute_nlm": 6.223916173317622,
+            "joint_two_constraint_statistic": 47.19452412414521
+          },
+          {
+            "device_id": "case57:bus:24:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              326.79565290590966,
+              -2802.5517391968706
+            ],
+            "lambda_sd": [
+              335.92374297340444,
+              887.8050373956077
+            ],
+            "normalized_multipliers": [
+              0.9728268981921369,
+              -3.1567197989979956
+            ],
+            "score_max_absolute_nlm": 3.1567197989979956,
+            "joint_two_constraint_statistic": 10.948015025932497
+          },
+          {
+            "device_id": "case57:bus:4:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              1897.7953989799937,
+              1755.924631132491
+            ],
+            "lambda_sd": [
+              733.3546066846372,
+              1242.7814667537727
+            ],
+            "normalized_multipliers": [
+              2.5878277461971386,
+              1.4128989513490913
+            ],
+            "score_max_absolute_nlm": 2.5878277461971386,
+            "joint_two_constraint_statistic": 8.584785391470634
+          },
+          {
+            "device_id": "case57:bus:6:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              2197.527123317741,
+              1986.7862145360868
+            ],
+            "lambda_sd": [
+              904.3812182179379,
+              1242.9313227544035
+            ],
+            "normalized_multipliers": [
+              2.4298681563156705,
+              1.5984682163558808
+            ],
+            "score_max_absolute_nlm": 2.4298681563156705,
+            "joint_two_constraint_statistic": 8.658529533184828
+          },
+          {
+            "device_id": "case57:bus:41:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -268.8887452643689,
+              -1614.9804822508434
+            ],
+            "lambda_sd": [
+              228.83115183611596,
+              765.8833528256558
+            ],
+            "normalized_multipliers": [
+              -1.1750530603321934,
+              -2.1086507185363437
+            ],
+            "score_max_absolute_nlm": 2.1086507185363437,
+            "joint_two_constraint_statistic": 5.849959398838938
+          },
+          {
+            "device_id": "case57:bus:15:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              2650.614448809826,
+              3844.375070641278
+            ],
+            "lambda_sd": [
+              1597.5214561030066,
+              1856.3097319599485
+            ],
+            "normalized_multipliers": [
+              1.659204287168533,
+              2.0709771674699295
+            ],
+            "score_max_absolute_nlm": 2.0709771674699295,
+            "joint_two_constraint_statistic": 7.118801329190863
+          },
+          {
+            "device_id": "case57:bus:38:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -129.7262566657398,
+              -2478.773621996735
+            ],
+            "lambda_sd": [
+              371.5117168115425,
+              1564.4055399496317
+            ],
+            "normalized_multipliers": [
+              -0.3491848326591172,
+              -1.5844827691396073
+            ],
+            "score_max_absolute_nlm": 1.5844827691396073,
+            "joint_two_constraint_statistic": 2.6456437330272844
+          },
+          {
+            "device_id": "case57:bus:11:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              158.97473528384018,
+              -575.753123718769
+            ],
+            "lambda_sd": [
+              144.12580551926,
+              1122.846899751749
+            ],
+            "normalized_multipliers": [
+              1.1030275578414432,
+              -0.5127619124620307
+            ],
+            "score_max_absolute_nlm": 1.1030275578414432,
+            "joint_two_constraint_statistic": 1.4962519046282114
+          },
+          {
+            "device_id": "case57:bus:56:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -184.17040041098667,
+              -530.516397606928
+            ],
+            "lambda_sd": [
+              170.43065219834367,
+              771.1744847246429
+            ],
+            "normalized_multipliers": [
+              -1.0806178233517112,
+              -0.6879330269807296
+            ],
+            "score_max_absolute_nlm": 1.0806178233517112,
+            "joint_two_constraint_statistic": 1.6687041620498335
+          },
+          {
+            "device_id": "case57:bus:49:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              605.8536375475533,
+              -956.8700616819042
+            ],
+            "lambda_sd": [
+              770.1186886231037,
+              1073.8077702122494
+            ],
+            "normalized_multipliers": [
+              0.7867016428737236,
+              -0.8910999605569708
+            ],
+            "score_max_absolute_nlm": 0.8910999605569708,
+            "joint_two_constraint_statistic": 1.3930353012551615
+          }
+        ]
+      },
+      "true_error_rank_for_evaluation_only": 1,
+      "top_ranked_alternative_test": {
+        "device_id": "case57:bus:12:coupler",
+        "desired_status": 1,
+        "J": 396.5141165915517,
+        "max_normalized_residual": 2.831004975912751,
+        "plausible": true,
+        "converged": true,
+        "observable": true,
+        "matches_truth_for_evaluation_only": true
+      }
+    },
+    {
+      "true_open_bus": 4,
+      "error_device_for_evaluation_only": null,
+      "scenario": "healthy",
+      "noise_seed": 90204,
+      "result": {
+        "expanded_state_dimension": 165,
+        "exact_constraint_rank": 26,
+        "effective_state_dimension": 139,
+        "weighted_tangent_jacobian_rank": 139,
+        "available_measurement_count": 530,
+        "chi_square_dof": 391,
+        "converged": true,
+        "function_evaluations": 5,
+        "solver_message": "`ftol` termination condition is satisfied.",
+        "constraint_max_absolute": 1.1102230246251565e-16,
+        "tangent_gradient_max_absolute": 3.82049597025258e-05,
+        "kkt_stationarity_max_absolute": 3.82049597025258e-05,
+        "kkt_stationarity_relative_to_gradient_scale": 1.0954787277320678e-10,
+        "minimum_voltage_magnitude_pu": 0.9356102504047834,
+        "maximum_voltage_magnitude_pu": 1.0594904486921526,
+        "J": 368.82985226903753,
+        "chi_square_threshold": 438.1057766434272,
+        "max_normalized_residual": 2.956195187256068,
+        "plausible": true,
+        "contracted_estimator_J": 368.829852269035,
+        "contracted_estimator_max_normalized_residual": 2.9561951875506525,
+        "contracted_estimator_plausible": true,
+        "J_absolute_difference_from_contracted": 2.5579538487363607e-12,
+        "prediction_max_absolute_difference_from_contracted_pu": 1.2445057623322597e-09,
+        "nlm_max_absolute_difference_after_constraint_reversal": 0.0,
+        "covariance_max_relative_difference_from_direct_kkt": 2.2511226198488792e-15,
+        "multiplier_noise_response_max_relative_difference_from_direct_kkt": 1.1827245839050625e-14,
+        "minimum_multiplier_covariance_eigenvalue": 5885.828377505369,
+        "coupler_ranking": [
+          {
+            "device_id": "case57:bus:38:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              800.6311105435516,
+              -448.46256182750983
+            ],
+            "lambda_sd": [
+              367.83809934007206,
+              1563.4113869760147
+            ],
+            "normalized_multipliers": [
+              2.176585601056392,
+              -0.28684872424713254
+            ],
+            "score_max_absolute_nlm": 2.176585601056392,
+            "joint_two_constraint_statistic": 4.806338035987458
+          },
+          {
+            "device_id": "case57:bus:56:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              279.27244821982237,
+              -1167.1084494051188
+            ],
+            "lambda_sd": [
+              170.2750997010366,
+              771.2004154160194
+            ],
+            "normalized_multipliers": [
+              1.6401250018949318,
+              -1.5133659501149637
+            ],
+            "score_max_absolute_nlm": 1.6401250018949318,
+            "joint_two_constraint_statistic": 4.890661283122654
+          },
+          {
+            "device_id": "case57:bus:11:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              225.6077132123162,
+              -139.40919246146234
+            ],
+            "lambda_sd": [
+              143.97631812890398,
+              1123.4144699495855
+            ],
+            "normalized_multipliers": [
+              1.5669779318174153,
+              -0.12409417556079591
+            ],
+            "score_max_absolute_nlm": 1.5669779318174153,
+            "joint_two_constraint_statistic": 2.476895291658654
+          },
+          {
+            "device_id": "case57:bus:49:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              1183.7677570034957,
+              778.064252749515
+            ],
+            "lambda_sd": [
+              778.1729778012533,
+              1074.2384771178915
+            ],
+            "normalized_multipliers": [
+              1.52121416545234,
+              0.7242937851537475
+            ],
+            "score_max_absolute_nlm": 1.52121416545234,
+            "joint_two_constraint_statistic": 2.872900840040518
+          },
+          {
+            "device_id": "case57:bus:24:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -445.8239381008603,
+              523.7905320483414
+            ],
+            "lambda_sd": [
+              334.5633534303278,
+              887.4341031118271
+            ],
+            "normalized_multipliers": [
+              -1.3325546074600256,
+              0.5902303395955223
+            ],
+            "score_max_absolute_nlm": 1.3325546074600256,
+            "joint_two_constraint_statistic": 2.1345181238859676
+          },
+          {
+            "device_id": "case57:bus:15:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -2028.0453790669849,
+              -137.90327737282496
+            ],
+            "lambda_sd": [
+              1595.50430060574,
+              1847.4702913978604
+            ],
+            "normalized_multipliers": [
+              -1.2710999138623624,
+              -0.07464438157134454
+            ],
+            "score_max_absolute_nlm": 1.2710999138623624,
+            "joint_two_constraint_statistic": 1.6233755503293896
+          },
+          {
+            "device_id": "case57:bus:13:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -795.3048525541534,
+              -1951.3935245495531
+            ],
+            "lambda_sd": [
+              1280.35284134172,
+              1793.511305620425
+            ],
+            "normalized_multipliers": [
+              -0.6211606885807585,
+              -1.088029675884598
+            ],
+            "score_max_absolute_nlm": 1.088029675884598,
+            "joint_two_constraint_statistic": 1.5803130941088608
+          },
+          {
+            "device_id": "case57:bus:4:coupler",
+            "reported_status": 0,
+            "constraint_kinds": [
+              "active_flow_zero_pu",
+              "reactive_flow_zero_pu"
+            ],
+            "lambda": [
+              54.167289538101286,
+              -115.17350988489524
+            ],
+            "lambda_sd": [
+              105.34811875491738,
+              113.15953745004607
+            ],
+            "normalized_multipliers": [
+              0.5141742460927704,
+              -1.0177976375675646
+            ],
+            "score_max_absolute_nlm": 1.0177976375675646,
+            "joint_two_constraint_statistic": 1.3272603858716399
+          },
+          {
+            "device_id": "case57:bus:1:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              534.1311042365446,
+              -1090.2183928674967
+            ],
+            "lambda_sd": [
+              806.7198296707885,
+              1299.4254869635533
+            ],
+            "normalized_multipliers": [
+              0.6621023614288944,
+              -0.8390003149892622
+            ],
+            "score_max_absolute_nlm": 0.8390003149892622,
+            "joint_two_constraint_statistic": 1.2857975333383047
+          },
+          {
+            "device_id": "case57:bus:12:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              604.4893569062501,
+              201.04206088873983
+            ],
+            "lambda_sd": [
+              774.5855035662541,
+              1270.0395230241677
+            ],
+            "normalized_multipliers": [
+              0.7804036534677351,
+              0.15829590909897548
+            ],
+            "score_max_absolute_nlm": 0.7804036534677351,
+            "joint_two_constraint_statistic": 0.6321647115029343
+          },
+          {
+            "device_id": "case57:bus:41:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -43.6389706943836,
+              419.33475332080155
+            ],
+            "lambda_sd": [
+              228.77031839695894,
+              765.8353664189551
+            ],
+            "normalized_multipliers": [
+              -0.19075451308618582,
+              0.547552087182406
+            ],
+            "score_max_absolute_nlm": 0.547552087182406,
+            "joint_two_constraint_statistic": 0.3352772045290166
+          },
+          {
+            "device_id": "case57:bus:9:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -21.94012215632162,
+              -671.3004789876334
+            ],
+            "lambda_sd": [
+              871.6923053334893,
+              1370.389177075114
+            ],
+            "normalized_multipliers": [
+              -0.025169571902929483,
+              -0.48986119433635744
+            ],
+            "score_max_absolute_nlm": 0.48986119433635744,
+            "joint_two_constraint_statistic": 0.24045293136776338
+          },
+          {
+            "device_id": "case57:bus:6:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -377.00606340231246,
+              -548.4950997789023
+            ],
+            "lambda_sd": [
+              775.9120344948118,
+              1216.7379034832138
+            ],
+            "normalized_multipliers": [
+              -0.4858876349917387,
+              -0.45079149602284857
+            ],
+            "score_max_absolute_nlm": 0.4858876349917387,
+            "joint_two_constraint_statistic": 0.45673085618112513
+          }
+        ]
+      }
+    },
+    {
+      "true_open_bus": 4,
+      "error_device_for_evaluation_only": "case57:bus:4:coupler",
+      "scenario": "merging",
+      "noise_seed": 90204,
+      "result": {
+        "expanded_state_dimension": 165,
+        "exact_constraint_rank": 26,
+        "effective_state_dimension": 139,
+        "weighted_tangent_jacobian_rank": 139,
+        "available_measurement_count": 530,
+        "chi_square_dof": 391,
+        "converged": true,
+        "function_evaluations": 6,
+        "solver_message": "`ftol` termination condition is satisfied.",
+        "constraint_max_absolute": 1.6653345369377348e-16,
+        "tangent_gradient_max_absolute": 5.81667749579573e-05,
+        "kkt_stationarity_max_absolute": 5.1271929805807304e-05,
+        "kkt_stationarity_relative_to_gradient_scale": 2.9070166402424232e-11,
+        "minimum_voltage_magnitude_pu": 0.9356176311381229,
+        "maximum_voltage_magnitude_pu": 1.0589095342073238,
+        "J": 9437.64975199569,
+        "chi_square_threshold": 438.1057766434272,
+        "max_normalized_residual": 50.381127061726225,
+        "plausible": false,
+        "contracted_estimator_J": 9437.649751995788,
+        "contracted_estimator_max_normalized_residual": 50.381126414947566,
+        "contracted_estimator_plausible": false,
+        "J_absolute_difference_from_contracted": 9.822542779147625e-11,
+        "prediction_max_absolute_difference_from_contracted_pu": 1.7807841673489477e-08,
+        "nlm_max_absolute_difference_after_constraint_reversal": 0.0,
+        "covariance_max_relative_difference_from_direct_kkt": 1.3570463654462074e-15,
+        "multiplier_noise_response_max_relative_difference_from_direct_kkt": 1.3025017435222617e-14,
+        "minimum_multiplier_covariance_eigenvalue": 5957.49352315329,
+        "coupler_ranking": [
+          {
+            "device_id": "case57:bus:4:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              66756.23253155022,
+              38941.80392948653
+            ],
+            "lambda_sd": [
+              737.4852500941844,
+              1241.9540983530921
+            ],
+            "normalized_multipliers": [
+              90.51873582966543,
+              31.355268267261863
+            ],
+            "score_max_absolute_nlm": 90.51873582966543,
+            "joint_two_constraint_statistic": 9064.307515217268
+          },
+          {
+            "device_id": "case57:bus:6:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              42214.871946961925,
+              6545.6829119134445
+            ],
+            "lambda_sd": [
+              906.1532929808956,
+              1245.0177700397605
+            ],
+            "normalized_multipliers": [
+              46.58689900920764,
+              5.257501595101251
+            ],
+            "score_max_absolute_nlm": 46.58689900920764,
+            "joint_two_constraint_statistic": 2213.5378243389764
+          },
+          {
+            "device_id": "case57:bus:38:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              5023.646985623566,
+              -126.72241226612118
+            ],
+            "lambda_sd": [
+              370.7501561745486,
+              1563.5656265231169
+            ],
+            "normalized_multipliers": [
+              13.549952446300363,
+              -0.0810470696697985
+            ],
+            "score_max_absolute_nlm": 13.549952446300363,
+            "joint_two_constraint_statistic": 183.6080987298868
+          },
+          {
+            "device_id": "case57:bus:13:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -17441.955746882315,
+              -5070.539401370032
+            ],
+            "lambda_sd": [
+              1290.8202514209029,
+              1797.0777642655844
+            ],
+            "normalized_multipliers": [
+              -13.51230407772317,
+              -2.821547014935227
+            ],
+            "score_max_absolute_nlm": 13.51230407772317,
+            "joint_two_constraint_statistic": 191.23677249025667
+          },
+          {
+            "device_id": "case57:bus:9:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              10857.80613088919,
+              -1294.4074335660282
+            ],
+            "lambda_sd": [
+              879.0042941103447,
+              1370.4577600008836
+            ],
+            "normalized_multipliers": [
+              12.352392591982229,
+              -0.9445073546558587
+            ],
+            "score_max_absolute_nlm": 12.352392591982229,
+            "joint_two_constraint_statistic": 153.6831475822451
+          },
+          {
+            "device_id": "case57:bus:12:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              7936.731451652314,
+              666.0743088130853
+            ],
+            "lambda_sd": [
+              778.1641120083317,
+              1270.2116514987124
+            ],
+            "normalized_multipliers": [
+              10.199302858067728,
+              0.5243805691966292
+            ],
+            "score_max_absolute_nlm": 10.199302858067728,
+            "joint_two_constraint_statistic": 104.2575238409582
+          },
+          {
+            "device_id": "case57:bus:24:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -2807.0176585365184,
+              430.0915379606542
+            ],
+            "lambda_sd": [
+              335.4752598040214,
+              887.4721552702548
+            ],
+            "normalized_multipliers": [
+              -8.36728663740011,
+              0.484625388420983
+            ],
+            "score_max_absolute_nlm": 8.36728663740011,
+            "joint_two_constraint_statistic": 70.30577373127255
+          },
+          {
+            "device_id": "case57:bus:1:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -5123.875006569057,
+              -5635.51712402292
+            ],
+            "lambda_sd": [
+              807.8851822445143,
+              1303.4378815418202
+            ],
+            "normalized_multipliers": [
+              -6.3423307162703555,
+              -4.323579361800301
+            ],
+            "score_max_absolute_nlm": 6.3423307162703555,
+            "joint_two_constraint_statistic": 53.49539297653303
+          },
+          {
+            "device_id": "case57:bus:15:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              5755.33333086038,
+              5352.7161214283415
+            ],
+            "lambda_sd": [
+              1592.1416187076557,
+              1852.4125903004503
+            ],
+            "normalized_multipliers": [
+              3.614837564218687,
+              2.8895917407688114
+            ],
+            "score_max_absolute_nlm": 3.614837564218687,
+            "joint_two_constraint_statistic": 21.650312071000123
+          },
+          {
+            "device_id": "case57:bus:11:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              332.4661340768291,
+              -672.1827184457879
+            ],
+            "lambda_sd": [
+              143.98919275865936,
+              1123.3615327267607
+            ],
+            "normalized_multipliers": [
+              2.308965886308401,
+              -0.5983672209374873
+            ],
+            "score_max_absolute_nlm": 2.308965886308401,
+            "joint_two_constraint_statistic": 5.73032162179162
+          },
+          {
+            "device_id": "case57:bus:49:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              1583.8456672004845,
+              875.9491455269174
+            ],
+            "lambda_sd": [
+              777.799146250236,
+              1074.1582298927349
+            ],
+            "normalized_multipliers": [
+              2.036317055420018,
+              0.8154749655592076
+            ],
+            "score_max_absolute_nlm": 2.036317055420018,
+            "joint_two_constraint_statistic": 4.8631410532668715
+          },
+          {
+            "device_id": "case57:bus:56:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              259.60997653701963,
+              -1171.6080207360646
+            ],
+            "lambda_sd": [
+              170.27111122412296,
+              771.1919677709813
+            ],
+            "normalized_multipliers": [
+              1.5246859826697348,
+              -1.5192170947039658
+            ],
+            "score_max_absolute_nlm": 1.5246859826697348,
+            "joint_two_constraint_statistic": 4.548709989790288
+          },
+          {
+            "device_id": "case57:bus:41:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -83.282779796838,
+              415.677860776846
+            ],
+            "lambda_sd": [
+              228.72356788317234,
+              765.8358220359569
+            ],
+            "normalized_multipliers": [
+              -0.3641198000171861,
+              0.5427767268339263
+            ],
+            "score_max_absolute_nlm": 0.5427767268339263,
+            "joint_two_constraint_statistic": 0.42543349288914023
+          }
+        ]
+      },
+      "true_error_rank_for_evaluation_only": 1,
+      "top_ranked_alternative_test": {
+        "device_id": "case57:bus:4:coupler",
+        "desired_status": 0,
+        "J": 368.829852269035,
+        "max_normalized_residual": 2.9561951875506525,
+        "plausible": true,
+        "converged": true,
+        "observable": true,
+        "matches_truth_for_evaluation_only": true
+      }
+    },
+    {
+      "true_open_bus": 12,
+      "error_device_for_evaluation_only": null,
+      "scenario": "healthy",
+      "noise_seed": 90212,
+      "result": {
+        "expanded_state_dimension": 165,
+        "exact_constraint_rank": 26,
+        "effective_state_dimension": 139,
+        "weighted_tangent_jacobian_rank": 139,
+        "available_measurement_count": 530,
+        "chi_square_dof": 391,
+        "converged": true,
+        "function_evaluations": 5,
+        "solver_message": "`ftol` termination condition is satisfied.",
+        "constraint_max_absolute": 5.551115123125783e-17,
+        "tangent_gradient_max_absolute": 4.428355728691713e-05,
+        "kkt_stationarity_max_absolute": 4.428355728691713e-05,
+        "kkt_stationarity_relative_to_gradient_scale": 1.221823389474946e-10,
+        "minimum_voltage_magnitude_pu": 0.9115291480687038,
+        "maximum_voltage_magnitude_pu": 1.0502613267035,
+        "J": 421.67017636615157,
+        "chi_square_threshold": 438.1057766434272,
+        "max_normalized_residual": 3.556239242809017,
+        "plausible": true,
+        "contracted_estimator_J": 421.6701763661496,
+        "contracted_estimator_max_normalized_residual": 3.556239239590312,
+        "contracted_estimator_plausible": true,
+        "J_absolute_difference_from_contracted": 1.9895196601282805e-12,
+        "prediction_max_absolute_difference_from_contracted_pu": 1.2322660739028102e-09,
+        "nlm_max_absolute_difference_after_constraint_reversal": 0.0,
+        "covariance_max_relative_difference_from_direct_kkt": 2.0744410148716457e-15,
+        "multiplier_noise_response_max_relative_difference_from_direct_kkt": 5.958056765346937e-15,
+        "minimum_multiplier_covariance_eigenvalue": 5664.964188975796,
+        "coupler_ranking": [
+          {
+            "device_id": "case57:bus:12:coupler",
+            "reported_status": 0,
+            "constraint_kinds": [
+              "active_flow_zero_pu",
+              "reactive_flow_zero_pu"
+            ],
+            "lambda": [
+              -1.137386862117836,
+              -274.8634821559771
+            ],
+            "lambda_sd": [
+              103.25220798550488,
+              110.26341534790258
+            ],
+            "normalized_multipliers": [
+              -0.011015617818821934,
+              -2.492789483154764
+            ],
+            "score_max_absolute_nlm": 2.492789483154764,
+            "joint_two_constraint_statistic": 6.215103050121694
+          },
+          {
+            "device_id": "case57:bus:38:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              660.5061765113812,
+              -49.869042053986846
+            ],
+            "lambda_sd": [
+              359.7649280670424,
+              1547.7921659766837
+            ],
+            "normalized_multipliers": [
+              1.8359382057060758,
+              -0.032219469222160464
+            ],
+            "score_max_absolute_nlm": 1.8359382057060758,
+            "joint_two_constraint_statistic": 3.370761835644902
+          },
+          {
+            "device_id": "case57:bus:41:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -240.61197943679207,
+              1278.7201266166094
+            ],
+            "lambda_sd": [
+              219.60522042282034,
+              763.8996594355531
+            ],
+            "normalized_multipliers": [
+              -1.0956569200564816,
+              1.673937291137763
+            ],
+            "score_max_absolute_nlm": 1.673937291137763,
+            "joint_two_constraint_statistic": 3.9840940008935695
+          },
+          {
+            "device_id": "case57:bus:1:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              1257.573513271518,
+              267.56451570974457
+            ],
+            "lambda_sd": [
+              755.445892568507,
+              1311.7002944207493
+            ],
+            "normalized_multipliers": [
+              1.6646771471558117,
+              0.20398296535254026
+            ],
+            "score_max_absolute_nlm": 1.6646771471558117,
+            "joint_two_constraint_statistic": 2.7714088527724283
+          },
+          {
+            "device_id": "case57:bus:13:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -1944.1568686522933,
+              1335.487566981451
+            ],
+            "lambda_sd": [
+              1200.3815001453052,
+              1707.275780416864
+            ],
+            "normalized_multipliers": [
+              -1.6196158208177607,
+              0.7822330652727739
+            ],
+            "score_max_absolute_nlm": 1.6196158208177607,
+            "joint_two_constraint_statistic": 3.1989133108209002
+          },
+          {
+            "device_id": "case57:bus:11:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              132.81211963334096,
+              -1796.9862995647682
+            ],
+            "lambda_sd": [
+              137.43509109016986,
+              1116.7747206452532
+            ],
+            "normalized_multipliers": [
+              0.9663625103300887,
+              -1.6090857595043881
+            ],
+            "score_max_absolute_nlm": 1.6090857595043881,
+            "joint_two_constraint_statistic": 3.568755674948385
+          },
+          {
+            "device_id": "case57:bus:15:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -546.072225563746,
+              2900.706203687751
+            ],
+            "lambda_sd": [
+              1550.2350736023889,
+              1834.974998946749
+            ],
+            "normalized_multipliers": [
+              -0.3522512390942104,
+              1.580787861062258
+            ],
+            "score_max_absolute_nlm": 1.580787861062258,
+            "joint_two_constraint_statistic": 2.6108279576445326
+          },
+          {
+            "device_id": "case57:bus:49:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              597.8073096506273,
+              -1530.2454220819616
+            ],
+            "lambda_sd": [
+              731.1838553726745,
+              1058.6081122288947
+            ],
+            "normalized_multipliers": [
+              0.8175882238892337,
+              -1.445525879128242
+            ],
+            "score_max_absolute_nlm": 1.445525879128242,
+            "joint_two_constraint_statistic": 2.7365940659120045
+          },
+          {
+            "device_id": "case57:bus:24:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -367.4422463483172,
+              259.02041295356133
+            ],
+            "lambda_sd": [
+              325.82760804369246,
+              884.6986581925553
+            ],
+            "normalized_multipliers": [
+              -1.127719804207151,
+              0.29277812343780607
+            ],
+            "score_max_absolute_nlm": 1.127719804207151,
+            "joint_two_constraint_statistic": 1.3623857714694658
+          },
+          {
+            "device_id": "case57:bus:9:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -741.6031798029757,
+              -928.5930700158897
+            ],
+            "lambda_sd": [
+              856.444503262063,
+              1372.101294423002
+            ],
+            "normalized_multipliers": [
+              -0.8659092060003015,
+              -0.6767671408737961
+            ],
+            "score_max_absolute_nlm": 0.8659092060003015,
+            "joint_two_constraint_statistic": 1.1925829569792437
+          },
+          {
+            "device_id": "case57:bus:4:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -457.31953054470785,
+              -925.5189027179524
+            ],
+            "lambda_sd": [
+              730.8510220672546,
+              1243.0184620500304
+            ],
+            "normalized_multipliers": [
+              -0.6257356379569026,
+              -0.7445737380211985
+            ],
+            "score_max_absolute_nlm": 0.7445737380211985,
+            "joint_two_constraint_statistic": 0.9392127833548709
+          },
+          {
+            "device_id": "case57:bus:56:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -69.40045261140632,
+              -440.12865203796696
+            ],
+            "lambda_sd": [
+              162.6764968150625,
+              769.1235980814507
+            ],
+            "normalized_multipliers": [
+              -0.42661634575462787,
+              -0.5722469745250971
+            ],
+            "score_max_absolute_nlm": 0.5722469745250971,
+            "joint_two_constraint_statistic": 0.5183227100880679
+          },
+          {
+            "device_id": "case57:bus:6:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -68.16368077905844,
+              -245.9094622300903
+            ],
+            "lambda_sd": [
+              904.3193178724389,
+              1243.1075321579765
+            ],
+            "normalized_multipliers": [
+              -0.07537567696709697,
+              -0.1978183349940797
+            ],
+            "score_max_absolute_nlm": 0.1978183349940797,
+            "joint_two_constraint_statistic": 0.04557130249719091
+          }
+        ]
+      }
+    },
+    {
+      "true_open_bus": 12,
+      "error_device_for_evaluation_only": "case57:bus:12:coupler",
+      "scenario": "merging",
+      "noise_seed": 90212,
+      "result": {
+        "expanded_state_dimension": 165,
+        "exact_constraint_rank": 26,
+        "effective_state_dimension": 139,
+        "weighted_tangent_jacobian_rank": 139,
+        "available_measurement_count": 530,
+        "chi_square_dof": 391,
+        "converged": true,
+        "function_evaluations": 6,
+        "solver_message": "`ftol` termination condition is satisfied.",
+        "constraint_max_absolute": 1.1102230246251565e-16,
+        "tangent_gradient_max_absolute": 0.0015475962267643695,
+        "kkt_stationarity_max_absolute": 0.0013740886497544125,
+        "kkt_stationarity_relative_to_gradient_scale": 3.7882006393675525e-10,
+        "minimum_voltage_magnitude_pu": 0.9115204203825439,
+        "maximum_voltage_magnitude_pu": 1.0431045791492164,
+        "J": 42202.52518087011,
+        "chi_square_threshold": 438.1057766434272,
+        "max_normalized_residual": 67.08254492274975,
+        "plausible": false,
+        "contracted_estimator_J": 42202.5251808708,
+        "contracted_estimator_max_normalized_residual": 67.08254900235397,
+        "contracted_estimator_plausible": false,
+        "J_absolute_difference_from_contracted": 6.912159733474255e-10,
+        "prediction_max_absolute_difference_from_contracted_pu": 6.865847801407199e-08,
+        "nlm_max_absolute_difference_after_constraint_reversal": 0.0,
+        "covariance_max_relative_difference_from_direct_kkt": 1.6511403583977943e-15,
+        "multiplier_noise_response_max_relative_difference_from_direct_kkt": 1.2661795140308918e-14,
+        "minimum_multiplier_covariance_eigenvalue": 5668.765866166488,
+        "coupler_ranking": [
+          {
+            "device_id": "case57:bus:12:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              133133.04659456928,
+              118143.78137750189
+            ],
+            "lambda_sd": [
+              738.9174091954592,
+              1234.4944442276346
+            ],
+            "normalized_multipliers": [
+              180.17310857451025,
+              95.7021572109374
+            ],
+            "score_max_absolute_nlm": 180.17310857451025,
+            "joint_two_constraint_statistic": 41600.71914198899
+          },
+          {
+            "device_id": "case57:bus:13:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -52717.919579692425,
+              -43129.602174040076
+            ],
+            "lambda_sd": [
+              1242.3194661773236,
+              1770.4880661273342
+            ],
+            "normalized_multipliers": [
+              -42.43507488609833,
+              -24.360289684628793
+            ],
+            "score_max_absolute_nlm": 42.43507488609833,
+            "joint_two_constraint_statistic": 2404.968280660004
+          },
+          {
+            "device_id": "case57:bus:49:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -18795.552461216466,
+              -4018.6958413510356
+            ],
+            "lambda_sd": [
+              739.8920388331568,
+              1059.77888768681
+            ],
+            "normalized_multipliers": [
+              -25.403101364434065,
+              -3.7920134926660816
+            ],
+            "score_max_absolute_nlm": 25.403101364434065,
+            "joint_two_constraint_statistic": 662.565196348278
+          },
+          {
+            "device_id": "case57:bus:1:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -15958.627592258801,
+              -7711.306417825355
+            ],
+            "lambda_sd": [
+              772.8574370820126,
+              1308.8747687481564
+            ],
+            "normalized_multipliers": [
+              -20.648863330489416,
+              -5.891554029420751
+            ],
+            "score_max_absolute_nlm": 20.648863330489416,
+            "joint_two_constraint_statistic": 440.26012090139665
+          },
+          {
+            "device_id": "case57:bus:9:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              16672.253326035454,
+              4450.057018741946
+            ],
+            "lambda_sd": [
+              854.910165125403,
+              1368.2017229842293
+            ],
+            "normalized_multipliers": [
+              19.501760542980414,
+              3.2524860508403557
+            ],
+            "score_max_absolute_nlm": 19.501760542980414,
+            "joint_two_constraint_statistic": 389.50786060527923
+          },
+          {
+            "device_id": "case57:bus:4:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              13358.923531606551,
+              1325.1851255414617
+            ],
+            "lambda_sd": [
+              735.9041505315703,
+              1244.227531408531
+            ],
+            "normalized_multipliers": [
+              18.153075399774437,
+              1.0650665510039652
+            ],
+            "score_max_absolute_nlm": 18.153075399774437,
+            "joint_two_constraint_statistic": 330.17833162348995
+          },
+          {
+            "device_id": "case57:bus:15:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              12751.981057935314,
+              7300.180193648548
+            ],
+            "lambda_sd": [
+              1564.2986411314853,
+              1839.6435995080185
+            ],
+            "normalized_multipliers": [
+              8.151883996211604,
+              3.968257871035921
+            ],
+            "score_max_absolute_nlm": 8.151883996211604,
+            "joint_two_constraint_statistic": 82.98349496790443
+          },
+          {
+            "device_id": "case57:bus:24:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              2233.0947557375384,
+              370.57011611214136
+            ],
+            "lambda_sd": [
+              326.2466510537137,
+              884.6574382934967
+            ],
+            "normalized_multipliers": [
+              6.844805145202482,
+              0.41888543527873423
+            ],
+            "score_max_absolute_nlm": 6.844805145202482,
+            "joint_two_constraint_statistic": 46.98963120450915
+          },
+          {
+            "device_id": "case57:bus:38:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -1919.706145381187,
+              -1931.052646659707
+            ],
+            "lambda_sd": [
+              360.2079211798654,
+              1548.3377123861985
+            ],
+            "normalized_multipliers": [
+              -5.329439005930703,
+              -1.2471779452324343
+            ],
+            "score_max_absolute_nlm": 5.329439005930703,
+            "joint_two_constraint_statistic": 30.11759127328669
+          },
+          {
+            "device_id": "case57:bus:6:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -3243.8440693936946,
+              -617.1030105605336
+            ],
+            "lambda_sd": [
+              904.2118121531747,
+              1242.6901267908931
+            ],
+            "normalized_multipliers": [
+              -3.587482518801892,
+              -0.49658639531814125
+            ],
+            "score_max_absolute_nlm": 3.587482518801892,
+            "joint_two_constraint_statistic": 13.21292614751387
+          },
+          {
+            "device_id": "case57:bus:41:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -12.574795533654065,
+              1273.503147209893
+            ],
+            "lambda_sd": [
+              219.89092134617312,
+              763.901750304146
+            ],
+            "normalized_multipliers": [
+              -0.057186515280717894,
+              1.6671033240895838
+            ],
+            "score_max_absolute_nlm": 1.6671033240895838,
+            "joint_two_constraint_statistic": 2.7816789537694584
+          },
+          {
+            "device_id": "case57:bus:11:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              60.50592121937005,
+              1729.4539154606045
+            ],
+            "lambda_sd": [
+              137.47717933866798,
+              1118.376341991777
+            ],
+            "normalized_multipliers": [
+              0.44011610880026,
+              1.546397085242814
+            ],
+            "score_max_absolute_nlm": 1.546397085242814,
+            "joint_two_constraint_statistic": 2.566424877377069
+          },
+          {
+            "device_id": "case57:bus:56:coupler",
+            "reported_status": 1,
+            "constraint_kinds": [
+              "angle_equality_rad",
+              "magnitude_equality_pu"
+            ],
+            "lambda": [
+              -45.99388205026638,
+              -428.7078093061052
+            ],
+            "lambda_sd": [
+              162.68270476845444,
+              769.1305359722976
+            ],
+            "normalized_multipliers": [
+              -0.2827214000143977,
+              -0.5573927821811854
+            ],
+            "score_max_absolute_nlm": 0.5573927821811854,
+            "joint_two_constraint_statistic": 0.3963122339979343
+          }
+        ]
+      },
+      "true_error_rank_for_evaluation_only": 1,
+      "top_ranked_alternative_test": {
+        "device_id": "case57:bus:12:coupler",
+        "desired_status": 0,
+        "J": 421.6701763661496,
+        "max_normalized_residual": 3.556239239590312,
+        "plausible": true,
+        "converged": true,
+        "observable": true,
+        "matches_truth_for_evaluation_only": true
+      }
+    }
+  ]
+}

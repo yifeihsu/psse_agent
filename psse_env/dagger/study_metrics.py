@@ -161,6 +161,14 @@ _OBJECTIVE_TOOL_EVIDENCE_FIELDS = {
     "power_flow_converged",
     "topology_feasible",
 }
+_OPTIONAL_OBJECTIVE_TOOL_EVIDENCE_FIELDS = {
+    "normalized_residual_alarm",
+    "normalized_residual_threshold",
+    "chi_square_alarm",
+    "chi_square_alpha",
+    "anomaly_detection_rule",
+    "chi_square_ratio",
+}
 _OBJECTIVE_ACTION_ASSESSMENT_FIELDS = {
     "contract",
     "evidence_available",
@@ -466,7 +474,10 @@ def _validated_objective_tool_evidence(
             raise StudyEvidenceError(f"{field} must be null for a non-WLS action")
         return None
     evidence = _mapping(value, field=field)
-    if set(evidence) != _OBJECTIVE_TOOL_EVIDENCE_FIELDS:
+    if not (
+        _OBJECTIVE_TOOL_EVIDENCE_FIELDS <= set(evidence)
+        <= _OBJECTIVE_TOOL_EVIDENCE_FIELDS | _OPTIONAL_OBJECTIVE_TOOL_EVIDENCE_FIELDS
+    ):
         raise StudyEvidenceError(f"{field} has a noncanonical schema")
     if (
         evidence.get("contract") != STUDY_OBJECTIVE_TOOL_EVIDENCE_CONTRACT
@@ -507,11 +518,16 @@ def _validated_objective_tool_evidence(
         "chi_square_statistic",
         "chi_square_threshold",
         "max_normalized_residual",
+        "normalized_residual_threshold",
+        "chi_square_alpha",
+        "chi_square_ratio",
     ):
         _optional_finite_number(evidence.get(name), field=f"{field}.{name}")
     for name in (
         "no_material_anomaly_remaining",
         "globally_resolved",
+        "normalized_residual_alarm",
+        "chi_square_alarm",
         "physical_constraints_ok",
         "physical_evidence_complete",
         "power_flow_converged",
@@ -524,6 +540,11 @@ def _validated_objective_tool_evidence(
     scope = evidence.get("physical_evidence_scope")
     if scope is not None and (not isinstance(scope, str) or not scope.strip()):
         raise StudyEvidenceError(f"{field}.physical_evidence_scope is invalid")
+    rule = evidence.get("anomaly_detection_rule")
+    if rule is not None and (not isinstance(rule, str) or rule not in {
+        "chi_square_only", "chi_square_or_normalized_residual"
+    }):
+        raise StudyEvidenceError(f"{field}.anomaly_detection_rule is invalid")
     violations = evidence.get("physical_bound_violations")
     if violations is not None and not isinstance(violations, list):
         raise StudyEvidenceError(
@@ -569,7 +590,38 @@ def _residual_certificate(
         or not isinstance(resolved, bool)
     ):
         return False, None, "final_residual_chi_square_fields_incomplete"
-    expected = statistic < threshold
+    nr_threshold = _optional_finite_number(
+        evidence.get("normalized_residual_threshold"),
+        field="objective_tool_evidence.normalized_residual_threshold",
+    )
+    if nr_threshold is not None and nr_threshold <= 0.0:
+        raise StudyEvidenceError("normalized residual threshold must be positive")
+    rule = evidence.get("anomaly_detection_rule")
+    if rule == "chi_square_or_normalized_residual" and nr_threshold is None:
+        return False, None, "final_normalized_residual_threshold_missing"
+    if rule is not None and rule != (
+        "chi_square_only" if nr_threshold is None else "chi_square_or_normalized_residual"
+    ):
+        raise StudyEvidenceError("anomaly detection rule disagrees with residual threshold")
+    chi_alarm = statistic >= threshold
+    nr_alarm = nr_threshold is not None and max_residual >= nr_threshold
+    for name, expected_alarm in (
+        ("chi_square_alarm", chi_alarm), ("normalized_residual_alarm", nr_alarm)
+    ):
+        supplied_alarm = evidence.get(name)
+        if supplied_alarm is not None and supplied_alarm is not expected_alarm:
+            raise StudyEvidenceError(f"{name} disagrees with statistic and threshold")
+    ratio = _optional_finite_number(
+        evidence.get("chi_square_ratio"), field="objective_tool_evidence.chi_square_ratio"
+    )
+    if ratio is not None and not math.isclose(ratio, statistic / threshold, rel_tol=1e-9, abs_tol=1e-12):
+        raise StudyEvidenceError("chi-square ratio disagrees with statistic and threshold")
+    alpha = _optional_finite_number(
+        evidence.get("chi_square_alpha"), field="objective_tool_evidence.chi_square_alpha"
+    )
+    if alpha is not None and not 0.0 < alpha < 1.0:
+        raise StudyEvidenceError("chi-square alpha must be between zero and one")
+    expected = not (chi_alarm or nr_alarm)
     if no_anomaly is not expected or resolved is not expected:
         raise StudyEvidenceError(
             "final residual/chi-square flags disagree with statistic and threshold"
