@@ -113,6 +113,16 @@ scores without naming the breaker).
   `topology_target_breaker_matches_requested`. Private-truth retirement and the offline
   teacher audit require breaker identity to agree when both sides name one.
 - The mixed-topology admission gate accepts the breaker-level action schema.
+- The model-visible protocol carries the breaker: `correct_topology_from_path`
+  now exposes `cb_name` (breaker name from the topology context) and an optional
+  1-based `line_index1`, at least one of which is required beside
+  `desired_status`. Dangling-terminal corrections export both (the context's
+  supported correction binds the affected line row); bus-split and merge
+  corrections export the breaker alone. The bridge in
+  `psse_env/dagger/protocol_bridge.py` rejects `branch_id` targets and an action
+  with neither target, and the round trip restores `{cb_name, status[, line_index]}`.
+  Before this change the canonical export required a numeric row and rejected every
+  breaker-named expert action, which stopped the first 2026-09-12 HPC run at stage 0.
 
 ## Files
 

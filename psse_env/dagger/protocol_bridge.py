@@ -210,16 +210,31 @@ _TRANSACTIONAL_TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
 ]
 
-# The deployment correction provider resolves branch rows numerically.  Keep
-# the model-visible targets narrower than the controller's internal aliases:
-# parameter correction retains its pinned 1-based ``line_index`` schema, while
-# topology correction uses the explicit 1-based ``line_index1`` spelling.
+# The deployment correction provider resolves branch rows numerically and
+# breakers by name.  Keep the model-visible targets narrower than the
+# controller's internal aliases: parameter correction retains its pinned
+# 1-based ``line_index`` schema, while topology correction uses the breaker
+# name reported by the topology context (``cb_name``) plus the explicit
+# 1-based ``line_index1`` spelling whenever the context binds a branch row.
+# Structural breaker corrections (bus splits and merges) carry no branch row.
 _TOPOLOGY_LINE_INDEX1_PROPERTY: dict[str, Any] = {
     "type": "integer",
-    "description": "1-based branch row index.",
+    "description": (
+        "1-based branch row index; include it exactly when the topology "
+        "context's supported correction carries one."
+    ),
+}
+_TOPOLOGY_BREAKER_PROPERTY: dict[str, Any] = {
+    "type": "string",
+    "description": "Breaker name reported by the topology context.",
 }
 _TOPOLOGY_NUMERIC_TARGET_KEYS = ("line_index", "line_index1", "branch_row0")
-_NONEXECUTABLE_NAMED_BRANCH_TARGET_KEYS = ("branch_id", "cb_name")
+_TOPOLOGY_BREAKER_TARGET_KEY = "cb_name"
+_NONEXECUTABLE_NAMED_BRANCH_TARGET_KEYS = ("branch_id",)
+_TOPOLOGY_TARGET_ERROR = (
+    "correct_topology requires a breaker name (cb_name) or a numeric "
+    "branch-row target."
+)
 
 
 def _require_registry() -> list[dict[str, Any]]:
@@ -246,8 +261,10 @@ def unified_tool_schemas() -> list[dict[str, Any]]:
       model-controlled action arguments.
     - ``correct_parameters_from_path`` exposes only the provider-executable
       1-based ``line_index`` target.
-    - ``correct_topology_from_path`` exposes only the provider-executable
-      1-based ``line_index1`` target and requires the desired status.
+    - ``correct_topology_from_path`` exposes the provider-executable targets
+      only: the breaker name (``cb_name``) reported by the topology context
+      and the 1-based ``line_index1`` branch row, at least one of which is
+      required alongside the desired status.
 
     These restrictions are not cosmetic.  Every generated call is validated
     against this registry before canonical-to-controller bridging, so the
@@ -290,16 +307,27 @@ def unified_tool_schemas() -> list[dict[str, Any]]:
         parameters["properties"].pop(key, None)
     parameters["required"] = ["case_path", "line_index"]
 
-    topology = by_name[CORRECT_TOPOLOGY_FROM_PATH]["function"]["parameters"]
+    topology_function = by_name[CORRECT_TOPOLOGY_FROM_PATH]["function"]
+    topology_function["description"] = (
+        "Correct a suspected topology mismatch: name the breaker (cb_name) "
+        "reported by the topology context, include the 1-based branch row "
+        "(line_index1) when the context binds one, and give the desired "
+        "breaker status."
+    )
+    topology = topology_function["parameters"]
     for key in (
         *_TOPOLOGY_NUMERIC_TARGET_KEYS,
         *_NONEXECUTABLE_NAMED_BRANCH_TARGET_KEYS,
+        _TOPOLOGY_BREAKER_TARGET_KEY,
     ):
         topology["properties"].pop(key, None)
+    topology["properties"][_TOPOLOGY_BREAKER_TARGET_KEY] = copy.deepcopy(
+        _TOPOLOGY_BREAKER_PROPERTY
+    )
     topology["properties"]["line_index1"] = copy.deepcopy(
         _TOPOLOGY_LINE_INDEX1_PROPERTY
     )
-    topology["required"] = ["case_path", "line_index1", "desired_status"]
+    topology["required"] = ["case_path", "desired_status"]
 
     schemas.extend(copy.deepcopy(_TRANSACTIONAL_TOOL_SCHEMAS))
     # Release generation rejects undeclared arguments for every tool.  Make
@@ -377,6 +405,26 @@ def _normalize_topology_numeric_target(arguments: dict[str, Any]) -> None:
     arguments["line_index1"] = line_index1
 
 
+def _normalize_topology_breaker_target(arguments: dict[str, Any]) -> None:
+    """Keep a well-formed breaker name; drop an empty one."""
+
+    raw_value = arguments.get(_TOPOLOGY_BREAKER_TARGET_KEY)
+    if raw_value is None:
+        arguments.pop(_TOPOLOGY_BREAKER_TARGET_KEY, None)
+        return
+    if not isinstance(raw_value, str) or not raw_value.strip():
+        raise ValueError("Topology correction cb_name must be a non-empty string.")
+    arguments[_TOPOLOGY_BREAKER_TARGET_KEY] = raw_value.strip()
+
+
+def _require_topology_target(arguments: Mapping[str, Any]) -> None:
+    if (
+        arguments.get("line_index1") is None
+        and arguments.get(_TOPOLOGY_BREAKER_TARGET_KEY) is None
+    ):
+        raise ValueError(_TOPOLOGY_TARGET_ERROR)
+
+
 def internal_to_canonical_action(action: Mapping[str, Any] | str) -> dict[str, Any]:
     """Convert a controller action to the canonical model-visible protocol."""
     normalized = _normalize_or_raise(action)
@@ -430,14 +478,10 @@ def internal_to_canonical_action(action: Mapping[str, Any] | str) -> dict[str, A
             arguments.get(key) is not None
             for key in _NONEXECUTABLE_NAMED_BRANCH_TARGET_KEYS
         ):
-            raise ValueError(
-                "correct_topology requires a numeric branch-row target."
-            )
+            raise ValueError(_TOPOLOGY_TARGET_ERROR)
         _normalize_topology_numeric_target(arguments)
-        if arguments.get("line_index1") is None:
-            raise ValueError(
-                "correct_topology requires a numeric branch-row target."
-            )
+        _normalize_topology_breaker_target(arguments)
+        _require_topology_target(arguments)
         status = arguments.pop("status", arguments.pop("expected_status", None))
         if status is None:
             raise ValueError("correct_topology requires a desired status.")
@@ -507,6 +551,10 @@ def canonical_to_internal_action(action: Mapping[str, Any] | str) -> dict[str, A
         # the 65-scenario suite, 195/195 correctly-targeted topology actions
         # across four checkpoints were rejected.  (Both lines made this fix;
         # the explicit integer cast is kept.)
+        # Breaker-level corrections name the breaker reported by the topology
+        # context; structural ones (bus splits and merges) carry no branch row.
+        _normalize_topology_breaker_target(arguments)
+        _require_topology_target(arguments)
         if arguments.get("line_index1") is not None:
             arguments["line_index"] = int(arguments.pop("line_index1"))
         desired = arguments.pop("desired_status", None)
