@@ -20,6 +20,11 @@ normalized-multiplier estimator, and the correction names the breaker
 (`docs/ieee14_node_breaker_nlm_20260912.md`). Everything is regenerated
 because the expert aggregate contains topology roots. Cluster directory
 `research_full_pipeline_20260912`, seeds unchanged.
+Outcome: R2 and the expert at 147/160, the same 147 roots and the same
+thirteen misses as the 2026-09-09 run; topology 16/16 and
+measurement+topology 12/12 for R2 and the expert, every accepted breaker
+the true one (`docs/node_breaker_pipeline_run_20260912.md`; three stage-0
+attempts failed on integration gaps fixed in 5955cfe, bd59df4, ae99f03).
 
 | Item | Value |
 | --- | --- |
