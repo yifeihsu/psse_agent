@@ -68,6 +68,9 @@ from psse_env.actions import (
     unexplained_signatures,
 )
 from psse_env.state_store import apply_modification
+from psse_env.oracle.measurement_recovery_evidence import (
+    measurement_targets_predating_branch_repair,
+)
 
 from three_phase_nlm.branch_current_analysis import (  # noqa: E402  (repo-root package)
     BRANCH_CURRENT_CHANNEL,
@@ -1699,6 +1702,7 @@ class MatpowerDeploymentProviders:
         post_branch_refinement_ready = bool(
             accepted_branch_rows
             and refinement_targets
+            and set(refinement_targets) <= measurement_targets_predating_branch_repair(observation)
             and anomaly_unresolved
             and not refinement_already_accepted
         )

@@ -28,6 +28,7 @@ from psse_env.oracle.measurement_recovery_evidence import (
     accepted_measurement_indices,
     eligible_joint_measurement_targets,
     measurement_target_indices,
+    measurement_targets_predating_branch_repair,
     verified_terminal_measurement_closure_action,
 )
 
@@ -610,6 +611,13 @@ class MeasurementExpert:
     ) -> bool:
         """Recognize the provider's same-state observable joint-refinement gate."""
         if active_id is None:
+            return False
+        # A singleton cannot use the multi-meter coupling rationale. Require
+        # observable commit ordering even if an older provider advertises a
+        # post-branch refinement after the meter was already fitted to that
+        # repaired model.
+        accepted = accepted_measurement_indices(state)
+        if len(accepted) == 1 and not accepted <= measurement_targets_predating_branch_repair(state):
             return False
         fresh_context_evidence = state_value(state, "fresh_context_evidence", {})
         if isinstance(fresh_context_evidence, Mapping):

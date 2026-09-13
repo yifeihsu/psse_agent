@@ -36,6 +36,9 @@ from psse_env.dagger.release_factories import (  # noqa: E402
     production_environment_factory,
 )
 from psse_env.dagger.suite_builder import partition_release_scenario_v1  # noqa: E402
+from psse_env.dagger.ieee57_runtime import (  # noqa: E402
+    ieee57_environment_factory, ieee57_runtime_manifest,
+)
 
 CONTRACT = "balanced_transfer_observable_expert_validation_v1"
 BALANCED_FAMILIES = frozenset(
@@ -47,6 +50,7 @@ RECEIPT_PATHS = (
     "psse_env/dagger/evaluator.py",
     "psse_env/dagger/release_audit.py",
     "psse_env/dagger/release_factories.py",
+    "psse_env/dagger/ieee57_runtime.py",
     "psse_env/dagger/suite_builder.py",
     "psse_env/dagger/study_metrics.py",
     "psse_env/dagger/dataset_builder.py",
@@ -59,6 +63,7 @@ RECEIPT_PATHS = (
     "psse_env/oracle/anomaly_evidence.py",
     "psse_env/oracle/termination_expert.py",
     "psse_env/oracle/measurement_expert.py",
+    "psse_env/oracle/measurement_recovery_evidence.py",
     "psse_env/oracle/parameter_expert.py",
     "psse_env/oracle/candidate_quality.py",
     "psse_env/oracle/process_validity.py",
@@ -193,11 +198,18 @@ def evaluate_scenarios(
         "parameter_and_measurement_screening_unchanged": True,
     }
     source_before = collect_source_receipt(phase="before_evaluation")
+    pinned_ieee57 = chi2_alpha == 0.05 and normalized_residual_threshold == 4.0 and all(
+        str(row.get("execution", {}).get("case", "")).lower() in {"case57", "ieee57"}
+        or str(row.get("grouping", {}).get("case_id", "")).lower() in {"case57", "ieee57"}
+        for row in rows
+    )
+    configuration["pinned_runtime"] = ieee57_runtime_manifest() if pinned_ieee57 else None
+    environment_factory = ieee57_environment_factory if pinned_ieee57 else partial(
+        production_environment_factory, chi2_alpha=chi2_alpha,
+        normalized_residual_threshold=normalized_residual_threshold,
+    )
     evaluator = ClosedLoopRolloutEvaluator(
-        env_factory=partial(
-            production_environment_factory, chi2_alpha=chi2_alpha,
-            normalized_residual_threshold=normalized_residual_threshold,
-        ),
+        env_factory=environment_factory,
         policy_factory=observable_expert_policy_factory,
         case_loader=deterministic_case_loader,
         max_steps=max_steps,

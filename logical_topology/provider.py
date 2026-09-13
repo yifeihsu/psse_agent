@@ -69,7 +69,7 @@ def _case(value):
 class LogicalTopologyProviders(MatpowerDeploymentProviders):
     """Inspectable, testable logical-CB provider with evidence-bound proposals."""
 
-    def __init__(self, *, scan_options=None, context_cache_size=16, **kwargs):
+    def __init__(self, *, scan_options=None, context_cache_size=16, atomic_actions=False, **kwargs):
         kwargs.setdefault("chi2_alpha", .05)
         kwargs.setdefault("normalized_residual_threshold", 4.0)
         super().__init__(**kwargs)
@@ -80,6 +80,7 @@ class LogicalTopologyProviders(MatpowerDeploymentProviders):
         self.scan_options = copy.deepcopy(dict(scan_options or {}))
         self.context_cache_size = int(context_cache_size)
         self._contexts = OrderedDict()
+        self.atomic_actions = bool(atomic_actions)
 
     def provider_hooks(self):
         """Explicit compatible hooks; caller must supply a logical-aware policy/audit."""
@@ -284,7 +285,12 @@ class LogicalTopologyProviders(MatpowerDeploymentProviders):
             supported = []
             unique = audit.get("unique_candidate_id")
             chosen = next((row for row in audit["plausible_candidates"] if row["candidate_id"] == unique), None)
-            if chosen is not None and len(chosen["changes"]) == 1:
+            if chosen is not None and self.atomic_actions:
+                supported.append({"tool": CORRECT_TOPOLOGY, "arguments": {
+                    "state_id": state["state_id"], "candidate_id": unique,
+                    "certificate_hash": evidence_hash(audit["certificate"]),
+                    "desired_statuses": copy.deepcopy(chosen["changes"])}})
+            elif chosen is not None and len(chosen["changes"]) == 1:
                 device, status = next(iter(chosen["changes"].items()))
                 supported.append({"tool": CORRECT_TOPOLOGY, "arguments": {"state_id": state["state_id"], "cb_name": device, "status": status}})
             return {**self._binding(state), "context_tool": GET_TOPOLOGY_CONTEXT,
@@ -326,6 +332,21 @@ class LogicalTopologyProviders(MatpowerDeploymentProviders):
     def correct_topology(self, state, action):
         try:
             arguments = action.get("arguments", {})
+            if self.atomic_actions:
+                from .atomic import validate_atomic_arguments
+                validate_atomic_arguments(arguments)
+                if action.get("tool") != CORRECT_TOPOLOGY or arguments["state_id"] != state["state_id"]:
+                    raise ValueError("logical atomic correction requires this state ID")
+                entry = self._context(state, create=False)
+                audit = entry["audit"]
+                if not audit or audit.get("unique_candidate_id") != arguments["candidate_id"]:
+                    raise ValueError("fresh unique candidate context required")
+                if arguments["certificate_hash"] != evidence_hash(audit["certificate"]):
+                    raise ValueError("submitted certificate hash differs from the complete certificate")
+                chosen = next(row for row in audit["plausible_candidates"] if row["candidate_id"] == arguments["candidate_id"])
+                if chosen["changes"] != arguments["desired_statuses"]:
+                    raise ValueError("atomic desired statuses must exactly match every certified change")
+                return self.apply_logical_candidate(state, chosen["candidate_id"])
             if action.get("tool") != CORRECT_TOPOLOGY or set(arguments) != {"state_id", "cb_name", "status"} or arguments["state_id"] != state["state_id"]:
                 raise ValueError("logical correction requires this state ID, one cb_name, and status")
             entry = self._context(state, create=False)

@@ -20,3 +20,9 @@ python scripts/probe_exact_coupler_nlm.py --output output/coupler_nlm_new.json
 See the [method review](../../docs/ieee57_topology_method_review_20260912.md)
 for assumptions and the [logical testbed](../../logical_topology/README.md)
 for generation and correction interfaces.
+
+The [audited P0-P2 pilot](../../docs/ieee57_audited_training_pilot_20260913.md)
+adds fixed runtime/teacher configuration, action-level quarantine, a 62-target
+balanced canonical SFT mechanics export with fresh-controller replay, and atomic
+pure-topology protocol integration. Its compressed evidence archives are
+versioned under `evidence/`; the much larger development corpora remain local.

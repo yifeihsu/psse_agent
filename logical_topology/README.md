@@ -106,3 +106,48 @@ python scripts/audit_logical_topology_artifacts.py --output-dir output/logical_t
 ```
 
 The run receipt distinguishes reused historical numerical fits from new estimator calls and records any missing historical dependency-version attestation. Each diagnostic decision and correction certificate is rebuilt. Physical OPF/PF admission results are retained from the original generation; independent artifact replay checks are recorded separately.
+## Pure logical agent adapter (P2)
+
+The opt-in `psse_env.dagger.logical_adapter.LogicalTopologyEnv` uses the existing
+production `TransactionalPSSEEnv` and `PowerSystemStateStore` lifecycle. It runs
+WLS, topology context, an atomic candidate action, verification, commitment,
+an explicit new active-state WLS, and a complete unchanged-topology confirmation
+before a scoped conclusion. The generic `LogicalTopologyProviders.env_kwargs()`
+guard remains in place; the ordinary bus-vector path cannot consume raw sections.
+
+`psse_env.dagger.logical_protocol.logical_tool_schemas()` supplies the separate
+versioned canonical registry. Its correction tool is
+`correct_logical_topology_from_context(case_path, candidate_id, certificate_hash,
+desired_statuses)`. The map contains exactly every desired status in the certified
+candidate. A joint candidate creates one state and one commit; a submitted subset,
+extra switch, stale certificate, or inconsistent model/evidence is rejected.
+
+The adapter preserves the full 530 physical sensor records, masks, covariance,
+stable logical IDs, branch parameters, and cumulative statuses. Verification and
+commit recheck the complete original certificate against the current model and
+fixed evidence; they never regenerate a changed candidate file to repair it.
+The private audit compares logical device statuses (including couplers), audits
+each accepted target, and checks raw-evidence preservation. Private truth does
+not choose actions or candidate dispositions. Ambiguous/incomplete evidence
+produces an explicit inconclusive handoff.
+
+This contract addresses **pure logical topology under the existing conditional
+comparison-guard assumptions**. Completion means a fixed-evidence topology fit
+within the declared hypothesis scope. It does not certify AC operating limits,
+mixed analog/parameter recovery, phase disturbances, or global status uniqueness.
+The generic measurement and parameter routes remain unsupported. The standard
+DAgger/legacy registry is unchanged: consumers must select this explicit adapter
+and its logical canonical registry rather than silently substitute providers.
+
+Run the reproducible protocol smoke pilot:
+
+```powershell
+python -m psse_env.dagger.logical_pilot --output output/ieee57_logical_adapter_pilot
+python -m unittest psse_env.dagger.test_logical_adapter -v
+```
+
+The smoke pilot retains seven noiseless fixtures, three shared physical parents,
+raw scenarios, full canonical traces, hashes, and private audits. It tests all 93
+single-device alternatives; pair fixtures additionally declare one specific
+branch-plus-coupler pair. These fixtures verify execution mechanics and are not
+an independent training population or a calibration/performance benchmark.

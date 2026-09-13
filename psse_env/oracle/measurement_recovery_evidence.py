@@ -4,6 +4,8 @@ from typing import Any, Mapping, Sequence
 
 from psse_env.actions import (
     CORRECT_MEASUREMENTS,
+    CORRECT_PARAMETERS,
+    CORRECT_TOPOLOGY,
     GET_MEASUREMENT_CONTEXT,
     RUN_WLS,
 )
@@ -52,6 +54,30 @@ def accepted_measurement_indices(state: Any) -> set[int]:
         if isinstance(action, Mapping):
             indices.update(measurement_target_indices(action))
     return indices
+
+
+def measurement_targets_predating_branch_repair(state: Any) -> set[int]:
+    """Meters last estimated before a later committed branch-model change.
+
+    Accepted corrections are an ordered, model-visible path. A branch change
+    before a meter correction does not make that meter estimate stale. A later
+    meter re-estimation clears its eligibility until another branch changes.
+    """
+    estimated: set[int] = set()
+    stale: set[int] = set()
+    for record in state_value(state, "accepted_corrections", []) or []:
+        if not isinstance(record, Mapping):
+            continue
+        action = record.get("source_action") or record.get("action") or record
+        if not isinstance(action, Mapping):
+            continue
+        if action.get("tool") == CORRECT_MEASUREMENTS:
+            targets = measurement_target_indices(action)
+            estimated.update(targets)
+            stale.difference_update(targets)
+        elif action.get("tool") in {CORRECT_PARAMETERS, CORRECT_TOPOLOGY}:
+            stale.update(estimated)
+    return stale
 
 
 def verified_terminal_measurement_closure_action(

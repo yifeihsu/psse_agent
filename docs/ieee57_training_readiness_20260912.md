@@ -1,5 +1,9 @@
 # IEEE57 training-data readiness
 
+Subsequent P0-P2 implementation and the audited collection/export/replay pilot are
+recorded in [the September 13 report](ieee57_audited_training_pilot_20260913.md).
+The results below describe the earlier ten-scenario readiness milestone.
+
 ## What can be generated now
 
 The basic IEEE14 experiments remain in their original working tree. IEEE57 work

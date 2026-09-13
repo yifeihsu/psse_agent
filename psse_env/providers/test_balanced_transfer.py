@@ -15,6 +15,10 @@ from mcp_server.matpower_server import _load_python_case
 from psse_env.providers.matpower import _render_matpower_case
 from psse_env.providers.scenario_generator import build_measurement_vector
 from scripts.validate_balanced_transfer import evaluate_scenarios, normalize_scenarios
+from psse_env.dagger.ieee57_runtime import (
+    ieee57_environment_factory, ieee57_runtime_manifest, validate_ieee57_runtime,
+    validate_ieee57_wls_metrics,
+)
 
 
 class BalancedTransferEndToEndTests(unittest.TestCase):
@@ -151,6 +155,35 @@ class BalancedTransferEndToEndTests(unittest.TestCase):
         self.assertTrue(summary["truth_audited_task_success"])
         self.assertEqual(self.report["initial_detection_summary"]["clean_control_count"], 1)
         self.assertEqual(self.report["initial_detection_summary"]["clean_control_alarm_count"], 0)
+
+    def test_pinned_detector_persists_candidate_verification_and_commit(self) -> None:
+        self.assertEqual(self.report["detection_configuration"]["pinned_runtime"], ieee57_runtime_manifest())
+        env = ieee57_environment_factory()
+        # Use the actual observable expert's already-evaluated correction path;
+        # this replays initial solve, candidate solve and real commitment.
+        env.reset(normalize_scenarios([self.residual_only_scenario])[0]["execution"])
+        trace = self.episodes["ieee57_residual_only_meter450_test"]["trace"]
+        initial_raw = copy.deepcopy(env.store.get_state(env.store.active_state_id)["measurements"])
+        solves = 0
+        committed = False
+        for transition in trace:
+            action = transition["action"]
+            _, output = env.step(action)
+            self.assertEqual(output["execution_status"], "success")
+            validate_ieee57_runtime(env)
+            if action["tool"] == "run_wls":
+                validate_ieee57_wls_metrics(output["tool_metrics"])
+                solves += 1
+            if action["tool"] == "commit_state":
+                committed = True
+                # Explicit solve at the newly active committed state proves
+                # detector settings survive promotion as well as verification.
+                _, post = env.step({"tool": "run_wls", "arguments": {"state_id": env.store.active_state_id}})
+                validate_ieee57_wls_metrics(post["tool_metrics"])
+                self.assertEqual(len(env.store.get_state(env.store.active_state_id)["measurements"]), len(initial_raw))
+                break
+        self.assertTrue(committed)
+        self.assertGreaterEqual(solves, 2)
 
     def test_chi_square_only_remains_explicitly_available(self) -> None:
         report = evaluate_scenarios(
