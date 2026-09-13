@@ -198,6 +198,16 @@ handle them.
 
 ## Limits
 
+- **Candidate flips that cannot be re-estimated.** Among the top-8 multiplier
+  candidates, an `unsupplied_island` breaker (one whose opening de-energizes a
+  yard section, e.g. `CB_6_I_B2`, `CB_Y1014_14B_14N1`, `CB_Y1014_I10_10B`) leaves the
+  flipped node/breaker estimator without a solution: the KKT system is singular and
+  `screen_breaker_flips` returns a NaN chi-square. The context records such a
+  finding with `flip_estimate_converged: false`, a null `gse_chi_square_after_flip`
+  and null progress, and never offers it as a correction. In a local 60-root draw
+  7 roots carried at least one such candidate; before the fix (commit bd59df4) the
+  NaN reached the aggregate rows and aborted the D0 export.
+
 Islanded bays are ranked and confirmed by the estimator like any other breaker, but
 their corrections are refused with the effect named: they are equipment outages the
 operator's WLS cannot see. Eight candidates are confirmed per context call; the audit never needed
