@@ -388,6 +388,48 @@ class BC0SuiteBuilderTests(unittest.TestCase):
         )
         self.assertEqual(diagnostic["top_hif_groups"], [{"branch_row0": 3}])
 
+    def test_partition_keeps_node_breaker_channels_in_execution(self) -> None:
+        """The node/breaker topology route ships the operator's reported breaker
+        map, the substation telemetry, the operator-model layout and the model
+        identity as runtime metadata; the true breaker status stays under audit."""
+        flat = _scenario("topology", 4)
+        flat["true_topology_errors"] = [
+            {"cb_name": "CB_6_L611_B2", "expected_status": 0, "true_cb_closed": False}
+        ]
+        flat["metadata"] = {
+            "reported_breaker_status": {"CB_6_L611_B2": "closed", "CB_6_B1_B2": "closed"},
+            "substation_telemetry": {
+                "node_vm": {"N6_B1": 1.07},
+                "cb_p": {"CB_6_L611_B2": 0.07},
+                "sigma": {"vm": 0.001, "cb": 0.01},
+                "model_id": "ieee14_full_schematic_v1",
+            },
+            "operator_layout": {"bus_count": 14, "sections": {"6": {"nodes": ["N6_B1"]}}},
+            "operator_voltage_meter_nodes": ["N1_B1", "N6_B1"],
+            "topology_model_id": "ieee14_full_schematic_v1",
+            "topology_model_fingerprint": "abc123",
+        }
+        envelope = partition_release_scenario_v1(flat)
+        validate_release_scenario_suites({"standard_success": [envelope]})
+        metadata = envelope["execution"]["metadata"]
+        self.assertEqual(
+            set(metadata),
+            {
+                "reported_breaker_status",
+                "substation_telemetry",
+                "operator_layout",
+                "operator_voltage_meter_nodes",
+                "topology_model_id",
+                "topology_model_fingerprint",
+            },
+        )
+        self.assertEqual(metadata["reported_breaker_status"]["CB_6_L611_B2"], "closed")
+        self.assertNotIn("true_topology_errors", envelope["execution"])
+        self.assertEqual(
+            envelope["audit"]["truth"]["true_topology_errors"],
+            flat["true_topology_errors"],
+        )
+
     def test_allocation_is_deterministic_unique_and_semantically_marked(self) -> None:
         plan = family_plan_from_policy()
         rows = [

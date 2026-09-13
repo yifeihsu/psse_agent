@@ -407,6 +407,17 @@ _EXECUTION_METADATA_KEYS = frozenset(
         "three_phase_voltages",
         "three_phase_branch_currents",
         "branch_current_sigma_pu",
+        # Node/breaker topology route (Transmission/ieee14_full_*): the
+        # operator's reported breaker map, the substation telemetry the agent
+        # requests, the rendered operator-model layout, the operator voltage
+        # meter nodes, and the model identity. None of these carries the true
+        # breaker status, which stays under audit.truth.true_topology_errors.
+        "reported_breaker_status",
+        "substation_telemetry",
+        "operator_layout",
+        "operator_voltage_meter_nodes",
+        "topology_model_id",
+        "topology_model_fingerprint",
     }
 )
 _PHYSICAL_AUDIT_OVERRIDE_KEYS = frozenset(
