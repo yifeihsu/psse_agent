@@ -2943,10 +2943,17 @@ class MatpowerDeploymentProviders:
             flip_threshold = float(
                 chi2_threshold(max(1, int(flip["dof"])), self.chi2_alpha)
             )
-            clean = bool(flip["success"] and flip["chi_square"] < flip_threshold)
+            # A flip whose re-estimation diverges (an island, a singular KKT
+            # system) reports a NaN chi-square; it explains nothing and must
+            # not reach the model-visible context as a non-finite number.
+            flip_converged = bool(flip["success"]) and math.isfinite(
+                float(flip["chi_square"])
+            )
+            flip_chi_square = float(flip["chi_square"]) if flip_converged else None
+            clean = bool(flip_converged and flip_chi_square < flip_threshold)
             progress = (
-                (reported_chi_square - float(flip["chi_square"])) / reported_chi_square
-                if flip["success"] and reported_chi_square > 0.0
+                (reported_chi_square - flip_chi_square) / reported_chi_square
+                if flip_converged and reported_chi_square > 0.0
                 else float("-inf")
             )
             structural = effect["effect"] in {"bus_split", "merge"}
@@ -2961,7 +2968,8 @@ class MatpowerDeploymentProviders:
                 "normalized_multipliers": dict(item.get("multipliers") or {}),
                 "reported_status": item["reported_status"],
                 "proposed_status": flip["proposed_status"],
-                "gse_chi_square_after_flip": float(flip["chi_square"]),
+                "flip_estimate_converged": flip_converged,
+                "gse_chi_square_after_flip": flip_chi_square,
                 "gse_threshold_after_flip": flip_threshold,
                 "gse_progress_after_flip": (
                     float(progress) if math.isfinite(progress) else None
@@ -2993,10 +3001,15 @@ class MatpowerDeploymentProviders:
         # remains), offer the flips that remove most of the anomaly, best first;
         # the operator-model screening decides between partial and final.
         clean_flips = [pair for pair in admissible if pair[0]["flip_explains_substation_measurements"]]
+
+        def flip_chi_square_key(pair: tuple[dict[str, Any], dict[str, Any]]) -> float:
+            value = pair[0]["gse_chi_square_after_flip"]
+            return float(value) if value is not None else math.inf
+
         if clean_flips:
-            chosen = sorted(clean_flips, key=lambda pair: pair[0]["gse_chi_square_after_flip"])
+            chosen = sorted(clean_flips, key=flip_chi_square_key)
         else:
-            chosen = sorted(admissible, key=lambda pair: pair[0]["gse_chi_square_after_flip"])
+            chosen = sorted(admissible, key=flip_chi_square_key)
         proposed = [action for _, action in chosen]
         hypothesis_source: dict[str, str] = {
             finding["cb_name"]: (

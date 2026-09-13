@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -460,12 +461,39 @@ TOOL_JSON_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 
+def _non_finite_paths(value: Any, prefix: str = "$") -> list[str]:
+    """JSON paths of every NaN/inf float inside ``value`` (for error messages)."""
+    paths: list[str] = []
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            paths.append(f"{prefix} = {value}")
+    elif isinstance(value, Mapping):
+        for key, child in value.items():
+            paths.extend(_non_finite_paths(child, f"{prefix}.{key}"))
+    elif isinstance(value, (list, tuple)):
+        for index, child in enumerate(value):
+            paths.extend(_non_finite_paths(child, f"{prefix}[{index}]"))
+    return paths
+
+
 def write_jsonl(path: str | Path, rows: Iterable[Mapping[str, Any]]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         for row in rows:
-            f.write(json.dumps(row, sort_keys=True, allow_nan=False) + "\n")
+            try:
+                encoded = json.dumps(row, sort_keys=True, allow_nan=False)
+            except ValueError as exc:
+                # Name the row and the offending fields: a bare "Out of range
+                # float values" error after an hour-long generation is useless.
+                paths = _non_finite_paths(row)
+                raise ValueError(
+                    f"Row {row.get('example_id')!r} (scenario "
+                    f"{row.get('scenario_id')!r}, family "
+                    f"{row.get('scenario_family')!r}) contains non-finite "
+                    f"values at {paths[:8]}"
+                ) from exc
+            f.write(encoded + "\n")
 
 
 def _normalized_provenance_source(source: Any) -> str:

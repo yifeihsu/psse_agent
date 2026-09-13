@@ -95,6 +95,46 @@ class NodeBreakerTopologyScenarioTests(unittest.TestCase):
         self.assertTrue(screened["eligible"])
         self.assertEqual(screened["hypothesis_source"], "node_breaker_nlm_ranking")
 
+    def test_non_converged_candidate_flip_is_reported_finite_and_not_offered(self) -> None:
+        """A candidate whose flipped re-estimation diverges (NaN chi-square)
+        must reach the model-visible context as a finite, non-explaining finding
+        and never as a supported correction; the true breaker stays supported."""
+        import json
+        import math
+        from unittest import mock
+
+        import Transmission.ieee14_full_gse as gse
+
+        real = gse.screen_breaker_flips
+        poisoned: dict[str, str] = {}
+
+        def diverging(model, reference, reported_status, telemetry, candidates, **kwargs):
+            results = real(model, reference, reported_status, telemetry, candidates, **kwargs)
+            for item in results:
+                if item["cb_name"] != self.truth["cb_name"]:
+                    item["success"] = False
+                    item["chi_square"] = float("nan")
+                    poisoned["cb_name"] = item["cb_name"]
+                    break
+            return results
+
+        with mock.patch.object(gse, "screen_breaker_flips", diverging):
+            context = self.providers.get_topology_context(_state(self.scenario))
+        self.assertIn("cb_name", poisoned)
+        json.dumps(context, allow_nan=False)  # no NaN reaches the export
+        by_name = {item["cb_name"]: item for item in context["breaker_findings"]}
+        bad = by_name[poisoned["cb_name"]]
+        self.assertFalse(bad["flip_estimate_converged"])
+        self.assertIsNone(bad["gse_chi_square_after_flip"])
+        self.assertIsNone(bad["gse_progress_after_flip"])
+        self.assertFalse(bad["flip_explains_substation_measurements"])
+        supported = {action["arguments"]["cb_name"] for action in context["supported_corrections"]}
+        self.assertNotIn(poisoned["cb_name"], supported)
+        self.assertIn(self.truth["cb_name"], supported)
+        good = by_name[self.truth["cb_name"]]
+        self.assertTrue(good["flip_estimate_converged"])
+        self.assertTrue(math.isfinite(good["gse_chi_square_after_flip"]))
+
     def test_breaker_correction_derives_case_and_records_the_switch(self) -> None:
         state = _state(self.scenario)
         result = self.providers.correct_topology(

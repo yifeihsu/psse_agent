@@ -776,3 +776,25 @@ class TeacherRealizabilityAuditTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WriteJsonlTests(unittest.TestCase):
+    def test_non_finite_row_error_names_the_row_and_fields(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        from psse_env.dagger.dataset_builder import write_jsonl
+
+        row = {
+            "example_id": "dagger_iter0_r0_deadbeef_step4",
+            "scenario_id": "r0_deadbeef",
+            "scenario_family": "topology",
+            "tool_output": {"breaker_findings": [{"gse_chi_square_after_flip": float("nan")}]},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(
+                ValueError,
+                r"dagger_iter0_r0_deadbeef_step4.*topology.*"
+                r"tool_output\.breaker_findings\[0\]\.gse_chi_square_after_flip = nan",
+            ):
+                write_jsonl(Path(tmp) / "rows.jsonl", [row])
