@@ -35,7 +35,9 @@ for name in pipeline.env prerequisites.sh build_suite.py summarize.py submit_pip
 done
 if [[ -n "$OVERRIDES" ]]; then
   [[ -f "$PIPE/source/$CELL/overrides/$OVERRIDES" ]] || { echo "unknown overrides file: $OVERRIDES" >&2; exit 2; }
-  sed "s#${SOURCE_PIPE}#${PIPE}#g" "$PIPE/source/$CELL/overrides/$OVERRIDES" > "$PIPE/pipeline.overrides.env"
+  # Copied verbatim: an overrides file names this run through $PIPE/$OUT and
+  # other runs (a frozen adapter, a previous cell) by their absolute paths.
+  cp "$PIPE/source/$CELL/overrides/$OVERRIDES" "$PIPE/pipeline.overrides.env"
 else
   rm -f "$PIPE/pipeline.overrides.env"
 fi
