@@ -12,6 +12,7 @@ from psse_env.actions import (
     unexplained_signatures,
 )
 from psse_env.oracle.expert_types import ExpertActionProposal, state_value
+from psse_env.oracle.anomaly_evidence import normalized_residual_alarm
 from psse_env.state_store import SYNTHETIC_TERMINAL_COMPATIBILITY_KEY
 
 
@@ -122,7 +123,7 @@ class TerminationExpert:
         anomalies_explained = bool(signatures) and not unexplained_signatures(
             signatures, state_value(state, "explained_anomalies", [])
         )
-        statistical_closure = no_anomaly or below_threshold
+        statistical_closure = (no_anomaly or below_threshold) and not normalized_residual_alarm(state)
         # A candidate-quality ACCEPT_FINAL verdict establishes that the
         # proposed transaction is safe and locally successful.  It is not an
         # independent release certificate for the newly active state.  Once a

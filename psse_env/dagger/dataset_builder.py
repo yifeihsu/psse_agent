@@ -135,6 +135,12 @@ HISTORY_METRIC_KEYS = (
     "remaining_suspect_count",
     "anomaly_threshold",
     "chi_square_threshold",
+    "chi_square_alpha",
+    "chi_square_ratio",
+    "chi_square_alarm",
+    "normalized_residual_threshold",
+    "normalized_residual_alarm",
+    "anomaly_detection_rule",
     "power_flow_converged",
     "topology_feasible",
     "target_progress",
@@ -201,6 +207,12 @@ LAST_VERIFICATION_PRIORITY_KEYS = (
     "chi_square_statistic",
     "chi_square_threshold",
     "max_normalized_residual",
+    "chi_square_alpha",
+    "chi_square_ratio",
+    "chi_square_alarm",
+    "normalized_residual_threshold",
+    "normalized_residual_alarm",
+    "anomaly_detection_rule",
     "physical_bound_violations",
     "unresolved_signatures",
 )
@@ -1127,6 +1139,7 @@ def prepare_model_policy_observation(
     history: Iterable[Mapping[str, Any]] | None = None,
     max_history_events: int = 8,
     max_history_chars: int = 4096,
+    alias_before_compaction: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Apply the exact model-visible sanitization used by export and audits."""
     if not isinstance(raw_observation, Mapping):
@@ -1134,6 +1147,21 @@ def prepare_model_policy_observation(
     source_history = list(
         raw_observation.get("history_window", []) if history is None else (history or [])
     )
+    # Opt-in replay-stable view: IDs and mapping insertion order must not decide
+    # which evidence survives the character/item budgets. Legacy exports retain
+    # their original compaction order unless this contract is requested.
+    if alias_before_compaction:
+        raw_observation = json.loads(json.dumps(raw_observation, sort_keys=True, allow_nan=False))
+        source_history = json.loads(json.dumps(source_history, sort_keys=True, allow_nan=False))
+        current_references = {key: raw_observation[key] for key in ("active_state_id", "candidate_state_id")
+                              if raw_observation.get(key) is not None}
+        state_aliases = build_state_alias_bindings(current_references, raw_observation, source_history)
+        episode_aliases = _episode_bindings(raw_observation)
+        hash_aliases = build_hash_alias_bindings(raw_observation, source_history)
+        raw_observation = alias_model_visible_state(raw_observation, state_aliases,
+            episode_aliases=episode_aliases, hash_aliases=hash_aliases)
+        source_history = alias_model_visible_state(source_history, state_aliases,
+            episode_aliases=episode_aliases, hash_aliases=hash_aliases)
     observation = _without_history(raw_observation)
     if "last_tool_output" in observation:
         observation["last_tool_output"] = _compact_last_tool_output(
@@ -1165,15 +1193,16 @@ def prepare_model_policy_observation(
         max_chars=max_history_chars,
     )
     observation["history_window"] = history_window
-    state_aliases = build_state_alias_bindings(observation, history_window)
-    episode_aliases = _episode_bindings(raw_observation)
-    hash_aliases = build_hash_alias_bindings(observation, history_window)
-    aliased = alias_model_visible_state(
-        observation,
-        state_aliases,
-        episode_aliases=episode_aliases,
-        hash_aliases=hash_aliases,
-    )
+    if alias_before_compaction:
+        aliased = observation
+    else:
+        state_aliases = build_state_alias_bindings(observation, history_window)
+        episode_aliases = _episode_bindings(raw_observation)
+        hash_aliases = build_hash_alias_bindings(observation, history_window)
+        aliased = alias_model_visible_state(
+            observation, state_aliases, episode_aliases=episode_aliases,
+            hash_aliases=hash_aliases,
+        )
     if not isinstance(aliased, Mapping):
         raise ValueError("Prepared policy observation must remain a mapping.")
     return dict(aliased), {
@@ -1258,6 +1287,7 @@ def examples_to_chat_sft(
     require_derived_provenance: bool = True,
     protocol: str = "canonical",
     allow_ineligible_auxiliary: bool = False,
+    alias_before_compaction: bool = False,
 ) -> list[dict[str, Any]]:
     """Convert DAgger examples to native, controller-bindable chat SFT rows.
 
@@ -1357,6 +1387,7 @@ def examples_to_chat_sft(
             history=raw_history,
             max_history_events=max_history_events,
             max_history_chars=max_history_chars,
+            alias_before_compaction=alias_before_compaction,
         )
 
         normalized_target = safe_normalize_action(target)

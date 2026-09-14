@@ -201,3 +201,9 @@ _unsloth_sentencepiece_temp/
 /artifacts/traces/*
 /artifacts/eval_archives/*
 /artifacts/logs/*
+
+# Reproducible local IEEE57 corpora, solver outputs, and transfer scratch files.
+/output/
+/generated/
+/tmp/
+/*.bundle

@@ -35,8 +35,10 @@ Outputs:
 from __future__ import annotations
 
 import json
+import importlib
 import os
 import sys
+import threading
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -50,7 +52,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 # PYPOWER API: cases, solver, options, admittance builder, indices
 from pypower.api import case14, case118, runopf, ppoption, makeYbus
 from pypower.idx_bus import VM, VA, PD, QD, BUS_I
-from pypower.idx_brch import F_BUS, T_BUS, BR_R, BR_X, TAP, BR_STATUS
+from pypower.idx_brch import F_BUS, T_BUS, BR_R, BR_X, TAP, BR_STATUS, RATE_A
 
 # Harmonics utilities (for harmonic_anomaly)
 try:
@@ -63,6 +65,7 @@ except ImportError as e:
 
 MEASUREMENT_ORDER = ["Vm", "Pinj", "Qinj", "Pf", "Qf", "Pt", "Qt"]
 DEFAULT_SIGMAS = {"vm": 1e-3, "inj": 1e-2, "flow": 1e-2}
+_AC_OPF_LOCK = threading.RLock()
 HARMONIC_DEFAULT_CANDIDATES = [2, 3, 4, 5, 9, 10, 11, 12, 13, 14]
 
 
@@ -109,7 +112,46 @@ def scale_loads(ppc, alpha_p: float, alpha_q: float | None = None):
 def solve_ac_opf(ppc):
     """Run AC optimal power flow with quiet options; return solved ppc or None if it fails."""
     ppopt = ppoption(VERBOSE=0, OUT_ALL=0)
-    results = runopf(deepcopy(ppc), ppopt)
+    # PYPOWER 5.1.19 returns a (0, 1) nonlinear inequality vector when no
+    # branch has a finite RATE_A limit. PIPS concatenates it with a flat
+    # vector and raises ValueError. Flatten only that empty vector, preserving
+    # the canonical absence of thermal constraints and every numerical value.
+    # Restore the solver hook even on failure; serialize this shared helper.
+    with _AC_OPF_LOCK:
+        branch = np.asarray(ppc["branch"])
+        has_flow_limits = np.any((branch[:, RATE_A] != 0) & (branch[:, RATE_A] < 1e10))
+        if has_flow_limits:
+            results = runopf(deepcopy(ppc), ppopt)
+        else:
+            solver_module = importlib.import_module("pypower.pipsopf_solver")
+            original_constraint = solver_module.opf_consfcn
+            original_hessian = solver_module.opf_hessfcn
+
+            def flat_empty_constraint(*args, **kwargs):
+                h, g, dh, dg = original_constraint(*args, **kwargs)
+                if np.asarray(h).size == 0:
+                    h = np.asarray(h).reshape(-1)
+                return h, g, dh, dg
+
+            def empty_flow_hessian(x, lmbda, om, Ybus, Yf, Yt, options, il=None, cost_mult=1):
+                # The upstream empty-flow Hessian also constructs dimensionless
+                # sparse matrices. Evaluate its existing derivatives on all
+                # branches with exactly zero flow multipliers instead; their
+                # contribution remains zero and no constraints are introduced.
+                if il is not None and len(il) == 0:
+                    internal_case = om.get_ppc()
+                    _, Yf, Yt = makeYbus(internal_case["baseMVA"], internal_case["bus"], internal_case["branch"])
+                    il = np.arange(len(internal_case["branch"]))
+                    lmbda = dict(lmbda, ineqnonlin=np.zeros(2 * len(il)))
+                return original_hessian(x, lmbda, om, Ybus, Yf, Yt, options, il, cost_mult)
+
+            solver_module.opf_consfcn = flat_empty_constraint
+            solver_module.opf_hessfcn = empty_flow_hessian
+            try:
+                results = runopf(deepcopy(ppc), ppopt)
+            finally:
+                solver_module.opf_consfcn = original_constraint
+                solver_module.opf_hessfcn = original_hessian
     return results if results.get("success") else None
 
 
@@ -417,7 +459,7 @@ def sigma_vector(idx_map, sigmas=DEFAULT_SIGMAS) -> np.ndarray:
     return out
 
 
-def apply_measurement_error(z_true, idx_map, rng):
+def apply_measurement_error(z_true, idx_map, rng, *, subtype=None):
     """
     Add base Gaussian noise plus one additional measurement-error subtype:
       - single_gross_outlier
@@ -425,12 +467,16 @@ def apply_measurement_error(z_true, idx_map, rng):
 
     The unreachable channel-wide bias/scale branches from the old script are intentionally removed so
     the emitted scenario semantics match the trace builder and label space exactly.
+    An explicit subtype supports stratified corpora; omission preserves the legacy random draw.
     """
+    if subtype is not None and subtype not in {"single_gross_outlier", "multi_gross_outliers"}:
+        raise ValueError(f"Unsupported measurement-error subtype: {subtype}")
     sigmas = DEFAULT_SIGMAS
     z_base = z_true + base_gaussian_noise(z_true, idx_map, sigmas, rng)
     z_obs = z_base.copy()
 
-    subtype = rng.choice(["single_gross_outlier", "multi_gross_outliers"])
+    if subtype is None:
+        subtype = rng.choice(["single_gross_outlier", "multi_gross_outliers"])
     ch = rng.choice(MEASUREMENT_ORDER)
     sl = idx_map[ch]
     ch_sigma = {

@@ -1,0 +1,4928 @@
+{
+  "contract": "ieee57_training_readiness_failure_audit_v1",
+  "scope": "Development retrospective plus observable probes; not a training corpus or independent test",
+  "sources": {
+    "expert_validation.json": {
+      "path": "C:\\dw\\output\\ieee57_training_readiness_20260912\\expert_validation.json",
+      "sha256": "75ec13f4add7c3aca80092dd8506889f124ee6867483db3c0fd0116a5d8558b8",
+      "location_kind": "local_file",
+      "publicly_retrievable": false
+    },
+    "scenarios.json": {
+      "path": "C:\\dw\\output\\ieee57_training_readiness_20260912\\scenarios.json",
+      "sha256": "c2dcf5b600d0fb08ea9214c904baf57683900e69551ae74f21dbf94e5655324a",
+      "location_kind": "local_file",
+      "publicly_retrievable": false
+    },
+    "generator_rows.json": {
+      "path": "C:\\dw\\output\\ieee57_training_readiness_20260912\\generator_rows.json",
+      "sha256": "41f00fa4f4867546bb8a1720970a5531fbc2e5e8cabead76c1f9e1faca4bc5d7",
+      "location_kind": "local_file",
+      "publicly_retrievable": false
+    },
+    "corpus/samples.jsonl": {
+      "path": "C:\\dw\\output\\ieee57_training_readiness_20260912\\corpus\\samples.jsonl",
+      "sha256": "19c4339df1dde71859534e3569d9bbf3056e8c91a37e9f43805c9d73f5a681c6",
+      "location_kind": "local_file",
+      "publicly_retrievable": false
+    }
+  },
+  "historical_trace_archive": {
+    "repository_path": "research/ieee57/evidence/training_readiness_20260912.json.gz",
+    "uncompressed_sha256": "75ec13f4add7c3aca80092dd8506889f124ee6867483db3c0fd0116a5d8558b8",
+    "format": "gzip of original expert_validation.json bytes"
+  },
+  "historical_scenarios_archive": {
+    "repository_path": "research/ieee57/evidence/training_readiness_scenarios_20260912.json.gz",
+    "uncompressed_sha256": "c2dcf5b600d0fb08ea9214c904baf57683900e69551ae74f21dbf94e5655324a",
+    "format": "gzip of original scenarios.json bytes; test replays receive execution partition only"
+  },
+  "runtime": {
+    "contract": "ieee57_balanced_runtime_v1",
+    "system": "ieee57",
+    "chi2_alpha": 0.05,
+    "normalized_residual_threshold": 4.0,
+    "anomaly_rule": "chi_square_or_normalized_residual",
+    "alarm_comparison": ">=",
+    "max_steps": 40,
+    "history_window": 4,
+    "production_dataset_mode": true,
+    "executor_hydrated_corrections": true
+  },
+  "source_episodes_retained": 10,
+  "episode_summaries": [
+    {
+      "scenario_id": "r0_037baa806b09",
+      "physical_root": "physical_v3_de146a4220f361dd2ee2a1648039b7e5d4e7d8e6c60b6fa6ed149a7a45e3e605",
+      "family": "no_error",
+      "cardinality": 0,
+      "case": "case57",
+      "steps": 2,
+      "terminal": true,
+      "terminal_outcome": "resolved",
+      "final_physical_success": true,
+      "final_physical_correct": true,
+      "physical_correctness_known": true,
+      "truth_audited_task_success": true,
+      "truth_audited_task_success_evidence_known": true,
+      "healthy_components_preserved": true,
+      "healthy_preservation_known": true,
+      "false_commit_count": 0,
+      "false_finalization_count": 0,
+      "invalid_action_count": 0,
+      "evaluator_error": null,
+      "initial_wls": {
+        "execution_status": "success",
+        "error_code": null,
+        "wls_objective": 371.73909356198595,
+        "chi_square_statistic": 371.73909356198595,
+        "chi_square_threshold": 424.3341660094632,
+        "chi_square_dof": 378,
+        "chi_square_alpha": 0.05,
+        "chi_square_ratio": 0.8760527040702532,
+        "max_normalized_residual": 3.634545932694428,
+        "normalized_residual_threshold": 4.0,
+        "chi_square_alarm": false,
+        "normalized_residual_alarm": false,
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "converged": true,
+        "no_material_anomaly_remaining": true,
+        "physical_constraints_ok": null
+      },
+      "acquisitions": [],
+      "physical_outcome_audit": {
+        "audit_mode": "strict_release_audit",
+        "evidence_complete": true,
+        "problems": [],
+        "remaining_true_fault_count": 0,
+        "final_physical_correct": true,
+        "physical_correctness_known": true,
+        "healthy_components_preserved": true,
+        "healthy_preservation_known": true,
+        "accepted_target_audit": {
+          "true_targets": {
+            "measurement": [],
+            "parameter": [],
+            "topology": []
+          },
+          "accepted_targets": {
+            "measurement": [],
+            "parameter": [],
+            "topology": []
+          },
+          "healthy_targets_preserved": true,
+          "uncovered_standard_faults": 0,
+          "problems": []
+        },
+        "strict_release_audit": {
+          "audit_version": "strict_offline_episode_truth_v3",
+          "scenario_id": "r0_037baa806b09",
+          "physical_root_fingerprint": "physical_v3_de146a4220f361dd2ee2a1648039b7e5d4e7d8e6c60b6fa6ed149a7a45e3e605",
+          "scenario_family": "no_error",
+          "terminal": true,
+          "terminal_outcome": "resolved",
+          "checks": {
+            "accepted_correction_targets": {
+              "status": "passed",
+              "problems": []
+            },
+            "diagnostic_explanation_family": {
+              "status": "passed",
+              "problems": []
+            },
+            "diagnostic_localization": {
+              "status": "passed",
+              "problems": []
+            },
+            "remaining_true_faults": {
+              "status": "passed",
+              "problems": [],
+              "derived_remaining_fault_count": 0,
+              "evidence_source": "offline_scenario_truth_derivation"
+            },
+            "accepted_target_nonregression": {
+              "status": "passed",
+              "problems": [],
+              "target_evidence": []
+            },
+            "healthy_measurements_preserved": {
+              "status": "passed",
+              "problems": []
+            },
+            "healthy_case_components_preserved": {
+              "status": "passed",
+              "problems": []
+            },
+            "final_measurements_match_clean": {
+              "status": "passed",
+              "problems": []
+            },
+            "final_case_matches_clean": {
+              "status": "passed",
+              "problems": []
+            }
+          },
+          "tolerances": {
+            "measurement_abs": 1e-06,
+            "measurement_rel": 1e-06,
+            "case_abs": 1e-09,
+            "case_rel": 1e-09,
+            "final_case_abs": 1e-09,
+            "final_case_rel": 1e-09,
+            "harmonic_bus_index": 0.0,
+            "hif_branch_rows": 0.0,
+            "hif_alpha_abs": 0.15,
+            "unbalance_bus_index": 0.0,
+            "unbalance_top_k": 1
+          },
+          "problems": [],
+          "quarantined": false
+        },
+        "post_correction_handoff_assessment": {
+          "assessment_version": "audit_verified_post_correction_controller_handoff_v1",
+          "status": "not_applicable",
+          "eligible": false,
+          "reasons": [],
+          "actual_terminal_outcome": "resolved",
+          "runtime_contract": {
+            "contract": "audit_verified_post_correction_controller_handoff_v1",
+            "passed": false,
+            "failures": [
+              "handoff_requires_operator_escalation_outcome",
+              "handoff_last_tool_mismatch",
+              "handoff_final_action_mismatch",
+              "handoff_action_request_mismatch",
+              "handoff_output_request_mismatch",
+              "handoff_transition_label_invalid",
+              "handoff_output_terminal_outcome_mismatch",
+              "handoff_requires_accepted_correction",
+              "handoff_active_state_binding_mismatch",
+              "handoff_active_state_hash_binding_mismatch",
+              "handoff_accepted_correction_state_binding_mismatch",
+              "handoff_marker_missing",
+              "handoff_confirmation_still_deferred",
+              "handoff_operator_review_not_required",
+              "handoff_additional_evidence_still_available",
+              "handoff_required_context_missing",
+              "handoff_recovery_target_outstanding",
+              "handoff_unexplained_signature_count_mismatch",
+              "handoff_confirmation_signature_mismatch"
+            ],
+            "active_state_id": "r0_037baa806b09_episode0:s0",
+            "active_state_hash": null,
+            "accepted_correction_count": 0,
+            "post_correction_confirmation_handoff": false
+          },
+          "counterfactual_completion_audit": null
+        },
+        "truth_audited_task_assessment": {
+          "assessment_version": "truth_audited_final_task_success_v1",
+          "status": "passed",
+          "eligible": true,
+          "basis": "counterfactual_resolution",
+          "bounded_branch_handoff": null,
+          "evidence_known": true,
+          "faulted": false,
+          "fault_presence_known": true,
+          "fault_presence_source": "canonical_truth",
+          "initial_true_fault_count": 0,
+          "reasons": [],
+          "actual_terminal": true,
+          "actual_terminal_outcome": "resolved",
+          "counterfactual_completion_audit": {
+            "audit_version": "strict_offline_episode_truth_v3",
+            "scenario_id": "r0_037baa806b09",
+            "physical_root_fingerprint": "physical_v3_de146a4220f361dd2ee2a1648039b7e5d4e7d8e6c60b6fa6ed149a7a45e3e605",
+            "scenario_family": "no_error",
+            "terminal": true,
+            "terminal_outcome": "resolved",
+            "checks": {
+              "accepted_correction_targets": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_explanation_family": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_localization": {
+                "status": "passed",
+                "problems": []
+              },
+              "remaining_true_faults": {
+                "status": "passed",
+                "problems": [],
+                "derived_remaining_fault_count": 0,
+                "evidence_source": "offline_scenario_truth_derivation"
+              },
+              "accepted_target_nonregression": {
+                "status": "passed",
+                "problems": [],
+                "target_evidence": []
+              },
+              "healthy_measurements_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "healthy_case_components_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_measurements_match_clean": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_case_matches_clean": {
+                "status": "passed",
+                "problems": []
+              }
+            },
+            "tolerances": {
+              "measurement_abs": 1e-06,
+              "measurement_rel": 1e-06,
+              "case_abs": 1e-09,
+              "case_rel": 1e-09,
+              "final_case_abs": 1e-09,
+              "final_case_rel": 1e-09,
+              "harmonic_bus_index": 0.0,
+              "hif_branch_rows": 0.0,
+              "hif_alpha_abs": 0.15,
+              "unbalance_bus_index": 0.0,
+              "unbalance_top_k": 1
+            },
+            "problems": [],
+            "quarantined": false
+          }
+        }
+      }
+    },
+    {
+      "scenario_id": "r0_493d84fe434a",
+      "physical_root": "physical_v3_21f13bee63f4b4a34a71933d407f7c9cd0a18419bcd8c9b3f58561d4f62197a3",
+      "family": "measurement",
+      "cardinality": 1,
+      "case": "case57",
+      "steps": 9,
+      "terminal": true,
+      "terminal_outcome": "operator_escalation",
+      "final_physical_success": false,
+      "final_physical_correct": false,
+      "physical_correctness_known": false,
+      "truth_audited_task_success": true,
+      "truth_audited_task_success_evidence_known": true,
+      "healthy_components_preserved": true,
+      "healthy_preservation_known": true,
+      "false_commit_count": 0,
+      "false_finalization_count": 0,
+      "invalid_action_count": 0,
+      "evaluator_error": null,
+      "initial_wls": {
+        "execution_status": "success",
+        "error_code": null,
+        "wls_objective": 498.3231513885929,
+        "chi_square_statistic": 498.3231513885929,
+        "chi_square_threshold": 424.3341660094632,
+        "chi_square_dof": 378,
+        "chi_square_alpha": 0.05,
+        "chi_square_ratio": 1.174364902253663,
+        "max_normalized_residual": 10.222155039987955,
+        "normalized_residual_threshold": 4.0,
+        "chi_square_alarm": true,
+        "normalized_residual_alarm": true,
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "converged": true,
+        "no_material_anomaly_remaining": false,
+        "physical_constraints_ok": null
+      },
+      "acquisitions": [
+        {
+          "step": 1,
+          "tool": "get_three_phase_context",
+          "execution_status": "success",
+          "error_code": null,
+          "context_status": "unavailable",
+          "available_evidence_channels": []
+        },
+        {
+          "step": 2,
+          "tool": "get_harmonic_context",
+          "execution_status": "success",
+          "error_code": null,
+          "context_status": "unavailable",
+          "available_evidence_channels": []
+        }
+      ],
+      "physical_outcome_audit": {
+        "audit_mode": "strict_release_audit",
+        "evidence_complete": true,
+        "problems": [],
+        "remaining_true_fault_count": null,
+        "final_physical_correct": false,
+        "physical_correctness_known": false,
+        "healthy_components_preserved": true,
+        "healthy_preservation_known": true,
+        "accepted_target_audit": {
+          "true_targets": {
+            "measurement": [
+              486
+            ],
+            "parameter": [],
+            "topology": []
+          },
+          "accepted_targets": {
+            "measurement": [
+              486
+            ],
+            "parameter": [],
+            "topology": []
+          },
+          "healthy_targets_preserved": true,
+          "uncovered_standard_faults": 0,
+          "problems": []
+        },
+        "strict_release_audit": {
+          "audit_version": "strict_offline_episode_truth_v3",
+          "scenario_id": "r0_493d84fe434a",
+          "physical_root_fingerprint": "physical_v3_21f13bee63f4b4a34a71933d407f7c9cd0a18419bcd8c9b3f58561d4f62197a3",
+          "scenario_family": "measurement",
+          "terminal": true,
+          "terminal_outcome": "operator_escalation",
+          "checks": {
+            "accepted_correction_targets": {
+              "status": "passed",
+              "problems": []
+            },
+            "diagnostic_explanation_family": {
+              "status": "not_required",
+              "problems": []
+            },
+            "diagnostic_localization": {
+              "status": "not_required",
+              "problems": []
+            },
+            "remaining_true_faults": {
+              "status": "not_required",
+              "problems": []
+            },
+            "accepted_target_nonregression": {
+              "status": "passed",
+              "problems": [],
+              "target_evidence": [
+                {
+                  "family": "measurement",
+                  "index0": 486,
+                  "initial_distance": 0.10318535923156721,
+                  "final_distance": 0.0007106081516725579,
+                  "tolerance": 0.04242648528688198,
+                  "status": "passed"
+                }
+              ]
+            },
+            "healthy_measurements_preserved": {
+              "status": "passed",
+              "problems": []
+            },
+            "healthy_case_components_preserved": {
+              "status": "passed",
+              "problems": []
+            },
+            "final_measurements_match_clean": {
+              "status": "not_required",
+              "problems": []
+            },
+            "final_case_matches_clean": {
+              "status": "not_required",
+              "problems": []
+            }
+          },
+          "tolerances": {
+            "measurement_abs": 0.04242640687119286,
+            "measurement_rel": 1e-06,
+            "case_abs": 1e-09,
+            "case_rel": 1e-09,
+            "final_case_abs": 1e-09,
+            "final_case_rel": 1e-09,
+            "harmonic_bus_index": 0.0,
+            "hif_branch_rows": 0.0,
+            "hif_alpha_abs": 0.15,
+            "unbalance_bus_index": 0.0,
+            "unbalance_top_k": 1
+          },
+          "problems": [],
+          "quarantined": false
+        },
+        "post_correction_handoff_assessment": {
+          "assessment_version": "audit_verified_post_correction_controller_handoff_v1",
+          "status": "passed",
+          "eligible": true,
+          "reasons": [],
+          "actual_terminal_outcome": "operator_escalation",
+          "runtime_contract": {
+            "contract": "audit_verified_post_correction_controller_handoff_v1",
+            "passed": true,
+            "failures": [],
+            "active_state_id": "r0_493d84fe434a_episode0:s1",
+            "active_state_hash": "bc7d139f1e5e6f09db90dbb09f15f5837164d862b2ed776e81a4647d2ad1e2b3",
+            "accepted_correction_count": 1,
+            "post_correction_confirmation_handoff": true
+          },
+          "counterfactual_completion_audit": {
+            "audit_version": "strict_offline_episode_truth_v3",
+            "scenario_id": "r0_493d84fe434a",
+            "physical_root_fingerprint": "physical_v3_21f13bee63f4b4a34a71933d407f7c9cd0a18419bcd8c9b3f58561d4f62197a3",
+            "scenario_family": "measurement",
+            "terminal": true,
+            "terminal_outcome": "resolved",
+            "checks": {
+              "accepted_correction_targets": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_explanation_family": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_localization": {
+                "status": "passed",
+                "problems": []
+              },
+              "remaining_true_faults": {
+                "status": "passed",
+                "problems": [],
+                "derived_remaining_fault_count": 0,
+                "evidence_source": "offline_scenario_truth_derivation"
+              },
+              "accepted_target_nonregression": {
+                "status": "passed",
+                "problems": [],
+                "target_evidence": [
+                  {
+                    "family": "measurement",
+                    "index0": 486,
+                    "initial_distance": 0.10318535923156721,
+                    "final_distance": 0.0007106081516725579,
+                    "tolerance": 0.04242648528688198,
+                    "status": "passed"
+                  }
+                ]
+              },
+              "healthy_measurements_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "healthy_case_components_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_measurements_match_clean": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_case_matches_clean": {
+                "status": "passed",
+                "problems": []
+              }
+            },
+            "tolerances": {
+              "measurement_abs": 0.04242640687119286,
+              "measurement_rel": 1e-06,
+              "case_abs": 1e-09,
+              "case_rel": 1e-09,
+              "final_case_abs": 1e-09,
+              "final_case_rel": 1e-09,
+              "harmonic_bus_index": 0.0,
+              "hif_branch_rows": 0.0,
+              "hif_alpha_abs": 0.15,
+              "unbalance_bus_index": 0.0,
+              "unbalance_top_k": 1
+            },
+            "problems": [],
+            "quarantined": false
+          }
+        },
+        "truth_audited_task_assessment": {
+          "assessment_version": "truth_audited_final_task_success_v1",
+          "status": "passed",
+          "eligible": true,
+          "basis": "counterfactual_resolution",
+          "bounded_branch_handoff": null,
+          "evidence_known": true,
+          "faulted": true,
+          "fault_presence_known": true,
+          "fault_presence_source": "canonical_truth",
+          "initial_true_fault_count": 1,
+          "reasons": [],
+          "actual_terminal": true,
+          "actual_terminal_outcome": "operator_escalation",
+          "counterfactual_completion_audit": {
+            "audit_version": "strict_offline_episode_truth_v3",
+            "scenario_id": "r0_493d84fe434a",
+            "physical_root_fingerprint": "physical_v3_21f13bee63f4b4a34a71933d407f7c9cd0a18419bcd8c9b3f58561d4f62197a3",
+            "scenario_family": "measurement",
+            "terminal": true,
+            "terminal_outcome": "resolved",
+            "checks": {
+              "accepted_correction_targets": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_explanation_family": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_localization": {
+                "status": "passed",
+                "problems": []
+              },
+              "remaining_true_faults": {
+                "status": "passed",
+                "problems": [],
+                "derived_remaining_fault_count": 0,
+                "evidence_source": "offline_scenario_truth_derivation"
+              },
+              "accepted_target_nonregression": {
+                "status": "passed",
+                "problems": [],
+                "target_evidence": [
+                  {
+                    "family": "measurement",
+                    "index0": 486,
+                    "initial_distance": 0.10318535923156721,
+                    "final_distance": 0.0007106081516725579,
+                    "tolerance": 0.04242648528688198,
+                    "status": "passed"
+                  }
+                ]
+              },
+              "healthy_measurements_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "healthy_case_components_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_measurements_match_clean": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_case_matches_clean": {
+                "status": "passed",
+                "problems": []
+              }
+            },
+            "tolerances": {
+              "measurement_abs": 0.04242640687119286,
+              "measurement_rel": 1e-06,
+              "case_abs": 1e-09,
+              "case_rel": 1e-09,
+              "final_case_abs": 1e-09,
+              "final_case_rel": 1e-09,
+              "harmonic_bus_index": 0.0,
+              "hif_branch_rows": 0.0,
+              "hif_alpha_abs": 0.15,
+              "unbalance_bus_index": 0.0,
+              "unbalance_top_k": 1
+            },
+            "problems": [],
+            "quarantined": false
+          }
+        }
+      }
+    },
+    {
+      "scenario_id": "r0_49669915880d",
+      "physical_root": "physical_v3_255522f1895e7e656a052c6140e97424d02fb743eca59eb867be3f748c0ae28a",
+      "family": "measurement+parameter",
+      "cardinality": 2,
+      "case": "case57",
+      "steps": 15,
+      "terminal": true,
+      "terminal_outcome": "operator_escalation",
+      "final_physical_success": false,
+      "final_physical_correct": false,
+      "physical_correctness_known": false,
+      "truth_audited_task_success": true,
+      "truth_audited_task_success_evidence_known": true,
+      "healthy_components_preserved": true,
+      "healthy_preservation_known": true,
+      "false_commit_count": 0,
+      "false_finalization_count": 0,
+      "invalid_action_count": 1,
+      "evaluator_error": null,
+      "initial_wls": {
+        "execution_status": "success",
+        "error_code": null,
+        "wls_objective": 2554.3533045605473,
+        "chi_square_statistic": 2554.3533045605473,
+        "chi_square_threshold": 424.3341660094632,
+        "chi_square_dof": 378,
+        "chi_square_alpha": 0.05,
+        "chi_square_ratio": 6.019673901308201,
+        "max_normalized_residual": 25.043094113452412,
+        "normalized_residual_threshold": 4.0,
+        "chi_square_alarm": true,
+        "normalized_residual_alarm": true,
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "converged": true,
+        "no_material_anomaly_remaining": false,
+        "physical_constraints_ok": null
+      },
+      "acquisitions": [
+        {
+          "step": 1,
+          "tool": "get_three_phase_context",
+          "execution_status": "success",
+          "error_code": null,
+          "context_status": "unavailable",
+          "available_evidence_channels": []
+        },
+        {
+          "step": 2,
+          "tool": "get_harmonic_context",
+          "execution_status": "success",
+          "error_code": null,
+          "context_status": "unavailable",
+          "available_evidence_channels": []
+        }
+      ],
+      "physical_outcome_audit": {
+        "audit_mode": "strict_release_audit",
+        "evidence_complete": true,
+        "problems": [],
+        "remaining_true_fault_count": null,
+        "final_physical_correct": false,
+        "physical_correctness_known": false,
+        "healthy_components_preserved": true,
+        "healthy_preservation_known": true,
+        "accepted_target_audit": {
+          "true_targets": {
+            "measurement": [
+              471
+            ],
+            "parameter": [
+              17
+            ],
+            "topology": []
+          },
+          "accepted_targets": {
+            "measurement": [
+              471
+            ],
+            "parameter": [
+              17
+            ],
+            "topology": []
+          },
+          "healthy_targets_preserved": true,
+          "uncovered_standard_faults": 0,
+          "problems": []
+        },
+        "strict_release_audit": {
+          "audit_version": "strict_offline_episode_truth_v3",
+          "scenario_id": "r0_49669915880d",
+          "physical_root_fingerprint": "physical_v3_255522f1895e7e656a052c6140e97424d02fb743eca59eb867be3f748c0ae28a",
+          "scenario_family": "measurement+parameter",
+          "terminal": true,
+          "terminal_outcome": "operator_escalation",
+          "checks": {
+            "accepted_correction_targets": {
+              "status": "passed",
+              "problems": []
+            },
+            "diagnostic_explanation_family": {
+              "status": "not_required",
+              "problems": []
+            },
+            "diagnostic_localization": {
+              "status": "not_required",
+              "problems": []
+            },
+            "remaining_true_faults": {
+              "status": "not_required",
+              "problems": []
+            },
+            "accepted_target_nonregression": {
+              "status": "passed",
+              "problems": [],
+              "target_evidence": [
+                {
+                  "family": "measurement",
+                  "index0": 471,
+                  "initial_distance": 0.2862180097176781,
+                  "final_distance": 0.0011230656348591994,
+                  "tolerance": 0.0424265770831854,
+                  "status": "passed"
+                },
+                {
+                  "family": "parameter",
+                  "target": [
+                    "branch_row0",
+                    17
+                  ],
+                  "columns": [
+                    2,
+                    3
+                  ],
+                  "initial_distance": 0.142608680778,
+                  "final_distance": 0.008268840752909349,
+                  "tolerance": 0.02828427144374027,
+                  "status": "passed"
+                }
+              ]
+            },
+            "healthy_measurements_preserved": {
+              "status": "passed",
+              "problems": []
+            },
+            "healthy_case_components_preserved": {
+              "status": "passed",
+              "problems": []
+            },
+            "final_measurements_match_clean": {
+              "status": "not_required",
+              "problems": []
+            },
+            "final_case_matches_clean": {
+              "status": "not_required",
+              "problems": []
+            }
+          },
+          "tolerances": {
+            "measurement_abs": 0.04242640687119286,
+            "measurement_rel": 1e-06,
+            "case_abs": 1e-09,
+            "case_rel": 1e-09,
+            "final_case_abs": 0.02,
+            "final_case_rel": 1e-09,
+            "harmonic_bus_index": 0.0,
+            "hif_branch_rows": 0.0,
+            "hif_alpha_abs": 0.15,
+            "unbalance_bus_index": 0.0,
+            "unbalance_top_k": 1
+          },
+          "problems": [],
+          "quarantined": false
+        },
+        "post_correction_handoff_assessment": {
+          "assessment_version": "audit_verified_post_correction_controller_handoff_v1",
+          "status": "not_applicable",
+          "eligible": false,
+          "reasons": [],
+          "actual_terminal_outcome": "operator_escalation",
+          "runtime_contract": {
+            "contract": "audit_verified_post_correction_controller_handoff_v1",
+            "passed": false,
+            "failures": [
+              "handoff_marker_missing",
+              "handoff_unexplained_signature_count_mismatch",
+              "handoff_confirmation_signature_mismatch"
+            ],
+            "active_state_id": "r0_49669915880d_episode0:s2",
+            "active_state_hash": "20d2199ddaa2a78e195092b1413da282794bf371649d09c9a6c6ca95a74b2570",
+            "accepted_correction_count": 2,
+            "post_correction_confirmation_handoff": false
+          },
+          "counterfactual_completion_audit": null
+        },
+        "truth_audited_task_assessment": {
+          "assessment_version": "truth_audited_final_task_success_v1",
+          "status": "passed",
+          "eligible": true,
+          "basis": "counterfactual_resolution",
+          "bounded_branch_handoff": null,
+          "evidence_known": true,
+          "faulted": true,
+          "fault_presence_known": true,
+          "fault_presence_source": "canonical_truth",
+          "initial_true_fault_count": 2,
+          "reasons": [],
+          "actual_terminal": true,
+          "actual_terminal_outcome": "operator_escalation",
+          "counterfactual_completion_audit": {
+            "audit_version": "strict_offline_episode_truth_v3",
+            "scenario_id": "r0_49669915880d",
+            "physical_root_fingerprint": "physical_v3_255522f1895e7e656a052c6140e97424d02fb743eca59eb867be3f748c0ae28a",
+            "scenario_family": "measurement+parameter",
+            "terminal": true,
+            "terminal_outcome": "resolved",
+            "checks": {
+              "accepted_correction_targets": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_explanation_family": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_localization": {
+                "status": "passed",
+                "problems": []
+              },
+              "remaining_true_faults": {
+                "status": "passed",
+                "problems": [],
+                "derived_remaining_fault_count": 0,
+                "evidence_source": "offline_scenario_truth_derivation"
+              },
+              "accepted_target_nonregression": {
+                "status": "passed",
+                "problems": [],
+                "target_evidence": [
+                  {
+                    "family": "measurement",
+                    "index0": 471,
+                    "initial_distance": 0.2862180097176781,
+                    "final_distance": 0.0011230656348591994,
+                    "tolerance": 0.0424265770831854,
+                    "status": "passed"
+                  },
+                  {
+                    "family": "parameter",
+                    "target": [
+                      "branch_row0",
+                      17
+                    ],
+                    "columns": [
+                      2,
+                      3
+                    ],
+                    "initial_distance": 0.142608680778,
+                    "final_distance": 0.008268840752909349,
+                    "tolerance": 0.02828427144374027,
+                    "status": "passed"
+                  }
+                ]
+              },
+              "healthy_measurements_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "healthy_case_components_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_measurements_match_clean": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_case_matches_clean": {
+                "status": "passed",
+                "problems": []
+              }
+            },
+            "tolerances": {
+              "measurement_abs": 0.04242640687119286,
+              "measurement_rel": 1e-06,
+              "case_abs": 1e-09,
+              "case_rel": 1e-09,
+              "final_case_abs": 0.02,
+              "final_case_rel": 1e-09,
+              "harmonic_bus_index": 0.0,
+              "hif_branch_rows": 0.0,
+              "hif_alpha_abs": 0.15,
+              "unbalance_bus_index": 0.0,
+              "unbalance_top_k": 1
+            },
+            "problems": [],
+            "quarantined": false
+          }
+        }
+      }
+    },
+    {
+      "scenario_id": "r0_4c50d84d2999",
+      "physical_root": "physical_v3_a066bba7a0621ac4332c27e7c805b4988429f78e87d170ec7d628c1ed60880f1",
+      "family": "measurement+parameter",
+      "cardinality": 2,
+      "case": "case57",
+      "steps": 13,
+      "terminal": true,
+      "terminal_outcome": "operator_escalation",
+      "final_physical_success": false,
+      "final_physical_correct": false,
+      "physical_correctness_known": false,
+      "truth_audited_task_success": false,
+      "truth_audited_task_success_evidence_known": true,
+      "healthy_components_preserved": true,
+      "healthy_preservation_known": true,
+      "false_commit_count": 0,
+      "false_finalization_count": 0,
+      "invalid_action_count": 0,
+      "evaluator_error": null,
+      "initial_wls": {
+        "execution_status": "success",
+        "error_code": null,
+        "wls_objective": 944.8664609809942,
+        "chi_square_statistic": 944.8664609809942,
+        "chi_square_threshold": 424.3341660094632,
+        "chi_square_dof": 378,
+        "chi_square_alpha": 0.05,
+        "chi_square_ratio": 2.226703708227733,
+        "max_normalized_residual": 22.01783853900192,
+        "normalized_residual_threshold": 4.0,
+        "chi_square_alarm": true,
+        "normalized_residual_alarm": true,
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "converged": true,
+        "no_material_anomaly_remaining": false,
+        "physical_constraints_ok": null
+      },
+      "acquisitions": [
+        {
+          "step": 1,
+          "tool": "get_three_phase_context",
+          "execution_status": "success",
+          "error_code": null,
+          "context_status": "unavailable",
+          "available_evidence_channels": []
+        },
+        {
+          "step": 2,
+          "tool": "get_harmonic_context",
+          "execution_status": "success",
+          "error_code": null,
+          "context_status": "unavailable",
+          "available_evidence_channels": []
+        }
+      ],
+      "physical_outcome_audit": {
+        "audit_mode": "strict_release_audit",
+        "evidence_complete": true,
+        "problems": [],
+        "remaining_true_fault_count": null,
+        "final_physical_correct": false,
+        "physical_correctness_known": false,
+        "healthy_components_preserved": true,
+        "healthy_preservation_known": true,
+        "accepted_target_audit": {
+          "true_targets": {
+            "measurement": [
+              204
+            ],
+            "parameter": [
+              73
+            ],
+            "topology": []
+          },
+          "accepted_targets": {
+            "measurement": [
+              204
+            ],
+            "parameter": [
+              73
+            ],
+            "topology": []
+          },
+          "healthy_targets_preserved": true,
+          "uncovered_standard_faults": 0,
+          "problems": []
+        },
+        "strict_release_audit": {
+          "audit_version": "strict_offline_episode_truth_v3",
+          "scenario_id": "r0_4c50d84d2999",
+          "physical_root_fingerprint": "physical_v3_a066bba7a0621ac4332c27e7c805b4988429f78e87d170ec7d628c1ed60880f1",
+          "scenario_family": "measurement+parameter",
+          "terminal": true,
+          "terminal_outcome": "operator_escalation",
+          "checks": {
+            "accepted_correction_targets": {
+              "status": "passed",
+              "problems": []
+            },
+            "diagnostic_explanation_family": {
+              "status": "not_required",
+              "problems": []
+            },
+            "diagnostic_localization": {
+              "status": "not_required",
+              "problems": []
+            },
+            "remaining_true_faults": {
+              "status": "not_required",
+              "problems": []
+            },
+            "accepted_target_nonregression": {
+              "status": "passed",
+              "problems": [],
+              "target_evidence": [
+                {
+                  "family": "measurement",
+                  "index0": 204,
+                  "initial_distance": 0.23467205270374347,
+                  "final_distance": 0.0032038760264594887,
+                  "tolerance": 0.04242660747167663,
+                  "status": "passed"
+                },
+                {
+                  "family": "parameter",
+                  "target": [
+                    "branch_row0",
+                    73
+                  ],
+                  "columns": [
+                    2,
+                    3
+                  ],
+                  "initial_distance": 1.4540058998328045,
+                  "final_distance": 0.2070809613305046,
+                  "tolerance": 0.273560673955753,
+                  "status": "passed"
+                }
+              ]
+            },
+            "healthy_measurements_preserved": {
+              "status": "passed",
+              "problems": []
+            },
+            "healthy_case_components_preserved": {
+              "status": "passed",
+              "problems": []
+            },
+            "final_measurements_match_clean": {
+              "status": "not_required",
+              "problems": []
+            },
+            "final_case_matches_clean": {
+              "status": "not_required",
+              "problems": []
+            }
+          },
+          "tolerances": {
+            "measurement_abs": 0.04242640687119286,
+            "measurement_rel": 1e-06,
+            "case_abs": 1e-09,
+            "case_rel": 1e-09,
+            "final_case_abs": 0.19343660625000003,
+            "final_case_rel": 1e-09,
+            "harmonic_bus_index": 0.0,
+            "hif_branch_rows": 0.0,
+            "hif_alpha_abs": 0.15,
+            "unbalance_bus_index": 0.0,
+            "unbalance_top_k": 1
+          },
+          "problems": [],
+          "quarantined": false
+        },
+        "post_correction_handoff_assessment": {
+          "assessment_version": "audit_verified_post_correction_controller_handoff_v1",
+          "status": "failed",
+          "eligible": false,
+          "reasons": [
+            "counterfactual_completion_check_failed:final_case_matches_clean",
+            "counterfactual_completion_quarantined",
+            "counterfactual_completion_reported_problems"
+          ],
+          "actual_terminal_outcome": "operator_escalation",
+          "runtime_contract": {
+            "contract": "audit_verified_post_correction_controller_handoff_v1",
+            "passed": true,
+            "failures": [],
+            "active_state_id": "r0_4c50d84d2999_episode0:s2",
+            "active_state_hash": "e7912562d26f0432c18b1037c9c61537d5d7d0857fe21c4a0df251bee1096c7d",
+            "accepted_correction_count": 2,
+            "post_correction_confirmation_handoff": true
+          },
+          "counterfactual_completion_audit": {
+            "audit_version": "strict_offline_episode_truth_v3",
+            "scenario_id": "r0_4c50d84d2999",
+            "physical_root_fingerprint": "physical_v3_a066bba7a0621ac4332c27e7c805b4988429f78e87d170ec7d628c1ed60880f1",
+            "scenario_family": "measurement+parameter",
+            "terminal": true,
+            "terminal_outcome": "resolved",
+            "checks": {
+              "accepted_correction_targets": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_explanation_family": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_localization": {
+                "status": "passed",
+                "problems": []
+              },
+              "remaining_true_faults": {
+                "status": "passed",
+                "problems": [],
+                "derived_remaining_fault_count": 0,
+                "evidence_source": "offline_scenario_truth_derivation"
+              },
+              "accepted_target_nonregression": {
+                "status": "passed",
+                "problems": [],
+                "target_evidence": [
+                  {
+                    "family": "measurement",
+                    "index0": 204,
+                    "initial_distance": 0.23467205270374347,
+                    "final_distance": 0.0032038760264594887,
+                    "tolerance": 0.04242660747167663,
+                    "status": "passed"
+                  },
+                  {
+                    "family": "parameter",
+                    "target": [
+                      "branch_row0",
+                      73
+                    ],
+                    "columns": [
+                      2,
+                      3
+                    ],
+                    "initial_distance": 1.4540058998328045,
+                    "final_distance": 0.2070809613305046,
+                    "tolerance": 0.273560673955753,
+                    "status": "passed"
+                  }
+                ]
+              },
+              "healthy_measurements_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "healthy_case_components_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_measurements_match_clean": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_case_matches_clean": {
+                "status": "failed",
+                "problems": [
+                  "final_case_outside_clean_tolerance"
+                ]
+              }
+            },
+            "tolerances": {
+              "measurement_abs": 0.04242640687119286,
+              "measurement_rel": 1e-06,
+              "case_abs": 1e-09,
+              "case_rel": 1e-09,
+              "final_case_abs": 0.19343660625000003,
+              "final_case_rel": 1e-09,
+              "harmonic_bus_index": 0.0,
+              "hif_branch_rows": 0.0,
+              "hif_alpha_abs": 0.15,
+              "unbalance_bus_index": 0.0,
+              "unbalance_top_k": 1
+            },
+            "problems": [
+              "final_case_outside_clean_tolerance"
+            ],
+            "quarantined": true
+          }
+        },
+        "truth_audited_task_assessment": {
+          "assessment_version": "truth_audited_final_task_success_v1",
+          "status": "failed",
+          "eligible": false,
+          "basis": null,
+          "bounded_branch_handoff": {
+            "contract": "bounded_branch_handoff_v1",
+            "passed": false,
+            "request": "operator_escalation:recovery_options_exhausted",
+            "candidate_lines": [],
+            "true_lines": [],
+            "reasons": [
+              "handoff_not_bounded_to_branch_candidates"
+            ]
+          },
+          "evidence_known": true,
+          "faulted": true,
+          "fault_presence_known": true,
+          "fault_presence_source": "canonical_truth",
+          "initial_true_fault_count": 2,
+          "reasons": [
+            "final_case_outside_clean_tolerance"
+          ],
+          "actual_terminal": true,
+          "actual_terminal_outcome": "operator_escalation",
+          "counterfactual_completion_audit": {
+            "audit_version": "strict_offline_episode_truth_v3",
+            "scenario_id": "r0_4c50d84d2999",
+            "physical_root_fingerprint": "physical_v3_a066bba7a0621ac4332c27e7c805b4988429f78e87d170ec7d628c1ed60880f1",
+            "scenario_family": "measurement+parameter",
+            "terminal": true,
+            "terminal_outcome": "resolved",
+            "checks": {
+              "accepted_correction_targets": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_explanation_family": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_localization": {
+                "status": "passed",
+                "problems": []
+              },
+              "remaining_true_faults": {
+                "status": "passed",
+                "problems": [],
+                "derived_remaining_fault_count": 0,
+                "evidence_source": "offline_scenario_truth_derivation"
+              },
+              "accepted_target_nonregression": {
+                "status": "passed",
+                "problems": [],
+                "target_evidence": [
+                  {
+                    "family": "measurement",
+                    "index0": 204,
+                    "initial_distance": 0.23467205270374347,
+                    "final_distance": 0.0032038760264594887,
+                    "tolerance": 0.04242660747167663,
+                    "status": "passed"
+                  },
+                  {
+                    "family": "parameter",
+                    "target": [
+                      "branch_row0",
+                      73
+                    ],
+                    "columns": [
+                      2,
+                      3
+                    ],
+                    "initial_distance": 1.4540058998328045,
+                    "final_distance": 0.2070809613305046,
+                    "tolerance": 0.273560673955753,
+                    "status": "passed"
+                  }
+                ]
+              },
+              "healthy_measurements_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "healthy_case_components_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_measurements_match_clean": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_case_matches_clean": {
+                "status": "failed",
+                "problems": [
+                  "final_case_outside_clean_tolerance"
+                ]
+              }
+            },
+            "tolerances": {
+              "measurement_abs": 0.04242640687119286,
+              "measurement_rel": 1e-06,
+              "case_abs": 1e-09,
+              "case_rel": 1e-09,
+              "final_case_abs": 0.19343660625000003,
+              "final_case_rel": 1e-09,
+              "harmonic_bus_index": 0.0,
+              "hif_branch_rows": 0.0,
+              "hif_alpha_abs": 0.15,
+              "unbalance_bus_index": 0.0,
+              "unbalance_top_k": 1
+            },
+            "problems": [
+              "final_case_outside_clean_tolerance"
+            ],
+            "quarantined": true
+          }
+        }
+      }
+    },
+    {
+      "scenario_id": "r0_56482aa7005d",
+      "physical_root": "physical_v3_71f916b8913e961b1c77081792f10ccb99cff2d81301170a491078e0f3df161d",
+      "family": "parameter",
+      "cardinality": 1,
+      "case": "case57",
+      "steps": 2,
+      "terminal": true,
+      "terminal_outcome": "resolved",
+      "final_physical_success": false,
+      "final_physical_correct": false,
+      "physical_correctness_known": true,
+      "truth_audited_task_success": false,
+      "truth_audited_task_success_evidence_known": true,
+      "healthy_components_preserved": true,
+      "healthy_preservation_known": true,
+      "false_commit_count": 0,
+      "false_finalization_count": 1,
+      "invalid_action_count": 0,
+      "evaluator_error": null,
+      "initial_wls": {
+        "execution_status": "success",
+        "error_code": null,
+        "wls_objective": 330.25719099917274,
+        "chi_square_statistic": 330.25719099917274,
+        "chi_square_threshold": 424.3341660094632,
+        "chi_square_dof": 378,
+        "chi_square_alpha": 0.05,
+        "chi_square_ratio": 0.7782950736797554,
+        "max_normalized_residual": 3.467954758189677,
+        "normalized_residual_threshold": 4.0,
+        "chi_square_alarm": false,
+        "normalized_residual_alarm": false,
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "converged": true,
+        "no_material_anomaly_remaining": true,
+        "physical_constraints_ok": null
+      },
+      "acquisitions": [],
+      "physical_outcome_audit": {
+        "audit_mode": "strict_release_audit",
+        "evidence_complete": true,
+        "problems": [
+          "resolved_episode_has_remaining_true_faults",
+          "final_case_outside_clean_tolerance"
+        ],
+        "remaining_true_fault_count": 1,
+        "final_physical_correct": false,
+        "physical_correctness_known": true,
+        "healthy_components_preserved": true,
+        "healthy_preservation_known": true,
+        "accepted_target_audit": {
+          "true_targets": {
+            "measurement": [],
+            "parameter": [
+              31
+            ],
+            "topology": []
+          },
+          "accepted_targets": {
+            "measurement": [],
+            "parameter": [],
+            "topology": []
+          },
+          "healthy_targets_preserved": true,
+          "uncovered_standard_faults": 1,
+          "problems": []
+        },
+        "strict_release_audit": {
+          "audit_version": "strict_offline_episode_truth_v3",
+          "scenario_id": "r0_56482aa7005d",
+          "physical_root_fingerprint": "physical_v3_71f916b8913e961b1c77081792f10ccb99cff2d81301170a491078e0f3df161d",
+          "scenario_family": "parameter",
+          "terminal": true,
+          "terminal_outcome": "resolved",
+          "checks": {
+            "accepted_correction_targets": {
+              "status": "passed",
+              "problems": []
+            },
+            "diagnostic_explanation_family": {
+              "status": "passed",
+              "problems": []
+            },
+            "diagnostic_localization": {
+              "status": "passed",
+              "problems": []
+            },
+            "remaining_true_faults": {
+              "status": "failed",
+              "problems": [
+                "resolved_episode_has_remaining_true_faults"
+              ],
+              "derived_remaining_fault_count": 1,
+              "evidence_source": "offline_scenario_truth_derivation"
+            },
+            "accepted_target_nonregression": {
+              "status": "passed",
+              "problems": [],
+              "target_evidence": []
+            },
+            "healthy_measurements_preserved": {
+              "status": "passed",
+              "problems": []
+            },
+            "healthy_case_components_preserved": {
+              "status": "passed",
+              "problems": []
+            },
+            "final_measurements_match_clean": {
+              "status": "passed",
+              "problems": []
+            },
+            "final_case_matches_clean": {
+              "status": "failed",
+              "problems": [
+                "final_case_outside_clean_tolerance"
+              ]
+            }
+          },
+          "tolerances": {
+            "measurement_abs": 1e-06,
+            "measurement_rel": 1e-06,
+            "case_abs": 1e-09,
+            "case_rel": 1e-09,
+            "final_case_abs": 0.044023792352800004,
+            "final_case_rel": 1e-09,
+            "harmonic_bus_index": 0.0,
+            "hif_branch_rows": 0.0,
+            "hif_alpha_abs": 0.15,
+            "unbalance_bus_index": 0.0,
+            "unbalance_top_k": 1
+          },
+          "problems": [
+            "resolved_episode_has_remaining_true_faults",
+            "final_case_outside_clean_tolerance"
+          ],
+          "quarantined": true
+        },
+        "post_correction_handoff_assessment": {
+          "assessment_version": "audit_verified_post_correction_controller_handoff_v1",
+          "status": "not_applicable",
+          "eligible": false,
+          "reasons": [],
+          "actual_terminal_outcome": "resolved",
+          "runtime_contract": {
+            "contract": "audit_verified_post_correction_controller_handoff_v1",
+            "passed": false,
+            "failures": [
+              "handoff_requires_operator_escalation_outcome",
+              "handoff_last_tool_mismatch",
+              "handoff_final_action_mismatch",
+              "handoff_action_request_mismatch",
+              "handoff_output_request_mismatch",
+              "handoff_transition_label_invalid",
+              "handoff_output_terminal_outcome_mismatch",
+              "handoff_requires_accepted_correction",
+              "handoff_active_state_binding_mismatch",
+              "handoff_active_state_hash_binding_mismatch",
+              "handoff_accepted_correction_state_binding_mismatch",
+              "handoff_marker_missing",
+              "handoff_confirmation_still_deferred",
+              "handoff_operator_review_not_required",
+              "handoff_additional_evidence_still_available",
+              "handoff_required_context_missing",
+              "handoff_recovery_target_outstanding",
+              "handoff_unexplained_signature_count_mismatch",
+              "handoff_confirmation_signature_mismatch"
+            ],
+            "active_state_id": "r0_56482aa7005d_episode0:s0",
+            "active_state_hash": null,
+            "accepted_correction_count": 0,
+            "post_correction_confirmation_handoff": false
+          },
+          "counterfactual_completion_audit": null
+        },
+        "truth_audited_task_assessment": {
+          "assessment_version": "truth_audited_final_task_success_v1",
+          "status": "failed",
+          "eligible": false,
+          "basis": null,
+          "bounded_branch_handoff": null,
+          "evidence_known": true,
+          "faulted": true,
+          "fault_presence_known": true,
+          "fault_presence_source": "canonical_truth",
+          "initial_true_fault_count": 1,
+          "reasons": [
+            "resolved_episode_has_remaining_true_faults",
+            "final_case_outside_clean_tolerance"
+          ],
+          "actual_terminal": true,
+          "actual_terminal_outcome": "resolved",
+          "counterfactual_completion_audit": {
+            "audit_version": "strict_offline_episode_truth_v3",
+            "scenario_id": "r0_56482aa7005d",
+            "physical_root_fingerprint": "physical_v3_71f916b8913e961b1c77081792f10ccb99cff2d81301170a491078e0f3df161d",
+            "scenario_family": "parameter",
+            "terminal": true,
+            "terminal_outcome": "resolved",
+            "checks": {
+              "accepted_correction_targets": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_explanation_family": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_localization": {
+                "status": "passed",
+                "problems": []
+              },
+              "remaining_true_faults": {
+                "status": "failed",
+                "problems": [
+                  "resolved_episode_has_remaining_true_faults"
+                ],
+                "derived_remaining_fault_count": 1,
+                "evidence_source": "offline_scenario_truth_derivation"
+              },
+              "accepted_target_nonregression": {
+                "status": "passed",
+                "problems": [],
+                "target_evidence": []
+              },
+              "healthy_measurements_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "healthy_case_components_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_measurements_match_clean": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_case_matches_clean": {
+                "status": "failed",
+                "problems": [
+                  "final_case_outside_clean_tolerance"
+                ]
+              }
+            },
+            "tolerances": {
+              "measurement_abs": 1e-06,
+              "measurement_rel": 1e-06,
+              "case_abs": 1e-09,
+              "case_rel": 1e-09,
+              "final_case_abs": 0.044023792352800004,
+              "final_case_rel": 1e-09,
+              "harmonic_bus_index": 0.0,
+              "hif_branch_rows": 0.0,
+              "hif_alpha_abs": 0.15,
+              "unbalance_bus_index": 0.0,
+              "unbalance_top_k": 1
+            },
+            "problems": [
+              "resolved_episode_has_remaining_true_faults",
+              "final_case_outside_clean_tolerance"
+            ],
+            "quarantined": true
+          }
+        }
+      }
+    },
+    {
+      "scenario_id": "r0_6ecfd7f85e68",
+      "physical_root": "physical_v3_3fa5c9b8e211d325e23dd71bf9779a0f2d16d9f216c4f2abf60bd8343fbb4476",
+      "family": "no_error",
+      "cardinality": 0,
+      "case": "case57",
+      "steps": 2,
+      "terminal": true,
+      "terminal_outcome": "resolved",
+      "final_physical_success": true,
+      "final_physical_correct": true,
+      "physical_correctness_known": true,
+      "truth_audited_task_success": true,
+      "truth_audited_task_success_evidence_known": true,
+      "healthy_components_preserved": true,
+      "healthy_preservation_known": true,
+      "false_commit_count": 0,
+      "false_finalization_count": 0,
+      "invalid_action_count": 0,
+      "evaluator_error": null,
+      "initial_wls": {
+        "execution_status": "success",
+        "error_code": null,
+        "wls_objective": 411.7937070788779,
+        "chi_square_statistic": 411.7937070788779,
+        "chi_square_threshold": 424.3341660094632,
+        "chi_square_dof": 378,
+        "chi_square_alpha": 0.05,
+        "chi_square_ratio": 0.9704467376536783,
+        "max_normalized_residual": 2.9270089719679575,
+        "normalized_residual_threshold": 4.0,
+        "chi_square_alarm": false,
+        "normalized_residual_alarm": false,
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "converged": true,
+        "no_material_anomaly_remaining": true,
+        "physical_constraints_ok": null
+      },
+      "acquisitions": [],
+      "physical_outcome_audit": {
+        "audit_mode": "strict_release_audit",
+        "evidence_complete": true,
+        "problems": [],
+        "remaining_true_fault_count": 0,
+        "final_physical_correct": true,
+        "physical_correctness_known": true,
+        "healthy_components_preserved": true,
+        "healthy_preservation_known": true,
+        "accepted_target_audit": {
+          "true_targets": {
+            "measurement": [],
+            "parameter": [],
+            "topology": []
+          },
+          "accepted_targets": {
+            "measurement": [],
+            "parameter": [],
+            "topology": []
+          },
+          "healthy_targets_preserved": true,
+          "uncovered_standard_faults": 0,
+          "problems": []
+        },
+        "strict_release_audit": {
+          "audit_version": "strict_offline_episode_truth_v3",
+          "scenario_id": "r0_6ecfd7f85e68",
+          "physical_root_fingerprint": "physical_v3_3fa5c9b8e211d325e23dd71bf9779a0f2d16d9f216c4f2abf60bd8343fbb4476",
+          "scenario_family": "no_error",
+          "terminal": true,
+          "terminal_outcome": "resolved",
+          "checks": {
+            "accepted_correction_targets": {
+              "status": "passed",
+              "problems": []
+            },
+            "diagnostic_explanation_family": {
+              "status": "passed",
+              "problems": []
+            },
+            "diagnostic_localization": {
+              "status": "passed",
+              "problems": []
+            },
+            "remaining_true_faults": {
+              "status": "passed",
+              "problems": [],
+              "derived_remaining_fault_count": 0,
+              "evidence_source": "offline_scenario_truth_derivation"
+            },
+            "accepted_target_nonregression": {
+              "status": "passed",
+              "problems": [],
+              "target_evidence": []
+            },
+            "healthy_measurements_preserved": {
+              "status": "passed",
+              "problems": []
+            },
+            "healthy_case_components_preserved": {
+              "status": "passed",
+              "problems": []
+            },
+            "final_measurements_match_clean": {
+              "status": "passed",
+              "problems": []
+            },
+            "final_case_matches_clean": {
+              "status": "passed",
+              "problems": []
+            }
+          },
+          "tolerances": {
+            "measurement_abs": 1e-06,
+            "measurement_rel": 1e-06,
+            "case_abs": 1e-09,
+            "case_rel": 1e-09,
+            "final_case_abs": 1e-09,
+            "final_case_rel": 1e-09,
+            "harmonic_bus_index": 0.0,
+            "hif_branch_rows": 0.0,
+            "hif_alpha_abs": 0.15,
+            "unbalance_bus_index": 0.0,
+            "unbalance_top_k": 1
+          },
+          "problems": [],
+          "quarantined": false
+        },
+        "post_correction_handoff_assessment": {
+          "assessment_version": "audit_verified_post_correction_controller_handoff_v1",
+          "status": "not_applicable",
+          "eligible": false,
+          "reasons": [],
+          "actual_terminal_outcome": "resolved",
+          "runtime_contract": {
+            "contract": "audit_verified_post_correction_controller_handoff_v1",
+            "passed": false,
+            "failures": [
+              "handoff_requires_operator_escalation_outcome",
+              "handoff_last_tool_mismatch",
+              "handoff_final_action_mismatch",
+              "handoff_action_request_mismatch",
+              "handoff_output_request_mismatch",
+              "handoff_transition_label_invalid",
+              "handoff_output_terminal_outcome_mismatch",
+              "handoff_requires_accepted_correction",
+              "handoff_active_state_binding_mismatch",
+              "handoff_active_state_hash_binding_mismatch",
+              "handoff_accepted_correction_state_binding_mismatch",
+              "handoff_marker_missing",
+              "handoff_confirmation_still_deferred",
+              "handoff_operator_review_not_required",
+              "handoff_additional_evidence_still_available",
+              "handoff_required_context_missing",
+              "handoff_recovery_target_outstanding",
+              "handoff_unexplained_signature_count_mismatch",
+              "handoff_confirmation_signature_mismatch"
+            ],
+            "active_state_id": "r0_6ecfd7f85e68_episode0:s0",
+            "active_state_hash": null,
+            "accepted_correction_count": 0,
+            "post_correction_confirmation_handoff": false
+          },
+          "counterfactual_completion_audit": null
+        },
+        "truth_audited_task_assessment": {
+          "assessment_version": "truth_audited_final_task_success_v1",
+          "status": "passed",
+          "eligible": true,
+          "basis": "counterfactual_resolution",
+          "bounded_branch_handoff": null,
+          "evidence_known": true,
+          "faulted": false,
+          "fault_presence_known": true,
+          "fault_presence_source": "canonical_truth",
+          "initial_true_fault_count": 0,
+          "reasons": [],
+          "actual_terminal": true,
+          "actual_terminal_outcome": "resolved",
+          "counterfactual_completion_audit": {
+            "audit_version": "strict_offline_episode_truth_v3",
+            "scenario_id": "r0_6ecfd7f85e68",
+            "physical_root_fingerprint": "physical_v3_3fa5c9b8e211d325e23dd71bf9779a0f2d16d9f216c4f2abf60bd8343fbb4476",
+            "scenario_family": "no_error",
+            "terminal": true,
+            "terminal_outcome": "resolved",
+            "checks": {
+              "accepted_correction_targets": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_explanation_family": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_localization": {
+                "status": "passed",
+                "problems": []
+              },
+              "remaining_true_faults": {
+                "status": "passed",
+                "problems": [],
+                "derived_remaining_fault_count": 0,
+                "evidence_source": "offline_scenario_truth_derivation"
+              },
+              "accepted_target_nonregression": {
+                "status": "passed",
+                "problems": [],
+                "target_evidence": []
+              },
+              "healthy_measurements_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "healthy_case_components_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_measurements_match_clean": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_case_matches_clean": {
+                "status": "passed",
+                "problems": []
+              }
+            },
+            "tolerances": {
+              "measurement_abs": 1e-06,
+              "measurement_rel": 1e-06,
+              "case_abs": 1e-09,
+              "case_rel": 1e-09,
+              "final_case_abs": 1e-09,
+              "final_case_rel": 1e-09,
+              "harmonic_bus_index": 0.0,
+              "hif_branch_rows": 0.0,
+              "hif_alpha_abs": 0.15,
+              "unbalance_bus_index": 0.0,
+              "unbalance_top_k": 1
+            },
+            "problems": [],
+            "quarantined": false
+          }
+        }
+      }
+    },
+    {
+      "scenario_id": "r0_71344635352a",
+      "physical_root": "physical_v3_59415fe87ddb22b4f396394e683a105f51dc2ccd08cae5e6e4ce53dc2b867eab",
+      "family": "parameter",
+      "cardinality": 1,
+      "case": "case57",
+      "steps": 2,
+      "terminal": true,
+      "terminal_outcome": "resolved",
+      "final_physical_success": false,
+      "final_physical_correct": false,
+      "physical_correctness_known": true,
+      "truth_audited_task_success": false,
+      "truth_audited_task_success_evidence_known": true,
+      "healthy_components_preserved": true,
+      "healthy_preservation_known": true,
+      "false_commit_count": 0,
+      "false_finalization_count": 1,
+      "invalid_action_count": 0,
+      "evaluator_error": null,
+      "initial_wls": {
+        "execution_status": "success",
+        "error_code": null,
+        "wls_objective": 372.5460455973741,
+        "chi_square_statistic": 372.5460455973741,
+        "chi_square_threshold": 424.3341660094632,
+        "chi_square_dof": 378,
+        "chi_square_alpha": 0.05,
+        "chi_square_ratio": 0.877954394059011,
+        "max_normalized_residual": 3.3373605578699745,
+        "normalized_residual_threshold": 4.0,
+        "chi_square_alarm": false,
+        "normalized_residual_alarm": false,
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "converged": true,
+        "no_material_anomaly_remaining": true,
+        "physical_constraints_ok": null
+      },
+      "acquisitions": [],
+      "physical_outcome_audit": {
+        "audit_mode": "strict_release_audit",
+        "evidence_complete": true,
+        "problems": [
+          "resolved_episode_has_remaining_true_faults",
+          "final_case_outside_clean_tolerance"
+        ],
+        "remaining_true_fault_count": 1,
+        "final_physical_correct": false,
+        "physical_correctness_known": true,
+        "healthy_components_preserved": true,
+        "healthy_preservation_known": true,
+        "accepted_target_audit": {
+          "true_targets": {
+            "measurement": [],
+            "parameter": [
+              31
+            ],
+            "topology": []
+          },
+          "accepted_targets": {
+            "measurement": [],
+            "parameter": [],
+            "topology": []
+          },
+          "healthy_targets_preserved": true,
+          "uncovered_standard_faults": 1,
+          "problems": []
+        },
+        "strict_release_audit": {
+          "audit_version": "strict_offline_episode_truth_v3",
+          "scenario_id": "r0_71344635352a",
+          "physical_root_fingerprint": "physical_v3_59415fe87ddb22b4f396394e683a105f51dc2ccd08cae5e6e4ce53dc2b867eab",
+          "scenario_family": "parameter",
+          "terminal": true,
+          "terminal_outcome": "resolved",
+          "checks": {
+            "accepted_correction_targets": {
+              "status": "passed",
+              "problems": []
+            },
+            "diagnostic_explanation_family": {
+              "status": "passed",
+              "problems": []
+            },
+            "diagnostic_localization": {
+              "status": "passed",
+              "problems": []
+            },
+            "remaining_true_faults": {
+              "status": "failed",
+              "problems": [
+                "resolved_episode_has_remaining_true_faults"
+              ],
+              "derived_remaining_fault_count": 1,
+              "evidence_source": "offline_scenario_truth_derivation"
+            },
+            "accepted_target_nonregression": {
+              "status": "passed",
+              "problems": [],
+              "target_evidence": []
+            },
+            "healthy_measurements_preserved": {
+              "status": "passed",
+              "problems": []
+            },
+            "healthy_case_components_preserved": {
+              "status": "passed",
+              "problems": []
+            },
+            "final_measurements_match_clean": {
+              "status": "passed",
+              "problems": []
+            },
+            "final_case_matches_clean": {
+              "status": "failed",
+              "problems": [
+                "final_case_outside_clean_tolerance"
+              ]
+            }
+          },
+          "tolerances": {
+            "measurement_abs": 1e-06,
+            "measurement_rel": 1e-06,
+            "case_abs": 1e-09,
+            "case_rel": 1e-09,
+            "final_case_abs": 0.0426016673489,
+            "final_case_rel": 1e-09,
+            "harmonic_bus_index": 0.0,
+            "hif_branch_rows": 0.0,
+            "hif_alpha_abs": 0.15,
+            "unbalance_bus_index": 0.0,
+            "unbalance_top_k": 1
+          },
+          "problems": [
+            "resolved_episode_has_remaining_true_faults",
+            "final_case_outside_clean_tolerance"
+          ],
+          "quarantined": true
+        },
+        "post_correction_handoff_assessment": {
+          "assessment_version": "audit_verified_post_correction_controller_handoff_v1",
+          "status": "not_applicable",
+          "eligible": false,
+          "reasons": [],
+          "actual_terminal_outcome": "resolved",
+          "runtime_contract": {
+            "contract": "audit_verified_post_correction_controller_handoff_v1",
+            "passed": false,
+            "failures": [
+              "handoff_requires_operator_escalation_outcome",
+              "handoff_last_tool_mismatch",
+              "handoff_final_action_mismatch",
+              "handoff_action_request_mismatch",
+              "handoff_output_request_mismatch",
+              "handoff_transition_label_invalid",
+              "handoff_output_terminal_outcome_mismatch",
+              "handoff_requires_accepted_correction",
+              "handoff_active_state_binding_mismatch",
+              "handoff_active_state_hash_binding_mismatch",
+              "handoff_accepted_correction_state_binding_mismatch",
+              "handoff_marker_missing",
+              "handoff_confirmation_still_deferred",
+              "handoff_operator_review_not_required",
+              "handoff_additional_evidence_still_available",
+              "handoff_required_context_missing",
+              "handoff_recovery_target_outstanding",
+              "handoff_unexplained_signature_count_mismatch",
+              "handoff_confirmation_signature_mismatch"
+            ],
+            "active_state_id": "r0_71344635352a_episode0:s0",
+            "active_state_hash": null,
+            "accepted_correction_count": 0,
+            "post_correction_confirmation_handoff": false
+          },
+          "counterfactual_completion_audit": null
+        },
+        "truth_audited_task_assessment": {
+          "assessment_version": "truth_audited_final_task_success_v1",
+          "status": "failed",
+          "eligible": false,
+          "basis": null,
+          "bounded_branch_handoff": null,
+          "evidence_known": true,
+          "faulted": true,
+          "fault_presence_known": true,
+          "fault_presence_source": "canonical_truth",
+          "initial_true_fault_count": 1,
+          "reasons": [
+            "resolved_episode_has_remaining_true_faults",
+            "final_case_outside_clean_tolerance"
+          ],
+          "actual_terminal": true,
+          "actual_terminal_outcome": "resolved",
+          "counterfactual_completion_audit": {
+            "audit_version": "strict_offline_episode_truth_v3",
+            "scenario_id": "r0_71344635352a",
+            "physical_root_fingerprint": "physical_v3_59415fe87ddb22b4f396394e683a105f51dc2ccd08cae5e6e4ce53dc2b867eab",
+            "scenario_family": "parameter",
+            "terminal": true,
+            "terminal_outcome": "resolved",
+            "checks": {
+              "accepted_correction_targets": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_explanation_family": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_localization": {
+                "status": "passed",
+                "problems": []
+              },
+              "remaining_true_faults": {
+                "status": "failed",
+                "problems": [
+                  "resolved_episode_has_remaining_true_faults"
+                ],
+                "derived_remaining_fault_count": 1,
+                "evidence_source": "offline_scenario_truth_derivation"
+              },
+              "accepted_target_nonregression": {
+                "status": "passed",
+                "problems": [],
+                "target_evidence": []
+              },
+              "healthy_measurements_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "healthy_case_components_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_measurements_match_clean": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_case_matches_clean": {
+                "status": "failed",
+                "problems": [
+                  "final_case_outside_clean_tolerance"
+                ]
+              }
+            },
+            "tolerances": {
+              "measurement_abs": 1e-06,
+              "measurement_rel": 1e-06,
+              "case_abs": 1e-09,
+              "case_rel": 1e-09,
+              "final_case_abs": 0.0426016673489,
+              "final_case_rel": 1e-09,
+              "harmonic_bus_index": 0.0,
+              "hif_branch_rows": 0.0,
+              "hif_alpha_abs": 0.15,
+              "unbalance_bus_index": 0.0,
+              "unbalance_top_k": 1
+            },
+            "problems": [
+              "resolved_episode_has_remaining_true_faults",
+              "final_case_outside_clean_tolerance"
+            ],
+            "quarantined": true
+          }
+        }
+      }
+    },
+    {
+      "scenario_id": "r0_781e406e09de",
+      "physical_root": "physical_v3_c0744a6d52e4e30c39b439e1286ea314305b9c9df81351fae9ce367431ed110e",
+      "family": "multi_measurement",
+      "cardinality": 4,
+      "case": "case57",
+      "steps": 29,
+      "terminal": true,
+      "terminal_outcome": "operator_escalation",
+      "final_physical_success": false,
+      "final_physical_correct": false,
+      "physical_correctness_known": false,
+      "truth_audited_task_success": true,
+      "truth_audited_task_success_evidence_known": true,
+      "healthy_components_preserved": true,
+      "healthy_preservation_known": true,
+      "false_commit_count": 0,
+      "false_finalization_count": 0,
+      "invalid_action_count": 0,
+      "evaluator_error": null,
+      "initial_wls": {
+        "execution_status": "success",
+        "error_code": null,
+        "wls_objective": 858.3717125675495,
+        "chi_square_statistic": 858.3717125675495,
+        "chi_square_threshold": 424.3341660094632,
+        "chi_square_dof": 378,
+        "chi_square_alpha": 0.05,
+        "chi_square_ratio": 2.0228673091301506,
+        "max_normalized_residual": 13.154907052547587,
+        "normalized_residual_threshold": 4.0,
+        "chi_square_alarm": true,
+        "normalized_residual_alarm": true,
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "converged": true,
+        "no_material_anomaly_remaining": false,
+        "physical_constraints_ok": null
+      },
+      "acquisitions": [
+        {
+          "step": 1,
+          "tool": "get_three_phase_context",
+          "execution_status": "success",
+          "error_code": null,
+          "context_status": "unavailable",
+          "available_evidence_channels": []
+        },
+        {
+          "step": 2,
+          "tool": "get_harmonic_context",
+          "execution_status": "success",
+          "error_code": null,
+          "context_status": "unavailable",
+          "available_evidence_channels": []
+        }
+      ],
+      "physical_outcome_audit": {
+        "audit_mode": "strict_release_audit",
+        "evidence_complete": true,
+        "problems": [],
+        "remaining_true_fault_count": null,
+        "final_physical_correct": false,
+        "physical_correctness_known": false,
+        "healthy_components_preserved": true,
+        "healthy_preservation_known": true,
+        "accepted_target_audit": {
+          "true_targets": {
+            "measurement": [
+              0,
+              6,
+              18,
+              26
+            ],
+            "parameter": [],
+            "topology": []
+          },
+          "accepted_targets": {
+            "measurement": [
+              0,
+              6,
+              18,
+              26
+            ],
+            "parameter": [],
+            "topology": []
+          },
+          "healthy_targets_preserved": true,
+          "uncovered_standard_faults": 0,
+          "problems": []
+        },
+        "strict_release_audit": {
+          "audit_version": "strict_offline_episode_truth_v3",
+          "scenario_id": "r0_781e406e09de",
+          "physical_root_fingerprint": "physical_v3_c0744a6d52e4e30c39b439e1286ea314305b9c9df81351fae9ce367431ed110e",
+          "scenario_family": "multi_measurement",
+          "terminal": true,
+          "terminal_outcome": "operator_escalation",
+          "checks": {
+            "accepted_correction_targets": {
+              "status": "passed",
+              "problems": []
+            },
+            "diagnostic_explanation_family": {
+              "status": "not_required",
+              "problems": []
+            },
+            "diagnostic_localization": {
+              "status": "not_required",
+              "problems": []
+            },
+            "remaining_true_faults": {
+              "status": "not_required",
+              "problems": []
+            },
+            "accepted_target_nonregression": {
+              "status": "passed",
+              "problems": [],
+              "target_evidence": [
+                {
+                  "family": "measurement",
+                  "index0": 0,
+                  "initial_distance": 0.01123101888051492,
+                  "final_distance": 0.0004712741087882222,
+                  "tolerance": 0.00424364963458676,
+                  "status": "passed"
+                },
+                {
+                  "family": "measurement",
+                  "index0": 6,
+                  "initial_distance": 0.013078120614568922,
+                  "final_distance": 0.000708153304124215,
+                  "tolerance": 0.0042436647321402645,
+                  "status": "passed"
+                },
+                {
+                  "family": "measurement",
+                  "index0": 18,
+                  "initial_distance": 0.01513303161612889,
+                  "final_distance": 0.0006710509457275027,
+                  "tolerance": 0.0042436442713738405,
+                  "status": "passed"
+                },
+                {
+                  "family": "measurement",
+                  "index0": 26,
+                  "initial_distance": 0.01458699422414389,
+                  "final_distance": 0.0016471032848874856,
+                  "tolerance": 0.00424366799276809,
+                  "status": "passed"
+                }
+              ]
+            },
+            "healthy_measurements_preserved": {
+              "status": "passed",
+              "problems": []
+            },
+            "healthy_case_components_preserved": {
+              "status": "passed",
+              "problems": []
+            },
+            "final_measurements_match_clean": {
+              "status": "not_required",
+              "problems": []
+            },
+            "final_case_matches_clean": {
+              "status": "not_required",
+              "problems": []
+            }
+          },
+          "tolerances": {
+            "measurement_abs": 0.004242640687119286,
+            "measurement_rel": 1e-06,
+            "case_abs": 1e-09,
+            "case_rel": 1e-09,
+            "final_case_abs": 1e-09,
+            "final_case_rel": 1e-09,
+            "harmonic_bus_index": 0.0,
+            "hif_branch_rows": 0.0,
+            "hif_alpha_abs": 0.15,
+            "unbalance_bus_index": 0.0,
+            "unbalance_top_k": 1
+          },
+          "problems": [],
+          "quarantined": false
+        },
+        "post_correction_handoff_assessment": {
+          "assessment_version": "audit_verified_post_correction_controller_handoff_v1",
+          "status": "passed",
+          "eligible": true,
+          "reasons": [],
+          "actual_terminal_outcome": "operator_escalation",
+          "runtime_contract": {
+            "contract": "audit_verified_post_correction_controller_handoff_v1",
+            "passed": true,
+            "failures": [],
+            "active_state_id": "r0_781e406e09de_episode0:s4",
+            "active_state_hash": "512480e785780ec3036c459297c9cabf787f0ea6477aa980631f3f8771b30398",
+            "accepted_correction_count": 4,
+            "post_correction_confirmation_handoff": true
+          },
+          "counterfactual_completion_audit": {
+            "audit_version": "strict_offline_episode_truth_v3",
+            "scenario_id": "r0_781e406e09de",
+            "physical_root_fingerprint": "physical_v3_c0744a6d52e4e30c39b439e1286ea314305b9c9df81351fae9ce367431ed110e",
+            "scenario_family": "multi_measurement",
+            "terminal": true,
+            "terminal_outcome": "resolved",
+            "checks": {
+              "accepted_correction_targets": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_explanation_family": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_localization": {
+                "status": "passed",
+                "problems": []
+              },
+              "remaining_true_faults": {
+                "status": "passed",
+                "problems": [],
+                "derived_remaining_fault_count": 0,
+                "evidence_source": "offline_scenario_truth_derivation"
+              },
+              "accepted_target_nonregression": {
+                "status": "passed",
+                "problems": [],
+                "target_evidence": [
+                  {
+                    "family": "measurement",
+                    "index0": 0,
+                    "initial_distance": 0.01123101888051492,
+                    "final_distance": 0.0004712741087882222,
+                    "tolerance": 0.00424364963458676,
+                    "status": "passed"
+                  },
+                  {
+                    "family": "measurement",
+                    "index0": 6,
+                    "initial_distance": 0.013078120614568922,
+                    "final_distance": 0.000708153304124215,
+                    "tolerance": 0.0042436647321402645,
+                    "status": "passed"
+                  },
+                  {
+                    "family": "measurement",
+                    "index0": 18,
+                    "initial_distance": 0.01513303161612889,
+                    "final_distance": 0.0006710509457275027,
+                    "tolerance": 0.0042436442713738405,
+                    "status": "passed"
+                  },
+                  {
+                    "family": "measurement",
+                    "index0": 26,
+                    "initial_distance": 0.01458699422414389,
+                    "final_distance": 0.0016471032848874856,
+                    "tolerance": 0.00424366799276809,
+                    "status": "passed"
+                  }
+                ]
+              },
+              "healthy_measurements_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "healthy_case_components_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_measurements_match_clean": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_case_matches_clean": {
+                "status": "passed",
+                "problems": []
+              }
+            },
+            "tolerances": {
+              "measurement_abs": 0.004242640687119286,
+              "measurement_rel": 1e-06,
+              "case_abs": 1e-09,
+              "case_rel": 1e-09,
+              "final_case_abs": 1e-09,
+              "final_case_rel": 1e-09,
+              "harmonic_bus_index": 0.0,
+              "hif_branch_rows": 0.0,
+              "hif_alpha_abs": 0.15,
+              "unbalance_bus_index": 0.0,
+              "unbalance_top_k": 1
+            },
+            "problems": [],
+            "quarantined": false
+          }
+        },
+        "truth_audited_task_assessment": {
+          "assessment_version": "truth_audited_final_task_success_v1",
+          "status": "passed",
+          "eligible": true,
+          "basis": "counterfactual_resolution",
+          "bounded_branch_handoff": null,
+          "evidence_known": true,
+          "faulted": true,
+          "fault_presence_known": true,
+          "fault_presence_source": "canonical_truth",
+          "initial_true_fault_count": 4,
+          "reasons": [],
+          "actual_terminal": true,
+          "actual_terminal_outcome": "operator_escalation",
+          "counterfactual_completion_audit": {
+            "audit_version": "strict_offline_episode_truth_v3",
+            "scenario_id": "r0_781e406e09de",
+            "physical_root_fingerprint": "physical_v3_c0744a6d52e4e30c39b439e1286ea314305b9c9df81351fae9ce367431ed110e",
+            "scenario_family": "multi_measurement",
+            "terminal": true,
+            "terminal_outcome": "resolved",
+            "checks": {
+              "accepted_correction_targets": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_explanation_family": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_localization": {
+                "status": "passed",
+                "problems": []
+              },
+              "remaining_true_faults": {
+                "status": "passed",
+                "problems": [],
+                "derived_remaining_fault_count": 0,
+                "evidence_source": "offline_scenario_truth_derivation"
+              },
+              "accepted_target_nonregression": {
+                "status": "passed",
+                "problems": [],
+                "target_evidence": [
+                  {
+                    "family": "measurement",
+                    "index0": 0,
+                    "initial_distance": 0.01123101888051492,
+                    "final_distance": 0.0004712741087882222,
+                    "tolerance": 0.00424364963458676,
+                    "status": "passed"
+                  },
+                  {
+                    "family": "measurement",
+                    "index0": 6,
+                    "initial_distance": 0.013078120614568922,
+                    "final_distance": 0.000708153304124215,
+                    "tolerance": 0.0042436647321402645,
+                    "status": "passed"
+                  },
+                  {
+                    "family": "measurement",
+                    "index0": 18,
+                    "initial_distance": 0.01513303161612889,
+                    "final_distance": 0.0006710509457275027,
+                    "tolerance": 0.0042436442713738405,
+                    "status": "passed"
+                  },
+                  {
+                    "family": "measurement",
+                    "index0": 26,
+                    "initial_distance": 0.01458699422414389,
+                    "final_distance": 0.0016471032848874856,
+                    "tolerance": 0.00424366799276809,
+                    "status": "passed"
+                  }
+                ]
+              },
+              "healthy_measurements_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "healthy_case_components_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_measurements_match_clean": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_case_matches_clean": {
+                "status": "passed",
+                "problems": []
+              }
+            },
+            "tolerances": {
+              "measurement_abs": 0.004242640687119286,
+              "measurement_rel": 1e-06,
+              "case_abs": 1e-09,
+              "case_rel": 1e-09,
+              "final_case_abs": 1e-09,
+              "final_case_rel": 1e-09,
+              "harmonic_bus_index": 0.0,
+              "hif_branch_rows": 0.0,
+              "hif_alpha_abs": 0.15,
+              "unbalance_bus_index": 0.0,
+              "unbalance_top_k": 1
+            },
+            "problems": [],
+            "quarantined": false
+          }
+        }
+      }
+    },
+    {
+      "scenario_id": "r0_85e8c617886f",
+      "physical_root": "physical_v3_b239c242b2f390e650e76e2e77d7806831711b812dfbae6a6ab60a50fd5bb2e9",
+      "family": "multi_measurement",
+      "cardinality": 2,
+      "case": "case57",
+      "steps": 15,
+      "terminal": true,
+      "terminal_outcome": "operator_escalation",
+      "final_physical_success": false,
+      "final_physical_correct": false,
+      "physical_correctness_known": false,
+      "truth_audited_task_success": true,
+      "truth_audited_task_success_evidence_known": true,
+      "healthy_components_preserved": true,
+      "healthy_preservation_known": true,
+      "false_commit_count": 0,
+      "false_finalization_count": 0,
+      "invalid_action_count": 0,
+      "evaluator_error": null,
+      "initial_wls": {
+        "execution_status": "success",
+        "error_code": null,
+        "wls_objective": 584.0945938458707,
+        "chi_square_statistic": 584.0945938458707,
+        "chi_square_threshold": 424.3341660094632,
+        "chi_square_dof": 378,
+        "chi_square_alpha": 0.05,
+        "chi_square_ratio": 1.37649673449308,
+        "max_normalized_residual": 11.201197457274906,
+        "normalized_residual_threshold": 4.0,
+        "chi_square_alarm": true,
+        "normalized_residual_alarm": true,
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "converged": true,
+        "no_material_anomaly_remaining": false,
+        "physical_constraints_ok": null
+      },
+      "acquisitions": [
+        {
+          "step": 1,
+          "tool": "get_three_phase_context",
+          "execution_status": "success",
+          "error_code": null,
+          "context_status": "unavailable",
+          "available_evidence_channels": []
+        },
+        {
+          "step": 2,
+          "tool": "get_harmonic_context",
+          "execution_status": "success",
+          "error_code": null,
+          "context_status": "unavailable",
+          "available_evidence_channels": []
+        }
+      ],
+      "physical_outcome_audit": {
+        "audit_mode": "strict_release_audit",
+        "evidence_complete": true,
+        "problems": [],
+        "remaining_true_fault_count": null,
+        "final_physical_correct": false,
+        "physical_correctness_known": false,
+        "healthy_components_preserved": true,
+        "healthy_preservation_known": true,
+        "accepted_target_audit": {
+          "true_targets": {
+            "measurement": [
+              129,
+              164
+            ],
+            "parameter": [],
+            "topology": []
+          },
+          "accepted_targets": {
+            "measurement": [
+              129,
+              164
+            ],
+            "parameter": [],
+            "topology": []
+          },
+          "healthy_targets_preserved": true,
+          "uncovered_standard_faults": 0,
+          "problems": []
+        },
+        "strict_release_audit": {
+          "audit_version": "strict_offline_episode_truth_v3",
+          "scenario_id": "r0_85e8c617886f",
+          "physical_root_fingerprint": "physical_v3_b239c242b2f390e650e76e2e77d7806831711b812dfbae6a6ab60a50fd5bb2e9",
+          "scenario_family": "multi_measurement",
+          "terminal": true,
+          "terminal_outcome": "operator_escalation",
+          "checks": {
+            "accepted_correction_targets": {
+              "status": "passed",
+              "problems": []
+            },
+            "diagnostic_explanation_family": {
+              "status": "not_required",
+              "problems": []
+            },
+            "diagnostic_localization": {
+              "status": "not_required",
+              "problems": []
+            },
+            "remaining_true_faults": {
+              "status": "not_required",
+              "problems": []
+            },
+            "accepted_target_nonregression": {
+              "status": "passed",
+              "problems": [],
+              "target_evidence": [
+                {
+                  "family": "measurement",
+                  "index0": 129,
+                  "initial_distance": 0.11940089521744367,
+                  "final_distance": 0.009617498202411926,
+                  "tolerance": 0.04242649685666988,
+                  "status": "passed"
+                },
+                {
+                  "family": "measurement",
+                  "index0": 164,
+                  "initial_distance": 0.13611766228116534,
+                  "final_distance": 0.00108545642245797,
+                  "tolerance": 0.04242649102161632,
+                  "status": "passed"
+                }
+              ]
+            },
+            "healthy_measurements_preserved": {
+              "status": "passed",
+              "problems": []
+            },
+            "healthy_case_components_preserved": {
+              "status": "passed",
+              "problems": []
+            },
+            "final_measurements_match_clean": {
+              "status": "not_required",
+              "problems": []
+            },
+            "final_case_matches_clean": {
+              "status": "not_required",
+              "problems": []
+            }
+          },
+          "tolerances": {
+            "measurement_abs": 0.04242640687119286,
+            "measurement_rel": 1e-06,
+            "case_abs": 1e-09,
+            "case_rel": 1e-09,
+            "final_case_abs": 1e-09,
+            "final_case_rel": 1e-09,
+            "harmonic_bus_index": 0.0,
+            "hif_branch_rows": 0.0,
+            "hif_alpha_abs": 0.15,
+            "unbalance_bus_index": 0.0,
+            "unbalance_top_k": 1
+          },
+          "problems": [],
+          "quarantined": false
+        },
+        "post_correction_handoff_assessment": {
+          "assessment_version": "audit_verified_post_correction_controller_handoff_v1",
+          "status": "passed",
+          "eligible": true,
+          "reasons": [],
+          "actual_terminal_outcome": "operator_escalation",
+          "runtime_contract": {
+            "contract": "audit_verified_post_correction_controller_handoff_v1",
+            "passed": true,
+            "failures": [],
+            "active_state_id": "r0_85e8c617886f_episode0:s2",
+            "active_state_hash": "64e175d5636ed2fddd9f7f73620a1d009d917ec3738223694942c0a97a67052f",
+            "accepted_correction_count": 2,
+            "post_correction_confirmation_handoff": true
+          },
+          "counterfactual_completion_audit": {
+            "audit_version": "strict_offline_episode_truth_v3",
+            "scenario_id": "r0_85e8c617886f",
+            "physical_root_fingerprint": "physical_v3_b239c242b2f390e650e76e2e77d7806831711b812dfbae6a6ab60a50fd5bb2e9",
+            "scenario_family": "multi_measurement",
+            "terminal": true,
+            "terminal_outcome": "resolved",
+            "checks": {
+              "accepted_correction_targets": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_explanation_family": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_localization": {
+                "status": "passed",
+                "problems": []
+              },
+              "remaining_true_faults": {
+                "status": "passed",
+                "problems": [],
+                "derived_remaining_fault_count": 0,
+                "evidence_source": "offline_scenario_truth_derivation"
+              },
+              "accepted_target_nonregression": {
+                "status": "passed",
+                "problems": [],
+                "target_evidence": [
+                  {
+                    "family": "measurement",
+                    "index0": 129,
+                    "initial_distance": 0.11940089521744367,
+                    "final_distance": 0.009617498202411926,
+                    "tolerance": 0.04242649685666988,
+                    "status": "passed"
+                  },
+                  {
+                    "family": "measurement",
+                    "index0": 164,
+                    "initial_distance": 0.13611766228116534,
+                    "final_distance": 0.00108545642245797,
+                    "tolerance": 0.04242649102161632,
+                    "status": "passed"
+                  }
+                ]
+              },
+              "healthy_measurements_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "healthy_case_components_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_measurements_match_clean": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_case_matches_clean": {
+                "status": "passed",
+                "problems": []
+              }
+            },
+            "tolerances": {
+              "measurement_abs": 0.04242640687119286,
+              "measurement_rel": 1e-06,
+              "case_abs": 1e-09,
+              "case_rel": 1e-09,
+              "final_case_abs": 1e-09,
+              "final_case_rel": 1e-09,
+              "harmonic_bus_index": 0.0,
+              "hif_branch_rows": 0.0,
+              "hif_alpha_abs": 0.15,
+              "unbalance_bus_index": 0.0,
+              "unbalance_top_k": 1
+            },
+            "problems": [],
+            "quarantined": false
+          }
+        },
+        "truth_audited_task_assessment": {
+          "assessment_version": "truth_audited_final_task_success_v1",
+          "status": "passed",
+          "eligible": true,
+          "basis": "counterfactual_resolution",
+          "bounded_branch_handoff": null,
+          "evidence_known": true,
+          "faulted": true,
+          "fault_presence_known": true,
+          "fault_presence_source": "canonical_truth",
+          "initial_true_fault_count": 2,
+          "reasons": [],
+          "actual_terminal": true,
+          "actual_terminal_outcome": "operator_escalation",
+          "counterfactual_completion_audit": {
+            "audit_version": "strict_offline_episode_truth_v3",
+            "scenario_id": "r0_85e8c617886f",
+            "physical_root_fingerprint": "physical_v3_b239c242b2f390e650e76e2e77d7806831711b812dfbae6a6ab60a50fd5bb2e9",
+            "scenario_family": "multi_measurement",
+            "terminal": true,
+            "terminal_outcome": "resolved",
+            "checks": {
+              "accepted_correction_targets": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_explanation_family": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_localization": {
+                "status": "passed",
+                "problems": []
+              },
+              "remaining_true_faults": {
+                "status": "passed",
+                "problems": [],
+                "derived_remaining_fault_count": 0,
+                "evidence_source": "offline_scenario_truth_derivation"
+              },
+              "accepted_target_nonregression": {
+                "status": "passed",
+                "problems": [],
+                "target_evidence": [
+                  {
+                    "family": "measurement",
+                    "index0": 129,
+                    "initial_distance": 0.11940089521744367,
+                    "final_distance": 0.009617498202411926,
+                    "tolerance": 0.04242649685666988,
+                    "status": "passed"
+                  },
+                  {
+                    "family": "measurement",
+                    "index0": 164,
+                    "initial_distance": 0.13611766228116534,
+                    "final_distance": 0.00108545642245797,
+                    "tolerance": 0.04242649102161632,
+                    "status": "passed"
+                  }
+                ]
+              },
+              "healthy_measurements_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "healthy_case_components_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_measurements_match_clean": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_case_matches_clean": {
+                "status": "passed",
+                "problems": []
+              }
+            },
+            "tolerances": {
+              "measurement_abs": 0.04242640687119286,
+              "measurement_rel": 1e-06,
+              "case_abs": 1e-09,
+              "case_rel": 1e-09,
+              "final_case_abs": 1e-09,
+              "final_case_rel": 1e-09,
+              "harmonic_bus_index": 0.0,
+              "hif_branch_rows": 0.0,
+              "hif_alpha_abs": 0.15,
+              "unbalance_bus_index": 0.0,
+              "unbalance_top_k": 1
+            },
+            "problems": [],
+            "quarantined": false
+          }
+        }
+      }
+    },
+    {
+      "scenario_id": "r0_d218b6b3cc19",
+      "physical_root": "physical_v3_6ad1d58893be2c6ef4a41f974f9b0a367ea88bed1ecebb5fa3867fe38415488d",
+      "family": "measurement",
+      "cardinality": 1,
+      "case": "case57",
+      "steps": 9,
+      "terminal": true,
+      "terminal_outcome": "operator_escalation",
+      "final_physical_success": false,
+      "final_physical_correct": false,
+      "physical_correctness_known": false,
+      "truth_audited_task_success": true,
+      "truth_audited_task_success_evidence_known": true,
+      "healthy_components_preserved": true,
+      "healthy_preservation_known": true,
+      "false_commit_count": 0,
+      "false_finalization_count": 0,
+      "invalid_action_count": 0,
+      "evaluator_error": null,
+      "initial_wls": {
+        "execution_status": "success",
+        "error_code": null,
+        "wls_objective": 474.7634266811786,
+        "chi_square_statistic": 474.7634266811786,
+        "chi_square_threshold": 424.3341660094632,
+        "chi_square_dof": 378,
+        "chi_square_alpha": 0.05,
+        "chi_square_ratio": 1.1188432719098813,
+        "max_normalized_residual": 10.88190096053105,
+        "normalized_residual_threshold": 4.0,
+        "chi_square_alarm": true,
+        "normalized_residual_alarm": true,
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "converged": true,
+        "no_material_anomaly_remaining": false,
+        "physical_constraints_ok": null
+      },
+      "acquisitions": [
+        {
+          "step": 1,
+          "tool": "get_three_phase_context",
+          "execution_status": "success",
+          "error_code": null,
+          "context_status": "unavailable",
+          "available_evidence_channels": []
+        },
+        {
+          "step": 2,
+          "tool": "get_harmonic_context",
+          "execution_status": "success",
+          "error_code": null,
+          "context_status": "unavailable",
+          "available_evidence_channels": []
+        }
+      ],
+      "physical_outcome_audit": {
+        "audit_mode": "strict_release_audit",
+        "evidence_complete": true,
+        "problems": [],
+        "remaining_true_fault_count": null,
+        "final_physical_correct": false,
+        "physical_correctness_known": false,
+        "healthy_components_preserved": true,
+        "healthy_preservation_known": true,
+        "accepted_target_audit": {
+          "true_targets": {
+            "measurement": [
+              446
+            ],
+            "parameter": [],
+            "topology": []
+          },
+          "accepted_targets": {
+            "measurement": [
+              446
+            ],
+            "parameter": [],
+            "topology": []
+          },
+          "healthy_targets_preserved": true,
+          "uncovered_standard_faults": 0,
+          "problems": []
+        },
+        "strict_release_audit": {
+          "audit_version": "strict_offline_episode_truth_v3",
+          "scenario_id": "r0_d218b6b3cc19",
+          "physical_root_fingerprint": "physical_v3_6ad1d58893be2c6ef4a41f974f9b0a367ea88bed1ecebb5fa3867fe38415488d",
+          "scenario_family": "measurement",
+          "terminal": true,
+          "terminal_outcome": "operator_escalation",
+          "checks": {
+            "accepted_correction_targets": {
+              "status": "passed",
+              "problems": []
+            },
+            "diagnostic_explanation_family": {
+              "status": "not_required",
+              "problems": []
+            },
+            "diagnostic_localization": {
+              "status": "not_required",
+              "problems": []
+            },
+            "remaining_true_faults": {
+              "status": "not_required",
+              "problems": []
+            },
+            "accepted_target_nonregression": {
+              "status": "passed",
+              "problems": [],
+              "target_evidence": [
+                {
+                  "family": "measurement",
+                  "index0": 446,
+                  "initial_distance": 0.10901853588763935,
+                  "final_distance": 0.00018998466561259697,
+                  "tolerance": 0.04242650830070943,
+                  "status": "passed"
+                }
+              ]
+            },
+            "healthy_measurements_preserved": {
+              "status": "passed",
+              "problems": []
+            },
+            "healthy_case_components_preserved": {
+              "status": "passed",
+              "problems": []
+            },
+            "final_measurements_match_clean": {
+              "status": "not_required",
+              "problems": []
+            },
+            "final_case_matches_clean": {
+              "status": "not_required",
+              "problems": []
+            }
+          },
+          "tolerances": {
+            "measurement_abs": 0.04242640687119286,
+            "measurement_rel": 1e-06,
+            "case_abs": 1e-09,
+            "case_rel": 1e-09,
+            "final_case_abs": 1e-09,
+            "final_case_rel": 1e-09,
+            "harmonic_bus_index": 0.0,
+            "hif_branch_rows": 0.0,
+            "hif_alpha_abs": 0.15,
+            "unbalance_bus_index": 0.0,
+            "unbalance_top_k": 1
+          },
+          "problems": [],
+          "quarantined": false
+        },
+        "post_correction_handoff_assessment": {
+          "assessment_version": "audit_verified_post_correction_controller_handoff_v1",
+          "status": "passed",
+          "eligible": true,
+          "reasons": [],
+          "actual_terminal_outcome": "operator_escalation",
+          "runtime_contract": {
+            "contract": "audit_verified_post_correction_controller_handoff_v1",
+            "passed": true,
+            "failures": [],
+            "active_state_id": "r0_d218b6b3cc19_episode0:s1",
+            "active_state_hash": "c801654f39b7a892d4ed5e662dba02ea9c2a71f1e0be673a15b4ac253cf57a2c",
+            "accepted_correction_count": 1,
+            "post_correction_confirmation_handoff": true
+          },
+          "counterfactual_completion_audit": {
+            "audit_version": "strict_offline_episode_truth_v3",
+            "scenario_id": "r0_d218b6b3cc19",
+            "physical_root_fingerprint": "physical_v3_6ad1d58893be2c6ef4a41f974f9b0a367ea88bed1ecebb5fa3867fe38415488d",
+            "scenario_family": "measurement",
+            "terminal": true,
+            "terminal_outcome": "resolved",
+            "checks": {
+              "accepted_correction_targets": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_explanation_family": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_localization": {
+                "status": "passed",
+                "problems": []
+              },
+              "remaining_true_faults": {
+                "status": "passed",
+                "problems": [],
+                "derived_remaining_fault_count": 0,
+                "evidence_source": "offline_scenario_truth_derivation"
+              },
+              "accepted_target_nonregression": {
+                "status": "passed",
+                "problems": [],
+                "target_evidence": [
+                  {
+                    "family": "measurement",
+                    "index0": 446,
+                    "initial_distance": 0.10901853588763935,
+                    "final_distance": 0.00018998466561259697,
+                    "tolerance": 0.04242650830070943,
+                    "status": "passed"
+                  }
+                ]
+              },
+              "healthy_measurements_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "healthy_case_components_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_measurements_match_clean": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_case_matches_clean": {
+                "status": "passed",
+                "problems": []
+              }
+            },
+            "tolerances": {
+              "measurement_abs": 0.04242640687119286,
+              "measurement_rel": 1e-06,
+              "case_abs": 1e-09,
+              "case_rel": 1e-09,
+              "final_case_abs": 1e-09,
+              "final_case_rel": 1e-09,
+              "harmonic_bus_index": 0.0,
+              "hif_branch_rows": 0.0,
+              "hif_alpha_abs": 0.15,
+              "unbalance_bus_index": 0.0,
+              "unbalance_top_k": 1
+            },
+            "problems": [],
+            "quarantined": false
+          }
+        },
+        "truth_audited_task_assessment": {
+          "assessment_version": "truth_audited_final_task_success_v1",
+          "status": "passed",
+          "eligible": true,
+          "basis": "counterfactual_resolution",
+          "bounded_branch_handoff": null,
+          "evidence_known": true,
+          "faulted": true,
+          "fault_presence_known": true,
+          "fault_presence_source": "canonical_truth",
+          "initial_true_fault_count": 1,
+          "reasons": [],
+          "actual_terminal": true,
+          "actual_terminal_outcome": "operator_escalation",
+          "counterfactual_completion_audit": {
+            "audit_version": "strict_offline_episode_truth_v3",
+            "scenario_id": "r0_d218b6b3cc19",
+            "physical_root_fingerprint": "physical_v3_6ad1d58893be2c6ef4a41f974f9b0a367ea88bed1ecebb5fa3867fe38415488d",
+            "scenario_family": "measurement",
+            "terminal": true,
+            "terminal_outcome": "resolved",
+            "checks": {
+              "accepted_correction_targets": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_explanation_family": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_localization": {
+                "status": "passed",
+                "problems": []
+              },
+              "remaining_true_faults": {
+                "status": "passed",
+                "problems": [],
+                "derived_remaining_fault_count": 0,
+                "evidence_source": "offline_scenario_truth_derivation"
+              },
+              "accepted_target_nonregression": {
+                "status": "passed",
+                "problems": [],
+                "target_evidence": [
+                  {
+                    "family": "measurement",
+                    "index0": 446,
+                    "initial_distance": 0.10901853588763935,
+                    "final_distance": 0.00018998466561259697,
+                    "tolerance": 0.04242650830070943,
+                    "status": "passed"
+                  }
+                ]
+              },
+              "healthy_measurements_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "healthy_case_components_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_measurements_match_clean": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_case_matches_clean": {
+                "status": "passed",
+                "problems": []
+              }
+            },
+            "tolerances": {
+              "measurement_abs": 0.04242640687119286,
+              "measurement_rel": 1e-06,
+              "case_abs": 1e-09,
+              "case_rel": 1e-09,
+              "final_case_abs": 1e-09,
+              "final_case_rel": 1e-09,
+              "harmonic_bus_index": 0.0,
+              "hif_branch_rows": 0.0,
+              "hif_alpha_abs": 0.15,
+              "unbalance_bus_index": 0.0,
+              "unbalance_top_k": 1
+            },
+            "problems": [],
+            "quarantined": false
+          }
+        }
+      }
+    }
+  ],
+  "parameter_failures": [
+    {
+      "scenario_id": "r0_56482aa7005d",
+      "physical_construction": {
+        "source_realization_id": "balanced_562b33c5e5a187df991cb628",
+        "branch_row0": 31,
+        "line_index1": 32,
+        "endpoints": [
+          21.0,
+          22.0
+        ],
+        "reported_rx": [
+          0.0736,
+          0.117
+        ],
+        "true_rx": [
+          0.230024593008,
+          0.440237923528
+        ],
+        "stored_physical_validation": {
+          "bound_tolerance_pu": 1e-05,
+          "generator_bound_violation_pu": 0.0,
+          "generator_load_injection_max_error_pu": 6.055109581301121e-09,
+          "passed": true,
+          "power_balance_tolerance_pu": 0.0001,
+          "stored_branch_flow_max_error_pu": 1.8943180357666733e-15,
+          "vm_max_pu": 1.0599999134507427,
+          "vm_min_pu": 0.9607772074400722,
+          "voltage_bound_violation_pu": 0.0,
+          "voltage_measurement_max_error_pu": 0.0
+        },
+        "operating_point": {
+          "load_scale": 0.9364803933856759
+        },
+        "sensor_sigmas": {
+          "flow": 0.01,
+          "inj": 0.01,
+          "vm": 0.001
+        },
+        "physical_case": {
+          "path": "C:\\dw\\output\\ieee57_training_readiness_20260912\\corpus\\physical_cases\\balanced_562b33c5e5a187df991cb628.m",
+          "sha256": "649de1da7d77b7fc1348fe5f48e29a6eeb80545eec3b99d899fc4246a8ffc815",
+          "location_kind": "local_file",
+          "publicly_retrievable": false
+        },
+        "recomputed_hx_max_error": 2.01052063886209e-10,
+        "observed_vector_matches_source": true,
+        "audit_clean_vector_matches_noisy_source": true,
+        "audit_clean_vector_semantics": "For parameter-only faults, clean_measurements retains the same sensor noise without measurement corruption; z_true is the separate noiseless physical vector."
+      },
+      "initial_detection": {
+        "execution_status": "success",
+        "error_code": null,
+        "wls_objective": 330.25719099917274,
+        "chi_square_statistic": 330.25719099917274,
+        "chi_square_threshold": 424.3341660094632,
+        "chi_square_dof": 378,
+        "chi_square_alpha": 0.05,
+        "chi_square_ratio": 0.7782950736797554,
+        "max_normalized_residual": 3.467954758189677,
+        "normalized_residual_threshold": 4.0,
+        "chi_square_alarm": false,
+        "normalized_residual_alarm": false,
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "converged": true,
+        "no_material_anomaly_remaining": true,
+        "physical_constraints_ok": null
+      },
+      "available_diagnosis": {
+        "historical_parameter_context_requested": false,
+        "historical_parameter_optimizer_called": false,
+        "observable_counterfactual_context": {
+          "execution_status": "success",
+          "error_code": null,
+          "error_detail": null,
+          "state_mutated": false,
+          "active_state_id": "r0_56482aa7005d_episode0:s0",
+          "candidate_state_id": null,
+          "tool_metrics": {
+            "state_id": "r0_56482aa7005d_episode0:s0",
+            "state_hash": "622153a1e4a158702bdbbfb3aa389385109e7a145539ab78947661436fb43a60",
+            "evidence_source": "deployment_context:wls_lagrange",
+            "context_tool": "get_parameter_context",
+            "fundamental_route_blocked_by_waveform_anomaly": [],
+            "three_phase_screening_pending": false,
+            "finding_count": 0,
+            "parameter_findings": [],
+            "parameter_scans_available": true,
+            "parameter_scan_count": 3,
+            "parameter_ranking_contract": "distinct_line_abs_lambda_dominance_v1",
+            "parameter_ranking_distinct_lines": [],
+            "parameter_ranking_top_abs_lambda": null,
+            "parameter_ranking_runner_up_abs_lambda": null,
+            "parameter_ranking_dominance_ratio": null,
+            "parameter_ranking_dominance_threshold": 1.2,
+            "parameter_ranking_singleton": false,
+            "parameter_ranking_dominant": false,
+            "parameter_ranking_ambiguous": false,
+            "parameter_ranking_candidate_lines": [],
+            "supported_corrections": [],
+            "route_status": "complete_negative",
+            "route_status_reason": "no_parameter_findings"
+          },
+          "valid_next_actions": []
+        },
+        "maximum_abs_branch_multiplier": 2.651050758359156,
+        "supported_candidate_optimizer_called": false,
+        "correction_feasibility": "No provider-supported candidate; no hidden-truth-directed optimizer probe"
+      },
+      "termination": {
+        "action": {
+          "tool": "finalize_diagnosis",
+          "arguments": {}
+        },
+        "policy_observation": {
+          "active_state_id": "r0_56482aa7005d_episode0:s0",
+          "candidate_state_id": null,
+          "candidate_status": null,
+          "last_tool": "run_wls",
+          "last_tool_status": "success",
+          "last_tool_output": {
+            "execution_status": "success",
+            "error_code": null,
+            "error_detail": null,
+            "state_mutated": false,
+            "active_state_id": "r0_56482aa7005d_episode0:s0",
+            "candidate_state_id": null,
+            "tool_metrics": {
+              "state_id": "r0_56482aa7005d_episode0:s0",
+              "state_hash": "622153a1e4a158702bdbbfb3aa389385109e7a145539ab78947661436fb43a60",
+              "evidence_source": "deployment_wls:lagrangian_port",
+              "state_estimation_converged": true,
+              "converged": true,
+              "wls_objective": 330.25719099917274,
+              "chi_square_statistic": 330.25719099917274,
+              "chi_square_threshold": 424.3341660094632,
+              "chi_square_dof": 378,
+              "chi_square_alpha": 0.05,
+              "chi_square_ratio": 0.7782950736797554,
+              "chi_square_alarm": false,
+              "max_normalized_residual": 3.467954758189677,
+              "normalized_residual_threshold": 4.0,
+              "normalized_residual_alarm": false,
+              "anomaly_detection_rule": "chi_square_or_normalized_residual",
+              "anomaly_threshold": 1.0,
+              "remaining_anomaly_score": 0.8669886895474193,
+              "no_material_anomaly_remaining": true,
+              "globally_resolved": true,
+              "anomaly_breadth": 0.006109979633401222,
+              "anomaly_breadth_count": 3,
+              "dominant_residual_block": null,
+              "unresolved_signatures": [],
+              "wls_summary": {
+                "success": true,
+                "top_residuals": [
+                  {
+                    "index0": 317,
+                    "channel": "Qf",
+                    "channel_offset": 66,
+                    "value": 3.468
+                  },
+                  {
+                    "index0": 337,
+                    "channel": "Pt",
+                    "channel_offset": 6,
+                    "value": 3.4329
+                  },
+                  {
+                    "index0": 142,
+                    "channel": "Qinj",
+                    "channel_offset": 28,
+                    "value": 3.1786
+                  }
+                ],
+                "top_lagrange": [],
+                "global_metrics": {
+                  "global_residual_sum": 330.2572,
+                  "global_residual_threshold": 424.3342,
+                  "global_residual_ratio": 0.7783
+                }
+              },
+              "evidence_sufficiency": {
+                "sufficient": true,
+                "evidence_keys": [
+                  "chi_square_statistic",
+                  "converged",
+                  "globally_resolved",
+                  "max_normalized_residual",
+                  "remaining_anomaly_score",
+                  "wls_objective"
+                ],
+                "evidence_source": "deployment_wls:lagrangian_port"
+              }
+            },
+            "valid_next_actions": []
+          },
+          "last_verification": {},
+          "accepted_corrections": [],
+          "explained_anomalies": [],
+          "rejected_hypotheses": [],
+          "unresolved_signatures": [],
+          "tried_action_signatures": [
+            "run_wls:{\"state_id\":\"r0_56482aa7005d_episode0:s0\"}"
+          ],
+          "remaining_budget": 39,
+          "history_window": [
+            {
+              "state_id": "r0_56482aa7005d_episode0:s0",
+              "candidate_state_id": null,
+              "action": {
+                "tool": "run_wls",
+                "arguments": {
+                  "state_id": "r0_56482aa7005d_episode0:s0"
+                }
+              },
+              "tool_output": {
+                "execution_status": "success",
+                "error_code": null,
+                "error_detail": null,
+                "state_mutated": false,
+                "active_state_id": "r0_56482aa7005d_episode0:s0",
+                "candidate_state_id": null,
+                "tool_metrics": {
+                  "state_id": "r0_56482aa7005d_episode0:s0",
+                  "state_hash": "622153a1e4a158702bdbbfb3aa389385109e7a145539ab78947661436fb43a60",
+                  "evidence_source": "deployment_wls:lagrangian_port",
+                  "state_estimation_converged": true,
+                  "converged": true,
+                  "wls_objective": 330.25719099917274,
+                  "chi_square_statistic": 330.25719099917274,
+                  "chi_square_threshold": 424.3341660094632,
+                  "chi_square_dof": 378,
+                  "chi_square_alpha": 0.05,
+                  "chi_square_ratio": 0.7782950736797554,
+                  "chi_square_alarm": false,
+                  "max_normalized_residual": 3.467954758189677,
+                  "normalized_residual_threshold": 4.0,
+                  "normalized_residual_alarm": false,
+                  "anomaly_detection_rule": "chi_square_or_normalized_residual",
+                  "anomaly_threshold": 1.0,
+                  "remaining_anomaly_score": 0.8669886895474193,
+                  "no_material_anomaly_remaining": true,
+                  "globally_resolved": true,
+                  "anomaly_breadth": 0.006109979633401222,
+                  "anomaly_breadth_count": 3,
+                  "dominant_residual_block": null,
+                  "unresolved_signatures": [],
+                  "wls_summary": {
+                    "success": true,
+                    "top_residuals": [
+                      {
+                        "index0": 317,
+                        "channel": "Qf",
+                        "channel_offset": 66,
+                        "value": 3.468
+                      },
+                      {
+                        "index0": 337,
+                        "channel": "Pt",
+                        "channel_offset": 6,
+                        "value": 3.4329
+                      },
+                      {
+                        "index0": 142,
+                        "channel": "Qinj",
+                        "channel_offset": 28,
+                        "value": 3.1786
+                      }
+                    ],
+                    "top_lagrange": [],
+                    "global_metrics": {
+                      "global_residual_sum": 330.2572,
+                      "global_residual_threshold": 424.3342,
+                      "global_residual_ratio": 0.7783
+                    }
+                  },
+                  "evidence_sufficiency": {
+                    "sufficient": true,
+                    "evidence_keys": [
+                      "chi_square_statistic",
+                      "converged",
+                      "globally_resolved",
+                      "max_normalized_residual",
+                      "remaining_anomaly_score",
+                      "wls_objective"
+                    ],
+                    "evidence_source": "deployment_wls:lagrangian_port"
+                  }
+                },
+                "valid_next_actions": []
+              }
+            }
+          ],
+          "episode_id": "r0_56482aa7005d_episode0",
+          "candidate_parent_id": null,
+          "candidate_lifecycle": "NO_CANDIDATE",
+          "candidate_committed": false,
+          "has_open_candidate": false,
+          "has_unverified_candidate": false,
+          "has_verified_candidate": false,
+          "remaining_anomaly_score": 0.8669886895474193,
+          "no_material_anomaly_remaining": true,
+          "has_fresh_measurement_context": false,
+          "has_fresh_parameter_context": false,
+          "has_fresh_topology_context": false,
+          "measurement_context_state_id": null,
+          "parameter_context_state_id": null,
+          "topology_context_state_id": null,
+          "fresh_context_evidence": {
+            "wls": {
+              "state_id": "r0_56482aa7005d_episode0:s0",
+              "state_hash": "622153a1e4a158702bdbbfb3aa389385109e7a145539ab78947661436fb43a60",
+              "evidence_source": "deployment_wls:lagrangian_port",
+              "successful": true,
+              "anomalous": false,
+              "anomaly_breadth": 0.006109979633401222,
+              "dominant_residual_block": null,
+              "normalized_residual_alarm": false,
+              "normalized_residual_threshold": 4.0,
+              "max_normalized_residual": 3.467954758189677,
+              "chi_square_alarm": false
+            }
+          },
+          "requires_measurement_context": true,
+          "available_evidence": [
+            "parameter_scans"
+          ],
+          "semantic_field_provenance": {
+            "unresolved_signatures": "deployment_wls:lagrangian_port",
+            "remaining_anomaly_score": "deployment_wls:lagrangian_port",
+            "no_material_anomaly_remaining": "deployment_wls:lagrangian_port"
+          }
+        },
+        "outcome": "resolved",
+        "false_finalization_count": 1,
+        "remaining_true_fault_count": 1,
+        "interpretation": "Both detector tests pass and the available parameter context has no candidate. This is an undetected fault under the declared evidence and routing contract, not a demonstrated optimizer failure. Resolved supervision is quarantined; no truth-informed replacement is emitted."
+      }
+    },
+    {
+      "scenario_id": "r0_71344635352a",
+      "physical_construction": {
+        "source_realization_id": "balanced_c73a9e12ad5dcf5b27c1cc01",
+        "branch_row0": 31,
+        "line_index1": 32,
+        "endpoints": [
+          21.0,
+          22.0
+        ],
+        "reported_rx": [
+          0.0736,
+          0.117
+        ],
+        "true_rx": [
+          0.0736,
+          0.426016673489
+        ],
+        "stored_physical_validation": {
+          "bound_tolerance_pu": 1e-05,
+          "generator_bound_violation_pu": 0.0,
+          "generator_load_injection_max_error_pu": 7.714704659701756e-07,
+          "passed": true,
+          "power_balance_tolerance_pu": 0.0001,
+          "stored_branch_flow_max_error_pu": 3.6637359812630166e-15,
+          "vm_max_pu": 1.0599999165529543,
+          "vm_min_pu": 0.9509266382629136,
+          "voltage_bound_violation_pu": 0.0,
+          "voltage_measurement_max_error_pu": 0.0
+        },
+        "operating_point": {
+          "load_scale": 0.9992517562897515
+        },
+        "sensor_sigmas": {
+          "flow": 0.01,
+          "inj": 0.01,
+          "vm": 0.001
+        },
+        "physical_case": {
+          "path": "C:\\dw\\output\\ieee57_training_readiness_20260912\\corpus\\physical_cases\\balanced_c73a9e12ad5dcf5b27c1cc01.m",
+          "sha256": "ceb4c7ce9f954ee1b57119c2e4e9179fab783dfd277abbec5af3d6f322dc2041",
+          "location_kind": "local_file",
+          "publicly_retrievable": false
+        },
+        "recomputed_hx_max_error": 4.105343713785919e-10,
+        "observed_vector_matches_source": true,
+        "audit_clean_vector_matches_noisy_source": true,
+        "audit_clean_vector_semantics": "For parameter-only faults, clean_measurements retains the same sensor noise without measurement corruption; z_true is the separate noiseless physical vector."
+      },
+      "initial_detection": {
+        "execution_status": "success",
+        "error_code": null,
+        "wls_objective": 372.5460455973741,
+        "chi_square_statistic": 372.5460455973741,
+        "chi_square_threshold": 424.3341660094632,
+        "chi_square_dof": 378,
+        "chi_square_alpha": 0.05,
+        "chi_square_ratio": 0.877954394059011,
+        "max_normalized_residual": 3.3373605578699745,
+        "normalized_residual_threshold": 4.0,
+        "chi_square_alarm": false,
+        "normalized_residual_alarm": false,
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "converged": true,
+        "no_material_anomaly_remaining": true,
+        "physical_constraints_ok": null
+      },
+      "available_diagnosis": {
+        "historical_parameter_context_requested": false,
+        "historical_parameter_optimizer_called": false,
+        "observable_counterfactual_context": {
+          "execution_status": "success",
+          "error_code": null,
+          "error_detail": null,
+          "state_mutated": false,
+          "active_state_id": "r0_71344635352a_episode0:s0",
+          "candidate_state_id": null,
+          "tool_metrics": {
+            "state_id": "r0_71344635352a_episode0:s0",
+            "state_hash": "8d73d4ef7918ede5d432f6d2c3e5c8b410cc154241c66ea8585694b21d510ebb",
+            "evidence_source": "deployment_context:wls_lagrange",
+            "context_tool": "get_parameter_context",
+            "fundamental_route_blocked_by_waveform_anomaly": [],
+            "three_phase_screening_pending": false,
+            "finding_count": 0,
+            "parameter_findings": [],
+            "parameter_scans_available": true,
+            "parameter_scan_count": 3,
+            "parameter_ranking_contract": "distinct_line_abs_lambda_dominance_v1",
+            "parameter_ranking_distinct_lines": [],
+            "parameter_ranking_top_abs_lambda": null,
+            "parameter_ranking_runner_up_abs_lambda": null,
+            "parameter_ranking_dominance_ratio": null,
+            "parameter_ranking_dominance_threshold": 1.2,
+            "parameter_ranking_singleton": false,
+            "parameter_ranking_dominant": false,
+            "parameter_ranking_ambiguous": false,
+            "parameter_ranking_candidate_lines": [],
+            "supported_corrections": [],
+            "route_status": "complete_negative",
+            "route_status_reason": "no_parameter_findings"
+          },
+          "valid_next_actions": []
+        },
+        "maximum_abs_branch_multiplier": 2.7557633562154784,
+        "supported_candidate_optimizer_called": false,
+        "correction_feasibility": "No provider-supported candidate; no hidden-truth-directed optimizer probe"
+      },
+      "termination": {
+        "action": {
+          "tool": "finalize_diagnosis",
+          "arguments": {}
+        },
+        "policy_observation": {
+          "active_state_id": "r0_71344635352a_episode0:s0",
+          "candidate_state_id": null,
+          "candidate_status": null,
+          "last_tool": "run_wls",
+          "last_tool_status": "success",
+          "last_tool_output": {
+            "execution_status": "success",
+            "error_code": null,
+            "error_detail": null,
+            "state_mutated": false,
+            "active_state_id": "r0_71344635352a_episode0:s0",
+            "candidate_state_id": null,
+            "tool_metrics": {
+              "state_id": "r0_71344635352a_episode0:s0",
+              "state_hash": "8d73d4ef7918ede5d432f6d2c3e5c8b410cc154241c66ea8585694b21d510ebb",
+              "evidence_source": "deployment_wls:lagrangian_port",
+              "state_estimation_converged": true,
+              "converged": true,
+              "wls_objective": 372.5460455973741,
+              "chi_square_statistic": 372.5460455973741,
+              "chi_square_threshold": 424.3341660094632,
+              "chi_square_dof": 378,
+              "chi_square_alpha": 0.05,
+              "chi_square_ratio": 0.877954394059011,
+              "chi_square_alarm": false,
+              "max_normalized_residual": 3.3373605578699745,
+              "normalized_residual_threshold": 4.0,
+              "normalized_residual_alarm": false,
+              "anomaly_detection_rule": "chi_square_or_normalized_residual",
+              "anomaly_threshold": 1.0,
+              "remaining_anomaly_score": 0.877954394059011,
+              "no_material_anomaly_remaining": true,
+              "globally_resolved": true,
+              "anomaly_breadth": 0.004073319755600814,
+              "anomaly_breadth_count": 2,
+              "dominant_residual_block": null,
+              "unresolved_signatures": [],
+              "wls_summary": {
+                "success": true,
+                "top_residuals": [
+                  {
+                    "index0": 192,
+                    "channel": "Pf",
+                    "channel_offset": 21,
+                    "value": 3.3374
+                  },
+                  {
+                    "index0": 437,
+                    "channel": "Qt",
+                    "channel_offset": 26,
+                    "value": 3.3216
+                  }
+                ],
+                "top_lagrange": [],
+                "global_metrics": {
+                  "global_residual_sum": 372.546,
+                  "global_residual_threshold": 424.3342,
+                  "global_residual_ratio": 0.878
+                }
+              },
+              "evidence_sufficiency": {
+                "sufficient": true,
+                "evidence_keys": [
+                  "chi_square_statistic",
+                  "converged",
+                  "globally_resolved",
+                  "max_normalized_residual",
+                  "remaining_anomaly_score",
+                  "wls_objective"
+                ],
+                "evidence_source": "deployment_wls:lagrangian_port"
+              }
+            },
+            "valid_next_actions": []
+          },
+          "last_verification": {},
+          "accepted_corrections": [],
+          "explained_anomalies": [],
+          "rejected_hypotheses": [],
+          "unresolved_signatures": [],
+          "tried_action_signatures": [
+            "run_wls:{\"state_id\":\"r0_71344635352a_episode0:s0\"}"
+          ],
+          "remaining_budget": 39,
+          "history_window": [
+            {
+              "state_id": "r0_71344635352a_episode0:s0",
+              "candidate_state_id": null,
+              "action": {
+                "tool": "run_wls",
+                "arguments": {
+                  "state_id": "r0_71344635352a_episode0:s0"
+                }
+              },
+              "tool_output": {
+                "execution_status": "success",
+                "error_code": null,
+                "error_detail": null,
+                "state_mutated": false,
+                "active_state_id": "r0_71344635352a_episode0:s0",
+                "candidate_state_id": null,
+                "tool_metrics": {
+                  "state_id": "r0_71344635352a_episode0:s0",
+                  "state_hash": "8d73d4ef7918ede5d432f6d2c3e5c8b410cc154241c66ea8585694b21d510ebb",
+                  "evidence_source": "deployment_wls:lagrangian_port",
+                  "state_estimation_converged": true,
+                  "converged": true,
+                  "wls_objective": 372.5460455973741,
+                  "chi_square_statistic": 372.5460455973741,
+                  "chi_square_threshold": 424.3341660094632,
+                  "chi_square_dof": 378,
+                  "chi_square_alpha": 0.05,
+                  "chi_square_ratio": 0.877954394059011,
+                  "chi_square_alarm": false,
+                  "max_normalized_residual": 3.3373605578699745,
+                  "normalized_residual_threshold": 4.0,
+                  "normalized_residual_alarm": false,
+                  "anomaly_detection_rule": "chi_square_or_normalized_residual",
+                  "anomaly_threshold": 1.0,
+                  "remaining_anomaly_score": 0.877954394059011,
+                  "no_material_anomaly_remaining": true,
+                  "globally_resolved": true,
+                  "anomaly_breadth": 0.004073319755600814,
+                  "anomaly_breadth_count": 2,
+                  "dominant_residual_block": null,
+                  "unresolved_signatures": [],
+                  "wls_summary": {
+                    "success": true,
+                    "top_residuals": [
+                      {
+                        "index0": 192,
+                        "channel": "Pf",
+                        "channel_offset": 21,
+                        "value": 3.3374
+                      },
+                      {
+                        "index0": 437,
+                        "channel": "Qt",
+                        "channel_offset": 26,
+                        "value": 3.3216
+                      }
+                    ],
+                    "top_lagrange": [],
+                    "global_metrics": {
+                      "global_residual_sum": 372.546,
+                      "global_residual_threshold": 424.3342,
+                      "global_residual_ratio": 0.878
+                    }
+                  },
+                  "evidence_sufficiency": {
+                    "sufficient": true,
+                    "evidence_keys": [
+                      "chi_square_statistic",
+                      "converged",
+                      "globally_resolved",
+                      "max_normalized_residual",
+                      "remaining_anomaly_score",
+                      "wls_objective"
+                    ],
+                    "evidence_source": "deployment_wls:lagrangian_port"
+                  }
+                },
+                "valid_next_actions": []
+              }
+            }
+          ],
+          "episode_id": "r0_71344635352a_episode0",
+          "candidate_parent_id": null,
+          "candidate_lifecycle": "NO_CANDIDATE",
+          "candidate_committed": false,
+          "has_open_candidate": false,
+          "has_unverified_candidate": false,
+          "has_verified_candidate": false,
+          "remaining_anomaly_score": 0.877954394059011,
+          "no_material_anomaly_remaining": true,
+          "has_fresh_measurement_context": false,
+          "has_fresh_parameter_context": false,
+          "has_fresh_topology_context": false,
+          "measurement_context_state_id": null,
+          "parameter_context_state_id": null,
+          "topology_context_state_id": null,
+          "fresh_context_evidence": {
+            "wls": {
+              "state_id": "r0_71344635352a_episode0:s0",
+              "state_hash": "8d73d4ef7918ede5d432f6d2c3e5c8b410cc154241c66ea8585694b21d510ebb",
+              "evidence_source": "deployment_wls:lagrangian_port",
+              "successful": true,
+              "anomalous": false,
+              "anomaly_breadth": 0.004073319755600814,
+              "dominant_residual_block": null,
+              "normalized_residual_alarm": false,
+              "normalized_residual_threshold": 4.0,
+              "max_normalized_residual": 3.3373605578699745,
+              "chi_square_alarm": false
+            }
+          },
+          "requires_measurement_context": true,
+          "available_evidence": [
+            "parameter_scans"
+          ],
+          "semantic_field_provenance": {
+            "unresolved_signatures": "deployment_wls:lagrangian_port",
+            "remaining_anomaly_score": "deployment_wls:lagrangian_port",
+            "no_material_anomaly_remaining": "deployment_wls:lagrangian_port"
+          }
+        },
+        "outcome": "resolved",
+        "false_finalization_count": 1,
+        "remaining_true_fault_count": 1,
+        "interpretation": "Both detector tests pass and the available parameter context has no candidate. This is an undetected fault under the declared evidence and routing contract, not a demonstrated optimizer failure. Resolved supervision is quarantined; no truth-informed replacement is emitted."
+      }
+    }
+  ],
+  "invalid_actions": [
+    {
+      "scenario_id": "r0_49669915880d",
+      "step": 12,
+      "historical_policy_observation": {
+        "active_state_id": "r0_49669915880d_episode0:s2",
+        "candidate_state_id": null,
+        "candidate_status": null,
+        "last_tool": "get_measurement_context",
+        "last_tool_status": "success",
+        "last_tool_output": {
+          "execution_status": "success",
+          "error_code": null,
+          "error_detail": null,
+          "state_mutated": false,
+          "active_state_id": "r0_49669915880d_episode0:s2",
+          "candidate_state_id": null,
+          "tool_metrics": {
+            "state_id": "r0_49669915880d_episode0:s2",
+            "state_hash": "20d2199ddaa2a78e195092b1413da282794bf371649d09c9a6c6ca95a74b2570",
+            "evidence_source": "deployment_context:wls_residuals",
+            "context_tool": "get_measurement_context",
+            "fundamental_route_blocked_by_waveform_anomaly": [],
+            "three_phase_screening_pending": false,
+            "measurement_route_blocked_by_branch_dominance": false,
+            "finding_count": 1,
+            "measurement_findings": [
+              {
+                "index0": 471,
+                "channel": "Qt",
+                "channel_offset": 60,
+                "value": 0.0052
+              }
+            ],
+            "supported_corrections": [
+              {
+                "tool": "correct_measurements",
+                "arguments": {
+                  "state_id": "r0_49669915880d_episode0:s2",
+                  "suspect_group": [
+                    471
+                  ]
+                }
+              }
+            ],
+            "physical_vm_joint_targets": [],
+            "physical_vm_closure_targets": [],
+            "coupled_measurement_fallback_targets": [],
+            "suppressed_colocated_post_branch_indices": [],
+            "accepted_target_refinement": true,
+            "accepted_target_refinement_blocked_by": [],
+            "accepted_target_refinement_dominant_target_unaccepted": false,
+            "accepted_target_refinement_near_threshold_override": false,
+            "accepted_target_refinement_anomaly_ratio": 1.007114837329763,
+            "accepted_target_refinement_remaining_budget": 29,
+            "accepted_target_refinement_already_accepted": false,
+            "accepted_target_refinement_kind": "post_branch_model_reestimate",
+            "accepted_target_refinement_suppressed_colocated_indices": [],
+            "branch_route_screening": {
+              "parameter": {
+                "state_id": "r0_49669915880d_episode0:s2",
+                "state_hash": "20d2199ddaa2a78e195092b1413da282794bf371649d09c9a6c6ca95a74b2570",
+                "evidence_source": "deployment_context:wls_lagrange",
+                "context_tool": "get_parameter_context",
+                "fundamental_route_blocked_by_waveform_anomaly": [],
+                "three_phase_screening_pending": false,
+                "finding_count": 0,
+                "parameter_findings": [],
+                "parameter_scans_available": true,
+                "parameter_scan_count": 3,
+                "parameter_ranking_contract": "distinct_line_abs_lambda_dominance_v1",
+                "parameter_ranking_distinct_lines": [],
+                "parameter_ranking_top_abs_lambda": null,
+                "parameter_ranking_runner_up_abs_lambda": null,
+                "parameter_ranking_dominance_ratio": null,
+                "parameter_ranking_dominance_threshold": 1.2,
+                "parameter_ranking_singleton": false,
+                "parameter_ranking_dominant": false,
+                "parameter_ranking_ambiguous": false,
+                "parameter_ranking_candidate_lines": [],
+                "supported_corrections": [],
+                "route_status": "complete_negative",
+                "route_status_reason": "no_parameter_findings"
+              },
+              "topology": {
+                "state_id": "r0_49669915880d_episode0:s2",
+                "state_hash": "20d2199ddaa2a78e195092b1413da282794bf371649d09c9a6c6ca95a74b2570",
+                "evidence_source": "deployment_context:wls_lagrange_candidate_screened",
+                "context_tool": "get_topology_context",
+                "fundamental_route_blocked_by_waveform_anomaly": [],
+                "three_phase_screening_pending": false,
+                "finding_count": 0,
+                "topology_findings": [],
+                "supported_corrections": [],
+                "proposed_correction_count": 0,
+                "screened_correction_count": 0,
+                "topology_candidate_screening": [],
+                "enumerated_close_hypotheses": [],
+                "islanding_filtered_lines": [],
+                "route_status": "complete_negative",
+                "route_status_reason": "no_topology_findings"
+              }
+            },
+            "verified_terminal_measurement_closure_targets": [],
+            "verified_terminal_measurement_closure_evidence": {},
+            "chi_square_statistic": 427.35323457408117,
+            "chi_square_threshold": 424.3341660094632,
+            "normalized_residual_threshold": 4.0,
+            "max_normalized_residual": 2.936145449982063,
+            "normalized_residual_alarm": false
+          },
+          "valid_next_actions": []
+        },
+        "last_verification": {},
+        "accepted_corrections": [
+          {
+            "candidate_state_id": "r0_49669915880d_episode0:s1",
+            "candidate_parent_id": "r0_49669915880d_episode0:s0",
+            "source_action": {
+              "tool": "correct_parameters",
+              "arguments": {
+                "state_id": "r0_49669915880d_episode0:s0",
+                "line_index": 18
+              }
+            }
+          },
+          {
+            "candidate_state_id": "r0_49669915880d_episode0:s2",
+            "candidate_parent_id": "r0_49669915880d_episode0:s1",
+            "source_action": {
+              "tool": "correct_measurements",
+              "arguments": {
+                "state_id": "r0_49669915880d_episode0:s1",
+                "suspect_group": [
+                  471
+                ]
+              }
+            }
+          }
+        ],
+        "explained_anomalies": [],
+        "rejected_hypotheses": [],
+        "unresolved_signatures": [],
+        "tried_action_signatures": [
+          "run_wls:{\"state_id\":\"r0_49669915880d_episode0:s0\"}",
+          "get_three_phase_context:{\"state_id\":\"r0_49669915880d_episode0:s0\"}",
+          "get_harmonic_context:{\"state_id\":\"r0_49669915880d_episode0:s0\"}",
+          "get_parameter_context:{\"state_id\":\"r0_49669915880d_episode0:s0\"}",
+          "correct_parameters:{\"line_index\":18,\"state_id\":\"r0_49669915880d_episode0:s0\"}",
+          "run_wls:{\"state_id\":\"r0_49669915880d_episode0:s1\"}",
+          "commit_state:{\"candidate_state_id\":\"r0_49669915880d_episode0:s1\"}",
+          "get_measurement_context:{\"state_id\":\"r0_49669915880d_episode0:s1\"}",
+          "correct_measurements:{\"state_id\":\"r0_49669915880d_episode0:s1\",\"suspect_group\":[471]}",
+          "run_wls:{\"state_id\":\"r0_49669915880d_episode0:s2\"}",
+          "commit_state:{\"candidate_state_id\":\"r0_49669915880d_episode0:s2\"}",
+          "get_measurement_context:{\"state_id\":\"r0_49669915880d_episode0:s2\"}"
+        ],
+        "remaining_budget": 28,
+        "history_window": [
+          {
+            "state_id": "r0_49669915880d_episode0:s1",
+            "candidate_state_id": null,
+            "action": {
+              "tool": "correct_measurements",
+              "arguments": {
+                "state_id": "r0_49669915880d_episode0:s1",
+                "suspect_group": [
+                  471
+                ]
+              }
+            },
+            "tool_output": {
+              "execution_status": "success",
+              "error_code": null,
+              "error_detail": null,
+              "state_mutated": true,
+              "active_state_id": "r0_49669915880d_episode0:s1",
+              "candidate_state_id": "r0_49669915880d_episode0:s2",
+              "tool_metrics": {
+                "execution_status": "success",
+                "episode_id": "r0_49669915880d_episode0",
+                "parent_state_id": "r0_49669915880d_episode0:s1",
+                "candidate_state_id": "r0_49669915880d_episode0:s2",
+                "state_hash_before": "c51a260a46fb95efb3297db4c063b54083b41dac92e120525413f0efda3c654d",
+                "state_hash_after": "20d2199ddaa2a78e195092b1413da282794bf371649d09c9a6c6ca95a74b2570",
+                "modification_signature": "correct_measurements:{\"state_id\":\"r0_49669915880d_episode0:s1\",\"suspect_group\":[471]}",
+                "depth": 2,
+                "created_at_step": 9,
+                "evidence_source": "deployment_correction:lagrangian_correct_port",
+                "correction_summary": {
+                  "success": true,
+                  "applied_any_correction": true,
+                  "iterations_performed": 1,
+                  "corrected_measurements": [
+                    {
+                      "index0": 471,
+                      "corrected": -0.1149,
+                      "estimated_error": 0.2851
+                    }
+                  ]
+                },
+                "applied_any_correction": true,
+                "iterations_performed": 1,
+                "suspect_group": [
+                  471
+                ]
+              },
+              "valid_next_actions": []
+            }
+          },
+          {
+            "state_id": "r0_49669915880d_episode0:s1",
+            "candidate_state_id": "r0_49669915880d_episode0:s2",
+            "action": {
+              "tool": "run_wls",
+              "arguments": {
+                "state_id": "r0_49669915880d_episode0:s2"
+              }
+            },
+            "tool_output": {
+              "execution_status": "success",
+              "error_code": null,
+              "error_detail": null,
+              "state_mutated": true,
+              "active_state_id": "r0_49669915880d_episode0:s1",
+              "candidate_state_id": "r0_49669915880d_episode0:s2",
+              "tool_metrics": {
+                "state_id": "r0_49669915880d_episode0:s2",
+                "state_hash": "20d2199ddaa2a78e195092b1413da282794bf371649d09c9a6c6ca95a74b2570",
+                "evidence_source": "deployment_wls:lagrangian_port",
+                "state_estimation_converged": true,
+                "converged": true,
+                "wls_objective": 427.35323457408117,
+                "chi_square_statistic": 427.35323457408117,
+                "chi_square_threshold": 424.3341660094632,
+                "chi_square_dof": 378,
+                "chi_square_alpha": 0.05,
+                "chi_square_ratio": 1.007114837329763,
+                "chi_square_alarm": true,
+                "max_normalized_residual": 2.936145449982063,
+                "normalized_residual_threshold": 4.0,
+                "normalized_residual_alarm": false,
+                "anomaly_detection_rule": "chi_square_or_normalized_residual",
+                "anomaly_threshold": 1.0,
+                "remaining_anomaly_score": 1.007114837329763,
+                "no_material_anomaly_remaining": false,
+                "globally_resolved": false,
+                "anomaly_breadth": 0.0,
+                "anomaly_breadth_count": 0,
+                "dominant_residual_block": null,
+                "unresolved_signatures": [],
+                "wls_summary": {
+                  "success": true,
+                  "top_residuals": [],
+                  "top_lagrange": [],
+                  "global_metrics": {
+                    "global_residual_sum": 427.3532,
+                    "global_residual_threshold": 424.3342,
+                    "global_residual_ratio": 1.0071
+                  }
+                },
+                "target_progress": 0.9997887647894547,
+                "target_metric_kind": "max_abs_normalized_residual",
+                "target_metric_value": 0.005236119522517938,
+                "target_metric_threshold": 3.0,
+                "remaining_suspect_count": 0,
+                "post_action_resolved": false,
+                "physical_constraints_ok": true,
+                "physical_evidence_scope": "observed_snapshot_topology_vm_rate_a",
+                "physical_evidence_complete": true,
+                "physical_bound_violations": [],
+                "steady_state_physical_evidence": {
+                  "scope": "observed_snapshot_topology_vm_rate_a",
+                  "method": "matpower_case_limits_with_observed_wls_telemetry",
+                  "complete": true,
+                  "topology_connectivity": {
+                    "checked": true,
+                    "bus_scope": "matpower_bus_type_not_4",
+                    "in_service_bus_count": 57,
+                    "active_branch_count": 80,
+                    "connected": true,
+                    "component_count": 1,
+                    "components": [
+                      [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5,
+                        6,
+                        7,
+                        8,
+                        9,
+                        10,
+                        11,
+                        12,
+                        13,
+                        14,
+                        15,
+                        16,
+                        17,
+                        18,
+                        19,
+                        20,
+                        21,
+                        22,
+                        23,
+                        24,
+                        25,
+                        26,
+                        27,
+                        28,
+                        29,
+                        30,
+                        31,
+                        32,
+                        33,
+                        34,
+                        35,
+                        36,
+                        37,
+                        38,
+                        39,
+                        40,
+                        41,
+                        42,
+                        43,
+                        44,
+                        45,
+                        46,
+                        47,
+                        48,
+                        49,
+                        50,
+                        51,
+                        52,
+                        53,
+                        54,
+                        55,
+                        56,
+                        57
+                      ]
+                    ]
+                  },
+                  "bus_voltage_bounds": {
+                    "checked": true,
+                    "checked_bus_count": 57,
+                    "within_bounds": true,
+                    "tolerance_pu": 0.005,
+                    "violation_count": 0
+                  },
+                  "active_branch_rate_a_bounds": {
+                    "checked": true,
+                    "active_branch_count": 80,
+                    "rated_branch_count": 80,
+                    "unrated_branch_count": 0,
+                    "within_defined_rate_a_bounds": true,
+                    "tolerance_mva": 1e-06,
+                    "telemetry_units": "per_unit_on_case_base_mva",
+                    "base_mva": 100.0,
+                    "violation_count": 0
+                  },
+                  "violation_count": 0,
+                  "input_errors": []
+                },
+                "evidence_sufficiency": {
+                  "sufficient": true,
+                  "evidence_keys": [
+                    "chi_square_statistic",
+                    "converged",
+                    "globally_resolved",
+                    "max_normalized_residual",
+                    "physical_constraints_ok",
+                    "post_action_resolved",
+                    "remaining_anomaly_score",
+                    "remaining_suspect_count",
+                    "target_fixed",
+                    "target_metric_kind",
+                    "target_metric_threshold",
+                    "target_metric_value",
+                    "target_progress",
+                    "wls_objective"
+                  ],
+                  "evidence_source": "deployment_wls:lagrangian_port"
+                },
+                "global_progress": 0.5898019662333913,
+                "global_progress_basis": "chi_square_statistic",
+                "parent_anomaly_score": 6.1970343115656155,
+                "parent_target_metric_value": 24.7881,
+                "sequential_cross_family_measurement": true,
+                "measurement_evidence_dominant": true,
+                "measurement_target_branch_colocated": false,
+                "independent_measurement_target": true,
+                "measurement_target_channel": "Qt",
+                "measurement_target_cluster_size": 1,
+                "accepted_measurement_target_count": 0,
+                "measurement_target_rank_one": true,
+                "measurement_branch_routes_closed": false
+              },
+              "valid_next_actions": []
+            }
+          },
+          {
+            "state_id": "r0_49669915880d_episode0:s1",
+            "candidate_state_id": "r0_49669915880d_episode0:s2",
+            "action": {
+              "tool": "commit_state",
+              "arguments": {
+                "candidate_state_id": "r0_49669915880d_episode0:s2"
+              }
+            },
+            "tool_output": {
+              "execution_status": "success",
+              "error_code": null,
+              "error_detail": null,
+              "state_mutated": true,
+              "active_state_id": "r0_49669915880d_episode0:s2",
+              "candidate_state_id": null,
+              "tool_metrics": {},
+              "valid_next_actions": []
+            }
+          },
+          {
+            "state_id": "r0_49669915880d_episode0:s2",
+            "candidate_state_id": null,
+            "action": {
+              "tool": "get_measurement_context",
+              "arguments": {
+                "state_id": "r0_49669915880d_episode0:s2"
+              }
+            },
+            "tool_output": {
+              "execution_status": "success",
+              "error_code": null,
+              "error_detail": null,
+              "state_mutated": false,
+              "active_state_id": "r0_49669915880d_episode0:s2",
+              "candidate_state_id": null,
+              "tool_metrics": {
+                "state_id": "r0_49669915880d_episode0:s2",
+                "state_hash": "20d2199ddaa2a78e195092b1413da282794bf371649d09c9a6c6ca95a74b2570",
+                "evidence_source": "deployment_context:wls_residuals",
+                "context_tool": "get_measurement_context",
+                "fundamental_route_blocked_by_waveform_anomaly": [],
+                "three_phase_screening_pending": false,
+                "measurement_route_blocked_by_branch_dominance": false,
+                "finding_count": 1,
+                "measurement_findings": [
+                  {
+                    "index0": 471,
+                    "channel": "Qt",
+                    "channel_offset": 60,
+                    "value": 0.0052
+                  }
+                ],
+                "supported_corrections": [
+                  {
+                    "tool": "correct_measurements",
+                    "arguments": {
+                      "state_id": "r0_49669915880d_episode0:s2",
+                      "suspect_group": [
+                        471
+                      ]
+                    }
+                  }
+                ],
+                "physical_vm_joint_targets": [],
+                "physical_vm_closure_targets": [],
+                "coupled_measurement_fallback_targets": [],
+                "suppressed_colocated_post_branch_indices": [],
+                "accepted_target_refinement": true,
+                "accepted_target_refinement_blocked_by": [],
+                "accepted_target_refinement_dominant_target_unaccepted": false,
+                "accepted_target_refinement_near_threshold_override": false,
+                "accepted_target_refinement_anomaly_ratio": 1.007114837329763,
+                "accepted_target_refinement_remaining_budget": 29,
+                "accepted_target_refinement_already_accepted": false,
+                "accepted_target_refinement_kind": "post_branch_model_reestimate",
+                "accepted_target_refinement_suppressed_colocated_indices": [],
+                "branch_route_screening": {
+                  "parameter": {
+                    "state_id": "r0_49669915880d_episode0:s2",
+                    "state_hash": "20d2199ddaa2a78e195092b1413da282794bf371649d09c9a6c6ca95a74b2570",
+                    "evidence_source": "deployment_context:wls_lagrange",
+                    "context_tool": "get_parameter_context",
+                    "fundamental_route_blocked_by_waveform_anomaly": [],
+                    "three_phase_screening_pending": false,
+                    "finding_count": 0,
+                    "parameter_findings": [],
+                    "parameter_scans_available": true,
+                    "parameter_scan_count": 3,
+                    "parameter_ranking_contract": "distinct_line_abs_lambda_dominance_v1",
+                    "parameter_ranking_distinct_lines": [],
+                    "parameter_ranking_top_abs_lambda": null,
+                    "parameter_ranking_runner_up_abs_lambda": null,
+                    "parameter_ranking_dominance_ratio": null,
+                    "parameter_ranking_dominance_threshold": 1.2,
+                    "parameter_ranking_singleton": false,
+                    "parameter_ranking_dominant": false,
+                    "parameter_ranking_ambiguous": false,
+                    "parameter_ranking_candidate_lines": [],
+                    "supported_corrections": [],
+                    "route_status": "complete_negative",
+                    "route_status_reason": "no_parameter_findings"
+                  },
+                  "topology": {
+                    "state_id": "r0_49669915880d_episode0:s2",
+                    "state_hash": "20d2199ddaa2a78e195092b1413da282794bf371649d09c9a6c6ca95a74b2570",
+                    "evidence_source": "deployment_context:wls_lagrange_candidate_screened",
+                    "context_tool": "get_topology_context",
+                    "fundamental_route_blocked_by_waveform_anomaly": [],
+                    "three_phase_screening_pending": false,
+                    "finding_count": 0,
+                    "topology_findings": [],
+                    "supported_corrections": [],
+                    "proposed_correction_count": 0,
+                    "screened_correction_count": 0,
+                    "topology_candidate_screening": [],
+                    "enumerated_close_hypotheses": [],
+                    "islanding_filtered_lines": [],
+                    "route_status": "complete_negative",
+                    "route_status_reason": "no_topology_findings"
+                  }
+                },
+                "verified_terminal_measurement_closure_targets": [],
+                "verified_terminal_measurement_closure_evidence": {},
+                "chi_square_statistic": 427.35323457408117,
+                "chi_square_threshold": 424.3341660094632,
+                "normalized_residual_threshold": 4.0,
+                "max_normalized_residual": 2.936145449982063,
+                "normalized_residual_alarm": false
+              },
+              "valid_next_actions": []
+            }
+          }
+        ],
+        "episode_id": "r0_49669915880d_episode0",
+        "candidate_parent_id": null,
+        "candidate_lifecycle": "NO_CANDIDATE",
+        "candidate_committed": false,
+        "has_open_candidate": false,
+        "has_unverified_candidate": false,
+        "has_verified_candidate": false,
+        "remaining_anomaly_score": 1.007114837329763,
+        "no_material_anomaly_remaining": false,
+        "has_fresh_measurement_context": true,
+        "has_fresh_parameter_context": true,
+        "has_fresh_topology_context": true,
+        "measurement_context_state_id": "r0_49669915880d_episode0:s2",
+        "parameter_context_state_id": "r0_49669915880d_episode0:s2",
+        "topology_context_state_id": "r0_49669915880d_episode0:s2",
+        "fresh_context_evidence": {
+          "harmonic": {
+            "request_attempted": true,
+            "state_id": "r0_49669915880d_episode0:s2",
+            "state_hash": "20d2199ddaa2a78e195092b1413da282794bf371649d09c9a6c6ca95a74b2570",
+            "evidence_source": "deployment_context:harmonic_measurements",
+            "available_evidence_channels": [],
+            "harmonic_distortion_detected": false,
+            "harmonic_context_status": "unavailable",
+            "finding_count": 0,
+            "harmonic_summary": {
+              "measurement_count": 0,
+              "note": "No spectral measurements were returned by the measurement request; the cause remains unknown."
+            },
+            "carried_from_state_id": "r0_49669915880d_episode0:s1"
+          },
+          "three_phase": {
+            "request_attempted": true,
+            "state_id": "r0_49669915880d_episode0:s2",
+            "state_hash": "20d2199ddaa2a78e195092b1413da282794bf371649d09c9a6c6ca95a74b2570",
+            "evidence_source": "deployment_context:three_phase_measurements",
+            "available_evidence_channels": [],
+            "measurement_status": {
+              "three_phase_voltages": "unavailable",
+              "three_phase_branch_currents": "unavailable"
+            },
+            "three_phase_context_status": "unavailable",
+            "finding_count": 0,
+            "measured_buses": [],
+            "measured_branch_count": 0,
+            "carried_from_state_id": "r0_49669915880d_episode0:s1"
+          },
+          "measurement": {
+            "context_tool": "get_measurement_context",
+            "context_binding": "direct_context",
+            "state_id": "r0_49669915880d_episode0:s2",
+            "state_hash": "20d2199ddaa2a78e195092b1413da282794bf371649d09c9a6c6ca95a74b2570",
+            "evidence_source": "deployment_context:wls_residuals",
+            "supported_corrections": [
+              {
+                "tool": "correct_measurements",
+                "arguments": {
+                  "state_id": "r0_49669915880d_episode0:s2",
+                  "suspect_group": [
+                    471
+                  ]
+                }
+              }
+            ],
+            "accepted_target_refinement": true,
+            "verified_terminal_measurement_closure_targets": [],
+            "verified_terminal_measurement_closure_evidence": {},
+            "physical_vm_joint_targets": [],
+            "measurement_findings": [
+              {
+                "index0": 471,
+                "channel": "Qt",
+                "channel_offset": 60,
+                "value": 0.0052
+              }
+            ]
+          },
+          "parameter": {
+            "context_tool": "get_parameter_context",
+            "context_binding": "branch_route_screening.parameter",
+            "bundled_by_context_tool": "get_measurement_context",
+            "state_id": "r0_49669915880d_episode0:s2",
+            "state_hash": "20d2199ddaa2a78e195092b1413da282794bf371649d09c9a6c6ca95a74b2570",
+            "evidence_source": "deployment_context:wls_lagrange",
+            "supported_corrections": [],
+            "route_status": "complete_negative",
+            "route_status_reason": "no_parameter_findings",
+            "parameter_findings": [],
+            "parameter_ranking_contract": "distinct_line_abs_lambda_dominance_v1",
+            "parameter_ranking_distinct_lines": [],
+            "parameter_ranking_top_abs_lambda": null,
+            "parameter_ranking_runner_up_abs_lambda": null,
+            "parameter_ranking_dominance_ratio": null,
+            "parameter_ranking_dominance_threshold": 1.2,
+            "parameter_ranking_singleton": false,
+            "parameter_ranking_dominant": false
+          },
+          "topology": {
+            "context_tool": "get_topology_context",
+            "context_binding": "branch_route_screening.topology",
+            "bundled_by_context_tool": "get_measurement_context",
+            "state_id": "r0_49669915880d_episode0:s2",
+            "state_hash": "20d2199ddaa2a78e195092b1413da282794bf371649d09c9a6c6ca95a74b2570",
+            "evidence_source": "deployment_context:wls_lagrange_candidate_screened",
+            "supported_corrections": [],
+            "route_status": "complete_negative",
+            "route_status_reason": "no_topology_findings",
+            "topology_findings": [],
+            "topology_candidate_screening": []
+          },
+          "wls": {
+            "state_id": "r0_49669915880d_episode0:s2",
+            "state_hash": "20d2199ddaa2a78e195092b1413da282794bf371649d09c9a6c6ca95a74b2570",
+            "evidence_source": "deployment_wls:lagrangian_port",
+            "successful": true,
+            "anomalous": false,
+            "anomaly_breadth": 0.0,
+            "dominant_residual_block": null,
+            "normalized_residual_alarm": false,
+            "normalized_residual_threshold": 4.0,
+            "max_normalized_residual": 2.936145449982063,
+            "chi_square_alarm": true
+          }
+        },
+        "requires_measurement_context": true,
+        "available_evidence": [
+          "parameter_scans"
+        ],
+        "semantic_field_provenance": {
+          "unresolved_signatures": "deployment_wls:lagrangian_port",
+          "remaining_anomaly_score": "deployment_wls:lagrangian_port",
+          "no_material_anomaly_remaining": "deployment_wls:lagrangian_port"
+        }
+      },
+      "historical_action": {
+        "tool": "correct_measurements",
+        "arguments": {
+          "state_id": "r0_49669915880d_episode0:s2",
+          "suspect_group": [
+            471
+          ]
+        }
+      },
+      "rejection": {
+        "execution_status": "failure",
+        "error_code": "measurement_correction_no_change",
+        "error_detail": "grouped correction produced no corrected measurements",
+        "state_mutated": false,
+        "active_state_id": "r0_49669915880d_episode0:s2",
+        "candidate_state_id": null,
+        "tool_metrics": {},
+        "valid_next_actions": []
+      },
+      "following_recovery": [
+        {
+          "step": 13,
+          "action": {
+            "tool": "run_wls",
+            "arguments": {
+              "state_id": "r0_49669915880d_episode0:s2"
+            }
+          },
+          "execution_status": "success",
+          "error_code": null,
+          "terminal_outcome": null
+        },
+        {
+          "step": 14,
+          "action": {
+            "tool": "ask_for_more_evidence",
+            "arguments": {
+              "state_id": "r0_49669915880d_episode0:s2",
+              "request": "operator_escalation:recovery_options_exhausted"
+            }
+          },
+          "execution_status": "success",
+          "error_code": null,
+          "terminal_outcome": "operator_escalation"
+        }
+      ],
+      "current_policy_action_on_exact_observation": {
+        "tool": "ask_for_more_evidence",
+        "arguments": {
+          "state_id": "r0_49669915880d_episode0:s2",
+          "request": "operator_escalation:recovery_options_exhausted"
+        }
+      },
+      "diagnosis": "Post-branch refinement eligibility ignored commit ordering. The meter had already been estimated after the branch repair, and its target NR was near zero. A repeat advertised correction produced no change. This was an execution-invalid no-op, not an accepted physical correction.",
+      "repair": "Require the most recent target measurement correction to precede a subsequent branch repair, using ordered model-visible accepted corrections only. The parameter and residual alarms remain unchanged."
+    }
+  ],
+  "mixed_protocol_replay": {
+    "source": {
+      "path": "C:\\dw\\output\\ieee57_training_p0_20260913\\mixed_replay.json",
+      "sha256": "537e6ef1d87acc019adeb47dbb81c3c764d9e054ef4c27c51f9c7da300160a11",
+      "location_kind": "local_file",
+      "publicly_retrievable": false
+    },
+    "episodes": [
+      {
+        "scenario_id": "r0_49669915880d",
+        "physical_root": "physical_v3_255522f1895e7e656a052c6140e97424d02fb743eca59eb867be3f748c0ae28a",
+        "family": "measurement+parameter",
+        "cardinality": 2,
+        "case": "case57",
+        "steps": 13,
+        "terminal": true,
+        "terminal_outcome": "operator_escalation",
+        "final_physical_success": false,
+        "final_physical_correct": false,
+        "physical_correctness_known": false,
+        "truth_audited_task_success": true,
+        "truth_audited_task_success_evidence_known": true,
+        "healthy_components_preserved": true,
+        "healthy_preservation_known": true,
+        "false_commit_count": 0,
+        "false_finalization_count": 0,
+        "invalid_action_count": 0,
+        "evaluator_error": null,
+        "initial_wls": {
+          "execution_status": "success",
+          "error_code": null,
+          "wls_objective": 2554.3533045605473,
+          "chi_square_statistic": 2554.3533045605473,
+          "chi_square_threshold": 424.3341660094632,
+          "chi_square_dof": 378,
+          "chi_square_alpha": 0.05,
+          "chi_square_ratio": 6.019673901308201,
+          "max_normalized_residual": 25.043094113452412,
+          "normalized_residual_threshold": 4.0,
+          "chi_square_alarm": true,
+          "normalized_residual_alarm": true,
+          "anomaly_detection_rule": "chi_square_or_normalized_residual",
+          "converged": true,
+          "no_material_anomaly_remaining": false,
+          "physical_constraints_ok": null
+        },
+        "acquisitions": [
+          {
+            "step": 1,
+            "tool": "get_three_phase_context",
+            "execution_status": "success",
+            "error_code": null,
+            "context_status": "unavailable",
+            "available_evidence_channels": []
+          },
+          {
+            "step": 2,
+            "tool": "get_harmonic_context",
+            "execution_status": "success",
+            "error_code": null,
+            "context_status": "unavailable",
+            "available_evidence_channels": []
+          }
+        ],
+        "physical_outcome_audit": {
+          "audit_mode": "strict_release_audit",
+          "evidence_complete": true,
+          "problems": [],
+          "remaining_true_fault_count": null,
+          "final_physical_correct": false,
+          "physical_correctness_known": false,
+          "healthy_components_preserved": true,
+          "healthy_preservation_known": true,
+          "accepted_target_audit": {
+            "true_targets": {
+              "measurement": [
+                471
+              ],
+              "parameter": [
+                17
+              ],
+              "topology": []
+            },
+            "accepted_targets": {
+              "measurement": [
+                471
+              ],
+              "parameter": [
+                17
+              ],
+              "topology": []
+            },
+            "healthy_targets_preserved": true,
+            "uncovered_standard_faults": 0,
+            "problems": []
+          },
+          "strict_release_audit": {
+            "audit_version": "strict_offline_episode_truth_v3",
+            "scenario_id": "r0_49669915880d",
+            "physical_root_fingerprint": "physical_v3_255522f1895e7e656a052c6140e97424d02fb743eca59eb867be3f748c0ae28a",
+            "scenario_family": "measurement+parameter",
+            "terminal": true,
+            "terminal_outcome": "operator_escalation",
+            "checks": {
+              "accepted_correction_targets": {
+                "status": "passed",
+                "problems": []
+              },
+              "diagnostic_explanation_family": {
+                "status": "not_required",
+                "problems": []
+              },
+              "diagnostic_localization": {
+                "status": "not_required",
+                "problems": []
+              },
+              "remaining_true_faults": {
+                "status": "not_required",
+                "problems": []
+              },
+              "accepted_target_nonregression": {
+                "status": "passed",
+                "problems": [],
+                "target_evidence": [
+                  {
+                    "family": "measurement",
+                    "index0": 471,
+                    "initial_distance": 0.2862180097176781,
+                    "final_distance": 0.0011230656348591994,
+                    "tolerance": 0.0424265770831854,
+                    "status": "passed"
+                  },
+                  {
+                    "family": "parameter",
+                    "target": [
+                      "branch_row0",
+                      17
+                    ],
+                    "columns": [
+                      2,
+                      3
+                    ],
+                    "initial_distance": 0.142608680778,
+                    "final_distance": 0.008268840752909349,
+                    "tolerance": 0.02828427144374027,
+                    "status": "passed"
+                  }
+                ]
+              },
+              "healthy_measurements_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "healthy_case_components_preserved": {
+                "status": "passed",
+                "problems": []
+              },
+              "final_measurements_match_clean": {
+                "status": "not_required",
+                "problems": []
+              },
+              "final_case_matches_clean": {
+                "status": "not_required",
+                "problems": []
+              }
+            },
+            "tolerances": {
+              "measurement_abs": 0.04242640687119286,
+              "measurement_rel": 1e-06,
+              "case_abs": 1e-09,
+              "case_rel": 1e-09,
+              "final_case_abs": 0.02,
+              "final_case_rel": 1e-09,
+              "harmonic_bus_index": 0.0,
+              "hif_branch_rows": 0.0,
+              "hif_alpha_abs": 0.15,
+              "unbalance_bus_index": 0.0,
+              "unbalance_top_k": 1
+            },
+            "problems": [],
+            "quarantined": false
+          },
+          "post_correction_handoff_assessment": {
+            "assessment_version": "audit_verified_post_correction_controller_handoff_v1",
+            "status": "not_applicable",
+            "eligible": false,
+            "reasons": [],
+            "actual_terminal_outcome": "operator_escalation",
+            "runtime_contract": {
+              "contract": "audit_verified_post_correction_controller_handoff_v1",
+              "passed": false,
+              "failures": [
+                "handoff_marker_missing",
+                "handoff_unexplained_signature_count_mismatch",
+                "handoff_confirmation_signature_mismatch"
+              ],
+              "active_state_id": "r0_49669915880d_episode0:s2",
+              "active_state_hash": "20d2199ddaa2a78e195092b1413da282794bf371649d09c9a6c6ca95a74b2570",
+              "accepted_correction_count": 2,
+              "post_correction_confirmation_handoff": false
+            },
+            "counterfactual_completion_audit": null
+          },
+          "truth_audited_task_assessment": {
+            "assessment_version": "truth_audited_final_task_success_v1",
+            "status": "passed",
+            "eligible": true,
+            "basis": "counterfactual_resolution",
+            "bounded_branch_handoff": null,
+            "evidence_known": true,
+            "faulted": true,
+            "fault_presence_known": true,
+            "fault_presence_source": "canonical_truth",
+            "initial_true_fault_count": 2,
+            "reasons": [],
+            "actual_terminal": true,
+            "actual_terminal_outcome": "operator_escalation",
+            "counterfactual_completion_audit": {
+              "audit_version": "strict_offline_episode_truth_v3",
+              "scenario_id": "r0_49669915880d",
+              "physical_root_fingerprint": "physical_v3_255522f1895e7e656a052c6140e97424d02fb743eca59eb867be3f748c0ae28a",
+              "scenario_family": "measurement+parameter",
+              "terminal": true,
+              "terminal_outcome": "resolved",
+              "checks": {
+                "accepted_correction_targets": {
+                  "status": "passed",
+                  "problems": []
+                },
+                "diagnostic_explanation_family": {
+                  "status": "passed",
+                  "problems": []
+                },
+                "diagnostic_localization": {
+                  "status": "passed",
+                  "problems": []
+                },
+                "remaining_true_faults": {
+                  "status": "passed",
+                  "problems": [],
+                  "derived_remaining_fault_count": 0,
+                  "evidence_source": "offline_scenario_truth_derivation"
+                },
+                "accepted_target_nonregression": {
+                  "status": "passed",
+                  "problems": [],
+                  "target_evidence": [
+                    {
+                      "family": "measurement",
+                      "index0": 471,
+                      "initial_distance": 0.2862180097176781,
+                      "final_distance": 0.0011230656348591994,
+                      "tolerance": 0.0424265770831854,
+                      "status": "passed"
+                    },
+                    {
+                      "family": "parameter",
+                      "target": [
+                        "branch_row0",
+                        17
+                      ],
+                      "columns": [
+                        2,
+                        3
+                      ],
+                      "initial_distance": 0.142608680778,
+                      "final_distance": 0.008268840752909349,
+                      "tolerance": 0.02828427144374027,
+                      "status": "passed"
+                    }
+                  ]
+                },
+                "healthy_measurements_preserved": {
+                  "status": "passed",
+                  "problems": []
+                },
+                "healthy_case_components_preserved": {
+                  "status": "passed",
+                  "problems": []
+                },
+                "final_measurements_match_clean": {
+                  "status": "passed",
+                  "problems": []
+                },
+                "final_case_matches_clean": {
+                  "status": "passed",
+                  "problems": []
+                }
+              },
+              "tolerances": {
+                "measurement_abs": 0.04242640687119286,
+                "measurement_rel": 1e-06,
+                "case_abs": 1e-09,
+                "case_rel": 1e-09,
+                "final_case_abs": 0.02,
+                "final_case_rel": 1e-09,
+                "harmonic_bus_index": 0.0,
+                "hif_branch_rows": 0.0,
+                "hif_alpha_abs": 0.15,
+                "unbalance_bus_index": 0.0,
+                "unbalance_top_k": 1
+              },
+              "problems": [],
+              "quarantined": false
+            }
+          }
+        }
+      }
+    ]
+  }
+}

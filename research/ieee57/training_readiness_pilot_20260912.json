@@ -1,0 +1,141 @@
+{
+  "scope": "Fresh balanced development pilot; candidate scenarios and audited teacher rollouts, not an exported SFT corpus or sealed test",
+  "seed": 2026091207,
+  "requested_by_family": {
+    "measurement": 2,
+    "measurement+parameter": 2,
+    "multi_measurement": 2,
+    "no_error": 2,
+    "parameter": 2
+  },
+  "built_by_family": {
+    "measurement": 2,
+    "measurement+parameter": 2,
+    "multi_measurement": 2,
+    "no_error": 2,
+    "parameter": 2
+  },
+  "physical_root_count": 10,
+  "parent_realization_count": 10,
+  "counts_complete": true,
+  "family_summary": {
+    "measurement": {
+      "physical_roots": 2,
+      "truth_audited_task_successes": 2,
+      "final_physical_successes": 0,
+      "final_physical_correct": 0,
+      "healthy_components_preserved": 2,
+      "healthy_preservation_known": 2,
+      "teacher_task_failures": 0,
+      "unknown_task_evidence": 0,
+      "false_commits": 0,
+      "false_finalizations": 0,
+      "invalid_actions": 0,
+      "initially_flagged_anomalous": 2,
+      "initially_not_flagged": 0,
+      "initial_detection_unknown": 0
+    },
+    "measurement+parameter": {
+      "physical_roots": 2,
+      "truth_audited_task_successes": 1,
+      "final_physical_successes": 0,
+      "final_physical_correct": 0,
+      "healthy_components_preserved": 2,
+      "healthy_preservation_known": 2,
+      "teacher_task_failures": 1,
+      "unknown_task_evidence": 0,
+      "false_commits": 0,
+      "false_finalizations": 0,
+      "invalid_actions": 1,
+      "initially_flagged_anomalous": 2,
+      "initially_not_flagged": 0,
+      "initial_detection_unknown": 0
+    },
+    "multi_measurement": {
+      "physical_roots": 2,
+      "truth_audited_task_successes": 2,
+      "final_physical_successes": 0,
+      "final_physical_correct": 0,
+      "healthy_components_preserved": 2,
+      "healthy_preservation_known": 2,
+      "teacher_task_failures": 0,
+      "unknown_task_evidence": 0,
+      "false_commits": 0,
+      "false_finalizations": 0,
+      "invalid_actions": 0,
+      "initially_flagged_anomalous": 2,
+      "initially_not_flagged": 0,
+      "initial_detection_unknown": 0
+    },
+    "no_error": {
+      "physical_roots": 2,
+      "truth_audited_task_successes": 2,
+      "final_physical_successes": 2,
+      "final_physical_correct": 2,
+      "healthy_components_preserved": 2,
+      "healthy_preservation_known": 2,
+      "teacher_task_failures": 0,
+      "unknown_task_evidence": 0,
+      "false_commits": 0,
+      "false_finalizations": 0,
+      "invalid_actions": 0,
+      "initially_flagged_anomalous": 0,
+      "initially_not_flagged": 2,
+      "initial_detection_unknown": 0
+    },
+    "parameter": {
+      "physical_roots": 2,
+      "truth_audited_task_successes": 0,
+      "final_physical_successes": 0,
+      "final_physical_correct": 0,
+      "healthy_components_preserved": 2,
+      "healthy_preservation_known": 2,
+      "teacher_task_failures": 2,
+      "unknown_task_evidence": 0,
+      "false_commits": 0,
+      "false_finalizations": 2,
+      "invalid_actions": 0,
+      "initially_flagged_anomalous": 0,
+      "initially_not_flagged": 2,
+      "initial_detection_unknown": 0
+    }
+  },
+  "outcome_semantics": {
+    "truth_audited_task_success": "Existing evaluator task outcome, including audited completion after controller handoff.",
+    "final_physical_success": "Existing evaluator strict resolved outcome; audited controller handoff alone does not set this field.",
+    "final_physical_correct": "Existing evaluator physical correctness field and known-evidence flag, also copied directly inside physical_outcome_audit."
+  },
+  "infrastructure_errors": [],
+  "detection_configuration": {
+    "chi2_alpha": 0.05,
+    "normalized_residual_threshold": 4.0,
+    "normalized_residual_alarm_comparison": ">=",
+    "anomaly_rule": "chi_square_or_normalized_residual",
+    "parameter_and_measurement_screening_unchanged": true
+  },
+  "source_sha256": {
+    "Transmission/generate_measurements.py": "b708a3f7667da810b807f73a08e914834c411c24e41ccadaa020242c535cd689",
+    "mcp_server/matpower_server.py": "cec284fd6f760b875e7675058374844975d6b9a2d4c041eba678711ad2454ed6",
+    "psse_env/dagger/evaluator.py": "0d6c7eb5f56935fd9117563c24e24a37894de045d918be8d142df74fda36fbcf",
+    "psse_env/dagger/release_factories.py": "c8830125f956e8cff6aa7533dabebf552661e8132938a8c64e7b8c4565c2a432",
+    "psse_env/dagger/suite_builder.py": "b297534c3cbffcc343c7415f686134b90fdafc0a4aa49195e4ccaea8d8392563",
+    "psse_env/providers/balanced_corpus.py": "c57a15b706347452ace0327dd945be571e8eae281f2956d5a8745b74977098bf",
+    "psse_env/providers/matpower.py": "769f4fad7a99a1682086e1be887baaa736a530737230ae85d6319650e15f0d46",
+    "psse_env/providers/scenario_generator.py": "a2eb4d3b4add133f12b163ff2ffd36ddb660e7bea523a8dcf0af3bae67200f60",
+    "psse_env/systems/registry.py": "13ba04001519750f3420b8eb70265d1c810f842796682d13ac34139dcd2e94c5",
+    "scripts/build_balanced_transfer_scenarios.py": "de2bab1173c2e8ac7fe3ccba6ebc6e0808d8da37d4815b79a1e522cca3ce342f",
+    "tools/correct_parameter_group_multi_scan_port.py": "b6345e7bc2563f922404385c5be8f1596cf2d057c30e67cb65543c1655101f34",
+    "tools/lagrangian_port.py": "80464e8f058975b8afe8d0c134e5569e86666bbb7368f4d9edb6fbc77f0c3ba5"
+  },
+  "artifacts_sha256": {
+    "manifest.json": "4c87c1686ca3201731180d6548c2268a0392855d6495c192ae8d72c7de5f4108",
+    "scenarios.json": "c2dcf5b600d0fb08ea9214c904baf57683900e69551ae74f21dbf94e5655324a",
+    "expert_validation.json": "75ec13f4add7c3aca80092dd8506889f124ee6867483db3c0fd0116a5d8558b8"
+  },
+  "large_artifacts_location": "output/ieee57_training_readiness_20260912 (local, not committed)",
+  "precommit_tests": {
+    "passed": 403,
+    "subtests_passed": 45,
+    "seconds": 91.21
+  }
+}

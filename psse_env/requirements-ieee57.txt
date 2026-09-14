@@ -1,0 +1,10 @@
+# CPU numerical testbeds and validation; model training has its own lock files.
+numpy>=1.26,<3
+scipy>=1.15,<2
+PYPOWER==5.1.19
+OpenDSSDirect.py==0.9.4
+dss-python==0.15.7
+dss-python-backend==0.14.5
+fastmcp==2.12.4
+threadpoolctl>=3.5,<4
+pytest>=8,<10

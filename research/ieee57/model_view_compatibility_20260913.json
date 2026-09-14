@@ -1,0 +1,25 @@
+{
+  "checked_rows": 164,
+  "comparison_baseline_commit": "e87543af01b7a5e8bd5777ee2ffb67b8eb8e8ce2",
+  "comparison_baseline_path": "psse_env/dagger/dataset_builder.py",
+  "contract": "ieee57_independent_model_view_review_v1",
+  "created_utc": "2026-09-13T15:59:57.852932+00:00",
+  "current_candidate_priority_passed": true,
+  "legacy_baseline_default_view_and_bindings_failures": [],
+  "long_identifier_and_reverse_mapping_order_failures": [],
+  "passed": true,
+  "scope": "Representation compatibility and invariance over all archived v4 raw targets, including quarantined actions; no inference of estimator accuracy or population training quality",
+  "source_archive": {
+    "member": "raw_targets.jsonl",
+    "member_matches_pilot_manifest": true,
+    "member_sha256": "f71d2f8ec9507bdf36aaac499c43d49c2c1fc763cb5f876bf65c1dfa673554f6",
+    "path": "research/ieee57/evidence/audited_balanced_pilot_20260913.tar.gz",
+    "sha256": "d5f8ac456fa89a31062f7399c5b99cac10ec8744b5ce675b492441e08aaab2e2"
+  },
+  "source_pilot_contract": "ieee57_audited_balanced_training_pilot_v1",
+  "source_sha256": {
+    "psse_env/dagger/dataset_builder.py": "fc808e0972b46af9ad1098bb449028c078b1d55148208a8f67b855adbaaa126f",
+    "psse_env/dagger/ieee57_training.py": "ffdc9b048c2c471c56bf29394c9df5f1b4109bd7ec5f0b4056d97ba259881a96",
+    "scripts/run_ieee57_training_pilot.py": "aa4d003ed09731a88d009a3722c28d31a7a5f5f715f30a6fd2c962dec90967c9"
+  }
+}

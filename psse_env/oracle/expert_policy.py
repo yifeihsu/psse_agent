@@ -31,6 +31,7 @@ from psse_env.actions import (
     waveform_anomaly_signatures,
 )
 from psse_env.oracle.candidate_quality import CandidateQualityOracle
+from psse_env.oracle.anomaly_evidence import normalized_residual_alarm
 from psse_env.oracle.diagnostics_expert import DiagnosticsExpert
 from psse_env.oracle.expert_types import (
     ExpertActionProposal,
@@ -930,6 +931,7 @@ class ExpertPolicyOracle:
         if (
             active_id is None
             or not self._get(policy, "accepted_corrections", [])
+            or normalized_residual_alarm(policy)
             or POST_CORRECTION_CONFIRMATION_SIGNATURE not in signatures
             or terminal_explanation_signatures(signatures)
         ):
@@ -977,7 +979,10 @@ class ExpertPolicyOracle:
         if self._get(policy, "has_open_candidate", False):
             return []
         active_id = self._get(policy, "active_state_id")
-        if active_id is None or self._get(policy, "no_material_anomaly_remaining", False):
+        if active_id is None or (
+            self._get(policy, "no_material_anomaly_remaining", False)
+            and not normalized_residual_alarm(policy)
+        ):
             return []
         score = self._get(policy, "remaining_anomaly_score")
         try:
@@ -1057,8 +1062,9 @@ class ExpertPolicyOracle:
         if self._get(policy, "has_open_candidate", False):
             return []
         active_id = self._get(policy, "active_state_id")
-        if active_id is None or self._get(
-            policy, "no_material_anomaly_remaining", False
+        if active_id is None or (
+            self._get(policy, "no_material_anomaly_remaining", False)
+            and not normalized_residual_alarm(policy)
         ):
             return []
         try:

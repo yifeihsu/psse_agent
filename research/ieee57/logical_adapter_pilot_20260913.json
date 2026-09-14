@@ -1,0 +1,402 @@
+{
+  "all_actions_succeeded": true,
+  "contract": "ieee57_logical_adapter_smoke_pilot_v1",
+  "implementation_sha256": {
+    "logical_topology/__init__.py": "86ceec8a422ea16a6045f92003be4507604f3fbbb1b546411b8e79da1b52cdf9",
+    "logical_topology/atomic.py": "0a1c959eb5e543af0d99357891674c4e43e6c87002931d230530871bca3dbd90",
+    "logical_topology/audit.py": "de658e6e7c8e7ccba747995ea1fb222dae99702dde501216138b53eb41a0ebf6",
+    "logical_topology/calibration.py": "c85f78650d50fae950e574b5181942497863671b655b004162b9f442bc047807",
+    "logical_topology/estimation.py": "4423cf627dba23af591eba5b8268f5c72c14bb3cf2e32388e60aeccfc466f349",
+    "logical_topology/fit_cache.py": "bc64b31c6574c3a21f9161d8256677e850c509b84ef64882b7e087cffff97f07",
+    "logical_topology/inventory.py": "10fabde5958d7e8c04bdab442806840c16e420cc73f49ceafdf9948f629375ca",
+    "logical_topology/measurements.py": "42fb7e19004f117465fb2a211d5b8b82ded5b708475fada701ac40827c0bd6b4",
+    "logical_topology/provider.py": "7b028da6f2e38ec8a87f8b916291b6166b1dc1ed57c50f92c3b5ae19e92351ac",
+    "logical_topology/runtime.py": "b3f9403bf9592c058bc2ce34830b481b76fb7fd0b86f114f4e75981f4d3a9ebe",
+    "logical_topology/scenarios.py": "bc6d1b17fd62df59dab1170ceb550a0cb7667d147ff3925e548fdb8977ab6468",
+    "logical_topology/test_audit.py": "6a181fef8dca6acb02d084cd33a875d4629acdc377e73c5402d28574f349c0ac",
+    "logical_topology/test_calibration.py": "296779f875821b4ef54589d0d8bd98814552f1c8ad01f2fb914a10368577e0f1",
+    "logical_topology/test_estimation.py": "e33fd636439981e6c69ef5149b4c45d40185d296a494c692ce9bb45d8c9c4f7c",
+    "logical_topology/test_fit_cache.py": "c81adea62233d225edaa26db19e7319cf1638d248bbd962ba25ac39a17381bd4",
+    "logical_topology/test_inventory.py": "7f1a46c52c9a76e7a808aef685550783ce5fa4b8c255593e2d938ca4340dff9e",
+    "logical_topology/test_provider.py": "e9530ded744941b60efff4556eaf5ae30ce63b27d15629d7b183698699a2112d",
+    "logical_topology/test_runtime.py": "ea388fdbb96a92f275796e6c5f6c68ff79291007ad100aa9b159870b1996560c",
+    "logical_topology/test_scenarios.py": "8140896b714a0528fb93e654ddb1ab56a053e5a244d9f694497a49b89f33d9f5",
+    "psse_env/dagger/logical_adapter.py": "91fd8b304114f9d07b4a1c0fa39242c610ad0738b903cfc86b1db086754383c8",
+    "psse_env/dagger/logical_pilot.py": "e35b2f35cc76238dabfd6cc6a8685936bc0dd5d9adff712ec9a8a7be3b8a7893",
+    "psse_env/dagger/logical_protocol.py": "f460944ca7474d6d5ad01ff7b2ced93a9264755bbe85a4652f239148315c36c4",
+    "psse_env/state_store.py": "625c45210930855771119dce0b21b7ba8261e966aafc0e071cdb71dee8cb2c09",
+    "psse_env/transactional_env.py": "9ed2e41eee011009420f7a64b13e6f3e26ee3654bb18477be2077218bd7bfeb5"
+  },
+  "inconclusive_count": 1,
+  "physical_parent_count": 3,
+  "population": "noiseless protocol regression fixtures; not independent train/validation/test populations",
+  "raw_sensor_count": 530,
+  "rows": [
+    {
+      "actions": [
+        "wls_from_path",
+        "get_topology_context",
+        "finalize_diagnosis"
+      ],
+      "all_actions_succeeded": true,
+      "family": "healthy",
+      "private_audit": {
+        "accepted_target_audits": [],
+        "completion_scope": "pure_logical_topology_fixed_raw_evidence_within_declared_hypothesis_scope",
+        "contract": "logical_private_status_audit_v1",
+        "exact_statuses_recovered": true,
+        "healthy_component_preserved": true,
+        "healthy_device_changes": [],
+        "logical_changes": {},
+        "measurements_and_covariance_preserved": true,
+        "raw_measurement_count": 530,
+        "remaining_logical_device_ids": [],
+        "strict_resolved": true,
+        "terminal_outcome": "resolved",
+        "truth_available": true
+      },
+      "scan_options": {},
+      "scenario": {
+        "path": "C:\\dw\\output\\ieee57_logical_adapter_pilot_20260913\\healthy_scenario.json",
+        "sha256": "8857961ba513fad5b518ce24b6c2020e7c1a00e3c65f548e124a127a8fbcecd5"
+      },
+      "trajectory": {
+        "path": "C:\\dw\\output\\ieee57_logical_adapter_pilot_20260913\\healthy_trajectory.json",
+        "sha256": "b7d4e1e71c5b298c25a2aae0ed68c2f9850da0b89d99e05fbd06e3afc76f236f"
+      }
+    },
+    {
+      "actions": [
+        "wls_from_path",
+        "get_topology_context",
+        "correct_logical_topology_from_context",
+        "get_verification_snapshot",
+        "commit_state",
+        "wls_from_path",
+        "get_topology_context",
+        "finalize_diagnosis"
+      ],
+      "all_actions_succeeded": true,
+      "family": "branch_inclusion",
+      "private_audit": {
+        "accepted_target_audits": [
+          {
+            "accepted_target_audit_passed": true,
+            "candidate_state_id": "ieee57_logical_adapter_branch_inclusion_episode0:s1",
+            "exact_certified_intervention_preserved": true,
+            "healthy_component_preserved": true,
+            "logical_device_changes": {
+              "case57:branch:1:status_cb": 1
+            },
+            "measurements_and_covariance_preserved": true,
+            "only_declared_statuses_changed": true,
+            "requested_statuses_correct": true
+          }
+        ],
+        "completion_scope": "pure_logical_topology_fixed_raw_evidence_within_declared_hypothesis_scope",
+        "contract": "logical_private_status_audit_v1",
+        "exact_statuses_recovered": true,
+        "healthy_component_preserved": true,
+        "healthy_device_changes": [],
+        "logical_changes": {
+          "case57:branch:1:status_cb": 1
+        },
+        "measurements_and_covariance_preserved": true,
+        "raw_measurement_count": 530,
+        "remaining_logical_device_ids": [],
+        "strict_resolved": true,
+        "terminal_outcome": "resolved",
+        "truth_available": true
+      },
+      "scan_options": {},
+      "scenario": {
+        "path": "C:\\dw\\output\\ieee57_logical_adapter_pilot_20260913\\branch_inclusion_scenario.json",
+        "sha256": "a643d723c7f4429e606b6af683fd0d8462d04acf6b65dd208fed171d2b13f131"
+      },
+      "trajectory": {
+        "path": "C:\\dw\\output\\ieee57_logical_adapter_pilot_20260913\\branch_inclusion_trajectory.json",
+        "sha256": "f25fa9439be779dfdaa6dab6f965538934ac61172d7a0b41fff3ec083a5ba5a5"
+      }
+    },
+    {
+      "actions": [
+        "wls_from_path",
+        "get_topology_context",
+        "correct_logical_topology_from_context",
+        "get_verification_snapshot",
+        "commit_state",
+        "wls_from_path",
+        "get_topology_context",
+        "finalize_diagnosis"
+      ],
+      "all_actions_succeeded": true,
+      "family": "branch_exclusion",
+      "private_audit": {
+        "accepted_target_audits": [
+          {
+            "accepted_target_audit_passed": true,
+            "candidate_state_id": "ieee57_logical_adapter_branch_exclusion_episode0:s1",
+            "exact_certified_intervention_preserved": true,
+            "healthy_component_preserved": true,
+            "logical_device_changes": {
+              "case57:branch:19:status_cb": 0
+            },
+            "measurements_and_covariance_preserved": true,
+            "only_declared_statuses_changed": true,
+            "requested_statuses_correct": true
+          }
+        ],
+        "completion_scope": "pure_logical_topology_fixed_raw_evidence_within_declared_hypothesis_scope",
+        "contract": "logical_private_status_audit_v1",
+        "exact_statuses_recovered": true,
+        "healthy_component_preserved": true,
+        "healthy_device_changes": [],
+        "logical_changes": {
+          "case57:branch:19:status_cb": 0
+        },
+        "measurements_and_covariance_preserved": true,
+        "raw_measurement_count": 530,
+        "remaining_logical_device_ids": [],
+        "strict_resolved": true,
+        "terminal_outcome": "resolved",
+        "truth_available": true
+      },
+      "scan_options": {},
+      "scenario": {
+        "path": "C:\\dw\\output\\ieee57_logical_adapter_pilot_20260913\\branch_exclusion_scenario.json",
+        "sha256": "92352074cb248e82708f777815df4ea5ebdd6049fb1db79e3bffec9975a14ff5"
+      },
+      "trajectory": {
+        "path": "C:\\dw\\output\\ieee57_logical_adapter_pilot_20260913\\branch_exclusion_trajectory.json",
+        "sha256": "087ddca9caad80d7bbb0026cc45923f80be9dcbe48937ab5e23307c41583d73e"
+      }
+    },
+    {
+      "actions": [
+        "wls_from_path",
+        "get_topology_context",
+        "correct_logical_topology_from_context",
+        "get_verification_snapshot",
+        "commit_state",
+        "wls_from_path",
+        "get_topology_context",
+        "finalize_diagnosis"
+      ],
+      "all_actions_succeeded": true,
+      "family": "split",
+      "private_audit": {
+        "accepted_target_audits": [
+          {
+            "accepted_target_audit_passed": true,
+            "candidate_state_id": "ieee57_logical_adapter_split_episode0:s1",
+            "exact_certified_intervention_preserved": true,
+            "healthy_component_preserved": true,
+            "logical_device_changes": {
+              "case57:bus:4:coupler": 1
+            },
+            "measurements_and_covariance_preserved": true,
+            "only_declared_statuses_changed": true,
+            "requested_statuses_correct": true
+          }
+        ],
+        "completion_scope": "pure_logical_topology_fixed_raw_evidence_within_declared_hypothesis_scope",
+        "contract": "logical_private_status_audit_v1",
+        "exact_statuses_recovered": true,
+        "healthy_component_preserved": true,
+        "healthy_device_changes": [],
+        "logical_changes": {
+          "case57:bus:4:coupler": 1
+        },
+        "measurements_and_covariance_preserved": true,
+        "raw_measurement_count": 530,
+        "remaining_logical_device_ids": [],
+        "strict_resolved": true,
+        "terminal_outcome": "resolved",
+        "truth_available": true
+      },
+      "scan_options": {},
+      "scenario": {
+        "path": "C:\\dw\\output\\ieee57_logical_adapter_pilot_20260913\\split_scenario.json",
+        "sha256": "f876b8b517a12b15d3a7e7d5e04d289833ee9c291d6bf7d767783aacff1f3b5c"
+      },
+      "trajectory": {
+        "path": "C:\\dw\\output\\ieee57_logical_adapter_pilot_20260913\\split_trajectory.json",
+        "sha256": "689bb1a764571cf4daaf70a73a0400d2ca0e104bbdbba34474a730c59163e6cf"
+      }
+    },
+    {
+      "actions": [
+        "wls_from_path",
+        "get_topology_context",
+        "correct_logical_topology_from_context",
+        "get_verification_snapshot",
+        "commit_state",
+        "wls_from_path",
+        "get_topology_context",
+        "finalize_diagnosis"
+      ],
+      "all_actions_succeeded": true,
+      "family": "merge",
+      "private_audit": {
+        "accepted_target_audits": [
+          {
+            "accepted_target_audit_passed": true,
+            "candidate_state_id": "ieee57_logical_adapter_merge_episode0:s1",
+            "exact_certified_intervention_preserved": true,
+            "healthy_component_preserved": true,
+            "logical_device_changes": {
+              "case57:bus:4:coupler": 0
+            },
+            "measurements_and_covariance_preserved": true,
+            "only_declared_statuses_changed": true,
+            "requested_statuses_correct": true
+          }
+        ],
+        "completion_scope": "pure_logical_topology_fixed_raw_evidence_within_declared_hypothesis_scope",
+        "contract": "logical_private_status_audit_v1",
+        "exact_statuses_recovered": true,
+        "healthy_component_preserved": true,
+        "healthy_device_changes": [],
+        "logical_changes": {
+          "case57:bus:4:coupler": 0
+        },
+        "measurements_and_covariance_preserved": true,
+        "raw_measurement_count": 530,
+        "remaining_logical_device_ids": [],
+        "strict_resolved": true,
+        "terminal_outcome": "resolved",
+        "truth_available": true
+      },
+      "scan_options": {},
+      "scenario": {
+        "path": "C:\\dw\\output\\ieee57_logical_adapter_pilot_20260913\\merge_scenario.json",
+        "sha256": "11d41c037ceffa1edb8ab5676b298df2b0843c49789981356cbce46ff1f998e2"
+      },
+      "trajectory": {
+        "path": "C:\\dw\\output\\ieee57_logical_adapter_pilot_20260913\\merge_trajectory.json",
+        "sha256": "b3c6802595da217edaf78b994fd838274d8b3047cbfc5ca79eded147a69e1b2b"
+      }
+    },
+    {
+      "actions": [
+        "wls_from_path",
+        "get_topology_context",
+        "correct_logical_topology_from_context",
+        "get_verification_snapshot",
+        "commit_state",
+        "wls_from_path",
+        "get_topology_context",
+        "finalize_diagnosis"
+      ],
+      "all_actions_succeeded": true,
+      "family": "pair",
+      "private_audit": {
+        "accepted_target_audits": [
+          {
+            "accepted_target_audit_passed": true,
+            "candidate_state_id": "ieee57_logical_adapter_pair_episode0:s1",
+            "exact_certified_intervention_preserved": true,
+            "healthy_component_preserved": true,
+            "logical_device_changes": {
+              "case57:branch:1:status_cb": 1,
+              "case57:bus:4:coupler": 1
+            },
+            "measurements_and_covariance_preserved": true,
+            "only_declared_statuses_changed": true,
+            "requested_statuses_correct": true
+          }
+        ],
+        "completion_scope": "pure_logical_topology_fixed_raw_evidence_within_declared_hypothesis_scope",
+        "contract": "logical_private_status_audit_v1",
+        "exact_statuses_recovered": true,
+        "healthy_component_preserved": true,
+        "healthy_device_changes": [],
+        "logical_changes": {
+          "case57:branch:1:status_cb": 1,
+          "case57:bus:4:coupler": 1
+        },
+        "measurements_and_covariance_preserved": true,
+        "raw_measurement_count": 530,
+        "remaining_logical_device_ids": [],
+        "strict_resolved": true,
+        "terminal_outcome": "resolved",
+        "truth_available": true
+      },
+      "scan_options": {
+        "include_pairs": true,
+        "max_pairs": 1,
+        "pair_devices": [
+          "case57:branch:1:status_cb",
+          "case57:bus:4:coupler"
+        ]
+      },
+      "scenario": {
+        "path": "C:\\dw\\output\\ieee57_logical_adapter_pilot_20260913\\pair_scenario.json",
+        "sha256": "2c446eb5e7ab285453d26bca9a6fb680aefc88d495d6ee33eceaa7d0e7496885"
+      },
+      "trajectory": {
+        "path": "C:\\dw\\output\\ieee57_logical_adapter_pilot_20260913\\pair_trajectory.json",
+        "sha256": "f6a02a8bcf36308325e8d66d14489bb91eb454339fe6abc4970c4ddeb7aaa8a8"
+      }
+    },
+    {
+      "actions": [
+        "wls_from_path",
+        "get_topology_context",
+        "ask_for_more_evidence"
+      ],
+      "all_actions_succeeded": true,
+      "family": "truncated_pair",
+      "private_audit": {
+        "accepted_target_audits": [],
+        "completion_scope": "pure_logical_topology_fixed_raw_evidence_within_declared_hypothesis_scope",
+        "contract": "logical_private_status_audit_v1",
+        "exact_statuses_recovered": false,
+        "healthy_component_preserved": true,
+        "healthy_device_changes": [],
+        "logical_changes": {},
+        "measurements_and_covariance_preserved": true,
+        "raw_measurement_count": 530,
+        "remaining_logical_device_ids": [
+          "case57:branch:1:status_cb",
+          "case57:bus:4:coupler"
+        ],
+        "strict_resolved": false,
+        "terminal_outcome": "inconclusive",
+        "truth_available": true
+      },
+      "scan_options": {
+        "include_pairs": true,
+        "max_pairs": 0,
+        "pair_devices": [
+          "case57:branch:1:status_cb",
+          "case57:bus:4:coupler"
+        ]
+      },
+      "scenario": {
+        "path": "C:\\dw\\output\\ieee57_logical_adapter_pilot_20260913\\truncated_pair_scenario.json",
+        "sha256": "28940942a7393434578cd09f79bbb7dd584363b08fe79297540df02f9f0931d5"
+      },
+      "trajectory": {
+        "path": "C:\\dw\\output\\ieee57_logical_adapter_pilot_20260913\\truncated_pair_trajectory.json",
+        "sha256": "fc6cab4024fe16db42ec15c2d27342fc8445e75df09a137158b0dacfdef20ffe"
+      }
+    }
+  ],
+  "search_scope": "all 93 single flips; pair fixtures additionally declare exactly one branch+coupler pair",
+  "source_files_unchanged_during_run": true,
+  "strict_resolved_count": 6,
+  "validation": {
+    "additional_truncated_healthy_test": 1,
+    "legacy_subtests": 24,
+    "legacy_tests": 34,
+    "logical_adapter_tests": 10,
+    "logs": {
+      "output/logical_adapter_legacy_regression.log": "7590d1dc54e34aa0eb042f38efe1cbcd126332bac05d7e111e579955c906fb05",
+      "output/logical_adapter_tests_final.log": "9715d68bea682ce4791aa210824f5efdb6042808a493dd96afdb76bf79e7ef6e",
+      "output/logical_adapter_truncated_healthy.log": "894b5cc2fd158cbf2bd5a5f5b2c618dea3ad807cccbf5c7d302576974adf5c7f"
+    }
+  },
+  "retrievable_evidence_archive": "research/ieee57/evidence/logical_adapter_pilot_20260913.tar.gz",
+  "retrievable_evidence_archive_sha256": "38f86dc555e08f55427165ca4132a73d7970e8171c7c98cc8a6a5c65837ea199"
+}

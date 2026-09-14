@@ -1,0 +1,16 @@
+[
+  {
+    "path": "research/ieee57/evidence/training_readiness_20260912.json.gz",
+    "raw_sha256": "75ec13f4add7c3aca80092dd8506889f124ee6867483db3c0fd0116a5d8558b8",
+    "gzip_sha256": "74ffabb62dd17f623b8fc4cf6d01497edbea78e068bb55e6318d707b99b8969c",
+    "raw_bytes": 4101138,
+    "gzip_bytes": 282859
+  },
+  {
+    "path": "research/ieee57/evidence/training_readiness_scenarios_20260912.json.gz",
+    "raw_sha256": "c2dcf5b600d0fb08ea9214c904baf57683900e69551ae74f21dbf94e5655324a",
+    "gzip_sha256": "690fbc11e0968f980c1b613c6d6c4864725daec076a2b805e763419d28075235",
+    "raw_bytes": 994238,
+    "gzip_bytes": 160104
+  }
+]

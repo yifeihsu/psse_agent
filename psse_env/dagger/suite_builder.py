@@ -430,6 +430,8 @@ def _portable_case_reference(value: Any) -> Any:
         return _json_native(value)
     if value == "case14":
         return "case14"
+    if value == "case57":
+        return _json_native(_load_python_case("case57"))
     if not isinstance(value, (str, os.PathLike)):
         raise ValueError(f"unsupported clean-case reference: {type(value).__name__}")
     path = Path(value)
@@ -614,6 +616,11 @@ def partition_release_scenario_v1(
         "split": str(split),
         "source_tier": str(scenario.get("source_tier") or ""),
     }
+    # Lineage remains offline-only and survives transport to downstream split
+    # builders. Exact fingerprints distinguish variants; this parent groups them.
+    for key in ("source_realization_id", "base_case_version", "scenario_admission_mode"):
+        if key in scenario:
+            grouping[key] = _json_native(scenario[key])
     envelope = {
         "scenario_schema_version": BC0_SUITE_SCHEMA_VERSION,
         "execution": execution,

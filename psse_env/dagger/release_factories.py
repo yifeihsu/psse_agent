@@ -129,13 +129,16 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def production_environment_factory(
-    *, seed: int | None = None, rng: Any | None = None
+    *, seed: int | None = None, rng: Any | None = None,
+    chi2_alpha: float = BC0_CHI2_ALPHA,
+    normalized_residual_threshold: float | None = None,
 ) -> TransactionalPSSEEnv:
     """Construct the real MATPOWER-backed deployment environment.
 
     ``seed`` and ``rng`` are accepted only for the evaluator's uniform factory
     calling convention.  The provider stack is deterministic for a fixed
-    scenario and does not draw from either value.
+    scenario and does not draw from either value. Explicit detection settings
+    support local transfer experiments; omitted settings preserve BC0 defaults.
     """
 
     del seed, rng
@@ -143,7 +146,8 @@ def production_environment_factory(
     # significance level.  Relying on the provider's general-purpose default
     # made healthy release roots anomalous only at evaluation time.
     providers = MatpowerDeploymentProviders(
-        chi2_alpha=BC0_CHI2_ALPHA,
+        chi2_alpha=chi2_alpha,
+        normalized_residual_threshold=normalized_residual_threshold,
         parameter_ranking_dominance_threshold=(
             BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD
         ),
@@ -651,8 +655,8 @@ def deterministic_case_loader(value: Any) -> dict[str, Any]:
         raise TypeError("case loader requires a non-empty path or {case_path: path}")
 
     provided = value.strip()
-    if provided == "case14":
-        case_path = _REPO_ROOT / "mcp_server" / "case14.m"
+    if provided in {"case14", "case57"}:
+        case_path = _REPO_ROOT / "mcp_server" / f"{provided}.m"
     else:
         case_path = Path(provided).expanduser()
         if not case_path.is_absolute():

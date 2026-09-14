@@ -41,6 +41,7 @@ from psse_env.actions import (
 )
 from psse_env.state_store import SYNTHETIC_TERMINAL_COMPATIBILITY_KEY
 from psse_env.oracle.expert_types import matching_evidence_codes
+from psse_env.oracle.anomaly_evidence import normalized_residual_alarm
 
 
 _CORRECTION_CONTEXT_FAMILY = {
@@ -72,7 +73,11 @@ def post_correction_confirmation_required(state: Mapping[str, Any]) -> bool:
         or state.get("has_unverified_candidate")
         or state.get("has_verified_candidate")
     )
-    if has_open_candidate or not state.get("accepted_corrections"):
+    if (
+        has_open_candidate
+        or not state.get("accepted_corrections")
+        or normalized_residual_alarm(state)
+    ):
         return False
     signatures = {
         str(item) for item in (state.get("unresolved_signatures") or [])
@@ -446,6 +451,8 @@ class ProcessValidityOracle:
             # A later diagnostic explanation closes only its own signature;
             # it is not an independent certificate for prior corrections.
             return False
+        if normalized_residual_alarm(state):
+            return anomalies_explained
         if state.get("no_material_anomaly_remaining"):
             return True
         remaining = state.get("remaining_anomaly_score")

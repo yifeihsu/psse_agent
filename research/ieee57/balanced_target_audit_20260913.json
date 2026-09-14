@@ -1,0 +1,4505 @@
+[
+  {
+    "example_id": "r0_35f95b9b9293:step:0",
+    "split": "train",
+    "family": "no_error",
+    "parent": "ieee57_parent_3d20c7eb3e3a00e36e66fc8163e778223ce522124862da6303acfba6c27957f6",
+    "step": 0,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_35f95b9b9293:step:1",
+    "split": "train",
+    "family": "no_error",
+    "parent": "ieee57_parent_3d20c7eb3e3a00e36e66fc8163e778223ce522124862da6303acfba6c27957f6",
+    "step": 1,
+    "action": {
+      "arguments": {},
+      "tool": "finalize_diagnosis"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "finalize",
+      "checks": {
+        "observable_evidence_gate_passed": true,
+        "resolved_claim_matches_private_ledger": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": "resolved"
+  },
+  {
+    "example_id": "r0_30ecb24216d8:step:0",
+    "split": "train",
+    "family": "measurement",
+    "parent": "ieee57_parent_67efacc26a945dc1ba680f3b4abf88ec75ffa514b7638900fd0c6c8b48a7ef00",
+    "step": 0,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_30ecb24216d8:step:1",
+    "split": "train",
+    "family": "measurement",
+    "parent": "ieee57_parent_67efacc26a945dc1ba680f3b4abf88ec75ffa514b7638900fd0c6c8b48a7ef00",
+    "step": 1,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_three_phase_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_30ecb24216d8:step:2",
+    "split": "train",
+    "family": "measurement",
+    "parent": "ieee57_parent_67efacc26a945dc1ba680f3b4abf88ec75ffa514b7638900fd0c6c8b48a7ef00",
+    "step": 2,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_harmonic_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_30ecb24216d8:step:3",
+    "split": "train",
+    "family": "measurement",
+    "parent": "ieee57_parent_67efacc26a945dc1ba680f3b4abf88ec75ffa514b7638900fd0c6c8b48a7ef00",
+    "step": 3,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_30ecb24216d8:step:4",
+    "split": "train",
+    "family": "measurement",
+    "parent": "ieee57_parent_67efacc26a945dc1ba680f3b4abf88ec75ffa514b7638900fd0c6c8b48a7ef00",
+    "step": 4,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "suspect_group": [
+          281
+        ]
+      },
+      "tool": "correct_measurements_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "measurement_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_30ecb24216d8:step:5",
+    "split": "train",
+    "family": "measurement",
+    "parent": "ieee57_parent_67efacc26a945dc1ba680f3b4abf88ec75ffa514b7638900fd0c6c8b48a7ef00",
+    "step": 5,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_30ecb24216d8:step:6",
+    "split": "train",
+    "family": "measurement",
+    "parent": "ieee57_parent_67efacc26a945dc1ba680f3b4abf88ec75ffa514b7638900fd0c6c8b48a7ef00",
+    "step": 6,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "commit_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "commit",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_truth_safe_to_commit": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_30ecb24216d8:step:7",
+    "split": "train",
+    "family": "measurement",
+    "parent": "ieee57_parent_67efacc26a945dc1ba680f3b4abf88ec75ffa514b7638900fd0c6c8b48a7ef00",
+    "step": 7,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_30ecb24216d8:step:8",
+    "split": "train",
+    "family": "measurement",
+    "parent": "ieee57_parent_67efacc26a945dc1ba680f3b4abf88ec75ffa514b7638900fd0c6c8b48a7ef00",
+    "step": 8,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "request": "operator_escalation:recovery_options_exhausted"
+      },
+      "tool": "ask_for_more_evidence"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "operator_escalation",
+      "checks": {
+        "handoff_state_audit_evaluable": true,
+        "observable_evidence_gate_passed": true,
+        "terminal_claim_is_handoff_not_resolution": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": "operator_escalation"
+  },
+  {
+    "example_id": "r0_45d351601279:step:0",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 0,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:1",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 1,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_three_phase_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:2",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 2,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_harmonic_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:3",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 3,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:4",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 4,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "suspect_group": [
+          375
+        ]
+      },
+      "tool": "correct_measurements_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "measurement_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:5",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 5,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:6",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 6,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "commit_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "commit",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_truth_safe_to_commit": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:7",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 7,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_parameter_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:8",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 8,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_topology_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:9",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 9,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:10",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 10,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "suspect_group": [
+          379
+        ]
+      },
+      "tool": "correct_measurements_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "measurement_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:11",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 11,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:12",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 12,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "commit_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "commit",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_truth_safe_to_commit": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:13",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 13,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_parameter_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:14",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 14,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_topology_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:15",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 15,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:16",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 16,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "suspect_group": [
+          370
+        ]
+      },
+      "tool": "correct_measurements_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "measurement_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:17",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 17,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:18",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 18,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "commit_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "commit",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_truth_safe_to_commit": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:19",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 19,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_parameter_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:20",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 20,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_topology_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:21",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 21,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:22",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 22,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "suspect_group": [
+          334
+        ]
+      },
+      "tool": "correct_measurements_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "measurement_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:23",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 23,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:24",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 24,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "commit_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "commit",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_truth_safe_to_commit": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:25",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 25,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_parameter_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:26",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 26,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_topology_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:27",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 27,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:28",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 28,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "suspect_group": [
+          333
+        ]
+      },
+      "tool": "correct_measurements_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "measurement_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:29",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 29,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:30",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 30,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "commit_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "commit",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_truth_safe_to_commit": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:31",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 31,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_45d351601279:step:32",
+    "split": "train",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_21504af443540eed0593cbd3c5bdc2d5c51075ca6c49cc219aa4b3821db0d80c",
+    "step": 32,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "request": "operator_escalation:recovery_options_exhausted"
+      },
+      "tool": "ask_for_more_evidence"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "operator_escalation",
+      "checks": {
+        "handoff_state_audit_evaluable": true,
+        "observable_evidence_gate_passed": true,
+        "terminal_claim_is_handoff_not_resolution": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": "operator_escalation"
+  },
+  {
+    "example_id": "r0_8c4d83022e39:step:0",
+    "split": "train",
+    "family": "parameter",
+    "parent": "ieee57_parent_ba501427108af280c97e14a356f85734eb9b6ea2cfa7150dd6f33f756a70a25f",
+    "step": 0,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_8c4d83022e39:step:1",
+    "split": "train",
+    "family": "parameter",
+    "parent": "ieee57_parent_ba501427108af280c97e14a356f85734eb9b6ea2cfa7150dd6f33f756a70a25f",
+    "step": 1,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_three_phase_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_8c4d83022e39:step:2",
+    "split": "train",
+    "family": "parameter",
+    "parent": "ieee57_parent_ba501427108af280c97e14a356f85734eb9b6ea2cfa7150dd6f33f756a70a25f",
+    "step": 2,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_harmonic_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_8c4d83022e39:step:3",
+    "split": "train",
+    "family": "parameter",
+    "parent": "ieee57_parent_ba501427108af280c97e14a356f85734eb9b6ea2cfa7150dd6f33f756a70a25f",
+    "step": 3,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_parameter_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_8c4d83022e39:step:4",
+    "split": "train",
+    "family": "parameter",
+    "parent": "ieee57_parent_ba501427108af280c97e14a356f85734eb9b6ea2cfa7150dd6f33f756a70a25f",
+    "step": 4,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "line_index": 28
+      },
+      "tool": "correct_parameters_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "parameter_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_8c4d83022e39:step:5",
+    "split": "train",
+    "family": "parameter",
+    "parent": "ieee57_parent_ba501427108af280c97e14a356f85734eb9b6ea2cfa7150dd6f33f756a70a25f",
+    "step": 5,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_8c4d83022e39:step:6",
+    "split": "train",
+    "family": "parameter",
+    "parent": "ieee57_parent_ba501427108af280c97e14a356f85734eb9b6ea2cfa7150dd6f33f756a70a25f",
+    "step": 6,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "commit_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "commit",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_truth_safe_to_commit": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_8c4d83022e39:step:7",
+    "split": "train",
+    "family": "parameter",
+    "parent": "ieee57_parent_ba501427108af280c97e14a356f85734eb9b6ea2cfa7150dd6f33f756a70a25f",
+    "step": 7,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_8c4d83022e39:step:8",
+    "split": "train",
+    "family": "parameter",
+    "parent": "ieee57_parent_ba501427108af280c97e14a356f85734eb9b6ea2cfa7150dd6f33f756a70a25f",
+    "step": 8,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "request": "operator_escalation:recovery_options_exhausted"
+      },
+      "tool": "ask_for_more_evidence"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "operator_escalation",
+      "checks": {
+        "handoff_state_audit_evaluable": true,
+        "observable_evidence_gate_passed": true,
+        "terminal_claim_is_handoff_not_resolution": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": "operator_escalation"
+  },
+  {
+    "example_id": "r0_b6498f983a7b:step:0",
+    "split": "train",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_9da385e5106441f46b87e64daed1350fb062538e373f214504065337ea2eebb6",
+    "step": 0,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_b6498f983a7b:step:1",
+    "split": "train",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_9da385e5106441f46b87e64daed1350fb062538e373f214504065337ea2eebb6",
+    "step": 1,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_three_phase_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_b6498f983a7b:step:2",
+    "split": "train",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_9da385e5106441f46b87e64daed1350fb062538e373f214504065337ea2eebb6",
+    "step": 2,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_harmonic_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_b6498f983a7b:step:3",
+    "split": "train",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_9da385e5106441f46b87e64daed1350fb062538e373f214504065337ea2eebb6",
+    "step": 3,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_b6498f983a7b:step:4",
+    "split": "train",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_9da385e5106441f46b87e64daed1350fb062538e373f214504065337ea2eebb6",
+    "step": 4,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "suspect_group": [
+          235
+        ]
+      },
+      "tool": "correct_measurements_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "measurement_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_b6498f983a7b:step:5",
+    "split": "train",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_9da385e5106441f46b87e64daed1350fb062538e373f214504065337ea2eebb6",
+    "step": 5,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_b6498f983a7b:step:6",
+    "split": "train",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_9da385e5106441f46b87e64daed1350fb062538e373f214504065337ea2eebb6",
+    "step": 6,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "commit_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "commit",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_truth_safe_to_commit": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_b6498f983a7b:step:7",
+    "split": "train",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_9da385e5106441f46b87e64daed1350fb062538e373f214504065337ea2eebb6",
+    "step": 7,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_b6498f983a7b:step:8",
+    "split": "train",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_9da385e5106441f46b87e64daed1350fb062538e373f214504065337ea2eebb6",
+    "step": 8,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "request": "operator_escalation:recovery_options_exhausted"
+      },
+      "tool": "ask_for_more_evidence"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "operator_escalation",
+      "checks": {
+        "handoff_state_audit_evaluable": true,
+        "observable_evidence_gate_passed": true,
+        "terminal_claim_is_handoff_not_resolution": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": "operator_escalation"
+  },
+  {
+    "example_id": "r0_d9032e301549:step:0",
+    "split": "validation",
+    "family": "no_error",
+    "parent": "ieee57_parent_8b208a1ffe6dabfaebbe41632b7af285c5f3769ddd0b7598ec2298c88070fcdb",
+    "step": 0,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_d9032e301549:step:1",
+    "split": "validation",
+    "family": "no_error",
+    "parent": "ieee57_parent_8b208a1ffe6dabfaebbe41632b7af285c5f3769ddd0b7598ec2298c88070fcdb",
+    "step": 1,
+    "action": {
+      "arguments": {},
+      "tool": "finalize_diagnosis"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "finalize",
+      "checks": {
+        "observable_evidence_gate_passed": true,
+        "resolved_claim_matches_private_ledger": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": "resolved"
+  },
+  {
+    "example_id": "r0_46b2eb290096:step:0",
+    "split": "validation",
+    "family": "measurement",
+    "parent": "ieee57_parent_318c4924db38cf7fd6ec51322c2f99ec8d0275001fe5ba4341213c9265dd34a9",
+    "step": 0,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_46b2eb290096:step:1",
+    "split": "validation",
+    "family": "measurement",
+    "parent": "ieee57_parent_318c4924db38cf7fd6ec51322c2f99ec8d0275001fe5ba4341213c9265dd34a9",
+    "step": 1,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_three_phase_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_46b2eb290096:step:2",
+    "split": "validation",
+    "family": "measurement",
+    "parent": "ieee57_parent_318c4924db38cf7fd6ec51322c2f99ec8d0275001fe5ba4341213c9265dd34a9",
+    "step": 2,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_harmonic_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_46b2eb290096:step:3",
+    "split": "validation",
+    "family": "measurement",
+    "parent": "ieee57_parent_318c4924db38cf7fd6ec51322c2f99ec8d0275001fe5ba4341213c9265dd34a9",
+    "step": 3,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_46b2eb290096:step:4",
+    "split": "validation",
+    "family": "measurement",
+    "parent": "ieee57_parent_318c4924db38cf7fd6ec51322c2f99ec8d0275001fe5ba4341213c9265dd34a9",
+    "step": 4,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "suspect_group": [
+          252
+        ]
+      },
+      "tool": "correct_measurements_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "measurement_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_46b2eb290096:step:5",
+    "split": "validation",
+    "family": "measurement",
+    "parent": "ieee57_parent_318c4924db38cf7fd6ec51322c2f99ec8d0275001fe5ba4341213c9265dd34a9",
+    "step": 5,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_46b2eb290096:step:6",
+    "split": "validation",
+    "family": "measurement",
+    "parent": "ieee57_parent_318c4924db38cf7fd6ec51322c2f99ec8d0275001fe5ba4341213c9265dd34a9",
+    "step": 6,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "commit_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "commit",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_truth_safe_to_commit": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_46b2eb290096:step:7",
+    "split": "validation",
+    "family": "measurement",
+    "parent": "ieee57_parent_318c4924db38cf7fd6ec51322c2f99ec8d0275001fe5ba4341213c9265dd34a9",
+    "step": 7,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_46b2eb290096:step:8",
+    "split": "validation",
+    "family": "measurement",
+    "parent": "ieee57_parent_318c4924db38cf7fd6ec51322c2f99ec8d0275001fe5ba4341213c9265dd34a9",
+    "step": 8,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "request": "operator_escalation:recovery_options_exhausted"
+      },
+      "tool": "ask_for_more_evidence"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "operator_escalation",
+      "checks": {
+        "handoff_state_audit_evaluable": true,
+        "observable_evidence_gate_passed": true,
+        "terminal_claim_is_handoff_not_resolution": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": "operator_escalation"
+  },
+  {
+    "example_id": "r0_6108a308e2a2:step:0",
+    "split": "validation",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_2bca5d475fa35d6a51174f18d7a311720fc237eb1bda9a3c81c3ee5131785c1c",
+    "step": 0,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_6108a308e2a2:step:1",
+    "split": "validation",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_2bca5d475fa35d6a51174f18d7a311720fc237eb1bda9a3c81c3ee5131785c1c",
+    "step": 1,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_three_phase_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_6108a308e2a2:step:2",
+    "split": "validation",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_2bca5d475fa35d6a51174f18d7a311720fc237eb1bda9a3c81c3ee5131785c1c",
+    "step": 2,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_harmonic_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_6108a308e2a2:step:3",
+    "split": "validation",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_2bca5d475fa35d6a51174f18d7a311720fc237eb1bda9a3c81c3ee5131785c1c",
+    "step": 3,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_6108a308e2a2:step:4",
+    "split": "validation",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_2bca5d475fa35d6a51174f18d7a311720fc237eb1bda9a3c81c3ee5131785c1c",
+    "step": 4,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "suspect_group": [
+          13
+        ]
+      },
+      "tool": "correct_measurements_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "measurement_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_6108a308e2a2:step:5",
+    "split": "validation",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_2bca5d475fa35d6a51174f18d7a311720fc237eb1bda9a3c81c3ee5131785c1c",
+    "step": 5,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_6108a308e2a2:step:6",
+    "split": "validation",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_2bca5d475fa35d6a51174f18d7a311720fc237eb1bda9a3c81c3ee5131785c1c",
+    "step": 6,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "commit_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "commit",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_truth_safe_to_commit": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_6108a308e2a2:step:7",
+    "split": "validation",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_2bca5d475fa35d6a51174f18d7a311720fc237eb1bda9a3c81c3ee5131785c1c",
+    "step": 7,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_parameter_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_6108a308e2a2:step:8",
+    "split": "validation",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_2bca5d475fa35d6a51174f18d7a311720fc237eb1bda9a3c81c3ee5131785c1c",
+    "step": 8,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_topology_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_6108a308e2a2:step:9",
+    "split": "validation",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_2bca5d475fa35d6a51174f18d7a311720fc237eb1bda9a3c81c3ee5131785c1c",
+    "step": 9,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_6108a308e2a2:step:10",
+    "split": "validation",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_2bca5d475fa35d6a51174f18d7a311720fc237eb1bda9a3c81c3ee5131785c1c",
+    "step": 10,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "suspect_group": [
+          34
+        ]
+      },
+      "tool": "correct_measurements_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "measurement_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_6108a308e2a2:step:11",
+    "split": "validation",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_2bca5d475fa35d6a51174f18d7a311720fc237eb1bda9a3c81c3ee5131785c1c",
+    "step": 11,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_6108a308e2a2:step:12",
+    "split": "validation",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_2bca5d475fa35d6a51174f18d7a311720fc237eb1bda9a3c81c3ee5131785c1c",
+    "step": 12,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "commit_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "commit",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_truth_safe_to_commit": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_6108a308e2a2:step:13",
+    "split": "validation",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_2bca5d475fa35d6a51174f18d7a311720fc237eb1bda9a3c81c3ee5131785c1c",
+    "step": 13,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_6108a308e2a2:step:14",
+    "split": "validation",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_2bca5d475fa35d6a51174f18d7a311720fc237eb1bda9a3c81c3ee5131785c1c",
+    "step": 14,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "request": "operator_escalation:recovery_options_exhausted"
+      },
+      "tool": "ask_for_more_evidence"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "operator_escalation",
+      "checks": {
+        "handoff_state_audit_evaluable": true,
+        "observable_evidence_gate_passed": true,
+        "terminal_claim_is_handoff_not_resolution": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": "operator_escalation"
+  },
+  {
+    "example_id": "r0_24143bcfdcb0:step:0",
+    "split": "validation",
+    "family": "parameter",
+    "parent": "ieee57_parent_2a7bc679fa17594ccf6df620f17b184d78681e13a26b62ba73aa46d2949b8a0e",
+    "step": 0,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_24143bcfdcb0:step:1",
+    "split": "validation",
+    "family": "parameter",
+    "parent": "ieee57_parent_2a7bc679fa17594ccf6df620f17b184d78681e13a26b62ba73aa46d2949b8a0e",
+    "step": 1,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_three_phase_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_24143bcfdcb0:step:2",
+    "split": "validation",
+    "family": "parameter",
+    "parent": "ieee57_parent_2a7bc679fa17594ccf6df620f17b184d78681e13a26b62ba73aa46d2949b8a0e",
+    "step": 2,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_harmonic_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_24143bcfdcb0:step:3",
+    "split": "validation",
+    "family": "parameter",
+    "parent": "ieee57_parent_2a7bc679fa17594ccf6df620f17b184d78681e13a26b62ba73aa46d2949b8a0e",
+    "step": 3,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_parameter_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_24143bcfdcb0:step:4",
+    "split": "validation",
+    "family": "parameter",
+    "parent": "ieee57_parent_2a7bc679fa17594ccf6df620f17b184d78681e13a26b62ba73aa46d2949b8a0e",
+    "step": 4,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "line_index": 60
+      },
+      "tool": "correct_parameters_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "parameter_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_24143bcfdcb0:step:5",
+    "split": "validation",
+    "family": "parameter",
+    "parent": "ieee57_parent_2a7bc679fa17594ccf6df620f17b184d78681e13a26b62ba73aa46d2949b8a0e",
+    "step": 5,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_24143bcfdcb0:step:6",
+    "split": "validation",
+    "family": "parameter",
+    "parent": "ieee57_parent_2a7bc679fa17594ccf6df620f17b184d78681e13a26b62ba73aa46d2949b8a0e",
+    "step": 6,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "commit_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "commit",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_truth_safe_to_commit": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_24143bcfdcb0:step:7",
+    "split": "validation",
+    "family": "parameter",
+    "parent": "ieee57_parent_2a7bc679fa17594ccf6df620f17b184d78681e13a26b62ba73aa46d2949b8a0e",
+    "step": 7,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_24143bcfdcb0:step:8",
+    "split": "validation",
+    "family": "parameter",
+    "parent": "ieee57_parent_2a7bc679fa17594ccf6df620f17b184d78681e13a26b62ba73aa46d2949b8a0e",
+    "step": 8,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "request": "operator_escalation:recovery_options_exhausted"
+      },
+      "tool": "ask_for_more_evidence"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "operator_escalation",
+      "checks": {
+        "handoff_state_audit_evaluable": true,
+        "observable_evidence_gate_passed": true,
+        "terminal_claim_is_handoff_not_resolution": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": "operator_escalation"
+  },
+  {
+    "example_id": "r0_bf7eb6d7098c:step:0",
+    "split": "validation",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_77ad1072c2c813714e5de04e74ae90e4cd2aabb3151a76a539a1ac7c98178426",
+    "step": 0,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_bf7eb6d7098c:step:1",
+    "split": "validation",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_77ad1072c2c813714e5de04e74ae90e4cd2aabb3151a76a539a1ac7c98178426",
+    "step": 1,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_three_phase_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_bf7eb6d7098c:step:2",
+    "split": "validation",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_77ad1072c2c813714e5de04e74ae90e4cd2aabb3151a76a539a1ac7c98178426",
+    "step": 2,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_harmonic_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_bf7eb6d7098c:step:3",
+    "split": "validation",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_77ad1072c2c813714e5de04e74ae90e4cd2aabb3151a76a539a1ac7c98178426",
+    "step": 3,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_bf7eb6d7098c:step:4",
+    "split": "validation",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_77ad1072c2c813714e5de04e74ae90e4cd2aabb3151a76a539a1ac7c98178426",
+    "step": 4,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "suspect_group": [
+          86
+        ]
+      },
+      "tool": "correct_measurements_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "measurement_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_bf7eb6d7098c:step:5",
+    "split": "validation",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_77ad1072c2c813714e5de04e74ae90e4cd2aabb3151a76a539a1ac7c98178426",
+    "step": 5,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_bf7eb6d7098c:step:6",
+    "split": "validation",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_77ad1072c2c813714e5de04e74ae90e4cd2aabb3151a76a539a1ac7c98178426",
+    "step": 6,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "commit_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "commit",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_truth_safe_to_commit": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_bf7eb6d7098c:step:7",
+    "split": "validation",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_77ad1072c2c813714e5de04e74ae90e4cd2aabb3151a76a539a1ac7c98178426",
+    "step": 7,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_bf7eb6d7098c:step:8",
+    "split": "validation",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_77ad1072c2c813714e5de04e74ae90e4cd2aabb3151a76a539a1ac7c98178426",
+    "step": 8,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "request": "operator_escalation:recovery_options_exhausted"
+      },
+      "tool": "ask_for_more_evidence"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "operator_escalation",
+      "checks": {
+        "handoff_state_audit_evaluable": true,
+        "observable_evidence_gate_passed": true,
+        "terminal_claim_is_handoff_not_resolution": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": "operator_escalation"
+  },
+  {
+    "example_id": "r0_f5f03549579a:step:0",
+    "split": "test",
+    "family": "no_error",
+    "parent": "ieee57_parent_5edfba33a4b47aa39b13afca91be059da6235bc652d64a40a77cfd75f7957a9a",
+    "step": 0,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f5f03549579a:step:1",
+    "split": "test",
+    "family": "no_error",
+    "parent": "ieee57_parent_5edfba33a4b47aa39b13afca91be059da6235bc652d64a40a77cfd75f7957a9a",
+    "step": 1,
+    "action": {
+      "arguments": {},
+      "tool": "finalize_diagnosis"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "finalize",
+      "checks": {
+        "observable_evidence_gate_passed": true,
+        "resolved_claim_matches_private_ledger": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": "resolved"
+  },
+  {
+    "example_id": "r0_3f6c36819771:step:0",
+    "split": "test",
+    "family": "measurement",
+    "parent": "ieee57_parent_24c09645a30b4d22f777bde96a1726b507c45b182db3410f84084afe4a91e719",
+    "step": 0,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_3f6c36819771:step:1",
+    "split": "test",
+    "family": "measurement",
+    "parent": "ieee57_parent_24c09645a30b4d22f777bde96a1726b507c45b182db3410f84084afe4a91e719",
+    "step": 1,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_three_phase_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_3f6c36819771:step:2",
+    "split": "test",
+    "family": "measurement",
+    "parent": "ieee57_parent_24c09645a30b4d22f777bde96a1726b507c45b182db3410f84084afe4a91e719",
+    "step": 2,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_harmonic_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_3f6c36819771:step:3",
+    "split": "test",
+    "family": "measurement",
+    "parent": "ieee57_parent_24c09645a30b4d22f777bde96a1726b507c45b182db3410f84084afe4a91e719",
+    "step": 3,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_3f6c36819771:step:4",
+    "split": "test",
+    "family": "measurement",
+    "parent": "ieee57_parent_24c09645a30b4d22f777bde96a1726b507c45b182db3410f84084afe4a91e719",
+    "step": 4,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "suspect_group": [
+          50
+        ]
+      },
+      "tool": "correct_measurements_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "measurement_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_3f6c36819771:step:5",
+    "split": "test",
+    "family": "measurement",
+    "parent": "ieee57_parent_24c09645a30b4d22f777bde96a1726b507c45b182db3410f84084afe4a91e719",
+    "step": 5,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_3f6c36819771:step:6",
+    "split": "test",
+    "family": "measurement",
+    "parent": "ieee57_parent_24c09645a30b4d22f777bde96a1726b507c45b182db3410f84084afe4a91e719",
+    "step": 6,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "commit_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "commit",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_truth_safe_to_commit": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_3f6c36819771:step:7",
+    "split": "test",
+    "family": "measurement",
+    "parent": "ieee57_parent_24c09645a30b4d22f777bde96a1726b507c45b182db3410f84084afe4a91e719",
+    "step": 7,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_3f6c36819771:step:8",
+    "split": "test",
+    "family": "measurement",
+    "parent": "ieee57_parent_24c09645a30b4d22f777bde96a1726b507c45b182db3410f84084afe4a91e719",
+    "step": 8,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "request": "operator_escalation:recovery_options_exhausted"
+      },
+      "tool": "ask_for_more_evidence"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "operator_escalation",
+      "checks": {
+        "handoff_state_audit_evaluable": true,
+        "observable_evidence_gate_passed": true,
+        "terminal_claim_is_handoff_not_resolution": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": "operator_escalation"
+  },
+  {
+    "example_id": "r0_f867b187db97:step:0",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 0,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:1",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 1,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_three_phase_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:2",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 2,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_harmonic_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:3",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 3,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:4",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 4,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "suspect_group": [
+          227
+        ]
+      },
+      "tool": "correct_measurements_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "measurement_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:5",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 5,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:6",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 6,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "commit_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "commit",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_truth_safe_to_commit": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:7",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 7,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_parameter_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:8",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 8,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_topology_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:9",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 9,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:10",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 10,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "suspect_group": [
+          236
+        ]
+      },
+      "tool": "correct_measurements_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "measurement_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:11",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 11,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:12",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 12,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "commit_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "commit",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_truth_safe_to_commit": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:13",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 13,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_parameter_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:14",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 14,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_topology_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:15",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 15,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:16",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 16,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "suspect_group": [
+          187
+        ]
+      },
+      "tool": "correct_measurements_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "measurement_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:17",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 17,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:18",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 18,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "commit_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "commit",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_truth_safe_to_commit": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:19",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 19,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_parameter_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:20",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 20,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_topology_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:21",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 21,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:22",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 22,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "suspect_group": [
+          187,
+          227,
+          236
+        ]
+      },
+      "tool": "correct_measurements_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": false,
+    "quarantine_reasons": [
+      "offline_teacher_target_audit_failed"
+    ],
+    "offline_target_audit": {
+      "action_class": "measurement_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": false
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": false,
+      "reason_codes": [
+        "target_outside_remaining_family_faults"
+      ]
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:23",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 23,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:24",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 24,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "rollback_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "rollback",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_not_truth_safe_to_commit": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:25",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 25,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "suspect_group": [
+          344
+        ]
+      },
+      "tool": "correct_measurements_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": false,
+    "quarantine_reasons": [
+      "offline_teacher_target_audit_failed"
+    ],
+    "offline_target_audit": {
+      "action_class": "measurement_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": false
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": false,
+      "reason_codes": [
+        "target_outside_remaining_family_faults"
+      ]
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:26",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 26,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:27",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 27,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "rollback_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "rollback",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_not_truth_safe_to_commit": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:28",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 28,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "suspect_group": [
+          200
+        ]
+      },
+      "tool": "correct_measurements_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": false,
+    "quarantine_reasons": [
+      "offline_teacher_target_audit_failed"
+    ],
+    "offline_target_audit": {
+      "action_class": "measurement_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": false
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": false,
+      "reason_codes": [
+        "target_outside_remaining_family_faults"
+      ]
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:29",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 29,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:30",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 30,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "rollback_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "rollback",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_not_truth_safe_to_commit": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_f867b187db97:step:31",
+    "split": "test",
+    "family": "multi_measurement",
+    "parent": "ieee57_parent_3d1cf401fff82c407a69a2f6235ab259c7b40757fdeb6feee93124fbb130e0f2",
+    "step": 31,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "request": "operator_escalation:recovery_options_exhausted"
+      },
+      "tool": "ask_for_more_evidence"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "operator_escalation",
+      "checks": {
+        "handoff_state_audit_evaluable": true,
+        "observable_evidence_gate_passed": true,
+        "terminal_claim_is_handoff_not_resolution": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": "operator_escalation"
+  },
+  {
+    "example_id": "r0_1bc059f13e3b:step:0",
+    "split": "test",
+    "family": "parameter",
+    "parent": "ieee57_parent_b9cf86d0e6811f70080257a88f8355e3e0ae5573ed9e13ffd7655bd5f0a8459c",
+    "step": 0,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_1bc059f13e3b:step:1",
+    "split": "test",
+    "family": "parameter",
+    "parent": "ieee57_parent_b9cf86d0e6811f70080257a88f8355e3e0ae5573ed9e13ffd7655bd5f0a8459c",
+    "step": 1,
+    "action": {
+      "arguments": {},
+      "tool": "finalize_diagnosis"
+    },
+    "execution_status": "success",
+    "accepted_supervision": false,
+    "quarantine_reasons": [
+      "offline_teacher_target_audit_failed"
+    ],
+    "offline_target_audit": {
+      "action_class": "finalize",
+      "checks": {
+        "observable_evidence_gate_passed": true,
+        "resolved_claim_matches_private_ledger": false
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": false,
+      "reason_codes": [
+        "resolved_claim_failed_private_release_audit"
+      ]
+    },
+    "terminal_outcome": "resolved"
+  },
+  {
+    "example_id": "r0_b79bb4c4e75b:step:0",
+    "split": "test",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_97538a5d692718e9adb2ef79881396767debc208045052c3f92e3273858f7d49",
+    "step": 0,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_b79bb4c4e75b:step:1",
+    "split": "test",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_97538a5d692718e9adb2ef79881396767debc208045052c3f92e3273858f7d49",
+    "step": 1,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_three_phase_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_b79bb4c4e75b:step:2",
+    "split": "test",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_97538a5d692718e9adb2ef79881396767debc208045052c3f92e3273858f7d49",
+    "step": 2,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_harmonic_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_b79bb4c4e75b:step:3",
+    "split": "test",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_97538a5d692718e9adb2ef79881396767debc208045052c3f92e3273858f7d49",
+    "step": 3,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_parameter_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_b79bb4c4e75b:step:4",
+    "split": "test",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_97538a5d692718e9adb2ef79881396767debc208045052c3f92e3273858f7d49",
+    "step": 4,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "line_index": 42
+      },
+      "tool": "correct_parameters_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "parameter_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_b79bb4c4e75b:step:5",
+    "split": "test",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_97538a5d692718e9adb2ef79881396767debc208045052c3f92e3273858f7d49",
+    "step": 5,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_b79bb4c4e75b:step:6",
+    "split": "test",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_97538a5d692718e9adb2ef79881396767debc208045052c3f92e3273858f7d49",
+    "step": 6,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "commit_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "commit",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_truth_safe_to_commit": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_b79bb4c4e75b:step:7",
+    "split": "test",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_97538a5d692718e9adb2ef79881396767debc208045052c3f92e3273858f7d49",
+    "step": 7,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_b79bb4c4e75b:step:8",
+    "split": "test",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_97538a5d692718e9adb2ef79881396767debc208045052c3f92e3273858f7d49",
+    "step": 8,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "suspect_group": [
+          391
+        ]
+      },
+      "tool": "correct_measurements_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "measurement_correction",
+      "checks": {
+        "complete_private_ledger": true,
+        "observable_evidence_gate_passed": true,
+        "target_is_remaining_family_fault": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_b79bb4c4e75b:step:9",
+    "split": "test",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_97538a5d692718e9adb2ef79881396767debc208045052c3f92e3273858f7d49",
+    "step": 9,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "wls_from_path"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_b79bb4c4e75b:step:10",
+    "split": "test",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_97538a5d692718e9adb2ef79881396767debc208045052c3f92e3273858f7d49",
+    "step": 10,
+    "action": {
+      "arguments": {
+        "case_path": "candidate"
+      },
+      "tool": "commit_state"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "commit",
+      "checks": {
+        "candidate_exists": true,
+        "candidate_source_truth_evidence_complete": true,
+        "candidate_truth_safe_to_commit": true,
+        "candidate_verified": true,
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_b79bb4c4e75b:step:11",
+    "split": "test",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_97538a5d692718e9adb2ef79881396767debc208045052c3f92e3273858f7d49",
+    "step": 11,
+    "action": {
+      "arguments": {
+        "case_path": "active"
+      },
+      "tool": "get_measurement_context"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "read_only",
+      "checks": {
+        "observable_evidence_gate_passed": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": null
+  },
+  {
+    "example_id": "r0_b79bb4c4e75b:step:12",
+    "split": "test",
+    "family": "measurement+parameter",
+    "parent": "ieee57_parent_97538a5d692718e9adb2ef79881396767debc208045052c3f92e3273858f7d49",
+    "step": 12,
+    "action": {
+      "arguments": {
+        "case_path": "active",
+        "request": "operator_escalation:recovery_options_exhausted"
+      },
+      "tool": "ask_for_more_evidence"
+    },
+    "execution_status": "success",
+    "accepted_supervision": true,
+    "quarantine_reasons": [],
+    "offline_target_audit": {
+      "action_class": "operator_escalation",
+      "checks": {
+        "handoff_state_audit_evaluable": true,
+        "observable_evidence_gate_passed": true,
+        "terminal_claim_is_handoff_not_resolution": true
+      },
+      "contract": "dagger1_offline_teacher_target_truth_audit_v4",
+      "passed": true,
+      "reason_codes": []
+    },
+    "terminal_outcome": "operator_escalation"
+  }
+]
