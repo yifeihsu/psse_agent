@@ -1370,7 +1370,7 @@ def evaluate_paired_adapters(
     *,
     development_scenarios: Sequence[Mapping[str, Any]],
     bc0_adapter: Path,
-    r1_adapter: Path,
+    r1_adapter: Path | None,
     base_model: str,
     base_revision: str,
     output_dir: Path,
@@ -1393,6 +1393,9 @@ def evaluate_paired_adapters(
 
     ``evaluation_dirname`` names the output subdirectory, so an ablation can
     be evaluated beside a finished round without touching its results.
+    With ``r1_adapter`` None only the student (and the expert, when asked)
+    is rolled out: a zero-shot reading of a frozen adapter on a new suite,
+    written in the same files with the candidate fields left empty.
 
     With ``expert_policy_factory`` the teacher itself is rolled out on the
     same roots under the same observation boundary and written beside the
@@ -1415,7 +1418,9 @@ def evaluate_paired_adapters(
         raise ValueError("Paired evaluation requires unique development physical roots")
     suite = {"standard_success": list(development_scenarios)}
     payloads: dict[str, dict[str, Any]] = {}
-    comparators: list[tuple[str, Any]] = [("bc0", bc0_adapter), ("r1", r1_adapter)]
+    comparators: list[tuple[str, Any]] = [("bc0", bc0_adapter)]
+    if r1_adapter is not None:
+        comparators.append(("r1", r1_adapter))
     if expert_policy_factory is not None:
         comparators.append(("expert", None))
     for label, adapter in comparators:
@@ -1462,10 +1467,10 @@ def evaluate_paired_adapters(
             pass
 
     bc0_overall = payloads["bc0"]["suite_metrics"]["overall"]
-    r1_overall = payloads["r1"]["suite_metrics"]["overall"]
+    r1_overall = payloads["r1"]["suite_metrics"]["overall"] if "r1" in payloads else None
     shared_numeric = sorted(
         key
-        for key in set(bc0_overall) & set(r1_overall)
+        for key in set(bc0_overall) & set(r1_overall or {})
         if isinstance(bc0_overall[key], (int, float))
         and not isinstance(bc0_overall[key], bool)
         and isinstance(r1_overall[key], (int, float))
@@ -1481,10 +1486,10 @@ def evaluate_paired_adapters(
         "max_steps": max_steps,
         "expert_overall": expert_overall,
         "bc0_adapter": str(bc0_adapter),
-        "r1_adapter": str(r1_adapter),
+        "r1_adapter": None if r1_adapter is None else str(r1_adapter),
         "bc0_overall": bc0_overall,
         "r1_overall": r1_overall,
-        "r1_minus_bc0": {
+        "r1_minus_bc0": None if r1_overall is None else {
             key: float(r1_overall[key]) - float(bc0_overall[key])
             for key in shared_numeric
         },
@@ -1703,6 +1708,14 @@ def parser() -> argparse.ArgumentParser:
         ),
     )
     result.add_argument(
+        "--eval-student-only",
+        action="store_true",
+        help=(
+            "Evaluate the student adapter alone (plus the expert with --eval-expert) "
+            "on the development roots: a zero-shot reading with no candidate"
+        ),
+    )
+    result.add_argument(
         "--eval-expert",
         action="store_true",
         help=(
@@ -1892,7 +1905,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     _write_jsonl(output_dir / "round1.train.jsonl", mixture)
     _write_json(output_dir / "mixture_report.json", mixture_report)
     comparison = None
-    if args.eval_r1_adapter is not None:
+    if args.eval_r1_adapter is not None and args.eval_student_only:
+        raise ValueError("--eval-student-only excludes --eval-r1-adapter")
+    if args.eval_r1_adapter is not None or args.eval_student_only:
         from psse_env.dagger.evaluator import evaluate_rollout_suites
 
         expert_policy_factory = None
@@ -1912,7 +1927,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         comparison = evaluate_paired_adapters(
             development_scenarios=development,
             bc0_adapter=adapter,
-            r1_adapter=args.eval_r1_adapter.expanduser().resolve(strict=True),
+            r1_adapter=(
+                None if args.eval_r1_adapter is None
+                else args.eval_r1_adapter.expanduser().resolve(strict=True)
+            ),
             base_model=model_spec.model_id,
             base_revision=model_spec.revision,
             output_dir=output_dir,

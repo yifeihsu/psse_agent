@@ -5,7 +5,8 @@
 # Every stage is output-guarded, so resubmitting after a failure resumes at
 # the first stage without a receipt.  FROM=<stage> starts the chain at that
 # stage (d0, bc0, r1c, r1t, r1e, r2c, r2t, r2e) when the earlier receipts
-# already exist.
+# already exist.  CHAIN="d0 r1c zs" submits that sequence instead (zs is the
+# zero-shot evaluation of the round-1 student, stage_zeroshot.sbatch).
 set -euo pipefail
 export PATH=/opt/slurm/bin:$PATH
 PIPE=/scratch/yx3882/research_full_pipeline_20260912
@@ -16,8 +17,9 @@ if squeue -u "$USER" -h -o "%j" | grep -Eq '^fp-'; then
   squeue -u "$USER" -o "%.12i %.10j %.8T %.10M %.24R" >&2
   exit 2
 fi
-FROM=${FROM:-d0}
-ORDER=(d0 bc0 r1c r1t r1e r2c r2t r2e)
+FROM=${FROM:-}
+read -ra ORDER <<< "${CHAIN:-d0 bc0 r1c r1t r1e r2c r2t r2e}"
+[[ -n "$FROM" ]] || FROM=${ORDER[0]}
 start=-1
 for index in "${!ORDER[@]}"; do [[ "${ORDER[$index]}" == "$FROM" ]] && start=$index; done
 [[ $start -ge 0 ]] || { echo "unknown FROM stage: $FROM" >&2; exit 2; }
@@ -38,6 +40,8 @@ for index in "${!ORDER[@]}"; do
     r2c) id=$(job_id "$(sbatch --parsable "${dependency[@]}" -J fp-r2c --export=ALL,PIPELINE_ROUND=r2 stage_collect.sbatch)") ;;
     r2t) id=$(job_id "$(sbatch --parsable "${dependency[@]}" -J fp-r2t --export=ALL,PIPELINE_ROUND=r2 stage_train.sbatch)") ;;
     r2e) id=$(job_id "$(sbatch --parsable "${dependency[@]}" -J fp-r2e --export=ALL,PIPELINE_ROUND=r2 stage_eval.sbatch)") ;;
+    zs)  id=$(job_id "$(sbatch --parsable "${dependency[@]}" -J fp-zs --export=ALL,PIPELINE_ROUND=r1 stage_zeroshot.sbatch)") ;;
+    *) echo "unknown chain stage: $stage" >&2; exit 2 ;;
   esac
   submitted+=("$stage=$id")
   previous=$id

@@ -9,7 +9,7 @@ echo ---
 tail -3 "$PIPE/submitted_jobs.txt" 2>/dev/null
 echo ---
 for receipt in out/prerequisites.json out/d0.done out/suite.done out/bc0.done \
-  out/r1/collection.done out/r1/training.done out/r1/round_summary.json \
+  out/r1/collection.done out/r1/zeroshot_summary.json out/r1/training.done out/r1/round_summary.json \
   out/r2/collection.done out/r2/training.done out/r2/round_summary.json out/pipeline_summary.json; do
   if [[ -s "$PIPE/$receipt" ]]; then echo "receipt present: $receipt"; else echo "receipt pending: $receipt"; fi
 done

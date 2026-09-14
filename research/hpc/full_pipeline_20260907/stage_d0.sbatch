@@ -34,6 +34,20 @@ opendss_local_model
 stage_cleanup() { rm -rf "$OPENDSS_LOCAL"; }
 trap stage_cleanup EXIT
 
+# A non-IEEE14 system draws from a fresh balanced corpus; build it here when
+# pipeline.env names none (output-guarded on its samples file).
+if [[ "$SYSTEM" != case14 && -z "$MEASUREMENT_CORPUS" ]]; then
+  CORPUS_DIR=${BALANCED_ARTIFACT_DIR:-$OUT/corpus}
+  if [[ ! -s "$CORPUS_DIR/samples.jsonl" ]]; then
+    rm -rf "$CORPUS_DIR"
+    (cd "$SRC" && "$PY" scripts/build_balanced_corpus.py --system "$SYSTEM" \
+      --output-dir "$CORPUS_DIR" --seed "$SEED_D0" --counts "$CORPUS_COUNTS" \
+      --num-scans "$CORPUS_NUM_SCANS" > "$OUT/corpus_console.json")
+  fi
+  MEASUREMENT_CORPUS=$CORPUS_DIR/samples.jsonl
+  BALANCED_ARTIFACT_DIR=$CORPUS_DIR
+fi
+
 # System selection and detector (pipeline.env): the fresh-corpus sources of
 # a non-IEEE14 system, the shared normalized-residual threshold, and the
 # IEEE-14 waveform corpora for case14 only.
@@ -147,5 +161,39 @@ if [[ ! -s "$OUT/suite.done" ]]; then
     --output-dir "$SUITE_DIR" \
     > "$OUT/suite_console.json"
   cp "$SUITE_DIR/manifest.json" "$OUT/suite.done"
+fi
+
+# A frozen student from an earlier run stands in for BC0: link it as this
+# run's adapter and write the receipt stage 1 checks, so no training runs.
+if [[ -n "$FROZEN_STUDENT_ADAPTER" && ! -s "$OUT/bc0.done" ]]; then
+  [[ -s "$FROZEN_STUDENT_ADAPTER/adapter_model.safetensors" ]] || { echo "frozen student adapter missing: $FROZEN_STUDENT_ADAPTER" >&2; exit 2; }
+  mkdir -p "$BC0_DIR"
+  ln -sfn "$FROZEN_STUDENT_ADAPTER" "$BC0_DIR/lora"
+  "$PY" - "$BC0_DIR" "$OUT/bc0.done" "$FROZEN_STUDENT_ADAPTER" <<'PY'
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+from psse_env.dagger.release_factories import checkpoint_tree_sha256
+
+bc0 = Path(sys.argv[1])
+frozen = Path(sys.argv[3]).resolve()
+payload = {
+    "contract": "research_full_pipeline_bc0_reused_v1",
+    "adapter_path": str(bc0 / "lora"),
+    "frozen_student_adapter": str(frozen),
+    "adapter_tree_sha256": checkpoint_tree_sha256(bc0 / "lora"),
+    "trained_in_this_run": False,
+    "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+}
+output = Path(sys.argv[2])
+fd, temporary = tempfile.mkstemp(prefix=f".{output.name}.", suffix=".tmp", dir=output.parent)
+with os.fdopen(fd, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+os.replace(temporary, output)
+print(json.dumps({k: payload[k] for k in ("frozen_student_adapter", "adapter_tree_sha256")}))
+PY
 fi
 echo fp-d0-complete

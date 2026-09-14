@@ -852,3 +852,59 @@ class DetectorRuleTests(unittest.TestCase):
         finally:
             research_module.RESEARCH_ENVIRONMENT_OPTIONS.clear()
             research_module.RESEARCH_ENVIRONMENT_OPTIONS.update(original)
+
+
+class StudentOnlyEvaluationTests(unittest.TestCase):
+    """A zero-shot reading rolls out the student and the expert, with no candidate."""
+
+    def test_student_only_evaluation_skips_the_candidate(self) -> None:
+        scenarios = [
+            {"grouping": {"physical_root_fingerprint": root, "scenario_family": "measurement"}}
+            for root in ("dev_a", "dev_b")
+        ]
+        observed = []
+
+        class Result:
+            def __init__(self, resolved):
+                self.resolved = resolved
+
+            def as_dict(self):
+                return {"suite_metrics": {"overall": {"episodes": 2, "resolved_episodes": self.resolved}}}
+
+        def evaluator(suites, *, policy_factory, **_kwargs):
+            policy = policy_factory()
+            observed.append(policy)
+            return Result(1 if policy == "expert" else 0)
+
+        with tempfile.TemporaryDirectory() as directory:
+            comparison = research_module.evaluate_paired_adapters(
+                development_scenarios=scenarios,
+                bc0_adapter=Path("frozen"),
+                r1_adapter=None,
+                base_model="gemma",
+                base_revision="f" * 40,
+                output_dir=Path(directory),
+                seed=4,
+                max_steps=8,
+                policy_loader=lambda path, **_kwargs: str(path),
+                environment_factory=lambda **_kwargs: object(),
+                evaluator=evaluator,
+                expert_policy_factory=lambda: "expert",
+                evaluation_dirname="zeroshot",
+            )
+            written = sorted(path.name for path in (Path(directory) / "zeroshot").iterdir())
+        self.assertEqual(observed, ["frozen", "expert"])
+        self.assertEqual(written, ["bc0_eval.json", "comparison.json", "expert_eval.json"])
+        self.assertIsNone(comparison["r1_adapter"])
+        self.assertIsNone(comparison["r1_overall"])
+        self.assertIsNone(comparison["r1_minus_bc0"])
+        self.assertEqual(comparison["bc0_overall"]["resolved_episodes"], 0)
+        self.assertEqual(comparison["expert_overall"]["resolved_episodes"], 1)
+
+    def test_student_only_cli_flag(self) -> None:
+        required = [
+            "--d0-raw", "raw.jsonl", "--d0-train", "train.jsonl",
+            "--adapter-path", "adapter", "--output-dir", "output",
+        ]
+        self.assertFalse(parser().parse_args(required).eval_student_only)
+        self.assertTrue(parser().parse_args(required + ["--eval-student-only"]).eval_student_only)

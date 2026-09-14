@@ -67,6 +67,41 @@ runs under the combined rule without a rerun. The IEEE 57 pilot's own
 runtime pin (alpha 0.05 with the same residual test) stays with the pilot
 scripts.
 
+## IEEE 57 transfer run (2026-09-14)
+
+`overrides/ieee57_transfer_20260914.env` generates the balanced IEEE 57 data
+and reads the frozen IEEE-14 checkpoint on it, without retraining anything on
+IEEE 14 (only the detector changed since the 2026-09-12 run):
+
+1. **Stage 0 (CPU)** builds a fresh balanced corpus under `out/corpus`
+   (`CORPUS_COUNTS`, `scripts/build_balanced_corpus.py`), the expert aggregate
+   D0 and the suites for the five balanced families, then links
+   `FROZEN_STUDENT_ADAPTER` (the 2026-09-12 run's R2 adapter) as this run's
+   `bc0` with a `bc0.done` receipt, so stage 1 has nothing to train.
+2. **Round-1 collection (GPU)** rolls the frozen adapter out on the IEEE 57
+   round-1 training roots with the expert labelling (the usual beta 0.25
+   collection), which is also the D1 a later adaptation round trains on.
+3. **Zero-shot evaluation (GPU, `stage_zeroshot.sbatch`)** evaluates the frozen
+   adapter (`--eval-student-only`) and the expert on the IEEE 57 development
+   roots into `out/r1/collection/zeroshot/` and summarizes them per family
+   and stratum in `out/r1/zeroshot_summary.json` (the student is labelled
+   `bc0` there, as the round-1 student).
+
+Deploy to its own cell directory and submit the three-stage chain:
+
+```bash
+git bundle create ieee57.bundle <deployed_commit>..feature/ieee14-full-topology
+wsl -- ssh -o BatchMode=yes torch "cat > /scratch/yx3882/research_full_pipeline_20260914_ieee57/ieee57.bundle" < ieee57.bundle
+wsl -- ssh torch bash -s -- /scratch/yx3882/research_full_pipeline_20260914_ieee57/ieee57.bundle feature/ieee14-full-topology "$(git rev-parse HEAD)" \
+  /scratch/yx3882/research_full_pipeline_20260914_ieee57 ieee57_transfer_20260914.env < research/hpc/full_pipeline_20260907/deploy_remote.sh
+wsl -- ssh torch 'CHAIN="d0 r1c zs" bash /scratch/yx3882/research_full_pipeline_20260914_ieee57/submit_pipeline.sh'
+```
+
+Adaptation on IEEE 57 is then `FROM=r1t CHAIN="r1t r1e" bash submit_pipeline.sh`
+(round-1 training on the collected mixture and the paired evaluation against
+the frozen student). The three-phase, harmonic and topology families have no
+IEEE 57 route yet, so the plans name only the five balanced families.
+
 Capacity that bounds the plans: 102 HIF windows serve `hif` and
 `measurement+hif` separately, 220 unbalance rows serve `three_phase_unbalance`
 and the balanced control separately, and the train partition of the tabular

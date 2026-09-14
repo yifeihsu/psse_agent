@@ -8,7 +8,10 @@ from pathlib import Path
 import pytest
 
 CELL = Path(__file__).resolve().parent / "hpc" / "full_pipeline_20260907"
-GPU_STAGES = ("stage_bc0.sbatch", "stage_collect.sbatch", "stage_train.sbatch", "stage_eval.sbatch")
+GPU_STAGES = (
+    "stage_bc0.sbatch", "stage_collect.sbatch", "stage_train.sbatch", "stage_eval.sbatch",
+    "stage_zeroshot.sbatch",
+)
 CPU_STAGES = ("stage_d0.sbatch",)
 SHELL_FILES = ("prerequisites.sh", "submit_pipeline.sh", "status_pipeline.sh", "deploy_remote.sh")
 PYTHON_FILES = ("build_suite.py", "summarize.py")
@@ -37,7 +40,9 @@ def test_gpu_stages_follow_the_cluster_routing_rules(name: str) -> None:
     assert "pipeline_environment" in text
     # Collection and evaluation run the parallel OpenDSS search beside the
     # policy GPU; training stages need no more than the default.
-    expected_cpus = 16 if name in ("stage_collect.sbatch", "stage_eval.sbatch") else 8
+    expected_cpus = (
+        16 if name in ("stage_collect.sbatch", "stage_eval.sbatch", "stage_zeroshot.sbatch") else 8
+    )
     assert f"#SBATCH --cpus-per-task={expected_cpus}" in header
 
 
@@ -72,7 +77,8 @@ def test_pipeline_env_declares_every_setting_the_stages_use() -> None:
         "PREVIOUS_PIPE", "SUITE_TRAINING_THRESHOLD", "SUITE_DEVELOPMENT_THRESHOLD",
         "SUITE_DEVELOPMENT_RANK_ALLOWANCE", "MEASUREMENT_ERROR_MIN_SIGMA",
         "TOPOLOGY_EFFECTS", "SYSTEM", "MEASUREMENT_CORPUS", "BALANCED_ARTIFACT_DIR",
-        "ADMISSION_MODE", "NORMALIZED_RESIDUAL_THRESHOLD",
+        "ADMISSION_MODE", "NORMALIZED_RESIDUAL_THRESHOLD", "CORPUS_COUNTS", "CORPUS_NUM_SCANS",
+        "FROZEN_STUDENT_ADAPTER", "ZEROSHOT_EVAL_NAME",
     ):
         assert name in declared, name
     assert 'export PSSE_HIF_WORKERS="${SLURM_CPUS_PER_TASK:-8}"' in text
@@ -231,3 +237,29 @@ def test_stage_zero_passes_the_system_selection_to_both_draws() -> None:
     assert re.search(r"^NORMALIZED_RESIDUAL_THRESHOLD=4.0$", env, flags=re.MULTILINE)
     assert '--normalized-residual-threshold "$NORMALIZED_RESIDUAL_THRESHOLD"' in env
     assert '--normalized-residual-threshold "$NORMALIZED_RESIDUAL_THRESHOLD"' in text
+
+
+def test_zero_shot_stage_and_frozen_student_wiring() -> None:
+    d0 = (CELL / "stage_d0.sbatch").read_text(encoding="utf-8")
+    assert "scripts/build_balanced_corpus.py" in d0
+    assert 'if [[ "$SYSTEM" != case14 && -z "$MEASUREMENT_CORPUS" ]]; then' in d0
+    assert 'ln -sfn "$FROZEN_STUDENT_ADAPTER" "$BC0_DIR/lora"' in d0
+    assert "research_full_pipeline_bc0_reused_v1" in d0
+    zs = (CELL / "stage_zeroshot.sbatch").read_text(encoding="utf-8")
+    assert "--eval-student-only --eval-expert --eval-output-name" in zs
+    assert 'source "$PIPE/pipeline.env"' in zs and "collection_args" in zs
+    assert "summarize.py" in zs and "--evaluation-name" in zs
+    submit = (CELL / "submit_pipeline.sh").read_text(encoding="utf-8")
+    assert 'read -ra ORDER <<< "${CHAIN:-d0 bc0 r1c r1t r1e r2c r2t r2e}"' in submit
+    assert "stage_zeroshot.sbatch" in submit
+    assert "stage_zeroshot.sbatch" in (CELL / "deploy_remote.sh").read_text(encoding="utf-8")
+    overrides = (CELL / "overrides" / "ieee57_transfer_20260914.env").read_text(encoding="utf-8")
+    assert "\r" not in overrides
+    assert re.search(r"^SYSTEM=case57$", overrides, flags=re.MULTILINE)
+    for name in ("D0_PLAN", "ROUND_TRAIN_PLAN", "DEVELOPMENT_PLAN"):
+        match = re.search(rf"^{name}='(\{{.*\}})'$", overrides, flags=re.MULTILINE)
+        assert match, name
+        assert set(json.loads(match.group(1))) == {
+            "no_error", "measurement", "multi_measurement", "parameter", "measurement+parameter",
+        }
+    assert re.search(r"^FROZEN_STUDENT_ADAPTER=/scratch/", overrides, flags=re.MULTILINE)
