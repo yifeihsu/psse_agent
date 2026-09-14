@@ -153,8 +153,31 @@ measurement+parameter, so the BC0 and R1 columns are not comparable
 across the two runs beyond the families that were already at the
 ceiling; R1 starts from a different student and lands on the four
 dominant-stratum roots the previous R1 had already solved. Round 2
-closes the gap in both runs. The loss-selected checkpoint remains a
-lottery; keeping the final checkpoint is still the recommendation.
+closes the gap in both runs.
+
+A side evaluation of the final checkpoint on the same roots (job
+17727218, `out/r1/round_summary.bc0_final.json`; the selected checkpoint
+re-evaluates to the identical 143):
+
+| BC0 checkpoint | Success | Parameter | Meas.+param | Multi-meter | Topology | Invalid | Loops |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 576 (selected) | 143/160 | 14/16 | 10/16 | 12/12 | 16/16 | 52 | 12 |
+| 922 (final) | 136/160 | 14/16 | 10/16 | 5/12 | 16/16 | 57 | 26 |
+
+The two checkpoints differ on one family only. On the seven multi-meter
+roots it loses, the final checkpoint keeps re-requesting the parameter
+and topology contexts between meter corrections (151 and 103 calls over
+the twelve roots, against 19 and 12 for the selected checkpoint), trips
+the loop detector and runs out the 40-step budget with only some of the
+meters fixed (0 of 3, 3 of 4, 2 of 5, ...); the selected checkpoint
+corrects every meter in 13 to 34 steps. This is the same drift the
+ten-sigma run saw at the end of its epoch (multi-meter 8/12 for its
+final checkpoint), but there the selected checkpoint was so early that
+the final one still won overall. So neither rule is safe on its own:
+selection by validation loss on the 128-row subset picked well this
+time and badly last time, and the last third of the epoch costs
+multi-meter roots both times. Selecting on the development suite, or on
+a validation slice stratified by family, is the fix.
 
 ## Pipeline record
 
