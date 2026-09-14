@@ -6,6 +6,9 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from unittest.mock import patch
+
+import scripts.run_dagger_research as research_module
 from scripts.run_dagger_research import (
     DEFAULT_DEVELOPMENT_PLAN,
     DEFAULT_TRAIN_PLAN,
@@ -712,3 +715,102 @@ class DiagnosticFamilyPresetTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SystemSwitchSourceTests(unittest.TestCase):
+    """--system threads a fresh balanced corpus through the research generator."""
+
+    @staticmethod
+    def _fresh(tmp: str) -> tuple[Path, Path]:
+        corpus = Path(tmp) / "corpus.jsonl"
+        corpus.write_text("", encoding="utf-8")
+        artifacts = Path(tmp) / "artifacts"
+        artifacts.mkdir()
+        return corpus, artifacts
+
+    def test_default_system_leaves_legacy_sources_untouched(self) -> None:
+        self.assertIsNone(resolve_scenario_sources(plan_families={"measurement"}, system="case14"))
+        sources = resolve_scenario_sources(plan_families={"three_phase_unbalance"}, system="ieee14")
+        assert sources is not None
+        self.assertNotIn("system", sources)
+
+    def test_case57_sources_need_a_fresh_corpus_and_balanced_families(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            corpus, artifacts = self._fresh(tmp)
+            sources = resolve_scenario_sources(
+                plan_families={"measurement", "parameter"},
+                system="case57",
+                measurement_corpus=corpus,
+                balanced_artifact_dir=artifacts,
+                admission_mode="physical",
+            )
+            assert sources is not None
+            self.assertEqual(sources["system"], "case57")
+            self.assertEqual(sources["measurement_corpus"], str(corpus.resolve()))
+            self.assertEqual(sources["balanced_artifact_dir"], str(artifacts.resolve()))
+            self.assertEqual(sources["admission_mode"], "physical")
+            self.assertIsNone(sources["hif_sample_paths"])
+            self.assertIsNone(sources["imbalance_sample_path"])
+            self.assertIsNone(sources["signature_modes"])
+            with self.assertRaisesRegex(ValueError, "does not support families"):
+                resolve_scenario_sources(
+                    plan_families={"hif"}, system="case57",
+                    measurement_corpus=corpus, balanced_artifact_dir=artifacts,
+                )
+            with self.assertRaisesRegex(ValueError, "IEEE 14 sources"):
+                resolve_scenario_sources(
+                    plan_families={"measurement"}, system="case57",
+                    measurement_corpus=corpus, balanced_artifact_dir=artifacts,
+                    hif_sample_paths=[corpus],
+                )
+            with self.assertRaisesRegex(ValueError, "fresh balanced corpus"):
+                resolve_scenario_sources(plan_families={"measurement"}, system="case57")
+            with self.assertRaises(FileNotFoundError):
+                resolve_scenario_sources(
+                    plan_families={"measurement"}, system="case57",
+                    measurement_corpus=Path(tmp) / "missing.jsonl",
+                    balanced_artifact_dir=artifacts,
+                )
+            with self.assertRaisesRegex(ValueError, "admission mode"):
+                resolve_scenario_sources(
+                    plan_families={"measurement"}, system="case57",
+                    measurement_corpus=corpus, balanced_artifact_dir=artifacts,
+                    admission_mode="teacher",
+                )
+
+    def test_fresh_sources_reach_the_generator(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            corpus, artifacts = self._fresh(tmp)
+            sources = resolve_scenario_sources(
+                plan_families={"measurement"}, system="case57",
+                measurement_corpus=corpus, balanced_artifact_dir=artifacts,
+                admission_mode="physical",
+            )
+            captured: dict = {}
+            with patch.object(
+                research_module, "Round0ScenarioGenerator",
+                side_effect=lambda **kwargs: captured.update(kwargs),
+            ):
+                research_module.research_scenario_generator(
+                    seed=3, research_profile={"scenario_sources": sources}
+                )
+        self.assertEqual(captured["system"], "case57")
+        self.assertEqual(captured["corpus_path"], corpus.resolve())
+        self.assertEqual(captured["balanced_artifact_dir"], artifacts.resolve())
+        self.assertEqual(captured["admission_mode"], "physical")
+        self.assertEqual(captured["source_partition"], "train")
+        self.assertNotIn("hif_sample_paths", captured)
+        self.assertNotIn("imbalance_sample_path", captured)
+
+    def test_system_cli_defaults_to_ieee14(self) -> None:
+        required = [
+            "--d0-raw", "raw.jsonl", "--d0-train", "train.jsonl",
+            "--adapter-path", "adapter", "--output-dir", "output",
+        ]
+        args = parser().parse_args(required)
+        self.assertEqual(args.system, "case14")
+        self.assertIsNone(args.measurement_corpus)
+        self.assertIsNone(args.balanced_artifact_dir)
+        self.assertIsNone(args.admission_mode)
+        args = parser().parse_args(required + ["--system", "case57", "--admission-mode", "physical"])
+        self.assertEqual((args.system, args.admission_mode), ("case57", "physical"))

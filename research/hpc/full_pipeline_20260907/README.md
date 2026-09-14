@@ -41,6 +41,17 @@ attempts failed on integration gaps fixed in 5955cfe, bd59df4, ae99f03).
 | Signatures | harmonic and unbalance discovered from the WLS anomaly; HIF keeps its relay flag; research HIF budget 7 x 9 x 10 |
 | Scheduler | stage 0 on the `cs` CPU partition (16 CPUs); GPU stages on the `a100\|h100\|h200\|rtx6000` union with preemption opt-in and requeue |
 
+`SYSTEM` (pipeline.env) selects the registered system for stage 0. `case14`
+is everything above. `case57` runs only the five balanced families of the
+system registry (no_error, measurement, multi_measurement, parameter,
+measurement+parameter) from a fresh balanced corpus named by
+`MEASUREMENT_CORPUS` and `BALANCED_ARTIFACT_DIR`, with every plan restricted
+to those families and no waveform corpora; `ADMISSION_MODE` picks the
+generator admission for both the aggregate and the suite draws. The later
+stages read the suites the same way for either system, but their environment
+factory still carries the IEEE-14 detector (chi-square alpha 0.01, no
+normalized-residual test), not the IEEE 57 runtime pin.
+
 Capacity that bounds the plans: 102 HIF windows serve `hif` and
 `measurement+hif` separately, 220 unbalance rows serve `three_phase_unbalance`
 and the balanced control separately, and the train partition of the tabular

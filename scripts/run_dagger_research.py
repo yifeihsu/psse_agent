@@ -39,6 +39,7 @@ from psse_env.dagger.rollout_collector import (  # noqa: E402
 )
 from psse_env.dagger.suite_builder import partition_release_scenario_v1  # noqa: E402
 from psse_env.oracle.expert_policy import ExpertPolicyOracle  # noqa: E402
+from psse_env.systems import resolve_system
 from psse_env.providers.scenario_generator import (  # noqa: E402
     CURRENT_TELEMETRY_HIF_SAMPLE_PATHS,
     CURRENT_TELEMETRY_IMBALANCE_SAMPLE_PATH,
@@ -145,8 +146,19 @@ def resolve_scenario_sources(
     hif_sample_paths: Sequence[Path | str] | None = None,
     imbalance_sample_path: Path | str | None = None,
     signature_modes: Mapping[str, str] | None = None,
+    system: str | None = None,
+    measurement_corpus: Path | str | None = None,
+    balanced_artifact_dir: Path | str | None = None,
+    admission_mode: str | None = None,
 ) -> dict[str, Any] | None:
     """Corpus paths for the generator, or ``None`` for its legacy defaults.
+
+    ``system`` selects the registered system (IEEE 14 by default).  Any other
+    system runs only the families its registry entry supports, from the fresh
+    balanced corpus named by ``measurement_corpus`` and
+    ``balanced_artifact_dir``; the IEEE 14 waveform corpora are refused for
+    it.  Those three, and ``admission_mode``, are recorded beside the corpora
+    only when given, so existing profiles resume unchanged.
 
     Diagnostic-telemetry families default to the per-phase branch-current
     corpora; explicit paths always win.  A core-only plan with no explicit
@@ -157,6 +169,41 @@ def resolve_scenario_sources(
     between a sensor-flagged and a discovered root.
     """
     families = set(plan_families)
+    spec = resolve_system(str(system or "case14"))
+    fresh: dict[str, Any] = {}
+    if spec.case_id != "case14":
+        unsupported = sorted(families - set(spec.supported_families))
+        if unsupported:
+            raise ValueError(
+                f"{spec.case_id} does not support families {unsupported}; "
+                f"supported: {list(spec.supported_families)}"
+            )
+        if hif_sample_paths or imbalance_sample_path:
+            raise ValueError(
+                "HIF/unbalance corpora are IEEE 14 sources; "
+                f"{spec.case_id} has no three-phase route"
+            )
+        if measurement_corpus is None or balanced_artifact_dir is None:
+            raise ValueError(
+                f"{spec.case_id} needs a fresh balanced corpus: "
+                "measurement_corpus and balanced_artifact_dir"
+            )
+    if measurement_corpus is not None:
+        corpus = Path(measurement_corpus)
+        if not corpus.is_file():
+            raise FileNotFoundError(f"measurement corpus is missing: {corpus}")
+        fresh["measurement_corpus"] = str(corpus.resolve())
+    if balanced_artifact_dir is not None:
+        artifacts = Path(balanced_artifact_dir)
+        if not artifacts.is_dir():
+            raise FileNotFoundError(f"balanced artifact directory is missing: {artifacts}")
+        fresh["balanced_artifact_dir"] = str(artifacts.resolve())
+    if admission_mode is not None:
+        if admission_mode not in {"recoverable", "physical"}:
+            raise ValueError(f"unknown admission mode {admission_mode!r}")
+        fresh["admission_mode"] = str(admission_mode)
+    if fresh or spec.case_id != "case14":
+        fresh["system"] = spec.case_id
     needs_telemetry = bool(families & DIAGNOSTIC_TELEMETRY_FAMILIES)
     hif = (
         [Path(path) for path in hif_sample_paths]
@@ -168,7 +215,7 @@ def resolve_scenario_sources(
         if imbalance_sample_path
         else (CURRENT_TELEMETRY_IMBALANCE_SAMPLE_PATH if needs_telemetry else None)
     )
-    if hif is None and imbalance is None and "harmonic" not in families:
+    if hif is None and imbalance is None and "harmonic" not in families and not fresh:
         return None
     for path in [*(hif or []), *([imbalance] if imbalance is not None else [])]:
         if not Path(path).is_file():
@@ -192,6 +239,7 @@ def resolve_scenario_sources(
             str(Path(imbalance).resolve()) if imbalance is not None else None
         ),
         "signature_modes": modes or None,
+        **fresh,
     }
 
 
@@ -656,6 +704,18 @@ def research_scenario_generator(
             generator_kwargs["waveform_signature_mode"] = dict(
                 sources["signature_modes"]
             )
+        # A fresh balanced corpus, possibly for a system other than IEEE 14;
+        # resolve_scenario_sources has validated the combination.
+        if sources.get("system"):
+            generator_kwargs["system"] = str(sources["system"])
+        if sources.get("measurement_corpus"):
+            generator_kwargs["corpus_path"] = Path(sources["measurement_corpus"])
+        if sources.get("balanced_artifact_dir"):
+            generator_kwargs["balanced_artifact_dir"] = Path(
+                sources["balanced_artifact_dir"]
+            )
+        if sources.get("admission_mode"):
+            generator_kwargs["admission_mode"] = str(sources["admission_mode"])
         # Keep every scan of a ten-scan current-telemetry window so the
         # research estimator budget can use the whole window.
         generator_kwargs["hif_max_scans"] = RESEARCH_HIF_SEARCH_BUDGET[
@@ -1510,6 +1570,34 @@ def parser() -> argparse.ArgumentParser:
         ),
     )
     result.add_argument(
+        "--system",
+        type=str,
+        default="case14",
+        help=(
+            "Registered system for generated scenarios (case14 or case57); a "
+            "non-IEEE14 system needs --measurement-corpus and "
+            "--balanced-artifact-dir from a fresh balanced corpus"
+        ),
+    )
+    result.add_argument(
+        "--measurement-corpus",
+        type=Path,
+        default=None,
+        help="Fresh balanced measurement/parameter corpus for the generator",
+    )
+    result.add_argument(
+        "--balanced-artifact-dir",
+        type=Path,
+        default=None,
+        help="Artifact directory of the fresh balanced corpus",
+    )
+    result.add_argument(
+        "--admission-mode",
+        choices=("recoverable", "physical"),
+        default=None,
+        help="Generator admission; omitted keeps the teacher-solvable default",
+    )
+    result.add_argument(
         "--harmonic-signature-mode",
         choices=WAVEFORM_SIGNATURE_MODES,
         default=DEFAULT_WAVEFORM_SIGNATURE_MODE["harmonic"],
@@ -1645,6 +1733,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         plan_families=plan_families,
         hif_sample_paths=args.hif_sample_paths,
         imbalance_sample_path=args.imbalance_sample_path,
+        system=args.system,
+        measurement_corpus=args.measurement_corpus,
+        balanced_artifact_dir=args.balanced_artifact_dir,
+        admission_mode=args.admission_mode,
         signature_modes={
             "harmonic": args.harmonic_signature_mode,
             "three_phase_unbalance": args.unbalance_signature_mode,

@@ -105,6 +105,7 @@ from psse_env.oracle import ExpertPolicyOracle
 from psse_env.providers import MatpowerDeploymentProviders
 from psse_env.providers.scenario_generator import Round0ScenarioGenerator
 from psse_env.sft.provenance import file_sha256, git_source_state, stable_json_sha256
+from psse_env.systems import SystemSpec, resolve_system
 from psse_env.transactional_env import TransactionalPSSEEnv
 
 DEFAULT_SEED = 20260719
@@ -435,6 +436,9 @@ class ObservableBaselinePolicy:
 def build_environment(args: argparse.Namespace) -> tuple[TransactionalPSSEEnv, ExpertPolicyOracle]:
     providers = MatpowerDeploymentProviders(
         chi2_alpha=args.chi2_alpha,
+        # None keeps the chi-square-only detector; the IEEE 57 runtime pins
+        # the normalized-residual test too (psse_env.dagger.ieee57_runtime).
+        normalized_residual_threshold=getattr(args, "normalized_residual_threshold", None),
         hif_alpha_grid_size=args.hif_alpha_grid,
         hif_r_grid_size=args.hif_r_grid,
         hif_max_scans=args.hif_max_scans,
@@ -1948,7 +1952,14 @@ def _generation_descriptor(
         else TOOL_JSON_SCHEMAS
     )
     input_corpora = _input_corpus_bindings(args, plan, repo_root=repo_root)
-    parameter_artifacts = _tracked_parameter_artifact_binding(repo_root)
+    system = _system_spec(args)
+    parameter_artifacts = (
+        _tracked_parameter_artifact_binding(repo_root)
+        if system.case_id == "case14"
+        else _fresh_parameter_artifact_binding(
+            Path(args.balanced_artifact_dir), repo_root=repo_root
+        )
+    )
     evaluation_holdout = _evaluation_suite_binding(args, repo_root=repo_root)
     evaluation_policy = _evaluation_policy_binding(
         args,
@@ -1976,7 +1987,17 @@ def _generation_descriptor(
             "max_steps": args.max_steps,
             "supervision_policy": BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION,
             "counterfactuals_per_scenario": args.counterfactuals_per_scenario,
+            "system": system.case_id,
+            "admission_mode": _admission_mode(args),
+            "balanced_artifact_dir": (
+                _path_label(Path(args.balanced_artifact_dir), repo_root=repo_root)
+                if getattr(args, "balanced_artifact_dir", None)
+                else None
+            ),
             "chi2_alpha": args.chi2_alpha,
+            "normalized_residual_threshold": getattr(
+                args, "normalized_residual_threshold", None
+            ),
             "hif_alpha_grid": args.hif_alpha_grid,
             "hif_r_grid": args.hif_r_grid,
             "hif_max_scans": args.hif_max_scans,
@@ -2745,6 +2766,133 @@ def _parse_topology_effects(value: str) -> tuple[str, ...]:
     return effects
 
 
+def _system_spec(args: argparse.Namespace) -> SystemSpec:
+    """The registered system the aggregate is generated for (IEEE 14 by default)."""
+    return resolve_system(str(getattr(args, "system", None) or "case14"))
+
+
+def _admission_mode(args: argparse.Namespace) -> str:
+    mode = str(getattr(args, "admission_mode", None) or "recoverable")
+    if mode not in {"recoverable", "physical"}:
+        raise ValueError("admission mode must be 'recoverable' or 'physical'")
+    return mode
+
+
+def _validate_plan_for_system(
+    args: argparse.Namespace, plan: Mapping[str, int]
+) -> SystemSpec:
+    """Refuse a plan or source configuration the selected system cannot serve.
+
+    IEEE 14 keeps every existing default.  Any other system runs only the
+    families its registry entry supports, from a fresh balanced corpus and
+    artifact directory (psse_env.providers.balanced_corpus); the IEEE 14
+    waveform corpora and tracked parameter cases are never substituted.
+    """
+    spec = _system_spec(args)
+    unsupported = sorted(
+        str(family)
+        for family, count in plan.items()
+        if int(count) > 0 and str(family) not in spec.supported_families
+    )
+    if unsupported:
+        raise ValueError(
+            f"{spec.case_id} does not support plan families {unsupported}; "
+            f"supported: {list(spec.supported_families)}"
+        )
+    _admission_mode(args)
+    if spec.case_id != "case14":
+        if (
+            getattr(args, "measurement_corpus", None) is None
+            or getattr(args, "balanced_artifact_dir", None) is None
+        ):
+            raise ValueError(
+                f"--system {spec.case_id} requires --measurement-corpus and "
+                "--balanced-artifact-dir from a fresh balanced corpus"
+            )
+        if getattr(args, "hif_corpus", None) or getattr(args, "imbalance_corpus", None):
+            raise ValueError(
+                "--hif-corpus and --imbalance-corpus are IEEE 14 waveform "
+                f"sources; {spec.case_id} has no three-phase route"
+            )
+    return spec
+
+
+def _scenario_generator_kwargs(
+    args: argparse.Namespace,
+    plan: Mapping[str, int],
+    *,
+    configured_corpora: Mapping[str, Path],
+    generation_descriptor: Mapping[str, Any],
+    repo_root: Path,
+) -> dict[str, Any]:
+    """Round0ScenarioGenerator arguments for the selected system."""
+    spec = _validate_plan_for_system(args, plan)
+    kwargs: dict[str, Any] = {
+        "system": spec.case_id,
+        "admission_mode": _admission_mode(args),
+        "corpus_path": configured_corpora["measurement_corpus"],
+        "seed": args.seed,
+        "source_partition": BC0_AGGREGATE_SOURCE_PARTITION,
+        "chi2_alpha": args.chi2_alpha,
+        "hif_max_scans": args.hif_max_scans,
+        "min_measurement_error_sigma": getattr(args, "min_measurement_error_sigma", None),
+    }
+    if getattr(args, "topology_effects", None):
+        kwargs["topology_effects"] = tuple(getattr(args, "topology_effects"))
+    if spec.case_id == "case14":
+        kwargs.update(
+            hif_sample_paths=[
+                path
+                for name, path in sorted(configured_corpora.items())
+                if name.startswith("hif_corpus_")
+            ],
+            imbalance_sample_path=configured_corpora.get(
+                "three_phase_unbalance_corpus",
+                scenario_generator_module.DEFAULT_IMBALANCE_SAMPLE_PATH,
+            ),
+            balanced_artifact_dir=scenario_generator_module.DEFAULT_BALANCED_ARTIFACT_DIR,
+            artifact_allowlist=[
+                repo_root / relative
+                for relative in generation_descriptor["input_artifacts"]["parameter_cases"]["files"]
+            ],
+        )
+    else:
+        # The fresh corpus carries its own parameter cases; a balanced-only
+        # system has no waveform source to bind.
+        kwargs.update(
+            hif_sample_paths=[],
+            imbalance_sample_path=None,
+            balanced_artifact_dir=Path(args.balanced_artifact_dir),
+            artifact_allowlist=None,
+        )
+    return kwargs
+
+
+def _fresh_parameter_artifact_binding(
+    artifact_dir: Path, *, repo_root: Path
+) -> dict[str, Any]:
+    """Content-address a fresh balanced corpus's parameter cases.
+
+    The IEEE 14 binding requires tracked, HEAD-clean files; a generated corpus
+    is local by design, so its cases are hashed and marked untracked.  A plan
+    without parameter families may have none.
+    """
+    root = (artifact_dir / "cases_parameter_error").absolute()
+    files = sorted(path for path in root.rglob("*") if path.is_file()) if root.is_dir() else []
+    if any(_has_symlink_component(root, path) for path in files):
+        raise RuntimeError(f"parameter case artifacts must not be symlinked: {root}")
+    file_hashes = {
+        path.relative_to(root).as_posix(): file_sha256(path) for path in files
+    }
+    return {
+        "root": _path_label(root, repo_root=repo_root),
+        "file_count": len(file_hashes),
+        "files": file_hashes,
+        "tree_sha256": stable_json_sha256(file_hashes),
+        "git_tracked": False,
+    }
+
+
 def generate(args: argparse.Namespace) -> dict[str, Any]:
     # Aggregate topology roots and their physical-v3 fingerprints depend on
     # the same numerical stack as the frozen evaluation suite.  Validate it
@@ -2754,6 +2902,7 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
     plan = {family: count * args.scale for family, count in DEFAULT_PLAN.items()}
     if args.plan:
         plan = _load_plan_argument(args.plan)
+    _validate_plan_for_system(args, plan)
     generation_descriptor = _generation_descriptor(
         args,
         plan,
@@ -2780,27 +2929,13 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         if name.startswith("hif_corpus_")
     ]
     generator = Round0ScenarioGenerator(
-        corpus_path=configured_corpora["measurement_corpus"],
-        hif_sample_paths=hif_corpus_paths,
-        imbalance_sample_path=configured_corpora.get(
-            "three_phase_unbalance_corpus",
-            scenario_generator_module.DEFAULT_IMBALANCE_SAMPLE_PATH,
-        ),
-        balanced_artifact_dir=scenario_generator_module.DEFAULT_BALANCED_ARTIFACT_DIR,
-        artifact_allowlist=[
-            repo_root / relative
-            for relative in generation_descriptor["input_artifacts"]["parameter_cases"]["files"]
-        ],
-        seed=args.seed,
-        source_partition=BC0_AGGREGATE_SOURCE_PARTITION,
-        chi2_alpha=args.chi2_alpha,
-        hif_max_scans=args.hif_max_scans,
-        min_measurement_error_sigma=getattr(args, "min_measurement_error_sigma", None),
-        **(
-            {"topology_effects": tuple(getattr(args, "topology_effects"))}
-            if getattr(args, "topology_effects", None)
-            else {}
-        ),
+        **_scenario_generator_kwargs(
+            args,
+            plan,
+            configured_corpora=configured_corpora,
+            generation_descriptor=generation_descriptor,
+            repo_root=repo_root,
+        )
     )
     scenarios = generator.build(plan)
     if not scenarios:
@@ -3322,7 +3457,7 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
     return report
 
 
-def main() -> None:
+def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Generate the recovery-balanced round-0 DAgger aggregate."
     )
@@ -3392,8 +3527,11 @@ def main() -> None:
     parser.add_argument(
         "--measurement-corpus",
         type=Path,
-        default=scenario_generator_module.DEFAULT_CORPUS_PATH,
-        help="Measurement/parameter/harmonic JSONL corpus.",
+        default=None,
+        help=(
+            "Measurement/parameter/harmonic JSONL corpus; omitted keeps the "
+            "tracked IEEE 14 corpus, and a non-IEEE14 system requires one"
+        ),
     )
     parser.add_argument(
         "--hif-corpus",
@@ -3408,8 +3546,46 @@ def main() -> None:
     parser.add_argument(
         "--imbalance-corpus",
         type=Path,
-        default=scenario_generator_module.DEFAULT_IMBALANCE_SAMPLE_PATH,
-        help="Three-phase-unbalance JSONL corpus.",
+        default=None,
+        help="Three-phase-unbalance JSONL corpus (IEEE 14); omitted keeps the default.",
+    )
+    parser.add_argument(
+        "--system",
+        type=str,
+        default="case14",
+        help=(
+            "Registered system to generate for (case14 or case57). A system "
+            "other than IEEE 14 runs its registry's balanced families from a "
+            "fresh corpus given by --measurement-corpus and "
+            "--balanced-artifact-dir"
+        ),
+    )
+    parser.add_argument(
+        "--admission-mode",
+        choices=("recoverable", "physical"),
+        default="recoverable",
+        help=(
+            "recoverable admits teacher-solvable roots (the IEEE 14 contract); "
+            "physical keeps every solved operating window"
+        ),
+    )
+    parser.add_argument(
+        "--balanced-artifact-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Artifact directory of a fresh balanced corpus "
+            "(psse_env.providers.balanced_corpus); required for a non-IEEE14 system"
+        ),
+    )
+    parser.add_argument(
+        "--normalized-residual-threshold",
+        type=float,
+        default=None,
+        help=(
+            "Add the maximum-normalized-residual alarm at this threshold to the "
+            "expert's WLS detector; omitted keeps the chi-square-only detector"
+        ),
     )
     parser.add_argument(
         "--research",
@@ -3420,7 +3596,11 @@ def main() -> None:
             "generation provenance."
         ),
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    args = build_argument_parser().parse_args()
     report = generate(args)
     print(
         json.dumps(

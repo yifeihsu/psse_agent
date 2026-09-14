@@ -71,7 +71,8 @@ def test_pipeline_env_declares_every_setting_the_stages_use() -> None:
         "COLLECTION_BETA", "COLLECTION_MAX_STEPS", "EVAL_MAX_STEPS", "D1_CAP", "D1_SHARE",
         "PREVIOUS_PIPE", "SUITE_TRAINING_THRESHOLD", "SUITE_DEVELOPMENT_THRESHOLD",
         "SUITE_DEVELOPMENT_RANK_ALLOWANCE", "MEASUREMENT_ERROR_MIN_SIGMA",
-        "TOPOLOGY_EFFECTS",
+        "TOPOLOGY_EFFECTS", "SYSTEM", "MEASUREMENT_CORPUS", "BALANCED_ARTIFACT_DIR",
+        "ADMISSION_MODE",
     ):
         assert name in declared, name
     assert 'export PSSE_HIF_WORKERS="${SLURM_CPUS_PER_TASK:-8}"' in text
@@ -216,3 +217,14 @@ def test_summary_joins_rounds_and_checks_adapter_consistency(tmp_path: Path) -> 
     write_round("r2", [False, False], [True, True])
     joined = summarize.pipeline_summary(tmp_path)
     assert "r1" in joined["adapter_consistency_across_rounds"]
+
+
+def test_stage_zero_passes_the_system_selection_to_both_draws() -> None:
+    text = (CELL / "stage_d0.sbatch").read_text(encoding="utf-8")
+    assert 'system_args=(--system "$SYSTEM" --admission-mode "$ADMISSION_MODE")' in text
+    assert text.count('"${system_args[@]}"') == 2
+    assert 'if [[ "$SYSTEM" == case14 ]]; then' in text
+    assert "--hif-corpus" in text and "--imbalance-corpus" in text
+    env = (CELL / "pipeline.env").read_text(encoding="utf-8")
+    assert re.search(r"^SYSTEM=case14$", env, flags=re.MULTILINE)
+    assert re.search(r"^ADMISSION_MODE=recoverable$", env, flags=re.MULTILINE)

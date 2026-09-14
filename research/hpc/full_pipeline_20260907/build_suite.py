@@ -174,6 +174,29 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Comma-separated breaker-error classes of the topology family (both draws)",
     )
+    parser.add_argument(
+        "--system",
+        default="case14",
+        help="Registered system for both draws (case14 or case57)",
+    )
+    parser.add_argument(
+        "--measurement-corpus",
+        type=Path,
+        default=None,
+        help="Fresh balanced corpus for the generator (required for a non-IEEE14 system)",
+    )
+    parser.add_argument(
+        "--balanced-artifact-dir",
+        type=Path,
+        default=None,
+        help="Artifact directory of the fresh balanced corpus",
+    )
+    parser.add_argument(
+        "--admission-mode",
+        choices=("recoverable", "physical"),
+        default=None,
+        help="Generator admission for both draws; omitted keeps the teacher-solvable default",
+    )
     parser.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args(argv)
 
@@ -186,7 +209,13 @@ def main(argv: list[str] | None = None) -> int:
     d0_roots = research.load_d0_roots(args.d0_raw)
     protected = research.load_protected_suite_roots(args.protected_suite)
     protected_roots = set(protected["physical_roots"])
-    sources = research.resolve_scenario_sources(plan_families=families)
+    sources = research.resolve_scenario_sources(
+        plan_families=families,
+        system=args.system,
+        measurement_corpus=args.measurement_corpus,
+        balanced_artifact_dir=args.balanced_artifact_dir,
+        admission_mode=args.admission_mode,
+    )
     profile = {
         "plan_preset": "full_pipeline_suite",
         "hif_search_profile": "research",
@@ -300,6 +329,7 @@ def main(argv: list[str] | None = None) -> int:
         "development_rank_allowance": int(args.development_rank_allowance),
         "min_measurement_error_sigma": args.min_measurement_error_sigma,
         "topology_effects": list(args.topology_effects) if args.topology_effects else None,
+        "system": str(args.system),
         "training_candidates_built": len(train_candidates),
         "development_candidates_built": len(dev_candidates),
         "training_generator_report": train_generator.report(),

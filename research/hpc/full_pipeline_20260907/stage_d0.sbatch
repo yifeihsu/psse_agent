@@ -34,6 +34,16 @@ opendss_local_model
 stage_cleanup() { rm -rf "$OPENDSS_LOCAL"; }
 trap stage_cleanup EXIT
 
+# System selection (pipeline.env): the fresh-corpus sources of a non-IEEE14
+# system, and the IEEE-14 waveform corpora for case14 only.
+system_args=(--system "$SYSTEM" --admission-mode "$ADMISSION_MODE")
+if [[ -n "$MEASUREMENT_CORPUS" ]]; then system_args+=(--measurement-corpus "$MEASUREMENT_CORPUS"); fi
+if [[ -n "$BALANCED_ARTIFACT_DIR" ]]; then system_args+=(--balanced-artifact-dir "$BALANCED_ARTIFACT_DIR"); fi
+waveform_args=()
+if [[ "$SYSTEM" == case14 ]]; then
+  waveform_args=(--hif-corpus "$HIF_CORPUS_TRAIN" --hif-corpus "$HIF_CORPUS_VALID" --imbalance-corpus "$IMBALANCE_CORPUS")
+fi
+
 cd "$SRC"
 reuse_previous_stage d0 d0.done
 if [[ ! -s "$OUT/d0.done" ]]; then
@@ -53,9 +63,8 @@ if [[ ! -s "$OUT/d0.done" ]]; then
     --hif-max-scans "$HIF_MAX_SCANS" \
     --min-measurement-error-sigma "$MEASUREMENT_ERROR_MIN_SIGMA" \
     --topology-effects "$TOPOLOGY_EFFECTS" \
-    --hif-corpus "$HIF_CORPUS_TRAIN" \
-    --hif-corpus "$HIF_CORPUS_VALID" \
-    --imbalance-corpus "$IMBALANCE_CORPUS" \
+    "${system_args[@]}" \
+    "${waveform_args[@]}" \
     > "$OUT/d0_console.json"
   "$PY" - "$D0_DIR" "$OUT/d0.done" <<'PY'
 import hashlib
@@ -132,6 +141,7 @@ if [[ ! -s "$OUT/suite.done" ]]; then
     --development-rank-allowance "$SUITE_DEVELOPMENT_RANK_ALLOWANCE" \
     --min-measurement-error-sigma "$MEASUREMENT_ERROR_MIN_SIGMA" \
     --topology-effects "$TOPOLOGY_EFFECTS" \
+    "${system_args[@]}" \
     --output-dir "$SUITE_DIR" \
     > "$OUT/suite_console.json"
   cp "$SUITE_DIR/manifest.json" "$OUT/suite.done"

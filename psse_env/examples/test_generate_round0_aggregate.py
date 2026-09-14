@@ -31,6 +31,8 @@ from psse_env.dagger.release_audit import (
 )
 from psse_env.dagger.rollout_collector import classify_state_example
 from psse_env.dagger.splits import PHYSICAL_FINGERPRINT_VERSION
+import psse_env.examples.generate_round0_aggregate as round0_module
+import psse_env.providers.scenario_generator as scenario_generator_module
 from psse_env.examples.generate_round0_aggregate import (
     BC0_AGGREGATE_SOURCE_PARTITION,
     BC0_CRITICAL_TARGET_TOOL_MINIMUM_DISTINCT_ROOTS,
@@ -2398,3 +2400,131 @@ class AggregateReleaseContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SystemSwitchTests(unittest.TestCase):
+    """--system keeps IEEE 14 as it was and routes other systems to a fresh corpus."""
+
+    @staticmethod
+    def _descriptor() -> dict:
+        return {
+            "input_artifacts": {
+                "parameter_cases": {"files": {"cases_parameter_error/a.m": "0" * 64}}
+            }
+        }
+
+    def test_parser_defaults_keep_the_ieee14_contract(self) -> None:
+        args = round0_module.build_argument_parser().parse_args([])
+        self.assertEqual(args.system, "case14")
+        self.assertEqual(args.admission_mode, "recoverable")
+        self.assertIsNone(args.balanced_artifact_dir)
+        self.assertIsNone(args.normalized_residual_threshold)
+        self.assertIsNone(args.measurement_corpus)
+        self.assertIsNone(args.imbalance_corpus)
+
+    def test_ieee14_generator_kwargs_are_unchanged(self) -> None:
+        args = round0_module.build_argument_parser().parse_args(["--seed", "7"])
+        repo_root = Path("/repo")
+        corpora = {
+            "measurement_corpus": Path("corpus.jsonl"),
+            "hif_corpus_0": Path("hif.jsonl"),
+        }
+        kwargs = round0_module._scenario_generator_kwargs(
+            args,
+            {"measurement": 1, "hif": 1},
+            configured_corpora=corpora,
+            generation_descriptor=self._descriptor(),
+            repo_root=repo_root,
+        )
+        self.assertEqual(kwargs["system"], "case14")
+        self.assertEqual(kwargs["admission_mode"], "recoverable")
+        self.assertEqual(kwargs["corpus_path"], Path("corpus.jsonl"))
+        self.assertEqual(kwargs["hif_sample_paths"], [Path("hif.jsonl")])
+        self.assertEqual(
+            kwargs["imbalance_sample_path"],
+            scenario_generator_module.DEFAULT_IMBALANCE_SAMPLE_PATH,
+        )
+        self.assertEqual(
+            kwargs["balanced_artifact_dir"],
+            scenario_generator_module.DEFAULT_BALANCED_ARTIFACT_DIR,
+        )
+        self.assertEqual(
+            kwargs["artifact_allowlist"], [repo_root / "cases_parameter_error/a.m"]
+        )
+        self.assertEqual(kwargs["seed"], 7)
+        self.assertEqual(kwargs["source_partition"], round0_module.BC0_AGGREGATE_SOURCE_PARTITION)
+        self.assertNotIn("topology_effects", kwargs)
+
+    def test_case57_generator_kwargs_use_the_fresh_corpus_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            corpus = Path(tmp) / "corpus.jsonl"
+            corpus.write_text("", encoding="utf-8")
+            artifacts = Path(tmp) / "artifacts"
+            artifacts.mkdir()
+            args = round0_module.build_argument_parser().parse_args(
+                [
+                    "--system", "case57",
+                    "--measurement-corpus", str(corpus),
+                    "--balanced-artifact-dir", str(artifacts),
+                    "--admission-mode", "physical",
+                    "--normalized-residual-threshold", "4.0",
+                ]
+            )
+            kwargs = round0_module._scenario_generator_kwargs(
+                args,
+                {"measurement": 2, "parameter": 1},
+                configured_corpora={"measurement_corpus": corpus},
+                generation_descriptor=self._descriptor(),
+                repo_root=Path(tmp),
+            )
+        self.assertEqual(kwargs["system"], "case57")
+        self.assertEqual(kwargs["admission_mode"], "physical")
+        self.assertEqual(kwargs["corpus_path"], corpus)
+        self.assertEqual(kwargs["hif_sample_paths"], [])
+        self.assertIsNone(kwargs["imbalance_sample_path"])
+        self.assertIsNone(kwargs["artifact_allowlist"])
+        self.assertEqual(kwargs["balanced_artifact_dir"], artifacts)
+        self.assertEqual(args.normalized_residual_threshold, 4.0)
+
+    def test_case57_refuses_ieee14_families_and_waveform_sources(self) -> None:
+        parse = round0_module.build_argument_parser().parse_args
+        base = [
+            "--system", "case57",
+            "--measurement-corpus", "c.jsonl",
+            "--balanced-artifact-dir", "art",
+        ]
+        with self.assertRaisesRegex(ValueError, "does not support plan families"):
+            round0_module._validate_plan_for_system(parse(base), {"measurement": 1, "hif": 1})
+        with self.assertRaisesRegex(ValueError, "waveform"):
+            round0_module._validate_plan_for_system(
+                parse(base + ["--hif-corpus", "h.jsonl"]), {"measurement": 1}
+            )
+        with self.assertRaisesRegex(ValueError, "requires --measurement-corpus"):
+            round0_module._validate_plan_for_system(parse(["--system", "case57"]), {"measurement": 1})
+        # A zero count is not a request for the family.
+        round0_module._validate_plan_for_system(parse(base), {"measurement": 1, "topology": 0})
+        with self.assertRaisesRegex(ValueError, "Unsupported system"):
+            round0_module._validate_plan_for_system(parse(["--system", "case118"]), {"measurement": 1})
+        # The tracked IEEE 14 default plan is not a case57 plan.
+        with self.assertRaisesRegex(ValueError, "does not support plan families"):
+            round0_module._validate_plan_for_system(parse(base), round0_module.DEFAULT_PLAN)
+
+    def test_fresh_parameter_binding_hashes_local_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "art"
+            (root / "cases_parameter_error").mkdir(parents=True)
+            (root / "cases_parameter_error" / "row.m").write_text("case", encoding="utf-8")
+            binding = round0_module._fresh_parameter_artifact_binding(root, repo_root=Path(tmp))
+            self.assertEqual(binding["file_count"], 1)
+            self.assertIn("row.m", binding["files"])
+            self.assertFalse(binding["git_tracked"])
+            self.assertEqual(
+                round0_module._input_artifact_release_failures(
+                    {"input_artifacts": {"parameter_cases": binding}}
+                ),
+                [],
+            )
+            empty = round0_module._fresh_parameter_artifact_binding(
+                Path(tmp) / "none", repo_root=Path(tmp)
+            )
+            self.assertEqual(empty["file_count"], 0)
