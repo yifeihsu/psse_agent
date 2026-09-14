@@ -799,6 +799,7 @@ class SystemSwitchSourceTests(unittest.TestCase):
         self.assertEqual(captured["balanced_artifact_dir"], artifacts.resolve())
         self.assertEqual(captured["admission_mode"], "physical")
         self.assertEqual(captured["source_partition"], "train")
+        self.assertEqual(captured["normalized_residual_threshold"], 4.0)
         self.assertNotIn("hif_sample_paths", captured)
         self.assertNotIn("imbalance_sample_path", captured)
 
@@ -814,3 +815,40 @@ class SystemSwitchSourceTests(unittest.TestCase):
         self.assertIsNone(args.admission_mode)
         args = parser().parse_args(required + ["--system", "case57", "--admission-mode", "physical"])
         self.assertEqual((args.system, args.admission_mode), ("case57", "physical"))
+
+
+class DetectorRuleTests(unittest.TestCase):
+    """The combined chi-square/normalized-residual rule reaches admission and the environment."""
+
+    def test_cli_defaults_to_the_four_sigma_residual_test(self) -> None:
+        self.assertEqual(parser().get_default("normalized_residual_threshold"), 4.0)
+        self.assertFalse(parser().get_default("chi_square_only"))
+        self.assertEqual(research_module.RESEARCH_ENVIRONMENT_OPTIONS["normalized_residual_threshold"], 4.0)
+
+    def test_option_reaches_the_environment_and_the_generator(self) -> None:
+        original = dict(research_module.RESEARCH_ENVIRONMENT_OPTIONS)
+        try:
+            research_module.RESEARCH_ENVIRONMENT_OPTIONS["normalized_residual_threshold"] = 4.0
+            env = research_module.research_diagnostic_environment_factory()
+            self.assertEqual(env.wls_runner.__self__.normalized_residual_threshold, 4.0)
+            captured: dict = {}
+            with patch.object(
+                research_module, "Round0ScenarioGenerator",
+                side_effect=lambda **kwargs: captured.update(kwargs),
+            ):
+                research_module.research_scenario_generator(seed=1)
+                self.assertEqual(captured["normalized_residual_threshold"], 4.0)
+                research_module.research_scenario_generator(seed=1, normalized_residual_threshold=None)
+                self.assertIsNone(captured["normalized_residual_threshold"])
+            research_module.RESEARCH_ENVIRONMENT_OPTIONS["normalized_residual_threshold"] = None
+            env = research_module.research_diagnostic_environment_factory()
+            self.assertIsNone(env.wls_runner.__self__.normalized_residual_threshold)
+            with patch.object(
+                research_module, "Round0ScenarioGenerator",
+                side_effect=lambda **kwargs: captured.update(kwargs),
+            ):
+                research_module.research_scenario_generator(seed=1)
+            self.assertIsNone(captured["normalized_residual_threshold"])
+        finally:
+            research_module.RESEARCH_ENVIRONMENT_OPTIONS.clear()
+            research_module.RESEARCH_ENVIRONMENT_OPTIONS.update(original)

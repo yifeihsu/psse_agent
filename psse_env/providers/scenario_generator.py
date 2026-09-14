@@ -96,6 +96,12 @@ from psse_env.systems import resolve_system
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CHI2_ALPHA = 0.01
+# Local test paired with the global chi-square test: an anomaly is present
+# when either fires.  Four sigma was chosen on fresh clean windows of both
+# networks (3 sigma flags 63% of healthy IEEE 57 windows and 30% of IEEE 14
+# ones, 3.5 sigma 22% and 6%, 4 sigma 5% and 2%) while every ten-sigma meter
+# fault is caught at any of the three; see the pipeline README.
+DEFAULT_NORMALIZED_RESIDUAL_THRESHOLD = 4.0
 
 # The tabular corpus families were synthesized on AC-OPF operating points with
 # loads scaled uniformly over this range (Transmission/generate_measurements.py
@@ -420,6 +426,7 @@ class Round0ScenarioGenerator:
         seed: int = 20260719,
         validate: bool = True,
         chi2_alpha: float = DEFAULT_CHI2_ALPHA,
+        normalized_residual_threshold: float | None = None,
         anomaly_margin: float = 1.25,
         topology_noise_scale: float = 1.0,
         enforce_topology_ranking: bool = True,
@@ -486,6 +493,18 @@ class Round0ScenarioGenerator:
         self.seed = int(seed)
         self.validate = bool(validate)
         self.chi2_alpha = float(chi2_alpha)
+        # None keeps the historical chi-square-only admission; with a
+        # threshold the admission tests mirror the environment's rule:
+        # anomalous when either test fires, clean only when neither does.
+        if normalized_residual_threshold is not None and (
+            isinstance(normalized_residual_threshold, bool)
+            or not math.isfinite(float(normalized_residual_threshold))
+            or float(normalized_residual_threshold) <= 0.0
+        ):
+            raise ValueError("normalized_residual_threshold must be positive or None")
+        self.normalized_residual_threshold = (
+            None if normalized_residual_threshold is None else float(normalized_residual_threshold)
+        )
         self.anomaly_margin = float(anomaly_margin)
         self.topology_noise_scale = float(topology_noise_scale)
         # A topology root is admitted only if the node/breaker estimator ranks
@@ -634,7 +653,7 @@ class Round0ScenarioGenerator:
         self._full_topology = None
         self._full_topology_fingerprint: str | None = None
         self._breaker_errors: list[dict[str, Any]] | None = None
-        self._chi2_cache: dict[tuple[str, str], float] = {}
+        self._wls_cache: dict[tuple[str, str], tuple[float, float]] = {}
 
     # ------------------------------------------------------------ data access
 
@@ -885,14 +904,36 @@ class Round0ScenarioGenerator:
 
     # ------------------------------------------------------------- validation
 
-    def _chi2_statistic(self, case: str, z: Sequence[float]) -> float:
+    def _wls_detection(self, case: str, z: Sequence[float]) -> tuple[float, float]:
+        """Chi-square statistic and maximum absolute normalized residual of one solve."""
         key = (case, hashlib.sha256(np.asarray(z, dtype=float).tobytes()).hexdigest())
-        if key not in self._chi2_cache:
+        if key not in self._wls_cache:
             payload = _wls_json(case, [float(value) for value in z])
             if not payload.get("success"):
                 raise ScenarioRejected("wls_failure", str(payload.get("error")))
-            self._chi2_cache[key] = float(payload.get("global_residual_sum") or 0.0)
-        return self._chi2_cache[key]
+            residuals = np.asarray(payload.get("r") or [], dtype=float)
+            maximum = float(np.max(np.abs(residuals))) if residuals.size else 0.0
+            self._wls_cache[key] = (float(payload.get("global_residual_sum") or 0.0), maximum)
+        return self._wls_cache[key]
+
+    def _chi2_statistic(self, case: str, z: Sequence[float]) -> float:
+        return self._wls_detection(case, z)[0]
+
+    def _max_normalized_residual(self, case: str, z: Sequence[float]) -> float:
+        return self._wls_detection(case, z)[1]
+
+    def _residual_alarm(self, case: str, z: Sequence[float], *, margin: float = 1.0) -> bool:
+        """The local test at ``margin`` times the threshold; False when disabled."""
+        if self.normalized_residual_threshold is None:
+            return False
+        return self._max_normalized_residual(case, z) >= margin * self.normalized_residual_threshold
+
+    def _detection_detail(self, case: str, z: Sequence[float]) -> str:
+        statistic, maximum = self._wls_detection(case, z)
+        detail = f"chi2 {statistic:.1f} vs {self.chi2_limit:.1f}"
+        if self.normalized_residual_threshold is not None:
+            detail += f", max|r| {maximum:.2f} vs {self.normalized_residual_threshold:.2f}"
+        return detail
 
     @property
     def chi2_limit(self) -> float:
@@ -900,23 +941,27 @@ class Round0ScenarioGenerator:
         return float(chi2_threshold(dof, self.chi2_alpha))
 
     def _require_anomalous(self, case: str, z: Sequence[float], family: str) -> None:
+        """Admit only faults either test detects with the anomaly margin to spare."""
         if not self.validate or self.admission_mode == "physical":
             return
         statistic = self._chi2_statistic(case, z)
-        if statistic <= self.anomaly_margin * self.chi2_limit:
-            raise ScenarioRejected(
-                "anomaly_not_detectable",
-                f"{family}: chi2 {statistic:.1f} <= {self.anomaly_margin:.2f} x {self.chi2_limit:.1f}",
-            )
+        chi_detectable = statistic > self.anomaly_margin * self.chi2_limit
+        if chi_detectable or self._residual_alarm(case, z, margin=self.anomaly_margin):
+            return
+        raise ScenarioRejected(
+            "anomaly_not_detectable",
+            f"{family}: {self._detection_detail(case, z)} with margin {self.anomaly_margin:.2f}",
+        )
 
     def _require_clean(self, case: str, z: Sequence[float], family: str) -> None:
+        """A corrected configuration must clear both tests, as the environment requires."""
         if not self.validate or self.admission_mode == "physical":
             return
         statistic = self._chi2_statistic(case, z)
-        if statistic >= self.chi2_limit:
+        if statistic >= self.chi2_limit or self._residual_alarm(case, z):
             raise ScenarioRejected(
                 "corrected_configuration_still_anomalous",
-                f"{family}: chi2 {statistic:.1f} >= {self.chi2_limit:.1f}",
+                f"{family}: {self._detection_detail(case, z)}",
             )
 
     def _require_parameter_correction_realizable(
@@ -1350,11 +1395,10 @@ class Round0ScenarioGenerator:
             probe = [float(value) for value in clean_measurements]
             probe[index] = float(observed)
             statistic = self._chi2_statistic(self.case_path, probe)
-            if statistic < self.chi2_limit:
+            if statistic < self.chi2_limit and not self._residual_alarm(self.case_path, probe):
                 raise ScenarioRejected(
                     "sequential_fault_not_individually_detectable",
-                    f"{family}: index {index} chi2 {statistic:.1f} < "
-                    f"{self.chi2_limit:.1f}",
+                    f"{family}: index {index} {self._detection_detail(self.case_path, probe)}",
                 )
 
     # --------------------------------------------------------- base families
@@ -3597,6 +3641,12 @@ class Round0ScenarioGenerator:
             "admission_mode": self.admission_mode,
             "chi2_alpha": self.chi2_alpha,
             "chi2_limit": self.chi2_limit,
+            "normalized_residual_threshold": self.normalized_residual_threshold,
+            "anomaly_detection_rule": (
+                "chi_square_or_normalized_residual"
+                if self.normalized_residual_threshold is not None
+                else "chi_square_only"
+            ),
             "source_partition": copy.deepcopy(self._source_partition_metadata),
             "parameter_ranking_admission": {
                 "contract": PARAMETER_RANKING_CONTRACT,

@@ -438,7 +438,7 @@ def build_environment(args: argparse.Namespace) -> tuple[TransactionalPSSEEnv, E
         chi2_alpha=args.chi2_alpha,
         # None keeps the chi-square-only detector; the IEEE 57 runtime pins
         # the normalized-residual test too (psse_env.dagger.ieee57_runtime).
-        normalized_residual_threshold=getattr(args, "normalized_residual_threshold", None),
+        normalized_residual_threshold=_normalized_residual_threshold(args),
         hif_alpha_grid_size=args.hif_alpha_grid,
         hif_r_grid_size=args.hif_r_grid,
         hif_max_scans=args.hif_max_scans,
@@ -1995,9 +1995,7 @@ def _generation_descriptor(
                 else None
             ),
             "chi2_alpha": args.chi2_alpha,
-            "normalized_residual_threshold": getattr(
-                args, "normalized_residual_threshold", None
-            ),
+            "normalized_residual_threshold": _normalized_residual_threshold(args),
             "hif_alpha_grid": args.hif_alpha_grid,
             "hif_r_grid": args.hif_r_grid,
             "hif_max_scans": args.hif_max_scans,
@@ -2771,6 +2769,14 @@ def _system_spec(args: argparse.Namespace) -> SystemSpec:
     return resolve_system(str(getattr(args, "system", None) or "case14"))
 
 
+def _normalized_residual_threshold(args: argparse.Namespace) -> float | None:
+    """The local residual test shared by admission and the expert's environment."""
+    if getattr(args, "chi_square_only", False):
+        return None
+    value = getattr(args, "normalized_residual_threshold", None)
+    return None if value is None else float(value)
+
+
 def _admission_mode(args: argparse.Namespace) -> str:
     mode = str(getattr(args, "admission_mode", None) or "recoverable")
     if mode not in {"recoverable", "physical"}:
@@ -2834,6 +2840,7 @@ def _scenario_generator_kwargs(
         "seed": args.seed,
         "source_partition": BC0_AGGREGATE_SOURCE_PARTITION,
         "chi2_alpha": args.chi2_alpha,
+        "normalized_residual_threshold": _normalized_residual_threshold(args),
         "hif_max_scans": args.hif_max_scans,
         "min_measurement_error_sigma": getattr(args, "min_measurement_error_sigma", None),
     }
@@ -3581,11 +3588,18 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--normalized-residual-threshold",
         type=float,
-        default=None,
+        default=scenario_generator_module.DEFAULT_NORMALIZED_RESIDUAL_THRESHOLD,
         help=(
-            "Add the maximum-normalized-residual alarm at this threshold to the "
-            "expert's WLS detector; omitted keeps the chi-square-only detector"
+            "Maximum-normalized-residual alarm paired with the chi-square test in "
+            "both scenario admission and the expert's environment (an anomaly is "
+            "present when either fires); --chi-square-only restores the "
+            "historical chi-square-only rule"
         ),
+    )
+    parser.add_argument(
+        "--chi-square-only",
+        action="store_true",
+        help="Disable the normalized-residual test (the pre-2026-09-14 detector)",
     )
     parser.add_argument(
         "--research",

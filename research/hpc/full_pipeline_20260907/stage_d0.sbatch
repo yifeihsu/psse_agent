@@ -34,9 +34,11 @@ opendss_local_model
 stage_cleanup() { rm -rf "$OPENDSS_LOCAL"; }
 trap stage_cleanup EXIT
 
-# System selection (pipeline.env): the fresh-corpus sources of a non-IEEE14
-# system, and the IEEE-14 waveform corpora for case14 only.
-system_args=(--system "$SYSTEM" --admission-mode "$ADMISSION_MODE")
+# System selection and detector (pipeline.env): the fresh-corpus sources of
+# a non-IEEE14 system, the shared normalized-residual threshold, and the
+# IEEE-14 waveform corpora for case14 only.
+system_args=(--system "$SYSTEM" --admission-mode "$ADMISSION_MODE"
+  --normalized-residual-threshold "$NORMALIZED_RESIDUAL_THRESHOLD")
 if [[ -n "$MEASUREMENT_CORPUS" ]]; then system_args+=(--measurement-corpus "$MEASUREMENT_CORPUS"); fi
 if [[ -n "$BALANCED_ARTIFACT_DIR" ]]; then system_args+=(--balanced-artifact-dir "$BALANCED_ARTIFACT_DIR"); fi
 waveform_args=()

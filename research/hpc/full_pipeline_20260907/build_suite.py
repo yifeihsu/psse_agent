@@ -197,10 +197,30 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Generator admission for both draws; omitted keeps the teacher-solvable default",
     )
+    parser.add_argument(
+        "--normalized-residual-threshold",
+        type=float,
+        default=None,
+        help=(
+            "Maximum-normalized-residual alarm paired with the chi-square test in "
+            "admission (both draws); omitted uses the research runner's default"
+        ),
+    )
+    parser.add_argument(
+        "--chi-square-only",
+        action="store_true",
+        help="Disable the normalized-residual test in admission (pre-2026-09-14 rule)",
+    )
     parser.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args(argv)
 
     research = load_research_script(args.source_root.resolve())
+    if args.chi_square_only:
+        normalized_residual_threshold = None
+    elif args.normalized_residual_threshold is None:
+        normalized_residual_threshold = research.DEFAULT_NORMALIZED_RESIDUAL_THRESHOLD
+    else:
+        normalized_residual_threshold = float(args.normalized_residual_threshold)
     round_plan = _plan(args.round_train_plan)
     development_plan = _plan(args.development_plan)
     train_plan = {family: count * args.rounds for family, count in round_plan.items()}
@@ -229,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
         parameter_ranking_dominance_threshold=args.training_threshold,
         min_measurement_error_sigma=args.min_measurement_error_sigma,
         topology_effects=args.topology_effects,
+        normalized_residual_threshold=normalized_residual_threshold,
     )
     train_requested = {family: count * args.candidate_multiplier for family, count in train_plan.items()}
     train_candidates = [
@@ -254,6 +275,7 @@ def main(argv: list[str] | None = None) -> int:
         parameter_target_rank_allowance=args.development_rank_allowance,
         min_measurement_error_sigma=args.min_measurement_error_sigma,
         topology_effects=args.topology_effects,
+        normalized_residual_threshold=normalized_residual_threshold,
     )
     dev_requested = {
         family: count * args.candidate_multiplier for family, count in development_plan.items()
@@ -330,6 +352,7 @@ def main(argv: list[str] | None = None) -> int:
         "min_measurement_error_sigma": args.min_measurement_error_sigma,
         "topology_effects": list(args.topology_effects) if args.topology_effects else None,
         "system": str(args.system),
+        "normalized_residual_threshold": normalized_residual_threshold,
         "training_candidates_built": len(train_candidates),
         "development_candidates_built": len(dev_candidates),
         "training_generator_report": train_generator.report(),

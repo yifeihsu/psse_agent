@@ -39,6 +39,7 @@ from psse_env.dagger.rollout_collector import (  # noqa: E402
 )
 from psse_env.dagger.suite_builder import partition_release_scenario_v1  # noqa: E402
 from psse_env.oracle.expert_policy import ExpertPolicyOracle  # noqa: E402
+from psse_env.providers.scenario_generator import DEFAULT_NORMALIZED_RESIDUAL_THRESHOLD
 from psse_env.systems import resolve_system
 from psse_env.providers.scenario_generator import (  # noqa: E402
     CURRENT_TELEMETRY_HIF_SAMPLE_PATHS,
@@ -117,7 +118,13 @@ RESEARCH_HIF_SEARCH_BUDGET = {
 HIF_SEARCH_PROFILES = ("auto", "release", "research")
 #: Research environment ablations, set from the command line before the
 #: environment factory is first called and recorded in the run report.
-RESEARCH_ENVIRONMENT_OPTIONS: dict[str, Any] = {"branch_first_partial": False}
+RESEARCH_ENVIRONMENT_OPTIONS: dict[str, Any] = {
+    "branch_first_partial": False,
+    # Local residual test paired with the chi-square test in the research
+    # environment and in generated-scenario admission; None is the
+    # historical chi-square-only detector.
+    "normalized_residual_threshold": DEFAULT_NORMALIZED_RESIDUAL_THRESHOLD,
+}
 #: Episode horizon of the research environment and the paired evaluation,
 #: the production factory's 40-step budget (teacher V2-B).  A multi-meter
 #: root corrected one meter per commit needs about six steps per meter after
@@ -259,7 +266,9 @@ def research_diagnostic_environment_factory(
     Identical to ``production_environment_factory`` (same chi-square level,
     dominance threshold, production dataset mode, deployment candidate oracle,
     and the 40-step horizon of the V2-B teacher) except for the bounded
-    OpenDSS estimator budget in ``RESEARCH_HIF_SEARCH_BUDGET``.
+    OpenDSS estimator budget in ``RESEARCH_HIF_SEARCH_BUDGET`` and the
+    normalized-residual test paired with the chi-square test
+    (``RESEARCH_ENVIRONMENT_OPTIONS["normalized_residual_threshold"]``).
     """
 
     del seed, rng
@@ -274,6 +283,9 @@ def research_diagnostic_environment_factory(
         chi2_alpha=BC0_CHI2_ALPHA,
         parameter_ranking_dominance_threshold=(
             BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD
+        ),
+        normalized_residual_threshold=RESEARCH_ENVIRONMENT_OPTIONS.get(
+            "normalized_residual_threshold", DEFAULT_NORMALIZED_RESIDUAL_THRESHOLD
         ),
         branch_first_partial=bool(
             RESEARCH_ENVIRONMENT_OPTIONS.get("branch_first_partial", False)
@@ -653,6 +665,9 @@ def _parse_plan(value: str, default: Mapping[str, int]) -> dict[str, int]:
     return _normalize_plan(payload)
 
 
+_UNSET: Any = object()
+
+
 def research_scenario_generator(
     *,
     seed: int,
@@ -661,6 +676,7 @@ def research_scenario_generator(
     parameter_target_rank_allowance: int | None = None,
     min_measurement_error_sigma: float | None = None,
     topology_effects: Sequence[str] | None = None,
+    normalized_residual_threshold: float | None | object = _UNSET,
 ) -> Round0ScenarioGenerator:
     """The scenario generator behind a research profile.
 
@@ -677,10 +693,19 @@ def research_scenario_generator(
     """
 
     profile = dict(research_profile or LEGACY_RESEARCH_PROFILE)
+    if normalized_residual_threshold is _UNSET:
+        # The environment's detector: admission must agree with what the
+        # expert and the learner will see at the first WLS.
+        normalized_residual_threshold = RESEARCH_ENVIRONMENT_OPTIONS.get(
+            "normalized_residual_threshold", DEFAULT_NORMALIZED_RESIDUAL_THRESHOLD
+        )
     generator_kwargs: dict[str, Any] = {
         "seed": int(seed),
         "source_partition": "train",
         "parameter_ranking_dominance_threshold": float(parameter_ranking_dominance_threshold),
+        "normalized_residual_threshold": (
+            None if normalized_residual_threshold is None else float(normalized_residual_threshold)
+        ),
     }
     if parameter_target_rank_allowance is not None:
         generator_kwargs["parameter_target_rank_allowance"] = int(parameter_target_rank_allowance)
@@ -1598,6 +1623,20 @@ def parser() -> argparse.ArgumentParser:
         help="Generator admission; omitted keeps the teacher-solvable default",
     )
     result.add_argument(
+        "--normalized-residual-threshold",
+        type=float,
+        default=DEFAULT_NORMALIZED_RESIDUAL_THRESHOLD,
+        help=(
+            "Maximum-normalized-residual alarm paired with the chi-square test in "
+            "the research environment and in generated-scenario admission"
+        ),
+    )
+    result.add_argument(
+        "--chi-square-only",
+        action="store_true",
+        help="Disable the normalized-residual test (the pre-2026-09-14 detector)",
+    )
+    result.add_argument(
         "--harmonic-signature-mode",
         choices=WAVEFORM_SIGNATURE_MODES,
         default=DEFAULT_WAVEFORM_SIGNATURE_MODE["harmonic"],
@@ -1747,6 +1786,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         args.hif_search_profile, plan_families
     )
     RESEARCH_ENVIRONMENT_OPTIONS["branch_first_partial"] = bool(args.branch_first_partial)
+    RESEARCH_ENVIRONMENT_OPTIONS["normalized_residual_threshold"] = (
+        None if args.chi_square_only else float(args.normalized_residual_threshold)
+    )
     environment_factory = resolve_environment_factory(hif_search_profile)
     research_profile = {
         "plan_preset": str(args.plan_preset),

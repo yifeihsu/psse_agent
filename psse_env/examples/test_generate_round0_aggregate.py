@@ -2418,7 +2418,8 @@ class SystemSwitchTests(unittest.TestCase):
         self.assertEqual(args.system, "case14")
         self.assertEqual(args.admission_mode, "recoverable")
         self.assertIsNone(args.balanced_artifact_dir)
-        self.assertIsNone(args.normalized_residual_threshold)
+        self.assertEqual(args.normalized_residual_threshold, 4.0)
+        self.assertFalse(args.chi_square_only)
         self.assertIsNone(args.measurement_corpus)
         self.assertIsNone(args.imbalance_corpus)
 
@@ -2453,7 +2454,16 @@ class SystemSwitchTests(unittest.TestCase):
         )
         self.assertEqual(kwargs["seed"], 7)
         self.assertEqual(kwargs["source_partition"], round0_module.BC0_AGGREGATE_SOURCE_PARTITION)
+        self.assertEqual(kwargs["normalized_residual_threshold"], 4.0)
         self.assertNotIn("topology_effects", kwargs)
+        chi_only = round0_module.build_argument_parser().parse_args(["--chi-square-only"])
+        self.assertIsNone(round0_module._normalized_residual_threshold(chi_only))
+        self.assertIsNone(
+            round0_module._scenario_generator_kwargs(
+                chi_only, {"measurement": 1}, configured_corpora=corpora,
+                generation_descriptor=self._descriptor(), repo_root=repo_root,
+            )["normalized_residual_threshold"]
+        )
 
     def test_case57_generator_kwargs_use_the_fresh_corpus_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2484,7 +2494,7 @@ class SystemSwitchTests(unittest.TestCase):
         self.assertIsNone(kwargs["imbalance_sample_path"])
         self.assertIsNone(kwargs["artifact_allowlist"])
         self.assertEqual(kwargs["balanced_artifact_dir"], artifacts)
-        self.assertEqual(args.normalized_residual_threshold, 4.0)
+        self.assertEqual(kwargs["normalized_residual_threshold"], 4.0)
 
     def test_case57_refuses_ieee14_families_and_waveform_sources(self) -> None:
         parse = round0_module.build_argument_parser().parse_args

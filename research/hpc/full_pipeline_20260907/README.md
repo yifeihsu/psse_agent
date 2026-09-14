@@ -48,9 +48,24 @@ measurement+parameter) from a fresh balanced corpus named by
 `MEASUREMENT_CORPUS` and `BALANCED_ARTIFACT_DIR`, with every plan restricted
 to those families and no waveform corpora; `ADMISSION_MODE` picks the
 generator admission for both the aggregate and the suite draws. The later
-stages read the suites the same way for either system, but their environment
-factory still carries the IEEE-14 detector (chi-square alpha 0.01, no
-normalized-residual test), not the IEEE 57 runtime pin.
+stages read the suites the same way for either system.
+
+**WLS anomaly detector (both systems, from 2026-09-14).** Scenario admission
+in stage 0 and the collection/evaluation environment use one rule: the
+chi-square test at alpha 0.01 *or* a maximum absolute normalized residual at
+`NORMALIZED_RESIDUAL_THRESHOLD` (4.0). An anomaly is present when either
+fires; a corrected configuration is clean only when neither does. The
+threshold was chosen on fresh clean windows of both networks: 3 sigma flagged
+38 of 60 healthy IEEE 57 windows and 178 of 600 healthy IEEE 14 windows, 3.5
+sigma 13 of 60 and 36 of 600, 4 sigma 3 of 60 and 12 of 600, while every
+meter fault of ten sigma or more was caught at any of the three (the
+chi-square test alone missed 3 of 25 such faults on IEEE 57 because one
+channel's error is diluted over 378 degrees of freedom). The runs above,
+through 2026-09-12, used the chi-square-only detector
+(`--chi-square-only` reproduces it); their scores are not comparable with
+runs under the combined rule without a rerun. The IEEE 57 pilot's own
+runtime pin (alpha 0.05 with the same residual test) stays with the pilot
+scripts.
 
 Capacity that bounds the plans: 102 HIF windows serve `hif` and
 `measurement+hif` separately, 220 unbalance rows serve `three_phase_unbalance`

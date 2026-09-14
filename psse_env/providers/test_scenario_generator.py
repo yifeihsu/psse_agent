@@ -2406,3 +2406,61 @@ class SynthesizedFamilyOperatingPointTests(unittest.TestCase):
             default=str,
         )
         self.assertNotIn(cb_name, visible)
+
+
+class NormalizedResidualAdmissionTests(unittest.TestCase):
+    """Admission mirrors the environment's combined chi-square/residual rule."""
+
+    @staticmethod
+    def _payload(statistic: float, maximum: float) -> dict:
+        return {"success": True, "global_residual_sum": statistic, "r": [maximum, -0.5, 0.25]}
+
+    def test_residual_only_fault_is_admitted_with_the_threshold_and_rejected_without(self) -> None:
+        import psse_env.providers.scenario_generator as module
+
+        combined = module.Round0ScenarioGenerator(seed=1, normalized_residual_threshold=4.0)
+        chi_only = module.Round0ScenarioGenerator(seed=1)
+        limit = combined.chi2_limit
+        z = [1.0] * combined.nz
+        # Global statistic within the clean band; one channel at ten sigma.
+        with patch.object(module, "_wls_json", return_value=self._payload(0.9 * limit, 10.0)):
+            combined._require_anomalous("case14", z, "measurement")
+            with self.assertRaises(module.ScenarioRejected) as rejected:
+                chi_only._require_anomalous("case14", z, "measurement")
+        self.assertTrue(str(rejected.exception).startswith("anomaly_not_detectable"))
+        # A residual inside the admission margin (1.25 x 4) is not detectable with margin.
+        marginal = module.Round0ScenarioGenerator(seed=2, normalized_residual_threshold=4.0)
+        with patch.object(module, "_wls_json", return_value=self._payload(0.9 * limit, 4.5)):
+            with self.assertRaises(module.ScenarioRejected):
+                marginal._require_anomalous("case14", z, "measurement")
+
+    def test_corrected_configuration_must_clear_both_tests(self) -> None:
+        import psse_env.providers.scenario_generator as module
+
+        combined = module.Round0ScenarioGenerator(seed=3, normalized_residual_threshold=4.0)
+        chi_only = module.Round0ScenarioGenerator(seed=3)
+        limit = combined.chi2_limit
+        z = [2.0] * combined.nz
+        with patch.object(module, "_wls_json", return_value=self._payload(0.8 * limit, 4.2)):
+            with self.assertRaises(module.ScenarioRejected) as rejected:
+                combined._require_clean("case14", z, "parameter")
+            chi_only._require_clean("case14", z, "parameter")
+        self.assertTrue(str(rejected.exception).startswith("corrected_configuration_still_anomalous"))
+        quiet = module.Round0ScenarioGenerator(seed=4, normalized_residual_threshold=4.0)
+        with patch.object(module, "_wls_json", return_value=self._payload(0.8 * limit, 3.9)):
+            quiet._require_clean("case14", z, "parameter")
+
+    def test_report_and_validation_of_the_threshold(self) -> None:
+        import psse_env.providers.scenario_generator as module
+
+        combined = module.Round0ScenarioGenerator(seed=5, normalized_residual_threshold=4.0)
+        report = combined.report()
+        self.assertEqual(report["normalized_residual_threshold"], 4.0)
+        self.assertEqual(report["anomaly_detection_rule"], "chi_square_or_normalized_residual")
+        legacy = module.Round0ScenarioGenerator(seed=5).report()
+        self.assertIsNone(legacy["normalized_residual_threshold"])
+        self.assertEqual(legacy["anomaly_detection_rule"], "chi_square_only")
+        for bad in (0.0, -1.0, float("nan"), True):
+            with self.assertRaises(ValueError):
+                module.Round0ScenarioGenerator(seed=5, normalized_residual_threshold=bad)
+        self.assertEqual(module.DEFAULT_NORMALIZED_RESIDUAL_THRESHOLD, 4.0)

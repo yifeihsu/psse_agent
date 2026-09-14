@@ -72,7 +72,7 @@ def test_pipeline_env_declares_every_setting_the_stages_use() -> None:
         "PREVIOUS_PIPE", "SUITE_TRAINING_THRESHOLD", "SUITE_DEVELOPMENT_THRESHOLD",
         "SUITE_DEVELOPMENT_RANK_ALLOWANCE", "MEASUREMENT_ERROR_MIN_SIGMA",
         "TOPOLOGY_EFFECTS", "SYSTEM", "MEASUREMENT_CORPUS", "BALANCED_ARTIFACT_DIR",
-        "ADMISSION_MODE",
+        "ADMISSION_MODE", "NORMALIZED_RESIDUAL_THRESHOLD",
     ):
         assert name in declared, name
     assert 'export PSSE_HIF_WORKERS="${SLURM_CPUS_PER_TASK:-8}"' in text
@@ -221,10 +221,13 @@ def test_summary_joins_rounds_and_checks_adapter_consistency(tmp_path: Path) -> 
 
 def test_stage_zero_passes_the_system_selection_to_both_draws() -> None:
     text = (CELL / "stage_d0.sbatch").read_text(encoding="utf-8")
-    assert 'system_args=(--system "$SYSTEM" --admission-mode "$ADMISSION_MODE")' in text
+    assert 'system_args=(--system "$SYSTEM" --admission-mode "$ADMISSION_MODE"' in text
     assert text.count('"${system_args[@]}"') == 2
     assert 'if [[ "$SYSTEM" == case14 ]]; then' in text
     assert "--hif-corpus" in text and "--imbalance-corpus" in text
     env = (CELL / "pipeline.env").read_text(encoding="utf-8")
     assert re.search(r"^SYSTEM=case14$", env, flags=re.MULTILINE)
     assert re.search(r"^ADMISSION_MODE=recoverable$", env, flags=re.MULTILINE)
+    assert re.search(r"^NORMALIZED_RESIDUAL_THRESHOLD=4.0$", env, flags=re.MULTILINE)
+    assert '--normalized-residual-threshold "$NORMALIZED_RESIDUAL_THRESHOLD"' in env
+    assert '--normalized-residual-threshold "$NORMALIZED_RESIDUAL_THRESHOLD"' in text
