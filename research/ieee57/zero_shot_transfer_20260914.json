@@ -1,0 +1,813 @@
+{
+  "candidate": "r1",
+  "collection_metrics": {
+    "canonical_export_failures": 0,
+    "canonical_export_rows": 286,
+    "contract": "research_dagger_minimal_v1",
+    "eligible_rows_by_recovery_stratum": {
+      "premature_commit_recovery": 3,
+      "rejected_candidate_rollback": 3,
+      "sequential_measurement_parameter_recovery": 18,
+      "unclassified": 262
+    },
+    "eligible_rows_by_scenario_family": {
+      "measurement": 68,
+      "measurement+parameter": 77,
+      "multi_measurement": 68,
+      "no_error": 6,
+      "parameter": 67
+    },
+    "episodes_completed": 52,
+    "episodes_total": 52,
+    "invalid_learner_action_rate": 0.0,
+    "label_yield": 0.8614457831325302,
+    "learner_actions_executed": 370,
+    "learner_expert_comparable_states": 332,
+    "learner_expert_full_action_disagreement_rate": 0.05120481927710843,
+    "learner_expert_tool_disagreement_rate": 0.05120481927710843,
+    "learner_induced_states": 332,
+    "quarantined_learner_target_rows": 46,
+    "research_ineligibility_reasons": {
+      "not_learner_policy_state": 164,
+      "observable_rank_one_proof_failed": 62
+    },
+    "safe_research_eligible_rows": 286,
+    "states_visited": 496,
+    "states_with_expert_target": 332
+  },
+  "contract": "research_full_pipeline_round_summary_v2",
+  "development_families": {
+    "measurement": 16,
+    "measurement+parameter": 16,
+    "multi_measurement": 12,
+    "no_error": 8,
+    "parameter": 16
+  },
+  "development_strata": {
+    "ambiguous": 12,
+    "dominant": 19,
+    "misranked": 1,
+    "not_applicable": 36
+  },
+  "environment_options": {
+    "branch_first_partial": false,
+    "normalized_residual_threshold": 4.0
+  },
+  "evaluation_name": "zeroshot",
+  "mixture": {
+    "actual_d1_share": 0.5,
+    "contract": "research_dagger_minimal_v1",
+    "d0_available": 2392,
+    "d0_selected": 286,
+    "d1_available": 286,
+    "d1_cap": 100000,
+    "d1_selected": 286,
+    "requested_d1_share": 0.5,
+    "seed": 20260912
+  },
+  "paired_evaluation": {
+    "candidate_minus_student": null,
+    "candidate_overall": null,
+    "expert_overall": {
+      "audited_completion_episodes": 67,
+      "audited_completion_rate": 0.9852941176470589,
+      "audited_post_correction_handoff_episodes": 59,
+      "audited_post_correction_handoff_rate": 0.8676470588235294,
+      "control_quarantine_rate": 0.0,
+      "control_quarantine_reason_counts": {},
+      "control_quarantined_episodes": 0,
+      "episodes": 68,
+      "episodes_with_injected_failures": 0,
+      "episodes_with_invalid_actions": 0,
+      "evaluator_error_episodes": 0,
+      "false_commit_count": 0,
+      "false_commit_episodes": 0,
+      "false_commit_rate": 0.0,
+      "false_finalization_count": 0,
+      "false_finalization_episodes": 0,
+      "false_finalization_rate": 0.0,
+      "false_rollback_count": 0,
+      "false_rollback_episodes": 0,
+      "false_rollback_rate": 0.0,
+      "faulted_episodes": 60,
+      "final_physical_correctness_known_rate": 1.0,
+      "final_physical_correctness_rate": 0.11764705882352941,
+      "final_physical_success_episodes": 8,
+      "final_physical_success_rate": 0.11764705882352941,
+      "healthy_component_corruption_episodes": 1,
+      "healthy_component_corruption_rate": 0.014705882352941176,
+      "healthy_component_preservation_episodes": 67,
+      "healthy_component_preservation_known_rate": 0.9852941176470589,
+      "healthy_component_preservation_rate": 0.9852941176470589,
+      "healthy_preservation_known_episodes": 68,
+      "injected_failure_count": 0,
+      "injected_failure_recovery_rate": 0.0,
+      "invalid_action_count": 0,
+      "invalid_action_recovery_rate": 0.0,
+      "loop_episodes": 0,
+      "loop_rate": 0.0,
+      "mean_specialized_tool_calls": 1.7647058823529411,
+      "mean_steps": 11.705882352941176,
+      "mean_tool_regret": null,
+      "mean_wls_calls": 2.6029411764705883,
+      "operator_escalation_episodes": 60,
+      "operator_escalation_rate": 0.8823529411764706,
+      "partial_fix_opportunities": 49,
+      "partial_fix_retention_rate": 1.0,
+      "physical_correct_episodes": 8,
+      "physical_correctness_known_episodes": 8,
+      "recovered_injected_failures": 0,
+      "recovered_invalid_actions": 0,
+      "repeated_nonadvancing_failure_breaker_episodes": 0,
+      "resolution_rate": 0.11764705882352941,
+      "resolved_episodes": 8,
+      "retained_partial_fixes": 49,
+      "specialized_tool_calls": 120,
+      "specialized_tool_counts": {
+        "get_harmonic_context": 60,
+        "get_three_phase_context": 60
+      },
+      "steps": 796,
+      "terminal_episodes": 68,
+      "terminal_rate": 1.0,
+      "tool_counts": {
+        "ask_for_more_evidence": 60,
+        "commit_state": 109,
+        "correct_measurements": 77,
+        "correct_parameters": 32,
+        "finalize_diagnosis": 8,
+        "get_harmonic_context": 60,
+        "get_measurement_context": 137,
+        "get_parameter_context": 54,
+        "get_three_phase_context": 60,
+        "get_topology_context": 22,
+        "run_wls": 177
+      },
+      "tool_regret_coverage": 0.0,
+      "tool_regret_samples": 0,
+      "tool_regret_total": 0.0,
+      "truth_audited_fault_recovery_success_episodes": 59,
+      "truth_audited_fault_recovery_success_rate": 0.9833333333333333,
+      "truth_audited_task_success_by_terminal_outcome": {
+        "operator_escalation": 59,
+        "resolved": 8
+      },
+      "truth_audited_task_success_episodes": 67,
+      "truth_audited_task_success_evidence_known_episodes": 68,
+      "truth_audited_task_success_evidence_known_rate": 1.0,
+      "truth_audited_task_success_rate": 0.9852941176470589,
+      "truth_fault_presence_known_episodes": 68,
+      "truth_fault_presence_known_rate": 1.0,
+      "unknown_terminal_outcome_episodes": 0,
+      "unqualified_operator_escalation_episodes": 1,
+      "unqualified_operator_escalation_rate": 0.014705882352941176,
+      "wls_calls": 177
+    },
+    "paired_physical_roots": 68,
+    "student_overall": {
+      "audited_completion_episodes": 62,
+      "audited_completion_rate": 0.9117647058823529,
+      "audited_post_correction_handoff_episodes": 54,
+      "audited_post_correction_handoff_rate": 0.7941176470588235,
+      "control_quarantine_rate": 0.0,
+      "control_quarantine_reason_counts": {},
+      "control_quarantined_episodes": 0,
+      "episodes": 68,
+      "episodes_with_injected_failures": 0,
+      "episodes_with_invalid_actions": 5,
+      "evaluator_error_episodes": 0,
+      "false_commit_count": 5,
+      "false_commit_episodes": 5,
+      "false_commit_rate": 0.07352941176470588,
+      "false_finalization_count": 0,
+      "false_finalization_episodes": 0,
+      "false_finalization_rate": 0.0,
+      "false_rollback_count": 0,
+      "false_rollback_episodes": 0,
+      "false_rollback_rate": 0.0,
+      "faulted_episodes": 60,
+      "final_physical_correctness_known_rate": 1.0,
+      "final_physical_correctness_rate": 0.11764705882352941,
+      "final_physical_success_episodes": 8,
+      "final_physical_success_rate": 0.11764705882352941,
+      "healthy_component_corruption_episodes": 1,
+      "healthy_component_corruption_rate": 0.014705882352941176,
+      "healthy_component_preservation_episodes": 67,
+      "healthy_component_preservation_known_rate": 0.9852941176470589,
+      "healthy_component_preservation_rate": 0.9852941176470589,
+      "healthy_preservation_known_episodes": 68,
+      "injected_failure_count": 0,
+      "injected_failure_recovery_rate": 0.0,
+      "invalid_action_count": 5,
+      "invalid_action_recovery_rate": 0.0,
+      "loop_episodes": 0,
+      "loop_rate": 0.0,
+      "mean_specialized_tool_calls": 1.8088235294117647,
+      "mean_steps": 12.367647058823529,
+      "mean_tool_regret": null,
+      "mean_wls_calls": 2.676470588235294,
+      "operator_escalation_episodes": 60,
+      "operator_escalation_rate": 0.8823529411764706,
+      "partial_fix_opportunities": 49,
+      "partial_fix_retention_rate": 1.0,
+      "physical_correct_episodes": 8,
+      "physical_correctness_known_episodes": 8,
+      "recovered_injected_failures": 0,
+      "recovered_invalid_actions": 0,
+      "repeated_nonadvancing_failure_breaker_episodes": 0,
+      "resolution_rate": 0.11764705882352941,
+      "resolved_episodes": 8,
+      "retained_partial_fixes": 49,
+      "specialized_tool_calls": 123,
+      "specialized_tool_counts": {
+        "get_harmonic_context": 61,
+        "get_three_phase_context": 62
+      },
+      "steps": 841,
+      "terminal_episodes": 68,
+      "terminal_rate": 1.0,
+      "tool_counts": {
+        "ask_for_more_evidence": 60,
+        "commit_state": 114,
+        "correct_measurements": 77,
+        "correct_parameters": 37,
+        "finalize_diagnosis": 8,
+        "get_harmonic_context": 61,
+        "get_measurement_context": 137,
+        "get_parameter_context": 74,
+        "get_three_phase_context": 62,
+        "get_topology_context": 24,
+        "rollback_state": 5,
+        "run_wls": 182
+      },
+      "tool_regret_coverage": 0.0,
+      "tool_regret_samples": 0,
+      "tool_regret_total": 0.0,
+      "truth_audited_fault_recovery_success_episodes": 59,
+      "truth_audited_fault_recovery_success_rate": 0.9833333333333333,
+      "truth_audited_task_success_by_terminal_outcome": {
+        "operator_escalation": 59,
+        "resolved": 8
+      },
+      "truth_audited_task_success_episodes": 67,
+      "truth_audited_task_success_evidence_known_episodes": 68,
+      "truth_audited_task_success_evidence_known_rate": 1.0,
+      "truth_audited_task_success_rate": 0.9852941176470589,
+      "truth_fault_presence_known_episodes": 68,
+      "truth_fault_presence_known_rate": 1.0,
+      "unknown_terminal_outcome_episodes": 0,
+      "unqualified_operator_escalation_episodes": 6,
+      "unqualified_operator_escalation_rate": 0.08823529411764706,
+      "wls_calls": 182
+    }
+  },
+  "per_family": {
+    "bc0": {
+      "episodes_per_family": {
+        "measurement": 16,
+        "measurement+parameter": 16,
+        "multi_measurement": 12,
+        "no_error": 8,
+        "parameter": 16
+      },
+      "outcomes": {
+        "measurement": {
+          "audit.diagnostic_truth_matched": {
+            "True": 16
+          },
+          "false_commit_count": {
+            "0": 16
+          },
+          "final_physical_success": {
+            "False": 16
+          },
+          "invalid_action_count": {
+            "0": 16
+          },
+          "loop_detected": {
+            "False": 16
+          },
+          "steps": {
+            "9": 16
+          },
+          "terminal": {
+            "True": 16
+          },
+          "terminal_outcome": {
+            "operator_escalation": 16
+          },
+          "truth_audited_task_success": {
+            "True": 16
+          }
+        },
+        "measurement+parameter": {
+          "audit.diagnostic_truth_matched": {
+            "True": 16
+          },
+          "false_commit_count": {
+            "0": 11,
+            "1": 5
+          },
+          "final_physical_success": {
+            "False": 16
+          },
+          "invalid_action_count": {
+            "0": 11,
+            "1": 5
+          },
+          "loop_detected": {
+            "False": 16
+          },
+          "steps": {
+            "13": 11,
+            "18": 5
+          },
+          "terminal": {
+            "True": 16
+          },
+          "terminal_outcome": {
+            "operator_escalation": 16
+          },
+          "truth_audited_task_success": {
+            "True": 16
+          }
+        },
+        "multi_measurement": {
+          "audit.diagnostic_truth_matched": {
+            "True": 12
+          },
+          "false_commit_count": {
+            "0": 12
+          },
+          "final_physical_success": {
+            "False": 12
+          },
+          "invalid_action_count": {
+            "0": 12
+          },
+          "loop_detected": {
+            "False": 12
+          },
+          "steps": {
+            "15": 2,
+            "17": 1,
+            "21": 1,
+            "22": 1,
+            "26": 1,
+            "29": 2,
+            "30": 1,
+            "33": 2,
+            "34": 1
+          },
+          "terminal": {
+            "True": 12
+          },
+          "terminal_outcome": {
+            "operator_escalation": 12
+          },
+          "truth_audited_task_success": {
+            "True": 12
+          }
+        },
+        "no_error": {
+          "audit.diagnostic_truth_matched": {
+            "True": 8
+          },
+          "false_commit_count": {
+            "0": 8
+          },
+          "final_physical_success": {
+            "True": 8
+          },
+          "invalid_action_count": {
+            "0": 8
+          },
+          "loop_detected": {
+            "False": 8
+          },
+          "steps": {
+            "2": 8
+          },
+          "terminal": {
+            "True": 8
+          },
+          "terminal_outcome": {
+            "resolved": 8
+          },
+          "truth_audited_task_success": {
+            "True": 8
+          }
+        },
+        "parameter": {
+          "audit.diagnostic_truth_matched": {
+            "True": 16
+          },
+          "false_commit_count": {
+            "0": 16
+          },
+          "final_physical_success": {
+            "False": 16
+          },
+          "invalid_action_count": {
+            "0": 16
+          },
+          "loop_detected": {
+            "False": 16
+          },
+          "steps": {
+            "9": 16
+          },
+          "terminal": {
+            "True": 16
+          },
+          "terminal_outcome": {
+            "operator_escalation": 16
+          },
+          "truth_audited_task_success": {
+            "False": 1,
+            "True": 15
+          }
+        }
+      },
+      "success_basis": {
+        "measurement": {
+          "counterfactual_resolution": 16
+        },
+        "measurement+parameter": {
+          "counterfactual_resolution": 16
+        },
+        "multi_measurement": {
+          "counterfactual_resolution": 12
+        },
+        "no_error": {
+          "counterfactual_resolution": 8
+        },
+        "parameter": {
+          "counterfactual_resolution": 15
+        }
+      },
+      "success_by_stratum": {
+        "measurement": {
+          "not_applicable": {
+            "episodes": 16,
+            "successes": 16
+          }
+        },
+        "measurement+parameter": {
+          "ambiguous": {
+            "episodes": 4,
+            "successes": 4
+          },
+          "dominant": {
+            "episodes": 12,
+            "successes": 12
+          }
+        },
+        "multi_measurement": {
+          "not_applicable": {
+            "episodes": 12,
+            "successes": 12
+          }
+        },
+        "no_error": {
+          "not_applicable": {
+            "episodes": 8,
+            "successes": 8
+          }
+        },
+        "parameter": {
+          "ambiguous": {
+            "episodes": 8,
+            "successes": 8
+          },
+          "dominant": {
+            "episodes": 7,
+            "successes": 7
+          },
+          "misranked": {
+            "episodes": 1,
+            "successes": 0
+          }
+        }
+      },
+      "unmatched_episodes": 0
+    },
+    "expert": {
+      "episodes_per_family": {
+        "measurement": 16,
+        "measurement+parameter": 16,
+        "multi_measurement": 12,
+        "no_error": 8,
+        "parameter": 16
+      },
+      "outcomes": {
+        "measurement": {
+          "audit.diagnostic_truth_matched": {
+            "True": 16
+          },
+          "false_commit_count": {
+            "0": 16
+          },
+          "final_physical_success": {
+            "False": 16
+          },
+          "invalid_action_count": {
+            "0": 16
+          },
+          "loop_detected": {
+            "False": 16
+          },
+          "steps": {
+            "9": 16
+          },
+          "terminal": {
+            "True": 16
+          },
+          "terminal_outcome": {
+            "operator_escalation": 16
+          },
+          "truth_audited_task_success": {
+            "True": 16
+          }
+        },
+        "measurement+parameter": {
+          "audit.diagnostic_truth_matched": {
+            "True": 16
+          },
+          "false_commit_count": {
+            "0": 16
+          },
+          "final_physical_success": {
+            "False": 16
+          },
+          "invalid_action_count": {
+            "0": 16
+          },
+          "loop_detected": {
+            "False": 16
+          },
+          "steps": {
+            "13": 16
+          },
+          "terminal": {
+            "True": 16
+          },
+          "terminal_outcome": {
+            "operator_escalation": 16
+          },
+          "truth_audited_task_success": {
+            "True": 16
+          }
+        },
+        "multi_measurement": {
+          "audit.diagnostic_truth_matched": {
+            "True": 12
+          },
+          "false_commit_count": {
+            "0": 12
+          },
+          "final_physical_success": {
+            "False": 12
+          },
+          "invalid_action_count": {
+            "0": 12
+          },
+          "loop_detected": {
+            "False": 12
+          },
+          "steps": {
+            "15": 3,
+            "21": 2,
+            "23": 1,
+            "25": 2,
+            "27": 1,
+            "31": 1,
+            "33": 2
+          },
+          "terminal": {
+            "True": 12
+          },
+          "terminal_outcome": {
+            "operator_escalation": 12
+          },
+          "truth_audited_task_success": {
+            "True": 12
+          }
+        },
+        "no_error": {
+          "audit.diagnostic_truth_matched": {
+            "True": 8
+          },
+          "false_commit_count": {
+            "0": 8
+          },
+          "final_physical_success": {
+            "True": 8
+          },
+          "invalid_action_count": {
+            "0": 8
+          },
+          "loop_detected": {
+            "False": 8
+          },
+          "steps": {
+            "2": 8
+          },
+          "terminal": {
+            "True": 8
+          },
+          "terminal_outcome": {
+            "resolved": 8
+          },
+          "truth_audited_task_success": {
+            "True": 8
+          }
+        },
+        "parameter": {
+          "audit.diagnostic_truth_matched": {
+            "True": 16
+          },
+          "false_commit_count": {
+            "0": 16
+          },
+          "final_physical_success": {
+            "False": 16
+          },
+          "invalid_action_count": {
+            "0": 16
+          },
+          "loop_detected": {
+            "False": 16
+          },
+          "steps": {
+            "9": 16
+          },
+          "terminal": {
+            "True": 16
+          },
+          "terminal_outcome": {
+            "operator_escalation": 16
+          },
+          "truth_audited_task_success": {
+            "False": 1,
+            "True": 15
+          }
+        }
+      },
+      "success_basis": {
+        "measurement": {
+          "counterfactual_resolution": 16
+        },
+        "measurement+parameter": {
+          "counterfactual_resolution": 16
+        },
+        "multi_measurement": {
+          "counterfactual_resolution": 12
+        },
+        "no_error": {
+          "counterfactual_resolution": 8
+        },
+        "parameter": {
+          "counterfactual_resolution": 15
+        }
+      },
+      "success_by_stratum": {
+        "measurement": {
+          "not_applicable": {
+            "episodes": 16,
+            "successes": 16
+          }
+        },
+        "measurement+parameter": {
+          "ambiguous": {
+            "episodes": 4,
+            "successes": 4
+          },
+          "dominant": {
+            "episodes": 12,
+            "successes": 12
+          }
+        },
+        "multi_measurement": {
+          "not_applicable": {
+            "episodes": 12,
+            "successes": 12
+          }
+        },
+        "no_error": {
+          "not_applicable": {
+            "episodes": 8,
+            "successes": 8
+          }
+        },
+        "parameter": {
+          "ambiguous": {
+            "episodes": 8,
+            "successes": 8
+          },
+          "dominant": {
+            "episodes": 7,
+            "successes": 7
+          },
+          "misranked": {
+            "episodes": 1,
+            "successes": 0
+          }
+        }
+      },
+      "unmatched_episodes": 0
+    }
+  },
+  "release_evidence": false,
+  "research_profile": {
+    "hif_search_profile": "research",
+    "plan_preset": "core",
+    "scenario_sources": null
+  },
+  "round": "r1",
+  "student": "bc0",
+  "success_by_family": {
+    "bc0": {
+      "measurement": {
+        "episodes": 16,
+        "successes": 16
+      },
+      "measurement+parameter": {
+        "episodes": 16,
+        "successes": 16
+      },
+      "multi_measurement": {
+        "episodes": 12,
+        "successes": 12
+      },
+      "no_error": {
+        "episodes": 8,
+        "successes": 8
+      },
+      "parameter": {
+        "episodes": 16,
+        "successes": 15
+      }
+    },
+    "expert": {
+      "measurement": {
+        "episodes": 16,
+        "successes": 16
+      },
+      "measurement+parameter": {
+        "episodes": 16,
+        "successes": 16
+      },
+      "multi_measurement": {
+        "episodes": 12,
+        "successes": 12
+      },
+      "no_error": {
+        "episodes": 8,
+        "successes": 8
+      },
+      "parameter": {
+        "episodes": 16,
+        "successes": 15
+      }
+    }
+  },
+  "success_by_stratum": {
+    "bc0": {
+      "ambiguous": {
+        "episodes": 12,
+        "successes": 12
+      },
+      "dominant": {
+        "episodes": 19,
+        "successes": 19
+      },
+      "misranked": {
+        "episodes": 1,
+        "successes": 0
+      },
+      "not_applicable": {
+        "episodes": 36,
+        "successes": 36
+      }
+    },
+    "expert": {
+      "ambiguous": {
+        "episodes": 12,
+        "successes": 12
+      },
+      "dominant": {
+        "episodes": 19,
+        "successes": 19
+      },
+      "misranked": {
+        "episodes": 1,
+        "successes": 0
+      },
+      "not_applicable": {
+        "episodes": 36,
+        "successes": 36
+      }
+    }
+  }
+}

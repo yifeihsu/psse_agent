@@ -97,6 +97,10 @@ wsl -- ssh torch bash -s -- /scratch/yx3882/research_full_pipeline_20260914_ieee
 wsl -- ssh torch 'CHAIN="d0 r1c zs" bash /scratch/yx3882/research_full_pipeline_20260914_ieee57/submit_pipeline.sh'
 ```
 
+Outcome: the frozen adapter scores 67/68 truth-audited task success, the
+same as the expert, with five order errors on mixed roots
+(`docs/ieee57_transfer_zero_shot_20260914.md`).
+
 Adaptation on IEEE 57 is then `FROM=r1t CHAIN="r1t r1e" bash submit_pipeline.sh`
 (round-1 training on the collected mixture and the paired evaluation against
 the frozen student). The three-phase, harmonic and topology families have no
