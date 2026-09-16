@@ -1,0 +1,3580 @@
+{
+  "acquisition_cost_note": "Acquisition fractions are screening requests, not measured downstream diagnostic cost or recovery.",
+  "by_family": {
+    "hif": {
+      "family_false_positive_rate": {
+        "count": 8448,
+        "parent_bootstrap_ci95": [
+          0.006507457386363637,
+          0.010771780303030304
+        ],
+        "parents": 128,
+        "rate": 0.008522727272727272
+      },
+      "family_healthy_trigger_rate": {
+        "count": 5120,
+        "parent_bootstrap_ci95": [
+          0.005078125,
+          0.01015625
+        ],
+        "parents": 128,
+        "rate": 0.0076171875
+      },
+      "family_recall": {
+        "count": 1022,
+        "parent_bootstrap_ci95": [
+          0.42089456756054305,
+          0.4863013698630137
+        ],
+        "parents": 128,
+        "rate": 0.45303326810176126
+      },
+      "family_score_discrimination": {
+        "average_precision": 0.7707564433379734,
+        "labeled_count": 9470,
+        "positive_count": 1022,
+        "roc_auc": 0.9490016975034098
+      },
+      "family_threshold": 0.9891358613967896,
+      "head_trained": true,
+      "mean_family_score_positive": 0.8663218012554974,
+      "phase_trigger": {
+        "count": 1022,
+        "parent_bootstrap_ci95": [
+          0.572265625,
+          0.655891544117647
+        ],
+        "parents": 128,
+        "rate": 0.6125244618395304
+      }
+    },
+    "measurement": {
+      "family_false_positive_rate": {
+        "count": 7934,
+        "parent_bootstrap_ci95": [
+          0.17965002251165169,
+          0.19011598587997983
+        ],
+        "parents": 128,
+        "rate": 0.18464834887824552
+      },
+      "family_healthy_trigger_rate": {
+        "count": 5120,
+        "parent_bootstrap_ci95": [
+          0.0095703125,
+          0.016796875
+        ],
+        "parents": 128,
+        "rate": 0.0130859375
+      },
+      "family_recall": {
+        "count": 1536,
+        "parent_bootstrap_ci95": [
+          1.0,
+          1.0
+        ],
+        "parents": 128,
+        "rate": 1.0
+      },
+      "family_score_discrimination": {
+        "average_precision": 0.979266191828224,
+        "labeled_count": 9470,
+        "positive_count": 1536,
+        "roc_auc": 0.9950842825707924
+      },
+      "family_threshold": 0.015819422900676727,
+      "head_trained": true,
+      "mean_family_score_positive": 0.8991574423853308,
+      "phase_trigger": {
+        "count": 1536,
+        "parent_bootstrap_ci95": [
+          0.078759765625,
+          0.10548502604166665
+        ],
+        "parents": 128,
+        "rate": 0.091796875
+      }
+    },
+    "parameter": {
+      "family_false_positive_rate": {
+        "count": 8446,
+        "parent_bootstrap_ci95": [
+          0.053394782932480137,
+          0.06652501503535832
+        ],
+        "parents": 128,
+        "rate": 0.06002841581813877
+      },
+      "family_healthy_trigger_rate": {
+        "count": 5120,
+        "parent_bootstrap_ci95": [
+          0.0087890625,
+          0.015625
+        ],
+        "parents": 128,
+        "rate": 0.012109375
+      },
+      "family_recall": {
+        "count": 1024,
+        "parent_bootstrap_ci95": [
+          0.9052734375,
+          0.9482421875
+        ],
+        "parents": 128,
+        "rate": 0.9287109375
+      },
+      "family_score_discrimination": {
+        "average_precision": 0.8686858032435948,
+        "labeled_count": 9470,
+        "positive_count": 1024,
+        "roc_auc": 0.9751177748712408
+      },
+      "family_threshold": 0.17211872339248657,
+      "head_trained": true,
+      "mean_family_score_positive": 0.7136667322245938,
+      "phase_trigger": {
+        "count": 1024,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.0029296875
+        ],
+        "parents": 128,
+        "rate": 0.0009765625
+      }
+    },
+    "topology": {
+      "family_false_positive_rate": {
+        "count": 8702,
+        "parent_bootstrap_ci95": [
+          0.16394761029411764,
+          0.17321927294624745
+        ],
+        "parents": 128,
+        "rate": 0.16869685129855205
+      },
+      "family_healthy_trigger_rate": {
+        "count": 5120,
+        "parent_bootstrap_ci95": [
+          0.008984375,
+          0.014453125
+        ],
+        "parents": 128,
+        "rate": 0.01171875
+      },
+      "family_recall": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.99609375,
+          1.0
+        ],
+        "parents": 128,
+        "rate": 0.9986979166666666
+      },
+      "family_score_discrimination": {
+        "average_precision": 0.9172634571556921,
+        "labeled_count": 9470,
+        "positive_count": 768,
+        "roc_auc": 0.9896187957270359
+      },
+      "family_threshold": 0.011431802995502949,
+      "head_trained": true,
+      "mean_family_score_positive": 0.7837138957812991,
+      "phase_trigger": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.0
+        ],
+        "parents": 128,
+        "rate": 0.0
+      }
+    },
+    "unbalance": {
+      "family_false_positive_rate": {
+        "count": 8702,
+        "parent_bootstrap_ci95": [
+          0.012408088235294117,
+          0.019186580882352942
+        ],
+        "parents": 128,
+        "rate": 0.015628591128476213
+      },
+      "family_healthy_trigger_rate": {
+        "count": 5120,
+        "parent_bootstrap_ci95": [
+          0.0029296875,
+          0.0109375
+        ],
+        "parents": 128,
+        "rate": 0.006640625
+      },
+      "family_recall": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.89453125,
+          0.94140625
+        ],
+        "parents": 128,
+        "rate": 0.9192708333333334
+      },
+      "family_score_discrimination": {
+        "average_precision": 0.9592186332186572,
+        "labeled_count": 9470,
+        "positive_count": 768,
+        "roc_auc": 0.9899617484965142
+      },
+      "family_threshold": 0.07259874790906906,
+      "head_trained": true,
+      "mean_family_score_positive": 0.8116317353764467,
+      "phase_trigger": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.8606770833333334,
+          0.9114908854166667
+        ],
+        "parents": 128,
+        "rate": 0.88671875
+      }
+    }
+  },
+  "by_family_and_severity": {
+    "hif/practical_core": {
+      "count": 1022,
+      "parent_bootstrap_ci95": [
+        0.572265625,
+        0.655891544117647
+      ],
+      "parents": 128,
+      "rate": 0.6125244618395304
+    },
+    "measurement/practical_core": {
+      "count": 1536,
+      "parent_bootstrap_ci95": [
+        0.078759765625,
+        0.10548502604166665
+      ],
+      "parents": 128,
+      "rate": 0.091796875
+    },
+    "parameter/practical_core": {
+      "count": 1024,
+      "parent_bootstrap_ci95": [
+        0.0,
+        0.0029296875
+      ],
+      "parents": 128,
+      "rate": 0.0009765625
+    },
+    "topology/practical_core": {
+      "count": 768,
+      "parent_bootstrap_ci95": [
+        0.0,
+        0.0
+      ],
+      "parents": 128,
+      "rate": 0.0
+    },
+    "unbalance/practical_core": {
+      "count": 768,
+      "parent_bootstrap_ci95": [
+        0.8606770833333334,
+        0.9114908854166667
+      ],
+      "parents": 128,
+      "rate": 0.88671875
+    }
+  },
+  "by_family_and_severity_wls": {
+    "hif/practical_core": {
+      "count": 1022,
+      "parent_bootstrap_ci95": [
+        0.39724087649828765,
+        0.44227005870841485
+      ],
+      "parents": 128,
+      "rate": 0.4197651663405088
+    },
+    "measurement/practical_core": {
+      "count": 1536,
+      "parent_bootstrap_ci95": [
+        1.0,
+        1.0
+      ],
+      "parents": 128,
+      "rate": 1.0
+    },
+    "parameter/practical_core": {
+      "count": 1024,
+      "parent_bootstrap_ci95": [
+        0.904296875,
+        0.9443359375
+      ],
+      "parents": 128,
+      "rate": 0.92578125
+    },
+    "topology/practical_core": {
+      "count": 768,
+      "parent_bootstrap_ci95": [
+        0.9817708333333334,
+        0.9986979166666666
+      ],
+      "parents": 128,
+      "rate": 0.9908854166666666
+    },
+    "unbalance/practical_core": {
+      "count": 768,
+      "parent_bootstrap_ci95": [
+        0.7122070312500001,
+        0.79296875
+      ],
+      "parents": 128,
+      "rate": 0.75390625
+    }
+  },
+  "by_phase_composition": {
+    "mixed_phase": {
+      "phase_recall": {
+        "count": 256,
+        "parent_bootstrap_ci95": [
+          0.453125,
+          0.6055664062499999
+        ],
+        "parents": 128,
+        "rate": 0.52734375
+      },
+      "phase_recall_among_wls_misses": {
+        "count": 0,
+        "parent_bootstrap_ci95": null,
+        "parents": 0,
+        "rate": null
+      },
+      "wls_phase_recall": {
+        "count": 256,
+        "parent_bootstrap_ci95": [
+          1.0,
+          1.0
+        ],
+        "parents": 128,
+        "rate": 1.0
+      }
+    },
+    "pure_hif": {
+      "phase_recall": {
+        "count": 766,
+        "parent_bootstrap_ci95": [
+          0.6018276762402088,
+          0.6815879030035823
+        ],
+        "parents": 128,
+        "rate": 0.6409921671018277
+      },
+      "phase_recall_among_wls_misses": {
+        "count": 593,
+        "parent_bootstrap_ci95": [
+          0.515678081445993,
+          0.6097202956933427
+        ],
+        "parents": 128,
+        "rate": 0.5632377740303541
+      },
+      "wls_phase_recall": {
+        "count": 766,
+        "parent_bootstrap_ci95": [
+          0.19580970545039164,
+          0.2558746736292428
+        ],
+        "parents": 128,
+        "rate": 0.2258485639686684
+      }
+    },
+    "pure_unbalance": {
+      "phase_recall": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.8606770833333334,
+          0.9114908854166667
+        ],
+        "parents": 128,
+        "rate": 0.88671875
+      },
+      "phase_recall_among_wls_misses": {
+        "count": 189,
+        "parent_bootstrap_ci95": [
+          0.535514985924822,
+          0.6853093702839895
+        ],
+        "parents": 88,
+        "rate": 0.6137566137566137
+      },
+      "wls_phase_recall": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.7122070312500001,
+          0.79296875
+        ],
+        "parents": 128,
+        "rate": 0.75390625
+      }
+    }
+  },
+  "calibration": {
+    "anomaly_threshold": 0.99994957447052,
+    "calibration_healthy_anomaly_trigger_rate": 0.0099609375,
+    "calibration_healthy_phase_trigger_rate": 0.0099609375,
+    "calibration_healthy_wls_union_trigger_rate": 0.02919921875,
+    "calibration_kind": "source_heldout_healthy",
+    "calibration_parent_ids": [
+      "practical_ieee14_2050284069_calibration_00000",
+      "practical_ieee14_2050284069_calibration_00001",
+      "practical_ieee14_2050284069_calibration_00002",
+      "practical_ieee14_2050284069_calibration_00003",
+      "practical_ieee14_2050284069_calibration_00004",
+      "practical_ieee14_2050284069_calibration_00005",
+      "practical_ieee14_2050284069_calibration_00006",
+      "practical_ieee14_2050284069_calibration_00007",
+      "practical_ieee14_2050284069_calibration_00008",
+      "practical_ieee14_2050284069_calibration_00009",
+      "practical_ieee14_2050284069_calibration_00010",
+      "practical_ieee14_2050284069_calibration_00011",
+      "practical_ieee14_2050284069_calibration_00012",
+      "practical_ieee14_2050284069_calibration_00013",
+      "practical_ieee14_2050284069_calibration_00014",
+      "practical_ieee14_2050284069_calibration_00015",
+      "practical_ieee14_2050284069_calibration_00016",
+      "practical_ieee14_2050284069_calibration_00017",
+      "practical_ieee14_2050284069_calibration_00018",
+      "practical_ieee14_2050284069_calibration_00019",
+      "practical_ieee14_2050284069_calibration_00020",
+      "practical_ieee14_2050284069_calibration_00021",
+      "practical_ieee14_2050284069_calibration_00022",
+      "practical_ieee14_2050284069_calibration_00023",
+      "practical_ieee14_2050284069_calibration_00024",
+      "practical_ieee14_2050284069_calibration_00025",
+      "practical_ieee14_2050284069_calibration_00026",
+      "practical_ieee14_2050284069_calibration_00027",
+      "practical_ieee14_2050284069_calibration_00028",
+      "practical_ieee14_2050284069_calibration_00029",
+      "practical_ieee14_2050284069_calibration_00030",
+      "practical_ieee14_2050284069_calibration_00031",
+      "practical_ieee14_3722983233_calibration_00000",
+      "practical_ieee14_3722983233_calibration_00001",
+      "practical_ieee14_3722983233_calibration_00002",
+      "practical_ieee14_3722983233_calibration_00003",
+      "practical_ieee14_3722983233_calibration_00004",
+      "practical_ieee14_3722983233_calibration_00005",
+      "practical_ieee14_3722983233_calibration_00006",
+      "practical_ieee14_3722983233_calibration_00007",
+      "practical_ieee14_3722983233_calibration_00008",
+      "practical_ieee14_3722983233_calibration_00009",
+      "practical_ieee14_3722983233_calibration_00010",
+      "practical_ieee14_3722983233_calibration_00011",
+      "practical_ieee14_3722983233_calibration_00012",
+      "practical_ieee14_3722983233_calibration_00013",
+      "practical_ieee14_3722983233_calibration_00014",
+      "practical_ieee14_3722983233_calibration_00015",
+      "practical_ieee14_3722983233_calibration_00016",
+      "practical_ieee14_3722983233_calibration_00017",
+      "practical_ieee14_3722983233_calibration_00018",
+      "practical_ieee14_3722983233_calibration_00019",
+      "practical_ieee14_3722983233_calibration_00020",
+      "practical_ieee14_3722983233_calibration_00021",
+      "practical_ieee14_3722983233_calibration_00022",
+      "practical_ieee14_3722983233_calibration_00023",
+      "practical_ieee14_3722983233_calibration_00024",
+      "practical_ieee14_3722983233_calibration_00025",
+      "practical_ieee14_3722983233_calibration_00026",
+      "practical_ieee14_3722983233_calibration_00027",
+      "practical_ieee14_3722983233_calibration_00028",
+      "practical_ieee14_3722983233_calibration_00029",
+      "practical_ieee14_3722983233_calibration_00030",
+      "practical_ieee14_3722983233_calibration_00031",
+      "practical_ieee14_4023779744_calibration_00000",
+      "practical_ieee14_4023779744_calibration_00001",
+      "practical_ieee14_4023779744_calibration_00002",
+      "practical_ieee14_4023779744_calibration_00003",
+      "practical_ieee14_4023779744_calibration_00004",
+      "practical_ieee14_4023779744_calibration_00005",
+      "practical_ieee14_4023779744_calibration_00006",
+      "practical_ieee14_4023779744_calibration_00007",
+      "practical_ieee14_4023779744_calibration_00008",
+      "practical_ieee14_4023779744_calibration_00009",
+      "practical_ieee14_4023779744_calibration_00010",
+      "practical_ieee14_4023779744_calibration_00011",
+      "practical_ieee14_4023779744_calibration_00012",
+      "practical_ieee14_4023779744_calibration_00013",
+      "practical_ieee14_4023779744_calibration_00014",
+      "practical_ieee14_4023779744_calibration_00015",
+      "practical_ieee14_4023779744_calibration_00016",
+      "practical_ieee14_4023779744_calibration_00017",
+      "practical_ieee14_4023779744_calibration_00018",
+      "practical_ieee14_4023779744_calibration_00019",
+      "practical_ieee14_4023779744_calibration_00020",
+      "practical_ieee14_4023779744_calibration_00021",
+      "practical_ieee14_4023779744_calibration_00022",
+      "practical_ieee14_4023779744_calibration_00023",
+      "practical_ieee14_4023779744_calibration_00024",
+      "practical_ieee14_4023779744_calibration_00025",
+      "practical_ieee14_4023779744_calibration_00026",
+      "practical_ieee14_4023779744_calibration_00027",
+      "practical_ieee14_4023779744_calibration_00028",
+      "practical_ieee14_4023779744_calibration_00029",
+      "practical_ieee14_4023779744_calibration_00030",
+      "practical_ieee14_4023779744_calibration_00031",
+      "practical_ieee14_4276613575_calibration_00000",
+      "practical_ieee14_4276613575_calibration_00001",
+      "practical_ieee14_4276613575_calibration_00002",
+      "practical_ieee14_4276613575_calibration_00003",
+      "practical_ieee14_4276613575_calibration_00004",
+      "practical_ieee14_4276613575_calibration_00005",
+      "practical_ieee14_4276613575_calibration_00006",
+      "practical_ieee14_4276613575_calibration_00007",
+      "practical_ieee14_4276613575_calibration_00008",
+      "practical_ieee14_4276613575_calibration_00009",
+      "practical_ieee14_4276613575_calibration_00010",
+      "practical_ieee14_4276613575_calibration_00011",
+      "practical_ieee14_4276613575_calibration_00012",
+      "practical_ieee14_4276613575_calibration_00013",
+      "practical_ieee14_4276613575_calibration_00014",
+      "practical_ieee14_4276613575_calibration_00015",
+      "practical_ieee14_4276613575_calibration_00016",
+      "practical_ieee14_4276613575_calibration_00017",
+      "practical_ieee14_4276613575_calibration_00018",
+      "practical_ieee14_4276613575_calibration_00019",
+      "practical_ieee14_4276613575_calibration_00020",
+      "practical_ieee14_4276613575_calibration_00021",
+      "practical_ieee14_4276613575_calibration_00022",
+      "practical_ieee14_4276613575_calibration_00023",
+      "practical_ieee14_4276613575_calibration_00024",
+      "practical_ieee14_4276613575_calibration_00025",
+      "practical_ieee14_4276613575_calibration_00026",
+      "practical_ieee14_4276613575_calibration_00027",
+      "practical_ieee14_4276613575_calibration_00028",
+      "practical_ieee14_4276613575_calibration_00029",
+      "practical_ieee14_4276613575_calibration_00030",
+      "practical_ieee14_4276613575_calibration_00031"
+    ],
+    "checkpoint_sha256": "2aaa28cb85cd62059cdb4565032504345ce777b4dfea8bb891845dc38a35cbf0",
+    "family_threshold_policy": "Separate healthy-reference quantiles; no family-wise false-trigger guarantee",
+    "family_thresholds": {
+      "hif": 0.9891358613967896,
+      "measurement": 0.015819422900676727,
+      "parameter": 0.17211872339248657,
+      "topology": 0.011431802995502949,
+      "unbalance": 0.07259874790906906
+    },
+    "feature_schema_version": "wls_screen_v1",
+    "healthy_count": 10240,
+    "healthy_parent_count": 128,
+    "invalid_calibration_graphs": [],
+    "matched_wls_score": "max(J/chi2_threshold, max_abs_normalized_residual/local_threshold); omit local term in chi-square-only mode",
+    "matched_wls_threshold": 1.0366253148685936,
+    "measurement_convention": "phase_a_vm_total_3ph_power_net_injection_excludes_shunts",
+    "model_id": "65e41aa2ebde326712e6686fe4f590936fae8b70ecfcb88dffb8c85f30ae35cb",
+    "phase_threshold": 0.9999387264251709,
+    "population_note": "Empirical calibration only; independent parent-held-out testing is required. The WLS union has its own measured rate.",
+    "quantile": 0.99,
+    "requested_healthy_false_trigger_rate": 0.01,
+    "score_semantics": "uncalibrated sigmoid scores; thresholds are empirical healthy-reference quantiles",
+    "small_calibration_warning": false,
+    "threshold_comparison": ">",
+    "union_threshold_jointly_calibrated": false,
+    "wls_comparator": {
+      "chi2_alpha": 0.01,
+      "normalized_residual_threshold": 4.0,
+      "rule": "J >= chi2 threshold OR max(abs(rN)) >= normalized residual threshold"
+    }
+  },
+  "checkpoint_sha256": "2aaa28cb85cd62059cdb4565032504345ce777b4dfea8bb891845dc38a35cbf0",
+  "family_trigger_matrix": {
+    "healthy": {
+      "hif": {
+        "count": 5120,
+        "parent_bootstrap_ci95": [
+          0.005078125,
+          0.01015625
+        ],
+        "parents": 128,
+        "rate": 0.0076171875
+      },
+      "measurement": {
+        "count": 5120,
+        "parent_bootstrap_ci95": [
+          0.0095703125,
+          0.016796875
+        ],
+        "parents": 128,
+        "rate": 0.0130859375
+      },
+      "parameter": {
+        "count": 5120,
+        "parent_bootstrap_ci95": [
+          0.0087890625,
+          0.015625
+        ],
+        "parents": 128,
+        "rate": 0.012109375
+      },
+      "topology": {
+        "count": 5120,
+        "parent_bootstrap_ci95": [
+          0.008984375,
+          0.014453125
+        ],
+        "parents": 128,
+        "rate": 0.01171875
+      },
+      "unbalance": {
+        "count": 5120,
+        "parent_bootstrap_ci95": [
+          0.0029296875,
+          0.0109375
+        ],
+        "parents": 128,
+        "rate": 0.006640625
+      }
+    },
+    "hif": {
+      "hif": {
+        "count": 766,
+        "parent_bootstrap_ci95": [
+          0.33984375,
+          0.40992167101827676
+        ],
+        "parents": 128,
+        "rate": 0.37467362924281983
+      },
+      "measurement": {
+        "count": 766,
+        "parent_bootstrap_ci95": [
+          0.1471315719324147,
+          0.20366265287893362
+        ],
+        "parents": 128,
+        "rate": 0.17493472584856398
+      },
+      "parameter": {
+        "count": 766,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.006544502617801047
+        ],
+        "parents": 128,
+        "rate": 0.0026109660574412533
+      },
+      "topology": {
+        "count": 766,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.003926701570680628
+        ],
+        "parents": 128,
+        "rate": 0.0013054830287206266
+      },
+      "unbalance": {
+        "count": 766,
+        "parent_bootstrap_ci95": [
+          0.09895833333333333,
+          0.15315397305846423
+        ],
+        "parents": 128,
+        "rate": 0.12532637075718014
+      }
+    },
+    "measurement": {
+      "hif": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.0234375,
+          0.049479166666666664
+        ],
+        "parents": 128,
+        "rate": 0.03515625
+      },
+      "measurement": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          1.0,
+          1.0
+        ],
+        "parents": 128,
+        "rate": 1.0
+      },
+      "parameter": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.14453125,
+          0.20963541666666666
+        ],
+        "parents": 128,
+        "rate": 0.17708333333333334
+      },
+      "topology": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.5182291666666666,
+          0.5963541666666666
+        ],
+        "parents": 128,
+        "rate": 0.5572916666666666
+      },
+      "unbalance": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.0
+        ],
+        "parents": 128,
+        "rate": 0.0
+      }
+    },
+    "mixed": {
+      "hif": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.20572916666666666,
+          0.2513346354166666
+        ],
+        "parents": 128,
+        "rate": 0.22916666666666666
+      },
+      "measurement": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          1.0,
+          1.0
+        ],
+        "parents": 128,
+        "rate": 1.0
+      },
+      "parameter": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.4010416666666667,
+          0.4661783854166666
+        ],
+        "parents": 128,
+        "rate": 0.4348958333333333
+      },
+      "topology": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.6432291666666666,
+          0.6719075520833333
+        ],
+        "parents": 128,
+        "rate": 0.6588541666666666
+      },
+      "unbalance": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.0013020833333333333,
+          0.014322916666666666
+        ],
+        "parents": 128,
+        "rate": 0.006510416666666667
+      }
+    },
+    "parameter": {
+      "hif": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.006510416666666667
+        ],
+        "parents": 128,
+        "rate": 0.0026041666666666665
+      },
+      "measurement": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.8580729166666666,
+          0.9153645833333334
+        ],
+        "parents": 128,
+        "rate": 0.8893229166666666
+      },
+      "parameter": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.91015625,
+          0.953125
+        ],
+        "parents": 128,
+        "rate": 0.9322916666666666
+      },
+      "topology": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.9218424479166667,
+          0.9596354166666666
+        ],
+        "parents": 128,
+        "rate": 0.94140625
+      },
+      "unbalance": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.00390625
+        ],
+        "parents": 128,
+        "rate": 0.0013020833333333333
+      }
+    },
+    "topology": {
+      "hif": {
+        "count": 512,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.0
+        ],
+        "parents": 128,
+        "rate": 0.0
+      },
+      "measurement": {
+        "count": 512,
+        "parent_bootstrap_ci95": [
+          0.978515625,
+          0.998046875
+        ],
+        "parents": 128,
+        "rate": 0.990234375
+      },
+      "parameter": {
+        "count": 512,
+        "parent_bootstrap_ci95": [
+          0.33203125,
+          0.45122070312499996
+        ],
+        "parents": 128,
+        "rate": 0.390625
+      },
+      "topology": {
+        "count": 512,
+        "parent_bootstrap_ci95": [
+          0.994140625,
+          1.0
+        ],
+        "parents": 128,
+        "rate": 0.998046875
+      },
+      "unbalance": {
+        "count": 512,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.0
+        ],
+        "parents": 128,
+        "rate": 0.0
+      }
+    },
+    "unbalance": {
+      "hif": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.0013020833333333333,
+          0.010416666666666666
+        ],
+        "parents": 128,
+        "rate": 0.005208333333333333
+      },
+      "measurement": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.07291666666666667,
+          0.12239583333333333
+        ],
+        "parents": 128,
+        "rate": 0.09635416666666667
+      },
+      "parameter": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.0026041666666666665,
+          0.018229166666666668
+        ],
+        "parents": 128,
+        "rate": 0.010416666666666666
+      },
+      "topology": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.0026041666666666665,
+          0.01435546874999997
+        ],
+        "parents": 128,
+        "rate": 0.0078125
+      },
+      "unbalance": {
+        "count": 768,
+        "parent_bootstrap_ci95": [
+          0.89453125,
+          0.94140625
+        ],
+        "parents": 128,
+        "rate": 0.9192708333333334
+      }
+    }
+  },
+  "general_anomaly_recall": {
+    "count": 4350,
+    "parent_bootstrap_ci95": [
+      0.8019721711131554,
+      0.829732400251784
+    ],
+    "parents": 128,
+    "rate": 0.8158620689655173
+  },
+  "healthy_anomaly_trigger_rate": {
+    "count": 5120,
+    "parent_bootstrap_ci95": [
+      0.0044921875,
+      0.010546875
+    ],
+    "parents": 128,
+    "rate": 0.0072265625
+  },
+  "healthy_false_trigger_rate": {
+    "count": 5120,
+    "parent_bootstrap_ci95": [
+      0.0041015625,
+      0.01015625
+    ],
+    "parents": 128,
+    "rate": 0.0068359375
+  },
+  "invalid_screen_policy": "unavailable, never a negative prediction; independent acquisition fallback remains required",
+  "invalid_test_windows": [],
+  "matched_budget_wls": {
+    "gnn_recall_among_matched_wls_misses": {
+      "count": 836,
+      "parent_bootstrap_ci95": [
+        0.5453365354097459,
+        0.6233300796382896
+      ],
+      "parents": 128,
+      "rate": 0.5873205741626795
+    },
+    "healthy_false_trigger_rate": {
+      "count": 5120,
+      "parent_bootstrap_ci95": [
+        0.0052734375,
+        0.009765625
+      ],
+      "parents": 128,
+      "rate": 0.007421875
+    },
+    "nonphase_fault_trigger_rate": {
+      "count": 2560,
+      "parent_bootstrap_ci95": [
+        0.95,
+        0.96953125
+      ],
+      "parents": 128,
+      "rate": 0.96015625
+    },
+    "paired_phase_recall_gain_over_wls": {
+      "count": 1790,
+      "parent_bootstrap_ci95": [
+        0.16908029597115692,
+        0.2240223463687151
+      ],
+      "parents": 128,
+      "rate": 0.1972067039106145
+    },
+    "phase_recall": {
+      "count": 1790,
+      "parent_bootstrap_ci95": [
+        0.5117315162360335,
+        0.5542614828020135
+      ],
+      "parents": 128,
+      "rate": 0.5329608938547487
+    },
+    "threshold": 1.0366253148685936
+  },
+  "model_id": "65e41aa2ebde326712e6686fe4f590936fae8b70ecfcb88dffb8c85f30ae35cb",
+  "network_transfer_claim": "none; new parent IDs alone do not establish a different network",
+  "nonphase_fault_trigger_rate": {
+    "count": 2560,
+    "parent_bootstrap_ci95": [
+      0.00078125,
+      0.00546875
+    ],
+    "parents": 128,
+    "rate": 0.002734375
+  },
+  "offline_phase_strata": {
+    "affected_phase": {
+      "1": {
+        "count": 620,
+        "parent_bootstrap_ci95": [
+          0.6066223776223777,
+          0.7038232020283223
+        ],
+        "parents": 127,
+        "rate": 0.6548387096774193
+      },
+      "2": {
+        "count": 180,
+        "parent_bootstrap_ci95": [
+          0.36312150055991044,
+          0.547374686716792
+        ],
+        "parents": 57,
+        "rate": 0.45555555555555555
+      },
+      "3": {
+        "count": 222,
+        "parent_bootstrap_ci95": [
+          0.5398230088495575,
+          0.7037646198830408
+        ],
+        "parents": 66,
+        "rate": 0.6216216216216216
+      },
+      "fractions_0.04336_0.3416_0.6151": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.05031_0.5751_0.3746": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.06926_0.5476_0.3831": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.07051_0.5203_0.4091": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.07379_0.821_0.1052": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.08447_0.4409_0.4746": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.08578_0.5574_0.3568": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.08634_0.3868_0.5268": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.08656_0.42_0.4934": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.08809_0.308_0.6039": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.09006_0.6449_0.2651": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.09214_0.4554_0.4524": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.09986_0.8145_0.08561": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.1036_0.6575_0.2389": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1036_0.8304_0.06606": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1057_0.6424_0.252": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.105_0.3381_0.5568": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1068_0.3978_0.4954": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1111_0.3077_0.5812": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.1114_0.5666_0.322": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1141_0.6487_0.2372": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1145_0.614_0.2714": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1147_0.4878_0.3974": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1151_0.4515_0.4334": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1157_0.1171_0.7672": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1175_0.5257_0.3568": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1178_0.75_0.1323": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1179_0.5886_0.2936": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1223_0.6616_0.2161": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1225_0.3561_0.5213": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1238_0.197_0.6792": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1244_0.5679_0.3077": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1245_0.4864_0.3891": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1248_0.4482_0.4269": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1276_0.2884_0.584": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1278_0.7157_0.1565": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1279_0.3797_0.4924": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1305_0.3653_0.5041": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.133_0.2066_0.6604": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1342_0.5756_0.2903": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1346_0.5861_0.2794": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1363_0.2851_0.5786": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1374_0.4315_0.4311": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1375_0.5257_0.3368": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1387_0.2133_0.648": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1425_0.3283_0.5292": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1449_0.3816_0.4735": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1461_0.6467_0.2072": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1463_0.3812_0.4726": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1467_0.7627_0.09068": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.146_0.6261_0.2279": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.147_0.1814_0.6715": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1481_0.3715_0.4803": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1482_0.2984_0.5534": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1484_0.246_0.6056": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.1487_0.4801_0.3711": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1493_0.6724_0.1784": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1498_0.4212_0.4291": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1503_0.137_0.7127": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1508_0.3374_0.5118": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1508_0.5429_0.3063": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1516_0.5262_0.3222": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1521_0.4237_0.4241": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.152_0.3426_0.5054": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1536_0.6445_0.2019": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1543_0.4342_0.4114": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.154_0.2409_0.6051": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.156_0.2274_0.6166": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1578_0.3034_0.5389": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1584_0.3152_0.5263": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1586_0.3067_0.5347": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1591_0.5748_0.2662": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1602_0.5078_0.332": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1634_0.4211_0.4154": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1637_0.5738_0.2625": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1639_0.2775_0.5586": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.163_0.3325_0.5045": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1654_0.6131_0.2215": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1657_0.2004_0.6338": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1668_0.6299_0.2032": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1675_0.4538_0.3787": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1682_0.1528_0.679": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1688_0.4152_0.416": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1718_0.2438_0.5844": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.171_0.4241_0.405": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1737_0.2389_0.5873": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.174_0.3633_0.4626": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1753_0.5_0.3247": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1754_0.2356_0.5891": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1754_0.294_0.5306": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1793_0.3722_0.4485": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1805_0.515_0.3045": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1813_0.4535_0.3652": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1822_0.5042_0.3135": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1826_0.157_0.6604": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.1872_0.5441_0.2686": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1899_0.29_0.5202": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1917_0.649_0.1593": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1918_0.403_0.4052": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1924_0.3064_0.5012": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1971_0.383_0.4199": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.1984_0.5881_0.2135": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2009_0.6701_0.129": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.2025_0.5011_0.2964": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2033_0.3689_0.4278": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2038_0.5511_0.2451": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.2044_0.3487_0.447": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2091_0.592_0.1989": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.2095_0.5348_0.2557": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2107_0.2669_0.5224": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2112_0.2424_0.5464": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.211_0.3392_0.4498": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2124_0.3221_0.4655": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2132_0.7331_0.05368": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.2135_0.1423_0.6442": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2169_0.1671_0.616": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.218_0.5266_0.2554": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.21_0.5539_0.2361": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.2204_0.2829_0.4968": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2204_0.6644_0.1152": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.2222_0.3032_0.4746": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2228_0.3419_0.4353": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2231_0.4888_0.2882": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.225_0.2564_0.5186": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2262_0.4887_0.285": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.2272_0.547_0.2258": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2274_0.6413_0.1313": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.2276_0.3111_0.4613": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2279_0.1294_0.6426": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2291_0.1748_0.5961": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2291_0.4365_0.3344": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2294_0.5603_0.2103": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.2302_0.3063_0.4634": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2306_0.1894_0.58": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2323_0.6018_0.1659": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2332_0.2803_0.4865": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2334_0.06157_0.705": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2335_0.4801_0.2864": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2355_0.4448_0.3196": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2356_0.6585_0.1059": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2365_0.239_0.5244": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2381_0.56_0.2019": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2391_0.1505_0.6104": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.2421_0.4783_0.2796": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2422_0.2176_0.5402": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2436_0.3836_0.3728": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.243_0.1166_0.6404": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.2456_0.4706_0.2837": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2462_0.5556_0.1982": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2466_0.1662_0.5872": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.2466_0.1877_0.5657": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.2497_0.1667_0.5836": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.2503_0.2416_0.5081": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2506_0.4886_0.2607": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2511_0.1606_0.5883": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2513_0.3472_0.4015": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2514_0.5933_0.1553": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.2519_0.6309_0.1172": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.251_0.6998_0.04924": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.2527_0.1028_0.6445": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.2533_0.3763_0.3704": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2573_0.1282_0.6145": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.2581_0.4709_0.271": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2584_0.5066_0.2351": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.2588_0.3368_0.4044": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2602_0.2609_0.4789": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2614_0.2994_0.4392": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.262_0.4944_0.2435": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2634_0.3374_0.3992": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2635_0.3031_0.4334": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.263_0.2533_0.4836": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2653_0.5261_0.2086": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.266_0.2667_0.4673": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.269_0.5343_0.1967": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.2702_0.2166_0.5132": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2703_0.2323_0.4974": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2712_0.594_0.1348": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.2716_0.3085_0.4199": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2721_0.5888_0.1391": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2722_0.2034_0.5243": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2735_0.1733_0.5532": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2776_0.6221_0.1003": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2797_0.4968_0.2235": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2845_0.263_0.4524": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.2847_0.1321_0.5832": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.2859_0.5754_0.1387": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2863_0.1894_0.5243": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2869_0.1103_0.6028": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.2876_0.2762_0.4362": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2894_0.4141_0.2965": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2895_0.2991_0.4114": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2899_0.1463_0.5638": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2899_0.2938_0.4163": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2902_0.2292_0.4806": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.295_0.437_0.268": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.2961_0.2954_0.4085": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.2962_0.2489_0.4549": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.297_0.233_0.4699": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.2985_0.2389_0.4625": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.3008_0.5067_0.1925": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.3011_0.5944_0.1045": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.3053_0.1526_0.5421": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.3072_0.5687_0.1241": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.307_0.4405_0.2524": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.3088_0.4797_0.2116": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.3099_0.2023_0.4878": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.3104_0.4954_0.1943": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.3145_0.2564_0.4291": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.3151_0.302_0.3829": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.3152_0.1551_0.5298": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.315_0.313_0.372": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.3219_0.4657_0.2123": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.3326_0.4801_0.1873": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.3536_0.3568_0.2895": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.3551_0.215_0.4299": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.357_0.09133_0.5517": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.3584_0.5026_0.139": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.3596_0.1472_0.4932": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.3598_0.1968_0.4434": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.3638_0.4973_0.1389": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.3675_0.2246_0.4079": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.3693_0.4632_0.1675": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.3704_0.1994_0.4302": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.3759_0.4659_0.1581": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.3811_0.5285_0.0904": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.3871_0.2991_0.3137": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.3877_0.4036_0.2087": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.3881_0.4502_0.1617": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.391_0.142_0.467": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.391_0.4889_0.1201": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.3933_0.4193_0.1874": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.3939_0.3637_0.2424": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.3965_0.2759_0.3276": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.3983_0.06174_0.54": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.3993_0.3567_0.244": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.399_0.07149_0.5295": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.3_0.4519_0.248": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4041_0.2928_0.3031": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4045_0.4882_0.1072": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4063_0.3845_0.2091": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4071_0.5658_0.02711": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4084_0.4174_0.1742": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.408_0.2294_0.3626": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4096_0.3436_0.2467": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4109_0.3412_0.2479": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4132_0.07647_0.5104": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4138_0.4276_0.1586": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4142_0.3751_0.2106": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4145_0.2562_0.3294": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.414_0.08126_0.5048": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.4164_0.1704_0.4133": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.416_0.2772_0.3068": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4173_0.4426_0.14": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.4176_0.4824_0.09996": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4189_0.1683_0.4127": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4193_0.141_0.4397": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4198_0.2491_0.3311": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4218_0.4569_0.1213": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4258_0.07434_0.4999": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4276_0.3804_0.1921": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4302_0.386_0.1837": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4314_0.1268_0.4418": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4329_0.08481_0.4823": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4334_0.1923_0.3744": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4339_0.2762_0.2899": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4346_0.2287_0.3367": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4363_0.2883_0.2753": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4365_0.1323_0.4312": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4379_0.4309_0.1312": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4407_0.2445_0.3148": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4425_0.3418_0.2157": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4431_0.3257_0.2312": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4437_0.3544_0.2019": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4446_0.4558_0.09958": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4447_0.3017_0.2537": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4482_0.4891_0.06272": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4485_0.5025_0.04899": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4493_0.1712_0.3796": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4499_0.3441_0.2061": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.44_0.3743_0.1857": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4535_0.3838_0.1628": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4541_0.2504_0.2955": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4557_0.352_0.1923": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4561_0.2876_0.2563": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4566_0.1337_0.4098": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4583_0.2355_0.3063": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4597_0.1663_0.374": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4598_0.4253_0.1149": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4611_0.3101_0.2288": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4654_0.3126_0.222": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4686_0.3723_0.1591": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4708_0.2557_0.2735": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4726_0.2053_0.3222": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4782_0.1912_0.3306": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4805_0.3987_0.1208": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.481_0.3653_0.1537": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4838_0.183_0.3332": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4842_0.211_0.3048": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.484_0.2097_0.3062": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4851_0.451_0.06393": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4852_0.1453_0.3695": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4863_0.4028_0.1109": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4866_0.2284_0.285": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4873_0.3789_0.1338": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4896_0.1581_0.3522": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4912_0.2024_0.3064": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4924_0.1612_0.3465": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4932_0.2466_0.2601": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.4988_0.3445_0.1567": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5028_0.2904_0.2068": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5039_0.07213_0.4239": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5045_0.2577_0.2378": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5067_0.2123_0.281": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.506_0.2553_0.2386": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.511_0.08359_0.4054": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5122_0.3393_0.1485": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5133_0.2644_0.2222": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5146_0.2644_0.221": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5149_0.4045_0.08068": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5158_0.4012_0.08293": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5167_0.05741_0.4259": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5169_0.2003_0.2828": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5173_0.2884_0.1943": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5177_0.3574_0.1249": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5193_0.3635_0.1173": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5196_0.2864_0.194": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5212_0.07623_0.4026": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5252_0.3186_0.1562": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5271_0.1256_0.3473": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.527_0.1383_0.3347": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5303_0.2475_0.2222": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5309_0.2069_0.2622": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5372_0.07517_0.3876": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5399_0.1209_0.3392": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5408_0.2096_0.2496": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5415_0.2427_0.2158": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.543_0.3424_0.1146": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.546_0.2699_0.184": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5483_0.1037_0.348": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5496_0.3315_0.1188": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5516_0.121_0.3274": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5523_0.2635_0.1842": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5546_0.1279_0.3175": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5639_0.1751_0.261": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5645_0.1142_0.3214": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5657_0.09641_0.3379": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "fractions_0.5657_0.3455_0.08872": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5682_0.2611_0.1708": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5703_0.1293_0.3004": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5709_0.2933_0.1357": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5746_0.1551_0.2703": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5769_0.1748_0.2483": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.576_0.1613_0.2628": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5782_0.07439_0.3474": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5782_0.2642_0.1575": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5826_0.2087_0.2087": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5848_0.1289_0.2863": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.584_0.1903_0.2257": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5859_0.1306_0.2835": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.589_0.2766_0.1344": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.589_0.3121_0.0989": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5933_0.1532_0.2535": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.5949_0.1591_0.246": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.6013_0.08624_0.3125": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.6019_0.183_0.2151": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.6127_0.2926_0.09464": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.6155_0.1977_0.1868": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.6233_0.3105_0.06618": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.6237_0.1402_0.2361": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.6273_0.1991_0.1736": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.6292_0.1054_0.2653": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.631_0.1094_0.2596": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.6329_0.2213_0.1457": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.6389_0.1175_0.2436": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.6609_0.1857_0.1534": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.5
+      },
+      "fractions_0.6641_0.1645_0.1714": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.6653_0.1865_0.1482": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.6676_0.2103_0.1221": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.6715_0.2666_0.06188": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.6959_0.07255_0.2315": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.7455_0.1431_0.1115": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.7559_0.2043_0.03979": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.7784_0.165_0.05662": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      },
+      "fractions_0.8309_0.04202_0.1271": {
+        "count": 2,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 1.0
+      }
+    },
+    "phase_localizable": {},
+    "residual_visible_energy_bin": {}
+  },
+  "paired_phase_recall_gain_over_wls": {
+    "count": 1790,
+    "parent_bootstrap_ci95": [
+      0.1394988589884278,
+      0.19532645089285713
+    ],
+    "parents": 128,
+    "rate": 0.1670391061452514
+  },
+  "phase_acquisition_fraction": {
+    "count": 9470,
+    "parent_bootstrap_ci95": [
+      0.13692942743428116,
+      0.1481546990496304
+    ],
+    "parents": 128,
+    "rate": 0.14244984160506863
+  },
+  "phase_positive_unavailable_count": 0,
+  "phase_recall": {
+    "count": 1790,
+    "parent_bootstrap_ci95": [
+      0.7044692737430167,
+      0.7581073080855946
+    ],
+    "parents": 128,
+    "rate": 0.7301675977653631
+  },
+  "phase_recall_among_wls_misses": {
+    "count": 782,
+    "parent_bootstrap_ci95": [
+      0.532382949124236,
+      0.6136683229303548
+    ],
+    "parents": 128,
+    "rate": 0.5754475703324808
+  },
+  "phase_trigger_recall_counting_unavailable_as_untriggered": 0.7301675977653631,
+  "screen_availability": 1.0,
+  "test_parent_ids": [
+    "practical_ieee14_2050284069_test_00000",
+    "practical_ieee14_2050284069_test_00001",
+    "practical_ieee14_2050284069_test_00002",
+    "practical_ieee14_2050284069_test_00003",
+    "practical_ieee14_2050284069_test_00004",
+    "practical_ieee14_2050284069_test_00005",
+    "practical_ieee14_2050284069_test_00006",
+    "practical_ieee14_2050284069_test_00007",
+    "practical_ieee14_2050284069_test_00008",
+    "practical_ieee14_2050284069_test_00009",
+    "practical_ieee14_2050284069_test_00010",
+    "practical_ieee14_2050284069_test_00011",
+    "practical_ieee14_2050284069_test_00012",
+    "practical_ieee14_2050284069_test_00013",
+    "practical_ieee14_2050284069_test_00014",
+    "practical_ieee14_2050284069_test_00015",
+    "practical_ieee14_2050284069_test_00016",
+    "practical_ieee14_2050284069_test_00017",
+    "practical_ieee14_2050284069_test_00018",
+    "practical_ieee14_2050284069_test_00019",
+    "practical_ieee14_2050284069_test_00020",
+    "practical_ieee14_2050284069_test_00021",
+    "practical_ieee14_2050284069_test_00022",
+    "practical_ieee14_2050284069_test_00023",
+    "practical_ieee14_2050284069_test_00024",
+    "practical_ieee14_2050284069_test_00025",
+    "practical_ieee14_2050284069_test_00026",
+    "practical_ieee14_2050284069_test_00027",
+    "practical_ieee14_2050284069_test_00028",
+    "practical_ieee14_2050284069_test_00029",
+    "practical_ieee14_2050284069_test_00030",
+    "practical_ieee14_2050284069_test_00031",
+    "practical_ieee14_3722983233_test_00000",
+    "practical_ieee14_3722983233_test_00001",
+    "practical_ieee14_3722983233_test_00002",
+    "practical_ieee14_3722983233_test_00003",
+    "practical_ieee14_3722983233_test_00004",
+    "practical_ieee14_3722983233_test_00005",
+    "practical_ieee14_3722983233_test_00006",
+    "practical_ieee14_3722983233_test_00007",
+    "practical_ieee14_3722983233_test_00008",
+    "practical_ieee14_3722983233_test_00009",
+    "practical_ieee14_3722983233_test_00010",
+    "practical_ieee14_3722983233_test_00011",
+    "practical_ieee14_3722983233_test_00012",
+    "practical_ieee14_3722983233_test_00013",
+    "practical_ieee14_3722983233_test_00014",
+    "practical_ieee14_3722983233_test_00015",
+    "practical_ieee14_3722983233_test_00016",
+    "practical_ieee14_3722983233_test_00017",
+    "practical_ieee14_3722983233_test_00018",
+    "practical_ieee14_3722983233_test_00019",
+    "practical_ieee14_3722983233_test_00020",
+    "practical_ieee14_3722983233_test_00021",
+    "practical_ieee14_3722983233_test_00022",
+    "practical_ieee14_3722983233_test_00023",
+    "practical_ieee14_3722983233_test_00024",
+    "practical_ieee14_3722983233_test_00025",
+    "practical_ieee14_3722983233_test_00026",
+    "practical_ieee14_3722983233_test_00027",
+    "practical_ieee14_3722983233_test_00028",
+    "practical_ieee14_3722983233_test_00029",
+    "practical_ieee14_3722983233_test_00030",
+    "practical_ieee14_3722983233_test_00031",
+    "practical_ieee14_4023779744_test_00000",
+    "practical_ieee14_4023779744_test_00001",
+    "practical_ieee14_4023779744_test_00002",
+    "practical_ieee14_4023779744_test_00003",
+    "practical_ieee14_4023779744_test_00004",
+    "practical_ieee14_4023779744_test_00005",
+    "practical_ieee14_4023779744_test_00006",
+    "practical_ieee14_4023779744_test_00007",
+    "practical_ieee14_4023779744_test_00008",
+    "practical_ieee14_4023779744_test_00009",
+    "practical_ieee14_4023779744_test_00010",
+    "practical_ieee14_4023779744_test_00011",
+    "practical_ieee14_4023779744_test_00012",
+    "practical_ieee14_4023779744_test_00013",
+    "practical_ieee14_4023779744_test_00014",
+    "practical_ieee14_4023779744_test_00015",
+    "practical_ieee14_4023779744_test_00016",
+    "practical_ieee14_4023779744_test_00017",
+    "practical_ieee14_4023779744_test_00018",
+    "practical_ieee14_4023779744_test_00019",
+    "practical_ieee14_4023779744_test_00020",
+    "practical_ieee14_4023779744_test_00021",
+    "practical_ieee14_4023779744_test_00022",
+    "practical_ieee14_4023779744_test_00023",
+    "practical_ieee14_4023779744_test_00024",
+    "practical_ieee14_4023779744_test_00025",
+    "practical_ieee14_4023779744_test_00026",
+    "practical_ieee14_4023779744_test_00027",
+    "practical_ieee14_4023779744_test_00028",
+    "practical_ieee14_4023779744_test_00029",
+    "practical_ieee14_4023779744_test_00030",
+    "practical_ieee14_4023779744_test_00031",
+    "practical_ieee14_4276613575_test_00000",
+    "practical_ieee14_4276613575_test_00001",
+    "practical_ieee14_4276613575_test_00002",
+    "practical_ieee14_4276613575_test_00003",
+    "practical_ieee14_4276613575_test_00004",
+    "practical_ieee14_4276613575_test_00005",
+    "practical_ieee14_4276613575_test_00006",
+    "practical_ieee14_4276613575_test_00007",
+    "practical_ieee14_4276613575_test_00008",
+    "practical_ieee14_4276613575_test_00009",
+    "practical_ieee14_4276613575_test_00010",
+    "practical_ieee14_4276613575_test_00011",
+    "practical_ieee14_4276613575_test_00012",
+    "practical_ieee14_4276613575_test_00013",
+    "practical_ieee14_4276613575_test_00014",
+    "practical_ieee14_4276613575_test_00015",
+    "practical_ieee14_4276613575_test_00016",
+    "practical_ieee14_4276613575_test_00017",
+    "practical_ieee14_4276613575_test_00018",
+    "practical_ieee14_4276613575_test_00019",
+    "practical_ieee14_4276613575_test_00020",
+    "practical_ieee14_4276613575_test_00021",
+    "practical_ieee14_4276613575_test_00022",
+    "practical_ieee14_4276613575_test_00023",
+    "practical_ieee14_4276613575_test_00024",
+    "practical_ieee14_4276613575_test_00025",
+    "practical_ieee14_4276613575_test_00026",
+    "practical_ieee14_4276613575_test_00027",
+    "practical_ieee14_4276613575_test_00028",
+    "practical_ieee14_4276613575_test_00029",
+    "practical_ieee14_4276613575_test_00030",
+    "practical_ieee14_4276613575_test_00031"
+  ],
+  "transfer_study": "source_parent_heldout",
+  "uncertainty_method": "percentile bootstrap of physical parents, keeping every paired window together",
+  "union_acquisition_fraction": {
+    "count": 9470,
+    "parent_bootstrap_ci95": [
+      0.4231256599788807,
+      0.4327349524815206
+    ],
+    "parents": 128,
+    "rate": 0.42787750791974655
+  },
+  "union_healthy_false_trigger_rate": {
+    "count": 5120,
+    "parent_bootstrap_ci95": [
+      0.0185546875,
+      0.026958007812499997
+    ],
+    "parents": 128,
+    "rate": 0.02265625
+  },
+  "union_nonphase_fault_trigger_rate": {
+    "count": 2560,
+    "parent_bootstrap_ci95": [
+      0.958984375,
+      0.976171875
+    ],
+    "parents": 128,
+    "rate": 0.96796875
+  },
+  "union_phase_recall": {
+    "count": 1790,
+    "parent_bootstrap_ci95": [
+      0.7955307262569833,
+      0.8324069109138068
+    ],
+    "parents": 128,
+    "rate": 0.8145251396648044
+  },
+  "valid_test_windows": 9470,
+  "wls_comparator_available": true,
+  "wls_healthy_false_trigger_rate": {
+    "count": 5120,
+    "parent_bootstrap_ci95": [
+      0.012890625,
+      0.0197265625
+    ],
+    "parents": 128,
+    "rate": 0.0162109375
+  },
+  "wls_nonphase_fault_trigger_rate": {
+    "count": 2560,
+    "parent_bootstrap_ci95": [
+      0.958583984375,
+      0.97578125
+    ],
+    "parents": 128,
+    "rate": 0.967578125
+  },
+  "wls_phase_recall": {
+    "count": 1790,
+    "parent_bootstrap_ci95": [
+      0.5435267857142857,
+      0.5831473214285714
+    ],
+    "parents": 128,
+    "rate": 0.5631284916201117
+  }
+}

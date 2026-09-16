@@ -41,6 +41,50 @@ def _table(headers, rows):
             *["| " + " | ".join(map(_cell, row)) + " |" for row in rows]]
 
 
+def generation_coverage(generation):
+    """Normalize legacy variant failures and practical proposal receipts.
+
+    Missing information stays unavailable. Practical corpus counts refer to
+    proposals and selected cohorts, not to independent test outcomes.
+    """
+    counts = generation.get("counts", {})
+    practical = "practical" in generation.get("schema", "")
+    failures = generation.get("physical_failures")
+    if isinstance(failures, dict) and failures.get("count") is not None:
+        failure_count = failures["count"]
+        failure_scope = "physical proposals or parent-source attempts"
+    elif isinstance(generation.get("failed_variants"), list):
+        failure_count = len(generation["failed_variants"])
+        failure_scope = "physical variants"
+    elif practical and isinstance(counts, dict):
+        # Serial practical receipts expose the same events as counters. The
+        # parallel wrapper additionally supplies a merged failure ledger.
+        failure_count = counts.get("parent_source_rejections", 0) + sum(
+            value for key, value in counts.items()
+            if key.startswith("proposal:") and key.endswith(":simulation_failure"))
+        failure_scope = "physical proposals or parent-source attempts"
+    else:
+        failure_count, failure_scope = None, "physical variants / proposals"
+    unfilled = {key.split(":", 1)[0]: value for key, value in counts.items()
+                if key.endswith(":unfilled_slots")}
+    if practical:
+        unfilled = {split: unfilled.get(split, 0)
+                    for split in generation.get("parents_by_split", {})}
+    cohorts = {}
+    for key, value in counts.items():
+        parts = key.split(":")
+        if len(parts) == 3 and parts[0] in ("main", "boundary"):
+            cohorts.setdefault(parts[0], {}).setdefault(parts[1], {})[parts[2]] = value
+    return {"schema": generation.get("schema"), "practical_selected_cohort": practical,
+        "physical_failure_count": failure_count, "physical_failure_scope": failure_scope,
+        "failure_reason_histogram": failures.get("reason_histogram", {}) if isinstance(failures, dict) else {},
+        "physical_failure_ledger": failures.get("ledger") if isinstance(failures, dict) else None,
+        "unfilled_slots_by_split": unfilled,
+        "unfilled_slot_count": sum(unfilled.values()) if practical or unfilled else None,
+        "cohort_counts": cohorts, "proposal_audit": generation.get("proposal_audit", {}),
+        "main_minimum_paired_distance": generation.get("main_minimum_paired_distance")}
+
+
 def audit_artifacts(evaluation, training=None, *, bootstrap_replicates=1000, seed=2026):
     """Check artifact pairing and expose independent-parent coverage explicitly."""
     predictions = evaluation.get("predictions", [])
@@ -146,16 +190,68 @@ def render_report(evaluation, training=None, *, title="WLS screen GNN: held-out 
         coverage.append(["Validation-selected seed / epoch", f"{selected.get('seed')} / {selected.get('epoch')}"])
     lines += _table(["Coverage item", "Value"], coverage)
     if generation is not None:
+        generated = generation_coverage(generation)
+        audit["generation_coverage"] = generated
         lines += ["", "Physical-corpus generation audit:", ""]
         physical_rows = [
+            ["Generation schema / policy", f"{generation.get('schema', 'not available')} / {generation.get('policy_version', 'not available')}"],
             ["Corpus seed", generation.get("seed", "not available")],
-            ["Failed physical variants", len(generation.get("failed_variants", []))],
+            [f"Failed {generated['physical_failure_scope']}", generated["physical_failure_count"]
+                if generated["physical_failure_count"] is not None else "not available"],
             ["Maximum healthy balanced-equation mismatch (pu)", generation.get("healthy_max_balanced_equation_error_pu", "not available")],
             ["Maximum healthy squared discrepancy in measurement-sigma units", generation.get("healthy_max_squared_sigma_scaled_discrepancy", "not available")],
             ["Measurement convention", generation.get("measurement_convention", "not available")],
             ["Manifest SHA-256", generation.get("manifest_sha256", "not available")],
         ]
+        if generated["practical_selected_cohort"]:
+            physical_rows += [
+                ["Main minimum paired noiseless mean distance", generated["main_minimum_paired_distance"]],
+                ["Attempt cap per slot", generation.get("attempt_cap_per_slot", "not available")],
+                ["Unfilled slots", generated["unfilled_slot_count"]],
+                ["Admission uses a WLS alarm", generation.get("admission_uses_wls_alarm", "not available")],
+                ["Admission uses noisy or learned scores", generation.get("admission_uses_noisy_or_learned_scores", "not available")],
+                ["Reported model identical within each parent", generation.get("reported_model_stays_identical_within_parent", "not available")],
+            ]
         lines += _table(["Physical check", "Recorded result"], physical_rows)
+        if generated["cohort_counts"]:
+            cohort_rows = []
+            for cohort, splits in sorted(generated["cohort_counts"].items()):
+                for split, values in sorted(splits.items()):
+                    cohort_rows.append([cohort, split, values.get("rows", "not available"),
+                        values.get("noise_windows", "not available"), values.get("healthy", 0)])
+            lines += ["", "Generated cohort coverage (before graph availability checks):", ""]
+            lines += _table(["Cohort", "Split", "Noiseless means", "Noisy windows", "Healthy means"], cohort_rows)
+            lines += ["", "Main and boundary cohorts can share operating parents within a split. "
+                "Their counts must not be added to claim additional independent parents. "
+                "The boundary corpus retains positive fault labels, including SFT-range HIF challenge cases; "
+                "it is evaluated separately with the frozen threshold."]
+        if generated["practical_selected_cohort"]:
+            lines += ["", "The main cohort is selected using declared physical rules and a paired noiseless mean-distance floor. "
+                "This distance knows the exact healthy parent and fault mean; it is an offline oracle measure, "
+                "not the fitted WLS residual statistic or a guarantee that the GNN can distinguish unknown operating states. "
+                "Main-cohort performance does not describe the unrestricted fault population."]
+        if generation.get("profiles"):
+            lines += ["", "Recorded scenario profiles:", ""]
+            lines += _table(["Profile", "Physical scope"], sorted(generation["profiles"].items()))
+        histograms = [
+            ("Proposal event", generated["proposal_audit"].get("event_histogram", {})),
+            ("Proposal outcome", generated["proposal_audit"].get("outcome_histogram", {})),
+            ("Rejection reason", generated["proposal_audit"].get("rejection_reason_histogram", {})),
+            ("Physical failure reason", generated["failure_reason_histogram"]),
+            ("Unfilled slots by split", generated["unfilled_slots_by_split"]),
+        ]
+        histogram_rows = [[kind, reason, count] for kind, histogram in histograms
+                          for reason, count in sorted(histogram.items())]
+        if histogram_rows:
+            lines += ["", f"Proposal ledger records: {generated['proposal_audit'].get('records', 'not available')}.", ""]
+            lines += _table(["Receipt category", "Outcome / reason / split", "Count"], histogram_rows)
+            lines += ["", "One proposal may have several rejection reasons. These histograms overlap and must not be summed as a count of independent failed cases."]
+        if generation.get("source_reports"):
+            lines += ["", "Physical generation sources:", ""]
+            lines += _table(["Shard", "Seed", "Source scope", "Generation receipt"], [
+                [source.get("shard_index", "not available"), source.get("seed", "not available"),
+                 source.get("shard_root", "not available"), source.get("generation_report", "not available")]
+                for source in generation["source_reports"]])
         if generation.get("severity_definitions"):
             lines += ["", "Recorded severity definitions:", "", "```json",
                       json.dumps(generation["severity_definitions"], indent=2, sort_keys=True), "```"]
@@ -283,8 +379,10 @@ def render_report(evaluation, training=None, *, title="WLS screen GNN: held-out 
     lines += [f"- {warning}" for warning in audit["warnings"]]
     if generation is not None:
         lines += [f"- Corpus scope: {limitation}." for limitation in generation.get("limitations", [])]
-        if generation.get("failed_variants"):
-            lines.append("- Physical simulation failures are excluded from the valid-screen denominator; inspect failed_variants in the generation report before interpreting coverage.")
+        if generated["physical_failure_count"]:
+            lines.append("- Physical simulation failures are excluded from the valid-screen denominator; inspect the physical-failure ledger or legacy failed_variants records in the generation report before interpreting coverage.")
+        if generated["unfilled_slot_count"]:
+            lines.append("- Unfilled proposal slots reduce the generated cohort relative to the planned design; review their counts and causes alongside recall.")
     lines += [
         "- Independent operating parents are distinct from noisy windows. Generalization claims must use parent-held-out evidence and preserve the physical-parent identity.",
         "- The input contract is phase-A voltage magnitude and total three-phase powers, with injections excluding shunts already modeled by WLS. Export convention and simulator equivalence need physical audits; a manifest label alone does not establish them.",

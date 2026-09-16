@@ -1,0 +1,34 @@
+{
+  "recorded_at_utc": "2026-09-16 17:29:08 UTC",
+  "source_commit": "1c1e4faa9f2dbb0746d454dcce7093b575ce3908",
+  "experiment": "SFT-supported practical signal cohort with separate positive boundary evaluation",
+  "generation_root_seed": 2026091933,
+  "physical_workers": 4,
+  "wls_workers": 4,
+  "parents_by_split": {"train": 384, "validation": 96, "calibration": 128, "test": 128},
+  "noise_replicates": 2,
+  "healthy_replicates": {"train": 2, "validation": 12, "calibration": 80, "test": 40},
+  "main_policy": {
+    "measurement": "Single and 2-5 same-channel meters; every bias 10-15 sigma",
+    "parameter": "Active nonzero-R/X line; true physical R/X/RX factors 0.1-0.5 or 2-5; reported model unchanged",
+    "unbalance": "Dirichlet(3,3,3) load fractions; actual maximum sequence VUF >= 1%",
+    "hif": "Explicit stronger curriculum: log-uniform 5-10,10-20,20-40 pu; two-terminal differential >=6 sigma",
+    "topology": "Connected physical branch-status changes; reported model unchanged; not full node-breaker topology",
+    "mixed": "Meter+parameter, meter+topology, meter+HIF; physical component individually core before meter overlay",
+    "paired_noiseless_measurement_distance_minimum": 5.0,
+    "selection_uses_wls_alarm": false,
+    "selection_uses_learned_score": false,
+    "noise_sigma_voltage_pu": 0.001,
+    "noise_sigma_power_pu": 0.01
+  },
+  "boundary_policy": "Retain representative below-main physical positives and uniform SFT-matched HIF Rpu20-200; never relabel healthy",
+  "model_training": "Unchanged GNN/loss/optimizer/default config; five seeds0-4; validation-only best checkpoint",
+  "calibration": "Independent healthy main calibration parents; empirical99th percentile, strict greater-than trigger",
+  "test_policy": "Freeze all models and thresholds before test scoring; no tuning on final main/boundary results",
+  "comparators": {
+    "wls": "alpha0.01 OR max normalized residual >=4",
+    "matched_wls": "Same healthy-calibration1%budget on max(J/chi2limit,maxrN/4)",
+    "previous_gnn": "V1 frozen weights and scaler with new healthy-only calibration on the same main test cohort; explicitly a comparison on changed population"
+  },
+  "reporting": "Report practical-main performance, acceptance/phase/asset coverage, and boundary performance separately; results are conditional on declared cohort, not general fault coverage"
+}

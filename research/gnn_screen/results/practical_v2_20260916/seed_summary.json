@@ -1,0 +1,786 @@
+{
+  "previous_model_policy": "V1 weights/scaler remain frozen; thresholds calibrated on V2 healthy calibration parents only",
+  "seeds": [
+    {
+      "by_phase_composition": {
+        "mixed_phase": {
+          "phase_recall": {
+            "count": 256,
+            "parent_bootstrap_ci95": [
+              0.453125,
+              0.6055664062499999
+            ],
+            "parents": 128,
+            "rate": 0.52734375
+          },
+          "phase_recall_among_wls_misses": {
+            "count": 0,
+            "parent_bootstrap_ci95": null,
+            "parents": 0,
+            "rate": null
+          },
+          "wls_phase_recall": {
+            "count": 256,
+            "parent_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "parents": 128,
+            "rate": 1.0
+          }
+        },
+        "pure_hif": {
+          "phase_recall": {
+            "count": 766,
+            "parent_bootstrap_ci95": [
+              0.6018276762402088,
+              0.6815879030035823
+            ],
+            "parents": 128,
+            "rate": 0.6409921671018277
+          },
+          "phase_recall_among_wls_misses": {
+            "count": 593,
+            "parent_bootstrap_ci95": [
+              0.515678081445993,
+              0.6097202956933427
+            ],
+            "parents": 128,
+            "rate": 0.5632377740303541
+          },
+          "wls_phase_recall": {
+            "count": 766,
+            "parent_bootstrap_ci95": [
+              0.19580970545039164,
+              0.2558746736292428
+            ],
+            "parents": 128,
+            "rate": 0.2258485639686684
+          }
+        },
+        "pure_unbalance": {
+          "phase_recall": {
+            "count": 768,
+            "parent_bootstrap_ci95": [
+              0.8606770833333334,
+              0.9114908854166667
+            ],
+            "parents": 128,
+            "rate": 0.88671875
+          },
+          "phase_recall_among_wls_misses": {
+            "count": 189,
+            "parent_bootstrap_ci95": [
+              0.535514985924822,
+              0.6853093702839895
+            ],
+            "parents": 88,
+            "rate": 0.6137566137566137
+          },
+          "wls_phase_recall": {
+            "count": 768,
+            "parent_bootstrap_ci95": [
+              0.7122070312500001,
+              0.79296875
+            ],
+            "parents": 128,
+            "rate": 0.75390625
+          }
+        }
+      },
+      "evaluation_path": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\output\\gnn_practical_v2_20260916\\evaluation\\primary\\evaluation.json",
+      "healthy_false_trigger_rate": {
+        "count": 5120,
+        "parent_bootstrap_ci95": [
+          0.0041015625,
+          0.01015625
+        ],
+        "parents": 128,
+        "rate": 0.0068359375
+      },
+      "is_previous_frozen_model": false,
+      "model_id": "65e41aa2ebde326712e6686fe4f590936fae8b70ecfcb88dffb8c85f30ae35cb",
+      "name": "primary",
+      "nonphase_fault_trigger_rate": {
+        "count": 2560,
+        "parent_bootstrap_ci95": [
+          0.00078125,
+          0.00546875
+        ],
+        "parents": 128,
+        "rate": 0.002734375
+      },
+      "phase_recall": {
+        "count": 1790,
+        "parent_bootstrap_ci95": [
+          0.7044692737430167,
+          0.7581073080855946
+        ],
+        "parents": 128,
+        "rate": 0.7301675977653631
+      },
+      "phase_recall_among_wls_misses": {
+        "count": 782,
+        "parent_bootstrap_ci95": [
+          0.532382949124236,
+          0.6136683229303548
+        ],
+        "parents": 128,
+        "rate": 0.5754475703324808
+      },
+      "primary_selected_by_validation": true,
+      "seed": 1
+    },
+    {
+      "by_phase_composition": {
+        "mixed_phase": {
+          "phase_recall": {
+            "count": 256,
+            "parent_bootstrap_ci95": [
+              0.359375,
+              0.5118164062499999
+            ],
+            "parents": 128,
+            "rate": 0.4296875
+          },
+          "phase_recall_among_wls_misses": {
+            "count": 0,
+            "parent_bootstrap_ci95": null,
+            "parents": 0,
+            "rate": null
+          },
+          "wls_phase_recall": {
+            "count": 256,
+            "parent_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "parents": 128,
+            "rate": 1.0
+          }
+        },
+        "pure_hif": {
+          "phase_recall": {
+            "count": 766,
+            "parent_bootstrap_ci95": [
+              0.5613577023498695,
+              0.6354581429503916
+            ],
+            "parents": 128,
+            "rate": 0.597911227154047
+          },
+          "phase_recall_among_wls_misses": {
+            "count": 593,
+            "parent_bootstrap_ci95": [
+              0.45889344456557807,
+              0.546204967135369
+            ],
+            "parents": 128,
+            "rate": 0.5025295109612141
+          },
+          "wls_phase_recall": {
+            "count": 766,
+            "parent_bootstrap_ci95": [
+              0.19580970545039164,
+              0.2558746736292428
+            ],
+            "parents": 128,
+            "rate": 0.2258485639686684
+          }
+        },
+        "pure_unbalance": {
+          "phase_recall": {
+            "count": 768,
+            "parent_bootstrap_ci95": [
+              0.8541666666666666,
+              0.9062825520833333
+            ],
+            "parents": 128,
+            "rate": 0.8815104166666666
+          },
+          "phase_recall_among_wls_misses": {
+            "count": 189,
+            "parent_bootstrap_ci95": [
+              0.5208227040816327,
+              0.6750206043956044
+            ],
+            "parents": 88,
+            "rate": 0.5978835978835979
+          },
+          "wls_phase_recall": {
+            "count": 768,
+            "parent_bootstrap_ci95": [
+              0.7122070312500001,
+              0.79296875
+            ],
+            "parents": 128,
+            "rate": 0.75390625
+          }
+        }
+      },
+      "evaluation_path": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\output\\gnn_practical_v2_20260916\\evaluation\\seed_0\\evaluation.json",
+      "healthy_false_trigger_rate": {
+        "count": 5120,
+        "parent_bootstrap_ci95": [
+          0.004296875,
+          0.009375
+        ],
+        "parents": 128,
+        "rate": 0.006640625
+      },
+      "is_previous_frozen_model": false,
+      "model_id": "68b71c63da88a5ee24e1ee29cf30eff5c963540bf19c62f24a9b29af542ac544",
+      "name": "seed_0",
+      "nonphase_fault_trigger_rate": {
+        "count": 2560,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.002734375
+        ],
+        "parents": 128,
+        "rate": 0.001171875
+      },
+      "phase_recall": {
+        "count": 1790,
+        "parent_bootstrap_ci95": [
+          0.6705768906302726,
+          0.7217323058288303
+        ],
+        "parents": 128,
+        "rate": 0.6955307262569832
+      },
+      "phase_recall_among_wls_misses": {
+        "count": 782,
+        "parent_bootstrap_ci95": [
+          0.4862497133027523,
+          0.5631443298969072
+        ],
+        "parents": 128,
+        "rate": 0.5255754475703325
+      },
+      "primary_selected_by_validation": false,
+      "seed": 0
+    },
+    {
+      "by_phase_composition": {
+        "mixed_phase": {
+          "phase_recall": {
+            "count": 256,
+            "parent_bootstrap_ci95": [
+              0.35546875,
+              0.5078125
+            ],
+            "parents": 128,
+            "rate": 0.4296875
+          },
+          "phase_recall_among_wls_misses": {
+            "count": 0,
+            "parent_bootstrap_ci95": null,
+            "parents": 0,
+            "rate": null
+          },
+          "wls_phase_recall": {
+            "count": 256,
+            "parent_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "parents": 128,
+            "rate": 1.0
+          }
+        },
+        "pure_hif": {
+          "phase_recall": {
+            "count": 766,
+            "parent_bootstrap_ci95": [
+              0.5572664430628272,
+              0.6292428198433421
+            ],
+            "parents": 128,
+            "rate": 0.5900783289817232
+          },
+          "phase_recall_among_wls_misses": {
+            "count": 593,
+            "parent_bootstrap_ci95": [
+              0.4613867660189384,
+              0.5486784765329729
+            ],
+            "parents": 128,
+            "rate": 0.5042158516020236
+          },
+          "wls_phase_recall": {
+            "count": 766,
+            "parent_bootstrap_ci95": [
+              0.19580970545039164,
+              0.2558746736292428
+            ],
+            "parents": 128,
+            "rate": 0.2258485639686684
+          }
+        },
+        "pure_unbalance": {
+          "phase_recall": {
+            "count": 768,
+            "parent_bootstrap_ci95": [
+              0.8072916666666666,
+              0.8697916666666666
+            ],
+            "parents": 128,
+            "rate": 0.83984375
+          },
+          "phase_recall_among_wls_misses": {
+            "count": 189,
+            "parent_bootstrap_ci95": [
+              0.4864712169796916,
+              0.639365946742996
+            ],
+            "parents": 88,
+            "rate": 0.5608465608465608
+          },
+          "wls_phase_recall": {
+            "count": 768,
+            "parent_bootstrap_ci95": [
+              0.7122070312500001,
+              0.79296875
+            ],
+            "parents": 128,
+            "rate": 0.75390625
+          }
+        }
+      },
+      "evaluation_path": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\output\\gnn_practical_v2_20260916\\evaluation\\seed_2\\evaluation.json",
+      "healthy_false_trigger_rate": {
+        "count": 5120,
+        "parent_bootstrap_ci95": [
+          0.0041015625,
+          0.009765625
+        ],
+        "parents": 128,
+        "rate": 0.006640625
+      },
+      "is_previous_frozen_model": false,
+      "model_id": "e7fe1c85bd0102b23a94d79d8e2e22e47cad73354639067898153bfe227ffeee",
+      "name": "seed_2",
+      "nonphase_fault_trigger_rate": {
+        "count": 2560,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.002353515624999991
+        ],
+        "parents": 128,
+        "rate": 0.001171875
+      },
+      "phase_recall": {
+        "count": 1790,
+        "parent_bootstrap_ci95": [
+          0.6485992056564246,
+          0.7008928571428571
+        ],
+        "parents": 128,
+        "rate": 0.6743016759776537
+      },
+      "phase_recall_among_wls_misses": {
+        "count": 782,
+        "parent_bootstrap_ci95": [
+          0.4785992217898833,
+          0.5545967741935484
+        ],
+        "parents": 128,
+        "rate": 0.5179028132992327
+      },
+      "primary_selected_by_validation": false,
+      "seed": 2
+    },
+    {
+      "by_phase_composition": {
+        "mixed_phase": {
+          "phase_recall": {
+            "count": 256,
+            "parent_bootstrap_ci95": [
+              0.5,
+              0.65234375
+            ],
+            "parents": 128,
+            "rate": 0.5703125
+          },
+          "phase_recall_among_wls_misses": {
+            "count": 0,
+            "parent_bootstrap_ci95": null,
+            "parents": 0,
+            "rate": null
+          },
+          "wls_phase_recall": {
+            "count": 256,
+            "parent_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "parents": 128,
+            "rate": 1.0
+          }
+        },
+        "pure_hif": {
+          "phase_recall": {
+            "count": 766,
+            "parent_bootstrap_ci95": [
+              0.4751958224543081,
+              0.5460762505153222
+            ],
+            "parents": 128,
+            "rate": 0.5078328981723238
+          },
+          "phase_recall_among_wls_misses": {
+            "count": 593,
+            "parent_bootstrap_ci95": [
+              0.35283219639966,
+              0.44070470626954084
+            ],
+            "parents": 128,
+            "rate": 0.3962900505902192
+          },
+          "wls_phase_recall": {
+            "count": 766,
+            "parent_bootstrap_ci95": [
+              0.19580970545039164,
+              0.2558746736292428
+            ],
+            "parents": 128,
+            "rate": 0.2258485639686684
+          }
+        },
+        "pure_unbalance": {
+          "phase_recall": {
+            "count": 768,
+            "parent_bootstrap_ci95": [
+              0.7916666666666666,
+              0.8541666666666666
+            ],
+            "parents": 128,
+            "rate": 0.8229166666666666
+          },
+          "phase_recall_among_wls_misses": {
+            "count": 189,
+            "parent_bootstrap_ci95": [
+              0.31382978723404253,
+              0.45790570175438594
+            ],
+            "parents": 88,
+            "rate": 0.38095238095238093
+          },
+          "wls_phase_recall": {
+            "count": 768,
+            "parent_bootstrap_ci95": [
+              0.7122070312500001,
+              0.79296875
+            ],
+            "parents": 128,
+            "rate": 0.75390625
+          }
+        }
+      },
+      "evaluation_path": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\output\\gnn_practical_v2_20260916\\evaluation\\seed_3\\evaluation.json",
+      "healthy_false_trigger_rate": {
+        "count": 5120,
+        "parent_bootstrap_ci95": [
+          0.0046875,
+          0.010161132812499996
+        ],
+        "parents": 128,
+        "rate": 0.0072265625
+      },
+      "is_previous_frozen_model": false,
+      "model_id": "2fa10b4992b88b6a28d916a5491d4b9e1e621df5509e351d00ad58842112540e",
+      "name": "seed_3",
+      "nonphase_fault_trigger_rate": {
+        "count": 2560,
+        "parent_bootstrap_ci95": [
+          0.00625,
+          0.013671875
+        ],
+        "parents": 128,
+        "rate": 0.009765625
+      },
+      "phase_recall": {
+        "count": 1790,
+        "parent_bootstrap_ci95": [
+          0.6269574944071589,
+          0.6787799125847965
+        ],
+        "parents": 128,
+        "rate": 0.6519553072625698
+      },
+      "phase_recall_among_wls_misses": {
+        "count": 782,
+        "parent_bootstrap_ci95": [
+          0.35406905325962973,
+          0.4291180858749254
+        ],
+        "parents": 128,
+        "rate": 0.39258312020460356
+      },
+      "primary_selected_by_validation": false,
+      "seed": 3
+    },
+    {
+      "by_phase_composition": {
+        "mixed_phase": {
+          "phase_recall": {
+            "count": 256,
+            "parent_bootstrap_ci95": [
+              0.39453125,
+              0.546875
+            ],
+            "parents": 128,
+            "rate": 0.46875
+          },
+          "phase_recall_among_wls_misses": {
+            "count": 0,
+            "parent_bootstrap_ci95": null,
+            "parents": 0,
+            "rate": null
+          },
+          "wls_phase_recall": {
+            "count": 256,
+            "parent_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "parents": 128,
+            "rate": 1.0
+          }
+        },
+        "pure_hif": {
+          "phase_recall": {
+            "count": 766,
+            "parent_bootstrap_ci95": [
+              0.5651041666666666,
+              0.6406341791775457
+            ],
+            "parents": 128,
+            "rate": 0.6018276762402088
+          },
+          "phase_recall_among_wls_misses": {
+            "count": 593,
+            "parent_bootstrap_ci95": [
+              0.47794972226178606,
+              0.5643725247524751
+            ],
+            "parents": 128,
+            "rate": 0.521079258010118
+          },
+          "wls_phase_recall": {
+            "count": 766,
+            "parent_bootstrap_ci95": [
+              0.19580970545039164,
+              0.2558746736292428
+            ],
+            "parents": 128,
+            "rate": 0.2258485639686684
+          }
+        },
+        "pure_unbalance": {
+          "phase_recall": {
+            "count": 768,
+            "parent_bootstrap_ci95": [
+              0.8580729166666666,
+              0.91015625
+            ],
+            "parents": 128,
+            "rate": 0.8854166666666666
+          },
+          "phase_recall_among_wls_misses": {
+            "count": 189,
+            "parent_bootstrap_ci95": [
+              0.5555416666666667,
+              0.7010356424440533
+            ],
+            "parents": 88,
+            "rate": 0.6296296296296297
+          },
+          "wls_phase_recall": {
+            "count": 768,
+            "parent_bootstrap_ci95": [
+              0.7122070312500001,
+              0.79296875
+            ],
+            "parents": 128,
+            "rate": 0.75390625
+          }
+        }
+      },
+      "evaluation_path": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\output\\gnn_practical_v2_20260916\\evaluation\\seed_4\\evaluation.json",
+      "healthy_false_trigger_rate": {
+        "count": 5120,
+        "parent_bootstrap_ci95": [
+          0.003515625,
+          0.009575195312499996
+        ],
+        "parents": 128,
+        "rate": 0.00625
+      },
+      "is_previous_frozen_model": false,
+      "model_id": "97506d0b76c98cb39d75509d766a73396f23d7e32b2cbf1f273815fc4820a6c4",
+      "name": "seed_4",
+      "nonphase_fault_trigger_rate": {
+        "count": 2560,
+        "parent_bootstrap_ci95": [
+          0.000390625,
+          0.00390625
+        ],
+        "parents": 128,
+        "rate": 0.001953125
+      },
+      "phase_recall": {
+        "count": 1790,
+        "parent_bootstrap_ci95": [
+          0.6798743016759776,
+          0.7312440489968532
+        ],
+        "parents": 128,
+        "rate": 0.7044692737430167
+      },
+      "phase_recall_among_wls_misses": {
+        "count": 782,
+        "parent_bootstrap_ci95": [
+          0.5069007556556838,
+          0.58270013213807
+        ],
+        "parents": 128,
+        "rate": 0.5473145780051151
+      },
+      "primary_selected_by_validation": false,
+      "seed": 4
+    },
+    {
+      "by_phase_composition": {
+        "mixed_phase": {
+          "phase_recall": {
+            "count": 256,
+            "parent_bootstrap_ci95": [
+              0.21875,
+              0.359375
+            ],
+            "parents": 128,
+            "rate": 0.28515625
+          },
+          "phase_recall_among_wls_misses": {
+            "count": 0,
+            "parent_bootstrap_ci95": null,
+            "parents": 0,
+            "rate": null
+          },
+          "wls_phase_recall": {
+            "count": 256,
+            "parent_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "parents": 128,
+            "rate": 1.0
+          }
+        },
+        "pure_hif": {
+          "phase_recall": {
+            "count": 766,
+            "parent_bootstrap_ci95": [
+              0.41015625,
+              0.47268710223563964
+            ],
+            "parents": 128,
+            "rate": 0.4412532637075718
+          },
+          "phase_recall_among_wls_misses": {
+            "count": 593,
+            "parent_bootstrap_ci95": [
+              0.2807875370311873,
+              0.35374863032461307
+            ],
+            "parents": 128,
+            "rate": 0.31703204047217537
+          },
+          "wls_phase_recall": {
+            "count": 766,
+            "parent_bootstrap_ci95": [
+              0.19580970545039164,
+              0.2558746736292428
+            ],
+            "parents": 128,
+            "rate": 0.2258485639686684
+          }
+        },
+        "pure_unbalance": {
+          "phase_recall": {
+            "count": 768,
+            "parent_bootstrap_ci95": [
+              0.8541341145833333,
+              0.9088541666666666
+            ],
+            "parents": 128,
+            "rate": 0.8815104166666666
+          },
+          "phase_recall_among_wls_misses": {
+            "count": 189,
+            "parent_bootstrap_ci95": [
+              0.4648594048594049,
+              0.6330047707830664
+            ],
+            "parents": 88,
+            "rate": 0.544973544973545
+          },
+          "wls_phase_recall": {
+            "count": 768,
+            "parent_bootstrap_ci95": [
+              0.7122070312500001,
+              0.79296875
+            ],
+            "parents": 128,
+            "rate": 0.75390625
+          }
+        }
+      },
+      "evaluation_path": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\output\\gnn_practical_v2_20260916\\evaluation\\previous_v1_recalibrated\\evaluation.json",
+      "healthy_false_trigger_rate": {
+        "count": 5120,
+        "parent_bootstrap_ci95": [
+          0.0041015625,
+          0.0125
+        ],
+        "parents": 128,
+        "rate": 0.0076171875
+      },
+      "is_previous_frozen_model": true,
+      "model_id": "c8d7462994b1eaa3d43d47bf1a7ae354eebeeeee1f4a7ae16e66fbeee9e9b8d0",
+      "name": "previous_v1_recalibrated",
+      "nonphase_fault_trigger_rate": {
+        "count": 2560,
+        "parent_bootstrap_ci95": [
+          0.1359375,
+          0.179296875
+        ],
+        "parents": 128,
+        "rate": 0.15703125
+      },
+      "phase_recall": {
+        "count": 1790,
+        "parent_bootstrap_ci95": [
+          0.5870535714285714,
+          0.6301712377988576
+        ],
+        "parents": 128,
+        "rate": 0.6078212290502794
+      },
+      "phase_recall_among_wls_misses": {
+        "count": 782,
+        "parent_bootstrap_ci95": [
+          0.3403107756621794,
+          0.4080363033901923
+        ],
+        "parents": 128,
+        "rate": 0.3721227621483376
+      },
+      "primary_selected_by_validation": false,
+      "seed": 0
+    }
+  ],
+  "selection_policy": "V2 primary chosen by validation before test; test scores do not change model selection"
+}

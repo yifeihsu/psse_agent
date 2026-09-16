@@ -1,0 +1,3968 @@
+{
+  "artifacts_sha256": {
+    "boundary_evaluation": "1e09fa3868c8cbe069d73594fbe90c86f3088b606af62ee2e8f3c39b5adb9169",
+    "calibration": "dc87f8907d533af09a7ec68ca8f87e86c1ef65b7786d0a2754f96ccdc32a97c7",
+    "checkpoint": "2aaa28cb85cd62059cdb4565032504345ce777b4dfea8bb891845dc38a35cbf0",
+    "main_evaluation": "a2832990cc44d53c192a381980294636f4bff805aad44918582a8415ee1852f0",
+    "training_report": "9860058a95cfeb039fddf48f3250218b78b54600abb32654a73429564480deae"
+  },
+  "bootstrap": {
+    "rates": "window weighted",
+    "replicates": 1000,
+    "seed": 2026,
+    "unit": "whole operating parents"
+  },
+  "boundary_cohort_metrics": {
+    "hif_sft_challenge": {
+      "all_faults": {
+        "configured_wls_recall": {
+          "count": 256,
+          "numerator": 3,
+          "parent_bootstrap_ci95": [
+            0.0,
+            0.02734375
+          ],
+          "parents": 128,
+          "rate": 0.01171875
+        },
+        "gnn_among_wls_misses": {
+          "count": 253,
+          "numerator": 14,
+          "parent_bootstrap_ci95": [
+            0.02744829963235294,
+            0.0873015873015873
+          ],
+          "parents": 128,
+          "rate": 0.05533596837944664
+        },
+        "gnn_anomaly_recall": {
+          "count": 256,
+          "numerator": 15,
+          "parent_bootstrap_ci95": [
+            0.02734375,
+            0.09375
+          ],
+          "parents": 128,
+          "rate": 0.05859375
+        },
+        "gnn_or_wls_recall": {
+          "count": 256,
+          "numerator": 17,
+          "parent_bootstrap_ci95": [
+            0.03515625,
+            0.1015625
+          ],
+          "parents": 128,
+          "rate": 0.06640625
+        },
+        "gnn_phase_recall": {
+          "count": 256,
+          "numerator": 15,
+          "parent_bootstrap_ci95": [
+            0.02734375,
+            0.09375
+          ],
+          "parents": 128,
+          "rate": 0.05859375
+        },
+        "gnn_phase_trigger_rate_all_rows": {
+          "count": 256,
+          "numerator": 15,
+          "parent_bootstrap_ci95": [
+            0.02734375,
+            0.09375
+          ],
+          "parents": 128,
+          "rate": 0.05859375
+        },
+        "matched_wls_recall": {
+          "count": 256,
+          "numerator": 2,
+          "parent_bootstrap_ci95": [
+            0.0,
+            0.01953125
+          ],
+          "parents": 128,
+          "rate": 0.0078125
+        },
+        "paired_gnn_phase_minus_wls": {
+          "count": 256,
+          "numerator": 12,
+          "parent_bootstrap_ci95": [
+            0.015625,
+            0.078125
+          ],
+          "parents": 128,
+          "rate": 0.046875
+        }
+      },
+      "by_pure_family": {
+        "hif": {
+          "configured_wls_recall": {
+            "count": 256,
+            "numerator": 3,
+            "parent_bootstrap_ci95": [
+              0.0,
+              0.02734375
+            ],
+            "parents": 128,
+            "rate": 0.01171875
+          },
+          "gnn_among_wls_misses": {
+            "count": 253,
+            "numerator": 14,
+            "parent_bootstrap_ci95": [
+              0.02744829963235294,
+              0.0873015873015873
+            ],
+            "parents": 128,
+            "rate": 0.05533596837944664
+          },
+          "gnn_anomaly_recall": {
+            "count": 256,
+            "numerator": 15,
+            "parent_bootstrap_ci95": [
+              0.02734375,
+              0.09375
+            ],
+            "parents": 128,
+            "rate": 0.05859375
+          },
+          "gnn_or_wls_recall": {
+            "count": 256,
+            "numerator": 17,
+            "parent_bootstrap_ci95": [
+              0.03515625,
+              0.1015625
+            ],
+            "parents": 128,
+            "rate": 0.06640625
+          },
+          "gnn_phase_recall": {
+            "count": 256,
+            "numerator": 15,
+            "parent_bootstrap_ci95": [
+              0.02734375,
+              0.09375
+            ],
+            "parents": 128,
+            "rate": 0.05859375
+          },
+          "gnn_phase_trigger_rate_all_rows": {
+            "count": 256,
+            "numerator": 15,
+            "parent_bootstrap_ci95": [
+              0.02734375,
+              0.09375
+            ],
+            "parents": 128,
+            "rate": 0.05859375
+          },
+          "matched_wls_recall": {
+            "count": 256,
+            "numerator": 2,
+            "parent_bootstrap_ci95": [
+              0.0,
+              0.01953125
+            ],
+            "parents": 128,
+            "rate": 0.0078125
+          },
+          "paired_gnn_phase_minus_wls": {
+            "count": 256,
+            "numerator": 12,
+            "parent_bootstrap_ci95": [
+              0.015625,
+              0.078125
+            ],
+            "parents": 128,
+            "rate": 0.046875
+          }
+        }
+      }
+    },
+    "positive_boundary": {
+      "all_faults": {
+        "configured_wls_recall": {
+          "count": 566,
+          "numerator": 54,
+          "parent_bootstrap_ci95": [
+            0.06859205776173286,
+            0.12324984855368772
+          ],
+          "parents": 127,
+          "rate": 0.09540636042402827
+        },
+        "gnn_among_wls_misses": {
+          "count": 395,
+          "numerator": 63,
+          "parent_bootstrap_ci95": [
+            0.12259918920715093,
+            0.2
+          ],
+          "parents": 126,
+          "rate": 0.15949367088607594
+        },
+        "gnn_anomaly_recall": {
+          "count": 566,
+          "numerator": 91,
+          "parent_bootstrap_ci95": [
+            0.1263038678912045,
+            0.19434628975265017
+          ],
+          "parents": 127,
+          "rate": 0.1607773851590106
+        },
+        "gnn_or_wls_recall": {
+          "count": 438,
+          "numerator": 106,
+          "parent_bootstrap_ci95": [
+            0.19442567567567567,
+            0.28728326364977863
+          ],
+          "parents": 127,
+          "rate": 0.2420091324200913
+        },
+        "gnn_phase_recall": {
+          "count": 438,
+          "numerator": 90,
+          "parent_bootstrap_ci95": [
+            0.1642694805194805,
+            0.24651475649181354
+          ],
+          "parents": 127,
+          "rate": 0.2054794520547945
+        },
+        "gnn_phase_trigger_rate_all_rows": {
+          "count": 566,
+          "numerator": 92,
+          "parent_bootstrap_ci95": [
+            0.12907792207792207,
+            0.19604822967564514
+          ],
+          "parents": 127,
+          "rate": 0.1625441696113074
+        },
+        "matched_wls_recall": {
+          "count": 566,
+          "numerator": 47,
+          "parent_bootstrap_ci95": [
+            0.0569244649391008,
+            0.11051242236024844
+          ],
+          "parents": 127,
+          "rate": 0.08303886925795052
+        },
+        "paired_gnn_phase_minus_wls": {
+          "count": 438,
+          "numerator": 47,
+          "parent_bootstrap_ci95": [
+            0.06618270149729213,
+            0.14816537467700255
+          ],
+          "parents": 127,
+          "rate": 0.10730593607305935
+        }
+      },
+      "by_pure_family": {
+        "hif": {
+          "configured_wls_recall": {
+            "count": 220,
+            "numerator": 6,
+            "parent_bootstrap_ci95": [
+              0.00909090909090909,
+              0.05
+            ],
+            "parents": 110,
+            "rate": 0.02727272727272727
+          },
+          "gnn_among_wls_misses": {
+            "count": 214,
+            "numerator": 5,
+            "parent_bootstrap_ci95": [
+              0.004672897196261682,
+              0.046511627906976744
+            ],
+            "parents": 110,
+            "rate": 0.02336448598130841
+          },
+          "gnn_anomaly_recall": {
+            "count": 220,
+            "numerator": 6,
+            "parent_bootstrap_ci95": [
+              0.00909090909090909,
+              0.05
+            ],
+            "parents": 110,
+            "rate": 0.02727272727272727
+          },
+          "gnn_or_wls_recall": {
+            "count": 220,
+            "numerator": 11,
+            "parent_bootstrap_ci95": [
+              0.022727272727272728,
+              0.08181818181818182
+            ],
+            "parents": 110,
+            "rate": 0.05
+          },
+          "gnn_phase_recall": {
+            "count": 220,
+            "numerator": 6,
+            "parent_bootstrap_ci95": [
+              0.00909090909090909,
+              0.05
+            ],
+            "parents": 110,
+            "rate": 0.02727272727272727
+          },
+          "gnn_phase_trigger_rate_all_rows": {
+            "count": 220,
+            "numerator": 6,
+            "parent_bootstrap_ci95": [
+              0.00909090909090909,
+              0.05
+            ],
+            "parents": 110,
+            "rate": 0.02727272727272727
+          },
+          "matched_wls_recall": {
+            "count": 220,
+            "numerator": 5,
+            "parent_bootstrap_ci95": [
+              0.004545454545454545,
+              0.045454545454545456
+            ],
+            "parents": 110,
+            "rate": 0.022727272727272728
+          },
+          "paired_gnn_phase_minus_wls": {
+            "count": 220,
+            "numerator": 0,
+            "parent_bootstrap_ci95": [
+              -0.02727272727272727,
+              0.02727272727272727
+            ],
+            "parents": 110,
+            "rate": 0.0
+          }
+        },
+        "parameter": {
+          "configured_wls_recall": {
+            "count": 126,
+            "numerator": 10,
+            "parent_bootstrap_ci95": [
+              0.031746031746031744,
+              0.12698412698412698
+            ],
+            "parents": 63,
+            "rate": 0.07936507936507936
+          },
+          "gnn_among_wls_misses": {
+            "count": 0,
+            "numerator": 0,
+            "parent_bootstrap_ci95": null,
+            "parents": 0,
+            "rate": null
+          },
+          "gnn_anomaly_recall": {
+            "count": 126,
+            "numerator": 3,
+            "parent_bootstrap_ci95": [
+              0.0,
+              0.05555555555555555
+            ],
+            "parents": 63,
+            "rate": 0.023809523809523808
+          },
+          "gnn_or_wls_recall": {
+            "count": 0,
+            "numerator": 0,
+            "parent_bootstrap_ci95": null,
+            "parents": 0,
+            "rate": null
+          },
+          "gnn_phase_recall": {
+            "count": 0,
+            "numerator": 0,
+            "parent_bootstrap_ci95": null,
+            "parents": 0,
+            "rate": null
+          },
+          "gnn_phase_trigger_rate_all_rows": {
+            "count": 126,
+            "numerator": 2,
+            "parent_bootstrap_ci95": [
+              0.0,
+              0.03968253968253968
+            ],
+            "parents": 63,
+            "rate": 0.015873015873015872
+          },
+          "matched_wls_recall": {
+            "count": 126,
+            "numerator": 8,
+            "parent_bootstrap_ci95": [
+              0.015873015873015872,
+              0.1111111111111111
+            ],
+            "parents": 63,
+            "rate": 0.06349206349206349
+          },
+          "paired_gnn_phase_minus_wls": {
+            "count": 0,
+            "numerator": 0,
+            "parent_bootstrap_ci95": null,
+            "parents": 0,
+            "rate": null
+          }
+        },
+        "topology": {
+          "configured_wls_recall": {
+            "count": 2,
+            "numerator": 1,
+            "parent_bootstrap_ci95": null,
+            "parents": 1,
+            "rate": 0.5
+          },
+          "gnn_among_wls_misses": {
+            "count": 0,
+            "numerator": 0,
+            "parent_bootstrap_ci95": null,
+            "parents": 0,
+            "rate": null
+          },
+          "gnn_anomaly_recall": {
+            "count": 2,
+            "numerator": 0,
+            "parent_bootstrap_ci95": null,
+            "parents": 1,
+            "rate": 0.0
+          },
+          "gnn_or_wls_recall": {
+            "count": 0,
+            "numerator": 0,
+            "parent_bootstrap_ci95": null,
+            "parents": 0,
+            "rate": null
+          },
+          "gnn_phase_recall": {
+            "count": 0,
+            "numerator": 0,
+            "parent_bootstrap_ci95": null,
+            "parents": 0,
+            "rate": null
+          },
+          "gnn_phase_trigger_rate_all_rows": {
+            "count": 2,
+            "numerator": 0,
+            "parent_bootstrap_ci95": null,
+            "parents": 1,
+            "rate": 0.0
+          },
+          "matched_wls_recall": {
+            "count": 2,
+            "numerator": 0,
+            "parent_bootstrap_ci95": null,
+            "parents": 1,
+            "rate": 0.0
+          },
+          "paired_gnn_phase_minus_wls": {
+            "count": 0,
+            "numerator": 0,
+            "parent_bootstrap_ci95": null,
+            "parents": 0,
+            "rate": null
+          }
+        },
+        "unbalance": {
+          "configured_wls_recall": {
+            "count": 218,
+            "numerator": 37,
+            "parent_bootstrap_ci95": [
+              0.10550458715596331,
+              0.23853211009174313
+            ],
+            "parents": 109,
+            "rate": 0.16972477064220184
+          },
+          "gnn_among_wls_misses": {
+            "count": 181,
+            "numerator": 58,
+            "parent_bootstrap_ci95": [
+              0.23626373626373626,
+              0.408864686169731
+            ],
+            "parents": 95,
+            "rate": 0.32044198895027626
+          },
+          "gnn_anomaly_recall": {
+            "count": 218,
+            "numerator": 82,
+            "parent_bootstrap_ci95": [
+              0.2980504587155963,
+              0.45871559633027525
+            ],
+            "parents": 109,
+            "rate": 0.3761467889908257
+          },
+          "gnn_or_wls_recall": {
+            "count": 218,
+            "numerator": 95,
+            "parent_bootstrap_ci95": [
+              0.3577981651376147,
+              0.5184633027522935
+            ],
+            "parents": 109,
+            "rate": 0.43577981651376146
+          },
+          "gnn_phase_recall": {
+            "count": 218,
+            "numerator": 84,
+            "parent_bootstrap_ci95": [
+              0.3073394495412844,
+              0.46788990825688076
+            ],
+            "parents": 109,
+            "rate": 0.3853211009174312
+          },
+          "gnn_phase_trigger_rate_all_rows": {
+            "count": 218,
+            "numerator": 84,
+            "parent_bootstrap_ci95": [
+              0.3073394495412844,
+              0.46788990825688076
+            ],
+            "parents": 109,
+            "rate": 0.3853211009174312
+          },
+          "matched_wls_recall": {
+            "count": 218,
+            "numerator": 34,
+            "parent_bootstrap_ci95": [
+              0.09621559633027524,
+              0.22477064220183487
+            ],
+            "parents": 109,
+            "rate": 0.1559633027522936
+          },
+          "paired_gnn_phase_minus_wls": {
+            "count": 218,
+            "numerator": 47,
+            "parent_bootstrap_ci95": [
+              0.13302752293577982,
+              0.29357798165137616
+            ],
+            "parents": 109,
+            "rate": 0.21559633027522937
+          }
+        }
+      }
+    }
+  },
+  "boundary_metrics": {
+    "general_anomaly_recall": {
+      "count": 822,
+      "numerator": 106,
+      "parent_bootstrap_ci95": [
+        0.10467837965792912,
+        0.1508751520956064
+      ],
+      "parents": 128,
+      "rate": 0.12895377128953772
+    },
+    "healthy_anomaly_trigger_rate": {
+      "count": 0,
+      "numerator": 0,
+      "parent_bootstrap_ci95": null,
+      "parents": 0,
+      "rate": null
+    },
+    "healthy_false_trigger_rate": {
+      "count": 0,
+      "numerator": 0,
+      "parent_bootstrap_ci95": null,
+      "parents": 0,
+      "rate": null
+    },
+    "nonphase_fault_trigger_rate": {
+      "count": 128,
+      "numerator": 2,
+      "parent_bootstrap_ci95": [
+        0.0,
+        0.0390625
+      ],
+      "parents": 64,
+      "rate": 0.015625
+    },
+    "paired_phase_recall_gain_over_wls": {
+      "count": 694,
+      "numerator": 59,
+      "parent_bootstrap_ci95": [
+        0.058294973925183756,
+        0.1106520935960591
+      ],
+      "parents": 128,
+      "rate": 0.08501440922190202
+    },
+    "phase_acquisition_fraction": {
+      "count": 822,
+      "numerator": 107,
+      "parent_bootstrap_ci95": [
+        0.10612937599454422,
+        0.152547429311112
+      ],
+      "parents": 128,
+      "rate": 0.13017031630170317
+    },
+    "phase_recall": {
+      "count": 694,
+      "numerator": 105,
+      "parent_bootstrap_ci95": [
+        0.12388634781744058,
+        0.17715554645927137
+      ],
+      "parents": 128,
+      "rate": 0.15129682997118155
+    },
+    "phase_recall_among_wls_misses": {
+      "count": 648,
+      "numerator": 77,
+      "parent_bootstrap_ci95": [
+        0.09459327479954292,
+        0.1433129261952304
+      ],
+      "parents": 128,
+      "rate": 0.11882716049382716
+    },
+    "union_acquisition_fraction": {
+      "count": 822,
+      "numerator": 136,
+      "parent_bootstrap_ci95": [
+        0.13867166352418467,
+        0.1916533253635943
+      ],
+      "parents": 128,
+      "rate": 0.1654501216545012
+    },
+    "union_healthy_false_trigger_rate": {
+      "count": 0,
+      "numerator": 0,
+      "parent_bootstrap_ci95": null,
+      "parents": 0,
+      "rate": null
+    },
+    "union_nonphase_fault_trigger_rate": {
+      "count": 128,
+      "numerator": 13,
+      "parent_bootstrap_ci95": [
+        0.046875,
+        0.1484375
+      ],
+      "parents": 64,
+      "rate": 0.1015625
+    },
+    "union_phase_recall": {
+      "count": 694,
+      "numerator": 123,
+      "parent_bootstrap_ci95": [
+        0.1471343438538206,
+        0.205281188472498
+      ],
+      "parents": 128,
+      "rate": 0.17723342939481268
+    },
+    "wls_healthy_false_trigger_rate": {
+      "count": 0,
+      "numerator": 0,
+      "parent_bootstrap_ci95": null,
+      "parents": 0,
+      "rate": null
+    },
+    "wls_nonphase_fault_trigger_rate": {
+      "count": 128,
+      "numerator": 11,
+      "parent_bootstrap_ci95": [
+        0.0390625,
+        0.1328125
+      ],
+      "parents": 64,
+      "rate": 0.0859375
+    },
+    "wls_phase_recall": {
+      "count": 694,
+      "numerator": 46,
+      "parent_bootstrap_ci95": [
+        0.045318334100557515,
+        0.08840804155444401
+      ],
+      "parents": 128,
+      "rate": 0.06628242074927954
+    }
+  },
+  "check_counts": {
+    "all_declared_test_graphs_available": 2,
+    "checkpoint_family_order_matches_schema_and_labels": 1,
+    "checkpoint_model_id": 1,
+    "checkpoint_sha": 1,
+    "embedded_calibration_exact": 3,
+    "exact_manifest_test_window_coverage": 2,
+    "family_discrimination_recomputed": 10,
+    "finite_prediction_scores": 19762,
+    "healthy_calibration_policy": 1,
+    "heldout_parent_assignment": 10292,
+    "main_boundary_shared_test_parents": 1,
+    "main_boundary_window_disjoint": 1,
+    "main_condition_preserved": 4350,
+    "model_calibration_binding": 3,
+    "paired_previous_identical_inputs_labels_wls": 9470,
+    "paired_previous_identical_window_ids": 1,
+    "prediction_count_unique": 3,
+    "prediction_physical_metadata_binding": 10292,
+    "previous_same_healthy_calibration_parents": 1,
+    "previous_v1_checkpoint_frozen": 1,
+    "raw_prediction_manifest_label_binding": 10292,
+    "same_frozen_calibration_main_boundary": 1,
+    "saved_metric_denominator": 1168,
+    "saved_metric_rate": 1168,
+    "saved_parent_bootstrap_ci": 1168,
+    "selected_seed1_epoch24": 1,
+    "sft_hif_challenge_range": 256,
+    "validation_only_selection_recomputed": 1,
+    "wls_score_alarm_consistency": 19762
+  },
+  "descriptive_pure_single_fault_ranking": {
+    "by_true_pure_family": {
+      "hif": {
+        "frozen_family_thresholds": {
+          "hif": 0.9891358613967896,
+          "measurement": 0.015819422900676727,
+          "parameter": 0.17211872339248657,
+          "topology": 0.011431802995502949,
+          "unbalance": 0.07259874790906906
+        },
+        "overall_labeled_family_roc_ap": {
+          "average_precision": 0.7707564433379733,
+          "roc_auc": 0.9490016975034098
+        },
+        "per_head_score_medians": {
+          "hif": 0.9759092330932617,
+          "measurement": 0.002034465433098376,
+          "parameter": 4.078021447639912e-06,
+          "topology": 5.160744933618844e-07,
+          "unbalance": 0.0131840487010777
+        },
+        "per_head_score_p10": {
+          "hif": 0.5393622517585754,
+          "measurement": 0.00010307592310709879,
+          "parameter": 2.2250546960478346e-09,
+          "topology": 1.3752888411433517e-10,
+          "unbalance": 0.0018632185528986156
+        },
+        "per_head_score_p90": {
+          "hif": 0.9988578259944916,
+          "measurement": 0.03416271321475506,
+          "parameter": 0.00192627013893798,
+          "topology": 0.00029899929359089583,
+          "unbalance": 0.08940796554088593
+        },
+        "top1_accuracy": {
+          "count": 766,
+          "numerator": 749,
+          "parent_bootstrap_ci95": [
+            0.9661458333333334,
+            0.9881586717778699
+          ],
+          "parents": 128,
+          "rate": 0.9778067885117493
+        },
+        "top1_prediction_counts": {
+          "hif": 749,
+          "measurement": 0,
+          "parameter": 12,
+          "topology": 0,
+          "unbalance": 5
+        },
+        "top1_tie_count": 0
+      },
+      "measurement": {
+        "frozen_family_thresholds": {
+          "hif": 0.9891358613967896,
+          "measurement": 0.015819422900676727,
+          "parameter": 0.17211872339248657,
+          "topology": 0.011431802995502949,
+          "unbalance": 0.07259874790906906
+        },
+        "overall_labeled_family_roc_ap": {
+          "average_precision": 0.9792661918282238,
+          "roc_auc": 0.9950842825707924
+        },
+        "per_head_score_medians": {
+          "hif": 0.00010579028094070964,
+          "measurement": 0.9998136162757874,
+          "parameter": 0.05417685583233833,
+          "topology": 0.014322447590529919,
+          "unbalance": 1.4026240933162626e-06
+        },
+        "per_head_score_p10": {
+          "hif": 5.912991731804596e-08,
+          "measurement": 0.9884773373603821,
+          "parameter": 0.005395931145176292,
+          "topology": 0.0007130953832529487,
+          "unbalance": 1.4204418263830122e-08
+        },
+        "per_head_score_p90": {
+          "hif": 0.6520854711532593,
+          "measurement": 0.9999794840812684,
+          "parameter": 0.290313658118248,
+          "topology": 0.05577650219202042,
+          "unbalance": 0.0002886752976337454
+        },
+        "top1_accuracy": {
+          "count": 768,
+          "numerator": 754,
+          "parent_bootstrap_ci95": [
+            0.9713541666666666,
+            0.9895833333333334
+          ],
+          "parents": 128,
+          "rate": 0.9817708333333334
+        },
+        "top1_prediction_counts": {
+          "hif": 9,
+          "measurement": 754,
+          "parameter": 5,
+          "topology": 0,
+          "unbalance": 0
+        },
+        "top1_tie_count": 0
+      },
+      "parameter": {
+        "frozen_family_thresholds": {
+          "hif": 0.9891358613967896,
+          "measurement": 0.015819422900676727,
+          "parameter": 0.17211872339248657,
+          "topology": 0.011431802995502949,
+          "unbalance": 0.07259874790906906
+        },
+        "overall_labeled_family_roc_ap": {
+          "average_precision": 0.8686858032435948,
+          "roc_auc": 0.9751177748712408
+        },
+        "per_head_score_medians": {
+          "hif": 1.6487335940951198e-09,
+          "measurement": 0.10298934206366539,
+          "parameter": 0.8401724994182587,
+          "topology": 0.1170920617878437,
+          "unbalance": 8.669964699947741e-06
+        },
+        "per_head_score_p10": {
+          "hif": 2.8976761268229018e-11,
+          "measurement": 0.014558884315192701,
+          "parameter": 0.30008874237537386,
+          "topology": 0.033610889315605165,
+          "unbalance": 7.198623848125862e-07
+        },
+        "per_head_score_p90": {
+          "hif": 6.657246121903893e-05,
+          "measurement": 0.41048324704170264,
+          "parameter": 0.9421332359313965,
+          "topology": 0.4881383329629899,
+          "unbalance": 0.0006423373823054142
+        },
+        "top1_accuracy": {
+          "count": 768,
+          "numerator": 670,
+          "parent_bootstrap_ci95": [
+            0.8424479166666666,
+            0.9010416666666666
+          ],
+          "parents": 128,
+          "rate": 0.8723958333333334
+        },
+        "top1_prediction_counts": {
+          "hif": 16,
+          "measurement": 13,
+          "parameter": 670,
+          "topology": 68,
+          "unbalance": 1
+        },
+        "top1_tie_count": 0
+      },
+      "topology": {
+        "frozen_family_thresholds": {
+          "hif": 0.9891358613967896,
+          "measurement": 0.015819422900676727,
+          "parameter": 0.17211872339248657,
+          "topology": 0.011431802995502949,
+          "unbalance": 0.07259874790906906
+        },
+        "overall_labeled_family_roc_ap": {
+          "average_precision": 0.9172634571556921,
+          "roc_auc": 0.9896187957270359
+        },
+        "per_head_score_medians": {
+          "hif": 1.0621235141394791e-10,
+          "measurement": 0.23666609823703766,
+          "parameter": 0.06694994494318962,
+          "topology": 0.9438108205795288,
+          "unbalance": 5.2909472287865356e-06
+        },
+        "per_head_score_p10": {
+          "hif": 1.8445786076955884e-13,
+          "measurement": 0.05409938059747219,
+          "parameter": 0.0007263809908181429,
+          "topology": 0.2806170552968979,
+          "unbalance": 2.413341235296684e-07
+        },
+        "per_head_score_p90": {
+          "hif": 2.3138303717473735e-08,
+          "measurement": 0.5073985457420351,
+          "parameter": 0.7367678046226502,
+          "topology": 0.9992072463035584,
+          "unbalance": 0.00029223683231975926
+        },
+        "top1_accuracy": {
+          "count": 512,
+          "numerator": 393,
+          "parent_bootstrap_ci95": [
+            0.718701171875,
+            0.818359375
+          ],
+          "parents": 128,
+          "rate": 0.767578125
+        },
+        "top1_prediction_counts": {
+          "hif": 1,
+          "measurement": 5,
+          "parameter": 113,
+          "topology": 393,
+          "unbalance": 0
+        },
+        "top1_tie_count": 0
+      },
+      "unbalance": {
+        "frozen_family_thresholds": {
+          "hif": 0.9891358613967896,
+          "measurement": 0.015819422900676727,
+          "parameter": 0.17211872339248657,
+          "topology": 0.011431802995502949,
+          "unbalance": 0.07259874790906906
+        },
+        "overall_labeled_family_roc_ap": {
+          "average_precision": 0.9592186332186571,
+          "roc_auc": 0.9899617484965142
+        },
+        "per_head_score_medians": {
+          "hif": 0.0019250765908509493,
+          "measurement": 6.246302291401662e-05,
+          "parameter": 4.6788268264208455e-06,
+          "topology": 2.838604018506885e-07,
+          "unbalance": 0.9970808923244476
+        },
+        "per_head_score_p10": {
+          "hif": 1.5697836488470784e-06,
+          "measurement": 2.9681124402713976e-08,
+          "parameter": 7.739084963986898e-08,
+          "topology": 3.5158975508764457e-09,
+          "unbalance": 0.1335984691977501
+        },
+        "per_head_score_p90": {
+          "hif": 0.654727697372437,
+          "measurement": 0.014750791434198622,
+          "parameter": 0.0015534128877334303,
+          "topology": 0.00015041231090435784,
+          "unbalance": 0.9999942779541016
+        },
+        "top1_accuracy": {
+          "count": 768,
+          "numerator": 644,
+          "parent_bootstrap_ci95": [
+            0.8072916666666666,
+            0.8684895833333334
+          ],
+          "parents": 128,
+          "rate": 0.8385416666666666
+        },
+        "top1_prediction_counts": {
+          "hif": 110,
+          "measurement": 3,
+          "parameter": 11,
+          "topology": 0,
+          "unbalance": 644
+        },
+        "top1_tie_count": 0
+      }
+    },
+    "family_order": [
+      "hif",
+      "unbalance",
+      "measurement",
+      "parameter",
+      "topology"
+    ],
+    "overall_pure_top1": {
+      "count": 3582,
+      "numerator": 3210,
+      "parent_bootstrap_ci95": [
+        0.8835829637011875,
+        0.9082088229777359
+      ],
+      "parents": 128,
+      "rate": 0.8961474036850922
+    },
+    "scope": "Descriptive argmax among five sigmoid family scores, conditioned on a known single fault. Excludes healthy and mixed cases; not a deployment decision rule or threshold tuning.",
+    "top1_tie_count": 0
+  },
+  "elapsed_seconds": 3.6390333000017563,
+  "failed_checks": [],
+  "interpretation": [
+    "Main results are conditional on the declared practical physical rules and paired noiseless raw distance>=5. They cannot be compared causally with V1performance on its old unfiltered distribution.",
+    "The paired V1comparison, when present, measures both frozen models on identical V2testwindows with separate1%healthy-reference calibrations. It does not identify which individual data/profile change caused improvement.",
+    "Boundary aggregate combines rejected-core positiveexamples and independently retained SFT-rangeHIF; only the explicit SFTchallenge stratum estimates its sampled20-200pu envelope.",
+    "Boundary examples are positive faults and have no healthy controls; no boundary healthyFPR or fault-absence certification is established.",
+    "Main/boundarywindows share independent testparents. Parent coverage cannot be added across cohorts.",
+    "Family scores are multilabel; own-family recall can coexist with wrong extraheadflags. Exact-family flags and extraheadrates are reported.",
+    "WLS generic alarms on measurement/parameter/topologyfaults are appropriate detections; reduced GNNphase triggers there indicate investigationselectivity, not measured total cost savings.",
+    "PhaseAonly input and paired-distance selection skew HIFphase representation; perphase and resistance-band results are supplied.",
+    "Allcalibration/selection remain frozen after test inspection. These are normalized fixed-PQ resistor/unbalance simulations, not field/arcing/harmonic or fullnodebreaker validation."
+  ],
+  "main_metrics": {
+    "general_anomaly_recall": {
+      "count": 4350,
+      "numerator": 3549,
+      "parent_bootstrap_ci95": [
+        0.8019721711131554,
+        0.829732400251784
+      ],
+      "parents": 128,
+      "rate": 0.8158620689655173
+    },
+    "healthy_anomaly_trigger_rate": {
+      "count": 5120,
+      "numerator": 37,
+      "parent_bootstrap_ci95": [
+        0.0044921875,
+        0.010546875
+      ],
+      "parents": 128,
+      "rate": 0.0072265625
+    },
+    "healthy_false_trigger_rate": {
+      "count": 5120,
+      "numerator": 35,
+      "parent_bootstrap_ci95": [
+        0.0041015625,
+        0.01015625
+      ],
+      "parents": 128,
+      "rate": 0.0068359375
+    },
+    "nonphase_fault_trigger_rate": {
+      "count": 2560,
+      "numerator": 7,
+      "parent_bootstrap_ci95": [
+        0.00078125,
+        0.00546875
+      ],
+      "parents": 128,
+      "rate": 0.002734375
+    },
+    "paired_phase_recall_gain_over_wls": {
+      "count": 1790,
+      "numerator": 299,
+      "parent_bootstrap_ci95": [
+        0.1394988589884278,
+        0.19532645089285713
+      ],
+      "parents": 128,
+      "rate": 0.1670391061452514
+    },
+    "phase_acquisition_fraction": {
+      "count": 9470,
+      "numerator": 1349,
+      "parent_bootstrap_ci95": [
+        0.13692942743428116,
+        0.1481546990496304
+      ],
+      "parents": 128,
+      "rate": 0.14244984160506863
+    },
+    "phase_recall": {
+      "count": 1790,
+      "numerator": 1307,
+      "parent_bootstrap_ci95": [
+        0.7044692737430167,
+        0.7581073080855946
+      ],
+      "parents": 128,
+      "rate": 0.7301675977653631
+    },
+    "phase_recall_among_wls_misses": {
+      "count": 782,
+      "numerator": 450,
+      "parent_bootstrap_ci95": [
+        0.532382949124236,
+        0.6136683229303548
+      ],
+      "parents": 128,
+      "rate": 0.5754475703324808
+    },
+    "union_acquisition_fraction": {
+      "count": 9470,
+      "numerator": 4052,
+      "parent_bootstrap_ci95": [
+        0.4231256599788807,
+        0.4327349524815206
+      ],
+      "parents": 128,
+      "rate": 0.42787750791974655
+    },
+    "union_healthy_false_trigger_rate": {
+      "count": 5120,
+      "numerator": 116,
+      "parent_bootstrap_ci95": [
+        0.0185546875,
+        0.026958007812499997
+      ],
+      "parents": 128,
+      "rate": 0.02265625
+    },
+    "union_nonphase_fault_trigger_rate": {
+      "count": 2560,
+      "numerator": 2478,
+      "parent_bootstrap_ci95": [
+        0.958984375,
+        0.976171875
+      ],
+      "parents": 128,
+      "rate": 0.96796875
+    },
+    "union_phase_recall": {
+      "count": 1790,
+      "numerator": 1458,
+      "parent_bootstrap_ci95": [
+        0.7955307262569833,
+        0.8324069109138068
+      ],
+      "parents": 128,
+      "rate": 0.8145251396648044
+    },
+    "wls_healthy_false_trigger_rate": {
+      "count": 5120,
+      "numerator": 83,
+      "parent_bootstrap_ci95": [
+        0.012890625,
+        0.0197265625
+      ],
+      "parents": 128,
+      "rate": 0.0162109375
+    },
+    "wls_nonphase_fault_trigger_rate": {
+      "count": 2560,
+      "numerator": 2477,
+      "parent_bootstrap_ci95": [
+        0.958583984375,
+        0.97578125
+      ],
+      "parents": 128,
+      "rate": 0.967578125
+    },
+    "wls_phase_recall": {
+      "count": 1790,
+      "numerator": 1008,
+      "parent_bootstrap_ci95": [
+        0.5435267857142857,
+        0.5831473214285714
+      ],
+      "parents": 128,
+      "rate": 0.5631284916201117
+    }
+  },
+  "model_id": "65e41aa2ebde326712e6686fe4f590936fae8b70ecfcb88dffb8c85f30ae35cb",
+  "previous_v1_recalibrated": {
+    "calibration_sha256": "639e612d1853af06ff832dbd5088f787b3d7832fcf1b446f5da893dc768a3ff2",
+    "checkpoint_sha256": "9ca02995b14396ee4ebb026a942532f2e75879e7d9663057d2c69bebb44875c6",
+    "comparison": {
+      "all_phase": {
+        "paired_v2_minus_v1_anomaly": {
+          "count": 1790,
+          "numerator": 126,
+          "parent_bootstrap_ci95": [
+            0.049720670391061456,
+            0.0904043109038308
+          ],
+          "parents": 128,
+          "rate": 0.07039106145251396
+        },
+        "paired_v2_minus_v1_phase": {
+          "count": 1790,
+          "numerator": 219,
+          "parent_bootstrap_ci95": [
+            0.09988278437949928,
+            0.14526536312849161
+          ],
+          "parents": 128,
+          "rate": 0.1223463687150838
+        },
+        "v1_anomaly_trigger": {
+          "count": 1790,
+          "numerator": 1275,
+          "parent_bootstrap_ci95": [
+            0.6941824776785714,
+            0.7309854011864814
+          ],
+          "parents": 128,
+          "rate": 0.7122905027932961
+        },
+        "v1_phase_trigger": {
+          "count": 1790,
+          "numerator": 1088,
+          "parent_bootstrap_ci95": [
+            0.5870535714285714,
+            0.6301712377988576
+          ],
+          "parents": 128,
+          "rate": 0.6078212290502794
+        },
+        "v2_anomaly_trigger": {
+          "count": 1790,
+          "numerator": 1401,
+          "parent_bootstrap_ci95": [
+            0.7606026785714286,
+            0.8048152956394586
+          ],
+          "parents": 128,
+          "rate": 0.78268156424581
+        },
+        "v2_phase_trigger": {
+          "count": 1790,
+          "numerator": 1307,
+          "parent_bootstrap_ci95": [
+            0.7044692737430167,
+            0.7581073080855946
+          ],
+          "parents": 128,
+          "rate": 0.7301675977653631
+        }
+      },
+      "healthy": {
+        "paired_v2_minus_v1_anomaly": {
+          "count": 5120,
+          "numerator": -11,
+          "parent_bootstrap_ci95": [
+            -0.0056640625,
+            0.0017626953124999956
+          ],
+          "parents": 128,
+          "rate": -0.0021484375
+        },
+        "paired_v2_minus_v1_phase": {
+          "count": 5120,
+          "numerator": -4,
+          "parent_bootstrap_ci95": [
+            -0.00546875,
+            0.003515625
+          ],
+          "parents": 128,
+          "rate": -0.00078125
+        },
+        "v1_anomaly_trigger": {
+          "count": 5120,
+          "numerator": 48,
+          "parent_bootstrap_ci95": [
+            0.00625,
+            0.0130859375
+          ],
+          "parents": 128,
+          "rate": 0.009375
+        },
+        "v1_phase_trigger": {
+          "count": 5120,
+          "numerator": 39,
+          "parent_bootstrap_ci95": [
+            0.0041015625,
+            0.0125
+          ],
+          "parents": 128,
+          "rate": 0.0076171875
+        },
+        "v2_anomaly_trigger": {
+          "count": 5120,
+          "numerator": 37,
+          "parent_bootstrap_ci95": [
+            0.0044921875,
+            0.010546875
+          ],
+          "parents": 128,
+          "rate": 0.0072265625
+        },
+        "v2_phase_trigger": {
+          "count": 5120,
+          "numerator": 35,
+          "parent_bootstrap_ci95": [
+            0.0041015625,
+            0.01015625
+          ],
+          "parents": 128,
+          "rate": 0.0068359375
+        }
+      },
+      "pure_hif": {
+        "paired_v2_minus_v1_anomaly": {
+          "count": 766,
+          "numerator": 138,
+          "parent_bootstrap_ci95": [
+            0.14449869791666667,
+            0.21485323367782153
+          ],
+          "parents": 128,
+          "rate": 0.1801566579634465
+        },
+        "paired_v2_minus_v1_own_family": {
+          "count": 766,
+          "numerator": -3,
+          "parent_bootstrap_ci95": [
+            -0.03927218241939928,
+            0.031252039817232374
+          ],
+          "parents": 128,
+          "rate": -0.0039164490861618795
+        },
+        "paired_v2_minus_v1_phase": {
+          "count": 766,
+          "numerator": 153,
+          "parent_bootstrap_ci95": [
+            0.16534350909015955,
+            0.23368146214099217
+          ],
+          "parents": 128,
+          "rate": 0.19973890339425587
+        },
+        "v1_anomaly_trigger": {
+          "count": 766,
+          "numerator": 352,
+          "parent_bootstrap_ci95": [
+            0.42689295039164493,
+            0.49216761178198437
+          ],
+          "parents": 128,
+          "rate": 0.4595300261096606
+        },
+        "v1_own_family": {
+          "count": 766,
+          "numerator": 290,
+          "parent_bootstrap_ci95": [
+            0.34854127570169713,
+            0.4086161879895561
+          ],
+          "parents": 128,
+          "rate": 0.3785900783289817
+        },
+        "v1_phase_trigger": {
+          "count": 766,
+          "numerator": 338,
+          "parent_bootstrap_ci95": [
+            0.41015625,
+            0.47268710223563964
+          ],
+          "parents": 128,
+          "rate": 0.4412532637075718
+        },
+        "v2_anomaly_trigger": {
+          "count": 766,
+          "numerator": 490,
+          "parent_bootstrap_ci95": [
+            0.6015430710078534,
+            0.6801566579634465
+          ],
+          "parents": 128,
+          "rate": 0.639686684073107
+        },
+        "v2_own_family": {
+          "count": 766,
+          "numerator": 287,
+          "parent_bootstrap_ci95": [
+            0.33984375,
+            0.40992167101827676
+          ],
+          "parents": 128,
+          "rate": 0.37467362924281983
+        },
+        "v2_phase_trigger": {
+          "count": 766,
+          "numerator": 491,
+          "parent_bootstrap_ci95": [
+            0.6018276762402088,
+            0.6815879030035823
+          ],
+          "parents": 128,
+          "rate": 0.6409921671018277
+        }
+      },
+      "pure_measurement": {
+        "paired_v2_minus_v1_anomaly": {
+          "count": 768,
+          "numerator": -104,
+          "parent_bootstrap_ci95": [
+            -0.1640625,
+            -0.10804036458333337
+          ],
+          "parents": 128,
+          "rate": -0.13541666666666666
+        },
+        "paired_v2_minus_v1_own_family": {
+          "count": 768,
+          "numerator": 129,
+          "parent_bootstrap_ci95": [
+            0.13541666666666666,
+            0.2031575520833333
+          ],
+          "parents": 128,
+          "rate": 0.16796875
+        },
+        "paired_v2_minus_v1_phase": {
+          "count": 768,
+          "numerator": -28,
+          "parent_bootstrap_ci95": [
+            -0.05862630208333333,
+            -0.015625
+          ],
+          "parents": 128,
+          "rate": -0.036458333333333336
+        },
+        "v1_anomaly_trigger": {
+          "count": 768,
+          "numerator": 737,
+          "parent_bootstrap_ci95": [
+            0.9440104166666666,
+            0.9752604166666666
+          ],
+          "parents": 128,
+          "rate": 0.9596354166666666
+        },
+        "v1_own_family": {
+          "count": 768,
+          "numerator": 639,
+          "parent_bootstrap_ci95": [
+            0.7968424479166667,
+            0.8645833333333334
+          ],
+          "parents": 128,
+          "rate": 0.83203125
+        },
+        "v1_phase_trigger": {
+          "count": 768,
+          "numerator": 34,
+          "parent_bootstrap_ci95": [
+            0.026041666666666668,
+            0.06510416666666667
+          ],
+          "parents": 128,
+          "rate": 0.044270833333333336
+        },
+        "v2_anomaly_trigger": {
+          "count": 768,
+          "numerator": 633,
+          "parent_bootstrap_ci95": [
+            0.796875,
+            0.8502929687499999
+          ],
+          "parents": 128,
+          "rate": 0.82421875
+        },
+        "v2_own_family": {
+          "count": 768,
+          "numerator": 768,
+          "parent_bootstrap_ci95": [
+            1.0,
+            1.0
+          ],
+          "parents": 128,
+          "rate": 1.0
+        },
+        "v2_phase_trigger": {
+          "count": 768,
+          "numerator": 6,
+          "parent_bootstrap_ci95": [
+            0.0026041666666666665,
+            0.015625
+          ],
+          "parents": 128,
+          "rate": 0.0078125
+        }
+      },
+      "pure_parameter": {
+        "paired_v2_minus_v1_anomaly": {
+          "count": 768,
+          "numerator": -87,
+          "parent_bootstrap_ci95": [
+            -0.14192708333333334,
+            -0.08460286458333337
+          ],
+          "parents": 128,
+          "rate": -0.11328125
+        },
+        "paired_v2_minus_v1_own_family": {
+          "count": 768,
+          "numerator": 713,
+          "parent_bootstrap_ci95": [
+            0.9049479166666666,
+            0.94921875
+          ],
+          "parents": 128,
+          "rate": 0.9283854166666666
+        },
+        "paired_v2_minus_v1_phase": {
+          "count": 768,
+          "numerator": -95,
+          "parent_bootstrap_ci95": [
+            -0.15755208333333334,
+            -0.09505208333333333
+          ],
+          "parents": 128,
+          "rate": -0.12369791666666667
+        },
+        "v1_anomaly_trigger": {
+          "count": 768,
+          "numerator": 622,
+          "parent_bootstrap_ci95": [
+            0.7708333333333334,
+            0.8450520833333334
+          ],
+          "parents": 128,
+          "rate": 0.8098958333333334
+        },
+        "v1_own_family": {
+          "count": 768,
+          "numerator": 3,
+          "parent_bootstrap_ci95": [
+            0.0,
+            0.009114583333333334
+          ],
+          "parents": 128,
+          "rate": 0.00390625
+        },
+        "v1_phase_trigger": {
+          "count": 768,
+          "numerator": 96,
+          "parent_bootstrap_ci95": [
+            0.09505208333333333,
+            0.15885416666666666
+          ],
+          "parents": 128,
+          "rate": 0.125
+        },
+        "v2_anomaly_trigger": {
+          "count": 768,
+          "numerator": 535,
+          "parent_bootstrap_ci95": [
+            0.6471354166666666,
+            0.7408854166666666
+          ],
+          "parents": 128,
+          "rate": 0.6966145833333334
+        },
+        "v2_own_family": {
+          "count": 768,
+          "numerator": 716,
+          "parent_bootstrap_ci95": [
+            0.91015625,
+            0.953125
+          ],
+          "parents": 128,
+          "rate": 0.9322916666666666
+        },
+        "v2_phase_trigger": {
+          "count": 768,
+          "numerator": 1,
+          "parent_bootstrap_ci95": [
+            0.0,
+            0.00390625
+          ],
+          "parents": 128,
+          "rate": 0.0013020833333333333
+        }
+      },
+      "pure_topology": {
+        "paired_v2_minus_v1_anomaly": {
+          "count": 512,
+          "numerator": -22,
+          "parent_bootstrap_ci95": [
+            -0.06640625,
+            -0.021484375
+          ],
+          "parents": 128,
+          "rate": -0.04296875
+        },
+        "paired_v2_minus_v1_own_family": {
+          "count": 512,
+          "numerator": 12,
+          "parent_bootstrap_ci95": [
+            0.005859375,
+            0.044921875
+          ],
+          "parents": 128,
+          "rate": 0.0234375
+        },
+        "paired_v2_minus_v1_phase": {
+          "count": 512,
+          "numerator": -152,
+          "parent_bootstrap_ci95": [
+            -0.34775390625,
+            -0.24609375
+          ],
+          "parents": 128,
+          "rate": -0.296875
+        },
+        "v1_anomaly_trigger": {
+          "count": 512,
+          "numerator": 502,
+          "parent_bootstrap_ci95": [
+            0.9609375,
+            0.99609375
+          ],
+          "parents": 128,
+          "rate": 0.98046875
+        },
+        "v1_own_family": {
+          "count": 512,
+          "numerator": 499,
+          "parent_bootstrap_ci95": [
+            0.953076171875,
+            0.9921875
+          ],
+          "parents": 128,
+          "rate": 0.974609375
+        },
+        "v1_phase_trigger": {
+          "count": 512,
+          "numerator": 152,
+          "parent_bootstrap_ci95": [
+            0.24609375,
+            0.3477539062499999
+          ],
+          "parents": 128,
+          "rate": 0.296875
+        },
+        "v2_anomaly_trigger": {
+          "count": 512,
+          "numerator": 480,
+          "parent_bootstrap_ci95": [
+            0.90625,
+            0.962890625
+          ],
+          "parents": 128,
+          "rate": 0.9375
+        },
+        "v2_own_family": {
+          "count": 512,
+          "numerator": 511,
+          "parent_bootstrap_ci95": [
+            0.994140625,
+            1.0
+          ],
+          "parents": 128,
+          "rate": 0.998046875
+        },
+        "v2_phase_trigger": {
+          "count": 512,
+          "numerator": 0,
+          "parent_bootstrap_ci95": [
+            0.0,
+            0.0
+          ],
+          "parents": 128,
+          "rate": 0.0
+        }
+      },
+      "pure_unbalance": {
+        "paired_v2_minus_v1_anomaly": {
+          "count": 768,
+          "numerator": 6,
+          "parent_bootstrap_ci95": [
+            -0.014322916666666666,
+            0.029947916666666668
+          ],
+          "parents": 128,
+          "rate": 0.0078125
+        },
+        "paired_v2_minus_v1_own_family": {
+          "count": 768,
+          "numerator": 31,
+          "parent_bootstrap_ci95": [
+            0.02080078125,
+            0.06123046874999997
+          ],
+          "parents": 128,
+          "rate": 0.040364583333333336
+        },
+        "paired_v2_minus_v1_phase": {
+          "count": 768,
+          "numerator": 4,
+          "parent_bootstrap_ci95": [
+            -0.020833333333333332,
+            0.029947916666666668
+          ],
+          "parents": 128,
+          "rate": 0.005208333333333333
+        },
+        "v1_anomaly_trigger": {
+          "count": 768,
+          "numerator": 676,
+          "parent_bootstrap_ci95": [
+            0.8541341145833333,
+            0.90625
+          ],
+          "parents": 128,
+          "rate": 0.8802083333333334
+        },
+        "v1_own_family": {
+          "count": 768,
+          "numerator": 675,
+          "parent_bootstrap_ci95": [
+            0.8528320312500001,
+            0.9036783854166667
+          ],
+          "parents": 128,
+          "rate": 0.87890625
+        },
+        "v1_phase_trigger": {
+          "count": 768,
+          "numerator": 677,
+          "parent_bootstrap_ci95": [
+            0.8541341145833333,
+            0.9088541666666666
+          ],
+          "parents": 128,
+          "rate": 0.8815104166666666
+        },
+        "v2_anomaly_trigger": {
+          "count": 768,
+          "numerator": 682,
+          "parent_bootstrap_ci95": [
+            0.8619791666666666,
+            0.9127929687499999
+          ],
+          "parents": 128,
+          "rate": 0.8880208333333334
+        },
+        "v2_own_family": {
+          "count": 768,
+          "numerator": 706,
+          "parent_bootstrap_ci95": [
+            0.89453125,
+            0.94140625
+          ],
+          "parents": 128,
+          "rate": 0.9192708333333334
+        },
+        "v2_phase_trigger": {
+          "count": 768,
+          "numerator": 681,
+          "parent_bootstrap_ci95": [
+            0.8606770833333334,
+            0.9114908854166667
+          ],
+          "parents": 128,
+          "rate": 0.88671875
+        }
+      }
+    },
+    "evaluation_sha256": "ea3e541439f3782a86ead78ab4b6c3122e52e0403c73c5b6f07814059c33ea12",
+    "operating_point_note": "Both frozen models use independently computed healthy-only1%reference thresholds on the same V2calibration parents; each realized testFPR is reported.",
+    "status": "paired_comparison_complete"
+  },
+  "pure_family_metrics": {
+    "hif": {
+      "any_family_flag": {
+        "count": 766,
+        "numerator": 418,
+        "parent_bootstrap_ci95": [
+          0.5104166666666666,
+          0.5815902549342106
+        ],
+        "parents": 128,
+        "rate": 0.5456919060052219
+      },
+      "any_wrong_additional_family_flag": {
+        "count": 766,
+        "numerator": 222,
+        "parent_bootstrap_ci95": [
+          0.25585869684086776,
+          0.3242284644960733
+        ],
+        "parents": 128,
+        "rate": 0.2898172323759791
+      },
+      "configured_wls_recall": {
+        "count": 766,
+        "numerator": 173,
+        "parent_bootstrap_ci95": [
+          0.19580970545039164,
+          0.2558746736292428
+        ],
+        "parents": 128,
+        "rate": 0.2258485639686684
+      },
+      "exact_family_flags": {
+        "count": 766,
+        "numerator": 196,
+        "parent_bootstrap_ci95": [
+          0.2206122681407746,
+          0.2916666666666667
+        ],
+        "parents": 128,
+        "rate": 0.2558746736292428
+      },
+      "extra_family_flags": {
+        "measurement": {
+          "count": 766,
+          "numerator": 134,
+          "parent_bootstrap_ci95": [
+            0.1471315719324147,
+            0.20366265287893362
+          ],
+          "parents": 128,
+          "rate": 0.17493472584856398
+        },
+        "parameter": {
+          "count": 766,
+          "numerator": 2,
+          "parent_bootstrap_ci95": [
+            0.0,
+            0.006544502617801047
+          ],
+          "parents": 128,
+          "rate": 0.0026109660574412533
+        },
+        "topology": {
+          "count": 766,
+          "numerator": 1,
+          "parent_bootstrap_ci95": [
+            0.0,
+            0.003926701570680628
+          ],
+          "parents": 128,
+          "rate": 0.0013054830287206266
+        },
+        "unbalance": {
+          "count": 766,
+          "numerator": 96,
+          "parent_bootstrap_ci95": [
+            0.09895833333333333,
+            0.15315397305846423
+          ],
+          "parents": 128,
+          "rate": 0.12532637075718014
+        }
+      },
+      "gnn_among_wls_misses": {
+        "count": 593,
+        "numerator": 334,
+        "parent_bootstrap_ci95": [
+          0.515678081445993,
+          0.6097202956933427
+        ],
+        "parents": 128,
+        "rate": 0.5632377740303541
+      },
+      "gnn_anomaly_recall": {
+        "count": 766,
+        "numerator": 490,
+        "parent_bootstrap_ci95": [
+          0.6015430710078534,
+          0.6801566579634465
+        ],
+        "parents": 128,
+        "rate": 0.639686684073107
+      },
+      "gnn_or_wls_recall": {
+        "count": 766,
+        "numerator": 507,
+        "parent_bootstrap_ci95": [
+          0.6246719160104987,
+          0.6997519753120173
+        ],
+        "parents": 128,
+        "rate": 0.6618798955613577
+      },
+      "gnn_phase_recall": {
+        "count": 766,
+        "numerator": 491,
+        "parent_bootstrap_ci95": [
+          0.6018276762402088,
+          0.6815879030035823
+        ],
+        "parents": 128,
+        "rate": 0.6409921671018277
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 766,
+        "numerator": 491,
+        "parent_bootstrap_ci95": [
+          0.6018276762402088,
+          0.6815879030035823
+        ],
+        "parents": 128,
+        "rate": 0.6409921671018277
+      },
+      "matched_wls_recall": {
+        "count": 766,
+        "numerator": 142,
+        "parent_bootstrap_ci95": [
+          0.15575916230366493,
+          0.21484375
+        ],
+        "parents": 128,
+        "rate": 0.185378590078329
+      },
+      "own_family_flag_recall": {
+        "count": 766,
+        "numerator": 287,
+        "parent_bootstrap_ci95": [
+          0.33984375,
+          0.40992167101827676
+        ],
+        "parents": 128,
+        "rate": 0.37467362924281983
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 766,
+        "numerator": 318,
+        "parent_bootstrap_ci95": [
+          0.3684809991024804,
+          0.45822454308093996
+        ],
+        "parents": 128,
+        "rate": 0.4151436031331593
+      }
+    },
+    "measurement": {
+      "any_family_flag": {
+        "count": 768,
+        "numerator": 768,
+        "parent_bootstrap_ci95": [
+          1.0,
+          1.0
+        ],
+        "parents": 128,
+        "rate": 1.0
+      },
+      "any_wrong_additional_family_flag": {
+        "count": 768,
+        "numerator": 470,
+        "parent_bootstrap_ci95": [
+          0.5728841145833333,
+          0.6497395833333334
+        ],
+        "parents": 128,
+        "rate": 0.6119791666666666
+      },
+      "configured_wls_recall": {
+        "count": 768,
+        "numerator": 768,
+        "parent_bootstrap_ci95": [
+          1.0,
+          1.0
+        ],
+        "parents": 128,
+        "rate": 1.0
+      },
+      "exact_family_flags": {
+        "count": 768,
+        "numerator": 298,
+        "parent_bootstrap_ci95": [
+          0.3502604166666667,
+          0.4271158854166666
+        ],
+        "parents": 128,
+        "rate": 0.3880208333333333
+      },
+      "extra_family_flags": {
+        "hif": {
+          "count": 768,
+          "numerator": 27,
+          "parent_bootstrap_ci95": [
+            0.0234375,
+            0.049479166666666664
+          ],
+          "parents": 128,
+          "rate": 0.03515625
+        },
+        "parameter": {
+          "count": 768,
+          "numerator": 136,
+          "parent_bootstrap_ci95": [
+            0.14453125,
+            0.20963541666666666
+          ],
+          "parents": 128,
+          "rate": 0.17708333333333334
+        },
+        "topology": {
+          "count": 768,
+          "numerator": 428,
+          "parent_bootstrap_ci95": [
+            0.5182291666666666,
+            0.5963541666666666
+          ],
+          "parents": 128,
+          "rate": 0.5572916666666666
+        },
+        "unbalance": {
+          "count": 768,
+          "numerator": 0,
+          "parent_bootstrap_ci95": [
+            0.0,
+            0.0
+          ],
+          "parents": 128,
+          "rate": 0.0
+        }
+      },
+      "gnn_among_wls_misses": {
+        "count": 0,
+        "numerator": 0,
+        "parent_bootstrap_ci95": null,
+        "parents": 0,
+        "rate": null
+      },
+      "gnn_anomaly_recall": {
+        "count": 768,
+        "numerator": 633,
+        "parent_bootstrap_ci95": [
+          0.796875,
+          0.8502929687499999
+        ],
+        "parents": 128,
+        "rate": 0.82421875
+      },
+      "gnn_or_wls_recall": {
+        "count": 0,
+        "numerator": 0,
+        "parent_bootstrap_ci95": null,
+        "parents": 0,
+        "rate": null
+      },
+      "gnn_phase_recall": {
+        "count": 0,
+        "numerator": 0,
+        "parent_bootstrap_ci95": null,
+        "parents": 0,
+        "rate": null
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 768,
+        "numerator": 6,
+        "parent_bootstrap_ci95": [
+          0.0026041666666666665,
+          0.015625
+        ],
+        "parents": 128,
+        "rate": 0.0078125
+      },
+      "matched_wls_recall": {
+        "count": 768,
+        "numerator": 768,
+        "parent_bootstrap_ci95": [
+          1.0,
+          1.0
+        ],
+        "parents": 128,
+        "rate": 1.0
+      },
+      "own_family_flag_recall": {
+        "count": 768,
+        "numerator": 768,
+        "parent_bootstrap_ci95": [
+          1.0,
+          1.0
+        ],
+        "parents": 128,
+        "rate": 1.0
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 0,
+        "numerator": 0,
+        "parent_bootstrap_ci95": null,
+        "parents": 0,
+        "rate": null
+      }
+    },
+    "parameter": {
+      "any_family_flag": {
+        "count": 768,
+        "numerator": 743,
+        "parent_bootstrap_ci95": [
+          0.953125,
+          0.98046875
+        ],
+        "parents": 128,
+        "rate": 0.9674479166666666
+      },
+      "any_wrong_additional_family_flag": {
+        "count": 768,
+        "numerator": 741,
+        "parent_bootstrap_ci95": [
+          0.9505208333333334,
+          0.9791666666666666
+        ],
+        "parents": 128,
+        "rate": 0.96484375
+      },
+      "configured_wls_recall": {
+        "count": 768,
+        "numerator": 692,
+        "parent_bootstrap_ci95": [
+          0.8723958333333334,
+          0.92578125
+        ],
+        "parents": 128,
+        "rate": 0.9010416666666666
+      },
+      "exact_family_flags": {
+        "count": 768,
+        "numerator": 2,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.006510416666666667
+        ],
+        "parents": 128,
+        "rate": 0.0026041666666666665
+      },
+      "extra_family_flags": {
+        "hif": {
+          "count": 768,
+          "numerator": 2,
+          "parent_bootstrap_ci95": [
+            0.0,
+            0.006510416666666667
+          ],
+          "parents": 128,
+          "rate": 0.0026041666666666665
+        },
+        "measurement": {
+          "count": 768,
+          "numerator": 683,
+          "parent_bootstrap_ci95": [
+            0.8580729166666666,
+            0.9153645833333334
+          ],
+          "parents": 128,
+          "rate": 0.8893229166666666
+        },
+        "topology": {
+          "count": 768,
+          "numerator": 723,
+          "parent_bootstrap_ci95": [
+            0.9218424479166667,
+            0.9596354166666666
+          ],
+          "parents": 128,
+          "rate": 0.94140625
+        },
+        "unbalance": {
+          "count": 768,
+          "numerator": 1,
+          "parent_bootstrap_ci95": [
+            0.0,
+            0.00390625
+          ],
+          "parents": 128,
+          "rate": 0.0013020833333333333
+        }
+      },
+      "gnn_among_wls_misses": {
+        "count": 0,
+        "numerator": 0,
+        "parent_bootstrap_ci95": null,
+        "parents": 0,
+        "rate": null
+      },
+      "gnn_anomaly_recall": {
+        "count": 768,
+        "numerator": 535,
+        "parent_bootstrap_ci95": [
+          0.6471354166666666,
+          0.7408854166666666
+        ],
+        "parents": 128,
+        "rate": 0.6966145833333334
+      },
+      "gnn_or_wls_recall": {
+        "count": 0,
+        "numerator": 0,
+        "parent_bootstrap_ci95": null,
+        "parents": 0,
+        "rate": null
+      },
+      "gnn_phase_recall": {
+        "count": 0,
+        "numerator": 0,
+        "parent_bootstrap_ci95": null,
+        "parents": 0,
+        "rate": null
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 768,
+        "numerator": 1,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.00390625
+        ],
+        "parents": 128,
+        "rate": 0.0013020833333333333
+      },
+      "matched_wls_recall": {
+        "count": 768,
+        "numerator": 675,
+        "parent_bootstrap_ci95": [
+          0.8463541666666666,
+          0.9075520833333334
+        ],
+        "parents": 128,
+        "rate": 0.87890625
+      },
+      "own_family_flag_recall": {
+        "count": 768,
+        "numerator": 716,
+        "parent_bootstrap_ci95": [
+          0.91015625,
+          0.953125
+        ],
+        "parents": 128,
+        "rate": 0.9322916666666666
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 0,
+        "numerator": 0,
+        "parent_bootstrap_ci95": null,
+        "parents": 0,
+        "rate": null
+      }
+    },
+    "topology": {
+      "any_family_flag": {
+        "count": 512,
+        "numerator": 512,
+        "parent_bootstrap_ci95": [
+          1.0,
+          1.0
+        ],
+        "parents": 128,
+        "rate": 1.0
+      },
+      "any_wrong_additional_family_flag": {
+        "count": 512,
+        "numerator": 512,
+        "parent_bootstrap_ci95": [
+          1.0,
+          1.0
+        ],
+        "parents": 128,
+        "rate": 1.0
+      },
+      "configured_wls_recall": {
+        "count": 512,
+        "numerator": 505,
+        "parent_bootstrap_ci95": [
+          0.97265625,
+          0.998046875
+        ],
+        "parents": 128,
+        "rate": 0.986328125
+      },
+      "exact_family_flags": {
+        "count": 512,
+        "numerator": 0,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.0
+        ],
+        "parents": 128,
+        "rate": 0.0
+      },
+      "extra_family_flags": {
+        "hif": {
+          "count": 512,
+          "numerator": 0,
+          "parent_bootstrap_ci95": [
+            0.0,
+            0.0
+          ],
+          "parents": 128,
+          "rate": 0.0
+        },
+        "measurement": {
+          "count": 512,
+          "numerator": 507,
+          "parent_bootstrap_ci95": [
+            0.978515625,
+            0.998046875
+          ],
+          "parents": 128,
+          "rate": 0.990234375
+        },
+        "parameter": {
+          "count": 512,
+          "numerator": 200,
+          "parent_bootstrap_ci95": [
+            0.33203125,
+            0.45122070312499996
+          ],
+          "parents": 128,
+          "rate": 0.390625
+        },
+        "unbalance": {
+          "count": 512,
+          "numerator": 0,
+          "parent_bootstrap_ci95": [
+            0.0,
+            0.0
+          ],
+          "parents": 128,
+          "rate": 0.0
+        }
+      },
+      "gnn_among_wls_misses": {
+        "count": 0,
+        "numerator": 0,
+        "parent_bootstrap_ci95": null,
+        "parents": 0,
+        "rate": null
+      },
+      "gnn_anomaly_recall": {
+        "count": 512,
+        "numerator": 480,
+        "parent_bootstrap_ci95": [
+          0.90625,
+          0.962890625
+        ],
+        "parents": 128,
+        "rate": 0.9375
+      },
+      "gnn_or_wls_recall": {
+        "count": 0,
+        "numerator": 0,
+        "parent_bootstrap_ci95": null,
+        "parents": 0,
+        "rate": null
+      },
+      "gnn_phase_recall": {
+        "count": 0,
+        "numerator": 0,
+        "parent_bootstrap_ci95": null,
+        "parents": 0,
+        "rate": null
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 512,
+        "numerator": 0,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.0
+        ],
+        "parents": 128,
+        "rate": 0.0
+      },
+      "matched_wls_recall": {
+        "count": 512,
+        "numerator": 503,
+        "parent_bootstrap_ci95": [
+          0.96484375,
+          0.99609375
+        ],
+        "parents": 128,
+        "rate": 0.982421875
+      },
+      "own_family_flag_recall": {
+        "count": 512,
+        "numerator": 511,
+        "parent_bootstrap_ci95": [
+          0.994140625,
+          1.0
+        ],
+        "parents": 128,
+        "rate": 0.998046875
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 0,
+        "numerator": 0,
+        "parent_bootstrap_ci95": null,
+        "parents": 0,
+        "rate": null
+      }
+    },
+    "unbalance": {
+      "any_family_flag": {
+        "count": 768,
+        "numerator": 728,
+        "parent_bootstrap_ci95": [
+          0.9283854166666666,
+          0.96484375
+        ],
+        "parents": 128,
+        "rate": 0.9479166666666666
+      },
+      "any_wrong_additional_family_flag": {
+        "count": 768,
+        "numerator": 83,
+        "parent_bootstrap_ci95": [
+          0.08203125,
+          0.13671875
+        ],
+        "parents": 128,
+        "rate": 0.10807291666666667
+      },
+      "configured_wls_recall": {
+        "count": 768,
+        "numerator": 579,
+        "parent_bootstrap_ci95": [
+          0.7122070312500001,
+          0.79296875
+        ],
+        "parents": 128,
+        "rate": 0.75390625
+      },
+      "exact_family_flags": {
+        "count": 768,
+        "numerator": 645,
+        "parent_bootstrap_ci95": [
+          0.8098958333333334,
+          0.8697916666666666
+        ],
+        "parents": 128,
+        "rate": 0.83984375
+      },
+      "extra_family_flags": {
+        "hif": {
+          "count": 768,
+          "numerator": 4,
+          "parent_bootstrap_ci95": [
+            0.0013020833333333333,
+            0.010416666666666666
+          ],
+          "parents": 128,
+          "rate": 0.005208333333333333
+        },
+        "measurement": {
+          "count": 768,
+          "numerator": 74,
+          "parent_bootstrap_ci95": [
+            0.07291666666666667,
+            0.12239583333333333
+          ],
+          "parents": 128,
+          "rate": 0.09635416666666667
+        },
+        "parameter": {
+          "count": 768,
+          "numerator": 8,
+          "parent_bootstrap_ci95": [
+            0.0026041666666666665,
+            0.018229166666666668
+          ],
+          "parents": 128,
+          "rate": 0.010416666666666666
+        },
+        "topology": {
+          "count": 768,
+          "numerator": 6,
+          "parent_bootstrap_ci95": [
+            0.0026041666666666665,
+            0.01435546874999997
+          ],
+          "parents": 128,
+          "rate": 0.0078125
+        }
+      },
+      "gnn_among_wls_misses": {
+        "count": 189,
+        "numerator": 116,
+        "parent_bootstrap_ci95": [
+          0.535514985924822,
+          0.6853093702839895
+        ],
+        "parents": 88,
+        "rate": 0.6137566137566137
+      },
+      "gnn_anomaly_recall": {
+        "count": 768,
+        "numerator": 682,
+        "parent_bootstrap_ci95": [
+          0.8619791666666666,
+          0.9127929687499999
+        ],
+        "parents": 128,
+        "rate": 0.8880208333333334
+      },
+      "gnn_or_wls_recall": {
+        "count": 768,
+        "numerator": 695,
+        "parent_bootstrap_ci95": [
+          0.8802083333333334,
+          0.9270833333333334
+        ],
+        "parents": 128,
+        "rate": 0.9049479166666666
+      },
+      "gnn_phase_recall": {
+        "count": 768,
+        "numerator": 681,
+        "parent_bootstrap_ci95": [
+          0.8606770833333334,
+          0.9114908854166667
+        ],
+        "parents": 128,
+        "rate": 0.88671875
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 768,
+        "numerator": 681,
+        "parent_bootstrap_ci95": [
+          0.8606770833333334,
+          0.9114908854166667
+        ],
+        "parents": 128,
+        "rate": 0.88671875
+      },
+      "matched_wls_recall": {
+        "count": 768,
+        "numerator": 556,
+        "parent_bootstrap_ci95": [
+          0.6822916666666666,
+          0.7630208333333334
+        ],
+        "parents": 128,
+        "rate": 0.7239583333333334
+      },
+      "own_family_flag_recall": {
+        "count": 768,
+        "numerator": 706,
+        "parent_bootstrap_ci95": [
+          0.89453125,
+          0.94140625
+        ],
+        "parents": 128,
+        "rate": 0.9192708333333334
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 768,
+        "numerator": 102,
+        "parent_bootstrap_ci95": [
+          0.10026041666666667,
+          0.16536458333333334
+        ],
+        "parents": 128,
+        "rate": 0.1328125
+      }
+    }
+  },
+  "pure_hif_phase_strata": {
+    "1": {
+      "configured_wls_recall": {
+        "count": 472,
+        "numerator": 95,
+        "parent_bootstrap_ci95": [
+          0.16008552631578948,
+          0.2402638850511191
+        ],
+        "parents": 127,
+        "rate": 0.20127118644067796
+      },
+      "gnn_among_wls_misses": {
+        "count": 377,
+        "numerator": 238,
+        "parent_bootstrap_ci95": [
+          0.5749896408839779,
+          0.6865614175707783
+        ],
+        "parents": 127,
+        "rate": 0.6312997347480106
+      },
+      "gnn_anomaly_recall": {
+        "count": 472,
+        "numerator": 326,
+        "parent_bootstrap_ci95": [
+          0.6465383735123589,
+          0.7383966244725738
+        ],
+        "parents": 127,
+        "rate": 0.690677966101695
+      },
+      "gnn_or_wls_recall": {
+        "count": 472,
+        "numerator": 333,
+        "parent_bootstrap_ci95": [
+          0.6610842746062815,
+          0.7509968357024577
+        ],
+        "parents": 127,
+        "rate": 0.7055084745762712
+      },
+      "gnn_phase_recall": {
+        "count": 472,
+        "numerator": 327,
+        "parent_bootstrap_ci95": [
+          0.6488057063825428,
+          0.7385915595171013
+        ],
+        "parents": 127,
+        "rate": 0.6927966101694916
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 472,
+        "numerator": 327,
+        "parent_bootstrap_ci95": [
+          0.6488057063825428,
+          0.7385915595171013
+        ],
+        "parents": 127,
+        "rate": 0.6927966101694916
+      },
+      "matched_wls_recall": {
+        "count": 472,
+        "numerator": 78,
+        "parent_bootstrap_ci95": [
+          0.12609255327592364,
+          0.2
+        ],
+        "parents": 127,
+        "rate": 0.1652542372881356
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 472,
+        "numerator": 232,
+        "parent_bootstrap_ci95": [
+          0.43643501081118785,
+          0.5510226757369614
+        ],
+        "parents": 127,
+        "rate": 0.4915254237288136
+      }
+    },
+    "2": {
+      "configured_wls_recall": {
+        "count": 134,
+        "numerator": 28,
+        "parent_bootstrap_ci95": [
+          0.1417618936567164,
+          0.2869048955760161
+        ],
+        "parents": 57,
+        "rate": 0.208955223880597
+      },
+      "gnn_among_wls_misses": {
+        "count": 106,
+        "numerator": 43,
+        "parent_bootstrap_ci95": [
+          0.321420380078637,
+          0.49040178571428567
+        ],
+        "parents": 53,
+        "rate": 0.4056603773584906
+      },
+      "gnn_anomaly_recall": {
+        "count": 134,
+        "numerator": 66,
+        "parent_bootstrap_ci95": [
+          0.40298507462686567,
+          0.5857142857142857
+        ],
+        "parents": 57,
+        "rate": 0.4925373134328358
+      },
+      "gnn_or_wls_recall": {
+        "count": 134,
+        "numerator": 71,
+        "parent_bootstrap_ci95": [
+          0.4420289855072464,
+          0.6171989889705882
+        ],
+        "parents": 57,
+        "rate": 0.5298507462686567
+      },
+      "gnn_phase_recall": {
+        "count": 134,
+        "numerator": 66,
+        "parent_bootstrap_ci95": [
+          0.40298507462686567,
+          0.5857142857142857
+        ],
+        "parents": 57,
+        "rate": 0.4925373134328358
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 134,
+        "numerator": 66,
+        "parent_bootstrap_ci95": [
+          0.40298507462686567,
+          0.5857142857142857
+        ],
+        "parents": 57,
+        "rate": 0.4925373134328358
+      },
+      "matched_wls_recall": {
+        "count": 134,
+        "numerator": 23,
+        "parent_bootstrap_ci95": [
+          0.10767857142857143,
+          0.24242424242424243
+        ],
+        "parents": 57,
+        "rate": 0.17164179104477612
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 134,
+        "numerator": 38,
+        "parent_bootstrap_ci95": [
+          0.2063375350140056,
+          0.3656847803237334
+        ],
+        "parents": 57,
+        "rate": 0.2835820895522388
+      }
+    },
+    "3": {
+      "configured_wls_recall": {
+        "count": 160,
+        "numerator": 50,
+        "parent_bootstrap_ci95": [
+          0.23493046259110517,
+          0.40247420262664163
+        ],
+        "parents": 66,
+        "rate": 0.3125
+      },
+      "gnn_among_wls_misses": {
+        "count": 110,
+        "numerator": 53,
+        "parent_bootstrap_ci95": [
+          0.3904365079365079,
+          0.5728429717180245
+        ],
+        "parents": 54,
+        "rate": 0.4818181818181818
+      },
+      "gnn_anomaly_recall": {
+        "count": 160,
+        "numerator": 98,
+        "parent_bootstrap_ci95": [
+          0.5370147255689425,
+          0.6836031320999675
+        ],
+        "parents": 66,
+        "rate": 0.6125
+      },
+      "gnn_or_wls_recall": {
+        "count": 160,
+        "numerator": 103,
+        "parent_bootstrap_ci95": [
+          0.5669786199444272,
+          0.7179878048780487
+        ],
+        "parents": 66,
+        "rate": 0.64375
+      },
+      "gnn_phase_recall": {
+        "count": 160,
+        "numerator": 98,
+        "parent_bootstrap_ci95": [
+          0.536144578313253,
+          0.6845793889845094
+        ],
+        "parents": 66,
+        "rate": 0.6125
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 160,
+        "numerator": 98,
+        "parent_bootstrap_ci95": [
+          0.536144578313253,
+          0.6845793889845094
+        ],
+        "parents": 66,
+        "rate": 0.6125
+      },
+      "matched_wls_recall": {
+        "count": 160,
+        "numerator": 41,
+        "parent_bootstrap_ci95": [
+          0.18125,
+          0.3461666666666666
+        ],
+        "parents": 66,
+        "rate": 0.25625
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 160,
+        "numerator": 48,
+        "parent_bootstrap_ci95": [
+          0.2253272842181293,
+          0.3717987804878049
+        ],
+        "parents": 66,
+        "rate": 0.3
+      }
+    }
+  },
+  "pure_hif_resistance_bands": {
+    "10to20": {
+      "configured_wls_recall": {
+        "count": 256,
+        "numerator": 34,
+        "parent_bootstrap_ci95": [
+          0.08984375,
+          0.1796875
+        ],
+        "parents": 128,
+        "rate": 0.1328125
+      },
+      "gnn_among_wls_misses": {
+        "count": 222,
+        "numerator": 116,
+        "parent_bootstrap_ci95": [
+          0.44247362151123215,
+          0.597366861567636
+        ],
+        "parents": 123,
+        "rate": 0.5225225225225225
+      },
+      "gnn_anomaly_recall": {
+        "count": 256,
+        "numerator": 142,
+        "parent_bootstrap_ci95": [
+          0.48427734375,
+          0.625
+        ],
+        "parents": 128,
+        "rate": 0.5546875
+      },
+      "gnn_or_wls_recall": {
+        "count": 256,
+        "numerator": 150,
+        "parent_bootstrap_ci95": [
+          0.515625,
+          0.65234375
+        ],
+        "parents": 128,
+        "rate": 0.5859375
+      },
+      "gnn_phase_recall": {
+        "count": 256,
+        "numerator": 143,
+        "parent_bootstrap_ci95": [
+          0.48828125,
+          0.62890625
+        ],
+        "parents": 128,
+        "rate": 0.55859375
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 256,
+        "numerator": 143,
+        "parent_bootstrap_ci95": [
+          0.48828125,
+          0.62890625
+        ],
+        "parents": 128,
+        "rate": 0.55859375
+      },
+      "matched_wls_recall": {
+        "count": 256,
+        "numerator": 24,
+        "parent_bootstrap_ci95": [
+          0.058496093750000006,
+          0.13671875
+        ],
+        "parents": 128,
+        "rate": 0.09375
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 256,
+        "numerator": 109,
+        "parent_bootstrap_ci95": [
+          0.34765625,
+          0.50390625
+        ],
+        "parents": 128,
+        "rate": 0.42578125
+      }
+    },
+    "20to40": {
+      "configured_wls_recall": {
+        "count": 254,
+        "numerator": 11,
+        "parent_bootstrap_ci95": [
+          0.01968503937007874,
+          0.06692913385826772
+        ],
+        "parents": 127,
+        "rate": 0.04330708661417323
+      },
+      "gnn_among_wls_misses": {
+        "count": 243,
+        "numerator": 128,
+        "parent_bootstrap_ci95": [
+          0.46088899220001034,
+          0.6
+        ],
+        "parents": 127,
+        "rate": 0.5267489711934157
+      },
+      "gnn_anomaly_recall": {
+        "count": 254,
+        "numerator": 134,
+        "parent_bootstrap_ci95": [
+          0.4645669291338583,
+          0.5984251968503937
+        ],
+        "parents": 127,
+        "rate": 0.5275590551181102
+      },
+      "gnn_or_wls_recall": {
+        "count": 254,
+        "numerator": 139,
+        "parent_bootstrap_ci95": [
+          0.48031496062992124,
+          0.6181102362204725
+        ],
+        "parents": 127,
+        "rate": 0.547244094488189
+      },
+      "gnn_phase_recall": {
+        "count": 254,
+        "numerator": 134,
+        "parent_bootstrap_ci95": [
+          0.468503937007874,
+          0.5984251968503937
+        ],
+        "parents": 127,
+        "rate": 0.5275590551181102
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 254,
+        "numerator": 134,
+        "parent_bootstrap_ci95": [
+          0.468503937007874,
+          0.5984251968503937
+        ],
+        "parents": 127,
+        "rate": 0.5275590551181102
+      },
+      "matched_wls_recall": {
+        "count": 254,
+        "numerator": 5,
+        "parent_bootstrap_ci95": [
+          0.003937007874015748,
+          0.03937007874015748
+        ],
+        "parents": 127,
+        "rate": 0.01968503937007874
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 254,
+        "numerator": 123,
+        "parent_bootstrap_ci95": [
+          0.41338582677165353,
+          0.562992125984252
+        ],
+        "parents": 127,
+        "rate": 0.484251968503937
+      }
+    },
+    "5to10": {
+      "configured_wls_recall": {
+        "count": 256,
+        "numerator": 128,
+        "parent_bootstrap_ci95": [
+          0.4296875,
+          0.5665039062499999
+        ],
+        "parents": 128,
+        "rate": 0.5
+      },
+      "gnn_among_wls_misses": {
+        "count": 128,
+        "numerator": 90,
+        "parent_bootstrap_ci95": [
+          0.6170987215909091,
+          0.7777989821882951
+        ],
+        "parents": 85,
+        "rate": 0.703125
+      },
+      "gnn_anomaly_recall": {
+        "count": 256,
+        "numerator": 214,
+        "parent_bootstrap_ci95": [
+          0.78125,
+          0.88671875
+        ],
+        "parents": 128,
+        "rate": 0.8359375
+      },
+      "gnn_or_wls_recall": {
+        "count": 256,
+        "numerator": 218,
+        "parent_bootstrap_ci95": [
+          0.796875,
+          0.8984375
+        ],
+        "parents": 128,
+        "rate": 0.8515625
+      },
+      "gnn_phase_recall": {
+        "count": 256,
+        "numerator": 214,
+        "parent_bootstrap_ci95": [
+          0.78125,
+          0.88671875
+        ],
+        "parents": 128,
+        "rate": 0.8359375
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 256,
+        "numerator": 214,
+        "parent_bootstrap_ci95": [
+          0.78125,
+          0.88671875
+        ],
+        "parents": 128,
+        "rate": 0.8359375
+      },
+      "matched_wls_recall": {
+        "count": 256,
+        "numerator": 113,
+        "parent_bootstrap_ci95": [
+          0.3671875,
+          0.51171875
+        ],
+        "parents": 128,
+        "rate": 0.44140625
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 256,
+        "numerator": 86,
+        "parent_bootstrap_ci95": [
+          0.2734375,
+          0.3984375
+        ],
+        "parents": 128,
+        "rate": 0.3359375
+      }
+    }
+  },
+  "pure_unbalance_largest_load_phase_strata": {
+    "1": {
+      "configured_wls_recall": {
+        "count": 270,
+        "numerator": 251,
+        "parent_bootstrap_ci95": [
+          0.8941550541915505,
+          0.9603329613095238
+        ],
+        "parents": 96,
+        "rate": 0.9296296296296296
+      },
+      "gnn_among_wls_misses": {
+        "count": 19,
+        "numerator": 19,
+        "parent_bootstrap_ci95": [
+          1.0,
+          1.0
+        ],
+        "parents": 17,
+        "rate": 1.0
+      },
+      "gnn_anomaly_recall": {
+        "count": 270,
+        "numerator": 269,
+        "parent_bootstrap_ci95": [
+          0.9883698219476744,
+          1.0
+        ],
+        "parents": 96,
+        "rate": 0.9962962962962963
+      },
+      "gnn_or_wls_recall": {
+        "count": 270,
+        "numerator": 270,
+        "parent_bootstrap_ci95": [
+          1.0,
+          1.0
+        ],
+        "parents": 96,
+        "rate": 1.0
+      },
+      "gnn_phase_recall": {
+        "count": 270,
+        "numerator": 266,
+        "parent_bootstrap_ci95": [
+          0.9669117647058824,
+          1.0
+        ],
+        "parents": 96,
+        "rate": 0.9851851851851852
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 270,
+        "numerator": 266,
+        "parent_bootstrap_ci95": [
+          0.9669117647058824,
+          1.0
+        ],
+        "parents": 96,
+        "rate": 0.9851851851851852
+      },
+      "matched_wls_recall": {
+        "count": 270,
+        "numerator": 247,
+        "parent_bootstrap_ci95": [
+          0.8768432546569479,
+          0.9473945279866332
+        ],
+        "parents": 96,
+        "rate": 0.9148148148148149
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 270,
+        "numerator": 15,
+        "parent_bootstrap_ci95": [
+          0.022054798196650925,
+          0.09489500873856276
+        ],
+        "parents": 96,
+        "rate": 0.05555555555555555
+      }
+    },
+    "2": {
+      "configured_wls_recall": {
+        "count": 244,
+        "numerator": 158,
+        "parent_bootstrap_ci95": [
+          0.5708043032786885,
+          0.7182800751879699
+        ],
+        "parents": 95,
+        "rate": 0.6475409836065574
+      },
+      "gnn_among_wls_misses": {
+        "count": 86,
+        "numerator": 46,
+        "parent_bootstrap_ci95": [
+          0.4216559419496167,
+          0.6543320105820106
+        ],
+        "parents": 46,
+        "rate": 0.5348837209302325
+      },
+      "gnn_anomaly_recall": {
+        "count": 244,
+        "numerator": 197,
+        "parent_bootstrap_ci95": [
+          0.7457627118644068,
+          0.8655539044886248
+        ],
+        "parents": 95,
+        "rate": 0.8073770491803278
+      },
+      "gnn_or_wls_recall": {
+        "count": 244,
+        "numerator": 204,
+        "parent_bootstrap_ci95": [
+          0.7739130434782608,
+          0.8893451690120412
+        ],
+        "parents": 95,
+        "rate": 0.8360655737704918
+      },
+      "gnn_phase_recall": {
+        "count": 244,
+        "numerator": 199,
+        "parent_bootstrap_ci95": [
+          0.7539857994389901,
+          0.8716869011921305
+        ],
+        "parents": 95,
+        "rate": 0.8155737704918032
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 244,
+        "numerator": 199,
+        "parent_bootstrap_ci95": [
+          0.7539857994389901,
+          0.8716869011921305
+        ],
+        "parents": 95,
+        "rate": 0.8155737704918032
+      },
+      "matched_wls_recall": {
+        "count": 244,
+        "numerator": 151,
+        "parent_bootstrap_ci95": [
+          0.543646480331263,
+          0.6864045454545454
+        ],
+        "parents": 95,
+        "rate": 0.6188524590163934
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 244,
+        "numerator": 41,
+        "parent_bootstrap_ci95": [
+          0.10964912280701754,
+          0.22580645161290322
+        ],
+        "parents": 95,
+        "rate": 0.1680327868852459
+      }
+    },
+    "3": {
+      "configured_wls_recall": {
+        "count": 254,
+        "numerator": 170,
+        "parent_bootstrap_ci95": [
+          0.5902240231726859,
+          0.7403100775193798
+        ],
+        "parents": 91,
+        "rate": 0.6692913385826772
+      },
+      "gnn_among_wls_misses": {
+        "count": 84,
+        "numerator": 51,
+        "parent_bootstrap_ci95": [
+          0.4819277108433735,
+          0.7241892446633825
+        ],
+        "parents": 46,
+        "rate": 0.6071428571428571
+      },
+      "gnn_anomaly_recall": {
+        "count": 254,
+        "numerator": 216,
+        "parent_bootstrap_ci95": [
+          0.7945505721668512,
+          0.9016527084818247
+        ],
+        "parents": 91,
+        "rate": 0.8503937007874016
+      },
+      "gnn_or_wls_recall": {
+        "count": 254,
+        "numerator": 221,
+        "parent_bootstrap_ci95": [
+          0.8202771284448819,
+          0.9173236480770482
+        ],
+        "parents": 91,
+        "rate": 0.8700787401574803
+      },
+      "gnn_phase_recall": {
+        "count": 254,
+        "numerator": 216,
+        "parent_bootstrap_ci95": [
+          0.7950692591180581,
+          0.902987967141039
+        ],
+        "parents": 91,
+        "rate": 0.8503937007874016
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 254,
+        "numerator": 216,
+        "parent_bootstrap_ci95": [
+          0.7950692591180581,
+          0.902987967141039
+        ],
+        "parents": 91,
+        "rate": 0.8503937007874016
+      },
+      "matched_wls_recall": {
+        "count": 254,
+        "numerator": 158,
+        "parent_bootstrap_ci95": [
+          0.5422916666666666,
+          0.6967245385310442
+        ],
+        "parents": 91,
+        "rate": 0.6220472440944882
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 254,
+        "numerator": 46,
+        "parent_bootstrap_ci95": [
+          0.11506255044390637,
+          0.24800229007633587
+        ],
+        "parents": 91,
+        "rate": 0.18110236220472442
+      }
+    }
+  },
+  "pure_unbalance_vuf_bins": {
+    "1to2percent": {
+      "configured_wls_recall": {
+        "count": 440,
+        "numerator": 286,
+        "parent_bootstrap_ci95": [
+          0.5929144183034751,
+          0.7008561643835616
+        ],
+        "parents": 118,
+        "rate": 0.65
+      },
+      "gnn_among_wls_misses": {
+        "count": 154,
+        "numerator": 94,
+        "parent_bootstrap_ci95": [
+          0.5249632352941177,
+          0.6986301369863014
+        ],
+        "parents": 77,
+        "rate": 0.6103896103896104
+      },
+      "gnn_anomaly_recall": {
+        "count": 440,
+        "numerator": 370,
+        "parent_bootstrap_ci95": [
+          0.799988986784141,
+          0.8808762007361522
+        ],
+        "parents": 118,
+        "rate": 0.8409090909090909
+      },
+      "gnn_or_wls_recall": {
+        "count": 440,
+        "numerator": 380,
+        "parent_bootstrap_ci95": [
+          0.8256764025330844,
+          0.9013165270238376
+        ],
+        "parents": 118,
+        "rate": 0.8636363636363636
+      },
+      "gnn_phase_recall": {
+        "count": 440,
+        "numerator": 372,
+        "parent_bootstrap_ci95": [
+          0.8065941816376275,
+          0.8865763888888889
+        ],
+        "parents": 118,
+        "rate": 0.8454545454545455
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 440,
+        "numerator": 372,
+        "parent_bootstrap_ci95": [
+          0.8065941816376275,
+          0.8865763888888889
+        ],
+        "parents": 118,
+        "rate": 0.8454545454545455
+      },
+      "matched_wls_recall": {
+        "count": 440,
+        "numerator": 268,
+        "parent_bootstrap_ci95": [
+          0.5514018691588785,
+          0.6626646215390147
+        ],
+        "parents": 118,
+        "rate": 0.6090909090909091
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 440,
+        "numerator": 86,
+        "parent_bootstrap_ci95": [
+          0.1492697433250434,
+          0.24236135839721124
+        ],
+        "parents": 118,
+        "rate": 0.19545454545454546
+      }
+    },
+    "2to5percent": {
+      "configured_wls_recall": {
+        "count": 268,
+        "numerator": 234,
+        "parent_bootstrap_ci95": [
+          0.8181818181818182,
+          0.9218814036885246
+        ],
+        "parents": 97,
+        "rate": 0.8731343283582089
+      },
+      "gnn_among_wls_misses": {
+        "count": 34,
+        "numerator": 22,
+        "parent_bootstrap_ci95": [
+          0.46875,
+          0.8181818181818182
+        ],
+        "parents": 21,
+        "rate": 0.6470588235294118
+      },
+      "gnn_anomaly_recall": {
+        "count": 268,
+        "numerator": 254,
+        "parent_bootstrap_ci95": [
+          0.9135215756783263,
+          0.977276999316473
+        ],
+        "parents": 97,
+        "rate": 0.9477611940298507
+      },
+      "gnn_or_wls_recall": {
+        "count": 268,
+        "numerator": 256,
+        "parent_bootstrap_ci95": [
+          0.9230555555555556,
+          0.9820143884892086
+        ],
+        "parents": 97,
+        "rate": 0.9552238805970149
+      },
+      "gnn_phase_recall": {
+        "count": 268,
+        "numerator": 254,
+        "parent_bootstrap_ci95": [
+          0.9135215756783263,
+          0.977276999316473
+        ],
+        "parents": 97,
+        "rate": 0.9477611940298507
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 268,
+        "numerator": 254,
+        "parent_bootstrap_ci95": [
+          0.9135215756783263,
+          0.977276999316473
+        ],
+        "parents": 97,
+        "rate": 0.9477611940298507
+      },
+      "matched_wls_recall": {
+        "count": 268,
+        "numerator": 229,
+        "parent_bootstrap_ci95": [
+          0.7977920127974855,
+          0.9057391898313139
+        ],
+        "parents": 97,
+        "rate": 0.8544776119402985
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 268,
+        "numerator": 20,
+        "parent_bootstrap_ci95": [
+          0.03280679744525548,
+          0.11787367724867723
+        ],
+        "parents": 97,
+        "rate": 0.07462686567164178
+      }
+    },
+    "atleast5percent": {
+      "configured_wls_recall": {
+        "count": 60,
+        "numerator": 59,
+        "parent_bootstrap_ci95": [
+          0.9482758620689655,
+          1.0
+        ],
+        "parents": 29,
+        "rate": 0.9833333333333333
+      },
+      "gnn_among_wls_misses": {
+        "count": 1,
+        "numerator": 0,
+        "parent_bootstrap_ci95": null,
+        "parents": 1,
+        "rate": 0.0
+      },
+      "gnn_anomaly_recall": {
+        "count": 60,
+        "numerator": 58,
+        "parent_bootstrap_ci95": [
+          0.896551724137931,
+          1.0
+        ],
+        "parents": 29,
+        "rate": 0.9666666666666667
+      },
+      "gnn_or_wls_recall": {
+        "count": 60,
+        "numerator": 59,
+        "parent_bootstrap_ci95": [
+          0.9482758620689655,
+          1.0
+        ],
+        "parents": 29,
+        "rate": 0.9833333333333333
+      },
+      "gnn_phase_recall": {
+        "count": 60,
+        "numerator": 55,
+        "parent_bootstrap_ci95": [
+          0.8103448275862069,
+          1.0
+        ],
+        "parents": 29,
+        "rate": 0.9166666666666666
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 60,
+        "numerator": 55,
+        "parent_bootstrap_ci95": [
+          0.8103448275862069,
+          1.0
+        ],
+        "parents": 29,
+        "rate": 0.9166666666666666
+      },
+      "matched_wls_recall": {
+        "count": 60,
+        "numerator": 59,
+        "parent_bootstrap_ci95": [
+          0.9482758620689655,
+          1.0
+        ],
+        "parents": 29,
+        "rate": 0.9833333333333333
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 60,
+        "numerator": -4,
+        "parent_bootstrap_ci95": [
+          -0.15,
+          0.0
+        ],
+        "parents": 29,
+        "rate": -0.06666666666666667
+      }
+    }
+  },
+  "saved_parent_bootstrap_intervals_independently_verified": 1168,
+  "saved_rates_independently_verified": 1168,
+  "selected_epoch": 24,
+  "selected_seed": 1,
+  "sft_hif_challenge_strata": {
+    "all": {
+      "configured_wls_recall": {
+        "count": 256,
+        "numerator": 3,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.02734375
+        ],
+        "parents": 128,
+        "rate": 0.01171875
+      },
+      "gnn_among_wls_misses": {
+        "count": 253,
+        "numerator": 14,
+        "parent_bootstrap_ci95": [
+          0.02744829963235294,
+          0.0873015873015873
+        ],
+        "parents": 128,
+        "rate": 0.05533596837944664
+      },
+      "gnn_anomaly_recall": {
+        "count": 256,
+        "numerator": 15,
+        "parent_bootstrap_ci95": [
+          0.02734375,
+          0.09375
+        ],
+        "parents": 128,
+        "rate": 0.05859375
+      },
+      "gnn_or_wls_recall": {
+        "count": 256,
+        "numerator": 17,
+        "parent_bootstrap_ci95": [
+          0.03515625,
+          0.1015625
+        ],
+        "parents": 128,
+        "rate": 0.06640625
+      },
+      "gnn_phase_recall": {
+        "count": 256,
+        "numerator": 15,
+        "parent_bootstrap_ci95": [
+          0.02734375,
+          0.09375
+        ],
+        "parents": 128,
+        "rate": 0.05859375
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 256,
+        "numerator": 15,
+        "parent_bootstrap_ci95": [
+          0.02734375,
+          0.09375
+        ],
+        "parents": 128,
+        "rate": 0.05859375
+      },
+      "matched_wls_recall": {
+        "count": 256,
+        "numerator": 2,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.01953125
+        ],
+        "parents": 128,
+        "rate": 0.0078125
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 256,
+        "numerator": 12,
+        "parent_bootstrap_ci95": [
+          0.015625,
+          0.078125
+        ],
+        "parents": 128,
+        "rate": 0.046875
+      }
+    },
+    "paired_distance_2to5": {
+      "configured_wls_recall": {
+        "count": 44,
+        "numerator": 0,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.0
+        ],
+        "parents": 22,
+        "rate": 0.0
+      },
+      "gnn_among_wls_misses": {
+        "count": 44,
+        "numerator": 3,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.1590909090909091
+        ],
+        "parents": 22,
+        "rate": 0.06818181818181818
+      },
+      "gnn_anomaly_recall": {
+        "count": 44,
+        "numerator": 3,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.1590909090909091
+        ],
+        "parents": 22,
+        "rate": 0.06818181818181818
+      },
+      "gnn_or_wls_recall": {
+        "count": 44,
+        "numerator": 3,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.1590909090909091
+        ],
+        "parents": 22,
+        "rate": 0.06818181818181818
+      },
+      "gnn_phase_recall": {
+        "count": 44,
+        "numerator": 3,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.1590909090909091
+        ],
+        "parents": 22,
+        "rate": 0.06818181818181818
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 44,
+        "numerator": 3,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.1590909090909091
+        ],
+        "parents": 22,
+        "rate": 0.06818181818181818
+      },
+      "matched_wls_recall": {
+        "count": 44,
+        "numerator": 0,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.0
+        ],
+        "parents": 22,
+        "rate": 0.0
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 44,
+        "numerator": 3,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.1590909090909091
+        ],
+        "parents": 22,
+        "rate": 0.06818181818181818
+      }
+    },
+    "paired_distance_atleast5": {
+      "configured_wls_recall": {
+        "count": 12,
+        "numerator": 1,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.25
+        ],
+        "parents": 6,
+        "rate": 0.08333333333333333
+      },
+      "gnn_among_wls_misses": {
+        "count": 11,
+        "numerator": 7,
+        "parent_bootstrap_ci95": [
+          0.3333333333333333,
+          0.9090909090909091
+        ],
+        "parents": 6,
+        "rate": 0.6363636363636364
+      },
+      "gnn_anomaly_recall": {
+        "count": 12,
+        "numerator": 8,
+        "parent_bootstrap_ci95": [
+          0.3333333333333333,
+          0.9166666666666666
+        ],
+        "parents": 6,
+        "rate": 0.6666666666666666
+      },
+      "gnn_or_wls_recall": {
+        "count": 12,
+        "numerator": 8,
+        "parent_bootstrap_ci95": [
+          0.3333333333333333,
+          0.9166666666666666
+        ],
+        "parents": 6,
+        "rate": 0.6666666666666666
+      },
+      "gnn_phase_recall": {
+        "count": 12,
+        "numerator": 8,
+        "parent_bootstrap_ci95": [
+          0.3333333333333333,
+          0.9166666666666666
+        ],
+        "parents": 6,
+        "rate": 0.6666666666666666
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 12,
+        "numerator": 8,
+        "parent_bootstrap_ci95": [
+          0.3333333333333333,
+          0.9166666666666666
+        ],
+        "parents": 6,
+        "rate": 0.6666666666666666
+      },
+      "matched_wls_recall": {
+        "count": 12,
+        "numerator": 0,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.0
+        ],
+        "parents": 6,
+        "rate": 0.0
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 12,
+        "numerator": 7,
+        "parent_bootstrap_ci95": [
+          0.3333333333333333,
+          0.8333333333333334
+        ],
+        "parents": 6,
+        "rate": 0.5833333333333334
+      }
+    },
+    "paired_distance_below2": {
+      "configured_wls_recall": {
+        "count": 200,
+        "numerator": 2,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.025
+        ],
+        "parents": 100,
+        "rate": 0.01
+      },
+      "gnn_among_wls_misses": {
+        "count": 198,
+        "numerator": 4,
+        "parent_bootstrap_ci95": [
+          0.005,
+          0.04020100502512563
+        ],
+        "parents": 100,
+        "rate": 0.020202020202020204
+      },
+      "gnn_anomaly_recall": {
+        "count": 200,
+        "numerator": 4,
+        "parent_bootstrap_ci95": [
+          0.005,
+          0.04
+        ],
+        "parents": 100,
+        "rate": 0.02
+      },
+      "gnn_or_wls_recall": {
+        "count": 200,
+        "numerator": 6,
+        "parent_bootstrap_ci95": [
+          0.01,
+          0.055
+        ],
+        "parents": 100,
+        "rate": 0.03
+      },
+      "gnn_phase_recall": {
+        "count": 200,
+        "numerator": 4,
+        "parent_bootstrap_ci95": [
+          0.005,
+          0.04
+        ],
+        "parents": 100,
+        "rate": 0.02
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 200,
+        "numerator": 4,
+        "parent_bootstrap_ci95": [
+          0.005,
+          0.04
+        ],
+        "parents": 100,
+        "rate": 0.02
+      },
+      "matched_wls_recall": {
+        "count": 200,
+        "numerator": 2,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.025
+        ],
+        "parents": 100,
+        "rate": 0.01
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 200,
+        "numerator": 2,
+        "parent_bootstrap_ci95": [
+          -0.015,
+          0.035
+        ],
+        "parents": 100,
+        "rate": 0.01
+      }
+    },
+    "paired_distance_below5": {
+      "configured_wls_recall": {
+        "count": 244,
+        "numerator": 2,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.020491803278688523
+        ],
+        "parents": 122,
+        "rate": 0.00819672131147541
+      },
+      "gnn_among_wls_misses": {
+        "count": 242,
+        "numerator": 7,
+        "parent_bootstrap_ci95": [
+          0.008333333333333333,
+          0.049586776859504134
+        ],
+        "parents": 122,
+        "rate": 0.028925619834710745
+      },
+      "gnn_anomaly_recall": {
+        "count": 244,
+        "numerator": 7,
+        "parent_bootstrap_ci95": [
+          0.00819672131147541,
+          0.04918032786885246
+        ],
+        "parents": 122,
+        "rate": 0.028688524590163935
+      },
+      "gnn_or_wls_recall": {
+        "count": 244,
+        "numerator": 9,
+        "parent_bootstrap_ci95": [
+          0.01639344262295082,
+          0.06147540983606557
+        ],
+        "parents": 122,
+        "rate": 0.036885245901639344
+      },
+      "gnn_phase_recall": {
+        "count": 244,
+        "numerator": 7,
+        "parent_bootstrap_ci95": [
+          0.00819672131147541,
+          0.04918032786885246
+        ],
+        "parents": 122,
+        "rate": 0.028688524590163935
+      },
+      "gnn_phase_trigger_rate_all_rows": {
+        "count": 244,
+        "numerator": 7,
+        "parent_bootstrap_ci95": [
+          0.00819672131147541,
+          0.04918032786885246
+        ],
+        "parents": 122,
+        "rate": 0.028688524590163935
+      },
+      "matched_wls_recall": {
+        "count": 244,
+        "numerator": 2,
+        "parent_bootstrap_ci95": [
+          0.0,
+          0.020491803278688523
+        ],
+        "parents": 122,
+        "rate": 0.00819672131147541
+      },
+      "paired_gnn_phase_minus_wls": {
+        "count": 244,
+        "numerator": 5,
+        "parent_bootstrap_ci95": [
+          -0.00010245901639343681,
+          0.045081967213114756
+        ],
+        "parents": 122,
+        "rate": 0.020491803278688523
+      }
+    }
+  },
+  "status": "passed"
+}

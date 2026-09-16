@@ -1,0 +1,1222 @@
+{
+  "audit_scope": "independent frozen physical corpus and proposal audit; no checkpoints or trained predictions accessed",
+  "boundary_manifest_sha256": "cbc417b24edd72c0a1d3cb285d7b5911efbfb12cb0eebf2c89502a1cef6ca269",
+  "boundary_means": 1913,
+  "boundary_noise_windows": 3826,
+  "boundary_paired_and_residual_visibility": {
+    "hif_sft_challenge": {
+      "means": 608,
+      "paired_d_quantiles_min_p10_median_p90_max": [
+        0.2663066629406172,
+        0.41501304562220065,
+        0.98126456544308,
+        3.0865627457344855,
+        21.65483389584364
+      ],
+      "projected_residual_energy_below1_count": 541,
+      "projected_residual_energy_below25_count": 608,
+      "projected_residual_energy_quantiles_min_p10_median_p90_max": [
+        0.025031543803285195,
+        0.03858898553819475,
+        0.1294392810773917,
+        1.1475219539877455,
+        7.5067589159134736
+      ]
+    },
+    "positive_boundary": {
+      "means": 1305,
+      "paired_d_quantiles_min_p10_median_p90_max": [
+        0.020295454292344278,
+        1.7374650591984864,
+        3.862954388832264,
+        15.03497542693004,
+        39.9954414156206
+      ],
+      "projected_residual_energy_below1_count": 236,
+      "projected_residual_energy_below25_count": 1252,
+      "projected_residual_energy_quantiles_min_p10_median_p90_max": [
+        1.814528507373555e-05,
+        0.5782523849363979,
+        3.0821008551761393,
+        15.086728496712313,
+        86.70863728124002
+      ]
+    }
+  },
+  "check_counts": {
+    "actual_model_connected": 4025,
+    "actual_reference_bound_generator_p_mw": 4025,
+    "actual_reference_bound_generator_q_mvar": 4025,
+    "actual_reference_bound_voltage_pu": 4025,
+    "all_main_boundary_parent_counts_recomputed": 1,
+    "all_main_rows_meet_core_and_distance": 11069,
+    "all_retained_fault_means_in_ledger": 1,
+    "all_windows_unique": 1,
+    "boundary_keeps_positive_labels_no_calibration": 1913,
+    "common_declared_covariance": 736,
+    "constant_pq_not_voltage_fallback": 12982,
+    "correct_differential_noise_significance": 3559,
+    "disabled_hif_control_passed": 608,
+    "eligible_parameter_line": 2673,
+    "explicit_sft_hif_challenge_scope": 608,
+    "failure_ledger_exact": 1,
+    "finite_122_external_inputs": 12982,
+    "fresh_noise_once": 12982,
+    "healthy_equation_audit_passed": 736,
+    "hif_label_physical_identity": 3559,
+    "hif_physical_resistance": 3559,
+    "independent_healthy_mean_equation_error_pu": 736,
+    "independent_parent_counts": 1,
+    "known_physical_disturbance": 2358,
+    "labels_reconstructed_from_physics_and_meter_receipt": 12982,
+    "local_projected_residual_energy_recomputed": 12982,
+    "main_acceptance_ledger_exact": 1,
+    "main_boundary_window_disjoint": 1,
+    "main_rule_independently_recomputed": 12982,
+    "manifest_input_contract": 12982,
+    "maximum_disabled_hif_split_difference_pu": 608,
+    "maximum_external_kcl_mismatch_pu": 12982,
+    "maximum_healthy_equation_error_pu": 736,
+    "merged_artifact_hash": 3,
+    "merged_numeric_inputs_identical_to_shard": 12982,
+    "meter_channel_count_unique": 3648,
+    "meter_overlay_only_declared_channels": 3648,
+    "meter_sft_10to15sigma": 3648,
+    "mixed_accepted_component_same_parent": 1824,
+    "mixed_component_independently_core": 1824,
+    "mixed_component_mean_hash": 1824,
+    "mixed_pure_component_identity": 1824,
+    "model_source_hash_recomputed": 4025,
+    "new_physical_parents_disjoint_from_v1": 1,
+    "no_identical_measurement_mean_cross_split": 1,
+    "no_wls_or_learned_score_admission": 12982,
+    "noise_seed_unique": 12982,
+    "one_common_covariance_all_shards": 1,
+    "one_healthy_mean_per_parent": 736,
+    "only_declared_true_parameters_changed": 2673,
+    "only_declared_true_status_changed": 1832,
+    "paired_raw_distance_recomputed": 12982,
+    "parent_and_reported_hash_binding": 12982,
+    "parent_seed_consistency": 736,
+    "parent_shard_exclusivity": 736,
+    "parent_split_exclusivity": 736,
+    "physical_actual_over_reported_ratio": 3522,
+    "physical_convergence_receipt": 12982,
+    "physical_failure_count_reason_recomputed": 1,
+    "physical_generation_source_hash": 56,
+    "physical_model_file_hash": 40250,
+    "physical_mutation_reported_fixed": 4505,
+    "physical_status_flip_connected": 1832,
+    "positive_boundary_is_below_main": 1305,
+    "positive_hif_equations": 3559,
+    "proposal_event_histogram_recomputed": 1,
+    "proposal_ledger_count": 1,
+    "proposal_outcome_histogram_recomputed": 1,
+    "rejection_histogram_recomputed": 1,
+    "reported_case_path_fixed_within_parent": 736,
+    "reported_model_equals_parent_physics": 736,
+    "reported_model_fixed_for_all_variants": 12982,
+    "retained_ledger_window_exists": 12246,
+    "retained_ledger_z_binding": 12246,
+    "same_covariance_all_variants": 12982,
+    "sft_challenge_resistance_envelope": 608,
+    "sft_physical_parameter_factor_range": 3522,
+    "shard_manifest_hash": 8,
+    "shard_policy_invariant": 4,
+    "shard_receipt_hash": 4,
+    "source_shard_relative_physics_hash": 12982,
+    "unbalance_total_power_preserved": 2358,
+    "unfilled_slots_recomputed": 1,
+    "unique_parent_physical_hashes": 1,
+    "visibility_model_and_rank_contract": 12982,
+    "wrapper_source_hash": 1
+  },
+  "cohort_mean_counts": {
+    "hif_sft_challenge": 608,
+    "main": 11069,
+    "positive_boundary": 1305
+  },
+  "counts": {
+    "boundary:test:hif": 238,
+    "boundary:test:noise_windows": 822,
+    "boundary:test:parameter": 63,
+    "boundary:test:rows": 411,
+    "boundary:test:topology": 1,
+    "boundary:test:unbalance": 109,
+    "boundary:train:hif": 717,
+    "boundary:train:noise_windows": 2406,
+    "boundary:train:parameter": 139,
+    "boundary:train:rows": 1203,
+    "boundary:train:topology": 6,
+    "boundary:train:unbalance": 341,
+    "boundary:validation:hif": 175,
+    "boundary:validation:noise_windows": 598,
+    "boundary:validation:parameter": 39,
+    "boundary:validation:rows": 299,
+    "boundary:validation:topology": 1,
+    "boundary:validation:unbalance": 84,
+    "calibration:parents": 128,
+    "main:calibration:healthy": 128,
+    "main:calibration:noise_windows": 10240,
+    "main:calibration:rows": 128,
+    "main:test:healthy": 128,
+    "main:test:hif": 511,
+    "main:test:measurement": 768,
+    "main:test:noise_windows": 9470,
+    "main:test:parameter": 512,
+    "main:test:rows": 2303,
+    "main:test:topology": 384,
+    "main:test:unbalance": 384,
+    "main:train:healthy": 384,
+    "main:train:hif": 1534,
+    "main:train:measurement": 2304,
+    "main:train:noise_windows": 13820,
+    "main:train:parameter": 1536,
+    "main:train:rows": 6910,
+    "main:train:topology": 1152,
+    "main:train:unbalance": 1152,
+    "main:validation:healthy": 96,
+    "main:validation:hif": 384,
+    "main:validation:measurement": 576,
+    "main:validation:noise_windows": 4416,
+    "main:validation:parameter": 384,
+    "main:validation:rows": 1728,
+    "main:validation:topology": 288,
+    "main:validation:unbalance": 288,
+    "test:parents": 128,
+    "train:parents": 384,
+    "validation:parents": 96
+  },
+  "disabled_hif_controls": 608,
+  "elapsed_seconds": 130.91140480000468,
+  "failed_checks": [],
+  "first_attempt_outcomes_by_family": {
+    "main_proposals/hif": {
+      "main_acceptance_among_valid_proposals": 0.6359649122807017,
+      "main_accepted": 1160,
+      "valid_positive_below_main_criteria": 664
+    },
+    "main_proposals/hif+measurement": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 608
+    },
+    "main_proposals/measurement": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 1824
+    },
+    "main_proposals/measurement+parameter": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 608
+    },
+    "main_proposals/measurement+topology": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 608
+    },
+    "main_proposals/parameter": {
+      "main_acceptance_among_valid_proposals": 0.8385502471169687,
+      "main_accepted": 1527,
+      "simulation_failure": 3,
+      "valid_positive_below_main_criteria": 294
+    },
+    "main_proposals/topology": {
+      "main_acceptance_among_valid_proposals": 0.9933719966859983,
+      "main_accepted": 1199,
+      "simulation_failure": 9,
+      "valid_positive_below_main_criteria": 8
+    },
+    "main_proposals/unbalance": {
+      "main_acceptance_among_valid_proposals": 0.47145993413830956,
+      "main_accepted": 859,
+      "simulation_failure": 2,
+      "valid_positive_below_main_criteria": 963
+    },
+    "sft_challenge/hif": {
+      "challenge_retained": 608,
+      "main_acceptance_among_valid_proposals": null
+    }
+  },
+  "independent_numeric_maxima": {
+    "actual_reference_bound_generator_p_mw": 0.0,
+    "actual_reference_bound_generator_q_mvar": 0.00014609126621276813,
+    "actual_reference_bound_voltage_pu": 6.970100197012385e-08,
+    "independent_healthy_mean_equation_error_pu": 1.208850797240757e-10,
+    "maximum_disabled_hif_split_difference_pu": 1.536169905761261e-10,
+    "maximum_external_kcl_mismatch_pu": 2.2818399011324343e-10,
+    "maximum_healthy_equation_error_pu": 1.208850797240757e-10
+  },
+  "known_open_healthy_parents_by_split": {
+    "calibration": 32,
+    "test": 32,
+    "train": 96,
+    "validation": 24
+  },
+  "limitations": [
+    "Main results are conditional on physical-core rules and known-parent paired raw distance>=5; this is not a fitted-residual floor or guaranteed class separability.",
+    "The boundary corpus retains the first excluded family example per parent plus an independently retained SFT-range HIF challenge; it is not an exhaustive unbiased sample of all rejected proposals.",
+    "Acceptance percentages are proposal-level under capped sequential resampling. Asset/phase proposal numbers reflect eligibility and stopping, not field incidence.",
+    "Main and boundary variants share the same declared operating parents within each split; their parent counts must not be added.",
+    "Parameter and topology mutations re-solve AC OPF, so their paired raw distance can include changed dispatch/state as well as mismatch evidence; local projected residual energy is reported separately.",
+    "Connected branch-status errors do not establish full node-breaker/bus-split coverage; normalized fixed-PQ resistive simulations do not establish field or arcing-harmonic performance.",
+    "This audit establishes data integrity, not trained-model efficacy."
+  ],
+  "main_means": 11069,
+  "main_noise_windows": 37946,
+  "main_paired_and_residual_visibility": {
+    "hif": {
+      "means": 1821,
+      "paired_d_quantiles_min_p10_median_p90_max": [
+        5.000049870871842,
+        5.665807539554616,
+        9.609367652258987,
+        23.71914980584355,
+        167.5763764109107
+      ],
+      "projected_residual_energy_below1_count": 0,
+      "projected_residual_energy_below25_count": 1465,
+      "projected_residual_energy_quantiles_min_p10_median_p90_max": [
+        1.2498198214575227,
+        2.453324403419349,
+        9.180353409375185,
+        38.27358768843637,
+        334.9393415556822
+      ]
+    },
+    "hif+measurement": {
+      "means": 608,
+      "paired_d_quantiles_min_p10_median_p90_max": [
+        7.3365909670404745,
+        13.000643488422073,
+        16.017246639453106,
+        24.917287752943665,
+        168.4689230956436
+      ],
+      "projected_residual_energy_below1_count": 0,
+      "projected_residual_energy_below25_count": 0,
+      "projected_residual_energy_quantiles_min_p10_median_p90_max": [
+        42.154212894151456,
+        86.52186447741117,
+        135.45566107451583,
+        194.40488633032842,
+        305.8183973063356
+      ]
+    },
+    "measurement": {
+      "means": 1824,
+      "paired_d_quantiles_min_p10_median_p90_max": [
+        10.011984213165537,
+        11.498321482065968,
+        19.522968305548808,
+        27.656558404574948,
+        32.58608570714818
+      ],
+      "projected_residual_energy_below1_count": 0,
+      "projected_residual_energy_below25_count": 1,
+      "projected_residual_energy_quantiles_min_p10_median_p90_max": [
+        20.716598294341438,
+        93.12366596742906,
+        275.77380096789943,
+        611.6045497406695,
+        927.2920157408413
+      ]
+    },
+    "measurement+parameter": {
+      "means": 608,
+      "paired_d_quantiles_min_p10_median_p90_max": [
+        11.39839877313899,
+        14.800349557382512,
+        26.03057311081669,
+        72.1742557530371,
+        325.0048100733323
+      ],
+      "projected_residual_energy_below1_count": 0,
+      "projected_residual_energy_below25_count": 0,
+      "projected_residual_energy_quantiles_min_p10_median_p90_max": [
+        70.52045559828515,
+        146.3841576015665,
+        381.41562264918207,
+        3708.1064707016935,
+        19100.268611676813
+      ]
+    },
+    "measurement+topology": {
+      "means": 608,
+      "paired_d_quantiles_min_p10_median_p90_max": [
+        11.59331139766809,
+        21.939555359778744,
+        57.837784680730735,
+        147.8478988715571,
+        338.4827065123218
+      ],
+      "projected_residual_energy_below1_count": 0,
+      "projected_residual_energy_below25_count": 0,
+      "projected_residual_energy_quantiles_min_p10_median_p90_max": [
+        66.59492274075423,
+        316.07317093897205,
+        2432.477046332279,
+        16097.13970376553,
+        67264.39416018903
+      ]
+    },
+    "parameter": {
+      "means": 1824,
+      "paired_d_quantiles_min_p10_median_p90_max": [
+        5.001640211565416,
+        7.570395893485166,
+        20.742803719638104,
+        71.53308372315725,
+        372.8450236524757
+      ],
+      "projected_residual_energy_below1_count": 0,
+      "projected_residual_energy_below25_count": 123,
+      "projected_residual_energy_quantiles_min_p10_median_p90_max": [
+        1.7507250324283181,
+        31.652380726543548,
+        236.3045202911899,
+        3644.270355193475,
+        19252.576610050095
+      ]
+    },
+    "topology": {
+      "means": 1216,
+      "paired_d_quantiles_min_p10_median_p90_max": [
+        5.0394376717775335,
+        18.683907757876636,
+        59.829277980874565,
+        151.8271700453623,
+        352.40035222591865
+      ],
+      "projected_residual_energy_below1_count": 0,
+      "projected_residual_energy_below25_count": 14,
+      "projected_residual_energy_quantiles_min_p10_median_p90_max": [
+        8.551462930059007,
+        219.22089538152318,
+        2488.981250069696,
+        16803.70176412727,
+        68724.61327437265
+      ]
+    },
+    "unbalance": {
+      "means": 1824,
+      "paired_d_quantiles_min_p10_median_p90_max": [
+        5.183707104571698,
+        13.592850958798001,
+        39.364572793946536,
+        100.73500604371962,
+        477.3522411729823
+      ],
+      "projected_residual_energy_below1_count": 4,
+      "projected_residual_energy_below25_count": 382,
+      "projected_residual_energy_quantiles_min_p10_median_p90_max": [
+        0.4888263541030111,
+        10.3791271498998,
+        79.29101559728063,
+        660.3463466998315,
+        11580.505757358042
+      ]
+    }
+  },
+  "manifest_sha256": "8826508a8203c57a448d33283cfdd68abf9f61973b627b9d11d4cd8d39691b6f",
+  "mixed_independently_core_components": 1824,
+  "numerical_warnings": [
+    {
+      "check": "actual_reference_bound_generator_q_mvar",
+      "context": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\output\\gnn_practical_v2_20260916\\corpus\\shards\\shard_003\\parents\\practical_ieee14_3722983233_train_00069\\physical_variants\\parameter_RX_draw00",
+      "interpretation": "Supplementary strict diagnostic exceeded; within the already declared source operating-bound tolerance.",
+      "maximum_bound_violation": 6.0846031100680875e-05,
+      "preexisting_generator_tolerance": 0.01,
+      "supplementary_strict_tolerance": 1e-05
+    },
+    {
+      "check": "actual_reference_bound_generator_q_mvar",
+      "context": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\output\\gnn_practical_v2_20260916\\corpus\\shards\\shard_003\\parents\\practical_ieee14_3722983233_train_00088\\physical_variants\\parameter_RX_draw00",
+      "interpretation": "Supplementary strict diagnostic exceeded; within the already declared source operating-bound tolerance.",
+      "maximum_bound_violation": 0.00014609126621276813,
+      "preexisting_generator_tolerance": 0.01,
+      "supplementary_strict_tolerance": 1e-05
+    }
+  ],
+  "operating_bound_tolerances": {
+    "basis": "Existing solve_operating_parent admission tolerance, applied unchanged to exported reference snapshots; not a post-hoc relaxation.",
+    "generator_p_mw": 0.01,
+    "generator_q_mvar": 0.01,
+    "source": "research/gnn_screen/generate_corpus.py:95",
+    "source_sha256": "e8e232ead99424e9daeb59a773d7ac2f32d615a8e644beb9809a2a58b3a652fb",
+    "voltage_pu": 1e-05
+  },
+  "parents": 736,
+  "parents_by_split": {
+    "calibration": 128,
+    "test": 128,
+    "train": 384,
+    "validation": 96
+  },
+  "physical_failure_reason_histogram": {
+    "Constrained source AC OPF did not converge": 13,
+    "OpenDSS snapshot did not converge": 11
+  },
+  "physical_failures": 24,
+  "positive_hif_physical_receipts": 3559,
+  "proposal_acceptance_by_asset": {
+    "main_proposals/hif_branch_0": {
+      "main_acceptance_among_valid_proposals": 0.25757575757575757,
+      "main_accepted": 68,
+      "valid_positive_below_main_criteria": 196
+    },
+    "main_proposals/hif_branch_1": {
+      "main_acceptance_among_valid_proposals": 0.23825503355704697,
+      "main_accepted": 71,
+      "valid_positive_below_main_criteria": 227
+    },
+    "main_proposals/hif_branch_10": {
+      "main_acceptance_among_valid_proposals": 0.5390334572490706,
+      "main_accepted": 145,
+      "valid_positive_below_main_criteria": 124
+    },
+    "main_proposals/hif_branch_11": {
+      "main_acceptance_among_valid_proposals": 0.587248322147651,
+      "main_accepted": 175,
+      "valid_positive_below_main_criteria": 123
+    },
+    "main_proposals/hif_branch_12": {
+      "main_acceptance_among_valid_proposals": 0.510548523206751,
+      "main_accepted": 121,
+      "valid_positive_below_main_criteria": 116
+    },
+    "main_proposals/hif_branch_13": {
+      "main_acceptance_among_valid_proposals": 0.5494880546075085,
+      "main_accepted": 161,
+      "valid_positive_below_main_criteria": 132
+    },
+    "main_proposals/hif_branch_14": {
+      "main_acceptance_among_valid_proposals": 0.5672131147540984,
+      "main_accepted": 173,
+      "valid_positive_below_main_criteria": 132
+    },
+    "main_proposals/hif_branch_15": {
+      "main_acceptance_among_valid_proposals": 0.6424050632911392,
+      "main_accepted": 203,
+      "valid_positive_below_main_criteria": 113
+    },
+    "main_proposals/hif_branch_16": {
+      "main_acceptance_among_valid_proposals": 0.6103448275862069,
+      "main_accepted": 177,
+      "valid_positive_below_main_criteria": 113
+    },
+    "main_proposals/hif_branch_17": {
+      "main_acceptance_among_valid_proposals": 0.5857142857142857,
+      "main_accepted": 164,
+      "valid_positive_below_main_criteria": 116
+    },
+    "main_proposals/hif_branch_18": {
+      "main_acceptance_among_valid_proposals": 0.6444444444444445,
+      "main_accepted": 174,
+      "valid_positive_below_main_criteria": 96
+    },
+    "main_proposals/hif_branch_19": {
+      "main_acceptance_among_valid_proposals": 0.5620689655172414,
+      "main_accepted": 163,
+      "valid_positive_below_main_criteria": 127
+    },
+    "main_proposals/hif_branch_2": {
+      "main_acceptance_among_valid_proposals": 0.46996466431095407,
+      "main_accepted": 133,
+      "valid_positive_below_main_criteria": 150
+    },
+    "main_proposals/hif_branch_3": {
+      "main_acceptance_among_valid_proposals": 0.4426877470355731,
+      "main_accepted": 112,
+      "valid_positive_below_main_criteria": 141
+    },
+    "main_proposals/hif_branch_4": {
+      "main_acceptance_among_valid_proposals": 0.3467153284671533,
+      "main_accepted": 95,
+      "valid_positive_below_main_criteria": 179
+    },
+    "main_proposals/hif_branch_5": {
+      "main_acceptance_among_valid_proposals": 0.5392156862745098,
+      "main_accepted": 165,
+      "valid_positive_below_main_criteria": 141
+    },
+    "main_proposals/hif_branch_6": {
+      "main_acceptance_among_valid_proposals": 0.49049429657794674,
+      "main_accepted": 129,
+      "valid_positive_below_main_criteria": 134
+    },
+    "main_proposals/parameter_branch_0": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 214
+    },
+    "main_proposals/parameter_branch_1": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 197
+    },
+    "main_proposals/parameter_branch_10": {
+      "main_acceptance_among_valid_proposals": 0.8578947368421053,
+      "main_accepted": 163,
+      "valid_positive_below_main_criteria": 27
+    },
+    "main_proposals/parameter_branch_11": {
+      "main_acceptance_among_valid_proposals": 0.8616352201257862,
+      "main_accepted": 137,
+      "valid_positive_below_main_criteria": 22
+    },
+    "main_proposals/parameter_branch_12": {
+      "main_acceptance_among_valid_proposals": 0.9764705882352941,
+      "main_accepted": 166,
+      "simulation_failure": 1,
+      "valid_positive_below_main_criteria": 4
+    },
+    "main_proposals/parameter_branch_15": {
+      "main_acceptance_among_valid_proposals": 0.5828220858895705,
+      "main_accepted": 95,
+      "valid_positive_below_main_criteria": 68
+    },
+    "main_proposals/parameter_branch_16": {
+      "main_acceptance_among_valid_proposals": 0.8926553672316384,
+      "main_accepted": 158,
+      "valid_positive_below_main_criteria": 19
+    },
+    "main_proposals/parameter_branch_17": {
+      "main_acceptance_among_valid_proposals": 0.6966292134831461,
+      "main_accepted": 124,
+      "valid_positive_below_main_criteria": 54
+    },
+    "main_proposals/parameter_branch_18": {
+      "main_acceptance_among_valid_proposals": 0.1259259259259259,
+      "main_accepted": 17,
+      "valid_positive_below_main_criteria": 118
+    },
+    "main_proposals/parameter_branch_19": {
+      "main_acceptance_among_valid_proposals": 0.864321608040201,
+      "main_accepted": 172,
+      "simulation_failure": 2,
+      "valid_positive_below_main_criteria": 27
+    },
+    "main_proposals/parameter_branch_2": {
+      "main_acceptance_among_valid_proposals": 0.9951456310679612,
+      "main_accepted": 205,
+      "valid_positive_below_main_criteria": 1
+    },
+    "main_proposals/parameter_branch_3": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 207
+    },
+    "main_proposals/parameter_branch_4": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 190
+    },
+    "main_proposals/parameter_branch_5": {
+      "main_acceptance_among_valid_proposals": 0.9807692307692307,
+      "main_accepted": 204,
+      "valid_positive_below_main_criteria": 4
+    },
+    "main_proposals/parameter_branch_6": {
+      "main_acceptance_among_valid_proposals": 0.905940594059406,
+      "main_accepted": 183,
+      "valid_positive_below_main_criteria": 19
+    },
+    "main_proposals/topology_branch_0": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 93
+    },
+    "main_proposals/topology_branch_1": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 109
+    },
+    "main_proposals/topology_branch_10": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 125
+    },
+    "main_proposals/topology_branch_11": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 74,
+      "simulation_failure": 2
+    },
+    "main_proposals/topology_branch_12": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 73,
+      "simulation_failure": 5
+    },
+    "main_proposals/topology_branch_14": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 95
+    },
+    "main_proposals/topology_branch_15": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 94
+    },
+    "main_proposals/topology_branch_16": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 88,
+      "simulation_failure": 2
+    },
+    "main_proposals/topology_branch_17": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 98
+    },
+    "main_proposals/topology_branch_18": {
+      "main_acceptance_among_valid_proposals": 0.9139784946236559,
+      "main_accepted": 85,
+      "simulation_failure": 1,
+      "valid_positive_below_main_criteria": 8
+    },
+    "main_proposals/topology_branch_19": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 117
+    },
+    "main_proposals/topology_branch_2": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 98
+    },
+    "main_proposals/topology_branch_3": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 90
+    },
+    "main_proposals/topology_branch_4": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 90
+    },
+    "main_proposals/topology_branch_5": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 105
+    },
+    "main_proposals/topology_branch_6": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 97
+    },
+    "main_proposals/topology_branch_7": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 86
+    },
+    "main_proposals/topology_branch_8": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 96
+    },
+    "main_proposals/topology_branch_9": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 111
+    },
+    "main_proposals/unbalance_bus_10": {
+      "main_acceptance_among_valid_proposals": 0.425531914893617,
+      "main_accepted": 160,
+      "valid_positive_below_main_criteria": 216
+    },
+    "main_proposals/unbalance_bus_11": {
+      "main_acceptance_among_valid_proposals": 0.011235955056179775,
+      "main_accepted": 4,
+      "valid_positive_below_main_criteria": 352
+    },
+    "main_proposals/unbalance_bus_12": {
+      "main_acceptance_among_valid_proposals": 0.20987654320987653,
+      "main_accepted": 85,
+      "valid_positive_below_main_criteria": 320
+    },
+    "main_proposals/unbalance_bus_13": {
+      "main_acceptance_among_valid_proposals": 0.6694444444444444,
+      "main_accepted": 241,
+      "valid_positive_below_main_criteria": 119
+    },
+    "main_proposals/unbalance_bus_14": {
+      "main_acceptance_among_valid_proposals": 0.7245989304812834,
+      "main_accepted": 271,
+      "valid_positive_below_main_criteria": 103
+    },
+    "main_proposals/unbalance_bus_2": {
+      "main_acceptance_among_valid_proposals": 0.014005602240896359,
+      "main_accepted": 5,
+      "valid_positive_below_main_criteria": 352
+    },
+    "main_proposals/unbalance_bus_3": {
+      "main_acceptance_among_valid_proposals": 0.9571428571428572,
+      "main_accepted": 335,
+      "simulation_failure": 11,
+      "valid_positive_below_main_criteria": 15
+    },
+    "main_proposals/unbalance_bus_4": {
+      "main_acceptance_among_valid_proposals": 0.6020942408376964,
+      "main_accepted": 230,
+      "valid_positive_below_main_criteria": 152
+    },
+    "main_proposals/unbalance_bus_5": {
+      "main_acceptance_among_valid_proposals": 0.0,
+      "valid_positive_below_main_criteria": 371
+    },
+    "main_proposals/unbalance_bus_6": {
+      "main_acceptance_among_valid_proposals": 0.4397905759162304,
+      "main_accepted": 168,
+      "valid_positive_below_main_criteria": 214
+    },
+    "main_proposals/unbalance_bus_9": {
+      "main_acceptance_among_valid_proposals": 0.8530183727034121,
+      "main_accepted": 325,
+      "valid_positive_below_main_criteria": 56
+    },
+    "sft_challenge/hif_branch_0": {
+      "challenge_retained": 37,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_branch_1": {
+      "challenge_retained": 41,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_branch_10": {
+      "challenge_retained": 29,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_branch_11": {
+      "challenge_retained": 30,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_branch_12": {
+      "challenge_retained": 35,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_branch_13": {
+      "challenge_retained": 44,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_branch_14": {
+      "challenge_retained": 35,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_branch_15": {
+      "challenge_retained": 43,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_branch_16": {
+      "challenge_retained": 35,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_branch_17": {
+      "challenge_retained": 47,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_branch_18": {
+      "challenge_retained": 31,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_branch_19": {
+      "challenge_retained": 35,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_branch_2": {
+      "challenge_retained": 30,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_branch_3": {
+      "challenge_retained": 40,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_branch_4": {
+      "challenge_retained": 33,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_branch_5": {
+      "challenge_retained": 27,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_branch_6": {
+      "challenge_retained": 36,
+      "main_acceptance_among_valid_proposals": null
+    }
+  },
+  "proposal_acceptance_by_family": {
+    "main_proposals/hif": {
+      "main_acceptance_among_valid_proposals": 0.4355417364266922,
+      "main_accepted": 1821,
+      "valid_positive_below_main_criteria": 2360
+    },
+    "main_proposals/hif+measurement": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 608
+    },
+    "main_proposals/measurement": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 1824
+    },
+    "main_proposals/measurement+parameter": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 608
+    },
+    "main_proposals/measurement+topology": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 608
+    },
+    "main_proposals/parameter": {
+      "main_acceptance_among_valid_proposals": 0.8340192043895748,
+      "main_accepted": 1824,
+      "simulation_failure": 3,
+      "valid_positive_below_main_criteria": 363
+    },
+    "main_proposals/topology": {
+      "main_acceptance_among_valid_proposals": 0.9934640522875817,
+      "main_accepted": 1216,
+      "simulation_failure": 10,
+      "valid_positive_below_main_criteria": 8
+    },
+    "main_proposals/unbalance": {
+      "main_acceptance_among_valid_proposals": 0.44553004396678064,
+      "main_accepted": 1824,
+      "simulation_failure": 11,
+      "valid_positive_below_main_criteria": 2270
+    },
+    "sft_challenge/hif": {
+      "challenge_retained": 608,
+      "main_acceptance_among_valid_proposals": null
+    }
+  },
+  "proposal_acceptance_by_family_phase_and_hif_band": {
+    "main_proposals/hif+measurement/band_10to20": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 182
+    },
+    "main_proposals/hif+measurement/band_10to20/phase_1": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 73
+    },
+    "main_proposals/hif+measurement/band_10to20/phase_2": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 58
+    },
+    "main_proposals/hif+measurement/band_10to20/phase_3": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 51
+    },
+    "main_proposals/hif+measurement/band_20to40": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 211
+    },
+    "main_proposals/hif+measurement/band_20to40/phase_1": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 211
+    },
+    "main_proposals/hif+measurement/band_5to10": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 215
+    },
+    "main_proposals/hif+measurement/band_5to10/phase_1": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 68
+    },
+    "main_proposals/hif+measurement/band_5to10/phase_2": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 56
+    },
+    "main_proposals/hif+measurement/band_5to10/phase_3": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 91
+    },
+    "main_proposals/hif+measurement/phase_1": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 352
+    },
+    "main_proposals/hif+measurement/phase_2": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 114
+    },
+    "main_proposals/hif+measurement/phase_3": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 142
+    },
+    "main_proposals/hif/band_10to20": {
+      "main_acceptance_among_valid_proposals": 0.7045191193511008,
+      "main_accepted": 608,
+      "valid_positive_below_main_criteria": 255
+    },
+    "main_proposals/hif/band_10to20/phase_1": {
+      "main_acceptance_among_valid_proposals": 0.9351535836177475,
+      "main_accepted": 274,
+      "valid_positive_below_main_criteria": 19
+    },
+    "main_proposals/hif/band_10to20/phase_2": {
+      "main_acceptance_among_valid_proposals": 0.6223776223776224,
+      "main_accepted": 178,
+      "valid_positive_below_main_criteria": 108
+    },
+    "main_proposals/hif/band_10to20/phase_3": {
+      "main_acceptance_among_valid_proposals": 0.5492957746478874,
+      "main_accepted": 156,
+      "valid_positive_below_main_criteria": 128
+    },
+    "main_proposals/hif/band_20to40": {
+      "main_acceptance_among_valid_proposals": 0.22324723247232472,
+      "main_accepted": 605,
+      "valid_positive_below_main_criteria": 2105
+    },
+    "main_proposals/hif/band_20to40/phase_1": {
+      "main_acceptance_among_valid_proposals": 0.6824858757062147,
+      "main_accepted": 604,
+      "valid_positive_below_main_criteria": 281
+    },
+    "main_proposals/hif/band_20to40/phase_2": {
+      "main_acceptance_among_valid_proposals": 0.0011148272017837235,
+      "main_accepted": 1,
+      "valid_positive_below_main_criteria": 896
+    },
+    "main_proposals/hif/band_20to40/phase_3": {
+      "main_acceptance_among_valid_proposals": 0.0,
+      "valid_positive_below_main_criteria": 928
+    },
+    "main_proposals/hif/band_5to10": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 608
+    },
+    "main_proposals/hif/band_5to10/phase_1": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 206
+    },
+    "main_proposals/hif/band_5to10/phase_2": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 178
+    },
+    "main_proposals/hif/band_5to10/phase_3": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 224
+    },
+    "main_proposals/hif/phase_1": {
+      "main_acceptance_among_valid_proposals": 0.7832369942196532,
+      "main_accepted": 1084,
+      "valid_positive_below_main_criteria": 300
+    },
+    "main_proposals/hif/phase_2": {
+      "main_acceptance_among_valid_proposals": 0.2623071271124173,
+      "main_accepted": 357,
+      "valid_positive_below_main_criteria": 1004
+    },
+    "main_proposals/hif/phase_3": {
+      "main_acceptance_among_valid_proposals": 0.2646239554317549,
+      "main_accepted": 380,
+      "valid_positive_below_main_criteria": 1056
+    },
+    "sft_challenge/hif/band_20to40": {
+      "challenge_retained": 70,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif/band_20to40/phase_1": {
+      "challenge_retained": 22,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif/band_20to40/phase_2": {
+      "challenge_retained": 24,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif/band_20to40/phase_3": {
+      "challenge_retained": 24,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif/band_40to200": {
+      "challenge_retained": 538,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif/band_40to200/phase_1": {
+      "challenge_retained": 187,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif/band_40to200/phase_2": {
+      "challenge_retained": 176,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif/band_40to200/phase_3": {
+      "challenge_retained": 175,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif/phase_1": {
+      "challenge_retained": 209,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif/phase_2": {
+      "challenge_retained": 200,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif/phase_3": {
+      "challenge_retained": 199,
+      "main_acceptance_among_valid_proposals": null
+    }
+  },
+  "proposal_acceptance_by_phase_and_hif_band": {
+    "main_proposals/hif_band_10to20": {
+      "main_acceptance_among_valid_proposals": 0.7559808612440191,
+      "main_accepted": 790,
+      "valid_positive_below_main_criteria": 255
+    },
+    "main_proposals/hif_band_10to20/phase_1": {
+      "main_acceptance_among_valid_proposals": 0.9480874316939891,
+      "main_accepted": 347,
+      "valid_positive_below_main_criteria": 19
+    },
+    "main_proposals/hif_band_10to20/phase_2": {
+      "main_acceptance_among_valid_proposals": 0.686046511627907,
+      "main_accepted": 236,
+      "valid_positive_below_main_criteria": 108
+    },
+    "main_proposals/hif_band_10to20/phase_3": {
+      "main_acceptance_among_valid_proposals": 0.6179104477611941,
+      "main_accepted": 207,
+      "valid_positive_below_main_criteria": 128
+    },
+    "main_proposals/hif_band_20to40": {
+      "main_acceptance_among_valid_proposals": 0.27935638479972613,
+      "main_accepted": 816,
+      "valid_positive_below_main_criteria": 2105
+    },
+    "main_proposals/hif_band_20to40/phase_1": {
+      "main_acceptance_among_valid_proposals": 0.7436131386861314,
+      "main_accepted": 815,
+      "valid_positive_below_main_criteria": 281
+    },
+    "main_proposals/hif_band_20to40/phase_2": {
+      "main_acceptance_among_valid_proposals": 0.0011148272017837235,
+      "main_accepted": 1,
+      "valid_positive_below_main_criteria": 896
+    },
+    "main_proposals/hif_band_20to40/phase_3": {
+      "main_acceptance_among_valid_proposals": 0.0,
+      "valid_positive_below_main_criteria": 928
+    },
+    "main_proposals/hif_band_5to10": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 823
+    },
+    "main_proposals/hif_band_5to10/phase_1": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 274
+    },
+    "main_proposals/hif_band_5to10/phase_2": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 234
+    },
+    "main_proposals/hif_band_5to10/phase_3": {
+      "main_acceptance_among_valid_proposals": 1.0,
+      "main_accepted": 315
+    },
+    "main_proposals/hif_phase_1": {
+      "main_acceptance_among_valid_proposals": 0.8271889400921659,
+      "main_accepted": 1436,
+      "valid_positive_below_main_criteria": 300
+    },
+    "main_proposals/hif_phase_2": {
+      "main_acceptance_among_valid_proposals": 0.3193220338983051,
+      "main_accepted": 471,
+      "valid_positive_below_main_criteria": 1004
+    },
+    "main_proposals/hif_phase_3": {
+      "main_acceptance_among_valid_proposals": 0.33079847908745247,
+      "main_accepted": 522,
+      "valid_positive_below_main_criteria": 1056
+    },
+    "main_proposals/unbalance_largest_load_phase_1": {
+      "main_acceptance_among_valid_proposals": 0.4631205673758865,
+      "main_accepted": 653,
+      "simulation_failure": 6,
+      "valid_positive_below_main_criteria": 757
+    },
+    "main_proposals/unbalance_largest_load_phase_2": {
+      "main_acceptance_among_valid_proposals": 0.44452554744525546,
+      "main_accepted": 609,
+      "simulation_failure": 2,
+      "valid_positive_below_main_criteria": 761
+    },
+    "main_proposals/unbalance_largest_load_phase_3": {
+      "main_acceptance_among_valid_proposals": 0.4277016742770167,
+      "main_accepted": 562,
+      "simulation_failure": 3,
+      "valid_positive_below_main_criteria": 752
+    },
+    "sft_challenge/hif_band_20to40": {
+      "challenge_retained": 70,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_band_20to40/phase_1": {
+      "challenge_retained": 22,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_band_20to40/phase_2": {
+      "challenge_retained": 24,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_band_20to40/phase_3": {
+      "challenge_retained": 24,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_band_40to200": {
+      "challenge_retained": 538,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_band_40to200/phase_1": {
+      "challenge_retained": 187,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_band_40to200/phase_2": {
+      "challenge_retained": 176,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_band_40to200/phase_3": {
+      "challenge_retained": 175,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_phase_1": {
+      "challenge_retained": 209,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_phase_2": {
+      "challenge_retained": 200,
+      "main_acceptance_among_valid_proposals": null
+    },
+    "sft_challenge/hif_phase_3": {
+      "challenge_retained": 199,
+      "main_acceptance_among_valid_proposals": null
+    }
+  },
+  "proposal_histograms": {
+    "events": {
+      "proposal": 15966,
+      "slot_unfilled": 3
+    },
+    "outcomes": {
+      "challenge_retained": 608,
+      "main_accepted": 10333,
+      "simulation_failure": 24,
+      "valid_positive_below_main_criteria": 5001
+    },
+    "rejections": {
+      "paired_mean_distance_below_main_margin": 4092,
+      "physical_core_rule_not_met": 2435
+    }
+  },
+  "status": "passed_with_numerical_warnings",
+  "supplementary_strict_diagnostic_artifact": "corpus_audit.strict_diagnostic.json",
+  "unfilled_slots": [
+    {
+      "attempt_cap": 24,
+      "event": "slot_unfilled",
+      "families": [
+        "hif"
+      ],
+      "parent_id": "practical_ieee14_4276613575_test_00006",
+      "slot": "hif_20to40",
+      "split": "test"
+    },
+    {
+      "attempt_cap": 24,
+      "event": "slot_unfilled",
+      "families": [
+        "hif"
+      ],
+      "parent_id": "practical_ieee14_3722983233_train_00005",
+      "slot": "hif_20to40",
+      "split": "train"
+    },
+    {
+      "attempt_cap": 24,
+      "event": "slot_unfilled",
+      "families": [
+        "hif"
+      ],
+      "parent_id": "practical_ieee14_3722983233_train_00071",
+      "slot": "hif_20to40",
+      "split": "train"
+    }
+  ],
+  "unique_physical_models_verified": 4025,
+  "unique_physical_parent_hashes": 736
+}

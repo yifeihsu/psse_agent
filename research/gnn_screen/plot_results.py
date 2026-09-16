@@ -31,7 +31,7 @@ def _draw_rate(ax, y, item, color, label=None, offset=0., height=.5):
                 textcoords="offset points", va="center", fontsize=9)
 
 
-def render(evaluation_path, output_dir, training_path=None):
+def render(evaluation_path, output_dir, training_path=None, scope_label=None):
     source = Path(evaluation_path)
     evaluation = json.loads(source.read_text(encoding="utf-8"))
     output = Path(output_dir)
@@ -65,7 +65,8 @@ def render(evaluation_path, output_dir, training_path=None):
     axes[1].set_xlim(0, max(3., maximum * 1.4))
     axes[1].set_xlabel("Healthy windows triggered (%)")
     axes[1].axvline(1, color="#555555", linestyle="--", linewidth=1)
-    fig.suptitle("IEEE-14 held-out screening performance", x=.01, ha="left", fontsize=16)
+    title = "IEEE-14 held-out screening performance"
+    fig.suptitle(title + (f" — {scope_label}" if scope_label else ""), x=.01, ha="left", fontsize=16)
     healthy = evaluation["healthy_false_trigger_rate"]
     fig.text(.01, .025,
              f"Healthy test: {healthy['count']:,} windows, {healthy['parents']} operating parents. "
@@ -86,13 +87,24 @@ def render(evaluation_path, output_dir, training_path=None):
     for index, family in enumerate(("hif", "unbalance")):
         pure = [r for r in evaluation["predictions"] if all(r["labels"]["family_mask"])
                 and r["labels"]["family"][index] and sum(r["labels"]["family"]) == 1]
-        for label in sorted({r["severity"] for r in pure}):
-            subset = [r for r in pure if r["severity"] == label]
+        def physical_band(row):
+            meta = row.get("offline_metadata", {})
+            if meta.get("cohort") == "main" and meta.get("scenario_policy"):
+                if family == "hif":
+                    resistance = meta["settings"]["hif"]["resistance_pu"]
+                    return "R 5–10 pu" if resistance < 10 else "R 10–20 pu" if resistance < 20 else "R 20–40 pu"
+                vuf = meta["maximum_voltage_negative_positive_ratio"]
+                return "VUF 1–2%" if vuf < .02 else "VUF 2–4%" if vuf < .04 else "VUF ≥4%"
+            return row["severity"]
+        for label in sorted({physical_band(r) for r in pure}):
+            subset = [r for r in pure if physical_band(r) == label]
             key = f"{family}/{label}"
             severity[key] = grouped_rate(subset, [r["phase_score"] > evaluation["calibration"]["phase_threshold"] for r in subset])
             severity_wls[key] = grouped_rate(subset, [bool(r["wls_alarm"]) for r in subset])
     keys = list(severity)
     order = {"weak": 0, "intermediate": 1, "strong": 2}
+    order.update({"R 5–10 pu": 0, "R 10–20 pu": 1, "R 20–40 pu": 2,
+                  "VUF 1–2%": 0, "VUF 2–4%": 1, "VUF ≥4%": 2})
     keys.sort(key=lambda key: (key.split("/")[0], order.get(key.split("/")[1], 3), key))
     fig, ax = plt.subplots(figsize=(11.5, max(4.5, len(keys) * .65 + 1.9)))
     for idx, key in enumerate(keys):
@@ -107,7 +119,8 @@ def render(evaluation_path, output_dir, training_path=None):
     ax.grid(axis="x", color="#E5E5E5", linewidth=.6)
     ax.set_axisbelow(True)
     ax.legend(loc="upper center", bbox_to_anchor=(.5, 1.13), ncol=2, frameon=False)
-    fig.suptitle("Phase recall on pure faults, by severity", x=.01, ha="left", fontsize=16)
+    fig.suptitle("Phase recall on pure faults, by severity" + (f" — {scope_label}" if scope_label else ""),
+                 x=.01, ha="left", fontsize=16)
     fig.text(.01, .02, "Single-family episodes only; mixed faults are excluded. "
              "Noisy windows from the same physical parent remain grouped.\n"
              "Error bars: 95% parent-bootstrap intervals. A zero-width interval cannot bound unseen events.", fontsize=9)
@@ -139,10 +152,9 @@ def render(evaluation_path, output_dir, training_path=None):
                     ax.text(j, i, f"{values[i,j]:.1f}%", ha="center", va="center",
                             color="white" if values[i, j] > 55 else "#222222", fontsize=10)
         fig.colorbar(im, ax=ax, label="Windows triggering the head (%)", shrink=.85)
-        fig.suptitle("Family decisions at healthy-calibrated thresholds", x=.01, ha="left", fontsize=15)
-        fig.text(.01, .02, "Each head uses its own healthy-calibration 99th percentile. "
-                 "Single-family rows exclude mixed episodes.\n"
-                 "Heads are independent: percentages across a row do not sum to 100%. Parent intervals are retained in evaluation.json.", fontsize=9)
+        fig.suptitle("Family flags at healthy-only thresholds", x=.01, ha="left", fontsize=15)
+        fig.text(.01, .02, "Offline flags: thresholds use healthy negatives only, without cross-family calibration.\n"
+                 "Rows do not sum to 100%. Single-family rows exclude mixed episodes; intervals are saved in evaluation.json.", fontsize=9)
         fig.tight_layout(rect=(0, .10, 1, .94))
         for suffix in ("png", "svg"):
             target = output / f"family_trigger_matrix.{suffix}"
@@ -178,6 +190,7 @@ def render(evaluation_path, output_dir, training_path=None):
     (output / "figure_sources.json").write_text(json.dumps({
         "evaluation_path": str(source.resolve()), "evaluation_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
         "training_path": str(Path(training_path).resolve()) if training_path else None,
+        "study_scope": scope_label,
         "figures": paths, "units": "percentage", "intervals": "95% physical-parent percentile bootstrap",
         "severity_scope": "pure single-family episodes only",
         "pure_severity_rates": severity, "pure_severity_wls_rates": severity_wls,
@@ -190,8 +203,9 @@ def main():
     parser.add_argument("evaluation")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--training")
+    parser.add_argument("--scope-label")
     args = parser.parse_args()
-    print("\n".join(render(args.evaluation, args.output_dir, args.training)))
+    print("\n".join(render(args.evaluation, args.output_dir, args.training, args.scope_label)))
 
 
 if __name__ == "__main__":

@@ -10,10 +10,14 @@ remain available.
 
 **Implementation status:** the model, numerical features, training,
 calibration, evaluation, and optional episode integration are implemented.
-A [five-seed physical IEEE-14 pilot](results/ieee14_v1_20260916/README.md)
-has now been trained and evaluated on independent parents. The GNN adds some
-detections to WLS, but weak HIFs and parameter-family classification remain
-major limitations. It is not a dependable standalone error-type classifier.
+A [five-seed practical IEEE-14 study](results/practical_v2_20260916/README.md)
+now uses SFT-supported error mechanisms and explicit physical and measurement
+criteria. On the same practical test cases, phase recall is 73.02% for V2 versus
+60.78% for the frozen, recalibrated V1 model, with healthy trigger rates of
+0.68% and 0.76%. These are conditional results for the selected population.
+Weak-signal HIF coverage and cross-family decision thresholds remain major
+limitations. It is not a dependable standalone error-type classifier.
+The [original pilot](results/ieee14_v1_20260916/README.md) is retained separately.
 The small training runs in unit tests remain software checks, separate from
 the saved physical experiment.
 
@@ -104,6 +108,19 @@ These are research starting points, not accuracy guarantees.
 
 ## Training and evaluation
 
+For the practical SFT-supported profile, generate fresh physical data with:
+
+```powershell
+python -m research.gnn_screen.generate_practical_parallel --output-dir output/gnn/practical_corpus --seed 2026091933 --workers 4 --train-parents 384 --validation-parents 96 --calibration-parents 128 --test-parents 128 --healthy-validation-replicates 12 --healthy-test-replicates 40
+```
+
+The output includes a main manifest, a separate positive-label boundary manifest,
+and proposal/physical-failure ledgers. The
+[scenario decision](../../docs/gnn_practical_scenarios_20260916.md) explains the
+offline paired-separation rule and its limits. Only the main manifest is used
+for training; evaluate boundary coverage separately with the same frozen model
+and calibration.
+
 From the repository root, with Python, NumPy, SciPy, PyTorch, PyYAML and pytest:
 
 ```powershell
@@ -184,10 +201,10 @@ smoke tests establish executability only. Freeze the LLM for the first detector
 comparison; targeted SFT/DAgger comes after the screen and threshold policy are
 validated.
 
-Validated locally after the physical training run: **332 tests and 111 subtests passed**, covering
+Validated locally after the practical V2 training run: **385 tests and 111 subtests passed**, covering
 the GNN suite, shared numerical foundations, provider WLS, acquisition routing,
 production protocol gates, and canonical protocol bridging. The recorded
-pipeline roundtrip remains a software test. The separately saved physical pilot
+pipeline roundtrip remains a software test. The separately saved physical study
 includes independent corpus/metric audits and an actual trained-checkpoint
 CPU/GPU inference comparison. These checks and its detection results are linked
-from the [experiment report](results/ieee14_v1_20260916/README.md).
+from the [experiment report](results/practical_v2_20260916/README.md).
