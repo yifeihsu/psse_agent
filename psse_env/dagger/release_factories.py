@@ -132,6 +132,8 @@ def production_environment_factory(
     *, seed: int | None = None, rng: Any | None = None,
     chi2_alpha: float = BC0_CHI2_ALPHA,
     normalized_residual_threshold: float | None = None,
+    screen_checkpoint: str | None = None,
+    screen_calibration: str | None = None,
 ) -> TransactionalPSSEEnv:
     """Construct the real MATPOWER-backed deployment environment.
 
@@ -148,6 +150,8 @@ def production_environment_factory(
     providers = MatpowerDeploymentProviders(
         chi2_alpha=chi2_alpha,
         normalized_residual_threshold=normalized_residual_threshold,
+        screen_checkpoint=screen_checkpoint,
+        screen_calibration=screen_calibration,
         parameter_ranking_dominance_threshold=(
             BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD
         ),

@@ -8,6 +8,7 @@ from psse_env.actions import (
     FINALIZE_DIAGNOSIS,
     ROLLBACK_STATE,
     RUN_WLS,
+    gnn_investigation_pending,
     terminal_explanation_signatures,
     unexplained_signatures,
 )
@@ -104,6 +105,8 @@ class TerminationExpert:
     ) -> list[ExpertActionProposal]:
         del history
         if state_value(state, "has_open_candidate"):
+            return []
+        if gnn_investigation_pending(state):
             return []
         no_anomaly = bool(state_value(state, "no_material_anomaly_remaining", False))
         score = state_value(state, "remaining_anomaly_score")

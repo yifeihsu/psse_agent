@@ -469,7 +469,13 @@ class MatpowerDeploymentProviders:
             PARAMETER_RANKING_DOMINANCE_THRESHOLD
         ),
         branch_first_partial: bool = False,
+        screen_checkpoint: str | None = None,
+        screen_calibration: str | None = None,
     ) -> None:
+        if bool(screen_checkpoint) != bool(screen_calibration):
+            raise ValueError("screen_checkpoint and screen_calibration must be provided together")
+        self.screen_checkpoint = str(screen_checkpoint) if screen_checkpoint else None
+        self.screen_calibration = str(screen_calibration) if screen_calibration else None
         self.top_k = int(top_k)
         # Research ablation: waive the branch partial-progress floor when the
         # branch target itself is resolved (see CandidateQualityOracle).
@@ -783,7 +789,10 @@ class MatpowerDeploymentProviders:
         ppc = _load_python_case(case_path)
         nb = int(ppc["bus"].shape[0])
         nl = int(ppc["branch"].shape[0])
-        payload = _wls_json(case_path, z)
+        payload = (
+            _wls_json(case_path, z, include_screen_evidence=True)
+            if self.screen_checkpoint else _wls_json(case_path, z)
+        )
         return {
             "case_path": case_path,
             "z": z,
@@ -1349,6 +1358,19 @@ class MatpowerDeploymentProviders:
             "globally_resolved": not (chi_alarm or residual_alarm),
         }
 
+    def _screen_wls(self, state: Mapping[str, Any], solved: Mapping[str, Any]) -> dict[str, Any]:
+        """Optional learned evidence; never changes WLS/correction certificates."""
+        from research.gnn_screen.protocol_adapter import load_screen, unavailable_report
+
+        try:
+            screen = load_screen(self.screen_checkpoint, self.screen_calibration)
+            return screen.screen(
+                solved["ppc"], solved["z"], wls_details=solved["payload"], **self._binding(state)
+            )
+        except Exception as exc:
+            # A missing/incompatible artifact is unavailable, never a negative.
+            return unavailable_report("model_unavailable", str(exc), **self._binding(state))
+
     def run_wls(self, state: Mapping[str, Any]) -> dict[str, Any]:
         try:
             solved = self._solve(state)
@@ -1356,10 +1378,17 @@ class MatpowerDeploymentProviders:
             return self._failure("wls_input_error", f"{type(exc).__name__}: {exc}")
         payload = solved["payload"]
         if not payload.get("success"):
+            screen_failure = {}
+            if self.screen_checkpoint:
+                from research.gnn_screen.protocol_adapter import unavailable_report
+                screen_failure["gnn_screen"] = unavailable_report(
+                    "wls_failure", str(payload.get("error", "solver_failure")), **self._binding(state)
+                )
             return self._failure(
                 "wls_failure",
                 payload.get("error", "solver_failure"),
                 evidence_source="deployment_wls:lagrangian_port",
+                **screen_failure,
             )
         residuals = [float(value) for value in payload.get("r") or []]
         nb, nl = solved["nb"], solved["nl"]
@@ -1483,6 +1512,15 @@ class MatpowerDeploymentProviders:
         # power-flow convergence claim.
         if is_candidate:
             metrics.update(self._steady_state_physical_evidence(solved))
+        if self.screen_checkpoint:
+            report = self._screen_wls(state, solved)
+            metrics["gnn_screen"] = report
+            if report.get("screen_status") == "valid" and report.get("phase_trigger") is True:
+                # A request for evidence, not a diagnosed HIF/unbalance signature.
+                # Existing acquisition and verification gates remain in force.
+                metrics["unresolved_signatures"] = _dedupe([
+                    *metrics["unresolved_signatures"], "wls_gnn_phase_investigation",
+                ])
         return metrics
 
     # ----------------------------------------------------------------- contexts

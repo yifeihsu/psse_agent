@@ -39,6 +39,8 @@ from .actions import (
     RUN_WLS,
     VERIFY_CANDIDATE,
     action_signature,
+    current_gnn_screen,
+    gnn_investigation_pending,
     safe_normalize_action,
     terminal_explanation_signatures,
     unexplained_signatures,
@@ -743,6 +745,7 @@ class TransactionalPSSEEnv:
                 "normalized_residual_threshold",
                 "max_normalized_residual",
                 "chi_square_alarm",
+                "gnn_screen",
             ):
                 if key in wls:
                     contexts["wls"][key] = wls[key]
@@ -1367,6 +1370,11 @@ class TransactionalPSSEEnv:
         tool = normalized["tool"]
         state = self.current_state()
         if tool in CONTEXT_TOOLS:
+            screen = current_gnn_screen(state)
+            if screen.get("phase_trigger") is False and screen.get("anomaly_trigger") is True:
+                # A learned hypothesis authorizes reading context only. The
+                # correction branch below still requires independent evidence.
+                return
             family = tool.removeprefix("get_").removesuffix("_context")
             markers = {
                 "measurement": ("measurement", "bad_data", "meter", "residual"),
@@ -1448,6 +1456,8 @@ class TransactionalPSSEEnv:
             self._assert_specialized_diagnostic_evidence(normalized, state)
             return
         if tool == FINALIZE_DIAGNOSIS:
+            if gnn_investigation_pending(state):
+                raise ValueError("Production finalize_diagnosis cannot skip a pending GNN investigation.")
             score = state.get("remaining_anomaly_score")
             try:
                 score_resolved = (

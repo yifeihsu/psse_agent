@@ -127,6 +127,7 @@ PROVENANCE_SOURCE_KEYS = frozenset(
 )
 
 HISTORY_METRIC_KEYS = (
+    "gnn_screen",
     "wls_objective",
     "chi_square_statistic",
     "residual_norm",
@@ -218,6 +219,7 @@ LAST_VERIFICATION_PRIORITY_KEYS = (
 )
 CONTEXT_DETAIL_KEYS = frozenset(
     {
+        "gnn_screen",
         "measurement_findings",
         "parameter_findings",
         "topology_findings",
@@ -970,7 +972,7 @@ def _bounded_history_metric(key: str, value: Any) -> Any:
     return _bounded_value(
         value,
         max_depth=6 if key in CONTEXT_DETAIL_KEYS else 3,
-        max_items=8,
+        max_items=24 if key == "gnn_screen" else 8,
         max_text_chars=160,
     )
 

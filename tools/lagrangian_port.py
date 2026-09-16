@@ -60,7 +60,8 @@ def _copy_result_to_internal(result: Any) -> Dict[str, np.ndarray]:
     bus[:, BUS_I] = np.arange(bus.shape[0], dtype=float)
     branch[:, F_BUS] = np.vectorize(int_map.__getitem__)(branch[:, F_BUS].astype(int))
     branch[:, T_BUS] = np.vectorize(int_map.__getitem__)(branch[:, T_BUS].astype(int))
-    gen[:, GEN_BUS] = np.vectorize(int_map.__getitem__)(gen[:, GEN_BUS].astype(int))
+    if gen.shape[0]:
+        gen[:, GEN_BUS] = np.vectorize(int_map.__getitem__)(gen[:, GEN_BUS].astype(int))
 
     return {"baseMVA": baseMVA, "bus": bus, "branch": branch, "gen": gen}
 
@@ -257,6 +258,7 @@ def lagrangian_m_singlephase_details(
     zero_injection_tol: float | None = None,
     max_it: int = 20,
     tol: float = 1e-5,
+    measurement_sigma: np.ndarray | None = None,
 ) -> Dict[str, Any]:
     """
     WLS state estimation with normalized Lagrange multipliers (NLM) for branch R/X.
@@ -298,6 +300,9 @@ def lagrangian_m_singlephase_details(
         Maximum WLS iterations.
     tol : float
         Convergence tolerance on max(abs(dx)).
+    measurement_sigma : ndarray or None
+        Optional positive standard deviations in full measurement-vector order.
+        None retains the existing 0.001 voltage / 0.01 power covariance.
 
     Returns
     -------
@@ -342,11 +347,11 @@ def lagrangian_m_singlephase_details(
     nzi = zin.size
 
     # measurement covariance / weights
-    Rdiag_full = np.r_[
-        (0.001 ** 2) * np.ones(nb),
-        (0.01 ** 2) * np.ones(2 * nb - 2 * nzi),
-        (0.01 ** 2) * np.ones(4 * nl),
-    ]
+    sigma = (np.r_[np.full(nb, 0.001), np.full(2 * nb + 4 * nl, 0.01)]
+             if measurement_sigma is None else np.asarray(measurement_sigma, dtype=float).reshape(-1))
+    if sigma.size != 3 * nb + 4 * nl or not np.all(np.isfinite(sigma)) or np.any(sigma <= 0):
+        raise ValueError("measurement_sigma must be finite, positive, and match the full measurement vector.")
+    Rdiag_full = _drop_rows_dense(sigma ** 2, np.r_[nb + zin, 2 * nb + zin].astype(int))
     W = sp.diags(1.0 / Rdiag_full, offsets=0, format="csc")
 
     # build Y-bus
@@ -528,6 +533,7 @@ def lagrangian_m_singlephase_details(
     Ginv_Ht = lu_res.solve(H_resid.T.toarray())
     proj_diag = np.sum(H_resid.toarray() * Ginv_Ht.T, axis=1)
     omega_diag = Rdiag_resid - proj_diag
+    omega_diag_unclipped = omega_diag.copy()
     omega_diag = np.clip(omega_diag, a_min=np.finfo(float).eps, a_max=None)
     r = np.abs(final_resid) / np.sqrt(omega_diag)
 
@@ -549,6 +555,17 @@ def lagrangian_m_singlephase_details(
         "n_states": int(2 * nb - 1),
         "dof": int(final_resid.shape[0] - (2 * nb - 1)),
         "iterations": iterations,
+        # Numeric evidence for WLS-only screening. Preserve the unclipped
+        # covariance so a downstream mask can distinguish unusable residuals.
+        "fitted_measurement": hx_resid.copy(),
+        "measurement_jacobian": H_resid.toarray(),
+        "measurement_variance_diag": Rdiag_resid.copy(),
+        "residual_covariance_diag": omega_diag_unclipped,
+        "measurement_rows": np.delete(
+            np.delete(np.arange(z.size), zi_rows), nb - 1 if ind == 1 else []
+        ),
+        "covariance_kind": "diagonal",
+        "solver_settings": {"max_it": int(max_it), "tol": float(tol)},
     }
 
 

@@ -186,6 +186,21 @@ class ExpertPolicyOracle:
                 mandatory=True,
             )
 
+        # A represented anomaly may be visible to the learned screen while
+        # balanced WLS is statistically quiet. Inspect the existing read-only
+        # contexts before taking the usual WLS-based termination path.
+        balanced_screening = self.diagnostics_expert.gnn_balanced_screening_proposals(
+            policy, context.history
+        )
+        if balanced_screening:
+            return self._rank_and_filter(
+                balanced_screening,
+                policy,
+                seen_signatures=seen_signatures,
+                blocked_correction_tools=blocked_correction_tools,
+                mandatory=True,
+            )
+
         recovery = self.recovery_expert.repair_actions(policy, context.history)
         if recovery:
             return self._rank_and_filter(

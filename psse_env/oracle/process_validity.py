@@ -30,6 +30,7 @@ from psse_env.actions import (
     VERIFY_CANDIDATE,
     action_signature,
     harmonic_screening_pending,
+    gnn_investigation_pending,
     safe_normalize_action,
     successful_current_wls,
     terminal_explanation_signatures,
@@ -430,6 +431,8 @@ class ProcessValidityOracle:
         return context_state_id is not None and str(context_state_id) == str(state.get("active_state_id"))
 
     def _terminal_condition_met(self, state: Any) -> bool:
+        if gnn_investigation_pending(state):
+            return False
         signatures = terminal_explanation_signatures(
             state.get("unresolved_signatures") or []
         )

@@ -137,7 +137,7 @@ def _load_python_case(case_path: str) -> Dict[str, Any]:
     return _parse_matpower_case(case_text)
 
 
-def _wls_json(case_path: str, z_list: List[float]) -> Dict[str, Any]:  # pragma: no cover
+def _wls_json(case_path: str, z_list: List[float], *, include_screen_evidence: bool = False) -> Dict[str, Any]:  # pragma: no cover
     """
     Python equivalent of LagrangianM_singlephase(z, result, ind, bus_data).
     Bypasses MATLAB engine completely.
@@ -209,6 +209,18 @@ def _wls_json(case_path: str, z_list: List[float]) -> Dict[str, Any]:  # pragma:
             "theta_est_rad": _as_list(details["theta_est_rad"]),
             "vm_est_pu": _as_list(details["vm_est_pu"]),
             "iterations": int(details["iterations"]),
+            # Actual solver evidence for the optional WLS-only graph screen.
+            # These arrays contain no acquired phase telemetry or truth labels.
+            **({
+                name: _as_list(details[name]) for name in (
+                    "measurement_variance_diag", "measurement_jacobian", "fitted_measurement",
+                    "residual_covariance_diag", "measurement_rows",
+                )
+            } if include_screen_evidence and details["success"] else {}),
+            **({"covariance_kind": details["covariance_kind"]}
+               if include_screen_evidence and details["success"] else {}),
+            **({"solver_settings": details["solver_settings"]}
+               if include_screen_evidence and details["success"] else {}),
             "branch_info": _branch_info_from_ppc(ppc),
         }
     except Exception as e:

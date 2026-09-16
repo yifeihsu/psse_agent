@@ -353,6 +353,56 @@ def wls_anomaly_breadth(state: Any, history: Any = None) -> float | None:
     return None
 
 
+def current_gnn_screen(state: Any) -> Mapping[str, Any]:
+    """Only current, successful, content-bound WLS can expose a learned screen."""
+    contexts = state.get("fresh_context_evidence") or {}
+    wls = (contexts.get("wls") or {}) if isinstance(contexts, Mapping) else {}
+    screen = (wls.get("gnn_screen") or {}) if isinstance(wls, Mapping) else {}
+    if (
+        isinstance(screen, Mapping)
+        and wls.get("successful") is True
+        and bool(wls.get("state_id")) and bool(wls.get("state_hash"))
+        and str(wls["state_id"]) == str(state.get("active_state_id") or "")
+        and screen.get("state_id") == wls["state_id"]
+        and screen.get("state_hash") == wls["state_hash"]
+        and screen.get("screen_status") == "valid"
+    ):
+        return screen
+    return {}
+
+
+def gnn_investigation_pending(state: Any) -> bool:
+    """A quiet WLS result cannot skip an outstanding learned investigation.
+
+    These are acquisition/context obligations, not physical fault assertions.
+    A reported unavailable phase acquisition satisfies the request; acquired
+    telemetry must be investigated before statistical episode closure.
+    """
+    screen = current_gnn_screen(state)
+    if not (screen.get("phase_trigger") is True or screen.get("anomaly_trigger") is True):
+        return False
+    waveform = waveform_anomaly_signatures(state.get("unresolved_signatures") or [])
+    if waveform:
+        # Independent acquired waveform evidence supersedes the screening
+        # hypothesis and follows its existing diagnostic ladder. Do not demand
+        # balanced contexts or a second phase acquisition after that diagnosis.
+        return bool(unexplained_signatures(waveform, state.get("explained_anomalies") or []))
+    contexts = state.get("fresh_context_evidence") or {}
+    if screen.get("phase_trigger") is True:
+        phase = contexts.get("three_phase") or {}
+        if not (isinstance(phase, Mapping) and phase.get("state_id") == screen["state_id"]
+                and phase.get("state_hash") == screen["state_hash"] and phase.get("request_attempted") is True):
+            return True
+        return phase.get("three_phase_context_status") != "unavailable" and phase.get("nlm_attempted") is not True
+    if screen.get("phase_trigger") is False and screen.get("anomaly_trigger") is True:
+        return any(not (
+            isinstance(contexts.get(family), Mapping)
+            and contexts[family].get("state_id") == screen["state_id"]
+            and contexts[family].get("state_hash") == screen["state_hash"]
+        ) for family in ("measurement", "parameter", "topology"))
+    return False
+
+
 def preferred_first_request(state: Any, history: Any = None) -> str:
     """Which additional measurement to request first after a WLS anomaly.
 
@@ -363,6 +413,8 @@ def preferred_first_request(state: Any, history: Any = None) -> str:
     returns nothing.  Without a breadth statistic (compact fixtures) the
     spectral request keeps its historical precedence.
     """
+    if current_gnn_screen(state).get("phase_trigger") is True:
+        return GET_THREE_PHASE_CONTEXT
     breadth = wls_anomaly_breadth(state, history)
     if breadth is not None and breadth < BROAD_ANOMALY_BREADTH:
         return GET_THREE_PHASE_CONTEXT

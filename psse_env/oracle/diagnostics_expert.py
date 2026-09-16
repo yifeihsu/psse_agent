@@ -20,6 +20,8 @@ The intended escalation ladders are:
 
 from __future__ import annotations
 
+import json
+import math
 from typing import Any, Mapping, Sequence
 
 from psse_env.actions import (
@@ -29,11 +31,15 @@ from psse_env.actions import (
     ESTIMATE_HIF_FROM_PATH,
     ESTIMATE_HIF_MULTISCAN_FROM_PATH,
     GET_HARMONIC_CONTEXT,
+    GET_MEASUREMENT_CONTEXT,
+    GET_PARAMETER_CONTEXT,
     GET_THREE_PHASE_CONTEXT,
+    GET_TOPOLOGY_CONTEXT,
     HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
     RUN_HSE_FROM_PATH,
     RUN_THREE_PHASE_NLM_FROM_PATH,
     RUN_WLS,
+    current_gnn_screen,
     safe_normalize_action,
     harmonic_screening_pending,
     successful_current_wls,
@@ -246,6 +252,75 @@ class DiagnosticsExpert:
                     )
                 )
         return proposals
+
+    def gnn_balanced_screening_proposals(
+        self, state: Any, history: Sequence[Mapping[str, Any]] | None = None,
+    ) -> list[ExpertActionProposal]:
+        """Inspect each balanced-error context once after a bound anomaly score.
+
+        Family scores only order read-only requests. They do not name a faulty
+        asset or make a correction admissible. A failed/untrained phase head is
+        not a negative phase screen, and existing waveform findings retain their
+        diagnostic route.
+        """
+        del history
+        state = policy_state_view(state)
+        active_id = str(state_value(state, "active_state_id") or "")
+        if not active_id or state_value(state, "has_open_candidate"):
+            return []
+        if waveform_anomaly_signatures(state_value(state, "unresolved_signatures", [])):
+            return []
+        contexts = state_value(state, "fresh_context_evidence") or {}
+        if not isinstance(contexts, Mapping):
+            return []
+        screen = current_gnn_screen(state)
+        if not (
+            screen.get("phase_trigger") is False
+            and screen.get("anomaly_trigger") is True
+        ):
+            return []
+        state_hash = screen["state_hash"]
+        tried: set[str] = set()
+        for signature in state_value(state, "tried_action_signatures", []) or []:
+            tool, separator, encoded = str(signature).partition(":")
+            if not separator:
+                continue
+            try:
+                arguments = json.loads(encoded)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(arguments, Mapping) and str(arguments.get("state_id") or "") == active_id:
+                tried.add(tool)
+        routes = [
+            ("measurement", GET_MEASUREMENT_CONTEXT),
+            ("parameter", GET_PARAMETER_CONTEXT),
+            ("topology", GET_TOPOLOGY_CONTEXT),
+        ]
+        scores = screen.get("family_scores") or {}
+        scores = scores if isinstance(scores, Mapping) else {}
+        disabled = screen.get("disabled_family_heads") or []
+
+        def ranking(route: tuple[str, str]) -> float:
+            family = route[0]
+            score = scores.get(family)
+            if family in disabled or isinstance(score, bool) or not isinstance(score, (float, int)):
+                return -1.0
+            return float(score) if math.isfinite(score) and 0 <= score <= 1 else -1.0
+
+        for family, tool in sorted(routes, key=ranking, reverse=True):
+            context = contexts.get(family) or {}
+            if isinstance(context, Mapping) and (
+                str(context.get("state_id") or "") == active_id
+                and context.get("state_hash") == state_hash
+            ):
+                continue
+            if tool in tried:
+                continue
+            return [self._proposal(
+                tool, {"state_id": active_id}, confidence=0.95,
+                evidence=["gnn_anomaly_screen_positive", "balanced_context_investigation_requested"],
+            )]
+        return []
 
     def harmonic_screening_proposals(
         self, state: Any, history: Sequence[Mapping[str, Any]] | None = None,
