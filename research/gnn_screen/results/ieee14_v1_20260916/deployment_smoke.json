@@ -1,0 +1,344 @@
+{
+  "adapter_inputs": [
+    "configured_case",
+    "noisy_z"
+  ],
+  "artifact_binding": {
+    "calibration_checkpoint_sha256": "9ca02995b14396ee4ebb026a942532f2e75879e7d9663057d2c69bebb44875c6",
+    "checkpoint_sha256": "9ca02995b14396ee4ebb026a942532f2e75879e7d9663057d2c69bebb44875c6",
+    "current_feature_schema_version": "wls_screen_v1",
+    "current_graph_numerical_source_hash": "3d017c8d8a5b3db0c4a7160d476a16c9542ea95ea82f3f0bc875a6d1db51a68b",
+    "current_measurement_convention": "phase_a_vm_total_3ph_power_net_injection_excludes_shunts",
+    "evaluation_checkpoint_sha256": "9ca02995b14396ee4ebb026a942532f2e75879e7d9663057d2c69bebb44875c6",
+    "feature_schema_version": "wls_screen_v1",
+    "loader_checks": [
+      "checkpoint feature schema",
+      "checkpoint five-family order",
+      "checkpoint measurement convention",
+      "calibration checkpoint byte hash",
+      "calibration model identity",
+      "strict threshold comparison",
+      "finite phase and anomaly thresholds"
+    ],
+    "measurement_convention": "phase_a_vm_total_3ph_power_net_injection_excludes_shunts",
+    "model_id": "c8d7462994b1eaa3d43d47bf1a7ae354eebeeeee1f4a7ae16e66fbeee9e9b8d0",
+    "scaler_schema_version": "wls_screen_v1",
+    "trained_family_mask": {
+      "hif": true,
+      "measurement": true,
+      "parameter": true,
+      "topology": true,
+      "unbalance": true
+    },
+    "trained_heads": {
+      "anomaly": true,
+      "phase": true
+    }
+  },
+  "artifact_binding_checks_passed": true,
+  "artifacts": {
+    "calibration": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\output\\gnn_screen\\ieee14_v1_20260916\\evaluation\\primary\\calibration.json",
+    "checkpoint": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\output\\gnn_screen\\ieee14_v1_20260916\\training\\checkpoint.pt",
+    "evaluation": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\output\\gnn_screen\\ieee14_v1_20260916\\evaluation\\primary\\evaluation.json",
+    "manifest": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\output\\gnn_screen\\ieee14_v1_20260916\\corpus\\manifest.jsonl"
+  },
+  "checks": [
+    {
+      "absolute_score_discrepancies": {
+        "anomaly_score": 0.0,
+        "family/hif": 0.0,
+        "family/measurement": 8.940696716308594e-08,
+        "family/parameter": 8.940696716308594e-08,
+        "family/topology": 7.916241884231567e-09,
+        "family/unbalance": 2.9802322387695312e-08,
+        "phase_score": 0.0
+      },
+      "cpu_deployment_report": {
+        "anomaly_score": 0.8520103693008423,
+        "anomaly_trigger": false,
+        "configured_model_hash": "8a229231ca05da3c1933547db0173cf3e23d5cb1225375cf36627733c66a7b45",
+        "covariance_hash": "c7f090785cc570017b5d680ea2366038d4ac6733c2ab3daf759c1b611651e010",
+        "disabled_family_heads": [],
+        "family_scores": {
+          "hif": 0.22003862261772156,
+          "measurement": 0.2835852801799774,
+          "parameter": 0.3473275303840637,
+          "topology": 0.007484479807317257,
+          "unbalance": 0.15526461601257324
+        },
+        "measurement_window_hash": "f94c76fcb02f4ea08fe165c6b6c10f5a55eead45c68cba1b5b89218f99c5ec92",
+        "model_id": "c8d7462994b1eaa3d43d47bf1a7ae354eebeeeee1f4a7ae16e66fbeee9e9b8d0",
+        "phase_score": 0.32942554354667664,
+        "phase_trigger": false,
+        "read_only": true,
+        "recommendation": "no_anomaly_detected_from_available_wls_snapshot_retain_independent_coverage",
+        "score_interpretation": "uncalibrated_sigmoid_scores_not_probabilities",
+        "screen_status": "valid",
+        "solver_settings": {
+          "max_it": 30,
+          "tol": 1e-08
+        },
+        "thresholds": {
+          "anomaly": 0.969367504119873,
+          "comparison": ">",
+          "phase": 0.8544342517852783
+        },
+        "unsupported_families": [
+          "harmonic"
+        ]
+      },
+      "current_numerical_source_cache_key_present": true,
+      "default_covariance_matches_manifest": true,
+      "default_solver_settings_match_manifest": true,
+      "expected_gpu_evaluation_scores": {
+        "anomaly_score": 0.8520103693008423,
+        "family_scores": [
+          0.22003862261772156,
+          0.15526458621025085,
+          0.2835853695869446,
+          0.34732744097709656,
+          0.007484487723559141
+        ],
+        "phase_score": 0.32942554354667664
+      },
+      "expected_triggers": {
+        "anomaly_trigger": false,
+        "phase_trigger": false
+      },
+      "maximum_absolute_score_discrepancy": 8.940696716308594e-08,
+      "noise_replicate": 0,
+      "parent_id": "ieee14_20260917_test_00000",
+      "passed": true,
+      "reconstructed_measurement_hash": "f94c76fcb02f4ea08fe165c6b6c10f5a55eead45c68cba1b5b89218f99c5ec92",
+      "selection": "healthy",
+      "trigger_match": true,
+      "window_id": "ieee14_20260917_test_00000:healthy:noise0"
+    },
+    {
+      "absolute_score_discrepancies": {
+        "anomaly_score": 0.0,
+        "family/hif": 5.960464477539063e-08,
+        "family/measurement": 9.313225746154785e-10,
+        "family/parameter": 2.421438694000244e-08,
+        "family/topology": 0.0,
+        "family/unbalance": 0.0,
+        "phase_score": 0.0
+      },
+      "cpu_deployment_report": {
+        "anomaly_score": 0.9999992847442627,
+        "anomaly_trigger": true,
+        "configured_model_hash": "8a229231ca05da3c1933547db0173cf3e23d5cb1225375cf36627733c66a7b45",
+        "covariance_hash": "c7f090785cc570017b5d680ea2366038d4ac6733c2ab3daf759c1b611651e010",
+        "disabled_family_heads": [],
+        "family_scores": {
+          "hif": 0.8545342683792114,
+          "measurement": 0.002606407506391406,
+          "parameter": 0.028040140867233276,
+          "topology": 0.0012529458617791533,
+          "unbalance": 0.35005122423171997
+        },
+        "measurement_window_hash": "5823058d2d9bf7f21b124361aaba21b0562b1f555078527d72a4c922df50b94b",
+        "model_id": "c8d7462994b1eaa3d43d47bf1a7ae354eebeeeee1f4a7ae16e66fbeee9e9b8d0",
+        "phase_score": 0.9999287128448486,
+        "phase_trigger": true,
+        "read_only": true,
+        "recommendation": "acquire_three_phase_context",
+        "score_interpretation": "uncalibrated_sigmoid_scores_not_probabilities",
+        "screen_status": "valid",
+        "solver_settings": {
+          "max_it": 30,
+          "tol": 1e-08
+        },
+        "thresholds": {
+          "anomaly": 0.969367504119873,
+          "comparison": ">",
+          "phase": 0.8544342517852783
+        },
+        "unsupported_families": [
+          "harmonic"
+        ]
+      },
+      "current_numerical_source_cache_key_present": true,
+      "default_covariance_matches_manifest": true,
+      "default_solver_settings_match_manifest": true,
+      "expected_gpu_evaluation_scores": {
+        "anomaly_score": 0.9999992847442627,
+        "family_scores": [
+          0.8545343279838562,
+          0.35005122423171997,
+          0.0026064084377139807,
+          0.028040165081620216,
+          0.0012529458617791533
+        ],
+        "phase_score": 0.9999287128448486
+      },
+      "expected_triggers": {
+        "anomaly_trigger": true,
+        "phase_trigger": true
+      },
+      "maximum_absolute_score_discrepancy": 5.960464477539063e-08,
+      "noise_replicate": 0,
+      "parent_id": "ieee14_20260917_test_00000",
+      "passed": true,
+      "reconstructed_measurement_hash": "5823058d2d9bf7f21b124361aaba21b0562b1f555078527d72a4c922df50b94b",
+      "selection": "hif_strong",
+      "trigger_match": true,
+      "window_id": "ieee14_20260917_test_00000:hif_2:noise0"
+    },
+    {
+      "absolute_score_discrepancies": {
+        "anomaly_score": 0.0,
+        "family/hif": 5.960464477539063e-08,
+        "family/measurement": 0.0,
+        "family/parameter": 0.0,
+        "family/topology": 3.259629011154175e-09,
+        "family/unbalance": 2.9802322387695312e-08,
+        "phase_score": 0.0
+      },
+      "cpu_deployment_report": {
+        "anomaly_score": 0.9852204322814941,
+        "anomaly_trigger": true,
+        "configured_model_hash": "8a229231ca05da3c1933547db0173cf3e23d5cb1225375cf36627733c66a7b45",
+        "covariance_hash": "c7f090785cc570017b5d680ea2366038d4ac6733c2ab3daf759c1b611651e010",
+        "disabled_family_heads": [],
+        "family_scores": {
+          "hif": 0.6518800258636475,
+          "measurement": 0.12932200729846954,
+          "parameter": 0.12586413323879242,
+          "topology": 0.006561662536114454,
+          "unbalance": 0.27672889828681946
+        },
+        "measurement_window_hash": "f79a359852988bd9ca09827886bddf4ad63c5dbe5476641c268e5e1c6d69a7f8",
+        "model_id": "c8d7462994b1eaa3d43d47bf1a7ae354eebeeeee1f4a7ae16e66fbeee9e9b8d0",
+        "phase_score": 0.9064835906028748,
+        "phase_trigger": true,
+        "read_only": true,
+        "recommendation": "acquire_three_phase_context",
+        "score_interpretation": "uncalibrated_sigmoid_scores_not_probabilities",
+        "screen_status": "valid",
+        "solver_settings": {
+          "max_it": 30,
+          "tol": 1e-08
+        },
+        "thresholds": {
+          "anomaly": 0.969367504119873,
+          "comparison": ">",
+          "phase": 0.8544342517852783
+        },
+        "unsupported_families": [
+          "harmonic"
+        ]
+      },
+      "current_numerical_source_cache_key_present": true,
+      "default_covariance_matches_manifest": true,
+      "default_solver_settings_match_manifest": true,
+      "expected_gpu_evaluation_scores": {
+        "anomaly_score": 0.9852204322814941,
+        "family_scores": [
+          0.6518800854682922,
+          0.27672886848449707,
+          0.12932200729846954,
+          0.12586413323879242,
+          0.006561665795743465
+        ],
+        "phase_score": 0.9064835906028748
+      },
+      "expected_triggers": {
+        "anomaly_trigger": true,
+        "phase_trigger": true
+      },
+      "maximum_absolute_score_discrepancy": 5.960464477539063e-08,
+      "noise_replicate": 0,
+      "parent_id": "ieee14_20260917_test_00000",
+      "passed": true,
+      "reconstructed_measurement_hash": "f79a359852988bd9ca09827886bddf4ad63c5dbe5476641c268e5e1c6d69a7f8",
+      "selection": "unbalance_strong",
+      "trigger_match": true,
+      "window_id": "ieee14_20260917_test_00000:unbalance_2:noise0"
+    },
+    {
+      "absolute_score_discrepancies": {
+        "anomaly_score": 0.0,
+        "family/hif": 2.2351741790771484e-08,
+        "family/measurement": 0.0,
+        "family/parameter": 5.960464477539063e-08,
+        "family/topology": 5.587935447692871e-09,
+        "family/unbalance": 2.9802322387695312e-08,
+        "phase_score": 1.4901161193847656e-08
+      },
+      "cpu_deployment_report": {
+        "anomaly_score": 0.8795005679130554,
+        "anomaly_trigger": false,
+        "configured_model_hash": "1b3fb1ed4f40ab830b5fb99462294d553ca380b7f9ad7a5747648f9e81bc3f54",
+        "covariance_hash": "c7f090785cc570017b5d680ea2366038d4ac6733c2ab3daf759c1b611651e010",
+        "disabled_family_heads": [],
+        "family_scores": {
+          "hif": 0.08778444677591324,
+          "measurement": 0.3930736482143402,
+          "parameter": 0.46747639775276184,
+          "topology": 0.011935018002986908,
+          "unbalance": 0.15272432565689087
+        },
+        "measurement_window_hash": "532a0b99f77f45803752718e355cbd8cce58ebb1275139d706409c31832a3071",
+        "model_id": "c8d7462994b1eaa3d43d47bf1a7ae354eebeeeee1f4a7ae16e66fbeee9e9b8d0",
+        "phase_score": 0.1784110814332962,
+        "phase_trigger": false,
+        "read_only": true,
+        "recommendation": "no_anomaly_detected_from_available_wls_snapshot_retain_independent_coverage",
+        "score_interpretation": "uncalibrated_sigmoid_scores_not_probabilities",
+        "screen_status": "valid",
+        "solver_settings": {
+          "max_it": 30,
+          "tol": 1e-08
+        },
+        "thresholds": {
+          "anomaly": 0.969367504119873,
+          "comparison": ">",
+          "phase": 0.8544342517852783
+        },
+        "unsupported_families": [
+          "harmonic"
+        ]
+      },
+      "current_numerical_source_cache_key_present": true,
+      "default_covariance_matches_manifest": true,
+      "default_solver_settings_match_manifest": true,
+      "expected_gpu_evaluation_scores": {
+        "anomaly_score": 0.8795005679130554,
+        "family_scores": [
+          0.08778446912765503,
+          0.15272429585456848,
+          0.3930736482143402,
+          0.4674764573574066,
+          0.01193501241505146
+        ],
+        "phase_score": 0.1784110963344574
+      },
+      "expected_triggers": {
+        "anomaly_trigger": false,
+        "phase_trigger": false
+      },
+      "maximum_absolute_score_discrepancy": 5.960464477539063e-08,
+      "noise_replicate": 0,
+      "parent_id": "ieee14_20260917_test_00000",
+      "passed": true,
+      "reconstructed_measurement_hash": "532a0b99f77f45803752718e355cbd8cce58ebb1275139d706409c31832a3071",
+      "selection": "parameter_strong",
+      "trigger_match": true,
+      "window_id": "ieee14_20260917_test_00000:parameter_2:noise0"
+    }
+  ],
+  "cpu_score_absolute_tolerance": 1e-05,
+  "maximum_absolute_score_discrepancy": 8.940696716308594e-08,
+  "performed_at_utc": "2026-09-16T02:28:56.917680+00:00",
+  "runtime": {
+    "device": "cpu",
+    "numpy": "1.26.4",
+    "platform": "Windows-11-10.0.26220-SP0",
+    "python": "3.13.7 (tags/v3.13.7:bcee1c3, Aug 14 2025, 14:15:11) [MSC v.1944 64 bit (AMD64)]",
+    "scipy": "1.15.2",
+    "torch": "2.6.0+cu126"
+  },
+  "scope": "Artifact handoff sanity only; four existing held-out windows, no additional performance experiment. Adapter receives only configured MATPOWER case and reconstructed noisy WLS measurements.",
+  "status": "passed"
+}

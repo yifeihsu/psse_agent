@@ -1,0 +1,324 @@
+{
+  "audit_scope": "independent read-only physical corpus artifact audit; no trained scores or test inference read",
+  "check_counts": {
+    "all_measurement_conventions": 1,
+    "base_case_whitelist": 736,
+    "configured_case_excludes_hidden_dispatch_state": 11068,
+    "configured_case_keys_whitelist": 11068,
+    "configured_topology_connected": 11068,
+    "constrained_opf_parent": 736,
+    "declared_noise_covariance": 1,
+    "declared_parameter_multiplier": 2431,
+    "declared_topology_status_flip": 1216,
+    "disabled_hif_split_equivalence": 608,
+    "distinct_physical_parent_hashes": 1,
+    "exact_declared_model_corruption": 3647,
+    "finite_122_measurements": 11068,
+    "generation_counts_recomputed": 1,
+    "generation_implementation_hashes": 1,
+    "healthy_equation_and_shunt_audit": 736,
+    "healthy_maximum_recomputed": 1,
+    "healthy_status_variation_support": 736,
+    "hif_physical_equations": 3647,
+    "hif_positive_fault_enabled": 3647,
+    "labels_reconstructed_from_physical_receipts": 11068,
+    "manifest_no_unregistered_input_fields": 11068,
+    "manifest_sha256": 1,
+    "missing_variants_match_failure_ledger": 736,
+    "no_identical_measurement_mean_across_splits": 1,
+    "no_model_corruption_outside_balanced_model_faults": 7421,
+    "one_healthy_mean_per_parent": 736,
+    "opf_reported_bound_violation": 2208,
+    "paired_measurements_fixed_except_declared_meter_bias": 6079,
+    "parent_counts_recomputed": 1,
+    "parent_seed_consistency": 736,
+    "parent_seed_split_disjointness": 1,
+    "parent_split_exclusivity": 736,
+    "physical_audit_hash_binding": 11068,
+    "physical_baseline_connected": 736,
+    "physical_case_hash_recomputed": 736,
+    "physical_convergence_external_kcl": 11068,
+    "physical_hash_split_disjointness": 1,
+    "physical_model_file_hash": 7360,
+    "physical_source_matches_configured_baseline": 736,
+    "reference_pf_recomputed_bounds": 2208,
+    "same_declared_covariance": 11068,
+    "single_covariance_hash": 1,
+    "single_explicit_noise_application": 11068,
+    "unbalance_preserves_total_demand": 3036,
+    "unique_noise_seed": 11068,
+    "unique_variant_names": 736,
+    "unique_window_id": 11068,
+    "variant_physical_parent_hash_consistency": 736
+  },
+  "counts_recomputed": {
+    "calibration:healthy": 128,
+    "calibration:noise_windows": 10240,
+    "calibration:parents": 128,
+    "calibration:rows": 128,
+    "test:healthy": 128,
+    "test:hif": 768,
+    "test:measurement": 512,
+    "test:noise_windows": 9470,
+    "test:parameter": 512,
+    "test:parents": 128,
+    "test:rows": 2303,
+    "test:topology": 256,
+    "test:unbalance": 639,
+    "train:healthy": 384,
+    "train:hif": 2303,
+    "train:measurement": 1536,
+    "train:noise_windows": 13818,
+    "train:parameter": 1535,
+    "train:parents": 384,
+    "train:rows": 6909,
+    "train:topology": 768,
+    "train:unbalance": 1917,
+    "validation:healthy": 96,
+    "validation:hif": 576,
+    "validation:measurement": 384,
+    "validation:noise_windows": 4416,
+    "validation:parameter": 384,
+    "validation:parents": 96,
+    "validation:rows": 1728,
+    "validation:topology": 192,
+    "validation:unbalance": 480
+  },
+  "cross_split_identical_z_mean_count": 0,
+  "cross_split_parent_seed_collision_count": 0,
+  "cross_split_physical_hash_collision_count": 0,
+  "disabled_hif_controls_checked": 608,
+  "elapsed_seconds": 68.36298230000102,
+  "expanded_noise_windows": 37944,
+  "failed_checks": [],
+  "failed_physical_variants": [
+    {
+      "error": "OpenDSS snapshot did not converge",
+      "families": [
+        "unbalance"
+      ],
+      "parent_id": "ieee14_20260917_train_00336",
+      "split": "train",
+      "variant": "unbalance_1"
+    },
+    {
+      "error": "OpenDSS snapshot did not converge",
+      "families": [
+        "unbalance",
+        "parameter"
+      ],
+      "parent_id": "ieee14_20260917_train_00336",
+      "split": "train",
+      "variant": "unbalance_parameter"
+    },
+    {
+      "error": "OpenDSS snapshot did not converge",
+      "families": [
+        "hif",
+        "unbalance"
+      ],
+      "parent_id": "ieee14_20260917_train_00336",
+      "split": "train",
+      "variant": "hif_unbalance"
+    },
+    {
+      "error": "OpenDSS snapshot did not converge",
+      "families": [
+        "unbalance"
+      ],
+      "parent_id": "ieee14_20260917_test_00100",
+      "split": "test",
+      "variant": "unbalance_2"
+    }
+  ],
+  "family_combinations_noise_windows": {
+    "calibration": {
+      "healthy": 10240
+    },
+    "test": {
+      "healthy": 5120,
+      "hif": 768,
+      "hif+measurement": 256,
+      "hif+topology": 256,
+      "hif+unbalance": 256,
+      "measurement": 768,
+      "parameter": 768,
+      "topology": 256,
+      "unbalance": 766,
+      "unbalance+parameter": 256
+    },
+    "train": {
+      "healthy": 768,
+      "hif": 2304,
+      "hif+measurement": 768,
+      "hif+topology": 768,
+      "hif+unbalance": 766,
+      "measurement": 2304,
+      "parameter": 2304,
+      "topology": 768,
+      "unbalance": 2302,
+      "unbalance+parameter": 766
+    },
+    "validation": {
+      "healthy": 1152,
+      "hif": 576,
+      "hif+measurement": 192,
+      "hif+topology": 192,
+      "hif+unbalance": 192,
+      "measurement": 576,
+      "parameter": 576,
+      "topology": 192,
+      "unbalance": 576,
+      "unbalance+parameter": 192
+    }
+  },
+  "generation_report_sha256": "50ae45f7b5485223198548c0d17efa1c7d00138cd24c2b9497743ebca64a7bfb",
+  "healthy_noise_windows_by_split": {
+    "calibration": 10240,
+    "test": 5120,
+    "train": 768,
+    "validation": 1152
+  },
+  "known_open_branch_rows0_by_split": {
+    "calibration": {
+      "0": 1,
+      "1": 1,
+      "10": 1,
+      "11": 1,
+      "12": 4,
+      "14": 1,
+      "15": 2,
+      "16": 1,
+      "17": 2,
+      "18": 2,
+      "19": 2,
+      "2": 1,
+      "3": 5,
+      "4": 1,
+      "5": 2,
+      "6": 5
+    },
+    "test": {
+      "0": 4,
+      "10": 2,
+      "11": 1,
+      "12": 4,
+      "14": 2,
+      "16": 4,
+      "17": 3,
+      "18": 1,
+      "2": 3,
+      "3": 4,
+      "4": 1,
+      "6": 3
+    },
+    "train": {
+      "0": 8,
+      "1": 6,
+      "10": 4,
+      "11": 2,
+      "12": 4,
+      "14": 6,
+      "15": 9,
+      "16": 7,
+      "17": 8,
+      "18": 7,
+      "19": 2,
+      "2": 7,
+      "3": 7,
+      "4": 9,
+      "5": 2,
+      "6": 8
+    },
+    "validation": {
+      "0": 2,
+      "1": 3,
+      "10": 3,
+      "11": 1,
+      "14": 1,
+      "15": 1,
+      "16": 1,
+      "17": 2,
+      "18": 2,
+      "3": 1,
+      "4": 1,
+      "5": 5,
+      "6": 1
+    }
+  },
+  "known_open_healthy_parents_by_split": {
+    "calibration": 32,
+    "test": 32,
+    "train": 96,
+    "validation": 24
+  },
+  "limitations": [
+    "No trained predictions inspected; this is clearance of corpus integrity, not evidence of detection efficacy.",
+    "Four physical nonconvergences remain explicit exclusions; one strong unbalance test mean (two planned noisy windows) is absent.",
+    "Hash disjointness confirms exact-parent separation, not broad network/domain generalization.",
+    "Simulation scope remains normalized diagonal IEEE-14, OPF-valid baseline and fixed-PQ postdisturbance, resistive HIF with no arcing/harmonic claim.",
+    "Family/severity windows are correlated siblings; parent-resampled uncertainty is required.",
+    "Model-only feature shortcut remains an empirical ablation question: corrupted parameters may extend beyond healthy configured parameter support."
+  ],
+  "manifest_sha256": "27f1c03ff8f72cbcab4aa1a349824f96a36dc7e309fe6f094afe6c22e85c366f",
+  "maximum_disabled_hif_vs_unsplit_difference_pu": 1.4819945270971857e-10,
+  "maximum_external_kcl_mismatch_pu": 2.2876858519043017e-10,
+  "maximum_healthy_balanced_equation_error_pu": 1.2258416504096203e-10,
+  "maximum_paired_measurement_difference_after_declared_corruption_pu": 0.0,
+  "maximum_recomputed_reference_bound_violation": {
+    "generator_p_mw": 0,
+    "generator_q_mvar": 0,
+    "voltage_pu": 0
+  },
+  "maximum_recorded_opf_bound_violation": {
+    "generator_p_mw": 0,
+    "generator_q_mvar": 0,
+    "voltage_pu": 0
+  },
+  "noise_contract": {
+    "all_rows_noiseless_mean": true,
+    "diagonal_covariance": true,
+    "power_sigma_pu": 0.01,
+    "unique_row_noise_seeds": 11068,
+    "voltage_sigma_pu": 0.001
+  },
+  "noise_sigma_sha256": "6c57c53ed3c34cf8b6e41a55fca7195f60c6c8200908628054602dc73a121982",
+  "parents": 736,
+  "parents_by_split": {
+    "calibration": 128,
+    "test": 128,
+    "train": 384,
+    "validation": 96
+  },
+  "physical_hash_collisions": {},
+  "physical_noiseless_means": 11068,
+  "physical_receipts_checked": 11068,
+  "positive_hif_audits_checked": 3647,
+  "rejected_parent_attempts": 0,
+  "severity_noise_windows": {
+    "calibration": {
+      "healthy": 10240
+    },
+    "test": {
+      "healthy": 5120,
+      "intermediate": 2048,
+      "strong": 1278,
+      "weak": 1024
+    },
+    "train": {
+      "healthy": 768,
+      "intermediate": 6138,
+      "strong": 3840,
+      "weak": 3072
+    },
+    "validation": {
+      "healthy": 1152,
+      "intermediate": 1536,
+      "strong": 960,
+      "weak": 768
+    }
+  },
+  "source_opf_parents_checked": 736,
+  "status": "passed",
+  "unique_physical_case_hashes": 736
+}

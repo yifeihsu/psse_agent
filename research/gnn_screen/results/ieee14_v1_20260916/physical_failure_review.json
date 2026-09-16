@@ -1,0 +1,347 @@
+{
+  "scope": "Read-only reproduction; frozen source/corpus unchanged",
+  "failures": [
+    {
+      "parent_id": "ieee14_20260917_train_00336",
+      "unbalance": {
+        "bus": 3,
+        "phase": 1,
+        "delta": 0.3
+      },
+      "physical_open_branch_row0": 0,
+      "source_case_sha256": "b76dad3a00cfa1ece16377e6090c1294eb1bd4f0d6b1cfd66b41f198a50f7088",
+      "exact_reproduction": "RuntimeError('OpenDSS snapshot did not converge')",
+      "opendss_continuation": [
+        {
+          "algorithm": "Newton",
+          "delta": 0.05,
+          "converged": true,
+          "iterations": 31,
+          "minimum_voltage_pu": 0.9899798792496285
+        },
+        {
+          "algorithm": "Newton",
+          "delta": 0.1,
+          "converged": true,
+          "iterations": 37,
+          "minimum_voltage_pu": 0.9666961730580557
+        },
+        {
+          "algorithm": "Newton",
+          "delta": 0.15,
+          "converged": true,
+          "iterations": 44,
+          "minimum_voltage_pu": 0.9396128335907319
+        },
+        {
+          "algorithm": "Newton",
+          "delta": 0.2,
+          "converged": true,
+          "iterations": 57,
+          "minimum_voltage_pu": 0.9062992614909595
+        },
+        {
+          "algorithm": "Newton",
+          "delta": 0.25,
+          "converged": true,
+          "iterations": 92,
+          "minimum_voltage_pu": 0.8593590535790702
+        },
+        {
+          "algorithm": "Newton",
+          "delta": 0.275,
+          "converged": true,
+          "iterations": 177,
+          "minimum_voltage_pu": 0.8184577325039538
+        },
+        {
+          "algorithm": "Newton",
+          "delta": 0.28,
+          "converged": true,
+          "iterations": 259,
+          "minimum_voltage_pu": 0.8033749052203253
+        },
+        {
+          "algorithm": "Newton",
+          "delta": 0.285,
+          "converged": false,
+          "iterations": 5000,
+          "minimum_voltage_pu": null
+        },
+        {
+          "algorithm": "Normal",
+          "delta": 0.05,
+          "converged": true,
+          "iterations": 31,
+          "minimum_voltage_pu": 0.9899798792496267
+        },
+        {
+          "algorithm": "Normal",
+          "delta": 0.1,
+          "converged": true,
+          "iterations": 37,
+          "minimum_voltage_pu": 0.9666961730580529
+        },
+        {
+          "algorithm": "Normal",
+          "delta": 0.15,
+          "converged": true,
+          "iterations": 44,
+          "minimum_voltage_pu": 0.9396128335907269
+        },
+        {
+          "algorithm": "Normal",
+          "delta": 0.2,
+          "converged": true,
+          "iterations": 57,
+          "minimum_voltage_pu": 0.9062992614909555
+        },
+        {
+          "algorithm": "Normal",
+          "delta": 0.25,
+          "converged": true,
+          "iterations": 92,
+          "minimum_voltage_pu": 0.8593590535790627
+        },
+        {
+          "algorithm": "Normal",
+          "delta": 0.275,
+          "converged": true,
+          "iterations": 177,
+          "minimum_voltage_pu": 0.8184577325039345
+        },
+        {
+          "algorithm": "Normal",
+          "delta": 0.28,
+          "converged": true,
+          "iterations": 259,
+          "minimum_voltage_pu": 0.80337490522031
+        },
+        {
+          "algorithm": "Normal",
+          "delta": 0.285,
+          "converged": false,
+          "iterations": 5000,
+          "minimum_voltage_pu": null
+        }
+      ],
+      "independent_fixed_pq_phase_check": [
+        {
+          "delta": 0.05,
+          "converged": true,
+          "minimum_voltage_pu": 0.9899798494454664
+        },
+        {
+          "delta": 0.1,
+          "converged": true,
+          "minimum_voltage_pu": 0.966696463110156
+        },
+        {
+          "delta": 0.15,
+          "converged": true,
+          "minimum_voltage_pu": 0.9396135801626746
+        },
+        {
+          "delta": 0.2,
+          "converged": true,
+          "minimum_voltage_pu": 0.9063007767633906
+        },
+        {
+          "delta": 0.25,
+          "converged": true,
+          "minimum_voltage_pu": 0.8593625507442103
+        },
+        {
+          "delta": 0.275,
+          "converged": true,
+          "minimum_voltage_pu": 0.8184663262742073
+        },
+        {
+          "delta": 0.28,
+          "converged": true,
+          "minimum_voltage_pu": 0.8033892614773418
+        },
+        {
+          "delta": 0.285,
+          "converged": false,
+          "minimum_voltage_pu": null
+        },
+        {
+          "delta": 0.29,
+          "converged": false,
+          "minimum_voltage_pu": null
+        },
+        {
+          "delta": 0.3,
+          "converged": false,
+          "minimum_voltage_pu": null
+        }
+      ],
+      "failed_variants": [
+        "unbalance_1",
+        "unbalance_parameter",
+        "hif_unbalance"
+      ]
+    },
+    {
+      "parent_id": "ieee14_20260917_test_00100",
+      "unbalance": {
+        "bus": 9,
+        "phase": 3,
+        "delta": 0.65
+      },
+      "physical_open_branch_row0": 0,
+      "source_case_sha256": "d1e2f15cd2d05dc693fe7f5c2dcb139aae65119526d1a0ff065ef38a9cb0bfdb",
+      "exact_reproduction": "RuntimeError('OpenDSS snapshot did not converge')",
+      "opendss_continuation": [
+        {
+          "algorithm": "Newton",
+          "delta": 0.1,
+          "converged": true,
+          "iterations": 31,
+          "minimum_voltage_pu": 0.9749140449953804
+        },
+        {
+          "algorithm": "Newton",
+          "delta": 0.2,
+          "converged": true,
+          "iterations": 36,
+          "minimum_voltage_pu": 0.9546526289443219
+        },
+        {
+          "algorithm": "Newton",
+          "delta": 0.3,
+          "converged": true,
+          "iterations": 43,
+          "minimum_voltage_pu": 0.9268945733616111
+        },
+        {
+          "algorithm": "Newton",
+          "delta": 0.4,
+          "converged": true,
+          "iterations": 54,
+          "minimum_voltage_pu": 0.8909109071400328
+        },
+        {
+          "algorithm": "Newton",
+          "delta": 0.5,
+          "converged": true,
+          "iterations": 80,
+          "minimum_voltage_pu": 0.8422544828325741
+        },
+        {
+          "algorithm": "Newton",
+          "delta": 0.55,
+          "converged": true,
+          "iterations": 120,
+          "minimum_voltage_pu": 0.8052366504322003
+        },
+        {
+          "algorithm": "Newton",
+          "delta": 0.6,
+          "converged": false,
+          "iterations": 5000,
+          "minimum_voltage_pu": null
+        },
+        {
+          "algorithm": "Normal",
+          "delta": 0.1,
+          "converged": true,
+          "iterations": 31,
+          "minimum_voltage_pu": 0.9749140449953827
+        },
+        {
+          "algorithm": "Normal",
+          "delta": 0.2,
+          "converged": true,
+          "iterations": 36,
+          "minimum_voltage_pu": 0.954652628944328
+        },
+        {
+          "algorithm": "Normal",
+          "delta": 0.3,
+          "converged": true,
+          "iterations": 43,
+          "minimum_voltage_pu": 0.9268945733616176
+        },
+        {
+          "algorithm": "Normal",
+          "delta": 0.4,
+          "converged": true,
+          "iterations": 54,
+          "minimum_voltage_pu": 0.8909109071400438
+        },
+        {
+          "algorithm": "Normal",
+          "delta": 0.5,
+          "converged": true,
+          "iterations": 80,
+          "minimum_voltage_pu": 0.8422544828325842
+        },
+        {
+          "algorithm": "Normal",
+          "delta": 0.55,
+          "converged": true,
+          "iterations": 120,
+          "minimum_voltage_pu": 0.8052366504322125
+        },
+        {
+          "algorithm": "Normal",
+          "delta": 0.6,
+          "converged": false,
+          "iterations": 5000,
+          "minimum_voltage_pu": null
+        }
+      ],
+      "independent_fixed_pq_phase_check": [
+        {
+          "delta": 0.1,
+          "converged": true,
+          "minimum_voltage_pu": 0.974914261612393
+        },
+        {
+          "delta": 0.2,
+          "converged": true,
+          "minimum_voltage_pu": 0.9546531225025349
+        },
+        {
+          "delta": 0.3,
+          "converged": true,
+          "minimum_voltage_pu": 0.9268955705808727
+        },
+        {
+          "delta": 0.4,
+          "converged": true,
+          "minimum_voltage_pu": 0.8909126186501194
+        },
+        {
+          "delta": 0.5,
+          "converged": true,
+          "minimum_voltage_pu": 0.8422578267473674
+        },
+        {
+          "delta": 0.55,
+          "converged": true,
+          "minimum_voltage_pu": 0.8052426757181845
+        },
+        {
+          "delta": 0.6,
+          "converged": false,
+          "minimum_voltage_pu": null
+        },
+        {
+          "delta": 0.65,
+          "converged": false,
+          "minimum_voltage_pu": null
+        }
+      ],
+      "failed_variants": [
+        "unbalance_2"
+      ]
+    }
+  ],
+  "interpretation": "Continuation and independent fixed-PQ power flow test voltage-solvability stress. Nonconvergence does not mathematically prove the absence of a power-flow root.",
+  "independent_check_approximation": "One phase equivalent, all non-reference buses PQ at source generator P/Q; neglects the tiny Thevenin source impedance.",
+  "recommended_handling": "Keep explicitly declared exclusions; no healthy relabeling, severity reduction, or hidden repair.",
+  "reproduction_command": "python output/gnn_screen/ieee14_v1_20260916/reproduce_physical_failures.py"
+}

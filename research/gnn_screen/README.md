@@ -8,14 +8,14 @@ episodes can activate multiple families. Harmonic classification and
 localization are outside v1; existing harmonic acquisition and diagnostics
 remain available.
 
-**Implementation status:** the model, numerical features, offline training,
-threshold calibration, evaluation, and optional episode integration are
-implemented and tested. No research-trained detector or validated detection
-accuracy is supplied. Tiny training runs in the tests verify the software
-pipeline; they are not physical HIF/unbalance experiments. A useful detector
-still requires independent operating parents, corrected measurement exports,
-training, and held-out evaluation. Weak single-snapshot faults may remain
-indistinguishable from noise.
+**Implementation status:** the model, numerical features, training,
+calibration, evaluation, and optional episode integration are implemented.
+A [five-seed physical IEEE-14 pilot](results/ieee14_v1_20260916/README.md)
+has now been trained and evaluated on independent parents. The GNN adds some
+detections to WLS, but weak HIFs and parameter-family classification remain
+major limitations. It is not a dependable standalone error-type classifier.
+The small training runs in unit tests remain software checks, separate from
+the saved physical experiment.
 
 ## Inputs and architecture
 
@@ -184,8 +184,10 @@ smoke tests establish executability only. Freeze the LLM for the first detector
 comparison; targeted SFT/DAgger comes after the screen and threshold policy are
 validated.
 
-Validated locally on this branch: **315 tests and 111 subtests passed**, covering
+Validated locally after the physical training run: **332 tests and 111 subtests passed**, covering
 the GNN suite, shared numerical foundations, provider WLS, acquisition routing,
 production protocol gates, and canonical protocol bridging. The recorded
-pipeline roundtrip includes loading its temporary checkpoint/calibration through
-the inference adapter; it remains a software test, not detection evidence.
+pipeline roundtrip remains a software test. The separately saved physical pilot
+includes independent corpus/metric audits and an actual trained-checkpoint
+CPU/GPU inference comparison. These checks and its detection results are linked
+from the [experiment report](results/ieee14_v1_20260916/README.md).

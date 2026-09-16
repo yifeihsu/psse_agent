@@ -26,7 +26,8 @@ def _draw_rate(ax, y, item, color, label=None, offset=0., height=.5):
             edgecolor="#333333", linewidth=.45)
     if error is not None:
         ax.errorbar(value, y + offset, xerr=error, fmt="none", ecolor="#252525", capsize=3, linewidth=1)
-    ax.annotate(f"{value:.1f}%", (value, y + offset), xytext=(5, 0),
+    label_x = max(value, interval[1] * 100) if interval else value
+    ax.annotate(f"{value:.1f}%", (label_x, y + offset), xytext=(5, 0),
                 textcoords="offset points", va="center", fontsize=9)
 
 
@@ -78,14 +79,25 @@ def render(evaluation_path, output_dir, training_path=None):
         paths.append(str(target.resolve()))
     plt.close(fig)
 
-    severity = evaluation["by_family_and_severity"]
-    keys = [key for key in severity if key.startswith(("hif/", "unbalance/"))]
+    # Pure-fault curves must not borrow detectability from a gross competing
+    # measurement/topology error in a mixed episode.
+    from .evaluate import grouped_rate
+    severity, severity_wls = {}, {}
+    for index, family in enumerate(("hif", "unbalance")):
+        pure = [r for r in evaluation["predictions"] if all(r["labels"]["family_mask"])
+                and r["labels"]["family"][index] and sum(r["labels"]["family"]) == 1]
+        for label in sorted({r["severity"] for r in pure}):
+            subset = [r for r in pure if r["severity"] == label]
+            key = f"{family}/{label}"
+            severity[key] = grouped_rate(subset, [r["phase_score"] > evaluation["calibration"]["phase_threshold"] for r in subset])
+            severity_wls[key] = grouped_rate(subset, [bool(r["wls_alarm"]) for r in subset])
+    keys = list(severity)
     order = {"weak": 0, "intermediate": 1, "strong": 2}
     keys.sort(key=lambda key: (key.split("/")[0], order.get(key.split("/")[1], 3), key))
     fig, ax = plt.subplots(figsize=(11.5, max(4.5, len(keys) * .65 + 1.9)))
     for idx, key in enumerate(keys):
         _draw_rate(ax, idx, severity[key], COLORS["gnn"], "GNN phase screen" if idx == 0 else None, -.17, .28)
-        baseline = evaluation.get("by_family_and_severity_wls", {}).get(key)
+        baseline = severity_wls.get(key)
         _draw_rate(ax, idx, baseline, COLORS["wls"], "Configured WLS" if idx == 0 else None, .17, .28)
     ax.set_yticks(range(len(keys)), [f"{key.replace('/', ' · ')}  (n={severity[key]['count']:,})" for key in keys])
     ax.invert_yaxis()
@@ -95,9 +107,9 @@ def render(evaluation_path, output_dir, training_path=None):
     ax.grid(axis="x", color="#E5E5E5", linewidth=.6)
     ax.set_axisbelow(True)
     ax.legend(loc="upper center", bbox_to_anchor=(.5, 1.13), ncol=2, frameon=False)
-    fig.suptitle("Detection by fault family and severity", x=.01, ha="left", fontsize=16)
-    fig.text(.01, .02, "Held-out physical parents; noisy windows from the same parent remain grouped. "
-             "Mixed-fault windows can appear in both families.\n"
+    fig.suptitle("Phase recall on pure faults, by severity", x=.01, ha="left", fontsize=16)
+    fig.text(.01, .02, "Single-family episodes only; mixed faults are excluded. "
+             "Noisy windows from the same physical parent remain grouped.\n"
              "Error bars: 95% parent-bootstrap intervals. A zero-width interval cannot bound unseen events.", fontsize=9)
     fig.tight_layout(rect=(0, .10, 1, .94))
     for suffix in ("png", "svg"):
@@ -106,15 +118,51 @@ def render(evaluation_path, output_dir, training_path=None):
         paths.append(str(target.resolve()))
     plt.close(fig)
 
+    matrix = evaluation.get("family_trigger_matrix", {})
+    if matrix and any(matrix.values()):
+        from .feature_schema import FAMILY_NAMES
+        available_heads = next(row for row in matrix.values() if row)
+        heads = [name for name in FAMILY_NAMES if name in available_heads]
+        row_names = [name for name in ("healthy", *heads, "mixed") if name in matrix]
+        values = np.asarray([[100 * matrix[row][head]["rate"]
+                              if matrix[row][head]["rate"] is not None else np.nan
+                              for head in heads] for row in row_names])
+        fig, ax = plt.subplots(figsize=(9.5, 6.2))
+        im = ax.imshow(values, vmin=0, vmax=100, cmap="Blues", aspect="auto")
+        ax.set_xticks(range(len(heads)), heads)
+        ax.set_yticks(range(len(row_names)), [f"{name} (n={matrix[name][heads[0]]['count']:,})" for name in row_names])
+        ax.set_xlabel("Triggered family head")
+        ax.set_ylabel("True episode family")
+        for i in range(len(row_names)):
+            for j in range(len(heads)):
+                if np.isfinite(values[i, j]):
+                    ax.text(j, i, f"{values[i,j]:.1f}%", ha="center", va="center",
+                            color="white" if values[i, j] > 55 else "#222222", fontsize=10)
+        fig.colorbar(im, ax=ax, label="Windows triggering the head (%)", shrink=.85)
+        fig.suptitle("Family decisions at healthy-calibrated thresholds", x=.01, ha="left", fontsize=15)
+        fig.text(.01, .02, "Each head uses its own healthy-calibration 99th percentile. "
+                 "Single-family rows exclude mixed episodes.\n"
+                 "Heads are independent: percentages across a row do not sum to 100%. Parent intervals are retained in evaluation.json.", fontsize=9)
+        fig.tight_layout(rect=(0, .10, 1, .94))
+        for suffix in ("png", "svg"):
+            target = output / f"family_trigger_matrix.{suffix}"
+            fig.savefig(target, dpi=180, bbox_inches="tight")
+            paths.append(str(target.resolve()))
+        plt.close(fig)
+
     if training_path:
         training = json.loads(Path(training_path).read_text(encoding="utf-8"))
         history = training["history"]
         fig, ax = plt.subplots(figsize=(9.5, 4.7))
         palette = ["#236A9E", "#B89B35", "#D66C33", "#78814C", "#B95D8B"]
+        styles = ["-", "--", ":", "-.", (0, (5, 1, 1, 1))]
+        markers = ["o", "s", "^", "D", "v"]
         for idx, seed in enumerate(sorted({row["seed"] for row in history})):
             points = [row for row in history if row["seed"] == seed]
             ax.plot([r["epoch"] for r in points], [100 * r["phase_recall"] for r in points],
-                    label=f"Seed {seed}", color=palette[idx % len(palette)], linewidth=1.6)
+                    label=f"Seed {seed}", color=palette[idx % len(palette)], linewidth=1.6,
+                    linestyle=styles[idx % len(styles)], marker=markers[idx % len(markers)],
+                    markersize=3, markevery=max(1, len(points) // 5))
         ax.set(xlabel="Training epoch", ylabel="Validation phase recall (%)", ylim=(0, 100))
         ax.grid(color="#E5E5E5", linewidth=.6)
         ax.legend(ncol=5, loc="lower center", bbox_to_anchor=(.5, 1), frameon=False)
@@ -131,6 +179,8 @@ def render(evaluation_path, output_dir, training_path=None):
         "evaluation_path": str(source.resolve()), "evaluation_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
         "training_path": str(Path(training_path).resolve()) if training_path else None,
         "figures": paths, "units": "percentage", "intervals": "95% physical-parent percentile bootstrap",
+        "severity_scope": "pure single-family episodes only",
+        "pure_severity_rates": severity, "pure_severity_wls_rates": severity_wls,
     }, indent=2) + "\n", encoding="utf-8")
     return paths
 

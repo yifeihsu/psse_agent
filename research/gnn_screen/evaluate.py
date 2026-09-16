@@ -113,14 +113,27 @@ def summarize(predictions, calibration, trained_mask, *, bootstrap_replicates=10
                "phase_recall_among_wls_misses": rate([r for r in rows if not r["wls_alarm"]], trigger) if known_wls else None}
         for name, rows in compositions.items()
     }
+    complete = [r for r in predictions if all(r["labels"]["family_mask"])]
+    family_strata = {"healthy": [r for r in complete if not any(r["labels"]["family"])]}
+    family_strata.update({name: [r for r in complete if r["labels"]["family"][i]
+                                 and sum(r["labels"]["family"]) == 1]
+                         for i, name in enumerate(FAMILY_NAMES)})
+    family_strata["mixed"] = [r for r in complete if sum(r["labels"]["family"]) > 1]
+    result["family_trigger_matrix"] = {
+        stratum: {name: rate(rows, lambda r, idx=i, limit=calibration["family_thresholds"][name]: r["family_scores"][idx] > limit)
+                  for i, name in enumerate(FAMILY_NAMES) if name in calibration.get("family_thresholds", {}) and trained_mask[i]}
+        for stratum, rows in family_strata.items()
+    }
     if known_wls:
         missed_phase = [r for r in phase if not r["wls_alarm"]]
         result.update({
             "phase_recall_among_wls_misses": rate(missed_phase, trigger),
             "wls_phase_recall": rate(phase, lambda r: bool(r["wls_alarm"])),
             "wls_healthy_false_trigger_rate": rate(healthy, lambda r: bool(r["wls_alarm"])),
+            "wls_nonphase_fault_trigger_rate": rate(nonphase, lambda r: bool(r["wls_alarm"])),
             "union_phase_recall": rate(phase, lambda r: trigger(r) or bool(r["wls_alarm"])),
             "union_healthy_false_trigger_rate": rate(healthy, lambda r: trigger(r) or bool(r["wls_alarm"])),
+            "union_nonphase_fault_trigger_rate": rate(nonphase, lambda r: trigger(r) or bool(r["wls_alarm"])),
             "union_acquisition_fraction": rate(predictions, lambda r: trigger(r) or bool(r["wls_alarm"])),
             "paired_phase_recall_gain_over_wls": rate(phase, lambda r: float(trigger(r)) - float(bool(r["wls_alarm"]))),
         })
