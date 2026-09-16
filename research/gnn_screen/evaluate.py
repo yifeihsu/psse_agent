@@ -72,6 +72,16 @@ def summarize(predictions, calibration, trained_mask, *, bootstrap_replicates=10
         by_family[name] = {"head_trained": bool(trained_mask[i]), "phase_trigger": rate(rows, trigger),
             "mean_family_score_positive": float(np.mean([r["family_scores"][i] for r in rows])) if rows and trained_mask[i] else None,
             "family_score_discrimination": family_ranking_metrics(predictions, i) if trained_mask[i] else None}
+        family_threshold = calibration.get("family_thresholds", {}).get(name)
+        if family_threshold is not None and trained_mask[i]:
+            negative = [r for r in predictions if r["labels"]["family_mask"][i] and not r["labels"]["family"][i]]
+            family_trigger = lambda r, idx=i, limit=family_threshold: r["family_scores"][idx] > limit
+            by_family[name].update({
+                "family_threshold": family_threshold,
+                "family_recall": rate(rows, family_trigger),
+                "family_false_positive_rate": rate(negative, family_trigger),
+                "family_healthy_trigger_rate": rate(healthy, family_trigger),
+            })
         for severity in sorted({r["severity"] for r in rows}):
             subset = [r for r in rows if r["severity"] == severity]
             by_severity[f"{name}/{severity}"] = rate(subset, trigger)
@@ -92,8 +102,21 @@ def summarize(predictions, calibration, trained_mask, *, bootstrap_replicates=10
         "uncertainty_method": "percentile bootstrap of physical parents, keeping every paired window together",
         "acquisition_cost_note": "Acquisition fractions are screening requests, not measured downstream diagnostic cost or recovery.",
     }
+    compositions = {
+        "pure_hif": [r for r in phase if r["labels"]["family"] == [1.0, 0.0, 0.0, 0.0, 0.0]],
+        "pure_unbalance": [r for r in phase if r["labels"]["family"] == [0.0, 1.0, 0.0, 0.0, 0.0]],
+        "mixed_phase": [r for r in phase if sum(r["labels"]["family"]) > 1],
+    }
+    result["by_phase_composition"] = {
+        name: {"phase_recall": rate(rows, trigger),
+               "wls_phase_recall": rate(rows, lambda r: bool(r["wls_alarm"])) if known_wls else None,
+               "phase_recall_among_wls_misses": rate([r for r in rows if not r["wls_alarm"]], trigger) if known_wls else None}
+        for name, rows in compositions.items()
+    }
     if known_wls:
+        missed_phase = [r for r in phase if not r["wls_alarm"]]
         result.update({
+            "phase_recall_among_wls_misses": rate(missed_phase, trigger),
             "wls_phase_recall": rate(phase, lambda r: bool(r["wls_alarm"])),
             "wls_healthy_false_trigger_rate": rate(healthy, lambda r: bool(r["wls_alarm"])),
             "union_phase_recall": rate(phase, lambda r: trigger(r) or bool(r["wls_alarm"])),
@@ -101,11 +124,28 @@ def summarize(predictions, calibration, trained_mask, *, bootstrap_replicates=10
             "union_acquisition_fraction": rate(predictions, lambda r: trigger(r) or bool(r["wls_alarm"])),
             "paired_phase_recall_gain_over_wls": rate(phase, lambda r: float(trigger(r)) - float(bool(r["wls_alarm"]))),
         })
+        result["by_family_and_severity_wls"] = {
+            key: rate([r for r in predictions if r["labels"]["family_mask"][FAMILY_NAMES.index(key.split('/')[0])]
+                       and r["labels"]["family"][FAMILY_NAMES.index(key.split('/')[0])]
+                       and r["severity"] == key.split('/', 1)[1]], lambda r: bool(r["wls_alarm"]))
+            for key in by_severity
+        }
+    matched_limit = calibration.get("matched_wls_threshold")
+    if matched_limit is not None and all(r.get("wls_score") is not None for r in predictions):
+        matched = lambda r: r["wls_score"] > matched_limit
+        result["matched_budget_wls"] = {
+            "threshold": matched_limit,
+            "healthy_false_trigger_rate": rate(healthy, matched),
+            "phase_recall": rate(phase, matched),
+            "nonphase_fault_trigger_rate": rate(nonphase, matched),
+            "gnn_recall_among_matched_wls_misses": rate([r for r in phase if not matched(r)], trigger),
+            "paired_phase_recall_gain_over_wls": rate(phase, lambda r: float(trigger(r)) - float(matched(r))),
+        }
     return result
 
 
 def evaluate(manifest, checkpoint_path, calibration_path, output, *, cache_dir=None,
-             device="cpu", allow_new_parents=False, bootstrap_replicates=1000, seed=2026):
+             device="cpu", allow_new_parents=False, bootstrap_replicates=1000, seed=2026, workers=1):
     model, scaler, checkpoint = load_trained_model(checkpoint_path, device)
     calibration = json.loads(Path(calibration_path).read_text(encoding="utf-8"))
     if calibration["checkpoint_sha256"] != file_sha256(checkpoint_path) or calibration["model_id"] != checkpoint["model_id"]:
@@ -113,7 +153,7 @@ def evaluate(manifest, checkpoint_path, calibration_path, output, *, cache_dir=N
     if calibration.get("threshold_comparison") != ">":
         raise ValueError("unsupported threshold comparison")
     corpus = prepare_corpus(manifest, cache_dir=cache_dir,
-                            split_seed=checkpoint["training_config"]["split_seed"])
+                            split_seed=checkpoint["training_config"]["split_seed"], workers=workers)
     parents = validate_heldout_parents(corpus.parent_splits, checkpoint, "test", allow_new_parents=allow_new_parents)
     if set(parents) & set(calibration["calibration_parent_ids"]):
         raise ValueError("test parents overlap independent calibration parents")
@@ -152,13 +192,17 @@ def main(argv=None):
     parser.add_argument("--output", required=True)
     parser.add_argument("--cache-dir")
     parser.add_argument("--device", default="cpu")
+    parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--torch-threads", type=int, default=1)
     parser.add_argument("--allow-new-parents", action="store_true")
     parser.add_argument("--bootstrap-replicates", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=2026)
     args = parser.parse_args(argv)
+    import torch
+    torch.set_num_threads(args.torch_threads)
     result = evaluate(args.manifest, args.checkpoint, args.calibration, args.output,
         cache_dir=args.cache_dir, device=args.device, allow_new_parents=args.allow_new_parents,
-        bootstrap_replicates=args.bootstrap_replicates, seed=args.seed)
+        bootstrap_replicates=args.bootstrap_replicates, seed=args.seed, workers=args.workers)
     print(f"evaluated {result['valid_test_windows']} valid windows; see {args.output}")
 
 

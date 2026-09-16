@@ -9,8 +9,13 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import io
 import json
+import sqlite3
+import time
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -173,18 +178,98 @@ class Corpus:
         return [sample for sample in self.samples if sample.split == name]
 
 
-def prepare_corpus(manifest: str | Path, *, cache_dir: str | Path | None = None,
-                   split_seed: int = 2026, graph_builder=None) -> Corpus:
+def _worker_init() -> None:
+    # A WLS solve has tiny dense matrices; many BLAS threads per process only
+    # oversubscribe the machine. Keep one native thread in each worker.
+    from threadpoolctl import threadpool_limits
+    global _worker_thread_limit
+    _worker_thread_limit = threadpool_limits(limits=1)
+
+
+def _build_task(task, builder=None):
     from .graph_builder import build_graph
     from .wls_features import ScreenInputError
+    case, observed, sigma, settings = task
+    try:
+        return {"graph": (builder or build_graph)(case, observed, measurement_sigma=sigma, solver_settings=settings)}
+    except ScreenInputError as exc:
+        return {"invalid": {"screen_status": getattr(exc, "status", "unavailable"), "reason": str(exc)}}
 
-    builder = graph_builder or build_graph
+
+def _cache_code_hash() -> str:
+    """Numerical implementation changes invalidate previously built graphs."""
+    here = Path(__file__).resolve().parent
+    paths = [here / name for name in ("feature_schema.py", "graph_builder.py", "wls_features.py")]
+    paths.extend(here.parents[1] / "tools" / name for name in ("lagrangian_port.py", "branch_param_jacobian.py"))
+    return content_hash({str(path.name): file_sha256(path) for path in paths})
+
+
+def _encode_cache(result) -> bytes:
+    stream = io.BytesIO()
+    if "graph" in result:
+        graph = result["graph"]
+        arrays = {name: graph[name] for name in ("x", "edge_index", "edge_attr", "u", "edge_pair")}
+        metadata = {"metadata": graph.get("metadata", {})}
+    else:
+        arrays, metadata = {}, result
+    np.savez(stream, **arrays, description=np.frombuffer(json.dumps(jsonable(metadata), allow_nan=False).encode(), dtype=np.uint8))
+    return stream.getvalue()
+
+
+def _decode_cache(payload: bytes):
+    with np.load(io.BytesIO(payload), allow_pickle=False) as archive:
+        metadata = json.loads(archive["description"].tobytes())
+        if "invalid" in metadata:
+            return metadata
+        return {"graph": {**{name: archive[name] for name in ("x", "edge_index", "edge_attr", "u", "edge_pair")}, **metadata}}
+
+
+def prepare_corpus(manifest: str | Path, *, cache_dir: str | Path | None = None,
+                   split_seed: int = 2026, graph_builder=None, workers: int = 1,
+                   progress: bool = False) -> Corpus:
+    """Build deterministic noisy graphs, optionally in bounded CPU workers.
+
+    One parent process owns the compact SQLite cache. Payloads are NumPy arrays
+    and JSON (never pickle), keyed by observations, covariance, solver and code.
+    Labels remain in manifest rows, outside graph construction and cache keys.
+    """
+    if not isinstance(workers, int) or isinstance(workers, bool) or workers < 1:
+        raise ValueError("workers must be a positive integer")
+    if graph_builder is not None and workers != 1:
+        raise ValueError("custom graph_builder requires workers=1")
     records = load_manifest(manifest)
     parent_splits = assign_parent_splits(records, seed=split_seed)
     cache = Path(cache_dir) if cache_dir else None
     if cache:
         cache.mkdir(parents=True, exist_ok=True)
-    samples, invalid = [], []
+    database = sqlite3.connect(cache / "graphs.sqlite3") if cache else None
+    if database:
+        database.execute("CREATE TABLE IF NOT EXISTS graphs (fingerprint TEXT PRIMARY KEY, payload BLOB NOT NULL)")
+    samples, invalid, pending = [], [], []
+    sample_order = {}
+    code_hash = _cache_code_hash()
+    started, hits, completed = time.monotonic(), 0, 0
+
+    def collect(row, window, fingerprint, result, *, store=False):
+        nonlocal completed
+        if "graph" in result:
+            graph = result["graph"]
+            graph["metadata"] = {**graph.get("metadata", {}), "cache_fingerprint": fingerprint,
+                                 "measurement_window": window}
+            samples.append(Sample(graph, copy.deepcopy(row["labels"]), row["parent_id"], row["split"],
+                                  row["severity"], window, row.get("offline_metadata", {})))
+        else:
+            invalid.append({"parent_id": row["parent_id"], "split": row["split"], "window_id": window,
+                            **result["invalid"], "labels": row["labels"], "severity": row["severity"]})
+        if store and database:
+            database.execute("INSERT OR REPLACE INTO graphs VALUES (?, ?)", (fingerprint, _encode_cache(result)))
+        completed += 1
+        if completed % 100 == 0:
+            if database:
+                database.commit()
+            if progress:
+                print(f"graphs={completed} cached={hits} invalid={len(invalid)} elapsed_s={time.monotonic()-started:.1f}", flush=True)
+
     for row in records:
         case, z = row["case"], np.asarray(row["z"], dtype=np.float64)
         if z.ndim != 1 or not np.all(np.isfinite(z)):
@@ -212,27 +297,35 @@ def prepare_corpus(manifest: str | Path, *, cache_dir: str | Path | None = None,
         for replicate in range(reps):
             observed = z + rng.normal(size=z.shape) * sigma if kind == "noiseless_mean" else z.copy()
             window = row["window_id"] + (f":noise{replicate}" if kind == "noiseless_mean" else "")
-            fingerprint = content_hash({"schema": FEATURE_SCHEMA_VERSION, "window": window,
+            sample_order[(row["parent_id"], window)] = len(sample_order)
+            fingerprint = content_hash({"schema": FEATURE_SCHEMA_VERSION, "code_hash": code_hash, "window": window,
                 "case": case, "measurements": observed, "covariance_diagonal": sigma ** 2,
                 "solver_settings": settings, "measurement_convention": MEASUREMENT_CONVENTION})
-            cached = cache / f"{fingerprint}.json" if cache else None
-            try:
-                if cached and cached.exists():
-                    graph = json.loads(cached.read_text(encoding="utf-8"))
-                    for name in ("x", "edge_index", "edge_attr", "u", "edge_pair"):
-                        graph[name] = np.asarray(graph[name], dtype=np.int64 if name in ("edge_index", "edge_pair") else np.float64)
-                else:
-                    graph = builder(case, observed, measurement_sigma=sigma, solver_settings=settings)
-                    graph["metadata"] = {**graph.get("metadata", {}), "cache_fingerprint": fingerprint,
-                                         "measurement_window": window}
-                    if cached:
-                        write_json(cached, graph)
-                samples.append(Sample(graph, copy.deepcopy(row["labels"]), row["parent_id"], row["split"],
-                                      row["severity"], window, row.get("offline_metadata", {})))
-            except ScreenInputError as exc:
-                invalid.append({"parent_id": row["parent_id"], "split": row["split"], "window_id": window,
-                                "screen_status": getattr(exc, "status", "unavailable"), "reason": str(exc),
-                                "labels": row["labels"], "severity": row["severity"]})
+            cached = database.execute("SELECT payload FROM graphs WHERE fingerprint=?", (fingerprint,)).fetchone() if database else None
+            if cached:
+                hits += 1
+                collect(row, window, fingerprint, _decode_cache(cached[0]))
+            else:
+                pending.append((row, window, fingerprint, (case, observed, sigma, settings)))
+    if progress:
+        print(f"corpus cache_hits={hits} pending={len(pending)} workers={workers}", flush=True)
+    try:
+        from threadpoolctl import threadpool_limits
+        with threadpool_limits(limits=1):
+            with (ProcessPoolExecutor(max_workers=workers, initializer=_worker_init) if workers > 1 and pending else nullcontext()) as pool:
+                results = (pool.map(_build_task, (item[3] for item in pending), chunksize=8) if pool else
+                           (_build_task(item[3], graph_builder) for item in pending))
+                for (row, window, fingerprint, _), result in zip(pending, results):
+                    collect(row, window, fingerprint, result, store=True)
+    finally:
+        if database:
+            database.commit()
+            database.close()
+    # Cache hits and newly built rows retain the same manifest/window order.
+    samples.sort(key=lambda sample: sample_order[(sample.parent_id, sample.window_id)])
+    invalid.sort(key=lambda row: sample_order[(row["parent_id"], row["window_id"])])
+    if progress:
+        print(f"corpus complete valid={len(samples)} invalid={len(invalid)} elapsed_s={time.monotonic()-started:.1f}", flush=True)
     return Corpus(samples, invalid, parent_splits)
 
 
@@ -248,8 +341,9 @@ def main(argv=None) -> None:
     parser.add_argument("--cache-dir", required=True)
     parser.add_argument("--report", required=True)
     parser.add_argument("--split-seed", type=int, default=2026)
+    parser.add_argument("--workers", type=int, default=1)
     args = parser.parse_args(argv)
-    corpus = prepare_corpus(args.manifest, cache_dir=args.cache_dir, split_seed=args.split_seed)
+    corpus = prepare_corpus(args.manifest, cache_dir=args.cache_dir, split_seed=args.split_seed, workers=args.workers, progress=True)
     write_json(args.report, {"valid_graphs": dict(Counter(s.split for s in corpus.samples)),
                             "invalid": corpus.invalid, "parent_splits": corpus.parent_splits,
                             "trained_family_mask": dict(zip(FAMILY_NAMES, trained_family_mask(corpus.split("train"))))})

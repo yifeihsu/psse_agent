@@ -153,6 +153,18 @@ def _element_terminal(dss: Any, element: str, terminal: int) -> dict[str, Any]:
     nterm = int(dss.CktElement.NumTerminals())
     if terminal < 1 or terminal > nterm:
         raise ValueError(f"Invalid terminal {terminal} for {element}")
+    if not bool(dss.CktElement.Enabled()):
+        # OpenDSS never initializes NodeOrder for assets disabled at compile
+        # time. Their physical terminal currents/powers are zero. Read only
+        # the declared terminal node identity, preserving fixed sensor rows.
+        bus_ref = str(dss.CktElement.BusNames()[terminal - 1]).lower().split(".")
+        declared = ([int(node) for node in bus_ref[1:]] if len(bus_ref) > 1
+                    else list(range(1, int(dss.CktElement.NumPhases()) + 1)))
+        phase_nodes = [node for node in declared if node in PHASES]
+        if len(phase_nodes) != len(set(phase_nodes)):
+            raise ValueError(f"Duplicate phase at {element} terminal {terminal}")
+        return {"current_a": [0j] * 3, "power_va": [0j] * 3,
+                "phase_nodes": sorted(phase_nodes), "bus": bus_ref[0]}
     nodes = list(dss.CktElement.NodeOrder())
     currents = _complex_array(list(dss.CktElement.Currents()), f"{element} currents")
     powers = _complex_array(list(dss.CktElement.Powers()), f"{element} powers")

@@ -99,19 +99,22 @@ def collate_graphs(
     for graph_id, graph in enumerate(graphs):
         if graph.get("screen_status", "valid") != "valid":
             raise ValueError("An unavailable screen must not enter the GNN as a negative example")
-        x = torch.as_tensor(graph["x"], dtype=torch.float32, device=target_device)
-        edges = torch.as_tensor(graph["edge_index"], dtype=torch.long, device=target_device)
-        attrs = torch.as_tensor(graph["edge_attr"], dtype=torch.float32, device=target_device)
-        u = torch.as_tensor(graph["u"], dtype=torch.float32, device=target_device)
-        pairs = torch.as_tensor(graph["edge_pair"], dtype=torch.long, device=target_device)
+        # Validate small individual graphs on CPU, then transfer the assembled
+        # batch once. Per-graph CUDA validation caused thousands of device
+        # synchronizations per training step for the tiny IEEE-14 graphs.
+        x = torch.as_tensor(graph["x"], dtype=torch.float32, device="cpu")
+        edges = torch.as_tensor(graph["edge_index"], dtype=torch.long, device="cpu")
+        attrs = torch.as_tensor(graph["edge_attr"], dtype=torch.float32, device="cpu")
+        u = torch.as_tensor(graph["u"], dtype=torch.float32, device="cpu")
+        pairs = torch.as_tensor(graph["edge_pair"], dtype=torch.long, device="cpu")
         if u.shape not in ((4,), (1, 4)):
             raise ValueError("Each input graph must have u with shape [4] or [1,4]")
         branch_count = int(pairs.max()) + 1 if pairs.numel() else 0
         local = {
             "x": x, "edge_index": edges, "edge_attr": attrs, "u": u.reshape(1, 4),
-            "node_batch": torch.zeros(x.shape[0], dtype=torch.long, device=target_device),
+            "node_batch": torch.zeros(x.shape[0], dtype=torch.long),
             "edge_pair": pairs,
-            "branch_batch": torch.zeros(branch_count, dtype=torch.long, device=target_device),
+            "branch_batch": torch.zeros(branch_count, dtype=torch.long),
         }
         _validate_batch(local)
         fields["x"].append(x)
@@ -125,7 +128,7 @@ def collate_graphs(
         node_offset += x.shape[0]
         branch_offset += branch_count
     result = {
-        key: torch.cat(parts, dim=1 if key == "edge_index" else 0)
+        key: torch.cat(parts, dim=1 if key == "edge_index" else 0).to(target_device)
         for key, parts in fields.items()
     }
     result["metadata"] = metadata
