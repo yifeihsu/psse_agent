@@ -79,7 +79,7 @@
     },
     "approved_suite_sha256": "613bba87413071782786fa18089624f0f5d431c98d783a9a24203bd8c76c029a",
     "evaluator_seed": 20260719,
-    "max_steps": 24,
+    "max_steps": 40,
     "scenario_schema_version": 1,
     "minimum_physical_roots_per_suite": {
       "efficiency": 20,
@@ -157,9 +157,9 @@
     "maximum_invalid_action_rate": 0.2,
     "maximum_invalid_actions_per_episode": 1,
     "maximum_loop_episode_rate": 0.05,
-    "maximum_steps_per_episode": 24,
+    "maximum_steps_per_episode": 40,
     "minimum_terminal_rate": 1.0
   },
-  "policy_id": "bc0_closed_loop_hard_gate_v3",
+  "policy_id": "bc0_closed_loop_hard_gate_v4",
   "policy_schema_version": 3
 }

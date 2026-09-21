@@ -20,6 +20,7 @@ from typing import Any, Mapping, Sequence
 from psse_env.dagger.evaluator import evaluate_rollout_suites
 from psse_env.dagger.release_factories import production_environment_factory
 from psse_env.dagger.research_policy_factory import research_gemma_policy_factory
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT
 from psse_env.research_models import (
     GEMMA4_12B,
     GEMMA4_E4B,
@@ -922,7 +923,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--lora-rank", type=int, default=16)
     result.add_argument("--lora-alpha", type=int, default=16)
     result.add_argument("--closed-loop-scenarios", type=int, default=3)
-    result.add_argument("--closed-loop-max-steps", type=int, default=8)
+    result.add_argument("--closed-loop-max-steps", type=int, default=DEFAULT_EPISODE_ACTION_LIMIT)
     result.add_argument("--seed", type=int, default=20260720)
     result.add_argument("--allow-download", action="store_true")
     result.add_argument("--no-load-in-4bit", action="store_true")

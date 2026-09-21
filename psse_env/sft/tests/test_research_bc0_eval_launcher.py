@@ -32,7 +32,8 @@ def test_bc0_eval_launcher_is_phase_gated_offline_and_bounded() -> None:
         "nvidia_smi_${RESEARCH_EVAL_PHASE}_${SLURM_JOB_ID}.csv",
         "python -m psse_env.sft research-bc0-eval",
         '--phase "$RESEARCH_EVAL_PHASE"',
-        '--max-steps 24',
+        'EPISODE_MAX_STEPS=${EPISODE_MAX_STEPS:-40}',
+        '--max-steps "$EPISODE_MAX_STEPS"',
         'eval_args+=(--d0-report "$D0_REPORT")',
     ):
         assert expected in launcher

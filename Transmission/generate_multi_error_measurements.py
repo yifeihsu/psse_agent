@@ -43,6 +43,7 @@ from Transmission.generate_measurements import (  # noqa: E402
     make_no_error_record,
     make_parameter_error_record,
     make_topology_error_record,
+    scada_noise_fields,
     sigma_vector,
     write_ppc_as_matpower_m,
 )
@@ -169,6 +170,7 @@ def _stage_snapshot(
     remaining_families: Sequence[str],
     note: str,
     z_obs: Sequence[float] | None = None,
+    sigma_z: Sequence[float] | None = None,
     case_path_policy: str | None = None,
     z_obs_policy: str | None = None,
 ) -> dict[str, Any]:
@@ -179,10 +181,16 @@ def _stage_snapshot(
     }
     if z_obs is not None:
         snapshot["z_obs"] = np.asarray(z_obs, dtype=float).tolist()
+        sigma = np.asarray(sigma_z, dtype=float)
+        if sigma.shape != np.asarray(z_obs).shape or not np.all(np.isfinite(sigma)) or np.any(sigma <= 0):
+            raise ValueError("Materialized verification snapshots need matching positive sigma_z")
+        snapshot["sigma_z"] = sigma.tolist()
     if case_path_policy:
         snapshot["case_path_policy"] = case_path_policy
     if z_obs_policy:
         snapshot["z_obs_policy"] = z_obs_policy
+        if z_obs_policy == "preserve_current_z_obs":
+            snapshot["sigma_z_policy"] = "preserve_current_sigma_z"
     return snapshot
 
 
@@ -375,17 +383,19 @@ def _make_parameter_context(
 
 def _copy_auxiliary_fields(target: dict[str, Any], family: str, component: Mapping[str, Any]) -> None:
     if family == "parameter_error":
-        for key in ("z_scans", "initial_states", "parameter_error_case_path", "correction_case_path"):
+        for key in ("z_scans", "sigma_z_scans", "initial_states", "parameter_error_case_path", "correction_case_path"):
             if key in component:
                 target[key] = component[key]
     elif family == "topology_error":
-        for key in ("z_true_full_model", "corrected_model_path"):
+        for key in ("z_true_full_model", "z_clean_full_model", "sigma_z_full_model", "z_true_full_model_role", "corrected_model_path"):
             if key in component:
                 target[key] = component[key]
     elif family == "harmonic_anomaly":
         for key in ("harmonic_measurements", "harmonic_orders"):
             if key in component:
                 target[key] = component[key]
+        if "noise_contract" in component:
+            target["harmonic_noise_contract"] = deepcopy(component["noise_contract"])
 
 
 def _make_component_factories(
@@ -711,7 +721,9 @@ def _make_physically_coupled_parameter_topology_record(
     # effect after topology correction is at the noise floor.
     if float(np.sum(signal * signal) / max(1, signal.shape[0])) < 0.5:
         return None
-    shared_noise = 0.5 * base_gaussian_noise(z_true_nominal, idx_map_full, DEFAULT_SIGMAS, rng)
+    # Reuse one full-covariance sensor draw for these paired comparisons.
+    # They have matched marginal noise, but are not independent replicates.
+    shared_noise = base_gaussian_noise(z_true_nominal, idx_map_full, DEFAULT_SIGMAS, rng)
     z_obs_param_faulty = z_true_param_faulty + shared_noise
     z_obs_nominal = z_true_nominal + shared_noise
 
@@ -793,6 +805,7 @@ def _make_physically_coupled_parameter_topology_record(
         "post_topology_correction": _stage_snapshot(
             case_path=str(corrected_model_path),
             z_obs=post_topology_z,
+            sigma_z=sigma_full,
             remaining_families=_remaining_after_correction(families, "topology_error"),
             note=(
                 "Topology model corrected; the same physical line-parameter fault remains "
@@ -802,6 +815,7 @@ def _make_physically_coupled_parameter_topology_record(
         "post_parameter_correction": _stage_snapshot(
             case_path=str(corrected_model_path),
             z_obs=post_parameter_z,
+            sigma_z=sigma_full,
             remaining_families=_remaining_after_correction(families, "parameter_error"),
             note="Parameter model corrected on the topology-corrected network.",
         ),
@@ -813,6 +827,7 @@ def _make_physically_coupled_parameter_topology_record(
         verification_snapshots["post_measurement_correction"] = _stage_snapshot(
             case_path=str(corrected_model_path),
             z_obs=post_measurement_z,
+            sigma_z=sigma_full,
             remaining_families=_remaining_after_correction(families, "measurement_error"),
             note="Gross measurement component removed after structural corrections.",
         )
@@ -847,6 +862,7 @@ def _make_physically_coupled_parameter_topology_record(
         "scenario": "multi_error",
         "z_true": z_true_initial.astype(float).tolist(),
         "z_obs": z_obs.astype(float).tolist(),
+        **scada_noise_fields(idx_map),
         "label": {
             "error_type": "multi_error",
             "combo": combo_key(families),
@@ -861,8 +877,13 @@ def _make_physically_coupled_parameter_topology_record(
         },
         "verification_snapshots": verification_snapshots,
         "z_true_full_model": z_obs_param_faulty.astype(float).tolist(),
+        "z_clean_full_model": z_true_param_faulty.astype(float).tolist(),
+        "sigma_z_full_model": sigma_full.tolist(),
+        "z_true_full_model_role": "noisy_verification_snapshot_despite_legacy_field_name",
+        "verification_noise_dependency": "same full-covariance draw reused after topology and parameter corrections; not independent replicates",
         "corrected_model_path": str(corrected_model_path),
         "z_scans": z_scans,
+        "sigma_z_scans": sigma_full.tolist(),
         "initial_states": initial_states,
         "parameter_error_case_path": str(parameter_case_path),
         "correction_case_path": str(parameter_case_path),
@@ -945,6 +966,7 @@ def make_multi_error_record(
         verification_snapshots["post_measurement_correction"] = _stage_snapshot(
             case_path=None,
             z_obs=z_obs_before_measurement_outlier,
+            sigma_z=base_component["sigma_z"],
             case_path_policy="preserve_current_case",
             remaining_families=_remaining_after_correction(families, "measurement_error"),
             note="Gross measurement component removed; other active families may remain.",
@@ -990,6 +1012,7 @@ def make_multi_error_record(
             verification_snapshots["post_topology_correction"] = _stage_snapshot(
                 case_path=topology_component.get("corrected_model_path"),
                 z_obs=topology_z_obs,
+                sigma_z=topology_component.get("sigma_z_full_model"),
                 z_obs_policy=None if topology_z_obs is not None else "preserve_current_z_obs",
                 remaining_families=_remaining_after_correction(families, "topology_error"),
                 note="Topology model corrected; preserve remaining data/model faults.",
@@ -1019,6 +1042,7 @@ def make_multi_error_record(
         "scenario": "multi_error",
         "z_true": z_true.astype(float).tolist(),
         "z_obs": z_obs.astype(float).tolist(),
+        **scada_noise_fields(idx_map),
         "label": {
             "error_type": "multi_error",
             "combo": combo_key(families),
@@ -1078,6 +1102,9 @@ def generate_dataset(
         "measurement_order": MEASUREMENT_ORDER,
         "branch_info": _branch_info(ppc_base),
         "sigmas": DEFAULT_SIGMAS,
+        "sigma_z": sigma_vector(idx_map, DEFAULT_SIGMAS).tolist(),
+        "seed": int(seed),
+        "noise_contract": scada_noise_fields(idx_map)["noise_contract"],
         "scenarios_emitted": ["multi_error"],
         "omitted_scenarios": ["three_phase_imbalance"],
         "multi_error": {

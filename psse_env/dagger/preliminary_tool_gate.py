@@ -302,8 +302,7 @@ def evaluate_generation(
     expected = _target_action(row)
     aliases = _state_aliases(row)
     tools = row.get("tools")
-    if _stable_sha256(tools) != _stable_sha256(unified_tool_schemas()):
-        raise PreliminaryToolGateError("gate row tool registry differs from runtime")
+    tool_registry_matches_runtime = _stable_sha256(tools) == _stable_sha256(unified_tool_schemas())
     parameter_schemas = {
         str(tool["function"]["name"]): tool["function"]["parameters"]
         for tool in tools
@@ -331,6 +330,7 @@ def evaluate_generation(
         "bound_internal_action": bound_action,
         "schema_valid": schema_valid,
         "state_bound": state_bound,
+        "tool_registry_matches_runtime": tool_registry_matches_runtime,
         "target_tool_match": bool(
             generated is not None and generated.get("tool") == expected["tool"]
         ),

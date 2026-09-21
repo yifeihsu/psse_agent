@@ -68,6 +68,7 @@ from psse_env.actions import (
     unexplained_signatures,
 )
 from psse_env.state_store import apply_modification
+from psse_env.noise_contract import resolve_state_measurement_noise, validate_shared_scada_covariance
 from psse_env.oracle.measurement_recovery_evidence import (
     measurement_targets_predating_branch_repair,
 )
@@ -455,6 +456,7 @@ class MatpowerDeploymentProviders:
         hif_alpha_grid_size: int = 31,
         hif_r_grid_size: int = 35,
         hif_max_scans: int = 10,
+        hif_resistance_search: str = "physical_ohm",
         harmonic_thd_threshold_percent: float = 1.0,
         hse_min_sse_reduction: float = 0.5,
         # Shared with the scenario generator so the policy-visible
@@ -476,6 +478,9 @@ class MatpowerDeploymentProviders:
             raise ValueError("screen_checkpoint and screen_calibration must be provided together")
         self.screen_checkpoint = str(screen_checkpoint) if screen_checkpoint else None
         self.screen_calibration = str(screen_calibration) if screen_calibration else None
+        if hif_resistance_search not in {"physical_ohm", "legacy_pu"}:
+            raise ValueError("hif_resistance_search must be physical_ohm or legacy_pu")
+        self.hif_resistance_search = hif_resistance_search
         self.top_k = int(top_k)
         # Research ablation: waive the branch partial-progress floor when the
         # branch target itself is resolved (see CandidateQualityOracle).
@@ -775,6 +780,34 @@ class MatpowerDeploymentProviders:
         return [float(value) for value in measurements]
 
     @staticmethod
+    def _noise_options(state: Mapping[str, Any], channel_count: int) -> dict[str, Any]:
+        contract = resolve_state_measurement_noise(state, channel_count)
+        options: dict[str, Any] = {}
+        if contract["measurement_sigma"] is not None:
+            options["measurement_sigma"] = contract["measurement_sigma"]
+        if contract["exact_measurement_indices"]:
+            options["exact_measurement_indices"] = contract["exact_measurement_indices"]
+        return options
+
+    @classmethod
+    def _correction_noise_options(cls, state: Mapping[str, Any], channel_count: int) -> dict[str, Any]:
+        options = cls._noise_options(state, channel_count)
+        sigma = options.pop("measurement_sigma", None)
+        if sigma is not None:
+            options["R_variances_full"] = np.square(sigma).tolist()
+        return options
+
+    @classmethod
+    def _parameter_noise_options(cls, state: Mapping[str, Any], scans: Mapping[str, Any],
+                                 z_scans: Sequence[Sequence[float]]) -> dict[str, Any]:
+        options = cls._noise_options(state, len(z_scans[0]))
+        sigma = scans.get("sigma_z", options.get("measurement_sigma"))
+        if sigma is None:
+            return {}
+        validate_shared_scada_covariance(sigma, [{"z_obs": row} for row in z_scans])
+        return {"R_variances_full": np.square(sigma).tolist()}
+
+    @staticmethod
     def _binding(state: Mapping[str, Any]) -> dict[str, Any]:
         binding: dict[str, Any] = {}
         if state.get("state_id") is not None:
@@ -789,10 +822,10 @@ class MatpowerDeploymentProviders:
         ppc = _load_python_case(case_path)
         nb = int(ppc["bus"].shape[0])
         nl = int(ppc["branch"].shape[0])
-        payload = (
-            _wls_json(case_path, z, include_screen_evidence=True)
-            if self.screen_checkpoint else _wls_json(case_path, z)
-        )
+        noise_options = self._noise_options(state, len(z))
+        if self.screen_checkpoint:
+            noise_options["include_screen_evidence"] = True
+        payload = _wls_json(case_path, z, **noise_options)
         return {
             "case_path": case_path,
             "z": z,
@@ -1325,7 +1358,7 @@ class MatpowerDeploymentProviders:
         """Apply the configured global and local tests to one observable solve."""
         payload = solved["payload"]
         residuals = [float(value) for value in payload.get("r") or []]
-        dof = max(1, len(residuals) - (2 * int(solved["nb"]) - 1))
+        dof = int(payload.get("dof", max(1, len(residuals) - (2 * int(solved["nb"]) - 1))))
         statistic = float(payload.get("global_residual_sum") or 0.0)
         threshold = float(chi2_threshold(dof, self.chi2_alpha))
         if (not residuals or any(not math.isfinite(value) for value in residuals)
@@ -2874,6 +2907,7 @@ class MatpowerDeploymentProviders:
         """
         from Transmission.ieee14_full_substation import (
             operator_model_from_map,
+            operator_noise_for_layout,
             operator_vector_for_layout,
             status_map_from_labels,
         )
@@ -2903,6 +2937,25 @@ class MatpowerDeploymentProviders:
             )
             telemetry = self._synchronized_telemetry(state, binding)
             measurements = operator_vector_for_layout(telemetry, layout)
+            operator_noise = operator_noise_for_layout(telemetry, layout)
+            covariance = np.asarray(operator_noise["measurement_covariance"], dtype=float)
+            if not np.array_equal(covariance, np.diag(np.diag(covariance))):
+                raise ValueError("correlated physical meter covariance requires a full-covariance WLS solver")
+            old_layout = self._metadata(state).get("operator_layout")
+            if isinstance(old_layout, Mapping):
+                source_measurements = np.asarray(self._measurements(state), dtype=float)
+                projected_source = operator_vector_for_layout(telemetry, old_layout)
+                old_noise = operator_noise_for_layout(telemetry, old_layout)
+                new_rows = {identity: row for row, identity in enumerate(operator_noise["measurement_ids"])}
+                # Single-meter updates already changed their physical source in
+                # _synchronized_telemetry. An aggregate meter discrepancy cannot
+                # be assigned to either equipment meter without new evidence.
+                # Preserve it only when its exact source combination survives.
+                for row in np.flatnonzero(np.abs(source_measurements - projected_source) > 1e-10):
+                    identity = old_noise["measurement_ids"][row]
+                    if identity not in new_rows:
+                        raise ValueError(f"aggregate_meter_identity_ambiguous_after_topology_change:{identity}")
+                    measurements[new_rows[identity]] += source_measurements[row] - projected_source[row]
         except (KeyError, ValueError) as exc:
             return self._failure(
                 "topology_correction_telemetry_incomplete",
@@ -2918,6 +2971,10 @@ class MatpowerDeploymentProviders:
                 "metadata_updates": {
                     "reported_breaker_status": new_labels,
                     "operator_layout": layout,
+                    "substation_telemetry": telemetry,
+                    "sigma_z": operator_noise["measurement_sigma"],
+                    "operator_noise": operator_noise,
+                    "structural_zero_indices": operator_noise["structural_zero_indices"],
                     "last_topology_correction": {
                         "cb_name": cb_name,
                         "cb_status": new_label,
@@ -3374,6 +3431,7 @@ class MatpowerDeploymentProviders:
                 enable_correction=True,
                 max_correction_iterations=self.max_correction_iterations,
                 error_tolerance=self.error_tolerance,
+                **self._correction_noise_options(state, len(z)),
             )
         except Exception as exc:
             return self._failure("measurement_correction_error", f"{type(exc).__name__}: {exc}")
@@ -3425,6 +3483,7 @@ class MatpowerDeploymentProviders:
                 row0 + 1,
                 z_scans,
                 initial_states,
+                **self._parameter_noise_options(state, scans, z_scans),
             )
         except Exception as exc:
             return self._failure("parameter_correction_error", f"{type(exc).__name__}: {exc}")
@@ -3847,10 +3906,14 @@ class MatpowerDeploymentProviders:
                 else:
                     voltage = cmath.rect(float(item["Vm"]), math.radians(float(item.get("Va_deg", 0))))
                 sigma = float(item.get("sigma", 1e-4))
+                if item.get("sigma_semantics", "per_component") == "complex_rms":
+                    sigma /= math.sqrt(2.0)
+                elif item.get("sigma_semantics", "per_component") != "per_component":
+                    raise ValueError("Unsupported harmonic sigma semantics")
                 if not (math.isfinite(abs(voltage)) and math.isfinite(sigma) and sigma > 0):
                     raise ValueError("Harmonic measurement and positive noise scale must be finite")
                 energy[bus] = energy.get(bus, 0.0) + abs(voltage) ** 2
-                noise_energy[bus] = noise_energy.get(bus, 0.0) + sigma ** 2
+                noise_energy[bus] = noise_energy.get(bus, 0.0) + 2 * sigma ** 2
             ratios: dict[int, float] = {}
             for bus, squared in energy.items():
                 if not 1 <= bus <= min(nb, len(observed)):
@@ -4262,6 +4325,16 @@ class MatpowerDeploymentProviders:
                 }
         return metrics
 
+    def _hif_search_arguments(self, arguments, *sources):
+        from IEEE_14_OpenDSS.measurement_convention import resolve_shunt_convention
+        explicit = arguments.get("shunt_convention")
+        declared = explicit is not None or any(isinstance(source, Mapping) and source.get("measurement_convention") is not None for source in sources)
+        return {
+            **{key: arguments.get(key) for key in ("r_hif_pu_min", "r_hif_pu_max", "r_hif_ohm_min", "r_hif_ohm_max", "kv_ll")},
+            "resistance_search": self.hif_resistance_search,
+            "shunt_convention": resolve_shunt_convention(explicit, *sources) if declared else None,
+        }
+
     def estimate_hif(self, state: Mapping[str, Any], action: Mapping[str, Any]) -> dict[str, Any]:
         arguments = dict(action.get("arguments") or {})
         if arguments.get("candidate_branch_row0") is None:
@@ -4302,10 +4375,11 @@ class MatpowerDeploymentProviders:
             top_k=int(arguments.get("top_k", self.top_k)),
             alpha_grid_size=alpha_grid_size,
             r_grid_size=r_grid_size,
-            r_hif_pu_min=float(arguments.get("r_hif_pu_min", 5.0)),
-            r_hif_pu_max=float(arguments.get("r_hif_pu_max", 1000.0)),
+            **self._hif_search_arguments(arguments, runtime, metadata),
             three_phase_branch_currents=branch_currents,
             branch_current_sigma_pu=current_sigma,
+            sigma_z=runtime.get("sigma_z", metadata.get("sigma_z")),
+            three_phase_sigma=float(runtime.get("three_phase_sigma", metadata.get("three_phase_sigma", 5e-3))),
         )
         if not payload.get("success"):
             return self._failure("hif_estimation_failure", payload.get("error"))
@@ -4385,8 +4459,7 @@ class MatpowerDeploymentProviders:
             top_k=int(arguments.get("top_k", self.top_k)),
             alpha_grid_size=alpha_grid_size,
             r_grid_size=r_grid_size,
-            r_hif_pu_min=float(arguments.get("r_hif_pu_min", 5.0)),
-            r_hif_pu_max=float(arguments.get("r_hif_pu_max", 1000.0)),
+            **self._hif_search_arguments(arguments, window, self._metadata(state)),
             robust_loss=str(arguments.get("robust_loss", "soft_l1")),
             smoothness_lambda=float(arguments.get("smoothness_lambda", 0.10)),
             branch_current_sigma_pu=self._branch_current_channel(state)[1],

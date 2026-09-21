@@ -402,7 +402,8 @@ class ResearchEpisodeBudgetTests(unittest.TestCase):
         from scripts.run_dagger_research import RESEARCH_EPISODE_BUDGET, parser
 
         source = inspect.getsource(release_factories.production_environment_factory)
-        production = int(re.search(r"max_steps=(\d+)", source).group(1))
+        self.assertIn("max_steps=DEFAULT_EPISODE_ACTION_LIMIT", source)
+        production = release_factories.DEFAULT_EPISODE_ACTION_LIMIT
         self.assertEqual(RESEARCH_EPISODE_BUDGET, production)
         self.assertEqual(RESEARCH_EPISODE_BUDGET, 40)
         self.assertEqual(parser().get_default("eval_max_steps"), production)

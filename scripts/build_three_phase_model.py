@@ -1,4 +1,4 @@
-"""Build and independently validate a normalized OpenDSS three-phase snapshot."""
+"""Build and independently validate a declared-voltage OpenDSS snapshot."""
 from __future__ import annotations
 
 import argparse
@@ -76,7 +76,7 @@ def compare_matpower_reference(directory, build, measurements, load_scale):
 
 def build_and_validate(output_dir, *, system="case57", assumptions="normalized_diagonal",
                        load_scale=1.0, unbalance_bus=12, unbalance_delta=0.2,
-                       matpower_reference_dir=None):
+                       matpower_reference_dir=None, voltage_profile=None):
     if not np.isfinite(load_scale) or load_scale <= 0:
         raise ValueError("load_scale must be finite and positive")
     spec = resolve_system(system)
@@ -84,6 +84,7 @@ def build_and_validate(output_dir, *, system="case57", assumptions="normalized_d
     case["bus"][:, 2:4] *= load_scale
     build = export_model(case, output_dir, case_id=spec.case_id,
                          assumptions=load_assumptions(assumptions),
+                         **({"voltage_profile": voltage_profile} if voltage_profile is not None else {}),
                          source_provenance={"system": spec.to_manifest(), "load_scale": load_scale})
     out = Path(build["output_dir"])
     dss = compile_model(out / "Master.dss")
@@ -145,6 +146,7 @@ def main(argv=None):
     parser.add_argument("--system", choices=("case14", "case57"), default="case57")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--assumptions", default="normalized_diagonal")
+    parser.add_argument("--voltage-profile", help="Explicit named voltage reconstruction; omission preserves normalized 1-kV behavior")
     parser.add_argument("--load-scale", type=float, default=1.0)
     parser.add_argument("--unbalance-bus", type=int, default=12)
     parser.add_argument("--unbalance-delta", type=float, default=0.2)
@@ -152,7 +154,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     result = build_and_validate(args.output_dir, system=args.system, assumptions=args.assumptions,
                                load_scale=args.load_scale, unbalance_bus=args.unbalance_bus,
-                               unbalance_delta=args.unbalance_delta, matpower_reference_dir=args.matpower_reference_dir)
+                               unbalance_delta=args.unbalance_delta, matpower_reference_dir=args.matpower_reference_dir,
+                               voltage_profile=args.voltage_profile)
     print(json.dumps({key: value for key, value in result.items() if key != "reports"}, indent=2))
     return 0 if result["passed"] else 2
 

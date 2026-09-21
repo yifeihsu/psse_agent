@@ -39,6 +39,7 @@ from psse_env.actions import (
     RUN_WLS,
     invalid_action,
 )
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT
 from psse_env.providers.scenario_generator import (
     DEFAULT_BALANCED_ARTIFACT_DIR,
     DEFAULT_CORPUS_PATH,
@@ -57,7 +58,7 @@ from psse_env.sft.provenance import file_sha256, stable_json_sha256
 # partition, while aggregate generation uses ``train``.
 BC0_SUITE_SEED = 20260719
 BC0_SUITE_GENERATION_SEED = 20260734
-BC0_SUITE_MAX_STEPS = 24
+BC0_SUITE_MAX_STEPS = DEFAULT_EPISODE_ACTION_LIMIT
 BC0_SUITE_SCHEMA_VERSION = 1
 BC0_SUITE_SPLIT = "release_eval"
 BC0_SUITE_SOURCE_PARTITION = "evaluation"
@@ -538,6 +539,25 @@ def _execution_metadata(scenario: Mapping[str, Any]) -> dict[str, Any] | None:
     if not isinstance(raw, Mapping):
         raise ValueError("scenario metadata must be a mapping")
     metadata = _json_native(raw)
+
+    def rename_reference_role_description(value: Any) -> None:
+        """Migrate one known descriptive key; actual privileged keys still fail."""
+        if isinstance(value, dict):
+            if (
+                value.get("schema") == "generated_sensor_noise_v1"
+                and value.get("clean_fields_role") == "noiseless_reference_for_offline_audit_only"
+            ):
+                description = value["clean_fields_role"]
+                if "reference_fields_role" in value and value["reference_fields_role"] != description:
+                    raise ValueError("noise contract has conflicting reference-role descriptions")
+                value["reference_fields_role"] = value.pop("clean_fields_role")
+            for nested in value.values():
+                rename_reference_role_description(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                rename_reference_role_description(nested)
+
+    rename_reference_role_description(metadata)
 
     scan_window = metadata.get("hif_scan_window")
     if isinstance(scan_window, Mapping):

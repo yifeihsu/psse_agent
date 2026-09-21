@@ -150,10 +150,12 @@ def build_graph(case: Mapping[str, Any], z: Any, *, wls_details: Mapping[str, An
                          bus[:, 4] / clean["baseMVA"], bus[:, 5] / clean["baseMVA"],
                          np.log1p(degree)))
     flow_packets = [packets[3 * nb + k * nl:3 * nb + (k + 1) * nl] for k in range(4)]
-    # Native MATPOWER tap=0 denotes a line with unity tap; keep that native
-    # encoding and its side on both directions, marked by orientation +/-1.
+    # Preserve native tap encoding. Known unequal terminal voltage bases also
+    # identify a nominal-ratio transformer (IEEE14 row 7-8 has native tap=0).
     shift = np.deg2rad(branch[:, 9])
-    transformer = (branch[:, 8] != 0) | (branch[:, 9] != 0)
+    known_voltage_transition = ((bus[source, 9] > 0) & (bus[destination, 9] > 0)
+                                & ~np.isclose(bus[source, 9], bus[destination, 9], rtol=1e-12, atol=0))
+    transformer = (branch[:, 8] != 0) | (branch[:, 9] != 0) | known_voltage_transition
     context = np.column_stack((branch[:, 2:5], branch[:, 8], np.cos(shift), np.sin(shift),
                                branch[:, 10], ~transformer, transformer))
     delta = evidence["theta_est_rad"][source] - evidence["theta_est_rad"][destination]
@@ -180,7 +182,9 @@ def build_graph(case: Mapping[str, Any], z: Any, *, wls_details: Mapping[str, An
         "wls_alarm_definition": "chi_square_only", "wls_chi_square_alpha": 0.05,
         "wls_chi_square_threshold": float(chi2.ppf(0.95, evidence["dof"])),
         "solver_settings": evidence["solver_settings"], "scaler_applied": False,
-        "configured_model_hash": _array_digest(clean["baseMVA"], bus[:, [0, 1, 4, 5]], branch[:, [0, 1, 2, 3, 4, 8, 9, 10]]),
+        "configured_model_hash": _array_digest(clean["baseMVA"],
+            bus[:, [0, 1, 4, 5, 9] if np.any(bus[:, 9] > 0) else [0, 1, 4, 5]],
+            branch[:, [0, 1, 2, 3, 4, 8, 9, 10]]),
         "measurement_hash": _array_digest(evidence["observed"]),
         "covariance_hash": _array_digest(evidence["variance"]),
         "feature_names": {"x": list(NODE_FEATURES), "edge_attr": list(EDGE_FEATURES), "u": list(GLOBAL_FEATURES)}})

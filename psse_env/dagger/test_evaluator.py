@@ -753,6 +753,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                 self.assertEqual(episode["recovered_invalid_action_count"], 0)
                 self.assertEqual(episode["policy_steps"], 4)
                 self.assertEqual(episode["steps"], 5)
+                self.assertEqual(observations[0]["remaining_budget"], 7)
                 first_history = observations[0]["history_window"][-1]
                 self.assertEqual(first_history["action"]["tool"], expected_tool)
                 self.assertEqual(
@@ -886,11 +887,13 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             {"recovery_rejected_candidate_rollback": [scenario]},
             env_factory=_PartialSetupEnv,
             policy_factory=lambda: _ScriptPolicy(observations),
-            max_steps=1,
+            max_steps=4,  # Three setup actions and one policy action.
         )
         episode = result.suite_metrics["episodes"][0]
         self.assertEqual(episode["evaluation_intervention"]["pre_policy_step_count"], 3)
         self.assertEqual(episode["policy_steps"], 1)
+        self.assertEqual(episode["steps"], 4)
+        self.assertEqual(observations[0]["remaining_budget"], 1)
         self.assertEqual(
             [row["action"]["tool"] for row in episode["trace"][:3]],
             [GET_MEASUREMENT_CONTEXT, CORRECT_MEASUREMENTS, RUN_WLS],
@@ -927,11 +930,12 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             {"recovery_measurement_parameter_sequential_handoff": [scenario]},
             env_factory=_PartialSetupEnv,
             policy_factory=lambda: _ScriptPolicy(observations),
-            max_steps=1,
+            max_steps=6,  # Five setup actions and one policy action.
         )
         evidence = result.suite_metrics["episodes"][0]["evaluation_intervention"]
         self.assertEqual(evidence["pre_policy_step_count"], 5)
         self.assertEqual(evidence["retention_opportunity_count"], 0)
+        self.assertEqual(observations[0]["remaining_budget"], 1)
         self.assertEqual(len(observations[0]["history_window"]), 4)
         self.assertEqual(
             observations[0]["history_window"][-1]["action"]["tool"],
@@ -968,7 +972,7 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             {"partial_success_retention": [_partial_retention_scenario()]},
             env_factory=_PartialSetupEnv,
             policy_factory=lambda: _ScriptPolicy(observations),
-            max_steps=4,
+            max_steps=5,  # Four setup actions and one policy action.
         )
         episode = result.suite_metrics["episodes"][0]
         evidence = episode["evaluation_intervention"]
@@ -978,6 +982,8 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         self.assertEqual(episode["partial_fix_count"], 1)
         self.assertEqual(episode["retained_partial_fix_count"], 1)
         self.assertEqual(episode["policy_steps"], 1)
+        self.assertEqual(episode["steps"], 5)
+        self.assertEqual(observations[0]["remaining_budget"], 1)
         self.assertEqual(
             [row["advanced"] for row in episode["trace"][:4]],
             [False, True, False, True],

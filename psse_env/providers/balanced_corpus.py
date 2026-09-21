@@ -230,9 +230,11 @@ def build_balanced_corpus(
                     "z_true": z_true.tolist(), "z_obs": z_obs.tolist(),
                     "label": label, "op_point": {"load_scale": alpha},
                     "sigmas": dict(DEFAULT_SIGMAS),
+                    "sigma_z": sigma.tolist(),
                     "physical_validation": {"passed": True, **admission},
                 }
                 if family == "parameter_error":
+                    record["sigma_z_scans"] = sigma.tolist()
                     record["z_scans"] = [
                         (z_true + rng.standard_normal(spec.nz) * sigma).tolist()
                         for _ in range(num_scans)

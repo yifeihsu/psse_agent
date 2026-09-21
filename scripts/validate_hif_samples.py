@@ -41,8 +41,11 @@ def validate_row(
     *,
     allow_non_top1: bool,
     allow_legacy_log_tail: bool,
+    allow_non_top3_detectability: tuple[str, ...] = (),
 ) -> list[str]:
     issues: list[str] = []
+    if row.get("scenario") == "no_error":
+        return [f"bad_{key}" for key in ("z_true", "z_obs") if not _finite_vector(row.get(key), 122)]
     if row.get("scenario") != "high_impedance_fault":
         issues.append("not_high_impedance_fault")
     if row.get("case") != "IEEE14":
@@ -123,9 +126,10 @@ def validate_row(
     if not top_rows:
         issues.append("missing_top_hif_groups")
     elif target is not None:
-        if top_rows[0] != target and not allow_non_top1:
+        allowed_weak = label.get("expected_detectability") in allow_non_top3_detectability
+        if top_rows[0] != target and not (allow_non_top1 or allowed_weak):
             issues.append("target_not_top1")
-        if target not in top_rows[:3]:
+        if target not in top_rows[:3] and not allowed_weak:
             issues.append("target_not_top3")
     return issues
 
@@ -133,11 +137,16 @@ def validate_row(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("path", type=Path)
+    parser.add_argument("--meta", type=Path)
+    parser.add_argument("--allow-non-top3-detectability", default="")
     parser.add_argument("--allow-non-top1", action="store_true")
     parser.add_argument("--allow-legacy-log-tail", action="store_true")
     parser.add_argument("--require-all-eligible-branches", action="store_true")
     args = parser.parse_args()
 
+    meta = json.loads(args.meta.read_text()) if args.meta else {}
+    eligible = meta.get("hif", {}).get("eligible_branch_row0", ELIGIBLE_HIF_BRANCHES)
+    strata, classes, scenarios = Counter(), Counter(), Counter()
     methods: Counter[str] = Counter()
     branches: Counter[str] = Counter()
     phases: Counter[str] = Counter()
@@ -153,6 +162,9 @@ def main() -> None:
                 continue
             rows += 1
             row = json.loads(line)
+            scenarios[str(row.get("scenario"))] += 1
+            strata[str(row.get("label", {}).get("voltage_stratum"))] += 1
+            classes[str(row.get("label", {}).get("resistance_class"))] += 1
             label = row.get("label") if isinstance(row.get("label"), Mapping) else {}
             nlm = row.get("nlm_diagnostic") if isinstance(row.get("nlm_diagnostic"), Mapping) else {}
             methods[str(nlm.get("method"))] += 1
@@ -174,6 +186,7 @@ def main() -> None:
                 row,
                 allow_non_top1=bool(args.allow_non_top1),
                 allow_legacy_log_tail=bool(args.allow_legacy_log_tail),
+                allow_non_top3_detectability=tuple(args.allow_non_top3_detectability.split(",")),
             )
             for issue in issues:
                 issue_counts[issue] += 1
@@ -181,17 +194,20 @@ def main() -> None:
                 print(f"{args.path}:{line_no}: {','.join(issues)}", file=sys.stderr)
 
     eligible_by_element = {
-        branch_info_for_row0(int(idx))["dss_element"]: int(idx) for idx in ELIGIBLE_HIF_BRANCHES
+        branch_info_for_row0(int(idx))["dss_element"]: int(idx) for idx in eligible
     }
     covered_label_rows = {
         eligible_by_element[element] for element in branches if element in eligible_by_element
     }
-    missing_eligible = sorted(set(int(i) for i in ELIGIBLE_HIF_BRANCHES) - covered_label_rows)
+    missing_eligible = sorted(set(int(i) for i in eligible) - covered_label_rows)
     if args.require_all_eligible_branches and missing_eligible:
         issue_counts["missing_eligible_branch"] = len(missing_eligible)
 
     result = {
         "rows": rows,
+        "scenario_counts": dict(scenarios),
+        "voltage_stratum_counts": dict(strata),
+        "resistance_class_counts": dict(classes),
         "methods": dict(methods),
         "top1_count": top1_count,
         "top3_count": top3_count,

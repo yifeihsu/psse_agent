@@ -21,6 +21,39 @@ The [original pilot](results/ieee14_v1_20260916/README.md) is retained separatel
 The small training runs in unit tests remain software checks, separate from
 the saved physical experiment.
 
+The [reviewed fault scenario profile](../../docs/fault_scenario_review_20260917.md)
+adds a versioned HIF curriculum, achieved-VUF strata, moderate-parameter and
+harmonic sensitivity companions, and matched noise-accuracy views. Generate it
+with `python -m research.reviewed_fault_scenarios --output-dir output/new_reviewed_cohort`.
+Its physical generation and feature loading have been checked; it is not a new
+trained-model result and does not overwrite the studies above.
+
+Reviewed training now requires [WLS-observable expert admission](../../docs/wls_observable_training_20260917.md).
+Use the generated `training_admission/<noise_profile>/filtered_manifest.jsonl`,
+which freezes selected training observations and preserves held-out cases.
+The training entry point rejects unfiltered reviewed means. Canonical LLM-SFT
+expert-prefix files are separate from these GNN manifests; neither format
+claims completed physical repair merely from a WLS alarm.
+
+The bundle default now uses the [physical IEEE14 HIF profile](../../docs/ieee14_physical_hif_20260918.md):
+69/13.8/18 kV bus bases, a 100–1000 ohm main population on 69 kV lines
+(2.1–21.0 pu on the 69 kV base; 1000 pu there would be 47.6 kOhm, not a
+1000 ohm HIF), and a separate voltage-stratified resistance sweep. Since
+2026-09-19 the profile also carries the physical-ohm resistance classification
+(`low_resistance_fault` < 50, `moderately_resistive` [50, 100),
+`moderately_high_resistance` [100, 200), `representative_hif` [200, 500),
+`weak_hif` [500, 1000), `extreme_weak_hif` [1000, 5000), `near_open_circuit`
+>= 5000 ohm; every physical HIF row records `settings.hif_resistance_class`)
+and an evaluation-only 69 kV detection-limit cohort (`hif_ohm_band:
+"detection_limit"`, uniform 1000–5000 ohm, two slots per validation/test
+parent, written to `hif_detection_limit_evaluation_manifest.jsonl`, never in
+`split="train"`, and not part of the curriculum weights). The HIF injector now
+refuses an omitted resistance on a multi-voltage registry; the historical 10 pu
+default survives only on uniform normalized models. The prior normalized
+profiles remain explicit reproduction options. The 7–8 voltage transition is
+recognized as a transformer, while the graph dimensions and per-unit WLS
+equations remain unchanged.
+
 ## Inputs and architecture
 
 The only numerical inputs are the operator's configured MATPOWER bus/branch

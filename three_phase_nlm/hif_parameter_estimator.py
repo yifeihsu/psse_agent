@@ -8,8 +8,15 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from IEEE_14_OpenDSS.constants import BUS_ORDER
-from hif_search_limits import validate_hif_search_limits
+from IEEE_14_OpenDSS.measurement_convention import (
+    SHUNT_CONVENTION_LEGACY,
+    measurement_convention_payload,
+    resolve_shunt_convention,
+    validate_shunt_convention,
+)
+from hif_search_limits import validate_hif_resistance_box, validate_hif_search_limits
 
+from . import hif_units
 from .dss_hif_injector import (
     _line_matcher,
     _parse_line_tokens,
@@ -30,6 +37,13 @@ from .branch_current_analysis import (
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+#: How the resistance search box is defaulted when the caller gives no bounds.
+#: ``physical_ohm`` searches ``hif_units.DEFAULT_HIF_SEARCH_OHM`` converted on
+#: the candidate line's local voltage base; ``legacy_pu`` reproduces the
+#: historical system-pu box ``hif_units.LEGACY_HIF_SEARCH_PU`` bit for bit.
+RESISTANCE_SEARCH_PHYSICAL_OHM = "physical_ohm"
+RESISTANCE_SEARCH_LEGACY_PU = "legacy_pu"
+_RESISTANCE_SEARCH_MODES = (RESISTANCE_SEARCH_PHYSICAL_OHM, RESISTANCE_SEARCH_LEGACY_PU)
 _DEFAULT_PRISTINE_MODEL_DIR = _REPO_ROOT / "IEEE_14_OpenDSS"
 #: A node-local copy of the default IEEE-14 OpenDSS model directory.  Every
 #: candidate simulation re-reads the model through ``Redirect``; on a shared
@@ -213,7 +227,15 @@ def _simulate_base(
     *,
     load_scale: float = 1.0,
     op_point: Mapping[str, Any] | None = None,
+    shunt_convention: str = SHUNT_CONVENTION_LEGACY,
 ) -> dict[str, Any]:
+    """No-HIF forward solve; ``shunt_convention`` selects the Pinj/Qinj convention.
+
+    The default is the historical exporter convention so tracked corpora
+    replay unchanged; ``"ybus"`` keeps fixed shunts inside Ybus like the
+    operator WLS.
+    """
+    convention = validate_shunt_convention(shunt_convention)
     (
         extract_measurement_series,
         extract_three_phase_voltage_measurements,
@@ -225,11 +247,12 @@ def _simulate_base(
     effective_op_point.setdefault("load_scale", float(load_scale))
     apply_hif_operating_point(baseline, effective_op_point)
     _solve_or_raise()
-    z_sim, _buses, _branches = extract_measurement_series()
+    z_sim, _buses, _branches = extract_measurement_series(shunt_convention=convention)
     return {
         "z": [float(x) for x in z_sim],
         "three_phase_voltages": extract_three_phase_voltage_measurements(),
         "three_phase_branch_currents": extract_three_phase_branch_current_measurements(),
+        "shunt_convention": convention,
     }
 
 
@@ -243,13 +266,26 @@ def _simulate_candidate(
     r_hif_pu: float,
     load_scale: float = 1.0,
     op_point: Mapping[str, Any] | None = None,
+    shunt_convention: str = SHUNT_CONVENTION_LEGACY,
 ) -> dict[str, Any]:
+    """Forward solve of one HIF candidate on the normalized (1 kV) DSS model.
+
+    ``r_hif_pu`` is a consistently based per-unit resistance, so it is valid
+    on any voltage base. The value injected into the model is the normalized
+    model resistance ``r_hif_pu * 0.01`` ohm, returned as ``r_hif_model_ohm``
+    (and under the historical key ``r_hif_ohm`` for existing readers). Neither
+    is a physical resistance: callers convert ``r_hif_pu`` with the candidate
+    line's own base (:mod:`three_phase_nlm.hif_units`). ``fault_v_volts`` is
+    likewise in normalized-model volts.
+    """
+    convention = validate_shunt_convention(shunt_convention)
     (
         extract_measurement_series,
         extract_three_phase_voltage_measurements,
         extract_three_phase_branch_current_measurements,
     ) = _measurement_exporters()
-    r_hif_ohm = hif_ohms_from_pu(r_hif_pu, base_mva=100.0, kv_ll=1.0)
+    # Normalized-model ohms (kV_LL = 1): never a physical resistance.
+    r_hif_model_ohm = hif_ohms_from_pu(r_hif_pu, base_mva=100.0, kv_ll=1.0)
     fault_bus = "FaultEst"
     _compile_base_model(model_dir)
     overrides = _inject_candidate(
@@ -257,7 +293,7 @@ def _simulate_candidate(
         dss_element=dss_element,
         alpha=alpha,
         phase=phase,
-        r_hif_ohm=r_hif_ohm,
+        r_hif_ohm=r_hif_model_ohm,
         fault_bus=fault_bus,
     )
     baseline = capture_operating_point_baseline()
@@ -265,17 +301,21 @@ def _simulate_candidate(
     effective_op_point.setdefault("load_scale", float(load_scale))
     apply_hif_operating_point(baseline, effective_op_point)
     _solve_or_raise()
-    z_sim, _buses, _branches = extract_measurement_series(branch_element_overrides=overrides)
+    z_sim, _buses, _branches = extract_measurement_series(
+        branch_element_overrides=overrides, shunt_convention=convention
+    )
     v3 = extract_three_phase_voltage_measurements()
     i3 = extract_three_phase_branch_current_measurements(branch_element_overrides=overrides)
-    kv_ln, _nominal_p_kw = constant_impedance_hif_kw(r_hif_ohm, kv_ll=1.0)
+    kv_ln, _nominal_p_kw = constant_impedance_hif_kw(r_hif_model_ohm, kv_ll=1.0)
     fault_v = _fault_voltage_volts(fault_bus, phase, kv_ln)
     return {
         "z": [float(x) for x in z_sim],
         "three_phase_voltages": v3,
         "three_phase_branch_currents": i3,
         "fault_v_volts": float(fault_v),
-        "r_hif_ohm": float(r_hif_ohm),
+        "r_hif_ohm": float(r_hif_model_ohm),
+        "r_hif_model_ohm": float(r_hif_model_ohm),
+        "shunt_convention": convention,
     }
 
 
@@ -288,8 +328,13 @@ def simulate_hif_candidate(
     op_point: Mapping[str, Any] | None = None,
     case_path: str = "case14",
     pristine_model_dir: str | None = None,
+    shunt_convention: str | None = None,
 ) -> dict[str, Any]:
-    """Replay one HIF candidate through the estimator's canonical simulator."""
+    """Replay one HIF candidate through the estimator's canonical simulator.
+
+    ``shunt_convention=None`` means the historical ``legacy_injection``
+    exporter convention.
+    """
     info = branch_info_for_row0(int(candidate_branch_row0))
     dss_element = str(info["dss_element"])
     if not dss_element.lower().startswith("line."):
@@ -304,6 +349,7 @@ def simulate_hif_candidate(
         phase=str(phase),
         r_hif_pu=float(r_hif_pu),
         op_point=op_point,
+        shunt_convention=resolve_shunt_convention(shunt_convention),
     )
 
 
@@ -438,12 +484,15 @@ def terminal_current_branch_evidence(
     branch_row0: int,
     candidate_phase: str | None = None,
     sigma: float = DEFAULT_BRANCH_CURRENT_SIGMA_PU,
+    kv_ll: float | None = None,
 ) -> dict[str, Any] | None:
     """Closed-form terminal-current evidence for one candidate line.
 
     Returns the two-terminal position/resistance estimate on the differential-
     dominant phase (or the requested phase) plus whether that phase is
     separated well enough from the others to restrict the model search.
+    ``kv_ll`` is the line-to-line base for the ohm fields of the estimate
+    (``None`` lets :func:`two_terminal_hif_estimate` use the line's local base).
     """
     if not three_phase_voltages or not three_phase_branch_currents:
         return None
@@ -467,6 +516,7 @@ def terminal_current_branch_evidence(
         three_phase_branch_currents,
         branch_row0=int(branch_row0),
         phase=phase,
+        kv_ll=kv_ll,
     )
     if estimate is None:
         return None
@@ -525,7 +575,12 @@ def _score(residual: np.ndarray) -> float:
     return float(np.linalg.norm(residual) / math.sqrt(float(residual.size)))
 
 
-def _candidate_payload(candidate: Mapping[str, Any], rank: int | None = None) -> dict[str, Any]:
+def _candidate_payload(
+    candidate: Mapping[str, Any],
+    rank: int | None = None,
+    *,
+    impedance_base_ohm: float | None = None,
+) -> dict[str, Any]:
     out = {
         "alpha_from_from_bus": float(candidate["alpha"]),
         "distance_percent_from_from_bus": 100.0 * float(candidate["alpha"]),
@@ -533,9 +588,107 @@ def _candidate_payload(candidate: Mapping[str, Any], rank: int | None = None) ->
         "r_hif_pu": float(candidate["r_hif_pu"]),
         "score": float(candidate["score"]),
     }
+    if impedance_base_ohm is not None:
+        # Physical ohms on the candidate line's local base (additive field).
+        out["r_hif_ohm"] = float(candidate["r_hif_pu"]) * float(impedance_base_ohm)
     if rank is not None:
         out = {"rank": int(rank), **out}
     return out
+
+
+def _resolve_search_configuration(
+    *,
+    candidate_branch_row0: int,
+    r_hif_pu_min: float | None,
+    r_hif_pu_max: float | None,
+    r_hif_ohm_min: float | None,
+    r_hif_ohm_max: float | None,
+    kv_ll: float | None,
+    resistance_search: str,
+) -> dict[str, Any]:
+    """Resolve the resistance search box on the candidate line's voltage base.
+
+    Returns the :func:`three_phase_nlm.hif_units.resolve_resistance_search_box`
+    receipt plus ``resistance_search``. Cross-voltage branches (``Line.7-8``)
+    are converted on the from-bus base and flagged, never refused, so legacy
+    corpora that used them keep replaying.
+    """
+    mode = str(resistance_search).strip().lower()
+    if mode not in _RESISTANCE_SEARCH_MODES:
+        raise ValueError(f"resistance_search must be one of {list(_RESISTANCE_SEARCH_MODES)}, got {resistance_search!r}")
+    if mode == RESISTANCE_SEARCH_LEGACY_PU:
+        default_ohm, default_pu = None, hif_units.LEGACY_HIF_SEARCH_PU
+    else:
+        default_ohm, default_pu = hif_units.DEFAULT_HIF_SEARCH_OHM, None
+    box = hif_units.resolve_resistance_search_box(
+        branch_row0=int(candidate_branch_row0),
+        r_hif_pu_min=r_hif_pu_min,
+        r_hif_pu_max=r_hif_pu_max,
+        r_hif_ohm_min=r_hif_ohm_min,
+        r_hif_ohm_max=r_hif_ohm_max,
+        kv_ll=kv_ll,
+        default_ohm=default_ohm,
+        default_pu=default_pu,
+    )
+    return {**box, "resistance_search": mode}
+
+
+def _physical_hif_magnitudes(
+    *,
+    r_hif_pu: float,
+    r_hif_model_ohm: float,
+    fault_v_model_volts: float,
+    box: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Physical ohm/ampere/siemens/kW fields of one fitted candidate.
+
+    ``r_hif_pu`` is consistent pu, ``r_hif_model_ohm`` and ``fault_v_model_volts``
+    are normalized-model (1 kV) quantities. Physical volts are the model volts
+    scaled by the local kV_LL; physical ohms are ``r_hif_pu * kV_LL**2/100``.
+    ``p_hif_kw`` is base invariant (V**2/R with V ~ kV and R ~ kV**2) and is
+    kept on the historical model-quantity formula so its value is unchanged.
+    """
+    kv_ll = float(box["kv_ll"])
+    zbase = float(box["impedance_base_ohm"])
+    r_ohm = float(r_hif_pu) * zbase
+    v_phys = float(fault_v_model_volts) * kv_ll / hif_units.MODEL_KV_LL
+    i_amp = v_phys / r_ohm if r_ohm > 0 else math.inf
+    p_kw = (float(fault_v_model_volts) ** 2) / float(r_hif_model_ohm) / 1000.0 if r_hif_model_ohm > 0 else math.inf
+    return {
+        "r_hif_pu": float(r_hif_pu),
+        "r_hif_ohm": r_ohm,
+        "r_hif_model_ohm": float(r_hif_model_ohm),
+        "g_hif_siemens": 1.0 / r_ohm if r_ohm > 0 else math.inf,
+        "i_hif_amp": float(i_amp),
+        "p_hif_kw": float(p_kw),
+        "q_hif_kvar": 0.0,
+        "resistance_units": hif_units.RESISTANCE_UNITS_OHM_LOCAL_BASE,
+        "local_kv_ll": kv_ll,
+        "impedance_base_ohm": zbase,
+        "resistance_basis": box["resistance_basis"],
+        "cross_voltage_branch": bool(box["cross_voltage_branch"]),
+        "resistance_class": hif_units.hif_resistance_class(r_ohm) if math.isfinite(r_ohm) and r_ohm > 0 else None,
+        "voltage_base_profile": box["voltage_base_profile"],
+    }
+
+
+def _search_box_payload(box: Mapping[str, Any], *, shunt_convention: str) -> dict[str, Any]:
+    """Auditable echo of the resistance box and conventions actually searched."""
+    return {
+        "r_hif_pu_min": float(box["r_hif_pu_min"]),
+        "r_hif_pu_max": float(box["r_hif_pu_max"]),
+        "r_hif_ohm_min": float(box["r_hif_ohm_min"]),
+        "r_hif_ohm_max": float(box["r_hif_ohm_max"]),
+        "kv_ll": float(box["kv_ll"]),
+        "impedance_base_ohm": float(box["impedance_base_ohm"]),
+        "resistance_basis": box["resistance_basis"],
+        "cross_voltage_branch": bool(box["cross_voltage_branch"]),
+        "voltage_base_profile": box["voltage_base_profile"],
+        "box_source": box["box_source"],
+        "resistance_search": box["resistance_search"],
+        "shunt_convention": shunt_convention,
+        "measurement_convention": measurement_convention_payload(shunt_convention),
+    }
 
 
 def _local_refinement_points(best: Mapping[str, Any], *, alpha_step: float, r_ratio: float) -> list[tuple[float, float, str]]:
@@ -604,26 +757,57 @@ def estimate_hif_location_magnitude(
     top_k: int = 5,
     alpha_grid_size: int = 31,
     r_grid_size: int = 35,
-    r_hif_pu_min: float = 5.0,
-    r_hif_pu_max: float = 1000.0,
+    r_hif_pu_min: float | None = None,
+    r_hif_pu_max: float | None = None,
+    r_hif_ohm_min: float | None = None,
+    r_hif_ohm_max: float | None = None,
+    kv_ll: float | None = None,
+    shunt_convention: str | None = None,
+    resistance_search: str = RESISTANCE_SEARCH_PHYSICAL_OHM,
     refine_top_n: int = 3,
     uncertainty_tolerance: float = 0.01,
     three_phase_branch_currents: Any = None,
     branch_current_sigma: float = DEFAULT_BRANCH_CURRENT_SIGMA_PU,
+    sigma_z: Sequence[float] | None = None,
+    three_phase_sigma: float = 5e-3,
     seed_from_terminal_currents: bool = True,
 ) -> dict[str, Any]:
+    """Single-scan model-based HIF position/resistance search on one line.
+
+    The resistance box is given in physical ohms on the candidate line's local
+    voltage base (``r_hif_ohm_min/max``) or in local-base per unit
+    (``r_hif_pu_min/max``), never both. With neither, ``resistance_search``
+    selects the default: ``"physical_ohm"`` searches 50-5000 ohm converted per
+    line, ``"legacy_pu"`` reproduces the historical 5-1000 pu box. ``kv_ll``
+    overrides the line's declared base. ``shunt_convention`` (``None`` means the
+    historical ``legacy_injection``) selects the Pinj/Qinj convention of the
+    candidate simulations so they match the observation. The search itself
+    runs in consistent pu; only the box boundary and the reported ohm, ampere
+    and siemens fields are voltage aware.
+    """
     alpha_grid_size, r_grid_size, _ = validate_hif_search_limits(
         alpha_grid_size=alpha_grid_size,
         r_grid_size=r_grid_size,
     )
+    resistance_box_request = validate_hif_resistance_box(
+        r_hif_pu_min=r_hif_pu_min,
+        r_hif_pu_max=r_hif_pu_max,
+        r_hif_ohm_min=r_hif_ohm_min,
+        r_hif_ohm_max=r_hif_ohm_max,
+    )
+    if str(resistance_search).strip().lower() not in _RESISTANCE_SEARCH_MODES:
+        raise ValueError(f"resistance_search must be one of {list(_RESISTANCE_SEARCH_MODES)}, got {resistance_search!r}")
+    convention = resolve_shunt_convention(shunt_convention)
     if z_obs is None:
         return {
             "success": False,
             "method": "model_based_hif_parameter_search",
             "error": "z_obs is required for HIF parameter estimation.",
         }
-    if float(r_hif_pu_min) <= 0.0 or float(r_hif_pu_max) <= float(r_hif_pu_min):
-        raise ValueError("Require 0 < r_hif_pu_min < r_hif_pu_max")
+    if not math.isfinite(float(three_phase_sigma)) or float(three_phase_sigma) <= 0:
+        raise ValueError("three_phase_sigma must be finite and positive")
+    if sigma_z is not None:
+        _measurement_residual(z_obs, z_obs, sigma_z=sigma_z)
 
     info = branch_info_for_row0(int(candidate_branch_row0))
     dss_element = str(info["dss_element"])
@@ -635,6 +819,17 @@ def estimate_hif_location_magnitude(
             "dss_element": dss_element,
             "error": "HIF parameter estimation currently supports Line.* branches only.",
         }
+
+    # Resistance box on the candidate line's own voltage base.  Everything
+    # downstream (grid, seeds, refinement, caches) runs in consistent pu.
+    box = _resolve_search_configuration(
+        candidate_branch_row0=int(candidate_branch_row0),
+        kv_ll=kv_ll,
+        resistance_search=resistance_search,
+        **resistance_box_request,
+    )
+    r_hif_pu_min = float(box["r_hif_pu_min"])
+    r_hif_pu_max = float(box["r_hif_pu_max"])
 
     model_dir = _resolve_model_dir(pristine_model_dir, case_path)
     original_tokens, _kv = _line_tokens(model_dir, dss_element)
@@ -655,6 +850,7 @@ def estimate_hif_location_magnitude(
             branch_row0=int(candidate_branch_row0),
             candidate_phase=candidate_phase,
             sigma=float(branch_current_sigma),
+            kv_ll=float(box["kv_ll"]),
         )
     except Exception:
         terminal_estimate = None
@@ -685,10 +881,13 @@ def estimate_hif_location_magnitude(
                 phase=phase,
                 r_hif_pu=float(r_hif_pu),
                 load_scale=float(load_scale),
+                shunt_convention=convention,
             )
             residual = _residual_vector(
                 observed_z=z_obs,
                 simulated_z=sim["z"],
+                sigma_z=sigma_z,
+                three_phase_sigma=three_phase_sigma,
                 observed_three_phase_voltages=three_phase_voltages,
                 simulated_three_phase_voltages=sim.get("three_phase_voltages"),
                 observed_branch_currents=three_phase_branch_currents,
@@ -703,8 +902,10 @@ def estimate_hif_location_magnitude(
                     "phase": phase,
                     "score": float(score),
                     "stage": stage,
+                    # Normalized-model quantities; converted to physical units
+                    # with the line's base when the payload is assembled.
                     "fault_v_volts": float(sim.get("fault_v_volts") or 0.0),
-                    "r_hif_ohm": float(sim["r_hif_ohm"]),
+                    "r_hif_model_ohm": float(sim.get("r_hif_model_ohm", sim["r_hif_ohm"])),
                 }
             )
         except Exception as exc:
@@ -772,10 +973,12 @@ def estimate_hif_location_magnitude(
     top_candidates = all_candidates[: max(1, int(top_k))]
 
     try:
-        base_sim = _simulate_base(model_dir, load_scale=float(load_scale))
+        base_sim = _simulate_base(model_dir, load_scale=float(load_scale), shunt_convention=convention)
         base_residual = _residual_vector(
             observed_z=z_obs,
             simulated_z=base_sim["z"],
+            sigma_z=sigma_z,
+            three_phase_sigma=three_phase_sigma,
             observed_three_phase_voltages=three_phase_voltages,
             simulated_three_phase_voltages=base_sim.get("three_phase_voltages"),
             observed_branch_currents=three_phase_branch_currents,
@@ -815,10 +1018,16 @@ def estimate_hif_location_magnitude(
         max(float(cand["r_hif_pu"]) for cand in near_best),
     ]
 
-    r_ohm = float(best["r_hif_ohm"])
-    fault_v = float(best.get("fault_v_volts") or (1.0 / math.sqrt(3.0) * 1000.0))
-    i_amp = fault_v / r_ohm if r_ohm > 0 else math.inf
-    p_kw = (fault_v**2) / r_ohm / 1000.0 if r_ohm > 0 else math.inf
+    # Normalized-model volts at the hidden fault bus; physical volts scale
+    # with the local kV_LL inside _physical_hif_magnitudes.
+    fault_v_model = float(best.get("fault_v_volts") or (hif_units.MODEL_KV_LN * 1000.0))
+    magnitudes = _physical_hif_magnitudes(
+        r_hif_pu=float(best["r_hif_pu"]),
+        r_hif_model_ohm=float(best["r_hif_model_ohm"]),
+        fault_v_model_volts=fault_v_model,
+        box=box,
+    )
+    zbase = float(box["impedance_base_ohm"])
     phase_scores = {}
     for phase in phase_candidates:
         phase_items = [cand for cand in all_candidates if cand.get("phase") == phase]
@@ -837,12 +1046,7 @@ def estimate_hif_location_magnitude(
             "alpha_from_from_bus": float(best["alpha"]),
             "distance_percent_from_from_bus": 100.0 * float(best["alpha"]),
             "phase": best.get("phase"),
-            "r_hif_pu": float(best["r_hif_pu"]),
-            "r_hif_ohm": r_ohm,
-            "g_hif_siemens": 1.0 / r_ohm if r_ohm > 0 else math.inf,
-            "i_hif_amp": float(i_amp),
-            "p_hif_kw": float(p_kw),
-            "q_hif_kvar": 0.0,
+            **magnitudes,
         },
         "fit": {
             "weighted_residual_norm": best_score,
@@ -856,13 +1060,14 @@ def estimate_hif_location_magnitude(
         "uncertainty": {
             "near_best_alpha_interval": near_best_alpha_interval,
             "near_best_r_hif_pu_interval": near_best_r_interval,
+            "near_best_r_hif_ohm_interval": [value * zbase for value in near_best_r_interval],
             "interval_method": "near_best_score_profile",
             "score_tolerance": float(uncertainty_tolerance),
             "near_best_count": len(near_best),
         },
         "phase_scores": phase_scores,
         "top_parameter_candidates": [
-            _candidate_payload(candidate, rank=rank)
+            _candidate_payload(candidate, rank=rank, impedance_base_ohm=zbase)
             for rank, candidate in enumerate(top_candidates, start=1)
         ],
         "terminal_current_estimate": terminal_estimate,
@@ -876,5 +1081,6 @@ def estimate_hif_location_magnitude(
             "branch_current_sigma_pu": float(branch_current_sigma),
             "phase_restricted_by_terminal_currents": phase_restricted,
             "terminal_current_seeded": terminal_seeded,
+            **_search_box_payload(box, shunt_convention=convention),
         },
     }

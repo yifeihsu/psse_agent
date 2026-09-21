@@ -47,6 +47,10 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
                 hif_alpha_grid_size: int,
                 hif_r_grid_size: int,
                 hif_max_scans: int,
+                hif_resistance_search: str,
+                normalized_residual_threshold: float | None = None,
+                screen_checkpoint: str | None = None,
+                screen_calibration: str | None = None,
             ) -> None:
                 self.chi2_alpha = chi2_alpha
                 self.parameter_ranking_dominance_threshold = (
@@ -55,6 +59,7 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
                 self.hif_alpha_grid_size = hif_alpha_grid_size
                 self.hif_r_grid_size = hif_r_grid_size
                 self.hif_max_scans = hif_max_scans
+                self.hif_resistance_search = hif_resistance_search
 
             def env_kwargs(self) -> dict[str, Any]:
                 return {
@@ -66,6 +71,7 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
                     "hif_alpha_grid_size": self.hif_alpha_grid_size,
                     "hif_r_grid_size": self.hif_r_grid_size,
                     "hif_max_scans": self.hif_max_scans,
+                    "hif_resistance_search": self.hif_resistance_search,
                 }
 
         class CandidateOracle:
@@ -113,6 +119,7 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
             env.kwargs["hif_max_scans"],
             factories.BC0_HIF_MAX_SCANS,
         )
+        self.assertEqual(env.kwargs["hif_resistance_search"], "physical_ohm")
         self.assertEqual(env.kwargs["max_steps"], 40)
         self.assertEqual(env.kwargs["history_window"], 4)
         self.assertEqual(env.validations, 1)
@@ -127,6 +134,10 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
                 hif_alpha_grid_size: int,
                 hif_r_grid_size: int,
                 hif_max_scans: int,
+                hif_resistance_search: str,
+                normalized_residual_threshold: float | None = None,
+                screen_checkpoint: str | None = None,
+                screen_calibration: str | None = None,
             ) -> None:
                 self.chi2_alpha = chi2_alpha
                 self.parameter_ranking_dominance_threshold = (
@@ -135,6 +146,7 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
                 self.hif_alpha_grid_size = hif_alpha_grid_size
                 self.hif_r_grid_size = hif_r_grid_size
                 self.hif_max_scans = hif_max_scans
+                self.hif_resistance_search = hif_resistance_search
 
             def env_kwargs(self) -> dict[str, Any]:
                 return {}
@@ -1249,7 +1261,7 @@ class GeneratedToolCallValidationTests(unittest.TestCase):
                 "call:wls_from_path{}", self.schemas
             )
 
-    def test_topology_release_parser_uses_only_one_based_line_index(self) -> None:
+    def test_topology_release_parser_requires_existing_canonical_branch_or_breaker_target(self) -> None:
         valid = (
             "call:correct_topology_from_path"
             '{"case_path":"active","line_index1":4,"desired_status":false}'
@@ -1271,19 +1283,25 @@ class GeneratedToolCallValidationTests(unittest.TestCase):
                 '{"case_path":"active","line_index":3,"desired_status":false}',
                 self.schemas,
             )
-        with self.assertRaisesRegex(GateError, "missing required arguments.*line_index1"):
+        with self.assertRaisesRegex(GateError, "requires a breaker name.*cb_name.*branch-row"):
             factories._validated_generated_action(
                 "call:correct_topology_from_path"
                 '{"case_path":"active","desired_status":false}',
                 self.schemas,
             )
-        with self.assertRaisesRegex(GateError, "unsupported arguments.*cb_name"):
+        named = {"case_path": "active", "cb_name": "CB_4_5", "desired_status": False}
+        self.assertEqual(
             factories._validated_generated_action(
-                "call:correct_topology_from_path"
-                '{"case_path":"active","cb_name":"CB_4_5",'
-                '"desired_status":false}',
-                self.schemas,
-            )
+                "call:correct_topology_from_path" + json.dumps(named), self.schemas),
+            {"tool": "correct_topology_from_path", "arguments": named},
+        )
+        for invalid_target in ({"cb_name": "   "},):
+            with self.subTest(invalid_target=invalid_target), self.assertRaises(GateError):
+                factories._validated_generated_action(
+                    "call:correct_topology_from_path" + json.dumps(
+                        {"case_path": "active", "desired_status": False, **invalid_target}),
+                    self.schemas,
+                )
 
     def test_parameter_release_parser_requires_executable_numeric_target(
         self,

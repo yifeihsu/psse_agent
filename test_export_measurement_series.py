@@ -252,7 +252,18 @@ class BranchCurrentExportPhysicsTests(unittest.TestCase):
         estimate = payload["terminal_current_estimate"]
         self.assertAlmostEqual(estimate["alpha_from_from_bus"], 0.47, places=6)
         self.assertAlmostEqual(estimate["r_hif_pu"] / 100.0, 1.0, places=6)
-        self.assertAlmostEqual(estimate["r_hif_ohm"], 1.0, places=6)
+        self.assertAlmostEqual(estimate["r_hif_ohm"], 190.44, places=4)
+        self.assertAlmostEqual(estimate["r_hif_model_ohm"], 1.0, places=6)
+        self.assertTrue(estimate["cross_voltage_branch"])
+
+    def test_ybus_convention_changes_only_bus9_reactive_injection(self) -> None:
+        legacy = np.asarray(extract_measurement_series()[0])
+        ybus = np.asarray(extract_measurement_series(shunt_convention="ybus")[0])
+        delta = legacy - ybus
+        np.testing.assert_allclose(np.delete(delta, 36), 0.0, atol=1e-12)
+        # The checked-in model is unbalanced; capacitor power uses all phases.
+        voltage = voltage_rows_to_phasors(extract_three_phase_voltage_measurements())[9]
+        self.assertAlmostEqual(delta[36], 0.19 * float(np.mean(np.abs(voltage) ** 2)), places=5)
 
 
 if __name__ == "__main__":

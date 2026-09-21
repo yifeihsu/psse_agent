@@ -1,5 +1,6 @@
 #!/bin/bash
 set -Eeuo pipefail
+EPISODE_MAX_STEPS=${EPISODE_MAX_STEPS:-40}
 
 : "${CELL_CONFIG:?set CELL_CONFIG}"
 : "${CELL_CONFIG_SHA256:?set CELL_CONFIG_SHA256}"
@@ -164,7 +165,7 @@ print(json.load(open(sys.argv[1], encoding="utf-8"))["inputs"]["evaluation_scena
 PY
 )
 "$CELL_PYTHON" -m research.evaluate --scenarios "$SCENARIOS" --adapter "$ADAPTER" \
-  --label "occupancy-cell-$CELL_ARM" --output "$EVALUATION" --max-steps 24 \
+  --label "occupancy-cell-$CELL_ARM" --output "$EVALUATION" --max-steps "$EPISODE_MAX_STEPS" \
   --model-id "$MODEL_ID" --revision "$MODEL_REVISION" > "$ATTEMPT/evaluation_console.json"
 "$CELL_PYTHON" "$SCRIPT_DIR/build.py" gate-evaluation --config "$CELL_CONFIG" \
   --expected-config-sha "$CELL_CONFIG_SHA256" --arm "$CELL_ARM" \

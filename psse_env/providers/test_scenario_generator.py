@@ -368,24 +368,31 @@ class ScenarioConstructionTests(unittest.TestCase):
         self.assertNotIn("unresolved_signatures", scenario)
         self.assertEqual(scenario["error_cardinality"], 0)
         self.assertEqual(scenario["source_tier"], "derived_negative_control")
-        for bus in scenario["metadata"]["three_phase_voltages"]:
-            self.assertEqual(len(set(bus["vln_pu"])), 1)
-            a, b, c = bus["ang_deg"]
-            self.assertAlmostEqual(a - b, 120.0)
-            self.assertAlmostEqual(c - a, 120.0)
+        metadata = scenario["metadata"]
+        self.assertEqual(metadata["three_phase_sigma"], .005)
+        self.assertTrue(all(channel["matched_gaussian"] for channel in metadata["noise_contract"]["channels"].values()))
+        self.assertEqual(metadata["telemetry_control_semantics"]["auxiliary_means"],
+                         "fresh_balanced_OpenDSS_solve_at_source_operating_point")
+        self.assertNotEqual(scenario["measurements"], scenario["clean_measurements"])
+        # The physical mean is balanced; independent sensor noise must not be
+        # projected away to force exactly equal measured phase magnitudes.
+        self.assertTrue(any(len(set(bus["vln_pu"])) > 1 for bus in metadata["three_phase_voltages"]))
 
-    def test_tracked_hif_fallback_promotes_legacy_rows_to_scan_windows(self) -> None:
+    def test_tracked_hif_fallback_promotes_shape_but_rejects_unknown_noise(self) -> None:
         generator = Round0ScenarioGenerator(
             hif_sample_paths=DEFAULT_HIF_FALLBACK_SAMPLE_PATHS,
             seed=20260719,
         )
-        scenario = generator.build({"hif": 1})[0]
-        window = scenario["metadata"]["hif_scan_window"]
-        self.assertEqual(len(window["scans"]), 1)
+        promoted = generator._hif_rows()[0]
+        self.assertEqual(len(promoted["scans"]), 1)
         self.assertEqual(
-            window["window_metadata"]["source_kind"],
+            promoted["window_metadata"]["source_kind"],
             "tracked_single_scan_fallback",
         )
+        self.assertNotIn("z_clean", promoted["scans"][0])
+        with self.assertRaises(ScenarioRejected) as caught:
+            generator._hif_scenario(promoted, 0)
+        self.assertEqual(caught.exception.reason, "waveform_noise_contract_invalid")
 
     def test_composition_overlays_extra_measurement_faults(self) -> None:
         scenario = self.by_family["measurement+parameter"]
@@ -2255,6 +2262,20 @@ class BranchCurrentChannelPropagationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.generator = Round0ScenarioGenerator(seed=1, validate=False)
         self.z = list(json.loads(FIXTURE.read_text(encoding="utf-8"))["z_obs"])
+        # These algebraic phasor fixtures test plumbing, not a sampled sensor
+        # distribution. Exercise real noise admission separately in alignment tests.
+        def aligned_fixture(row, family):
+            from copy import deepcopy
+            aligned = deepcopy(row)
+            aligned["sigma_z"] = self.generator.noise_profile().tolist()
+            aligned["three_phase_sigma"] = .005
+            for scan in aligned.get("scans", []):
+                scan["sigma_z"] = aligned["sigma_z"].copy()
+                scan["three_phase_sigma"] = .005
+            return aligned
+        alignment = patch.object(self.generator, "_aligned_waveform_row", side_effect=aligned_fixture)
+        alignment.start()
+        self.addCleanup(alignment.stop)
 
     def test_unbalance_row_exposes_channel_and_balanced_control(self) -> None:
         from three_phase_nlm.synthetic_branch_telemetry import synthetic_unbalance_rows
@@ -2279,10 +2300,10 @@ class BranchCurrentChannelPropagationTests(unittest.TestCase):
 
         control = self.generator._telemetry_no_disturbance_scenario(row, 0)
         balanced = control["metadata"]["three_phase_branch_currents"]
-        self.assertEqual(len(balanced), len(currents))
-        for item in balanced:
-            self.assertEqual(len(set(item["i_from_pu"])), 1)
-            self.assertEqual(len(set(item["i_to_pu"])), 1)
+        self.assertEqual(len(balanced), 20)
+        self.assertTrue(any(len(set(item["i_from_pu"])) > 1 for item in balanced))
+        self.assertEqual(control["metadata"]["branch_current_sigma_pu"], .002)
+        self.assertTrue(control["metadata"]["noise_contract"]["channels"]["three_phase_branch_currents"]["matched_gaussian"])
         self.assertEqual(control["hidden_truth"]["true_unbalance_errors"], [])
 
     def test_hif_row_exposes_channel_and_strips_hidden_clean_copy(self) -> None:
@@ -2324,6 +2345,7 @@ class BranchCurrentChannelPropagationTests(unittest.TestCase):
         self.assertEqual(window["branch_current_sigma_pu"], 0.002)
         self.assertEqual(window["scans"][0]["three_phase_branch_currents"], currents)
         self.assertNotIn("three_phase_branch_currents_clean", window["scans"][0])
+        self.assertNotIn("z_clean", window["scans"][0])
         for key in metadata:
             self.assertFalse(str(key).endswith("_clean"), key)
 

@@ -147,7 +147,7 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", required=True, type=Path)
     parser.add_argument("--d0-raw", required=True, type=Path)
@@ -211,8 +211,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Disable the normalized-residual test in admission (pre-2026-09-14 rule)",
     )
+    parser.add_argument("--hif-sample-paths", nargs="+", type=Path)
+    parser.add_argument("--imbalance-sample-path", type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
 
     research = load_research_script(args.source_root.resolve())
     if args.chi_square_only:
@@ -233,6 +239,8 @@ def main(argv: list[str] | None = None) -> int:
         plan_families=families,
         system=args.system,
         measurement_corpus=args.measurement_corpus,
+        hif_sample_paths=args.hif_sample_paths,
+        imbalance_sample_path=args.imbalance_sample_path,
         balanced_artifact_dir=args.balanced_artifact_dir,
         admission_mode=args.admission_mode,
     )

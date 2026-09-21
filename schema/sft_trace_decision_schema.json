@@ -310,6 +310,51 @@
                 "number",
                 "null"
               ]
+            },
+            "local_kv_ll": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "impedance_base_ohm": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "r_hif_model_ohm": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "resistance_basis": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "resistance_class": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "voltage_base_profile": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "r_hif_ohm_range": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "number"
+              }
             }
           },
           "additionalProperties": true

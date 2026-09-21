@@ -20,11 +20,11 @@ from pathlib import Path
 from typing import Any
 
 from psse_env.research_models import GEMMA4_12B
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT
 
 from .gates import GateError
 from .provenance import stable_json_sha256
 from .research_bc0_eval import (
-    DEFAULT_MAX_STEPS,
     DEFAULT_SEED,
     REQUIRED_MAX_INPUT_TOKENS,
     RESEARCH_BC0_EVAL_CONTRACT,
@@ -37,6 +37,7 @@ from .research_bc0_eval import (
 
 
 CHECKPOINT_REPORT_CONTRACT = "research_gemma4_12b_bc0_checkpoint_eval_v1"
+DEFAULT_MAX_STEPS = DEFAULT_EPISODE_ACTION_LIMIT
 COMPARISON_REPORT_CONTRACT = "research_gemma4_12b_bc0_checkpoint_comparison_v1"
 COMPARISON_REPORT_NAME = "research_bc0_checkpoint_comparison.json"
 _LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")

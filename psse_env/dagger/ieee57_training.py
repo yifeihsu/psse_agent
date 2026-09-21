@@ -12,6 +12,7 @@ from collections import Counter
 from typing import Any, Mapping
 
 from psse_env.actions import invalid_action, safe_normalize_action
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT, bind_env_action_limit, validate_episode_action_limit
 from psse_env.state_store import policy_safe_copy
 from psse_env.dagger.dataset_builder import (
     alias_model_visible_state, bind_controller_action, examples_to_chat_sft,
@@ -124,11 +125,12 @@ def supervision_reasons(row: Mapping[str, Any]) -> list[str]:
     return reasons
 
 
-def collect_episode(envelope, *, max_steps=40, environment_factory=None):
+def collect_episode(envelope, *, max_steps=DEFAULT_EPISODE_ACTION_LIMIT, environment_factory=None):
     from .ieee57_runtime import ieee57_environment_factory, ieee57_expert_oracle_factory, validate_ieee57_runtime
     factory = environment_factory or ieee57_environment_factory
     env = factory()
-    validate_ieee57_runtime(env)
+    max_steps = bind_env_action_limit(env, max_steps)
+    validate_ieee57_runtime(env, expected_max_steps=max_steps)
     runtime = private_runtime_scenario(envelope)
     if len(runtime["measurements"]) != 491:
         raise ValueError("Balanced IEEE57 collection requires 491 measurements")
@@ -137,7 +139,7 @@ def collect_episode(envelope, *, max_steps=40, environment_factory=None):
     history, rows = [], []
     grouping = envelope["grouping"]
     for step in range(max_steps):
-        validate_ieee57_runtime(env)
+        validate_ieee57_runtime(env, expected_max_steps=max_steps)
         observation = _observation(env, history)
         # Fix the observable target BEFORE obtaining private state or truth.
         selection = select_observable_expert_actions(
@@ -168,7 +170,7 @@ def collect_episode(envelope, *, max_steps=40, environment_factory=None):
         except ValueError as exc:
             canonical_action, canonical_error = None, str(exc)
         next_state, output = env.step(action)
-        validate_ieee57_runtime(env)
+        validate_ieee57_runtime(env, expected_max_steps=max_steps)
         detector_fields = _detector_outputs(output, action["tool"])
         next_history = history + [{"state_id": observation.get("active_state_id"),
                                   "action": policy_safe_copy(action), "tool_output": policy_safe_copy(output)}]
@@ -183,6 +185,7 @@ def collect_episode(envelope, *, max_steps=40, environment_factory=None):
             "parent_plan_sha256": grouping["parent_plan_sha256"],
             "dataset_split": grouping.get("dataset_split", grouping["split"]),
             "network_case": "case57", "step": step, "iteration": 0,
+            "episode_action_limit": max_steps,
             "dataset_mode": "production", "collector_contract": CONTRACT,
             "dataset_source": "fresh_parent_assigned_observable_expert",
             "supervision_policy": CONTRACT, "policy_observation": observation,
@@ -255,7 +258,14 @@ def replay_episode(envelope, rows, exported_rows, *, environment_factory=None):
     """Replay raw prefixes, and execute exported targets using fresh aliases."""
     from .ieee57_runtime import ieee57_environment_factory, ieee57_expert_oracle_factory, validate_ieee57_runtime
     env = (environment_factory or ieee57_environment_factory)()
-    validate_ieee57_runtime(env)
+    recorded_limits = {
+        validate_episode_action_limit(row.get("episode_action_limit", DEFAULT_EPISODE_ACTION_LIMIT))
+        for row in rows
+    }
+    if len(recorded_limits) > 1:
+        raise ValueError("Replay rows disagree on their episode action limit")
+    max_steps = bind_env_action_limit(env, next(iter(recorded_limits), DEFAULT_EPISODE_ACTION_LIMIT))
+    validate_ieee57_runtime(env, expected_max_steps=max_steps)
     runtime = private_runtime_scenario(envelope)
     runtime["scenario_id"] += "_fresh_replay"
     env.reset(runtime)
@@ -267,7 +277,7 @@ def replay_episode(envelope, rows, exported_rows, *, environment_factory=None):
     history, checks = [], []
     expert = ieee57_expert_oracle_factory()
     for original in rows:
-        validate_ieee57_runtime(env)
+        validate_ieee57_runtime(env, expected_max_steps=max_steps)
         observation = _observation(env, history)
         view, aliases = _model_view(observation)
         if view != original["model_view"]:
@@ -307,7 +317,7 @@ def replay_episode(envelope, rows, exported_rows, *, environment_factory=None):
         if row is not None:
             validate_offline_teacher_target_audit_metadata(audit, require_passed=True)
         next_state, output = env.step(rebound)
-        validate_ieee57_runtime(env)
+        validate_ieee57_runtime(env, expected_max_steps=max_steps)
         _detector_outputs(output, rebound["tool"])
         if output.get("execution_status") != original["tool_output"].get("execution_status"):
             raise ValueError("Replay protocol outcome changed")

@@ -171,6 +171,16 @@ def test_evaluate_generation_separates_schema_valid_from_unknown_alias() -> None
     assert "Unknown controller state alias" in result["error"]
 
 
+def test_registry_drift_is_recorded_without_disabling_action_validation() -> None:
+    row = _row(0)
+    row["tools"][0]["function"]["description"] = "Historical wording"
+    result = evaluate_generation(row, _text("wls_from_path", {"case_path": "active"}))
+    assert result["tool_registry_matches_runtime"] is False
+    assert result["schema_valid"] is True and result["state_bound"] is True
+    invalid = evaluate_generation(row, _text("nonexistent_tool", {}))
+    assert invalid["schema_valid"] is False
+
+
 def test_summary_is_fail_closed_at_objective_action_thresholds() -> None:
     rows = [_row(index) for index in range(SAMPLE_COUNT)]
     passing = [

@@ -58,6 +58,7 @@ if [[ -n "$BALANCED_ARTIFACT_DIR" ]]; then system_args+=(--balanced-artifact-dir
 waveform_args=()
 if [[ "$SYSTEM" == case14 ]]; then
   waveform_args=(--hif-corpus "$HIF_CORPUS_TRAIN" --hif-corpus "$HIF_CORPUS_VALID" --imbalance-corpus "$IMBALANCE_CORPUS")
+  waveform_args+=(--hif-corpus "$HIF_CORPUS_TRAIN_EXTRA" --hif-corpus "$HIF_CORPUS_VALID_EXTRA")
 fi
 
 cd "$SRC"
@@ -143,9 +144,16 @@ fi
 if [[ ! -s "$OUT/suite.done" ]]; then
   protected=(--protected-suite "$BC0_SUITE")
   if [[ -s "$TRACE_VALIDATION" ]]; then protected+=(--protected-suite "$TRACE_VALIDATION"); fi
+  suite_waveform_args=()
+  if [[ "$SYSTEM" == case14 ]]; then
+    suite_waveform_args=(--hif-sample-paths "$HIF_CORPUS_TRAIN" "$HIF_CORPUS_VALID")
+    suite_waveform_args+=("$HIF_CORPUS_TRAIN_EXTRA" "$HIF_CORPUS_VALID_EXTRA")
+    suite_waveform_args+=(--imbalance-sample-path "$IMBALANCE_CORPUS")
+  fi
   "$PY" "$PIPE/build_suite.py" \
     --source-root "$SRC" \
     --d0-raw "$D0_DIR/aggregate.raw.jsonl" \
+    "${suite_waveform_args[@]}" \
     "${protected[@]}" \
     --round-train-plan "$ROUND_TRAIN_PLAN" \
     --development-plan "$DEVELOPMENT_PLAN" \

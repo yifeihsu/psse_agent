@@ -31,6 +31,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT
+
 from psse_env.actions import (
     ASK_FOR_MORE_EVIDENCE,
     COMMIT_STATE,
@@ -45,7 +47,7 @@ from psse_env.dagger.dataset_builder import (
     validate_policy_payload,
 )
 from psse_env.dagger.policy_adapter import LocalAliasPolicyAdapter
-from psse_env.dagger.protocol_bridge import unified_tool_schemas
+from psse_env.dagger.protocol_bridge import canonical_to_internal_action, unified_tool_schemas
 from psse_env.oracle import ExpertPolicyOracle, ProcessValidityOracle
 from psse_env.providers.matpower import MatpowerDeploymentProviders
 from psse_env.providers.scenario_generator import DEFAULT_CHI2_ALPHA
@@ -134,6 +136,7 @@ def production_environment_factory(
     normalized_residual_threshold: float | None = None,
     screen_checkpoint: str | None = None,
     screen_calibration: str | None = None,
+    hif_resistance_search: str = "physical_ohm",
 ) -> TransactionalPSSEEnv:
     """Construct the real MATPOWER-backed deployment environment.
 
@@ -158,6 +161,7 @@ def production_environment_factory(
         hif_alpha_grid_size=BC0_HIF_ALPHA_GRID_SIZE,
         hif_r_grid_size=BC0_HIF_R_GRID_SIZE,
         hif_max_scans=BC0_HIF_MAX_SCANS,
+        hif_resistance_search=hif_resistance_search,
     )
     env = TransactionalPSSEEnv(
         **providers.env_kwargs(),
@@ -166,7 +170,7 @@ def production_environment_factory(
         # correction cycle (branch re-screens + fetch + correct + verify +
         # commit) plus baseline and final certification; 24 truncated
         # four-and-five-error recoveries mid-cycle.
-        max_steps=40,
+        max_steps=DEFAULT_EPISODE_ACTION_LIMIT,
         history_window=4,
     )
     if env.production_dataset_mode is not True:
@@ -1302,6 +1306,15 @@ def _validated_generated_action(
         parameters,
         path=f"generated.{parsed.name}.arguments",
     )
+    if parsed.name == "correct_topology_from_path":
+        # The existing canonical protocol allows a breaker name or the
+        # one-based branch row. JSON required-fields alone cannot express the
+        # target alternative in this registry; reuse its semantic validation
+        # while preserving the generated canonical action verbatim.
+        try:
+            canonical_to_internal_action({"tool": parsed.name, "arguments": parsed.arguments})
+        except (TypeError, ValueError) as exc:
+            raise GateError(f"Generated topology target is invalid: {exc}") from exc
     return {"tool": parsed.name, "arguments": copy.deepcopy(parsed.arguments)}
 
 

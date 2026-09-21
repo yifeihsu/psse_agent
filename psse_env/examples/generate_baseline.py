@@ -8,6 +8,7 @@ from typing import Any
 from psse_env import TransactionalPSSEEnv
 from psse_env.dagger import DaggerRolloutCollector, examples_to_chat_sft, write_jsonl
 from psse_env.oracle import ExpertPolicyOracle
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT
 
 
 SEED = 42
@@ -42,7 +43,7 @@ def scenario() -> dict[str, Any]:
 
 def generate(output_dir: Path) -> list[dict[str, Any]]:
     collector = DaggerRolloutCollector(
-        env=TransactionalPSSEEnv(max_steps=6),
+        env=TransactionalPSSEEnv(max_steps=DEFAULT_EPISODE_ACTION_LIMIT),
         policy=DeterministicPolicy(),
         expert_oracle=ExpertPolicyOracle(),
         rng=random.Random(SEED),
@@ -51,7 +52,7 @@ def generate(output_dir: Path) -> list[dict[str, Any]]:
         scenarios=[scenario()],
         iteration=0,
         beta=1.0,
-        max_steps=6,
+        max_steps=DEFAULT_EPISODE_ACTION_LIMIT,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     write_jsonl(output_dir / "sample_rollout.jsonl", rows)

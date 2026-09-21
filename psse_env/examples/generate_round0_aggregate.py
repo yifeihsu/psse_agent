@@ -45,6 +45,7 @@ import psse_env.oracle as oracle_module
 import psse_env.providers.matpower as matpower_provider_module
 import psse_env.providers.scenario_generator as scenario_generator_module
 import psse_env.transactional_env as transactional_env_module
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT
 from psse_env.actions import (
     ASK_FOR_MORE_EVIDENCE,
     COMMIT_STATE,
@@ -3482,7 +3483,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-steps",
         type=int,
-        default=40,
+        default=DEFAULT_EPISODE_ACTION_LIMIT,
         help="Expert episode horizon; 40 matches the production factory.",
     )
     parser.add_argument("--counterfactuals-per-scenario", type=int, default=3)

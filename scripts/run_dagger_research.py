@@ -28,6 +28,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from psse_env.actions import INVALID_ACTION  # noqa: E402
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT  # noqa: E402
 from psse_env.dagger.dataset_builder import (  # noqa: E402
     examples_to_chat_sft,
     load_jsonl,
@@ -129,7 +130,7 @@ RESEARCH_ENVIRONMENT_OPTIONS: dict[str, Any] = {
 #: the production factory's 40-step budget (teacher V2-B).  A multi-meter
 #: root corrected one meter per commit needs about six steps per meter after
 #: the two measurement requests, so 24 could not hold four or five meters.
-RESEARCH_EPISODE_BUDGET = 40
+RESEARCH_EPISODE_BUDGET = DEFAULT_EPISODE_ACTION_LIMIT
 LEGACY_RESEARCH_PROFILE = {
     "plan_preset": "core",
     "hif_search_profile": "release",
@@ -1538,7 +1539,7 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--seed", type=int, default=20260720)
     result.add_argument("--beta", type=float, default=0.25)
-    result.add_argument("--max-steps", type=int, default=16)
+    result.add_argument("--max-steps", type=int, default=DEFAULT_EPISODE_ACTION_LIMIT)
     result.add_argument("--d1-cap", type=int, default=150)
     result.add_argument("--d1-share", type=float, default=0.25)
     result.add_argument("--candidate-multiplier", type=int, default=3)

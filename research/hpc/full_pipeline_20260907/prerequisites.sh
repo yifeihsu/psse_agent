@@ -29,7 +29,7 @@ if [[ -n "$(git -C "$SRC" status --porcelain --untracked-files=no)" ]]; then
   git -C "$SRC" status --short --untracked-files=no >&2
   exit 2
 fi
-for path in "$HIF_CORPUS_TRAIN" "$HIF_CORPUS_VALID" "$IMBALANCE_CORPUS" \
+for path in "$HIF_CORPUS_TRAIN" "$HIF_CORPUS_VALID" "$HIF_CORPUS_TRAIN_EXTRA" "$HIF_CORPUS_VALID_EXTRA" "$IMBALANCE_CORPUS" \
   "$SRC/data/measurements_5class_merged.jsonl" "$BC0_SUITE"; do
   [[ -s "$path" ]] || { echo "missing or empty input: $path" >&2; exit 2; }
 done
@@ -73,7 +73,8 @@ if [[ "$WITH_TESTS" == 1 ]]; then
     research/test_hpc_full_pipeline.py
 fi
 "$PY" - "$OUTPUT" "$actual_commit" "$WITH_TESTS" "$SRC" "$SNAPSHOT" \
-  "$HIF_CORPUS_TRAIN" "$HIF_CORPUS_VALID" "$IMBALANCE_CORPUS" "$BC0_SUITE" <<'PY'
+  "$HIF_CORPUS_TRAIN" "$HIF_CORPUS_VALID" "$IMBALANCE_CORPUS" "$BC0_SUITE" \
+  "$HIF_CORPUS_TRAIN_EXTRA" "$HIF_CORPUS_VALID_EXTRA" <<'PY'
 import datetime
 import hashlib
 import json
@@ -93,6 +94,8 @@ payload = {
     "inputs": {
         "hif_corpus_train": {"path": sys.argv[6], "sha256": sha(sys.argv[6])},
         "hif_corpus_validation": {"path": sys.argv[7], "sha256": sha(sys.argv[7])},
+        "hif_corpus_train_extra": {"path": sys.argv[10], "sha256": sha(sys.argv[10])},
+        "hif_corpus_validation_extra": {"path": sys.argv[11], "sha256": sha(sys.argv[11])},
         "imbalance_corpus": {"path": sys.argv[8], "sha256": sha(sys.argv[8])},
         "bc0_suite": {"path": sys.argv[9], "sha256": sha(sys.argv[9])},
         "tabular_corpus": {"path": sys.argv[4] + "/data/measurements_5class_merged.jsonl", "sha256": sha(sys.argv[4] + "/data/measurements_5class_merged.jsonl")},

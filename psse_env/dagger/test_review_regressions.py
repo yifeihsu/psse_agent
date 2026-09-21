@@ -1032,15 +1032,15 @@ class DaggerExecutionRegressionTests(unittest.TestCase):
                 collection_role="diagnostic",
             )
 
-    def test_default_multi_error_horizon_is_24(self):
-        self.assertEqual(inspect.signature(run_dagger).parameters["max_steps"].default, 24)
+    def test_default_multi_error_horizon_is_40(self):
+        self.assertEqual(inspect.signature(run_dagger).parameters["max_steps"].default, 40)
         self.assertIs(
             inspect.signature(run_dagger).parameters[
                 "replay_require_late_iteration_model_quota"
             ].default,
             True,
         )
-        self.assertEqual(TransactionalPSSEEnv().max_steps, 24)
+        self.assertEqual(TransactionalPSSEEnv().max_steps, 40)
 
 
 class CounterfactualSafetyRegressionTests(unittest.TestCase):

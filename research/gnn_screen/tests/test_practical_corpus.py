@@ -10,8 +10,8 @@ import pytest
 pytest.importorskip("opendssdirect")
 from research.gnn_screen.dataset import content_hash, load_manifest
 from research.gnn_screen.practical_corpus import (
-    MAIN_MIN_DISTANCE, audit_constant_pq, cohort_decision, generate_corpus, meter_overlay,
-    perturb_physical_case,
+    MAIN_MIN_DISTANCE, SLOTS, audit_constant_pq, cohort_decision, generate_corpus, meter_overlay,
+    perturb_physical_case, physical_hif_slots, reviewed_slots,
 )
 from research.gnn_screen.scenario_policy import paired_visibility
 from research.gnn_screen.wls_features import default_measurement_sigma
@@ -116,6 +116,26 @@ def test_boundary_keeps_fault_labels_and_sft_hif_challenge(practical):
     assert below and all(row["families"] for row in below)
     assert all(row["scenario_policy"]["rejection_reasons"] for row in below)
     assert not set(r["window_id"] for r in main) & set(r["window_id"] for r in boundary)
+
+
+def test_legacy_and_reviewed_slot_tables_keep_pu_options_only_physical_drops_them():
+    # The shared SLOTS tuple is the legacy_v1 contract and is unchanged (pu ranges intact).
+    legacy = {name: options for name, _, options in SLOTS}
+    assert legacy["hif_5to10"] == {"resistance_range": (5., 10.)}
+    assert legacy["measurement_hif"] == {"resistance_range": (5., 40.), "meter_count": 1}
+    assert len(SLOTS) == 17
+    # reviewed_v1 still forwards the mixed slot's legacy option untouched.
+    reviewed = {name: options for name, _, options in reviewed_slots(stage="full", split="test")}
+    assert reviewed["measurement_hif"] == {"resistance_range": (5., 40.), "meter_count": 1}
+    assert reviewed["hif_weak_evaluation"]["hif_band"] == "weak"
+    # Only the physical profile strips the dead pu option and adds the detection-limit cohort.
+    physical = {name: options for name, _, options in physical_hif_slots(stage="full", split="test")}
+    assert physical["measurement_hif"] == {"meter_count": 1}
+    assert not any("resistance_range" in options for options in physical.values())
+    assert not any("hif_band" in options for options in physical.values())
+    assert physical["hif_69kv_detection_limit_0"] == physical["hif_69kv_detection_limit_1"] == {
+        "hif_ohm_band": "detection_limit", "voltage_kv": 69.0, "destination": "hif_detection_limit_evaluation"}
+    assert "hif_69kv_detection_limit_0" not in {name for name, _, _ in physical_hif_slots(stage="full", split="train")}
 
 
 def test_meter_magnitude_count_and_same_channel_contract():

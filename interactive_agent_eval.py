@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT, validate_episode_action_limit
 from trace_protocol import (
     acquired_three_phase_context,
     canonical_tool_schemas,
@@ -224,7 +225,8 @@ def parse_args() -> argparse.Namespace:
         default=2,
         help="Number of messages to seed the conversation with. Use 2 for system+user-only eval.",
     )
-    parser.add_argument("--max-steps", type=int, default=6, help="Maximum tool/final turns to generate.")
+    parser.add_argument("--max-steps", type=int, default=DEFAULT_EPISODE_ACTION_LIMIT,
+                        help="Maximum assistant actions, including tool attempts and final responses; at most one tool is executed per action.")
     parser.add_argument("--max-new-tokens", type=int, default=1024, help="Generation limit per step.")
     parser.add_argument("--max-seq-length", type=int, default=8192, help="Context window passed to Unsloth.")
     parser.add_argument(
@@ -245,7 +247,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print the reference final assistant message from the trace, if present.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    try:
+        args.max_steps = validate_episode_action_limit(args.max_steps)
+    except ValueError as exc:
+        parser.error(str(exc))
+    return args
 
 
 def load_trace_messages(trace_file: Path, sample_index: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:

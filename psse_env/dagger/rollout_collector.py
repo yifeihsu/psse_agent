@@ -6,6 +6,7 @@ import random
 from collections import Counter
 from collections.abc import Callable, Iterable
 from concurrent.futures import Executor
+from dataclasses import replace
 from typing import Any, Mapping
 
 from psse_env.actions import (
@@ -17,6 +18,7 @@ from psse_env.actions import (
     safe_normalize_action,
 )
 from psse_env.dagger.dataset_builder import validate_policy_payload
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT, bind_env_action_limit
 from psse_env.dagger.offline_teacher_target_audit import (
     offline_teacher_target_audit,
     validate_offline_teacher_target_audit_metadata,
@@ -890,6 +892,7 @@ class DaggerRolloutCollector:
         max_steps: int,
         collection_role: str | None = None,
     ) -> list[dict[str, Any]]:
+        max_steps = bind_env_action_limit(self.env, max_steps)
         if self.supervision_policy == BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION and (
             int(iteration) != 0 or float(beta) != 1.0
         ):
@@ -1037,7 +1040,9 @@ class DaggerRolloutCollector:
             state_visited_by = "initial"
 
             for step in range(max_steps):
-                policy_observation = self._policy_observation(history)
+                policy_observation = replace(
+                    self._policy_observation(history), remaining_budget=max_steps - step
+                )
                 observation_dict = policy_observation.as_dict()
                 validate_policy_payload(observation_dict)
                 policy_action_future = None
@@ -1238,7 +1243,9 @@ class DaggerRolloutCollector:
                     "tool_output": policy_safe_copy(tool_output),
                 }
                 provisional_history = history + [provisional_transition]
-                next_policy_observation = self._policy_observation(provisional_history)
+                next_policy_observation = replace(
+                    self._policy_observation(provisional_history), remaining_budget=max_steps - step - 1
+                )
                 next_oracle_state = self._oracle_state(provisional_history, next_policy_observation)
                 transition_label = self.expert_oracle.label_transition(
                     state=oracle_state,
@@ -1254,7 +1261,9 @@ class DaggerRolloutCollector:
                     "transition_label": policy_safe_copy(transition_label),
                 }
                 next_history = history + [transition_record]
-                final_next_policy_observation = self._policy_observation(next_history)
+                final_next_policy_observation = replace(
+                    self._policy_observation(next_history), remaining_budget=max_steps - step - 1
+                )
                 final_next_oracle_state: OracleState | Mapping[str, Any] | None = None
                 if (
                     self.supervision_policy
@@ -1487,7 +1496,16 @@ class DaggerRolloutCollector:
         policy_observation: PolicyObservation,
     ) -> OracleState | Mapping[str, Any]:
         if hasattr(self.env, "get_oracle_state"):
-            return self.env.get_oracle_state(history)
+            oracle = self.env.get_oracle_state(history)
+            if isinstance(oracle, OracleState):
+                return replace(oracle, policy_observation=policy_observation)
+            if isinstance(oracle, Mapping):
+                oracle = copy.deepcopy(dict(oracle))
+                if "policy_observation" in oracle:
+                    oracle["policy_observation"] = policy_observation.as_dict()
+                else:
+                    oracle["remaining_budget"] = policy_observation.remaining_budget
+            return oracle
         return policy_observation.as_dict()
 
     def _select_expert_actions(
@@ -1619,7 +1637,7 @@ def run_dagger(
     initial_dataset: list[dict[str, Any]] | None = None,
     num_iterations: int = 8,
     beta_schedule: list[float] | None = None,
-    max_steps: int = 24,
+    max_steps: int = DEFAULT_EPISODE_ACTION_LIMIT,
     train_policy_fn: Callable[[Any, list[dict[str, Any]]], Any] | None = None,
     evaluate_fn: Callable[[Any, Any, Any], Any] | None = None,
     snapshot_policy_fn: Callable[[Any], Any] | None = None,

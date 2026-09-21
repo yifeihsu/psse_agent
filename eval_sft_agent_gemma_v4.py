@@ -10,6 +10,7 @@ cannot parse them yet.
 from __future__ import annotations
 
 import argparse
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT, validate_episode_action_limit
 import copy
 import gc
 import json
@@ -368,8 +369,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--max-turns",
         type=int,
-        default=6,
-        help="Max generation turns before forcing stop. Set high enough for 5 tool calls plus a final verdict.",
+        default=DEFAULT_EPISODE_ACTION_LIMIT,
+        help="Maximum assistant actions per episode, including failed tool attempts and final verdict; at most one tool per action.",
     )
     p.add_argument(
         "--max-new-tokens",
@@ -568,7 +569,12 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Call torch.cuda.empty_cache() every N generation turns. 0 disables periodic cache flushes.",
     )
-    return p.parse_args()
+    args = p.parse_args()
+    try:
+        args.max_turns = validate_episode_action_limit(args.max_turns)
+    except ValueError as exc:
+        p.error(str(exc))
+    return args
 
 
 def normalize_gemma_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1777,6 +1783,11 @@ def compact_tool_arguments_for_prompt(tool_name: str, arguments: dict[str, Any])
             "top_k",
             "alpha_grid_size",
             "r_grid_size",
+            "shunt_convention",
+            "kv_ll",
+            "resistance_search",
+            "r_hif_ohm_min",
+            "r_hif_ohm_max",
             "r_hif_pu_min",
             "r_hif_pu_max",
         },
@@ -1790,6 +1801,11 @@ def compact_tool_arguments_for_prompt(tool_name: str, arguments: dict[str, Any])
             "top_k",
             "alpha_grid_size",
             "r_grid_size",
+            "shunt_convention",
+            "kv_ll",
+            "resistance_search",
+            "r_hif_ohm_min",
+            "r_hif_ohm_max",
             "r_hif_pu_min",
             "r_hif_pu_max",
             "robust_loss",
@@ -1820,6 +1836,7 @@ class EvalSampleState:
     wls_completed_successfully: bool = False
     turn_trace: list[dict[str, Any]] = field(default_factory=list)
     turn_index0: int = 0
+    action_limit: int = DEFAULT_EPISODE_ACTION_LIMIT
 
     @property
     def finished(self) -> bool:
@@ -1830,6 +1847,7 @@ def init_eval_sample_state(
     sample_index: int,
     messages_gt: list[dict[str, Any]],
     runtime_context: Mapping[str, Any] | None,
+    *, action_limit: int = DEFAULT_EPISODE_ACTION_LIMIT,
 ) -> EvalSampleState:
     gt_verdict = normalize_verdict(extract_ground_truth(messages_gt))
     conversation = extract_prompt_prefix(messages_gt)
@@ -1844,6 +1862,7 @@ def init_eval_sample_state(
         meta=meta,
         index_map=index_map,
         hidden_context=hidden_context,
+        action_limit=validate_episode_action_limit(action_limit),
     )
 
 
@@ -2055,6 +2074,11 @@ def run_state_turn(
     prompt_tokens: int,
     model_generate_seconds: float,
 ) -> None:
+    if state.finished:
+        return
+    if turn_index0 >= state.action_limit or len(state.tool_calls_made) >= state.action_limit:
+        state.error_msg = f"Max turns reached without final verdict ({state.action_limit})"
+        return
     state.last_raw_generation = response_text
     turn_record: dict[str, Any] = {
         "turn": turn_index0 + 1,
@@ -2219,7 +2243,7 @@ def run_one_sample(
     model: Any,
     tokenizer: Any,
     *,
-    max_turns: int,
+    max_turns: int = DEFAULT_EPISODE_ACTION_LIMIT,
     max_new_tokens: int,
     max_input_tokens: int,
     tools: list[dict[str, Any]] | None,
@@ -2237,6 +2261,7 @@ def run_one_sample(
 ) -> dict[str, Any]:
     import torch
 
+    max_turns = validate_episode_action_limit(max_turns)
     gt_verdict = normalize_verdict(extract_ground_truth(messages_gt))
     conversation = extract_prompt_prefix(messages_gt)
     meta, index_map = extract_conversation_context(messages_gt)
@@ -2509,7 +2534,7 @@ def run_sample_batch(
     tokenizer: Any,
     *,
     sample_offset: int,
-    max_turns: int,
+    max_turns: int = DEFAULT_EPISODE_ACTION_LIMIT,
     max_new_tokens: int,
     max_input_tokens: int,
     tools: list[dict[str, Any]] | None,
@@ -2526,8 +2551,9 @@ def run_sample_batch(
 ) -> list[dict[str, Any]]:
     import torch
 
+    max_turns = validate_episode_action_limit(max_turns)
     states = [
-        init_eval_sample_state(sample_offset + batch_index, sample["messages"], sample.get("runtime_context"))
+        init_eval_sample_state(sample_offset + batch_index, sample["messages"], sample.get("runtime_context"), action_limit=max_turns)
         for batch_index, sample in enumerate(batch_samples)
     ]
 
@@ -2633,7 +2659,7 @@ def run_samples_with_rolling_scheduler(
     *,
     sample_offset: int,
     concurrent_conversations: int,
-    max_turns: int,
+    max_turns: int = DEFAULT_EPISODE_ACTION_LIMIT,
     max_new_tokens: int,
     max_input_tokens: int,
     tools: list[dict[str, Any]] | None,
@@ -2652,6 +2678,7 @@ def run_samples_with_rolling_scheduler(
     import traceback
     import torch
 
+    max_turns = validate_episode_action_limit(max_turns)
     stop_ids = get_stop_token_ids(tokenizer)
     pad_token_id = resolve_pad_token_id(tokenizer)
 
@@ -2667,6 +2694,7 @@ def run_samples_with_rolling_scheduler(
                     sample_offset + pending_index,
                     sample["messages"],
                     sample.get("runtime_context"),
+                    action_limit=max_turns,
                 )
             )
             pending_index += 1
@@ -2737,6 +2765,7 @@ def run_samples_with_rolling_scheduler(
                 pad_token_id=pad_token_id,
             )
 
+            initial_progress = {id(state): (state.turn_index0, len(state.tool_calls_made)) for state in group_states}
             try:
                 model_start = time.perf_counter()
                 with torch.inference_mode():
@@ -2783,6 +2812,15 @@ def run_samples_with_rolling_scheduler(
                 traceback.print_exc(file=sys.stdout)
                 print("Rolling batch step failed; retrying affected states serially.")
                 for row_index, state in enumerate(group_states):
+                    previous_turn, previous_calls = initial_progress[id(state)]
+                    if state.finished or state.turn_index0 != previous_turn:
+                        continue
+                    if len(state.tool_calls_made) != previous_calls:
+                        # Dispatch may have succeeded before result processing
+                        # failed. Retrying would execute the same action again.
+                        state.error_msg = f"CRITICAL ERROR: tool turn failed after dispatch; action was not replayed: {exc}"
+                        state.turn_index0 += 1
+                        continue
                     try:
                         single_inputs = model_inputs_list[row_index]
                         prompt_tokens = prompt_tokens_list[row_index]
@@ -3282,42 +3320,17 @@ def main() -> None:
                     import traceback
 
                     traceback.print_exc(file=sys.stdout)
-                    print("Batch evaluation failed; falling back to serial evaluation for this batch.")
+                    print("Batch evaluation failed; recording failure without replaying episode actions.")
                     result_batch = []
-                    for sample in batch_samples:
-                        try:
-                            result_batch.append(
-                                run_one_sample(
-                                    sample["messages"],
-                                    model,
-                                    tokenizer,
-                                    max_turns=args.max_turns,
-                                    max_new_tokens=args.max_new_tokens,
-                                    max_input_tokens=max_input_tokens,
-                                    tools=tools,
-                                    continue_on_tool_error=args.continue_on_tool_error,
-                                    continue_on_missing_context_tool=args.continue_on_missing_context_tool,
-                                    repair_wls_from_user=args.repair_wls_from_user,
-                                    enable_thinking=args.enable_thinking,
-                                    verbose=args.verbose,
-                                    runtime_context=sample.get("runtime_context"),
-                                    inject_empty_thought_channel=args.inject_empty_thought_channel,
-                                    gc_collect_every_n_turns=args.gc_collect_every_n_turns,
-                                    empty_cuda_cache_every_n_turns=args.empty_cuda_cache_every_n_turns,
-                                    filter_unavailable_helper_tools=args.filter_unavailable_helper_tools,
-                                    inject_runtime_helper_note=args.inject_runtime_helper_note,
-                                )
-                            )
-                            result_batch[-1].setdefault("sample_index", batch_start + len(result_batch) - 1)
-                        except Exception as serial_exc:
-                            traceback.print_exc(file=sys.stdout)
-                            result_batch.append(
-                                build_critical_error_result(
-                                    sample["messages"],
-                                    serial_exc,
-                                    sample_index=batch_start + len(result_batch),
-                                )
-                            )
+                    for index, sample in enumerate(batch_samples):
+                        failed = build_critical_error_result(
+                            sample["messages"], exc, sample_index=batch_start + index,
+                        )
+                        # The failed call may already have dispatched tools.
+                        # Restarting would grant a second independent budget.
+                        failed["action_count_evidence_known"] = False
+                        failed["automatic_episode_replay"] = False
+                        result_batch.append(failed)
 
                 for result in result_batch:
                     record_result(result, out_file)

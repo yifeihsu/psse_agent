@@ -18,6 +18,7 @@
 # adapter. Select exactly one phase with RESEARCH_EVAL_PHASE=d0 or d1.
 
 set -Eeuo pipefail
+EPISODE_MAX_STEPS=${EPISODE_MAX_STEPS:-40}
 
 : "${RESEARCH_SOURCE_ROOT:?set RESEARCH_SOURCE_ROOT to the research checkout}"
 : "${RESEARCH_ENV:?set RESEARCH_ENV to the research conda environment}"
@@ -116,7 +117,7 @@ eval_args=(
   --adapter-path "$ADAPTER_DIR"
   --d0-train "$D0_TRAIN"
   --output-dir "$OUTPUT_DIR"
-  --max-steps 24
+  --max-steps "$EPISODE_MAX_STEPS"
 )
 if [[ "$RESEARCH_EVAL_PHASE" == "d1" ]]; then
   eval_args+=(--d0-report "$D0_REPORT")

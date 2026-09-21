@@ -29,6 +29,7 @@ from psse_env.dagger.sft_audit import (
 from psse_env.dagger.splits import grouped_scenario_split
 from psse_env.oracle import ExpertPolicyOracle
 from psse_env.transactional_env import TransactionalPSSEEnv
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT
 
 
 SEED = 20260715
@@ -326,7 +327,7 @@ def generate(output_dir: Path, *, root_scenarios: int = DEFAULT_ROOT_SCENARIOS) 
             CORRECT_PARAMETERS: adapters.execute_correction,
             CORRECT_TOPOLOGY: adapters.execute_correction,
         },
-        max_steps=8,
+        max_steps=DEFAULT_EPISODE_ACTION_LIMIT,
         history_window=4,
     )
     provider_report = env.validate_production_configuration()
@@ -340,7 +341,7 @@ def generate(output_dir: Path, *, root_scenarios: int = DEFAULT_ROOT_SCENARIOS) 
         scenarios=scenarios,
         iteration=0,
         beta=1.0,
-        max_steps=8,
+        max_steps=DEFAULT_EPISODE_ACTION_LIMIT,
     )
     nonproduction_rows = [
         row.get("example_id")

@@ -477,9 +477,78 @@ def _meta_core(meta: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def normalized_generated_harmonic_measurements(measurements: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Require named sigma semantics; normalize explicit complex RMS once.
+
+    Missing semantics cannot establish whether historical sigma meant complex
+    RMS or one real/imaginary component. Unknown legacy observations therefore
+    require regeneration, rather than a guessed covariance conversion.
+    """
+    normalized = []
+    for position, item in enumerate(measurements):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"Harmonic measurement {position} must be a mapping")
+        semantics = item.get("sigma_semantics")
+        if semantics not in {"per_component", "complex_rms"}:
+            raise ValueError(
+                f"Harmonic measurement {position} has missing or unsupported sigma_semantics. "
+                "Regenerate legacy harmonic sources or supply verified per_component/complex_rms provenance."
+            )
+        sigma = item.get("sigma")
+        if isinstance(sigma, bool) or sigma is None or not np.isfinite(float(sigma)) or float(sigma) <= 0:
+            raise ValueError(f"Harmonic measurement {position} requires a finite positive sigma")
+        record = dict(item)
+        if semantics == "complex_rms":
+            if record.get("sigma_complex_rms") is not None and not np.isclose(
+                float(record["sigma_complex_rms"]), float(sigma), rtol=1e-12, atol=0,
+            ):
+                raise ValueError("Conflicting harmonic complex-RMS sigma declarations")
+            record["sigma_complex_rms"] = float(sigma)
+            record["sigma"] = float(sigma) / np.sqrt(2.0)
+            record["sigma_semantics"] = "per_component"
+            record["noise_alignment"] = "explicit_complex_rms_to_component"
+        elif record.get("sigma_complex_rms") is not None and not np.isclose(
+            float(record["sigma_complex_rms"]) / np.sqrt(2.0), float(sigma), rtol=1e-12, atol=0,
+        ):
+            raise ValueError("Conflicting harmonic component/RMS sigma declarations")
+        normalized.append(record)
+    return normalized
+
+
 def load_sample_sources(config: BuilderConfig) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    def load_with_waveform_noise_boundary(path: Path, source_meta: Mapping[str, Any]) -> list[dict[str, Any]]:
+        from three_phase_nlm.measurement_noise import align_legacy_waveform_row
+
+        rows = []
+        for position, source in enumerate(iter_jsonl(path)):
+            scenario = normalize_scenario(str(source.get("scenario", "")))
+            if source.get("harmonic_measurements"):
+                source["harmonic_measurements"] = normalized_generated_harmonic_measurements(source["harmonic_measurements"])
+            elif scenario == "harmonic_anomaly":
+                raise ValueError("Harmonic source has no measurements with explicit sigma semantics; regenerate it")
+            family = {"high_impedance_fault": "hif", "three_phase_imbalance": "unbalance"}.get(scenario)
+            if family is not None:
+                # Separate deterministic preparation streams avoid changing an
+                # existing observation or tying noise to downstream tool success.
+                identity = hashlib.sha256(f"{source.get('id')}:{position}:{family}".encode()).digest()
+                seed = np.random.SeedSequence([config.seed, int.from_bytes(identity[:8], "little")])
+                try:
+                    source = align_legacy_waveform_row(
+                        source, family, np.random.default_rng(seed), legacy_metadata=source_meta,
+                    )
+                    contract = source.get("noise_contract")
+                    if not isinstance(contract, Mapping) or contract.get("schema") != "generated_sensor_noise_v1":
+                        raise ValueError("explicit weighting sigmas alone do not establish the applied auxiliary noise")
+                except (TypeError, ValueError, KeyError) as exc:
+                    raise ValueError(
+                        f"Waveform source {source.get('id', position)!r} has no verified applied-noise contract: {exc}. "
+                        "Regenerate it with the aligned waveform generator or provide supported original source meta.json evidence."
+                    ) from exc
+            rows.append(source)
+        return rows
+
     base_meta = json.loads(config.meta_path.read_text(encoding="utf-8"))
-    samples = list(iter_jsonl(config.samples_path))
+    samples = load_with_waveform_noise_boundary(config.samples_path, base_meta)
 
     if config.imbalance_samples_path and config.imbalance_meta_path:
         imbalance_meta = json.loads(config.imbalance_meta_path.read_text(encoding="utf-8"))
@@ -487,7 +556,7 @@ def load_sample_sources(config: BuilderConfig) -> tuple[dict[str, Any], list[dic
             raise ValueError("Primary and imbalance metadata do not match on core measurement fields.")
         imbalance_samples = [
             rec
-            for rec in iter_jsonl(config.imbalance_samples_path)
+            for rec in load_with_waveform_noise_boundary(config.imbalance_samples_path, imbalance_meta)
             if normalize_scenario(str(rec.get("scenario", ""))) == "three_phase_imbalance"
         ]
         samples.extend(imbalance_samples)
@@ -497,7 +566,7 @@ def load_sample_sources(config: BuilderConfig) -> tuple[dict[str, Any], list[dic
         if _meta_core(base_meta) != _meta_core(hif_meta):
             raise ValueError("Primary and HIF metadata do not match on core measurement fields.")
         hif_samples = []
-        for rec in iter_jsonl(config.hif_samples_path):
+        for rec in load_with_waveform_noise_boundary(config.hif_samples_path, hif_meta):
             if normalize_scenario(str(rec.get("scenario", ""))) != "high_impedance_fault":
                 continue
             rec = dict(rec)
@@ -541,18 +610,28 @@ def call_tool_json(endpoint: str, name: str, arguments: Mapping[str, Any], timeo
             else:
                 return obj
 
+        def _declared_variances():
+            if arguments.get("R_variances_full") is not None:
+                return arguments["R_variances_full"]
+            sigma = arguments.get("sigma_z_scans", arguments.get("sigma_z", arguments.get("measurement_sigma")))
+            return None if sigma is None else np.square(np.asarray(sigma, dtype=float)).tolist()
+
         # LLM calls wls_from_path with {case_path, z}
         if name in ("wls_from_path", "wls_from_text"):
             if "case_text" in arguments:
                 result = mp_tools.wls_from_text.fn(
                     case_name=arguments.get("case_path", arguments.get("case_name", "temp")),
                     case_text=arguments["case_text"],
-                    z=arguments.get("z", arguments.get("z_obs", []))
+                    z=arguments.get("z", arguments.get("z_obs", [])),
+                    measurement_sigma=arguments.get("measurement_sigma", arguments.get("sigma_z")),
+                    exact_measurement_indices=arguments.get("exact_measurement_indices", arguments.get("structural_zero_indices")),
                 )
             else:
                 result = mp_tools.wls_from_path.fn(
                     case_path=arguments["case_path"],
-                    z=arguments.get("z", arguments.get("z_obs", []))
+                    z=arguments.get("z", arguments.get("z_obs", [])),
+                    measurement_sigma=arguments.get("measurement_sigma", arguments.get("sigma_z")),
+                    exact_measurement_indices=arguments.get("exact_measurement_indices", arguments.get("structural_zero_indices")),
                 )
             return _make_serializable(result)
             
@@ -561,7 +640,8 @@ def call_tool_json(endpoint: str, name: str, arguments: Mapping[str, Any], timeo
                 case_path=arguments["case_path"],
                 line_index=arguments["line_index"],
                 z_scans=arguments.get("z_scans", []),
-                initial_states=arguments.get("initial_states")
+                initial_states=arguments.get("initial_states"),
+                R_variances_full=_declared_variances(),
             )
             return _make_serializable(result)
             
@@ -569,7 +649,9 @@ def call_tool_json(endpoint: str, name: str, arguments: Mapping[str, Any], timeo
             result = mp_tools.correct_measurements_from_path.fn(
                 case_path=arguments["case_path"],
                 z=arguments.get("z", arguments.get("z_obs", [])),
-                suspect_group=arguments["suspect_group"]
+                suspect_group=arguments["suspect_group"],
+                R_variances_full=_declared_variances(),
+                exact_measurement_indices=arguments.get("exact_measurement_indices", arguments.get("structural_zero_indices")),
             )
             return _make_serializable(result)
             
@@ -600,6 +682,9 @@ def call_tool_json(endpoint: str, name: str, arguments: Mapping[str, Any], timeo
                 phase=arguments.get("phase"),
                 r_hif_ohm=arguments.get("r_hif_ohm"),
                 load_scale=arguments.get("load_scale", 1.0),
+                three_phase_voltages=arguments.get("three_phase_voltages"),
+                three_phase_branch_currents=arguments.get("three_phase_branch_currents"),
+                branch_current_sigma_pu=arguments.get("branch_current_sigma_pu"),
             )
             return _make_serializable(result)
 
@@ -615,8 +700,17 @@ def call_tool_json(endpoint: str, name: str, arguments: Mapping[str, Any], timeo
                 top_k=arguments.get("top_k", 5),
                 alpha_grid_size=arguments.get("alpha_grid_size", 31),
                 r_grid_size=arguments.get("r_grid_size", 35),
-                r_hif_pu_min=arguments.get("r_hif_pu_min", 5.0),
-                r_hif_pu_max=arguments.get("r_hif_pu_max", 1000.0),
+                r_hif_pu_min=arguments.get("r_hif_pu_min"),
+                r_hif_ohm_min=arguments.get("r_hif_ohm_min"),
+                r_hif_pu_max=arguments.get("r_hif_pu_max"),
+                r_hif_ohm_max=arguments.get("r_hif_ohm_max"),
+                shunt_convention=arguments.get("shunt_convention"),
+                kv_ll=arguments.get("kv_ll"),
+                resistance_search=arguments.get("resistance_search", "physical_ohm"),
+                sigma_z=arguments.get("sigma_z"),
+                three_phase_sigma=arguments.get("three_phase_sigma", 5e-3),
+                three_phase_branch_currents=arguments.get("three_phase_branch_currents"),
+                branch_current_sigma_pu=arguments.get("branch_current_sigma_pu"),
             )
             return _make_serializable(result)
 
@@ -635,10 +729,16 @@ def call_tool_json(endpoint: str, name: str, arguments: Mapping[str, Any], timeo
                 top_k=arguments.get("top_k", 5),
                 alpha_grid_size=arguments.get("alpha_grid_size", 31),
                 r_grid_size=arguments.get("r_grid_size", 35),
-                r_hif_pu_min=arguments.get("r_hif_pu_min", 5.0),
-                r_hif_pu_max=arguments.get("r_hif_pu_max", 1000.0),
+                r_hif_pu_min=arguments.get("r_hif_pu_min"),
+                r_hif_ohm_min=arguments.get("r_hif_ohm_min"),
+                r_hif_pu_max=arguments.get("r_hif_pu_max"),
+                r_hif_ohm_max=arguments.get("r_hif_ohm_max"),
+                shunt_convention=arguments.get("shunt_convention"),
+                kv_ll=arguments.get("kv_ll"),
+                resistance_search=arguments.get("resistance_search", "physical_ohm"),
                 robust_loss=arguments.get("robust_loss", "soft_l1"),
                 smoothness_lambda=arguments.get("smoothness_lambda", 0.10),
+                branch_current_sigma_pu=arguments.get("branch_current_sigma_pu"),
             )
             return _make_serializable(result)
             
@@ -850,10 +950,11 @@ def make_mock_hif_parameter_estimate_payload(
     r_hif_pu = _maybe_float(lab.get("r_hif_pu"))
     if r_hif_pu is None:
         r_hif_pu = 100.0
-    r_hif_ohm = _maybe_float(lab.get("r_hif_ohm"))
-    if r_hif_ohm is None:
-        r_hif_ohm = float(r_hif_pu) * 0.01
-    kv_ln = _maybe_float(lab.get("kv_ln")) or (1.0 / np.sqrt(3.0))
+    from three_phase_nlm.hif_units import label_physical_ohm, label_local_kv_ll, hif_resistance_record
+    physical_label = {**lab, "branch_row0": lab.get("branch_row0", candidate_branch_row0), "r_hif_pu": r_hif_pu}
+    r_hif_ohm = label_physical_ohm(physical_label)
+    kv_ln = label_local_kv_ll(physical_label) / np.sqrt(3.0)
+    physical_record = hif_resistance_record(branch_row0=candidate_branch_row0, resistance_ohm=r_hif_ohm)
     fault_v = float(kv_ln) * 1000.0
     p_kw = (fault_v**2) / float(r_hif_ohm) / 1000.0 if float(r_hif_ohm) > 0 else None
     i_amp = fault_v / float(r_hif_ohm) if float(r_hif_ohm) > 0 else None
@@ -880,6 +981,7 @@ def make_mock_hif_parameter_estimate_payload(
             "distance_percent_from_from_bus": 100.0 * float(alpha),
             "phase": lab.get("phase"),
             "r_hif_pu": float(r_hif_pu),
+            **physical_record,
             "r_hif_ohm": float(r_hif_ohm),
             "g_hif_siemens": 1.0 / float(r_hif_ohm) if float(r_hif_ohm) > 0 else None,
             "i_hif_amp": i_amp,
@@ -1025,6 +1127,16 @@ def make_user_payload(rec: Mapping[str, Any], meta: Mapping[str, Any], case_path
         },
         "task": "Call wls_from_path first, then decide whether any correction or follow-up tool is required.",
     }
+    if rec.get("measurement_convention") is not None:
+        payload["measurement_convention"] = rec["measurement_convention"]
+    sigma = rec.get("sigma_z", meta.get("sigma_z"))
+    if sigma is not None:
+        if len(sigma) != len(rec["z_obs"]):
+            raise ValueError("Source sigma_z does not match its observation vector")
+        payload["sigma_z"] = list(sigma)
+    exact = rec.get("exact_measurement_indices", rec.get("structural_zero_indices"))
+    if exact is not None:
+        payload["exact_measurement_indices"] = list(exact)
     if normalize_scenario(str(rec.get("scenario", ""))) == "three_phase_imbalance":
         payload["note"] = (
             "This snapshot is a 1φ-equivalent operator vector (phase-A voltage magnitudes plus 3φ totals). "
@@ -1058,6 +1170,7 @@ def make_parameter_followup_payload(rec: Mapping[str, Any], case_path: str) -> D
         {
             "case_path": case_path,
             "z_scans": rec.get("z_scans", []),
+            "sigma_z": rec.get("sigma_z_scans", rec.get("sigma_z")),
             "initial_states": rec.get("initial_states", []),
             "note": "Repeated measurement scans and initial states for parameter correction.",
             "suspect_line": {
@@ -1090,7 +1203,7 @@ def make_harmonic_followup_payload(rec: Mapping[str, Any], case_path: str) -> Di
     return round_user_payload(
         {
             "case_path": case_path,
-            "harmonic_measurements": rec.get("harmonic_measurements", []),
+            "harmonic_measurements": normalized_generated_harmonic_measurements(rec.get("harmonic_measurements", [])),
             "harmonic_orders": rec.get("harmonic_orders", []),
             "note": "Harmonic measurements for HSE follow-up.",
         }
@@ -1116,6 +1229,7 @@ def sanitize_hif_nlm_diagnostic(payload: Any) -> dict[str, Any]:
 
 
 def make_hif_context_payload(rec: Mapping[str, Any], case_path: str) -> Dict[str, Any]:
+    from three_phase_nlm.hif_units import label_model_ohm, label_physical_ohm, label_resistance_units
     label = rec.get("label", {})
     nlm_diagnostic = sanitize_hif_nlm_diagnostic(rec.get("nlm_diagnostic"))
     source_dir = rec.get("_source_dir")
@@ -1123,6 +1237,15 @@ def make_hif_context_payload(rec: Mapping[str, Any], case_path: str) -> Dict[str
     faulted_model_dir = None
     if source_dir and scenario_model_dir:
         faulted_model_dir = str((Path(str(source_dir)) / str(scenario_model_dir)).resolve())
+    scan_keys = ("scan_index", "z_obs", "three_phase_voltages", "three_phase_branch_currents",
+                 "branch_current_sigma_pu", "three_phase_sigma", "sigma_z", "op_point", "topology_id", "time_tag", "measurement_convention")
+    scans = []
+    for scan in rec.get("scans") or []:
+        observed = {key: scan[key] for key in scan_keys if key in scan}
+        for key in ("sigma_z", "three_phase_sigma", "branch_current_sigma_pu"):
+            if key not in observed and rec.get(key) is not None:
+                observed[key] = rec[key]
+        scans.append(observed)
     return round_user_payload(
         {
             "case_path": case_path,
@@ -1130,8 +1253,9 @@ def make_hif_context_payload(rec: Mapping[str, Any], case_path: str) -> Dict[str
             "three_phase_voltages": rec.get("three_phase_voltages", []),
             "three_phase_branch_currents": rec.get("three_phase_branch_currents", []),
             "branch_current_sigma_pu": rec.get("branch_current_sigma_pu"),
+            "three_phase_sigma": rec.get("three_phase_sigma"),
             "scan_window_path": f"bound://hif_window/{rec.get('id')}",
-            "scans": rec.get("scans", []),
+            "scans": scans,
             "sigma_z": rec.get("sigma_z"),
             "scan_count": len(rec.get("scans", [])) if isinstance(rec.get("scans"), list) else 0,
             "nlm_diagnostic": nlm_diagnostic,
@@ -1139,7 +1263,10 @@ def make_hif_context_payload(rec: Mapping[str, Any], case_path: str) -> Dict[str
             "pristine_model_dir": str(REPO_ROOT / "IEEE_14_OpenDSS"),
             "faulted_model_dir": faulted_model_dir,
             "phase": label.get("phase") if isinstance(label, Mapping) else None,
-            "r_hif_ohm": label.get("r_hif_ohm") if isinstance(label, Mapping) else None,
+            "r_hif_ohm": label_model_ohm(label),
+            "r_hif_ohm_physical": label_physical_ohm(label),
+            "resistance_units": label_resistance_units(label),
+            "measurement_convention": rec.get("measurement_convention"),
             "load_scale": rec.get("op_point", {}).get("load_scale") if isinstance(rec.get("op_point"), Mapping) else None,
             "note": "Compact three-phase NLM HIF localization context bound from the generated sample.",
         }
@@ -1151,6 +1278,8 @@ def make_imbalance_followup_payload(rec: Mapping[str, Any]) -> Dict[str, Any]:
         "three_phase_voltages": rec.get("three_phase_voltages", []),
         "note": "Per-bus three-phase VLN voltage measurements from substations.",
     }
+    if rec.get("three_phase_sigma") is not None:
+        payload["three_phase_sigma"] = rec["three_phase_sigma"]
     if rec.get("three_phase_branch_currents"):
         payload["three_phase_branch_currents"] = rec.get("three_phase_branch_currents")
         payload["branch_current_sigma_pu"] = rec.get("branch_current_sigma_pu")
@@ -1168,6 +1297,8 @@ def make_verification_snapshot_payload(
     stage: str,
     *,
     remaining_families: Optional[Sequence[str]] = None,
+    sigma_z: Optional[Sequence[float]] = None,
+    exact_measurement_indices: Optional[Sequence[int]] = None,
 ) -> Dict[str, Any]:
     payload: dict[str, Any] = {
         "case_path": case_path,
@@ -1177,6 +1308,15 @@ def make_verification_snapshot_payload(
     }
     if remaining_families is not None:
         payload["remaining_families"] = list(remaining_families)
+    if sigma_z is not None:
+        sigma = np.asarray(sigma_z, dtype=float)
+        if sigma.shape != (len(z_obs),) or not np.isfinite(sigma).all() or np.any(sigma < 0):
+            raise ValueError("Verification sigma_z must match its observation vector")
+        exact = list(exact_measurement_indices or [])
+        if set(np.flatnonzero(sigma == 0).tolist()) != set(exact):
+            raise ValueError("Verification zero variances must be exact measurement constraints")
+        payload["sigma_z"] = sigma.tolist()
+        payload["exact_measurement_indices"] = exact
     return round_user_payload(payload)
 
 
@@ -1315,6 +1455,60 @@ def get_explicit_verification_snapshot(rec: Mapping[str, Any], stage: str) -> Op
     if not isinstance(item, Mapping):
         return None
     return dict(item)
+
+
+class UnsupportedTopologyVerification(ValueError):
+    """No acquired topology-verification observation with known covariance."""
+
+
+def verified_topology_snapshot(
+    snapshot: Mapping[str, Any], *, current_z_obs: Sequence[float],
+    current_sigma_z: Optional[Sequence[float]],
+    current_channel_ids: Optional[Sequence[Any]] = None,
+    current_exact_indices: Optional[Sequence[int]] = None,
+) -> dict[str, Any]:
+    """Select observed telemetry; never convert a solver prediction to data.
+
+    A model-only update may retain the original observations only when explicit
+    external channel identities agree. Equal vector lengths alone are not
+    evidence of identity after a topology change.
+    """
+    if snapshot.get("measurement_role", snapshot.get("z_corrected_role")) in {
+        "noiseless_model_prediction", "model_prediction", "noiseless_reference",
+    }:
+        raise UnsupportedTopologyVerification("topology_verification_noiseless_model_prediction")
+    preserve = snapshot.get("z_obs_policy") == "preserve_current_z_obs"
+    if preserve:
+        target_ids = snapshot.get("measurement_channel_ids")
+        if (not isinstance(current_channel_ids, (list, tuple)) or not current_channel_ids
+                or not isinstance(target_ids, (list, tuple)) or not target_ids
+                or not all(isinstance(item, str) and item for item in current_channel_ids)
+                or len(set(current_channel_ids)) != len(current_channel_ids)
+                or list(current_channel_ids) != list(target_ids)
+                or len(current_channel_ids) != len(current_z_obs)):
+            raise UnsupportedTopologyVerification("topology_verification_channel_identity_unverified")
+        z = list(current_z_obs)
+        sigma = current_sigma_z
+        exact = list(current_exact_indices or [])
+        if snapshot.get("sigma_z") is not None:
+            declared, existing = np.asarray(snapshot["sigma_z"], dtype=float), np.asarray(sigma, dtype=float)
+            if declared.shape != existing.shape or not np.allclose(declared, existing, rtol=1e-12, atol=0):
+                raise UnsupportedTopologyVerification("topology_verification_preserved_observation_covariance_changed")
+    else:
+        z = snapshot.get("z_obs")
+        sigma = snapshot.get("sigma_z")
+        exact = list(snapshot.get("exact_measurement_indices", snapshot.get("structural_zero_indices", [])))
+    if not isinstance(z, (list, tuple)) or sigma is None:
+        raise UnsupportedTopologyVerification("topology_verification_noisy_observation_or_covariance_missing")
+    values, weights = np.asarray(z, dtype=float), np.asarray(sigma, dtype=float)
+    if (values.ndim != 1 or weights.shape != values.shape or not np.isfinite(values).all()
+            or not np.isfinite(weights).all() or np.any(weights < 0)
+            or set(np.flatnonzero(weights == 0).tolist()) != set(exact)):
+        raise UnsupportedTopologyVerification("topology_verification_observation_covariance_invalid")
+    return {"z_obs": values.tolist(), "sigma_z": weights.tolist(),
+            "exact_measurement_indices": exact,
+            "measurement_role": "sensor_observation",
+            "original_observations_preserved": preserve}
 
 
 def bind_verification_snapshot_case(
@@ -2253,6 +2447,7 @@ def build_final_target(
         )
         if estimated:
             parameter_details = {
+                **{key: estimated.get(key) for key in ("local_kv_ll", "impedance_base_ohm", "r_hif_model_ohm", "resistance_basis", "resistance_class", "resistance_units", "voltage_base_profile", "r_hif_ohm_range")},
                 "parameter_fit": fit,
                 "parameter_uncertainty": uncertainty,
                 "parameter_observability": observability,
@@ -2561,6 +2756,8 @@ def append_multi_error_actions(
     current_case_visible = base_case_visible
     current_case_backend: Any = base_case_backend
     current_z_obs: list[float] = list(rec.get("z_obs", []))
+    current_sigma_z = rec.get("sigma_z", meta.get("sigma_z"))
+    current_exact_indices = rec.get("exact_measurement_indices", rec.get("structural_zero_indices", []))
     previous_wls_payload: Mapping[str, Any] = wls_payload
     corrected_families: list[str] = []
     label = rec.get("label", {})
@@ -2618,15 +2815,25 @@ def append_multi_error_actions(
         note: str,
         remaining_families: Optional[Sequence[str]] = None,
     ) -> Mapping[str, Any]:
-        nonlocal current_z_obs, previous_wls_payload
+        nonlocal current_z_obs, previous_wls_payload, current_sigma_z, current_exact_indices
         pre_payload = previous_wls_payload
         current_z_obs = list(z_verify)
+        explicit_noise = get_explicit_verification_snapshot(rec, verify_stage)
+        if explicit_noise is not None and explicit_noise.get("sigma_z_policy") != "preserve_current_sigma_z":
+            if explicit_noise.get("sigma_z") is not None:
+                current_sigma_z = explicit_noise["sigma_z"]
+                current_exact_indices = explicit_noise.get("exact_measurement_indices", explicit_noise.get("structural_zero_indices", []))
+        elif explicit_noise is None and verify_stage == "post_topology_correction" and rec.get("sigma_z_full_model") is not None:
+            current_sigma_z = rec["sigma_z_full_model"]
+            current_exact_indices = rec.get("exact_measurement_indices_full_model", [])
         verification_snapshot = make_verification_snapshot_payload(
             verification_case_visible,
             current_z_obs,
             note,
             verify_stage,
             remaining_families=remaining_families,
+            sigma_z=current_sigma_z,
+            exact_measurement_indices=current_exact_indices,
         )
         runtime_context["tool_context"].setdefault("verification_snapshots", {})[verify_stage] = verification_snapshot
         hidden_context["snapshot_context"] = verification_snapshot
@@ -2775,6 +2982,11 @@ def append_multi_error_actions(
                 note = "Post-topology-correction verification snapshot."
                 remaining = None
                 if explicit is not None:
+                    observed_snapshot = verified_topology_snapshot(
+                        explicit, current_z_obs=current_z_obs, current_sigma_z=current_sigma_z,
+                        current_channel_ids=rec.get("measurement_channel_ids"),
+                        current_exact_indices=current_exact_indices,
+                    )
                     verification_case_visible = bind_verification_snapshot_case(
                         snapshot=explicit,
                         stage=verify_stage,
@@ -2785,31 +2997,36 @@ def append_multi_error_actions(
                         current_case_visible=current_case_visible,
                         current_case_backend=current_case_backend,
                     )
-                    z_verify = verification_z_obs_from_snapshot(explicit, current_z_obs)
+                    z_verify = observed_snapshot["z_obs"]
+                    current_sigma_z = observed_snapshot["sigma_z"]
+                    current_exact_indices = observed_snapshot["exact_measurement_indices"]
                     note = str(explicit.get("note") or note)
                     remaining = explicit.get("remaining_families")
                     if explicit.get("case_path_policy") != "preserve_current_case":
                         current_case_visible = verification_case_visible
                         current_case_backend = explicit.get("case_path") or current_case_backend
-                elif rec.get("corrected_model_path"):
+                elif rec.get("corrected_model_path") and rec.get("z_true_full_model") is not None:
+                    observed_snapshot = verified_topology_snapshot(
+                        {"z_obs": rec["z_true_full_model"], "sigma_z": rec.get("sigma_z_full_model"),
+                         "exact_measurement_indices": rec.get("exact_measurement_indices_full_model", [])},
+                        current_z_obs=current_z_obs, current_sigma_z=current_sigma_z,
+                    )
                     verification_case_visible = make_case_alias(base_case_visible, "topology_verify", sid)
                     current_case_visible = verification_case_visible
                     current_case_backend = rec["corrected_model_path"]
                     runtime_context["case_aliases"][verification_case_visible] = runtime_case_reference(
                         current_case_backend
                     )
-                    z_verify = current_z_obs
-                elif isinstance(topo_payload.get("z_corrected"), list):
-                    verification_case_visible = current_case_visible
-                    z_verify = list(topo_payload["z_corrected"])
+                    z_verify = observed_snapshot["z_obs"]
+                    current_sigma_z = observed_snapshot["sigma_z"]
+                    current_exact_indices = observed_snapshot["exact_measurement_indices"]
                     if "measurement_error" in families and "measurement_error" not in corrected_families:
-                        z_verify = apply_measurement_label_to_snapshot(
-                            z_verify,
-                            component_label(rec, "measurement_error"),
-                        )
+                        raise UnsupportedTopologyVerification("topology_verification_remaining_meter_identity_unverified")
                 else:
-                    z_verify = None
-                    verification_case_visible = current_case_visible
+                    # A solver's z_corrected is a noiseless model prediction.
+                    # Without acquired data/covariance or a verified identity
+                    # mapping, do not replace the original noisy measurements.
+                    raise UnsupportedTopologyVerification("topology_verification_noisy_observation_or_covariance_missing")
 
                 if isinstance(z_verify, list):
                     remaining_list = _remaining_after("topology_error", remaining)
@@ -3291,6 +3508,8 @@ def build_tool_precondition_hardening_trace(
         z_verify,
         "Post-measurement-correction verification snapshot.",
         verify_stage,
+        sigma_z=rec.get("sigma_z", meta.get("sigma_z")),
+        exact_measurement_indices=rec.get("exact_measurement_indices", rec.get("structural_zero_indices")),
     )
     runtime_context["tool_context"].setdefault("verification_snapshots", {})[verify_stage] = verification_snapshot
     hidden_context["snapshot_context"] = verification_snapshot
@@ -3481,20 +3700,16 @@ def build_sft(config: BuilderConfig) -> None:
                 continue
 
             if scenario == "multi_error":
-                multi_result = append_multi_error_actions(
-                    config=config,
-                    rec=rec,
-                    sid=sid,
-                    meta=meta,
-                    idx_map=idx_map,
-                    base_case_backend=base_case_backend,
-                    base_case_visible=base_case_visible,
-                    runtime_context=runtime_context,
-                    hidden_context=hidden_context,
-                    messages=messages,
-                    wls_payload=wls_payload,
-                    rng_np=rng_np,
-                )
+                try:
+                    multi_result = append_multi_error_actions(
+                        config=config, rec=rec, sid=sid, meta=meta, idx_map=idx_map,
+                        base_case_backend=base_case_backend, base_case_visible=base_case_visible,
+                        runtime_context=runtime_context, hidden_context=hidden_context,
+                        messages=messages, wls_payload=wls_payload, rng_np=rng_np,
+                    )
+                except UnsupportedTopologyVerification as exc:
+                    rejected_rows.append({"id": sid, "scenario": scenario, "reason": str(exc)})
+                    continue
                 measurement_suspect_group = multi_result["measurement_suspect_group"]
                 verification_payloads = dict(multi_result["verification_payloads"])
                 verification_pre_payloads = dict(multi_result["verification_pre_payloads"])
@@ -3567,6 +3782,8 @@ def build_sft(config: BuilderConfig) -> None:
                         z2,
                         "Post-measurement-correction verification snapshot.",
                         verify_stage,
+                        sigma_z=rec.get("sigma_z", meta.get("sigma_z")),
+                        exact_measurement_indices=rec.get("exact_measurement_indices", rec.get("structural_zero_indices")),
                     )
                     runtime_context["tool_context"].setdefault("verification_snapshots", {})[verify_stage] = verification_snapshot
                     hidden_context["snapshot_context"] = verification_snapshot
@@ -3688,9 +3905,11 @@ def build_sft(config: BuilderConfig) -> None:
                         )
                         verification_snapshot = make_verification_snapshot_payload(
                             verification_case_visible,
-                            rec["z_true"],
+                            rec["z_obs"],
                             "Post-parameter-correction verification snapshot.",
                             verify_stage,
+                            sigma_z=rec.get("sigma_z", meta.get("sigma_z")),
+                            exact_measurement_indices=rec.get("exact_measurement_indices", rec.get("structural_zero_indices")),
                         )
                         runtime_context["tool_context"].setdefault("verification_snapshots", {})[verify_stage] = verification_snapshot
                         hidden_context["snapshot_context"] = verification_snapshot
@@ -3799,14 +4018,33 @@ def build_sft(config: BuilderConfig) -> None:
 
                     case_path_verify = make_case_alias(base_case_visible, "topology_verify", sid)
                     z_verify = None
-                    if "corrected_model_path" in rec and "z_true_full_model" in rec:
-                        runtime_context["case_aliases"][case_path_verify] = runtime_case_reference(
-                            rec["corrected_model_path"]
-                        )
-                        z_verify = rec["z_true_full_model"]
-                    elif isinstance(topo_payload.get("z_corrected"), list):
-                        runtime_context["case_aliases"][case_path_verify] = runtime_case_reference(base_case_backend)
-                        z_verify = topo_payload["z_corrected"]
+                    try:
+                        explicit = get_explicit_verification_snapshot(rec, "post_topology_correction")
+                        if explicit is not None:
+                            observed_snapshot = verified_topology_snapshot(
+                                explicit, current_z_obs=rec["z_obs"],
+                                current_sigma_z=rec.get("sigma_z", meta.get("sigma_z")),
+                                current_channel_ids=rec.get("measurement_channel_ids"),
+                                current_exact_indices=rec.get("exact_measurement_indices", rec.get("structural_zero_indices")),
+                            )
+                            case_path_verify = bind_verification_snapshot_case(
+                                snapshot=explicit, stage="post_topology_correction", sid=sid,
+                                base_case_visible=base_case_visible, base_case_backend=base_case_backend,
+                                runtime_context=runtime_context,
+                            )
+                        elif "corrected_model_path" in rec and "z_true_full_model" in rec:
+                            observed_snapshot = verified_topology_snapshot(
+                                {"z_obs": rec["z_true_full_model"], "sigma_z": rec.get("sigma_z_full_model"),
+                                 "exact_measurement_indices": rec.get("exact_measurement_indices_full_model", [])},
+                                current_z_obs=rec["z_obs"], current_sigma_z=rec.get("sigma_z"),
+                            )
+                            runtime_context["case_aliases"][case_path_verify] = runtime_case_reference(rec["corrected_model_path"])
+                        else:
+                            raise UnsupportedTopologyVerification("topology_verification_noisy_observation_or_covariance_missing")
+                        z_verify = observed_snapshot["z_obs"]
+                    except UnsupportedTopologyVerification as exc:
+                        rejected_rows.append({"id": sid, "scenario": scenario, "reason": str(exc)})
+                        continue
 
                     if isinstance(z_verify, list):
                         verify_stage = "post_topology_correction"
@@ -3815,6 +4053,8 @@ def build_sft(config: BuilderConfig) -> None:
                             z_verify,
                             "Post-topology-correction verification snapshot.",
                             verify_stage,
+                            sigma_z=observed_snapshot["sigma_z"],
+                            exact_measurement_indices=observed_snapshot["exact_measurement_indices"],
                         )
                         runtime_context["tool_context"].setdefault("verification_snapshots", {})[verify_stage] = verification_snapshot
                         hidden_context["snapshot_context"] = verification_snapshot

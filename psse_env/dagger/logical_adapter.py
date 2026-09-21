@@ -21,6 +21,7 @@ from psse_env.oracle.candidate_quality import CandidateAssessment, CandidateDisp
 from psse_env.oracle.process_validity import ProcessValidityOracle
 from psse_env.state_store import find_forbidden_policy_paths, policy_safe_copy
 from psse_env.transactional_env import TransactionalPSSEEnv
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT, bind_env_action_limit
 from .logical_protocol import ALLOWED_INTERNAL, canonical_to_internal_action, internal_to_canonical_action
 
 CONTRACT = "ieee57_pure_logical_transaction_v1"
@@ -429,7 +430,8 @@ def observable_logical_teacher(observation):
     return {"tool": RUN_WLS, "arguments": {"state_id": active}}
 
 
-def run_logical_episode(env, scenario, *, max_steps=16):
+def run_logical_episode(env, scenario, *, max_steps=DEFAULT_EPISODE_ACTION_LIMIT):
+    max_steps = bind_env_action_limit(env, max_steps)
     env.reset(scenario)
     steps = []
     for _ in range(max_steps):

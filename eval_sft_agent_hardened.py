@@ -32,6 +32,7 @@ Usage examples:
 from __future__ import annotations
 
 import argparse
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT, validate_episode_action_limit
 import ast
 import gc
 import json
@@ -69,8 +70,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--max-turns",
         type=int,
-        default=4,
-        help="Max tool-call turns before forcing stop (safety)",
+        default=DEFAULT_EPISODE_ACTION_LIMIT,
+        help="Maximum assistant actions, including failed tool attempts and final verdict; one tool per action",
     )
     p.add_argument(
         "--max-new-tokens",
@@ -128,7 +129,12 @@ def parse_args() -> argparse.Namespace:
         action="store_false",
         help="Disable auto-repair of malformed wls_from_path arguments from the user payload",
     )
-    return p.parse_args()
+    args = p.parse_args()
+    try:
+        args.max_turns = validate_episode_action_limit(args.max_turns)
+    except ValueError as exc:
+        p.error(str(exc))
+    return args
 
 
 # ---------------------------------------------------------------------------
@@ -273,8 +279,10 @@ DEFAULT_POWER_TOOLS: list[dict[str, Any]] = [
                     "top_k": {"type": "integer", "default": 5},
                     "alpha_grid_size": {"type": "integer", "default": 31},
                     "r_grid_size": {"type": "integer", "default": 35},
-                    "r_hif_pu_min": {"type": "number", "default": 5.0},
-                    "r_hif_pu_max": {"type": "number", "default": 1000.0},
+                    "r_hif_ohm_min": {"type": "number", "default": 50.0},
+                "r_hif_ohm_max": {"type": "number", "default": 5000.0},
+                "r_hif_pu_min": {"type": ["number", "null"], "default": None},
+                    "r_hif_pu_max": {"type": ["number", "null"], "default": None},
                 },
                 "required": ["case_path", "candidate_branch_row0"],
             },
@@ -297,8 +305,10 @@ DEFAULT_POWER_TOOLS: list[dict[str, Any]] = [
                     "top_k": {"type": "integer", "default": 5},
                     "alpha_grid_size": {"type": "integer", "default": 31},
                     "r_grid_size": {"type": "integer", "default": 35},
-                    "r_hif_pu_min": {"type": "number", "default": 5.0},
-                    "r_hif_pu_max": {"type": "number", "default": 1000.0},
+                    "r_hif_ohm_min": {"type": "number", "default": 50.0},
+                "r_hif_ohm_max": {"type": "number", "default": 5000.0},
+                "r_hif_pu_min": {"type": ["number", "null"], "default": None},
+                    "r_hif_pu_max": {"type": ["number", "null"], "default": None},
                     "robust_loss": {"type": "string", "enum": ["linear", "soft_l1", "huber"], "default": "soft_l1"},
                     "smoothness_lambda": {"type": "number", "default": 0.10},
                 },
@@ -1248,7 +1258,7 @@ def run_one_sample(
     model: Any,
     tokenizer: Any,
     *,
-    max_turns: int,
+    max_turns: int = DEFAULT_EPISODE_ACTION_LIMIT,
     max_new_tokens: int,
     max_input_tokens: int,
     tools: list[dict[str, Any]] | None,
@@ -1259,6 +1269,7 @@ def run_one_sample(
 ) -> dict[str, Any]:
     import torch
 
+    max_turns = validate_episode_action_limit(max_turns)
     gt_verdict = normalize_verdict(extract_ground_truth(messages_gt))
     conversation = extract_prompt_prefix(messages_gt)
     user_snapshot = extract_user_snapshot(messages_gt)

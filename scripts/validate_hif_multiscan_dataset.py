@@ -37,7 +37,8 @@ from three_phase_nlm.hif_parameter_estimator import (  # noqa: E402
     _resolve_model_dir,
     _simulate_candidate,
 )
-from three_phase_nlm.ieee14_adapter import branch_info_for_row0  # noqa: E402
+from IEEE_14_OpenDSS.measurement_convention import resolve_shunt_convention
+from three_phase_nlm.ieee14_adapter import ELIGIBLE_HIF_BRANCHES, branch_info_for_row0  # noqa: E402
 from three_phase_nlm.branch_current_analysis import (  # noqa: E402
     BRANCH_CURRENT_CHANNEL,
     branch_current_rows_valid,
@@ -220,6 +221,7 @@ def _replay_clean_scans(
     rows: Sequence[Mapping[str, Any]],
     *,
     limit: int,
+    meta: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     model_dir = _resolve_model_dir(None, "case14")
     token_cache: dict[int, list[str]] = {}
@@ -254,6 +256,7 @@ def _replay_clean_scans(
                         "phase": str(label["phase"]),
                         "r_hif_pu": float(label["r_hif_pu"]),
                         "op_point": scan["op_point"],
+                        "shunt_convention": resolve_shunt_convention(None, scan, row, (meta or {}).get("hif", {})),
                     },
                     sort_keys=True,
                     separators=(",", ":"),
@@ -267,6 +270,7 @@ def _replay_clean_scans(
                         phase=str(label["phase"]),
                         r_hif_pu=float(label["r_hif_pu"]),
                         op_point=scan["op_point"],
+                        shunt_convention=resolve_shunt_convention(None, scan, row, (meta or {}).get("hif", {})),
                     )["z"]
                 error = float(
                     np.max(
@@ -311,7 +315,10 @@ def main() -> None:
     args = parser.parse_args()
 
     meta = json.loads(args.meta.read_text(encoding="utf-8"))
-    rows = [row for _line_no, row in _iter_jsonl(args.samples)]
+    all_rows = [row for _line_no, row in _iter_jsonl(args.samples)]
+    rows = [row for row in all_rows if row.get("scenario") != "no_error"]
+    healthy_rows = [row for row in all_rows if row.get("scenario") == "no_error"]
+    eligible = set(meta.get("hif", {}).get("eligible_branch_row0", ELIGIBLE_HIF_BRANCHES))
     issues: Counter[str] = Counter()
     expected_scans = int(meta.get("hif", {}).get("scan_window", {}).get("scans_per_window", 20))
     all_ops: list[list[float]] = []
@@ -322,11 +329,16 @@ def main() -> None:
     duplicate_windows = 0
     branch_current_scan_count = 0
 
+    for control in healthy_rows:
+        if not _finite_vector(control.get("z_obs"), 122) or not _finite_vector(control.get("z_clean"), 122):
+            issues["bad_healthy_control"] += 1
     schemas_equal = True
     points_unique = True
     values_finite = True
     topology_constant = True
     for row in rows:
+        if (row.get("shared_label") or row.get("label") or {}).get("branch_row0") not in eligible:
+            issues["ineligible_branch"] += 1
         scans = row.get("scans")
         if not isinstance(scans, list) or len(scans) != expected_scans:
             issues["unexpected_scan_count"] += 1
@@ -360,7 +372,16 @@ def main() -> None:
                 issues["missing_z_clean"] += 1
             vector = scan.get("z_clean") if _finite_vector(scan.get("z_clean"), 122) else scan.get("z_obs")
             if _finite_vector(vector, 122):
-                physics_vectors.append(vector)
+                physics_vector = list(vector)
+                if resolve_shunt_convention(None, scan, row, meta.get("hif", {})) == "ybus":
+                    voltages = scan.get("three_phase_voltages_clean") or scan.get("three_phase_voltages") or []
+                    bus9 = next((v for v in voltages if str(v.get("bus")).lower() == "b9"), None)
+                    if bus9 is None:
+                        issues["missing_bus9_shunt_voltage"] += 1
+                    else:
+                        # Restore the actual capacitor injection only for external-terminal KCL.
+                        physics_vector[36] += .19 * float(np.mean(np.square(bus9["vln_pu"])))
+                physics_vectors.append(physics_vector)
                 measurement_vectors.append(vector)
             if not _phasors_valid(scan.get("three_phase_voltages")):
                 issues["bad_three_phase_voltages"] += 1
@@ -437,7 +458,7 @@ def main() -> None:
         endpoints = _branch_endpoints(meta)
         data_physics = _measurement_physics(physics_vectors, endpoints)
         engine_physics = _engine_transformer_loss_check()
-        replay = _replay_clean_scans(rows, limit=max(0, int(args.replay_limit)))
+        replay = _replay_clean_scans(rows, limit=max(0, int(args.replay_limit)), meta=meta)
         operating_checks["all_points_reconstructable"] = replay["all_points_reconstructable"]
         if not data_physics["transformer_signature_passed"]:
             issues["transformer_two_thirds_signature"] += 1
@@ -456,6 +477,8 @@ def main() -> None:
     for name, passed in operating_checks.items():
         if passed is False:
             issues[f"operating_point_{name}"] += 1
+    result["healthy_control_count"] = len(healthy_rows)
+    result["eligible_branch_row0"] = sorted(eligible)
     result["issues"] = dict(sorted(issues.items()))
     result["error_count"] = int(sum(issues.values()))
     result["success"] = not issues

@@ -12,7 +12,13 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from hif_search_limits import validate_hif_search_limits
+from IEEE_14_OpenDSS.measurement_convention import (
+    MEASUREMENT_CONVENTION_KEY,
+    SHUNT_CONVENTION_LEGACY,
+    resolve_shunt_convention,
+    validate_shunt_convention,
+)
+from hif_search_limits import validate_hif_resistance_box, validate_hif_search_limits
 
 from .branch_current_analysis import (
     BRANCH_CURRENT_CHANNEL,
@@ -23,10 +29,15 @@ from .branch_current_analysis import (
 )
 from .dss_hif_injector import _phase_number
 from .hif_parameter_estimator import (
+    RESISTANCE_SEARCH_PHYSICAL_OHM,
+    _RESISTANCE_SEARCH_MODES,
     _candidate_payload,
     _line_tokens,
+    _physical_hif_magnitudes,
     _residual_vector,
     _resolve_model_dir,
+    _resolve_search_configuration,
+    _search_box_payload,
     _simulate_base,
     _simulate_candidate,
     _terminal_seed_points,
@@ -34,6 +45,7 @@ from .hif_parameter_estimator import (
     classify_parameter_certainty,
     terminal_current_branch_evidence,
 )
+from . import hif_units
 from .hif_operating_point import canonicalize_ieee14_operating_point
 from .ieee14_adapter import branch_info_for_row0
 
@@ -118,6 +130,10 @@ class HIFScan:
     #: re-parse the observed rows.
     voltage_phasors: Any = None
     current_phasors: Any = None
+    #: Pinj/Qinj shunt convention the scan was exported with (its
+    #: ``measurement_convention`` declaration); absent means the historical
+    #: exporter convention so tracked corpora replay unchanged.
+    shunt_convention: str = SHUNT_CONVENTION_LEGACY
 
 
 def _simulation_phasors(
@@ -147,8 +163,13 @@ def _aggregate_terminal_estimates(
     *,
     r_hif_pu_min: float,
     r_hif_pu_max: float,
+    impedance_base_ohm: float | None = None,
 ) -> dict[str, Any] | None:
-    """Combine per-scan closed-form estimates into one seed with a phase vote."""
+    """Combine per-scan closed-form estimates into one seed with a phase vote.
+
+    ``impedance_base_ohm`` (the candidate line's local base) adds physical
+    ``r_hif_ohm``/``r_hif_ohm_interval`` next to the pu seed.
+    """
     if not estimates:
         return None
     phase_votes: dict[str, float] = {}
@@ -282,6 +303,7 @@ def _parse_scans(
     scans: Sequence[Mapping[str, Any]] | None,
     scan_window_path: str | Path | None,
     default_sigma_z: Sequence[float] | None = None,
+    shunt_convention: str | None = None,
 ) -> tuple[list[HIFScan], dict[str, Any]]:
     window: Mapping[str, Any] = {}
     raw_scans: Any = scans
@@ -361,10 +383,13 @@ def _parse_scans(
                 branch_current_sigma=branch_current_sigma,
                 voltage_phasors=_voltage_rows_to_phasors(item.get("three_phase_voltages")),
                 current_phasors=branch_current_rows_to_phasors(branch_currents),
+                shunt_convention=resolve_shunt_convention(shunt_convention, item, window),
             )
         )
     if len(topology_ids) > 1:
         raise ValueError("All scans in an HIF event window must use the same topology_id")
+    if len({scan.shunt_convention for scan in parsed}) > 1:
+        raise ValueError("All scans in an HIF window must use the same shunt_convention")
     return parsed, dict(window)
 
 
@@ -846,8 +871,13 @@ def estimate_hif_location_magnitude_multiscan(
     top_k: int = 5,
     alpha_grid_size: int = 31,
     r_grid_size: int = 35,
-    r_hif_pu_min: float = 5.0,
-    r_hif_pu_max: float = 1000.0,
+    r_hif_pu_min: float | None = None,
+    r_hif_pu_max: float | None = None,
+    r_hif_ohm_min: float | None = None,
+    r_hif_ohm_max: float | None = None,
+    kv_ll: float | None = None,
+    shunt_convention: str | None = None,
+    resistance_search: str = "physical_ohm",
     robust_loss: str = "soft_l1",
     refine_top_n: int = 3,
     local_max_nfev: int = 40,
@@ -881,8 +911,13 @@ def estimate_hif_location_magnitude_multiscan(
         raise ValueError(f"scan_selection must be one of {sorted(_SELECTION_MODES)}")
     if loss not in _ROBUST_LOSSES:
         raise ValueError(f"robust_loss must be one of {sorted(_ROBUST_LOSSES)}")
-    if float(r_hif_pu_min) <= 0.0 or float(r_hif_pu_max) <= float(r_hif_pu_min):
-        raise ValueError("Require 0 < r_hif_pu_min < r_hif_pu_max")
+    validate_hif_resistance_box(r_hif_pu_min=r_hif_pu_min, r_hif_pu_max=r_hif_pu_max,
+        r_hif_ohm_min=r_hif_ohm_min, r_hif_ohm_max=r_hif_ohm_max)
+    box = _resolve_search_configuration(candidate_branch_row0=candidate_branch_row0,
+        r_hif_pu_min=r_hif_pu_min, r_hif_pu_max=r_hif_pu_max,
+        r_hif_ohm_min=r_hif_ohm_min, r_hif_ohm_max=r_hif_ohm_max,
+        kv_ll=kv_ll, resistance_search=resistance_search)
+    r_hif_pu_min, r_hif_pu_max = box['r_hif_pu_min'], box['r_hif_pu_max']
     if float(smoothness_lambda) < 0.0:
         raise ValueError("smoothness_lambda must be non-negative")
 
@@ -890,7 +925,9 @@ def estimate_hif_location_magnitude_multiscan(
         scans=scans,
         scan_window_path=scan_window_path,
         default_sigma_z=sigma_z,
+        shunt_convention=shunt_convention,
     )
+    convention = parsed_scans[0].shunt_convention
     input_scan_count = len(parsed_scans)
     info = branch_info_for_row0(int(candidate_branch_row0))
     dss_element = str(info["dss_element"])
@@ -920,6 +957,7 @@ def estimate_hif_location_magnitude_multiscan(
                 branch_row0=int(candidate_branch_row0),
                 candidate_phase=candidate_phase,
                 sigma=float(scan.branch_current_sigma),
+                kv_ll=kv_ll,
             )
         except Exception:
             evidence = None
@@ -931,6 +969,7 @@ def estimate_hif_location_magnitude_multiscan(
         per_scan_terminal,
         r_hif_pu_min=float(r_hif_pu_min),
         r_hif_pu_max=float(r_hif_pu_max),
+        impedance_base_ohm=box['impedance_base_ohm'],
     )
     if terminal_estimate is not None:
         # Coherent window detection: average the complex differential across
@@ -985,7 +1024,7 @@ def estimate_hif_location_magnitude_multiscan(
     pool_workers = _simulation_workers(workers)
 
     def simulation_key(scan: HIFScan, alpha: float, r_hif_pu: float, phase: str) -> tuple[str, float, float, str]:
-        return (str(phase), round(float(alpha), 11), round(float(r_hif_pu), 9), _json_cache_key(scan.op_point))
+        return (str(phase), round(float(alpha), 11), round(float(r_hif_pu), 9), _json_cache_key([scan.op_point, scan.shunt_convention]))
 
     def simulation_kwargs(scan: HIFScan, alpha: float, r_hif_pu: float, phase: str) -> dict[str, Any]:
         return {
@@ -996,6 +1035,7 @@ def estimate_hif_location_magnitude_multiscan(
             "phase": str(phase),
             "r_hif_pu": float(r_hif_pu),
             "op_point": scan.op_point,
+            "shunt_convention": scan.shunt_convention,
         }
 
     def simulate(scan: HIFScan, alpha: float, r_hif_pu: float, phase: str) -> dict[str, Any]:
@@ -1426,9 +1466,9 @@ def estimate_hif_location_magnitude_multiscan(
     base_blocks: list[np.ndarray] = []
     for scan in selected_scans:
         try:
-            key = _json_cache_key(scan.op_point)
+            key = _json_cache_key([scan.op_point, scan.shunt_convention])
             if key not in base_cache:
-                base_cache[key] = _simulate_base(model_dir, op_point=scan.op_point)
+                base_cache[key] = _simulate_base(model_dir, op_point=scan.op_point, shunt_convention=scan.shunt_convention)
             base_blocks.append(_scan_residual(scan, base_cache[key], parsed_cache))
         except Exception as exc:
             if len(candidate_errors) < 8:
@@ -1528,10 +1568,11 @@ def estimate_hif_location_magnitude_multiscan(
             "diagnostic_complete": False,
         }
 
-    r_ohms = [float(sim["r_hif_ohm"]) for sim in best_simulations]
+    r_model_ohms = [float(sim["r_hif_ohm"]) for sim in best_simulations]
+    r_ohms = [float(r) * box['impedance_base_ohm'] for r in best_r_values]
     fault_volts = [float(sim.get("fault_v_volts") or (1000.0 / math.sqrt(3.0))) for sim in best_simulations]
-    currents = [voltage / resistance for voltage, resistance in zip(fault_volts, r_ohms)]
-    powers = [voltage**2 / resistance / 1000.0 for voltage, resistance in zip(fault_volts, r_ohms)]
+    currents = [voltage * box['kv_ll'] / resistance for voltage, resistance in zip(fault_volts, r_ohms)]
+    powers = [voltage**2 / resistance / 1000.0 for voltage, resistance in zip(fault_volts, r_model_ohms)]
     median_r_pu = float(np.median(best_r_values))
     median_r_ohm = float(np.median(r_ohms))
     phase_scores = {
@@ -1542,6 +1583,8 @@ def estimate_hif_location_magnitude_multiscan(
     near_r_values = [float(item["r_hif_pu"]) for item in near_best]
 
     estimated: dict[str, Any] = {
+        **_physical_hif_magnitudes(r_hif_pu=median_r_pu,
+            r_hif_model_ohm=float(np.median(r_model_ohms)), fault_v_model_volts=float(np.median(fault_volts)), box=box),
         "alpha_from_from_bus": float(best["alpha"]),
         "distance_percent_from_from_bus": 100.0 * float(best["alpha"]),
         "phase": best.get("phase"),
@@ -1624,6 +1667,7 @@ def estimate_hif_location_magnitude_multiscan(
             "pilot_rejected_scan_indices": pilot_rejected_scan_indices,
         },
         "search": {
+            **_search_box_payload(box, shunt_convention=convention),
             "resistance_mode": mode,
             "alpha_grid_size": int(alpha_grid_size),
             "r_grid_size": int(r_grid_size),

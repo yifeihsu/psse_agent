@@ -44,17 +44,37 @@ def validate_assumptions(spec: Mapping[str, Any]) -> None:
     }
     numeric_keys = {"base_mva", "base_kv_ll", "frequency_hz", "line_zero_sequence_r_ratio",
                     "line_zero_sequence_x_ratio", "line_zero_sequence_c_ratio"}
-    allowed = set(expected) | numeric_keys | {
+    required = set(expected) | numeric_keys | {
         "name", "provenance", "constant_pq_voltage_range", "source_z1_pu", "source_z2_pu", "source_z0_pu",
         "transformer_magnetizing_percent", "transformer_antifloat_ppm",
     }
+    allowed = required | {"voltage_profile", "bus_base_kv_ll"}
     unknown = set(spec) - allowed
-    missing = allowed - set(spec)
+    missing = required - set(spec)
     if unknown or missing:
         raise ValueError(f"Unknown or missing assumption fields: unknown={sorted(unknown)}, missing={sorted(missing)}")
     for key, value in expected.items():
+        if key == "voltage_realization" and spec.get(key) == "declared_per_bus_nominal_voltage":
+            continue
         if spec.get(key) != value:
             raise ValueError(f"Unsupported three-phase assumption {key}: {spec.get(key)!r}")
+    if spec.get("voltage_realization") == "declared_per_bus_nominal_voltage":
+        voltage_map = spec.get("bus_base_kv_ll")
+        if not isinstance(voltage_map, Mapping) or not voltage_map:
+            raise ValueError("per-bus voltage realization requires bus_base_kv_ll")
+        keys = []
+        for key, value in voltage_map.items():
+            if isinstance(key, bool) or not str(key).isdigit() or int(key) <= 0:
+                raise ValueError("voltage-map bus IDs must be positive integers")
+            keys.append(int(key))
+            if isinstance(value, bool) or not math.isfinite(float(value)) or float(value) <= 0:
+                raise ValueError("every bus voltage base must be finite and positive")
+        if len(keys) != len(set(keys)):
+            raise ValueError("duplicate bus IDs in voltage map")
+        if not isinstance(spec.get("voltage_profile"), str) or not spec["voltage_profile"]:
+            raise ValueError("per-bus voltage realization requires a profile identity")
+    elif "bus_base_kv_ll" in spec or "voltage_profile" in spec:
+        raise ValueError("per-bus voltage fields require a declared per-bus realization")
     for key in numeric_keys:
         value = float(spec[key])
         if not math.isfinite(value) or value <= 0:
@@ -88,13 +108,31 @@ def _serial_case(case: Mapping[str, Any]) -> dict[str, Any]:
 
 def export_model(case: Mapping[str, Any], output_dir: str | Path, *,
                  assumptions: Mapping[str, Any] | None = None,
-                 case_id: str = "custom", source_provenance: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                 case_id: str = "custom", source_provenance: Mapping[str, Any] | None = None,
+                 voltage_profile: str | None = None) -> dict[str, Any]:
     """Solve the canonical positive-sequence case, then export its PQ snapshot.
 
     The source matrices are never mutated. Cases with shifts, islands, invalid
     branches, or a failed reference solve are rejected before any model is written.
+    Uniform normalized voltage remains the default. ``voltage_profile`` opts
+    into the selected IEEE14 or IEEE57 bases; ``assumptions.bus_base_kv_ll`` permits
+    an explicit complete map. Per-unit branch parameters/taps are preserved.
+    With a bus map, the scalar ``base_kv_ll`` names the slack/source base only.
     """
     spec = copy.deepcopy(dict(load_assumptions() if assumptions is None else assumptions))
+    if voltage_profile is not None:
+        from .voltage_bases import get_voltage_base_profile
+        profile_metadata = get_voltage_base_profile(voltage_profile)
+        expected_map = {str(bus): float(value) for bus, value in profile_metadata["bus_base_kv_ll"].items()}
+        if spec.get("bus_base_kv_ll") is not None and {
+            str(key): float(value) for key, value in spec["bus_base_kv_ll"].items()
+        } != expected_map:
+            raise ValueError("voltage profile conflicts with assumptions bus voltage bases")
+        spec.update(voltage_profile=voltage_profile, bus_base_kv_ll=expected_map,
+                    voltage_realization="declared_per_bus_nominal_voltage")
+    elif "bus_base_kv_ll" in spec:
+        spec["voltage_realization"] = "declared_per_bus_nominal_voltage"
+        spec.setdefault("voltage_profile", "explicit_bus_voltage_bases_v1")
     validate_assumptions(spec)
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", case_id):
         raise ValueError("case_id must be an alphanumeric OpenDSS name beginning with a letter")
@@ -146,8 +184,18 @@ def export_model(case: Mapping[str, Any], output_dir: str | Path, *,
         raise ValueError("Negative shunt conductance is not supported")
     source_hash = hashlib.sha256(json.dumps(_serial_case(source), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     normalized = copy.deepcopy(source)
-    kv = float(spec["base_kv_ll"])
-    normalized["bus"][:, BASE_KV] = kv
+    bus_kv = ({int(bus): float(value) for bus, value in spec["bus_base_kv_ll"].items()}
+              if "bus_base_kv_ll" in spec else {int(bus): float(spec["base_kv_ll"]) for bus in ids})
+    if set(bus_kv) != set(ids):
+        raise ValueError("voltage profile must cover exactly the source case bus IDs")
+    if "bus_base_kv_ll" in spec:
+        spec["bus_base_kv_ll"] = {str(number): value for number, value in sorted(bus_kv.items())}
+    slack = int(refs[0])
+    kv = bus_kv[slack]
+    # In a multivoltage model this scalar is the slack/source reference only.
+    # All bus and branch conversions use the explicit local map below.
+    spec["base_kv_ll"] = kv
+    normalized["bus"][:, BASE_KV] = [bus_kv[int(number)] for number in ids]
     reference, success = runpf(normalized, ppoption(VERBOSE=0, OUT_ALL=0, PF_TOL=1e-11, PF_MAX_IT=100, ENFORCE_Q_LIMS=0))
     if not success:
         raise ValueError("Positive-sequence reference power flow did not converge")
@@ -156,7 +204,7 @@ def export_model(case: Mapping[str, Any], output_dir: str | Path, *,
         raise ValueError("Reference voltage is outside the declared constant-PQ envelope")
     out = Path(output_dir).resolve()
     out.mkdir(parents=True, exist_ok=False)
-    zbase = kv * kv / base
+    source_zbase = kv * kv / base
     freq = float(spec["frequency_hz"])
     registry: dict[str, Any] = {
         "schema": "three_phase_asset_registry_v1", "case_id": case_id,
@@ -165,25 +213,32 @@ def export_model(case: Mapping[str, Any], output_dir: str | Path, *,
     }
     for i, bus in enumerate(buses):
         registry["buses"].append({"row0": i, "external_bus": int(bus[BUS_I]),
-                                  "dss_bus": f"b{int(bus[BUS_I])}", "kv_ll": kv,
+                                  "dss_bus": f"b{int(bus[BUS_I])}", "kv_ll": bus_kv[int(bus[BUS_I])],
                                   "source_base_kv": float(bus[BASE_KV]), "phases": [1, 2, 3]})
     files: dict[str, list[str]] = {name: ["! Generated normalized snapshot; see assumptions.json and asset_registry.json."]
                                   for name in ("Lines.dss", "Transformers.dss", "Loads.dss", "Generators.dss", "Shunts.dss")}
     circuits: dict[tuple[int, int], int] = {}
     for i, branch in enumerate(source["branch"]):
         f, t = int(branch[F_BUS]), int(branch[T_BUS])
+        from_kv, to_kv = bus_kv[f], bus_kv[t]
+        zbase = from_kv * from_kv / base
+        native_tap = float(branch[TAP] or 1.0)
         pair = tuple(sorted((f, t)))
         circuits[pair] = circuits.get(pair, 0) + 1
-        kind = "Transformer" if branch[TAP] != 0 else "Line"
+        cross_voltage = not math.isclose(from_kv, to_kv, rel_tol=1e-12, abs_tol=0)
+        kind = "Transformer" if branch[TAP] != 0 or cross_voltage else "Line"
         name = f"br_{i+1:04d}"
         status = int(branch[BR_STATUS])
         enabled = "yes" if status else "no"
         item = {"asset_id": f"{case_id}:branch:{i+1}", "branch_row0": i,
                 "from_bus": f, "to_bus": t, "dss_element": f"{kind}.{name}",
                 "from_terminal": 1, "to_terminal": 2, "status": status,
-                "circuit_ordinal": circuits[pair], "tap": float(branch[TAP] or 1.0),
+                "circuit_ordinal": circuits[pair], "tap": native_tap,
                 "source_tap": float(branch[TAP]), "r_pu": float(branch[BR_R]),
                 "x_pu": float(branch[BR_X]), "b_pu": float(branch[BR_B]),
+                "from_kv_ll": from_kv, "to_kv_ll": to_kv,
+                "from_zbase_ohm": zbase, "to_zbase_ohm": to_kv * to_kv / base,
+                "voltage_conversion_required": cross_voltage,
                 "charging_elements": {"from": [], "to": []}}
         if kind == "Line":
             r = phase_matrix(branch[BR_R] * zbase, spec["line_zero_sequence_r_ratio"])
@@ -196,35 +251,36 @@ def export_model(case: Mapping[str, Any], output_dir: str | Path, *,
         else:
             files["Transformers.dss"].append(
                 f"New Transformer.{name} Phases=3 Windings=2 Buses=[b{f}.1.2.3.0 b{t}.1.2.3.0] "
-                f"Conns=[wye wye] kVs=[{kv:.16g} {kv:.16g}] kVAs=[{base*1000:.16g} {base*1000:.16g}] "
+                f"Conns=[wye wye] kVs=[{from_kv:.16g} {to_kv:.16g}] kVAs=[{base*1000:.16g} {base*1000:.16g}] "
                 f"XHL={branch[BR_X]*100:.16g} %Rs=[{branch[BR_R]*50:.16g} {branch[BR_R]*50:.16g}] "
-                f"Taps=[{branch[TAP]:.16g} 1] %NoLoadLoss=0 %IMag=0 ppm_Antifloat=0 "
+                f"Taps=[{native_tap:.16g} 1] %NoLoadLoss=0 %IMag=0 ppm_Antifloat=0 "
                 f"Wdg=1 RNeut=0 XNeut=0 Wdg=2 RNeut=0 XNeut=0 BaseFreq={freq:.16g} Enabled={enabled}")
             # Preserve any transformer charging as endpoint admittances. The
             # source case57 has none, but this avoids a silent generic loss.
-            for side, bus_id, ratio in (("from", f, float(branch[TAP]) ** 2), ("to", t, 1.0)):
+            for side, bus_id, ratio in (("from", f, native_tap ** 2), ("to", t, 1.0)):
                 if branch[BR_B] != 0:
                     element = f"Capacitor.{name}_{side}_charging"
                     kvar = float(branch[BR_B]) * base * 1000 / (2 * ratio)
-                    files["Shunts.dss"].append(f"New {element} Phases=3 Bus1=b{bus_id}.1.2.3 Bus2=b{bus_id}.0.0.0 Conn=wye kV={kv:.16g} kvar={kvar:.16g} BaseFreq={freq:.16g} Enabled={enabled}")
+                    files["Shunts.dss"].append(f"New {element} Phases=3 Bus1=b{bus_id}.1.2.3 Bus2=b{bus_id}.0.0.0 Conn=wye kV={bus_kv[bus_id]:.16g} kvar={kvar:.16g} BaseFreq={freq:.16g} Enabled={enabled}")
                     item["charging_elements"][side].append(element)
         registry["branches"].append(item)
     for bus in buses:
         number = int(bus[BUS_I])
+        local_kv = bus_kv[number]
         if bus[PD] != 0 or bus[QD] != 0:
             for phase, letter in enumerate("abc", 1):
                 element = f"Load.ld_{number:03d}_{letter}"
                 kw, kvar = float(bus[PD])*1000/3, float(bus[QD])*1000/3
-                files["Loads.dss"].append(f"New {element} Phases=1 Bus1=b{number}.{phase}.0 Conn=wye kV={kv/math.sqrt(3):.16g} kW={kw:.16g} kvar={kvar:.16g} Model=1 Status=fixed Vminpu={lo:.16g} Vmaxpu={hi:.16g} Vlowpu={lo/2:.16g} Spectrum=fundamental_only BaseFreq={freq:.16g}")
-                registry["loads"].append({"bus": number, "phase": phase, "element": element, "kw": kw, "kvar": kvar})
+                files["Loads.dss"].append(f"New {element} Phases=1 Bus1=b{number}.{phase}.0 Conn=wye kV={local_kv/math.sqrt(3):.16g} kW={kw:.16g} kvar={kvar:.16g} Model=1 Status=fixed Vminpu={lo:.16g} Vmaxpu={hi:.16g} Vlowpu={lo/2:.16g} Spectrum=fundamental_only BaseFreq={freq:.16g}")
+                registry["loads"].append({"bus": number, "phase": phase, "element": element, "kw": kw, "kvar": kvar, "kv_ll": local_kv})
         if bus[BS] != 0:
             kind = "Capacitor" if bus[BS] > 0 else "Reactor"
             element = f"{kind}.bs_{number:03d}"
-            files["Shunts.dss"].append(f"New {element} Phases=3 Bus1=b{number}.1.2.3 Bus2=b{number}.0.0.0 Conn=wye kV={kv:.16g} kvar={abs(bus[BS])*1000:.16g} BaseFreq={freq:.16g}")
+            files["Shunts.dss"].append(f"New {element} Phases=3 Bus1=b{number}.1.2.3 Bus2=b{number}.0.0.0 Conn=wye kV={local_kv:.16g} kvar={abs(bus[BS])*1000:.16g} BaseFreq={freq:.16g}")
             registry["shunts"].append({"bus": number, "element": element, "gs_mw": 0.0, "bs_mvar": float(bus[BS])})
         if bus[GS] > 0:
             element = f"Reactor.gs_{number:03d}"
-            files["Shunts.dss"].append(f"New {element} Phases=3 Bus1=b{number}.1.2.3 Bus2=b{number}.0.0.0 R={kv*kv/bus[GS]:.16g} X=0 BaseFreq={freq:.16g}")
+            files["Shunts.dss"].append(f"New {element} Phases=3 Bus1=b{number}.1.2.3 Bus2=b{number}.0.0.0 R={local_kv*local_kv/bus[GS]:.16g} X=0 BaseFreq={freq:.16g}")
             registry["shunts"].append({"bus": number, "element": element, "gs_mw": float(bus[GS]), "bs_mvar": 0.0})
     slack = int(refs[0])
     slack_gen_rows = []
@@ -238,8 +294,8 @@ def export_model(case: Mapping[str, Any], output_dir: str | Path, *,
         for phase, letter in enumerate("abc", 1):
             element = f"Generator.gen_{i+1:03d}_{letter}"
             kw, kvar = float(gen[PG])*1000/3, float(gen[QG])*1000/3
-            files["Generators.dss"].append(f"New {element} Phases=1 Bus1=b{number}.{phase}.0 Conn=wye kV={kv/math.sqrt(3):.16g} kW={kw:.16g} kvar={kvar:.16g} Model=1 Status=fixed Vminpu={lo:.16g} Vmaxpu={hi:.16g} Spectrum=fundamental_only BaseFreq={freq:.16g}")
-            registry["generators"].append({"gen_row0": i, "bus": number, "phase": phase, "element": element, "kw": kw, "kvar": kvar})
+            files["Generators.dss"].append(f"New {element} Phases=1 Bus1=b{number}.{phase}.0 Conn=wye kV={bus_kv[number]/math.sqrt(3):.16g} kW={kw:.16g} kvar={kvar:.16g} Model=1 Status=fixed Vminpu={lo:.16g} Vmaxpu={hi:.16g} Spectrum=fundamental_only BaseFreq={freq:.16g}")
+            registry["generators"].append({"gen_row0": i, "bus": number, "phase": phase, "element": element, "kw": kw, "kvar": kvar, "kv_ll": bus_kv[number]})
     if not slack_gen_rows:
         raise ValueError("No active slack generator")
     slack_bus = reference["bus"][np.where(reference["bus"][:, BUS_I] == slack)[0][0]]
@@ -247,16 +303,20 @@ def export_model(case: Mapping[str, Any], output_dir: str | Path, *,
     slack_s = sum((complex(reference["gen"][i, PG], reference["gen"][i, QG]) for i in slack_gen_rows), 0j) / base
     emf = v + complex(*spec["source_z1_pu"]) * np.conj(slack_s / v)
     registry["source"] = {"element": "Vsource.source", "bus": slack, "gen_rows0": slack_gen_rows,
+                           "kv_ll": kv, "zbase_ohm": source_zbase,
                            "emf_pu": [float(emf.real), float(emf.imag)], "target_voltage_pu": [float(v.real), float(v.imag)],
                            "reference_slack_power_pu": [slack_s.real, slack_s.imag]}
-    ztext = " ".join(f"Z{seq}=[{complex(*spec[f'source_z{seq}_pu']).real*zbase:.16g} {complex(*spec[f'source_z{seq}_pu']).imag*zbase:.16g}]" for seq in (1, 2, 0))
+    ztext = " ".join(f"Z{seq}=[{complex(*spec[f'source_z{seq}_pu']).real*source_zbase:.16g} {complex(*spec[f'source_z{seq}_pu']).imag*source_zbase:.16g}]" for seq in (1, 2, 0))
+    voltage_bases = " ".join(f"{value:.16g}" for value in sorted(set(bus_kv.values())))
+    explicit_bus_bases = ([f"SetkVBase Bus=b{number} kVLL={value:.16g}" for number, value in sorted(bus_kv.items())]
+                          if "bus_base_kv_ll" in spec else [])
     master = ["! Normalized three-phase research model. All physical quantities follow assumptions.json.",
               "Clear", f"Set DefaultBaseFrequency={freq:.16g}",
               f"New Circuit.{case_id}_3p Bus1=b{slack}.1.2.3 Bus2=b{slack}.0.0.0 Phases=3 BasekV={kv:.16g} pu={abs(emf):.16g} Angle={np.rad2deg(np.angle(emf)):.16g} BaseMVA={base:.16g} {ztext} Model=Thevenin",
               "New Spectrum.fundamental_only NumHarm=1 Harmonic=[1] %Mag=[100] Angle=[0]",
               "Edit Vsource.source Spectrum=fundamental_only",
               *[f"Redirect {name}" for name in files],
-              f"Set VoltageBases=[{kv:.16g}]", "CalcVoltageBases", "Set ControlMode=off",
+              f"Set VoltageBases=[{voltage_bases}]", "CalcVoltageBases", *explicit_bus_bases, "Set ControlMode=off",
               "Set Mode=snapshot Algorithm=Newton LoadModel=Powerflow MaxIterations=1000 Tolerance=1e-12",
               "Solve"]
     (out / "Master.dss").write_text("\n".join(master) + "\n", encoding="utf-8")
@@ -267,6 +327,8 @@ def export_model(case: Mapping[str, Any], output_dir: str | Path, *,
     write_json(out / "positive_sequence_reference.json", _serial_case(reference))
     write_json(out / "source_case.json", _serial_case(source))
     manifest = {"schema": "three_phase_model_build_v1", "case_id": case_id,
+                "voltage_profile": spec.get("voltage_profile", "legacy_uniform"),
+                "bus_base_kv_ll": {str(number): value for number, value in sorted(bus_kv.items())},
                 "source_provenance": dict(source_provenance or {}), "base_case_hash": source_hash,
                 "external_bus_count": len(buses), "external_phase_node_count": 3*len(buses),
                 "physical_branch_count": len(registry["branches"]),

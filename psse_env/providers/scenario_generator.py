@@ -196,6 +196,17 @@ CURRENT_TELEMETRY_HIF_SAMPLE_PATHS = (
     / "hif_multiscan_currents_17x10_20260903"
     / "samples.jsonl",
 )
+# Physical-ohm corpora are opt-in; historical telemetry paths retain replay identity.
+PHYSICAL_HIF_SAMPLE_PATHS = tuple(_REPO_ROOT / "artifacts" / "measurements" / name / "samples.jsonl" for name in (
+    # Detectable subsets (discovered-mode WLS admission, margin 1.25) of the 2026-09-19/21 physical
+    # 69 kV 100-1000 ohm corpora; the full corpora carry the same names without "_detectable".
+    "hif_physical69_main_train_detectable_25x10_20260921", "hif_physical69_main_valid_detectable_7x10_20260921",
+    "hif_physical69_main_train_extra_detectable_69x10_20260921", "hif_physical69_main_valid_extra_detectable_17x10_20260921"))
+PHYSICAL_HIF_DETECTION_LIMIT_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/hif_physical69_detection_limit_21x10_20260919/samples.jsonl"
+PHYSICAL_HIF_SWEEP_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/hif_physical_sweep_eval_336x10_20260919/samples.jsonl"
+# Unbalance corpus regenerated 2026-09-21 under the WLS shunt convention (ybus), phase-A Vm,
+# physical telemetry bases; 440 windows + 60 balanced controls, seed 20260925.
+PHYSICAL_IMBALANCE_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/out_measurements_imbalance_currents_ybus_detectable_160_20260921/samples.jsonl"
 DEFAULT_BALANCED_ARTIFACT_DIR = (
     _REPO_ROOT / "artifacts" / "measurements" / "out_measurements_balanced"
 )
@@ -786,6 +797,48 @@ class Round0ScenarioGenerator:
             self._corpus_by_class = grouped
         return self._corpus_by_class
 
+    @staticmethod
+    def _waveform_source_rows(path: Path) -> list[dict[str, Any]]:
+        """Keep historical noise evidence private until scenario preparation."""
+        metadata_path = path.with_name("meta.json")
+        source_meta = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.is_file() else None
+        rows = []
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                if row.get("scenario") == "no_error":
+                    continue
+                row["_source_noise_metadata"] = copy.deepcopy(source_meta)
+                rows.append(row)
+        return rows
+
+    def _aligned_waveform_row(self, row: Mapping[str, Any], family: str) -> dict[str, Any]:
+        from three_phase_nlm.measurement_noise import align_legacy_waveform_row
+        try:
+            aligned = align_legacy_waveform_row(
+                row, family, self._rng, legacy_metadata=row.get("_source_noise_metadata")
+            )
+            contract = aligned.get("noise_contract")
+            if not isinstance(contract, Mapping) or contract.get("schema") != "generated_sensor_noise_v1":
+                raise ValueError("Weighting sigmas alone do not establish applied noise; regenerate with an aligned generator or provide supported source metadata")
+            return aligned
+        except (TypeError, ValueError, KeyError) as exc:
+            raise ScenarioRejected("waveform_noise_contract_invalid", f"{row.get('id')}: {exc}") from exc
+
+    @staticmethod
+    def _observable_waveform_scan(scan: Mapping[str, Any]) -> dict[str, Any]:
+        """Allowlist measurements/configuration; clean copies and labels stay offline."""
+        from three_phase_nlm.hif_operating_point import canonicalize_ieee14_operating_point
+        allowed = ("scan_index", "z_obs", "three_phase_voltages", BRANCH_CURRENT_CHANNEL,
+                   BRANCH_CURRENT_SIGMA_KEY, "sigma_z", "three_phase_sigma", "topology_id",
+                   "noise_contract", "time_tag", "measurement_convention")
+        observed = {key: copy.deepcopy(scan[key]) for key in allowed if key in scan}
+        if "op_point" in scan:
+            observed["op_point"] = canonicalize_ieee14_operating_point(scan["op_point"])
+        return observed
+
     def _hif_rows(self) -> list[dict[str, Any]]:
         if self._hif_samples is None:
             rows: list[dict[str, Any]] = []
@@ -793,17 +846,16 @@ class Round0ScenarioGenerator:
             for path in self.hif_sample_paths:
                 if not path.is_file():
                     continue
-                with open(path, encoding="utf-8") as handle:
-                    rows.extend(json.loads(line) for line in handle)
+                rows.extend(self._waveform_source_rows(path))
             if not rows:
                 used_fallback = True
                 for path in self.hif_fallback_sample_paths:
                     if not path.is_file():
                         continue
-                    with open(path, encoding="utf-8") as handle:
-                        rows.extend(json.loads(line) for line in handle)
+                    rows.extend(self._waveform_source_rows(path))
             self._hif_samples = [self._normalize_hif_row(row) for row in rows]
-            # Both primary corpora cover the same 17 HIF branches.  Preserve
+            # Legacy primary corpora cover 17 lines; physical corpora use 16
+            # same-voltage lines (7 in the main 69 kV population). Preserve
             # their combined ordering population when the single tracked
             # fallback corpus is used, so later families see the same seeded
             # random stream without duplicating physical fallback scenarios.
@@ -815,8 +867,7 @@ class Round0ScenarioGenerator:
         if self._imbalance_samples is None:
             rows: list[dict[str, Any]] = []
             if self.imbalance_sample_path.is_file():
-                with open(self.imbalance_sample_path, encoding="utf-8") as handle:
-                    rows.extend(json.loads(line) for line in handle)
+                rows.extend(self._waveform_source_rows(self.imbalance_sample_path))
             self._imbalance_samples = rows
         return self._imbalance_samples
 
@@ -824,21 +875,18 @@ class Round0ScenarioGenerator:
     def _normalize_hif_row(row: Mapping[str, Any]) -> dict[str, Any]:
         """Promote a legacy HIF snapshot to the current scan-window schema.
 
-        The tracked representative HIF corpus predates persistent multiscan
-        windows.  It remains a physically generated snapshot with NLM and
-        three-phase evidence, so a clean checkout can safely expose it as a
-        one-scan window when the larger benchmark artifacts are unavailable.
+        Promotion changes the shape only. The later noise-contract check still
+        requires evidence for every channel before admitting legacy telemetry.
         """
         normalized = copy.deepcopy(dict(row))
         if normalized.get("scans"):
             return normalized
-        required = ("z_obs", "z_true", "three_phase_voltages")
+        required = ("z_obs", "three_phase_voltages")
         if any(not normalized.get(key) for key in required):
             return normalized
         topology_id = str(normalized.get("topology_id") or "ieee14_base")
         promoted_scan = {
             "scan_index": 0,
-            "z_clean": copy.deepcopy(normalized["z_true"]),
             "z_obs": copy.deepcopy(normalized["z_obs"]),
             "three_phase_voltages": copy.deepcopy(
                 normalized["three_phase_voltages"]
@@ -846,6 +894,10 @@ class Round0ScenarioGenerator:
             "op_point": copy.deepcopy(normalized.get("op_point") or {}),
             "topology_id": topology_id,
         }
+        # z_true may be a balanced counterfactual, not this HIF's sensor mean.
+        for key in ("z_clean", "three_phase_voltages_clean", "sigma_z", "three_phase_sigma", "noise_contract", "measurement_convention"):
+            if key in normalized:
+                promoted_scan[key] = copy.deepcopy(normalized[key])
         if normalized.get(BRANCH_CURRENT_CHANNEL):
             promoted_scan[BRANCH_CURRENT_CHANNEL] = copy.deepcopy(
                 normalized[BRANCH_CURRENT_CHANNEL]
@@ -861,35 +913,18 @@ class Round0ScenarioGenerator:
         return normalized
 
     def noise_profile(self) -> np.ndarray:
-        """Per-index measurement noise std estimated from no-error corpus rows."""
-        if self.system.case_id != "case14" or self._fresh_corpus:
-            # Match the actual covariance used by every deployed balanced solver.
-            # Do not estimate a 491-channel array from an IEEE14 fallback corpus.
-            return self.system.measurement_sigma()
-        if self._noise_std is None:
-            diffs = [
-                np.asarray(row["z_obs"], dtype=float)
-                - np.asarray(row["z_true"], dtype=float)
-                for row in self._corpus().get("no_error", [])[: self.noise_profile_rows]
-            ]
-            if not diffs:
-                raise RuntimeError(
-                    f"corpus {self.corpus_path} carries no no_error rows for the noise profile"
-                )
-            self._noise_std = np.stack(diffs).std(axis=0)
-            if self._fresh_corpus:
-                return self.system.measurement_sigma()
-        return self._noise_std
+        """Declared SCADA sigma shared by generation, error floors and WLS."""
+        return self.system.measurement_sigma()
 
     def _floored_measurement_error(
-        self, index: int, observed: float, clean: float
+        self, index: int, observed: float, clean: float, *, sigma_z=None
     ) -> tuple[float, bool]:
         """Lift a meter error below the sigma floor; return (observed, lifted)."""
 
         floor = self.min_measurement_error_sigma
         if floor is None:
             return float(observed), False
-        sigma = float(self.noise_profile()[int(index)])
+        sigma = float((self.noise_profile() if sigma_z is None else sigma_z)[int(index)])
         delta = float(observed) - float(clean)
         if abs(delta) >= floor * sigma:
             return float(observed), False
@@ -904,33 +939,48 @@ class Round0ScenarioGenerator:
 
     # ------------------------------------------------------------- validation
 
-    def _wls_detection(self, case: str, z: Sequence[float]) -> tuple[float, float]:
+    def _wls_detection(self, case: str, z: Sequence[float], *, sigma_z=None, exact_measurement_indices=None) -> tuple[float, float]:
         """Chi-square statistic and maximum absolute normalized residual of one solve."""
-        key = (case, hashlib.sha256(np.asarray(z, dtype=float).tobytes()).hexdigest())
+        noise_key = (None if sigma_z is None else tuple(float(v) for v in sigma_z), tuple(exact_measurement_indices or []))
+        key = (case, hashlib.sha256(np.asarray(z, dtype=float).tobytes()).hexdigest(), noise_key)
         if key not in self._wls_cache:
-            payload = _wls_json(case, [float(value) for value in z])
+            options = {}
+            if sigma_z is not None:
+                options["measurement_sigma"] = list(sigma_z)
+            if exact_measurement_indices:
+                options["exact_measurement_indices"] = list(exact_measurement_indices)
+            payload = _wls_json(case, [float(value) for value in z], **options)
             if not payload.get("success"):
                 raise ScenarioRejected("wls_failure", str(payload.get("error")))
             residuals = np.asarray(payload.get("r") or [], dtype=float)
             maximum = float(np.max(np.abs(residuals))) if residuals.size else 0.0
             self._wls_cache[key] = (float(payload.get("global_residual_sum") or 0.0), maximum)
+            if not hasattr(self, "_wls_dof_cache"):
+                self._wls_dof_cache = {}
+            self._wls_dof_cache[key] = int(payload.get("dof", self.nz - self.state_count))
         return self._wls_cache[key]
 
-    def _chi2_statistic(self, case: str, z: Sequence[float]) -> float:
-        return self._wls_detection(case, z)[0]
+    def _cached_chi2_limit(self, case: str, z: Sequence[float], *, sigma_z=None, exact_measurement_indices=None) -> float:
+        noise_key = (None if sigma_z is None else tuple(float(v) for v in sigma_z), tuple(exact_measurement_indices or []))
+        key = (case, hashlib.sha256(np.asarray(z, dtype=float).tobytes()).hexdigest(), noise_key)
+        dof = getattr(self, "_wls_dof_cache", {}).get(key, self.nz - self.state_count)
+        return float(chi2_threshold(max(1, int(dof)), self.chi2_alpha))
 
-    def _max_normalized_residual(self, case: str, z: Sequence[float]) -> float:
-        return self._wls_detection(case, z)[1]
+    def _chi2_statistic(self, case: str, z: Sequence[float], **noise_options) -> float:
+        return self._wls_detection(case, z, **noise_options)[0]
 
-    def _residual_alarm(self, case: str, z: Sequence[float], *, margin: float = 1.0) -> bool:
+    def _max_normalized_residual(self, case: str, z: Sequence[float], **noise_options) -> float:
+        return self._wls_detection(case, z, **noise_options)[1]
+
+    def _residual_alarm(self, case: str, z: Sequence[float], *, margin: float = 1.0, **noise_options) -> bool:
         """The local test at ``margin`` times the threshold; False when disabled."""
         if self.normalized_residual_threshold is None:
             return False
-        return self._max_normalized_residual(case, z) >= margin * self.normalized_residual_threshold
+        return self._max_normalized_residual(case, z, **noise_options) >= margin * self.normalized_residual_threshold
 
-    def _detection_detail(self, case: str, z: Sequence[float]) -> str:
-        statistic, maximum = self._wls_detection(case, z)
-        detail = f"chi2 {statistic:.1f} vs {self.chi2_limit:.1f}"
+    def _detection_detail(self, case: str, z: Sequence[float], **noise_options) -> str:
+        statistic, maximum = self._wls_detection(case, z, **noise_options)
+        detail = f"chi2 {statistic:.1f} vs {self._cached_chi2_limit(case, z, **noise_options):.1f}"
         if self.normalized_residual_threshold is not None:
             detail += f", max|r| {maximum:.2f} vs {self.normalized_residual_threshold:.2f}"
         return detail
@@ -940,28 +990,28 @@ class Round0ScenarioGenerator:
         dof = max(1, self.nz - self.state_count)
         return float(chi2_threshold(dof, self.chi2_alpha))
 
-    def _require_anomalous(self, case: str, z: Sequence[float], family: str) -> None:
+    def _require_anomalous(self, case: str, z: Sequence[float], family: str, **noise_options) -> None:
         """Admit only faults either test detects with the anomaly margin to spare."""
         if not self.validate or self.admission_mode == "physical":
             return
-        statistic = self._chi2_statistic(case, z)
-        chi_detectable = statistic > self.anomaly_margin * self.chi2_limit
-        if chi_detectable or self._residual_alarm(case, z, margin=self.anomaly_margin):
+        statistic = self._chi2_statistic(case, z, **noise_options)
+        chi_detectable = statistic > self.anomaly_margin * self._cached_chi2_limit(case, z, **noise_options)
+        if chi_detectable or self._residual_alarm(case, z, margin=self.anomaly_margin, **noise_options):
             return
         raise ScenarioRejected(
             "anomaly_not_detectable",
-            f"{family}: {self._detection_detail(case, z)} with margin {self.anomaly_margin:.2f}",
+            f"{family}: {self._detection_detail(case, z, **noise_options)} with margin {self.anomaly_margin:.2f}",
         )
 
-    def _require_clean(self, case: str, z: Sequence[float], family: str) -> None:
+    def _require_clean(self, case: str, z: Sequence[float], family: str, **noise_options) -> None:
         """A corrected configuration must clear both tests, as the environment requires."""
         if not self.validate or self.admission_mode == "physical":
             return
-        statistic = self._chi2_statistic(case, z)
-        if statistic >= self.chi2_limit or self._residual_alarm(case, z):
+        statistic = self._chi2_statistic(case, z, **noise_options)
+        if statistic >= self._cached_chi2_limit(case, z, **noise_options) or self._residual_alarm(case, z, **noise_options):
             raise ScenarioRejected(
                 "corrected_configuration_still_anomalous",
-                f"{family}: {self._detection_detail(case, z)}",
+                f"{family}: {self._detection_detail(case, z, **noise_options)}",
             )
 
     def _require_parameter_correction_realizable(
@@ -973,6 +1023,8 @@ class Round0ScenarioGenerator:
         z_scans: Sequence[Sequence[float]],
         measurements: Sequence[float],
         final_case_abs_tolerance: float,
+        sigma_z: Sequence[float] | None = None,
+        sigma_z_scans: Sequence[float] | None = None,
     ) -> dict[str, Any] | None:
         """Truth-side gate for the deployed multi-scan parameter corrector.
 
@@ -996,6 +1048,7 @@ class Round0ScenarioGenerator:
             line_index1,
             normalized_scans,
             initial_states,
+            **({"R_variances_full": np.square(sigma_z_scans).tolist()} if sigma_z_scans is not None else {}),
         )
         success = bool(payload.get("success"))
         corrected = payload.get("corrected_params") or []
@@ -1076,6 +1129,7 @@ class Round0ScenarioGenerator:
                 },
                 "case": corrected_case_path,
                 "measurements": [float(value) for value in measurements],
+                "metadata": {"sigma_z": list(sigma_z)} if sigma_z is not None else {},
                 "policy_observation": {},
             }
         )
@@ -1150,8 +1204,10 @@ class Round0ScenarioGenerator:
                 "case": self.case_path,
                 "measurements": [float(value) for value in measurements],
                 "metadata": {
+                    **({"sigma_z": list(sigma_z)} if sigma_z is not None else {}),
                     "parameter_scans": {
                         "z_scans": copy.deepcopy(normalized_scans),
+                        **({"sigma_z": list(sigma_z_scans)} if sigma_z_scans is not None else {}),
                     }
                 },
                 "policy_observation": {},
@@ -1314,6 +1370,7 @@ class Round0ScenarioGenerator:
         case: str,
         measurements: Sequence[float],
         family: str,
+        sigma_z: Sequence[float] | None = None,
     ) -> dict[str, Any]:
         return {
             "scenario_id": scenario_id,
@@ -1327,7 +1384,7 @@ class Round0ScenarioGenerator:
             "case": case,
             "measurements": [float(value) for value in measurements],
             "semantic_field_provenance": {"measurements": _SNAPSHOT_PROVENANCE},
-            "metadata": {},
+            "metadata": {"sigma_z": list(sigma_z) if sigma_z is not None else self.noise_profile().tolist()},
         }
 
     def _declare_measurement_recovery_tolerance(
@@ -1346,10 +1403,11 @@ class Round0ScenarioGenerator:
         and every healthy channel remain exact, separately enforced checks in
         the strict truth audit.
         """
+        sigma = list((scenario.get("metadata") or {}).get("sigma_z", self.noise_profile()))
         valid = [
             int(index)
             for index in indices
-            if 0 <= int(index) < len(self.noise_profile())
+            if 0 <= int(index) < len(sigma) and float(sigma[int(index)]) > 0
         ]
         if not valid:
             return
@@ -1357,7 +1415,7 @@ class Round0ScenarioGenerator:
             1e-6,
             3.0
             * float(np.sqrt(2.0))
-            * max(float(self.noise_profile()[index]) for index in valid),
+            * max(float(sigma[index]) for index in valid),
         )
         release_audit = scenario.setdefault("release_audit", {})
         tolerances = release_audit.setdefault("tolerances", {})
@@ -1374,6 +1432,7 @@ class Round0ScenarioGenerator:
         clean_measurements: Sequence[float],
         faults: Sequence[Mapping[str, Any]],
         family: str,
+        sigma_z: Sequence[float] | None = None,
     ) -> None:
         """Require every declared meter fault to remain detectable on its own.
 
@@ -1394,8 +1453,8 @@ class Round0ScenarioGenerator:
             index = int(index)
             probe = [float(value) for value in clean_measurements]
             probe[index] = float(observed)
-            statistic = self._chi2_statistic(self.case_path, probe)
-            if statistic < self.chi2_limit and not self._residual_alarm(self.case_path, probe):
+            statistic = self._chi2_statistic(self.case_path, probe, sigma_z=sigma_z)
+            if statistic < self._cached_chi2_limit(self.case_path, probe, sigma_z=sigma_z) and not self._residual_alarm(self.case_path, probe, sigma_z=sigma_z):
                 raise ScenarioRejected(
                     "sequential_fault_not_individually_detectable",
                     f"{family}: index {index} {self._detection_detail(self.case_path, probe)}",
@@ -1409,8 +1468,9 @@ class Round0ScenarioGenerator:
             case=self.case_path,
             measurements=row["z_obs"],
             family="no_error",
+            sigma_z=row.get("sigma_z"),
         )
-        self._require_clean(self.case_path, row["z_obs"], "no_error")
+        self._require_clean(self.case_path, row["z_obs"], "no_error", sigma_z=row.get("sigma_z"))
         scenario["clean_case"] = self.case_path
         # A healthy sensor snapshot includes ordinary measurement noise.  The
         # release target is therefore the observed vector, not a noiseless
@@ -1438,16 +1498,17 @@ class Round0ScenarioGenerator:
         lifted_indices: list[int] = []
         for error_index in error_indices:
             z_obs[error_index], lifted = self._floored_measurement_error(
-                error_index, z_obs[error_index], z_true[error_index]
+                error_index, z_obs[error_index], z_true[error_index], sigma_z=row.get("sigma_z")
             )
             if lifted:
                 lifted_indices.append(error_index)
-        self._require_anomalous(self.case_path, z_obs, family)
+        self._require_anomalous(self.case_path, z_obs, family, sigma_z=row.get("sigma_z"))
         scenario = self._base_scenario(
             self._scenario_id(family, row.get("id"), index),
             case=self.case_path,
             measurements=z_obs,
             family=family,
+            sigma_z=row.get("sigma_z"),
         )
         scenario["clean_case"] = self.case_path
         clean_measurements = list(z_obs)
@@ -1459,7 +1520,7 @@ class Round0ScenarioGenerator:
         # channels that even this truth-restored vector fails the global gate;
         # those roots are intrinsically non-terminal and are skipped rather
         # than encouraging broad healthy-channel rewrites.
-        self._require_clean(self.case_path, clean_measurements, family)
+        self._require_clean(self.case_path, clean_measurements, family, sigma_z=row.get("sigma_z"))
         scenario["clean_measurements"] = clean_measurements
         scenario["true_measurement_errors"] = [
             {
@@ -1471,7 +1532,7 @@ class Round0ScenarioGenerator:
             for error_index in error_indices
         ]
         if self.min_measurement_error_sigma is not None:
-            sigma = self.noise_profile()
+            sigma = row.get("sigma_z", self.noise_profile())
             scenario["measurement_error_floor"] = {
                 "sigma_multiple": self.min_measurement_error_sigma,
                 "lifted_indices": lifted_indices,
@@ -1485,6 +1546,7 @@ class Round0ScenarioGenerator:
             clean_measurements=clean_measurements,
             faults=scenario["true_measurement_errors"],
             family=family,
+            sigma_z=row.get("sigma_z"),
         )
         self._declare_measurement_recovery_tolerance(scenario, error_indices)
         return scenario
@@ -1506,8 +1568,8 @@ class Round0ScenarioGenerator:
         # The physical line changed; the agent's model database (case14) is
         # stale.  The measurements must therefore be anomalous under case14 and
         # consistent under the changed-parameter case the corpus generated.
-        self._require_anomalous(self.case_path, z_obs, "parameter")
-        self._require_clean(str(true_case), z_obs, "parameter")
+        self._require_anomalous(self.case_path, z_obs, "parameter", sigma_z=row.get("sigma_z"))
+        self._require_clean(str(true_case), z_obs, "parameter", sigma_z=row.get("sigma_z"))
         true_ppc = _load_python_case(str(true_case))
         if self.system.case_id != "case14":
             base = self._clean_case()
@@ -1549,12 +1611,15 @@ class Round0ScenarioGenerator:
             z_scans=row["z_scans"],
             measurements=z_obs,
             final_case_abs_tolerance=final_case_abs_tolerance,
+            sigma_z=row.get("sigma_z"),
+            sigma_z_scans=row.get("sigma_z_scans", row.get("sigma_z")),
         )
         scenario = self._base_scenario(
             self._scenario_id("parameter", row.get("id"), index),
             case=self.case_path,
             measurements=z_obs,
             family="parameter",
+            sigma_z=row.get("sigma_z"),
         )
         scenario["clean_case"] = str(true_case)
         scenario["clean_measurements"] = list(z_obs)
@@ -1579,6 +1644,7 @@ class Round0ScenarioGenerator:
         }
         scenario["metadata"]["parameter_scans"] = {
             "z_scans": [[float(v) for v in scan] for scan in row["z_scans"]],
+            "sigma_z": list(row.get("sigma_z_scans", row.get("sigma_z", self.noise_profile()))),
             "initial_state_strategy": "observed_vm_plus_configured_case_angles_v1",
         }
         # The ranking the deployed parameter context produced on this root
@@ -1641,7 +1707,8 @@ class Round0ScenarioGenerator:
             self._full_topology_fingerprint = self._full_topology.fingerprint()
         return self._full_topology
 
-    def _require_branch_dominant_wls_evidence(self, z_obs: Sequence[float], cb_name: str) -> None:
+    def _require_branch_dominant_wls_evidence(self, z_obs: Sequence[float], cb_name: str,
+                                            *, sigma_z=None, exact_measurement_indices=None) -> None:
         """Admit a topology root only when the operator's WLS evidence routes to a branch.
 
         The deployed solve tags its signatures by the classical discrimination
@@ -1655,7 +1722,12 @@ class Round0ScenarioGenerator:
         """
         if not self.validate or not self.require_branch_dominant_topology:
             return
-        payload = _wls_json(self.case_path, [float(value) for value in z_obs])
+        options = {}
+        if sigma_z is not None:
+            options["measurement_sigma"] = list(sigma_z)
+        if exact_measurement_indices:
+            options["exact_measurement_indices"] = list(exact_measurement_indices)
+        payload = _wls_json(self.case_path, [float(value) for value in z_obs], **options)
         if not payload.get("success"):
             raise ScenarioRejected("wls_failure", str(payload.get("error")))
         max_residual = max((abs(float(v)) for v in payload.get("r") or []), default=0.0)
@@ -1718,6 +1790,7 @@ class Round0ScenarioGenerator:
         from Transmission.ieee14_full_substation import (
             add_telemetry_noise,
             operator_model_from_map,
+            operator_noise_for_layout,
             operator_vector_for_layout,
             solve_node_breaker,
             status_labels,
@@ -1775,6 +1848,16 @@ class Round0ScenarioGenerator:
         z_obs = _canonicalize_synthesized_measurement_vector(
             operator_vector_for_layout(telemetry, normal_layout).tolist()
         )
+        operator_noise = operator_noise_for_layout(telemetry, normal_layout)
+
+        def noise_options(contract):
+            covariance = np.asarray(contract["measurement_covariance"], dtype=float)
+            if not np.array_equal(covariance, np.diag(np.diag(covariance))):
+                raise ScenarioRejected("correlated_operator_noise_unsupported", cb_name)
+            return {"sigma_z": contract["measurement_sigma"],
+                    "exact_measurement_indices": contract["structural_zero_indices"]}
+
+        source_noise_options = noise_options(operator_noise)
 
         if category == "dangling_line_terminal":
             row0 = int(error["equivalent_branch_row0"])
@@ -1782,6 +1865,7 @@ class Round0ScenarioGenerator:
             corrected_ppc["branch"][row0][10] = 0.0
             corrected_case = self._derived_case(corrected_ppc, f"r0_topo_l{row0 + 1}s0")
             clean_measurements = list(z_obs)
+            corrected_operator_noise = operator_noise
         else:
             corrected_ppc, corrected_layout = operator_model_from_map(
                 clean_case14, model, {cb_name: true_closed}, meter_nodes
@@ -1792,9 +1876,10 @@ class Round0ScenarioGenerator:
             clean_measurements = _canonicalize_synthesized_measurement_vector(
                 operator_vector_for_layout(telemetry, corrected_layout).tolist()
             )
-        self._require_anomalous(self.case_path, z_obs, "topology")
-        self._require_clean(corrected_case, clean_measurements, "topology")
-        self._require_branch_dominant_wls_evidence(z_obs, cb_name)
+            corrected_operator_noise = operator_noise_for_layout(telemetry, corrected_layout)
+        self._require_anomalous(self.case_path, z_obs, "topology", **source_noise_options)
+        self._require_clean(corrected_case, clean_measurements, "topology", **noise_options(corrected_operator_noise))
+        self._require_branch_dominant_wls_evidence(z_obs, cb_name, **source_noise_options)
 
         reported_labels = status_labels(model)
         reported_estimate = gse_topology_nlm(model, reference, {}, telemetry)
@@ -1836,6 +1921,7 @@ class Round0ScenarioGenerator:
             case=self.case_path,
             measurements=z_obs,
             family="topology",
+            sigma_z=operator_noise["measurement_sigma"],
         )
         scenario["clean_case"] = corrected_case
         scenario["clean_measurements"] = list(clean_measurements)
@@ -1845,6 +1931,8 @@ class Round0ScenarioGenerator:
             str(bus): node for bus, node in meter_nodes.items()
         }
         scenario["metadata"]["operator_layout"] = normal_layout
+        scenario["metadata"]["operator_noise"] = operator_noise
+        scenario["metadata"]["structural_zero_indices"] = operator_noise["structural_zero_indices"]
         scenario["metadata"]["topology_model_id"] = MODEL_ID
         scenario["metadata"]["topology_model_fingerprint"] = self._full_topology_fingerprint
         # Ranking statistics only: the breaker names stay in the hidden truth.
@@ -1926,6 +2014,7 @@ class Round0ScenarioGenerator:
                         "V_real": float(real),
                         "V_imag": float(imag),
                         "sigma": float(item["sigma"]),
+                        "sigma_semantics": item.get("sigma_semantics", "per_component"),
                     }
                 )
         return {
@@ -1933,6 +2022,8 @@ class Round0ScenarioGenerator:
             "scenario": "harmonic_anomaly",
             "z_true": _canonicalize_synthesized_measurement_vector(trace["z_scada_true"]),
             "z_obs": _canonicalize_synthesized_measurement_vector(trace["z_scada_meas"]),
+            "sigma_z": list(trace["sigma_z"]),
+            "noise_contract": copy.deepcopy(trace["noise_contract"]),
             "harmonic_measurements": harmonic_measurements,
             "harmonic_orders": sorted(orders),
             "label": {
@@ -1951,6 +2042,15 @@ class Round0ScenarioGenerator:
         harmonic_measurements = row.get("harmonic_measurements")
         if not harmonic_measurements:
             raise ScenarioRejected("harmonic_measurements_missing", str(row.get("id")))
+        harmonic_measurements = copy.deepcopy(harmonic_measurements)
+        for item in harmonic_measurements:
+            # Legacy generated harmonic rows stored complex RMS sigma. Fresh
+            # rows name rectangular component sigma explicitly.
+            if "sigma_semantics" not in item:
+                item["sigma_complex_rms"] = float(item["sigma"])
+                item["sigma"] = float(item["sigma"]) / math.sqrt(2.0)
+                item["sigma_semantics"] = "per_component"
+                item["noise_alignment"] = "legacy_generated_complex_rms_to_component"
         z_obs = [float(value) for value in row["z_obs"]]
         mode = self.waveform_signature_mode["harmonic"]
         # These synthetic corpus rows also perturb the positive-sequence
@@ -1958,14 +2058,15 @@ class Round0ScenarioGenerator:
         # additional measurements; that anomaly alone is not harmonic evidence.
         # The legacy monitor-flagged mode only requires WLS solvability.
         if mode == "discovered":
-            self._require_anomalous(self.case_path, z_obs, "harmonic")
+            self._require_anomalous(self.case_path, z_obs, "harmonic", sigma_z=row.get("sigma_z"))
         elif self.validate:
-            self._chi2_statistic(self.case_path, z_obs)
+            self._chi2_statistic(self.case_path, z_obs, sigma_z=row.get("sigma_z"))
         scenario = self._base_scenario(
             self._scenario_id("harmonic", row.get("id"), index),
             case=self.case_path,
             measurements=z_obs,
             family="harmonic",
+            sigma_z=row.get("sigma_z"),
         )
         scenario["clean_case"] = self.case_path
         scenario["clean_measurements"] = [float(value) for value in row["z_true"]]
@@ -1999,6 +2100,7 @@ class Round0ScenarioGenerator:
         return scenario
 
     def _hif_scenario(self, row: Mapping[str, Any], index: int) -> dict[str, Any]:
+        row = self._aligned_waveform_row(row, "hif")
         label = dict(row.get("label") or {})
         diagnostic = row.get("nlm_diagnostic")
         scans = row.get("scans")
@@ -2008,7 +2110,7 @@ class Round0ScenarioGenerator:
             raise ScenarioRejected("hif_scans_missing", str(row.get("id")))
         z_obs = [float(value) for value in row["z_obs"]]
         if self.validate:
-            self._chi2_statistic(self.case_path, z_obs)  # must solve; may be subtle
+            self._chi2_statistic(self.case_path, z_obs, sigma_z=row["sigma_z"])  # must solve; may be subtle
         if len(scans) > self.hif_max_scans:
             picks = np.linspace(0, len(scans) - 1, self.hif_max_scans).round().astype(int)
             scans = [scans[int(i)] for i in dict.fromkeys(picks.tolist())]
@@ -2017,35 +2119,49 @@ class Round0ScenarioGenerator:
             case=self.case_path,
             measurements=z_obs,
             family="hif",
+            sigma_z=row["sigma_z"],
         )
         scenario["clean_case"] = self.case_path
         scenario["clean_measurements"] = [float(value) for value in row["z_true"]]
         hif_mode = self.waveform_signature_mode["hif"]
         if hif_mode == "discovered":
-            self._require_anomalous(self.case_path, z_obs, "hif")
+            self._require_anomalous(self.case_path, z_obs, "hif", sigma_z=row["sigma_z"])
         else:
             scenario["unresolved_signatures"] = [HIF_SIGNATURE]
             scenario["semantic_field_provenance"]["unresolved_signatures"] = (
                 _WAVEFORM_PROVENANCE
             )
-        scenario["metadata"]["nlm_diagnostic"] = copy.deepcopy(dict(diagnostic))
+        scenario["metadata"]["nlm_diagnostic"] = {
+            key: copy.deepcopy(diagnostic[key])
+            for key in ("success", "converged", "method", "backend", "top_hif_groups") if key in diagnostic
+        }
+        scenario["metadata"]["three_phase_sigma"] = float(row["three_phase_sigma"])
+        if row.get("noise_contract") is not None:
+            scenario["metadata"]["noise_contract"] = copy.deepcopy(row["noise_contract"])
         scenario["metadata"]["hif_runtime"] = {
             "z_obs": z_obs,
+            "sigma_z": copy.deepcopy(row["sigma_z"]),
+            "three_phase_sigma": float(row["three_phase_sigma"]),
             "three_phase_voltages": copy.deepcopy(row.get("three_phase_voltages")),
             "load_scale": float((row.get("op_point") or {}).get("load_scale", 1.0)),
         }
-        # The hidden clean current copy is QA replay data, never runtime telemetry.
-        clean_current_key = f"{BRANCH_CURRENT_CHANNEL}_clean"
-        runtime_scans = [
-            {key: value for key, value in dict(scan).items() if key != clean_current_key}
-            for scan in scans
-        ]
+        runtime_scans = [self._observable_waveform_scan(scan) for scan in scans]
+        window_meta = row.get("window_metadata") or {}
         scenario["metadata"]["hif_scan_window"] = {
             "scan_window_path": str(row.get("id") or scenario["scenario_id"]),
             "scans": copy.deepcopy(runtime_scans),
-            "sigma_z": copy.deepcopy(row.get("sigma_z")),
-            "window_metadata": copy.deepcopy(row.get("window_metadata") or {}),
+            "sigma_z": copy.deepcopy(row["sigma_z"]),
+            "three_phase_sigma": float(row["three_phase_sigma"]),
+            "window_metadata": {
+                key: copy.deepcopy(window_meta[key]) for key in ("source_kind", "operating_point_mode")
+                if key in window_meta
+            },
         }
+        if row.get("measurement_convention") is not None:
+            declaration = copy.deepcopy(row["measurement_convention"])
+            scenario["metadata"]["measurement_convention"] = declaration
+            scenario["metadata"]["hif_runtime"]["measurement_convention"] = copy.deepcopy(declaration)
+            scenario["metadata"]["hif_scan_window"]["measurement_convention"] = copy.deepcopy(declaration)
         branch_currents = row.get(BRANCH_CURRENT_CHANNEL)
         if not branch_currents and runtime_scans:
             branch_currents = runtime_scans[0].get(BRANCH_CURRENT_CHANNEL)
@@ -2142,6 +2258,7 @@ class Round0ScenarioGenerator:
     def _unbalance_scenario(
         self, row: Mapping[str, Any], index: int
     ) -> dict[str, Any]:
+        row = self._aligned_waveform_row(row, "three_phase_unbalance")
         label = copy.deepcopy(dict(row.get("label") or {}))
         voltages = row.get("three_phase_voltages")
         if not isinstance(voltages, Sequence) or not voltages:
@@ -2154,14 +2271,15 @@ class Round0ScenarioGenerator:
         if mode == "discovered":
             # The operator starts from the positive-sequence snapshot alone,
             # so the unbalance must at least register as a WLS anomaly.
-            self._require_anomalous(self.case_path, z_obs, "three_phase_unbalance")
+            self._require_anomalous(self.case_path, z_obs, "three_phase_unbalance", sigma_z=row["sigma_z"])
         elif self.validate:
-            self._chi2_statistic(self.case_path, z_obs)
+            self._chi2_statistic(self.case_path, z_obs, sigma_z=row["sigma_z"])
         scenario = self._base_scenario(
             self._scenario_id("three_phase_unbalance", row.get("id"), index),
             case=self.case_path,
             measurements=z_obs,
             family="three_phase_unbalance",
+            sigma_z=row["sigma_z"],
         )
         scenario["clean_case"] = self.case_path
         scenario["clean_measurements"] = [float(value) for value in row["z_true"]]
@@ -2171,6 +2289,9 @@ class Round0ScenarioGenerator:
                 _WAVEFORM_PROVENANCE
             )
         scenario["metadata"]["three_phase_voltages"] = copy.deepcopy(list(voltages))
+        scenario["metadata"]["three_phase_sigma"] = float(row["three_phase_sigma"])
+        if row.get("noise_contract") is not None:
+            scenario["metadata"]["noise_contract"] = copy.deepcopy(row["noise_contract"])
         branch_currents = row.get(BRANCH_CURRENT_CHANNEL)
         if branch_currents and branch_current_rows_to_phasors(branch_currents):
             scenario["metadata"][BRANCH_CURRENT_CHANNEL] = copy.deepcopy(list(branch_currents))
@@ -2189,35 +2310,53 @@ class Round0ScenarioGenerator:
     def _telemetry_no_disturbance_scenario(
         self, row: Mapping[str, Any], index: int
     ) -> dict[str, Any]:
-        voltages = row.get("three_phase_voltages")
-        if not isinstance(voltages, Sequence) or not voltages:
-            raise ScenarioRejected("three_phase_voltages_missing", str(row.get("id")))
-        balanced = self._balanced_voltage_control(voltages)
-        if not balanced:
-            raise ScenarioRejected("balanced_telemetry_control_invalid", str(row.get("id")))
-        measurements = [float(value) for value in row["z_true"]]
-        self._require_clean(self.case_path, measurements, "telemetry_no_disturbance")
+        from three_phase_nlm.hif_operating_point import canonicalize_ieee14_operating_point
+        from three_phase_nlm.hif_parameter_estimator import _resolve_model_dir, _simulate_base
+        from three_phase_nlm.measurement_noise import (
+            add_scada_noise, add_voltage_phasor_noise, generated_noise_contract,
+        )
+        from three_phase_nlm.branch_current_analysis import add_branch_current_noise
+
+        row = self._aligned_waveform_row(row, "hif" if row.get("scans") else "three_phase_unbalance")
+        sigma_z = row["sigma_z"]
+        voltage_sigma = float(row["three_phase_sigma"])
+        current_sigma = float(row[BRANCH_CURRENT_SIGMA_KEY])
+        op_point = canonicalize_ieee14_operating_point(row.get("op_point") or {})
+        try:
+            balanced_model = _simulate_base(_resolve_model_dir(None, self.case_path), op_point=op_point)
+        except Exception as exc:
+            raise ScenarioRejected("balanced_telemetry_replay_failed", str(exc)) from exc
+        # SCADA retains the canonical balanced reference used by this control;
+        # auxiliary means come from a fresh balanced OpenDSS solve. Never project
+        # already noisy currents/voltages and then declare the original variance.
+        clean_measurements = [float(value) for value in row["z_true"]]
+        measurements = add_scada_noise(clean_measurements, self._rng, sigma_z)
+        balanced = add_voltage_phasor_noise(balanced_model["three_phase_voltages"], self._rng, voltage_sigma)
+        balanced_currents = add_branch_current_noise(balanced_model[BRANCH_CURRENT_CHANNEL], self._rng, current_sigma)
+        self._require_clean(self.case_path, measurements, "telemetry_no_disturbance", sigma_z=sigma_z)
         scenario = self._base_scenario(
             self._scenario_id("telemetry_no_disturbance", row.get("id"), index),
             case=self.case_path,
             measurements=measurements,
             family="telemetry_no_disturbance",
+            sigma_z=sigma_z,
         )
         scenario["clean_case"] = self.case_path
-        scenario["clean_measurements"] = list(measurements)
+        scenario["clean_measurements"] = clean_measurements
         scenario["metadata"]["three_phase_voltages"] = balanced
-        branch_currents = row.get(BRANCH_CURRENT_CHANNEL)
-        if branch_currents and branch_current_rows_to_phasors(branch_currents):
-            balanced_currents = balanced_branch_current_control(list(branch_currents))
-            if not balanced_currents:
-                raise ScenarioRejected(
-                    "balanced_current_control_invalid", str(row.get("id"))
-                )
-            scenario["metadata"][BRANCH_CURRENT_CHANNEL] = balanced_currents
-            if row.get(BRANCH_CURRENT_SIGMA_KEY) is not None:
-                scenario["metadata"][BRANCH_CURRENT_SIGMA_KEY] = float(
-                    row[BRANCH_CURRENT_SIGMA_KEY]
-                )
+        scenario["metadata"]["three_phase_sigma"] = voltage_sigma
+        scenario["metadata"][BRANCH_CURRENT_CHANNEL] = balanced_currents
+        scenario["metadata"][BRANCH_CURRENT_SIGMA_KEY] = current_sigma
+        scenario["metadata"]["noise_contract"] = generated_noise_contract(
+            sigma_z, noise_scale=float((row.get("noise_contract") or {}).get("noise_scale", 1.0)),
+            three_phase_sigma=voltage_sigma, branch_current_sigma_pu=current_sigma,
+        )
+        scenario["metadata"]["telemetry_control_semantics"] = {
+            "scada_mean": "canonical_balanced_PYPOWER_reference",
+            "auxiliary_means": "fresh_balanced_OpenDSS_solve_at_source_operating_point",
+            "noise": "independent_Gaussian_draws_added_once_to_each_deterministic_sensor_mean",
+            "cross_simulator_operating_point_identity": "not_asserted",
+        }
         scenario["hidden_truth"] = {
             "true_unbalance_errors": [],
             "control_kind": "telemetry_present_no_disturbance",
@@ -2230,6 +2369,7 @@ class Round0ScenarioGenerator:
         """Indices eligible for a gross-offset overlay on this scenario."""
         index_map = measurement_index_map(self.nb, self.nl)
         blocked: set[int] = set()
+        blocked.update(int(i) for i in (scenario.get("metadata") or {}).get("structural_zero_indices", []))
         for fault in scenario.get("true_measurement_errors") or []:
             if fault.get("index") is not None:
                 blocked.add(int(fault["index"]))
@@ -3351,12 +3491,14 @@ class Round0ScenarioGenerator:
         composed["scenario_id"] = self._scenario_id(family, scenario["scenario_id"], index)
         composed["root_scenario_id"] = composed["scenario_id"]
         measurements = [float(value) for value in composed["measurements"]]
+        metadata = composed.get("metadata") or {}
+        sigma_z = list(metadata.get("sigma_z", self.noise_profile()))
         errors = list(composed.get("true_measurement_errors") or [])
         for overlay_index in self._overlay_indices(composed, offsets):
             magnitude = float(self._rng.uniform(0.10, 0.30))
             if self.min_measurement_error_sigma is not None:
                 floor = self.min_measurement_error_sigma * float(
-                    self.noise_profile()[overlay_index]
+                    sigma_z[overlay_index]
                 )
                 magnitude = max(magnitude, floor * float(self._rng.uniform(1.0, 1.5)))
             sign = 1.0 if self._rng.random() < 0.5 else -1.0
@@ -3370,19 +3512,30 @@ class Round0ScenarioGenerator:
                 }
             )
         composed["measurements"] = measurements
+        # The active snapshot and its diagnostic copy are one acquisition.
+        # Historical scans stay independent; only the matching current scan
+        # receives the same corruption, preventing a hidden uncorrupted copy.
+        runtime = metadata.get("hif_runtime")
+        if isinstance(runtime, dict):
+            runtime["z_obs"] = list(measurements)
+            window = metadata.get("hif_scan_window") or {}
+            for scan in window.get("scans", []):
+                if scan.get("z_obs") == scenario["measurements"]:
+                    scan["z_obs"] = list(measurements)
         composed["true_measurement_errors"] = errors
         self._declare_measurement_recovery_tolerance(
             composed,
             [int(item["index"]) for item in errors if item.get("index") is not None],
         )
-        self._require_anomalous(self.case_path, measurements, family)
+        noise_options = {"sigma_z": sigma_z, "exact_measurement_indices": metadata.get("structural_zero_indices", [])}
+        self._require_anomalous(self.case_path, measurements, family, **noise_options)
         corrected_case = str(composed.get("clean_case") or self.case_path)
         if corrected_case != self.case_path:
             # In branch+measurement recovery the branch family may correctly
             # resolve first. The independent bad meter must still be observable
             # under that repaired model; otherwise exact sequential recovery is
             # order-dependent and a truth-free policy can finalize too early.
-            self._require_anomalous(corrected_case, measurements, family)
+            self._require_anomalous(corrected_case, measurements, family, **noise_options)
         if family == "measurement+topology":
             self._require_mixed_topology_recovery_realizable(composed)
         if family == "measurement+parameter":
@@ -3684,6 +3837,10 @@ __all__ = [
     "DEFAULT_IMBALANCE_SAMPLE_PATH",
     "LEGACY_IMBALANCE_SAMPLE_PATH",
     "CURRENT_TELEMETRY_HIF_SAMPLE_PATHS",
+    "PHYSICAL_HIF_SAMPLE_PATHS",
+    "PHYSICAL_HIF_DETECTION_LIMIT_SAMPLE_PATH",
+    "PHYSICAL_HIF_SWEEP_SAMPLE_PATH",
+    "PHYSICAL_IMBALANCE_SAMPLE_PATH",
     "CURRENT_TELEMETRY_IMBALANCE_SAMPLE_PATH",
     "UNBALANCE_SIGNATURE",
     "UNBALANCE_CURRENT_SIGNATURE",

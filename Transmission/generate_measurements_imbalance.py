@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from copy import deepcopy
@@ -61,6 +62,68 @@ from three_phase_nlm.branch_current_analysis import (  # type: ignore
     DEFAULT_BRANCH_CURRENT_SIGMA_PU,
     add_branch_current_noise,
 )
+from three_phase_nlm.measurement_noise import (
+    DEFAULT_THREE_PHASE_SIGMA_PU,
+    add_scada_noise,
+    add_voltage_phasor_noise,
+    generated_noise_contract,
+    positive_sigma,
+    scada_noise_sigma,
+    scaled_sensor_sigma,
+)
+from IEEE_14_OpenDSS.measurement_convention import (  # type: ignore
+    SHUNT_CONVENTION_LEGACY,
+    SHUNT_CONVENTION_YBUS,
+    measurement_convention_payload,
+    validate_shunt_convention,
+)
+from three_phase_model.voltage_bases import (  # type: ignore
+    IEEE14_NOMINAL_KV,
+    IEEE14_VOLTAGE_BASE_PROFILE_ID,
+    ieee14_voltage_base_profile,
+)
+
+TELEMETRY_BASE_SEMANTICS = ("physical_local_bases", "normalized_model_bases")
+BALANCED_REFERENCE_OPENDSS = "opendss_same_operating_point"
+BALANCED_REFERENCE_PYPOWER_OPF = "pypower_opf"
+BALANCED_REFERENCE_MODES = (BALANCED_REFERENCE_OPENDSS, BALANCED_REFERENCE_PYPOWER_OPF)
+#: The operator's single voltage-magnitude channel per bus is the phase-A
+#: line-to-neutral magnitude exported by OpenDSS (decision 2026-09-21). Under
+#: unbalance it departs from the positive-sequence magnitude, which is real
+#: single-phase-meter physics, not an export artifact.
+OPERATOR_VM_CHANNEL = {
+    "channel": "Vm",
+    "semantics": "phase_a_line_to_neutral_voltage_magnitude_pu",
+    "not": "positive_sequence_or_three_phase_average_magnitude",
+    "note": "a single-phase SCADA voltage meter on phase A; unbalance therefore reaches the balanced WLS through Vm",
+}
+
+
+def _bus_number(bus) -> int:
+    text = str(bus).strip().lower()
+    text = text[1:] if text.startswith("b") else text
+    return int(text.split(".")[0])
+
+
+def _physical_kvbase_ln(bus) -> float:
+    """Physical line-to-neutral base kV of an IEEE-14 bus (kV_LL / sqrt(3))."""
+    return float(IEEE14_NOMINAL_KV[_bus_number(bus)]) / math.sqrt(3.0)
+
+
+def _physical_ibase_a(bus) -> float:
+    """Per-phase current base (S_base/3) / V_LN,base on the physical bus base."""
+    return (100.0 * 1e6 / 3.0) / (_physical_kvbase_ln(bus) * 1e3)
+
+
+def _rewrite_voltage_bases(rows):
+    """Replace ``kvbase_ln`` by the physical local base; pu values untouched."""
+    return [{**dict(row), "kvbase_ln": _physical_kvbase_ln(row["bus"])} for row in rows]
+
+
+def _rewrite_current_bases(rows):
+    """Replace ``ibase_from_a``/``ibase_to_a`` by the physical terminal bases; pu untouched."""
+    return [{**dict(row), "ibase_from_a": _physical_ibase_a(row["from_bus"]),
+             "ibase_to_a": _physical_ibase_a(row["to_bus"])} for row in rows]
 
 from Transmission.generate_measurements import (  # type: ignore
     MEASUREMENT_ORDER,
@@ -302,17 +365,38 @@ def generate_dataset(
     load_scale_min: float,
     load_scale_max: float,
     dirichlet_alpha: float,
-    branch_current_noise_pu: float = 0.0,
-    branch_current_sigma_pu: float = DEFAULT_BRANCH_CURRENT_SIGMA_PU,
+    branch_current_noise_pu: float = DEFAULT_BRANCH_CURRENT_SIGMA_PU,
+    branch_current_sigma_pu: float | None = None,
+    three_phase_noise_pu: float = DEFAULT_THREE_PHASE_SIGMA_PU,
+    noise_scale: float = 1.0,
+    shunt_convention: str = SHUNT_CONVENTION_YBUS,
+    telemetry_bases: str = "physical_local_bases",
+    balanced_reference: str = BALANCED_REFERENCE_OPENDSS,
 ) -> None:
-    if float(branch_current_noise_pu) < 0.0:
-        raise ValueError("branch_current_noise_pu must be non-negative")
-    if float(branch_current_sigma_pu) <= 0.0:
-        raise ValueError("branch_current_sigma_pu must be positive")
-    # The declared sigma is the nominal sensor accuracy used to weight the
-    # channel; applied noise may be zero (clean telemetry) or larger.
-    declared_current_sigma = max(float(branch_current_sigma_pu), float(branch_current_noise_pu))
+    # Bus injections follow the operator WLS convention by default (fixed
+    # shunts stay in Ybus); the historical corpus used legacy_injection.
+    shunt_convention = validate_shunt_convention(shunt_convention)
+    if telemetry_bases not in TELEMETRY_BASE_SEMANTICS:
+        raise ValueError(f"telemetry_bases must be one of {TELEMETRY_BASE_SEMANTICS}, got {telemetry_bases!r}")
+    physical_bases = telemetry_bases == "physical_local_bases"
+    if balanced_reference not in BALANCED_REFERENCE_MODES:
+        raise ValueError(f"balanced_reference must be one of {BALANCED_REFERENCE_MODES}, got {balanced_reference!r}")
+    convention_payload = measurement_convention_payload(shunt_convention)
+    noise_scale = positive_sigma(noise_scale, field="noise_scale")
+    branch_current_noise_pu = positive_sigma(branch_current_noise_pu, field="branch_current_noise_pu")
+    if branch_current_sigma_pu is not None:
+        declared = positive_sigma(branch_current_sigma_pu, field="branch_current_sigma_pu")
+        if not np.isclose(declared, branch_current_noise_pu, rtol=1e-12, atol=0.0):
+            raise ValueError("branch_current_sigma_pu must equal applied branch_current_noise_pu before noise_scale")
+    declared_current_sigma = scaled_sensor_sigma(branch_current_noise_pu, noise_scale, field="branch_current_noise_pu")
+    voltage_sigma = scaled_sensor_sigma(three_phase_noise_pu, noise_scale, field="three_phase_noise_pu")
+    sigma_z = scada_noise_sigma(noise_scale).tolist()
+    noise_contract = generated_noise_contract(
+        sigma_z, noise_scale=noise_scale, three_phase_sigma=voltage_sigma,
+        branch_current_sigma_pu=declared_current_sigma,
+    )
     rng = np.random.default_rng(seed)
+    measurement_rng = np.random.default_rng(np.random.SeedSequence([int(seed), 1]))
     # IMPORTANT: OpenDSS `Basic.DataPath()` changes the process CWD, so always use absolute output paths.
     out = Path(os.path.abspath(out_dir))
     out.mkdir(parents=True, exist_ok=True)
@@ -329,14 +413,32 @@ def generate_dataset(
         index_map={k: [int(v.start), int(v.stop)] for k, v in idx_map.items()},
         measurement_order=MEASUREMENT_ORDER,
         branch_info=_branch_info_case14(),
+        sigma_z=sigma_z,
+        three_phase_sigma=voltage_sigma,
+        branch_current_sigma_pu=declared_current_sigma,
+        noise_contract=noise_contract,
+        measurement_convention=convention_payload,
+        operator_vm_channel=dict(OPERATOR_VM_CHANNEL),
+        telemetry_base_semantics=telemetry_bases,
+        voltage_base_profile=(ieee14_voltage_base_profile() if physical_bases else None),
         imbalance=dict(
             eligible_load_buses=[],
+            shunt_convention=shunt_convention,
+            balanced_reference=balanced_reference,
+            z_true_semantics=(
+                "balanced OpenDSS solve at the same load scale with every load balanced (bus 3 rebalanced), "
+                "same dispatch and shunt convention as the unbalanced solve; z_reference_opf is the pypower OPF vector"
+                if balanced_reference == BALANCED_REFERENCE_OPENDSS else
+                "pypower OPF balanced case (different dispatch than the OpenDSS solve)"),
+            z_obs_semantics="phase-A Vm plus three-phase total P/Q injections and flows; unbalanced OpenDSS solve",
             bus_order=BUS_ORDER,
             branch_order=BRANCH_ORDER,
             three_phase_voltage_measurements=dict(
                 type="VLN",
                 phases=["A", "B", "C"],
                 fields=["vln_pu", "ang_deg", "kvbase_ln"],
+                three_phase_sigma=voltage_sigma,
+                noise_model="independent Gaussian per real/imaginary component",
             ),
             three_phase_branch_current_measurements={
                 "channel": BRANCH_CURRENT_CHANNEL,
@@ -356,7 +458,7 @@ def generate_dataset(
                 ],
                 "sign_convention": "current flowing into the branch from each terminal",
                 "per_unit_base": "(S_base/3) / V_LN,base at the terminal bus, S_base=100 MVA",
-                "applied_noise_sigma_pu": float(branch_current_noise_pu),
+                "applied_noise_sigma_pu": declared_current_sigma,
                 BRANCH_CURRENT_SIGMA_KEY: float(declared_current_sigma),
             },
             base_model_override={
@@ -395,7 +497,12 @@ def generate_dataset(
                 id=f"ne3p_{rng.integers(1e12)}",
                 scenario="no_error",
                 z_true=z,
-                z_obs=z,
+                z_clean=z,
+                z_obs=add_scada_noise(z, measurement_rng, sigma_z),
+                sigma_z=sigma_z,
+                noise_contract=generated_noise_contract(sigma_z, noise_scale=noise_scale),
+                measurement_convention=dict(measurement_convention_payload(SHUNT_CONVENTION_YBUS),
+                                            source="pypower balanced reference; makeSbus excludes shunts"),
                 label=dict(error_type="no_error"),
                 op_point=dict(load_scale=alpha),
             )
@@ -418,36 +525,70 @@ def generate_dataset(
             )
             dss.Text.Command("Solve")
 
-            z_obs, buses, branches = extract_measurement_series()
-            if len(z_obs) != 3 * nb + 4 * nl:
-                raise RuntimeError(f"Unexpected z length={len(z_obs)} (expected 122)")
+            z_clean, buses, branches = extract_measurement_series(shunt_convention=shunt_convention)
+            if len(z_clean) != 3 * nb + 4 * nl:
+                raise RuntimeError(f"Unexpected z length={len(z_clean)} (expected 122)")
             if list(buses) != list(BUS_ORDER):
                 raise RuntimeError("Unexpected bus order from OpenDSS extractor.")
             if list(branches) != list(BRANCH_ORDER):
                 raise RuntimeError("Unexpected branch order from OpenDSS extractor.")
 
-            three_phase_voltages = extract_three_phase_voltage_measurements()
+            three_phase_voltages_clean = extract_three_phase_voltage_measurements()
+            three_phase_voltages = add_voltage_phasor_noise(
+                three_phase_voltages_clean, measurement_rng, voltage_sigma
+            )
+            branch_currents_clean = extract_three_phase_branch_current_measurements()
             branch_currents = add_branch_current_noise(
-                extract_three_phase_branch_current_measurements(),
-                rng,
-                float(branch_current_noise_pu),
+                branch_currents_clean,
+                measurement_rng,
+                declared_current_sigma,
             )
 
-            # Positive-sequence reference with same total load scaling (for analysis/labeling)
+            if physical_bases:
+                three_phase_voltages_clean = _rewrite_voltage_bases(three_phase_voltages_clean)
+                three_phase_voltages = _rewrite_voltage_bases(three_phase_voltages)
+                branch_currents_clean = _rewrite_current_bases(branch_currents_clean)
+                branch_currents = _rewrite_current_bases(branch_currents)
+
+            # pypower OPF balanced case at the same total load (different dispatch; kept for continuity)
             ppc_scaled = _scale_pypower_loads(ppc_base, alpha)
             solved = _solve_pypower(ppc_scaled)
             if solved is None:
                 continue
-            z_true = compute_measurements_pu(solved).astype(float).tolist()
+            z_reference_opf = compute_measurements_pu(solved).astype(float).tolist()
+            if balanced_reference == BALANCED_REFERENCE_OPENDSS:
+                # Paired balanced reference: the same OpenDSS model, dispatch, load scale and
+                # shunt convention with every load balanced (the unbalanced exports above are
+                # complete, so recompiling here is safe).
+                _compile_ieee14_opendss(dss_repo)
+                _scale_all_loads(base_loads, alpha)
+                dss.Text.Command("Solve")
+                z_balanced, _, _ = extract_measurement_series(shunt_convention=shunt_convention)
+                z_true = [float(x) for x in z_balanced]
+                z_true_semantics = ("balanced_same_operating_point_opendss_reference; every load balanced, same "
+                                    "dispatch, load scale and shunt convention; z_clean is the unbalanced sensor mean")
+            else:
+                z_true = z_reference_opf
+                z_true_semantics = "balanced_reference_pypower_opf; different dispatch than the OpenDSS solve"
 
             rec = dict(
                 id=f"imb3p_{rng.integers(1e12)}",
                 scenario="three_phase_imbalance",
                 z_true=z_true,
-                z_obs=[float(x) for x in z_obs],
+                z_true_semantics=z_true_semantics,
+                z_reference_opf=z_reference_opf,
+                balanced_reference=balanced_reference,
+                z_clean=[float(x) for x in z_clean],
+                z_obs=add_scada_noise(z_clean, measurement_rng, sigma_z),
+                sigma_z=sigma_z,
                 three_phase_voltages=three_phase_voltages,
+                three_phase_voltages_clean=three_phase_voltages_clean,
+                three_phase_sigma=voltage_sigma,
+                noise_contract=noise_contract,
+                measurement_convention=convention_payload,
                 **{
                     BRANCH_CURRENT_CHANNEL: branch_currents,
+                    f"{BRANCH_CURRENT_CHANNEL}_clean": branch_currents_clean,
                     BRANCH_CURRENT_SIGMA_KEY: float(declared_current_sigma),
                 },
                 label=dict(
@@ -469,6 +610,10 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--load-scale-min", type=float, default=0.80)
     p.add_argument("--load-scale-max", type=float, default=1.25)
+    p.add_argument("--noise-scale", type=float, default=1.0,
+                   help="Positive common multiplier for applied noise and exported sensor sigmas.")
+    p.add_argument("--three-phase-noise-pu", type=float, default=DEFAULT_THREE_PHASE_SIGMA_PU,
+                   help="Phase-voltage real/imaginary component sigma before --noise-scale.")
     p.add_argument(
         "--dirichlet-alpha",
         type=float,
@@ -478,14 +623,33 @@ def main() -> None:
     p.add_argument(
         "--branch-current-noise-pu",
         type=float,
-        default=0.0,
-        help="Applied per-component Gaussian noise on branch-current phasors (pu); 0 keeps them clean.",
+        default=DEFAULT_BRANCH_CURRENT_SIGMA_PU,
+        help="Positive branch-current component sigma before --noise-scale; exported weights use the same value.",
     )
     p.add_argument(
         "--branch-current-sigma-pu",
         type=float,
-        default=DEFAULT_BRANCH_CURRENT_SIGMA_PU,
-        help="Declared nominal branch-current sensor sigma (pu) used to weight the channel.",
+        default=None,
+        help="Optional consistency assertion: must equal --branch-current-noise-pu before --noise-scale.",
+    )
+    p.add_argument(
+        "--shunt-convention",
+        choices=[SHUNT_CONVENTION_YBUS, SHUNT_CONVENTION_LEGACY],
+        default=SHUNT_CONVENTION_YBUS,
+        help="Bus-injection convention of the exported z: ybus keeps fixed shunts in Ybus (operator WLS); "
+             "legacy_injection reproduces the historical corpora that counted the bus-9 capacitor in Qinj.",
+    )
+    p.add_argument(
+        "--balanced-reference",
+        choices=list(BALANCED_REFERENCE_MODES),
+        default=BALANCED_REFERENCE_OPENDSS,
+        help="Row-level z_true: balanced OpenDSS solve at the same operating point (default) or the pypower OPF case.",
+    )
+    p.add_argument(
+        "--telemetry-bases",
+        choices=list(TELEMETRY_BASE_SEMANTICS),
+        default="physical_local_bases",
+        help="Report kvbase_ln/ibase_*_a on the declared 69/13.8/18 kV bases or on the normalized 1 kV model.",
     )
     args = p.parse_args()
 
@@ -498,9 +662,15 @@ def main() -> None:
         load_scale_max=args.load_scale_max,
         dirichlet_alpha=args.dirichlet_alpha,
         branch_current_noise_pu=float(args.branch_current_noise_pu),
-        branch_current_sigma_pu=float(args.branch_current_sigma_pu),
+        branch_current_sigma_pu=args.branch_current_sigma_pu,
+        three_phase_noise_pu=float(args.three_phase_noise_pu),
+        noise_scale=float(args.noise_scale),
+        shunt_convention=args.shunt_convention,
+        telemetry_bases=args.telemetry_bases,
+        balanced_reference=args.balanced_reference,
     )
-    print(f"Wrote imbalance dataset to: {args.out}")
+    print(f"Wrote imbalance dataset to: {args.out} [shunt_convention={args.shunt_convention} "
+          f"telemetry_bases={args.telemetry_bases} operator_vm=phase_a_magnitude]")
 
 
 if __name__ == "__main__":

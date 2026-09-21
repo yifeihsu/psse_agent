@@ -69,7 +69,7 @@ except ImportError:  # pragma: no cover - direct execution inside Transmission/
 CB_R_PU = 5e-6
 CB_X_PU = 5e-5
 
-# Nominal sensor accuracies (pu, rad) shared by the operator vector and the telemetry.
+# Nominal raw-sensor accuracies; summed operator injections propagate variance.
 TELEMETRY_SIGMA = {"vm": 1e-3, "inj": 1e-2, "flow": 1e-2, "cb": 1e-2}
 
 __all__ = [
@@ -82,6 +82,9 @@ __all__ = [
     "operator_vector_from_telemetry",
     "operator_model_from_map",
     "operator_vector_for_layout",
+    "operator_noise_for_layout",
+    "operator_sigma_for_layout",
+    "operator_observation_for_layout",
     "STRUCTURAL_EFFECTS",
     "solve_node_breaker",
     "status_map_from_labels",
@@ -302,6 +305,10 @@ def substation_telemetry(
         "cb_p": cb_p,
         "cb_q": cb_q,
         "sigma": dict(TELEMETRY_SIGMA),
+        "nominal_sensor_sigma": dict(TELEMETRY_SIGMA),
+        "measurement_kind": "noiseless_mean",
+        "applied_noise_scale": 0.0,
+        "noise_draw_count": 0,
         "dead_nodes": [nodes[b - 1] for b in sorted(dead)],
     }
 
@@ -309,8 +316,23 @@ def substation_telemetry(
 def add_telemetry_noise(
     telemetry: Mapping[str, Any], rng: np.random.Generator, scale: float = 1.0
 ) -> dict[str, Any]:
-    """Independent Gaussian sensor noise on every channel (sigmas scaled by ``scale``)."""
-    sigma = {key: float(value) * float(scale) for key, value in telemetry["sigma"].items()}
+    """Draw sensor noise once, recording the exact applied standard deviations.
+
+    Deterministic controls use ``substation_telemetry`` directly. A noisy draw
+    requires a finite positive scale and cannot be applied to an observed
+    snapshot a second time. De-energized voltage readings remain explicit zeros.
+    """
+    scale = float(scale)
+    if not np.isfinite(scale) or scale <= 0:
+        raise ValueError("noisy telemetry requires a finite positive noise scale")
+    if telemetry.get("measurement_kind") == "observed" or telemetry.get("noise_draw_count", 0):
+        raise ValueError("telemetry noise must be drawn once from noiseless means")
+    nominal = dict(telemetry.get("nominal_sensor_sigma", telemetry["sigma"]))
+    if set(nominal) != set(TELEMETRY_SIGMA) or any(
+        not np.isfinite(float(value)) or float(value) <= 0 for value in nominal.values()
+    ):
+        raise ValueError("telemetry sensor sigmas must be finite positive vm/inj/flow/cb values")
+    sigma = {key: float(value) * scale for key, value in nominal.items()}
     noisy = deepcopy(dict(telemetry))
     noisy["node_vm"] = {
         name: (value + rng.normal(0.0, sigma["vm"]) if value > 0 else 0.0)
@@ -323,6 +345,10 @@ def add_telemetry_noise(
     for key in ("cb_p", "cb_q"):
         noisy[key] = {name: value + rng.normal(0.0, sigma["cb"]) for name, value in telemetry[key].items()}
     noisy["sigma"] = sigma
+    noisy["nominal_sensor_sigma"] = {key: float(value) for key, value in nominal.items()}
+    noisy["measurement_kind"] = "observed"
+    noisy["applied_noise_scale"] = scale
+    noisy["noise_draw_count"] = 1
     return noisy
 
 
@@ -604,3 +630,114 @@ def operator_vector_for_layout(
         np.asarray(telemetry["branch_pt"], dtype=float),
         np.asarray(telemetry["branch_qt"], dtype=float),
     ]
+
+
+def operator_noise_for_layout(
+    telemetry: Mapping[str, Any], layout: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Propagate fixed physical-meter covariance through one operator layout.
+
+    Each voltage row selects one named physical sensor; it is never averaged.
+    An injection is a sum of independent equipment-node meters. Shared source
+    meters, if a layout repeats them, produce the corresponding off-diagonal
+    covariance. Rows without injection meters are exact structural constraints,
+    not fictitious noisy sensors. This function does not alter observations or
+    draw new noise and is equally applicable to a stored snapshot's layout.
+
+    For explicit ``noiseless_mean`` telemetry, measurement covariance describes
+    the target sensor model; ``applied_noise_covariance`` is zero. Observed
+    telemetry uses the actual scaled sigmas recorded by ``add_telemetry_noise``.
+    """
+    n = int(layout["bus_count"])
+    sections = layout["sections"]
+    sigmas = {key: float(telemetry["sigma"][key]) for key in TELEMETRY_SIGMA}
+    if any(not np.isfinite(value) or value <= 0 for value in sigmas.values()):
+        raise ValueError("physical sensor sigmas must be finite and positive")
+    if set(telemetry["node_pinj"]) != set(telemetry["node_qinj"]):
+        raise ValueError("P/Q injection meter identities must match")
+    kind = str(telemetry.get("measurement_kind", "observed"))
+    if kind not in {"observed", "noiseless_mean"}:
+        raise ValueError("measurement_kind must be observed or noiseless_mean")
+    dead_nodes = {str(node) for node in telemetry.get("dead_nodes", [])}
+    sources: list[list[str]] = []
+    measurement_ids: list[str] = []
+    source_variances: dict[str, float] = {}
+    structural: list[int] = []
+    deterministic: list[int] = []
+
+    def append_row(channel: str, source_ids: list[str], variance: float, *, zero_identity: str = "") -> None:
+        index = len(sources)
+        if len(source_ids) != len(set(source_ids)):
+            raise ValueError("an operator row cannot count one physical sensor twice")
+        sources.append(source_ids)
+        measurement_ids.append(
+            source_ids[0] if len(source_ids) == 1 else
+            f"{channel}:sum:" + "+".join(sorted(source_ids)) if source_ids else
+            f"{channel}:structural_zero:{zero_identity}"
+        )
+        for source_id in source_ids:
+            if source_id in source_variances and source_variances[source_id] != variance:
+                raise ValueError("one physical sensor has conflicting declared variances")
+            source_variances[source_id] = variance
+        if not source_ids:
+            structural.append(index)
+        elif variance == 0:
+            deterministic.append(index)
+
+    for i in range(n):
+        section = sections[str(i + 1)]
+        node = str(section["meter_node"])
+        if node not in telemetry["node_vm"]:
+            raise ValueError(f"voltage meter {node} is absent from the physical snapshot")
+        variance = 0.0 if node in dead_nodes else sigmas["vm"] ** 2
+        append_row("Vm", [f"Vm:node:{node}"], variance)
+    for channel, key in (("Pinj", "node_pinj"), ("Qinj", "node_qinj")):
+        for i in range(n):
+            section = sections[str(i + 1)]
+            nodes = [str(node) for node in section["equipment_nodes"] if node in telemetry[key]]
+            append_row(channel, [f"{channel}:node:{node}" for node in nodes], sigmas["inj"] ** 2,
+                       zero_identity="+".join(sorted(str(node) for node in section.get("nodes", [section["meter_node"]]))))
+    for channel, key in (("Pf", "branch_pf"), ("Qf", "branch_qf"), ("Pt", "branch_pt"), ("Qt", "branch_qt")):
+        if len(telemetry[key]) != NL:
+            raise ValueError(f"{key} must retain the {NL} original physical branch identities")
+        for row0 in range(NL):
+            append_row(channel, [f"{channel}:branch_row0:{row0}"], sigmas["flow"] ** 2)
+    raw_ids = list(source_variances)
+    raw_index = {source_id: i for i, source_id in enumerate(raw_ids)}
+    aggregation = np.zeros((len(sources), len(raw_ids)))
+    for i, source_ids in enumerate(sources):
+        for source_id in source_ids:
+            aggregation[i, raw_index[source_id]] = 1.0
+    raw_variance = np.asarray([source_variances[source_id] for source_id in raw_ids])
+    covariance = (aggregation * raw_variance) @ aggregation.T
+    diagonal = np.diag(covariance)
+    return {
+        "contract": "physical_topology_meter_covariance_v1",
+        "measurement_kind": kind,
+        "measurement_ids": measurement_ids,
+        "measurement_sources": sources,
+        "measurement_sigma": np.sqrt(diagonal).tolist(),
+        "measurement_covariance": covariance.tolist(),
+        "applied_noise_covariance": (covariance if kind == "observed" else np.zeros_like(covariance)).tolist(),
+        "covariance_interpretation": "applied_observation_covariance" if kind == "observed" else "target_sensor_covariance_for_noiseless_mean",
+        "structural_zero_indices": structural,
+        "deterministic_sensor_indices": deterministic,
+        "stochastic_measurement_indices": np.flatnonzero(diagonal > 0).tolist(),
+        "raw_sensor_ids": raw_ids,
+        "raw_sensor_variances": raw_variance.tolist(),
+        "aggregation_matrix": aggregation.tolist(),
+        "covariance_propagation": "A @ diag(raw_sensor_variances) @ A.T",
+        "candidate_comparison_requires_retained_raw_observations": True,
+        "applied_noise_scale": telemetry.get("applied_noise_scale"),
+    }
+
+
+def operator_sigma_for_layout(telemetry: Mapping[str, Any], layout: Mapping[str, Any]) -> np.ndarray:
+    """Per-row standard deviations, with exact structural rows left at zero."""
+    return np.asarray(operator_noise_for_layout(telemetry, layout)["measurement_sigma"], dtype=float)
+
+
+def operator_observation_for_layout(telemetry: Mapping[str, Any], layout: Mapping[str, Any]) -> dict[str, Any]:
+    """Store one unchanged observation projection together with its covariance."""
+    return {"measurements": operator_vector_for_layout(telemetry, layout).tolist(),
+            **operator_noise_for_layout(telemetry, layout)}

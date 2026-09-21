@@ -156,3 +156,7 @@ Both vectors are directly paste‑able into MATLAB as row vectors using the docu
   - Adjust `export_measurement_series_balanced.py` (e.g., different pandapower case or modified parameters).
   - Keep the `makeSbus`‑style P/Q reconstruction and branch order intact if you want compatibility with the existing MATLAB tooling.
 
+
+## Voltage bases (2026-09-19)
+
+DSS files remain normalized to 1 kV LL on 100 MVA. Physical IEEE14 bases are 69 kV at buses 1-5, 13.8 kV at buses 6-7 and 9-14, and 18 kV at bus 8. The 132/33/11 kV comments are inert historical annotations. Use `three_phase_nlm.hif_units`: physical ohms -> local pu -> normalized-model ohms. Never pass physical kV or physical resistance directly into a model-ohm injector or the legacy NLM bridge. New corpora declare `ohm_local_base` and `ybus`; absent convention markers replay as `legacy_injection`. Exclude cross-voltage Line.7-8 from new physical HIF generation; legacy estimators retain it on its from-bus base. See `docs/ieee14_hif_legacy_reconfiguration_20260919.md`.

@@ -41,6 +41,16 @@ class IEEE57RuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "detector mismatch"):
             validate_ieee57_runtime(env)
 
+    def test_explicit_action_horizon_does_not_relax_detector_contract(self):
+        env = ieee57_environment_factory()
+        env.max_steps = 8
+        with self.assertRaisesRegex(ValueError, "max_steps"):
+            validate_ieee57_runtime(env)
+        self.assertEqual(validate_ieee57_runtime(env, expected_max_steps=8)["max_steps"], 8)
+        env.wls_runner.__self__.normalized_residual_threshold = 3.0
+        with self.assertRaisesRegex(ValueError, "detector mismatch"):
+            validate_ieee57_runtime(env, expected_max_steps=8)
+
     def test_inclusive_alarm_boundaries_and_missing_or_nonfinite_evidence(self):
         metrics = {
             "chi_square_alpha": .05, "normalized_residual_threshold": 4.0,

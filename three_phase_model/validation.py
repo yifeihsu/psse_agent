@@ -105,9 +105,14 @@ def _yprim(dss: Any, element: Mapping[str, Any]) -> np.ndarray:
 
 
 def positive_sequence_terminal_admittance(
-    dss: Any, element_name: str, from_bus: str, to_bus: str, *, zbase_ohm: float,
+    dss: Any, element_name: str, from_bus: str, to_bus: str, *, zbase_ohm: float | None = None,
+    terminal_kv_ll: tuple[float, float] | None = None, base_mva: float | None = None,
 ) -> np.ndarray:
-    """Project the actual grounded phase-domain primitive onto two terminals."""
+    """Project compiled YPrim with physical-to-per-unit scaling per terminal.
+
+    Use ``terminal_kv_ll`` and ``base_mva`` for different winding voltage bases;
+    the historical ``zbase_ohm`` option is valid for a uniform-base pair only.
+    """
     element = _element(dss, element_name)
     if not element["enabled"]:
         return np.zeros((2, 2), dtype=complex)
@@ -127,7 +132,21 @@ def positive_sequence_terminal_admittance(
             excitation[index, endpoints[_bus_name(bus)]] = _PHASE[node - 1]
     # Conjugate transpose / 3 extracts I1 from [Ia, Ib, Ic]. Grounded neutral
     # conductors get zero excitation; no unsupported neutral elimination occurs.
-    return excitation.conj().T @ y @ excitation * (float(zbase_ohm) / 3)
+    projected = excitation.conj().T @ y @ excitation / 3
+    if terminal_kv_ll is not None:
+        if zbase_ohm is not None:
+            raise ValueError("choose explicit terminal voltage bases or one uniform impedance base")
+        kv = np.asarray(terminal_kv_ll, dtype=float)
+        if (kv.shape != (2,) or not np.isfinite(kv).all() or np.any(kv <= 0)
+                or base_mva is None or not math.isfinite(float(base_mva)) or float(base_mva) <= 0):
+            raise ValueError("two finite positive terminal kV bases and a positive MVA base are required")
+        voltage_bases = kv * 1000 / np.sqrt(3)
+        current_bases = float(base_mva) * 1000 / (np.sqrt(3) * kv)
+        # Ipu_i = sum_j Yphysical_ij * Vbase_j / Ibase_i * Vpu_j.
+        return projected * voltage_bases[None, :] / current_bases[:, None]
+    if zbase_ohm is None or not math.isfinite(float(zbase_ohm)) or float(zbase_ohm) <= 0:
+        raise ValueError("a finite positive uniform impedance base is required")
+    return projected * float(zbase_ohm)
 
 
 def reference_terminal_admittance(branch: Any) -> np.ndarray:
@@ -165,8 +184,6 @@ Malformed or unavailable engine evidence raises rather than producing a pass.
     kv_ll = float(assumptions["base_kv_ll"])
     if not math.isfinite(base_mva) or not math.isfinite(kv_ll) or min(base_mva, kv_ll) <= 0:
         raise ValueError("positive finite power and voltage bases are required")
-    zbase = kv_ll**2 / base_mva
-    ibase = base_mva * 1000 / (np.sqrt(3) * kv_ll)
     sbase_kva = base_mva * 1000
     bus_table = np.asarray(reference["bus"], dtype=float)
     branch_table = np.asarray(reference["branch"], dtype=float)
@@ -177,6 +194,14 @@ Malformed or unavailable engine evidence raises rather than producing a pass.
     by_external = {int(row["external_bus"]): row for row in buses}
     if len(by_external) != len(buses):
         raise ValueError("duplicate external bus identifiers")
+    declared_bus_kv = ({int(key): float(value) for key, value in assumptions["bus_base_kv_ll"].items()}
+                       if "bus_base_kv_ll" in assumptions else {number: kv_ll for number in by_external})
+    if set(declared_bus_kv) != set(by_external) or any(
+        not math.isfinite(value) or value <= 0 for value in declared_bus_kv.values()
+    ):
+        raise ValueError("declared voltage bases must cover all registered buses with positive values")
+    current_base = {number: base_mva * 1000 / (np.sqrt(3) * value) for number, value in declared_bus_kv.items()}
+    current_base_by_name = {_bus_name(row["dss_bus"]): current_base[number] for number, row in by_external.items()}
     checks: dict[str, Any] = {}
 
     def check(name: str, error: float, limit: float, **details: Any) -> None:
@@ -184,6 +209,8 @@ Malformed or unavailable engine evidence raises rather than producing a pass.
                         "max_error": float(error), "tolerance": float(limit), **details}
 
     source = registry["source"]
+    source_kv = declared_bus_kv[int(source["bus"])]
+    source_zbase = source_kv**2 / base_mva
     branch_rows = list(registry["branches"])
     expected_names = {str(source["element"]).lower()}
     assigned_names = [str(source["element"]).lower()]
@@ -236,21 +263,24 @@ Malformed or unavailable engine evidence raises rather than producing a pass.
     vm_error: list[float] = []
     va_error: list[float] = []
     v_null: list[float] = []
+    base_errors: list[float] = []
     for row in buses:
         external, index = int(row["external_bus"]), int(row["row0"])
-        if float(row["kv_ll"]) != kv_ll:
-            raise ValueError("validator currently requires a uniform declared line-to-line voltage base")
+        local_kv = declared_bus_kv[external]
+        if float(row["kv_ll"]) != local_kv:
+            raise ValueError("registry bus kV disagrees with its declared voltage base")
         if dss.Circuit.SetActiveBus(row["dss_bus"]) < 0:
             raise ValueError(f"OpenDSS bus missing: {row['dss_bus']}")
         nodes = list(dss.Bus.Nodes())
         raw = _complex_array(dss.Bus.Voltages(), name=f"bus {external} voltages")
         if len(nodes) != len(raw) or any(nodes.count(phase) != 1 for phase in (1, 2, 3)):
             raise ValueError(f"bus {external} does not have exactly one voltage per phase")
-        volts = np.asarray([raw[nodes.index(phase)] for phase in (1, 2, 3)]) / (kv_ll * 1000 / np.sqrt(3))
+        base_errors.append(float(dss.Bus.kVBase()) * np.sqrt(3) - local_kv)
+        volts = np.asarray([raw[nodes.index(phase)] for phase in (1, 2, 3)]) / (local_kv * 1000 / np.sqrt(3))
         bus_phase_pu[external] = volts
         sequence = _SEQ @ volts
         v_null.extend(np.abs(sequence[[0, 2]]).tolist())
-        result = {"bus": external, "vm_pu": np.abs(volts).tolist(),
+        result = {"bus": external, "kv_ll": local_kv, "vm_pu": np.abs(volts).tolist(),
                   "va_deg": np.rad2deg(np.angle(volts)).tolist(),
                   "sequence_voltage_pu": [_pair(v) for v in sequence]}
         if balanced:
@@ -260,6 +290,7 @@ Malformed or unavailable engine evidence raises rather than producing a pass.
             result["reference_vm_pu"] = float(bus_table[index, 7])
             result["reference_va_deg"] = float(bus_table[index, 8])
         bus_results.append(result)
+    check("compiled_bus_voltage_bases", _max(base_errors), 1e-9)
 
     def side_values(names: list[str], endpoint: int) -> tuple[complex, np.ndarray]:
         power, currents = 0j, np.zeros(3, dtype=complex)
@@ -274,7 +305,7 @@ Malformed or unavailable engine evidence raises rather than producing a pass.
                     node = element["nodes"][index]
                     if node in (1, 2, 3):
                         power += element["powers_kva"][index] / sbase_kva
-                        currents[node - 1] += element["currents"][index] / ibase
+                        currents[node - 1] += element["currents"][index] / current_base[endpoint]
                     elif node != 0:
                         raise ValueError("only phase nodes 1/2/3 and grounded node 0 are supported")
         return power, currents
@@ -302,7 +333,8 @@ Malformed or unavailable engine evidence raises rather than producing a pass.
         actual_y = np.zeros((2, 2), dtype=complex)
         for name in names:
             actual_y += positive_sequence_terminal_admittance(
-                dss, name, by_external[fb]["dss_bus"], by_external[tb]["dss_bus"], zbase_ohm=zbase,
+                dss, name, by_external[fb]["dss_bus"], by_external[tb]["dss_bus"],
+                terminal_kv_ll=(declared_bus_kv[fb], declared_bus_kv[tb]), base_mva=base_mva,
             )
         y_error = _max(actual_y - target_y)
         y_errors.append(y_error)
@@ -340,9 +372,10 @@ Malformed or unavailable engine evidence raises rather than producing a pass.
                 index = terminal * element["ncond"] + conductor
                 node = int(element["nodes"][index])
                 if node:
-                    kcl[(_bus_name(bus), node)] += element["currents"][index] / ibase
+                    kcl[(_bus_name(bus), node)] += element["currents"][index] / current_base_by_name[_bus_name(bus)]
         if name in passive_names:
-            constitutive.extend(((_yprim(dss, element) @ element["volts"] - element["currents"]) / ibase).tolist())
+            conductor_bases = np.repeat([current_base_by_name[_bus_name(bus)] for bus in element["buses"]], element["ncond"])
+            constitutive.extend(((_yprim(dss, element) @ element["volts"] - element["currents"]) / conductor_bases).tolist())
     check("phase_node_kcl", _max(list(kcl.values())), tol.phase_kcl_pu,
           node_count=len(kcl), worst_nodes=[{"bus": bus, "node": node, "residual_current_pu": _pair(value)}
           for (bus, node), value in sorted(kcl.items(), key=lambda item: abs(item[1]), reverse=True)[:8]])
@@ -417,7 +450,7 @@ Malformed or unavailable engine evidence raises rather than producing a pass.
             if node not in (1, 2, 3) or _bus_name(bus) != source_bus:
                 raise ValueError("source must terminate at its declared phase bus and ground")
             source_excitation[index] = sequence_phase[node - 1]
-    source_y_sequence_pu = source_excitation.conj().T @ _yprim(dss, source_element) @ source_excitation * zbase / 3
+    source_y_sequence_pu = source_excitation.conj().T @ _yprim(dss, source_element) @ source_excitation * source_zbase / 3
     source_z_sequence_pu = np.linalg.inv(source_y_sequence_pu)
     source_z_target = np.diag([complex(*assumptions[f"source_z{sequence}_pu"]) for sequence in (0, 1, 2)])
     check("source_sequence_impedance", _max(source_z_sequence_pu - source_z_target), tol.source_impedance_pu)
@@ -433,8 +466,11 @@ Malformed or unavailable engine evidence raises rather than producing a pass.
     return {
         "contract": "compiled_opendss_independent_equivalence_v1", "balanced_reference_check": balanced,
         "passed": not failed, "failed_checks": failed, "checks": checks,
-        "tolerances": asdict(tol), "bases": {"base_mva": base_mva, "base_kv_ll": kv_ll,
-        "zbase_ohm": zbase, "ibase_ampere": float(ibase)},
+        "tolerances": asdict(tol), "bases": {"base_mva": base_mva, "base_kv_ll": source_kv,
+        "zbase_ohm": source_zbase, "ibase_ampere": float(current_base[int(source["bus"])]),
+        "scalar_base_scope": "slack_source_reference", "bus_bases": {
+            str(number): {"kv_ll": value, "zbase_ohm": value**2 / base_mva,
+                          "ibase_ampere": float(current_base[number])} for number, value in declared_bus_kv.items()}},
         "power_accounting_pu": {"source_injection": _pair(source_injection),
         "generator_injection": _pair(generator_sum), "load_consumption": _pair(load_sum),
         "shunt_consumption": _pair(shunt_sum), "branch_losses": _pair(branch_loss_actual),

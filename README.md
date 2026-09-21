@@ -217,3 +217,5 @@ python run_http_server.py
 ## License
 
 Refer to `LICENSE.md`.
+
+Physical HIF configuration: [IEEE14 physical experiment](docs/ieee14_physical_hif_20260918.md), [legacy-stack physical-ohm reconfiguration](docs/ieee14_hif_legacy_reconfiguration_20260919.md), and [IEEE57 reconstruction](docs/ieee57_physical_hif_20260919.md).

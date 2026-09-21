@@ -1,0 +1,165 @@
+{
+  "approved_factories": {
+    "case_loader": [
+      {
+        "import_spec": "psse_env.dagger.release_factories:deterministic_case_loader"
+      }
+    ],
+    "environment": [
+      {
+        "import_spec": "psse_env.dagger.release_factories:production_environment_factory"
+      }
+    ],
+    "expert_policy": [
+      {
+        "import_spec": "psse_env.dagger.release_factories:observable_expert_policy_factory"
+      }
+    ],
+    "model_policy": [
+      {
+        "import_spec": "psse_env.dagger.release_factories:gemma_release_policy_factory"
+      }
+    ]
+  },
+  "role_policy": {
+    "base-baseline": "identity_and_measurement_only",
+    "checkpoint-promotion": "bc0_promotion",
+    "expert-baseline": "teacher_release"
+  },
+  "suite_policy": {
+    "approved_suite_manifest": {
+      "suite_manifest": {
+        "efficiency": {
+          "episodes": 31,
+          "distinct_physical_roots": 31,
+          "content_sha256": "92d0294b688880a6e93f88613b9636f4cba84ef2234ded8d9e427fb7a7a15834",
+          "root_set_sha256": "5e85a884b3434ccbc2cf02d3537c3a95567bfadef1ec4bc1eaade861876c586d"
+        },
+        "forced_error_recovery": {
+          "episodes": 21,
+          "distinct_physical_roots": 21,
+          "content_sha256": "10995be492e634dc47b4f3852d597990c69fc08f3c0324bb5526851cb217bb0f",
+          "root_set_sha256": "2e5d7605f0b61f2790459ad9f889b603a88b6a2eb8f43faf342634806d38c91d"
+        },
+        "invalid_action_recovery": {
+          "episodes": 21,
+          "distinct_physical_roots": 21,
+          "content_sha256": "8b7c2a2a628e6a90a08af7798a96aef3385af79d832494336130e41b47f73bce",
+          "root_set_sha256": "9943c3b1c7a4d4e8c277030cb04a1af6b25f567e4be397ffa542097155c61a70"
+        },
+        "partial_success_retention": {
+          "episodes": 21,
+          "distinct_physical_roots": 21,
+          "content_sha256": "60d34aa6610179c093f810fae2a8fdb9e5c18244766977a6dd28983ca46f8ef9",
+          "root_set_sha256": "695948bfd087f9d8d83078baae9e23c0782f7c2b84181f4b9dcabe4406538a14"
+        },
+        "standard_success": {
+          "episodes": 21,
+          "distinct_physical_roots": 21,
+          "content_sha256": "5cd8c251884422edac4034b7021a682530677d8436a3902e2de528f07362ebdb",
+          "root_set_sha256": "8c0f6a9bcb4eab40cdd780eeeedb505e0c5f5a2dc351238843efc9f0ed85b379"
+        }
+      },
+      "suite_content_hashes": {
+        "efficiency": "92d0294b688880a6e93f88613b9636f4cba84ef2234ded8d9e427fb7a7a15834",
+        "forced_error_recovery": "10995be492e634dc47b4f3852d597990c69fc08f3c0324bb5526851cb217bb0f",
+        "invalid_action_recovery": "8b7c2a2a628e6a90a08af7798a96aef3385af79d832494336130e41b47f73bce",
+        "partial_success_retention": "60d34aa6610179c093f810fae2a8fdb9e5c18244766977a6dd28983ca46f8ef9",
+        "standard_success": "5cd8c251884422edac4034b7021a682530677d8436a3902e2de528f07362ebdb"
+      },
+      "suite_root_set_hashes": {
+        "efficiency": "5e85a884b3434ccbc2cf02d3537c3a95567bfadef1ec4bc1eaade861876c586d",
+        "forced_error_recovery": "2e5d7605f0b61f2790459ad9f889b603a88b6a2eb8f43faf342634806d38c91d",
+        "invalid_action_recovery": "9943c3b1c7a4d4e8c277030cb04a1af6b25f567e4be397ffa542097155c61a70",
+        "partial_success_retention": "695948bfd087f9d8d83078baae9e23c0782f7c2b84181f4b9dcabe4406538a14",
+        "standard_success": "8c0f6a9bcb4eab40cdd780eeeedb505e0c5f5a2dc351238843efc9f0ed85b379"
+      },
+      "suite_content_sha256": "0a29b0190591e52ac0695e078444ca190b27c6b9779150244d13f9a90527a928",
+      "root_set_sha256": "0ebbb9c340944fcf4f6249fca4fb1f0c6b701a98a59e943b35ed87d596a507f5"
+    },
+    "approved_suite_sha256": "613bba87413071782786fa18089624f0f5d431c98d783a9a24203bd8c76c029a",
+    "evaluator_seed": 20260719,
+    "max_steps": 24,
+    "scenario_schema_version": 1,
+    "minimum_physical_roots_per_suite": {
+      "efficiency": 20,
+      "forced_error_recovery": 20,
+      "invalid_action_recovery": 20,
+      "partial_success_retention": 20,
+      "standard_success": 20
+    },
+    "required_suites": [
+      "standard_success",
+      "forced_error_recovery",
+      "partial_success_retention",
+      "invalid_action_recovery",
+      "efficiency"
+    ],
+    "status": "pinned"
+  },
+  "family_policy": {
+    "harmonic": {
+      "maximum_unqualified_operator_escalation_rate": 0.0,
+      "minimum_physical_roots": 4,
+      "minimum_audited_completion_rate": 1.0
+    },
+    "hif": {
+      "maximum_unqualified_operator_escalation_rate": 1.0,
+      "minimum_physical_roots": 17,
+      "minimum_audited_completion_rate": 0.0
+    },
+    "measurement": {
+      "maximum_unqualified_operator_escalation_rate": 0.0,
+      "minimum_physical_roots": 8,
+      "minimum_audited_completion_rate": 1.0
+    },
+    "measurement+hif": {
+      "maximum_unqualified_operator_escalation_rate": 1.0,
+      "minimum_physical_roots": 2,
+      "minimum_audited_completion_rate": 0.0
+    },
+    "measurement+parameter": {
+      "maximum_unqualified_operator_escalation_rate": 0.05,
+      "minimum_physical_roots": 22,
+      "minimum_audited_completion_rate": 0.95
+    },
+    "measurement+topology": {
+      "maximum_unqualified_operator_escalation_rate": 0.05,
+      "minimum_physical_roots": 22,
+      "minimum_audited_completion_rate": 0.95
+    },
+    "multi_measurement": {
+      "maximum_unqualified_operator_escalation_rate": 1.0,
+      "minimum_physical_roots": 20,
+      "minimum_audited_completion_rate": 0.0
+    },
+    "no_error": {
+      "maximum_unqualified_operator_escalation_rate": 0.0,
+      "minimum_physical_roots": 4,
+      "minimum_audited_completion_rate": 1.0
+    },
+    "parameter": {
+      "maximum_unqualified_operator_escalation_rate": 0.0,
+      "minimum_physical_roots": 8,
+      "minimum_audited_completion_rate": 1.0
+    },
+    "topology": {
+      "maximum_unqualified_operator_escalation_rate": 0.0,
+      "minimum_physical_roots": 8,
+      "minimum_audited_completion_rate": 1.0
+    }
+  },
+  "hard_constraints": {
+    "maximum_false_commit_count": 0,
+    "maximum_false_finalization_count": 0,
+    "maximum_false_rollback_count": 0,
+    "maximum_healthy_component_corruption_episodes": 0,
+    "maximum_invalid_action_rate": 0.2,
+    "maximum_invalid_actions_per_episode": 1,
+    "maximum_loop_episode_rate": 0.05,
+    "maximum_steps_per_episode": 24,
+    "minimum_terminal_rate": 1.0
+  },
+  "policy_id": "bc0_closed_loop_hard_gate_v3",
+  "policy_schema_version": 3
+}

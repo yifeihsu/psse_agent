@@ -17,12 +17,13 @@ from typing import Any, Sequence
 
 from psse_env.dagger.protocol_bridge import canonical_to_internal_action
 from psse_env.dagger.release_factories import production_environment_factory
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT, bind_env_action_limit
 
 from .collect import load_scenarios
 from .model import load_policy
 from .train import file_sha256
 
-DEFAULT_MAX_STEPS = 24
+DEFAULT_MAX_STEPS = DEFAULT_EPISODE_ACTION_LIMIT
 EVALUATION_SCHEMA_VERSION = 2
 
 
@@ -73,6 +74,7 @@ def run_episode(
 ) -> dict[str, Any]:
     """Run one episode and record how it ended."""
 
+    max_steps = bind_env_action_limit(env, max_steps)
     env.reset(_scenario_execution(scenario))
     history: list[dict[str, Any]] = []
     trace: list[dict[str, Any]] = []

@@ -20,6 +20,7 @@
 # never trains or modifies adapter weights.
 
 set -Eeuo pipefail
+EPISODE_MAX_STEPS=${EPISODE_MAX_STEPS:-40}
 
 : "${RESEARCH_SOURCE_ROOT:?set RESEARCH_SOURCE_ROOT to the research checkout}"
 : "${RESEARCH_ENV:?set RESEARCH_ENV to the research conda environment}"
@@ -154,7 +155,7 @@ if ! report_ready "$D0_REPORT" d0 "$PUBLISHED_ADAPTER"; then
     --adapter-path "$PUBLISHED_ADAPTER" \
     --d0-train "$D0_TRAIN" \
     --output-dir "$REPLAY_DIR" \
-    --max-steps 24
+    --max-steps "$EPISODE_MAX_STEPS"
 fi
 
 D1_REPORT="$REPLAY_DIR/research_bc0_d1_eval.json"
@@ -165,7 +166,7 @@ if ! report_ready "$D1_REPORT" d1 "$PUBLISHED_ADAPTER"; then
     --d0-train "$D0_TRAIN" \
     --d0-report "$D0_REPORT" \
     --output-dir "$REPLAY_DIR" \
-    --max-steps 24
+    --max-steps "$EPISODE_MAX_STEPS"
 fi
 
 python -m psse_env.sft.research_bc0_checkpoint_compare \
@@ -173,4 +174,4 @@ python -m psse_env.sft.research_bc0_checkpoint_compare \
   --suite-name standard_success \
   "${checkpoint_args[@]}" \
   --output-dir "$COMPARISON_DIR" \
-  --max-steps 24
+  --max-steps "$EPISODE_MAX_STEPS"

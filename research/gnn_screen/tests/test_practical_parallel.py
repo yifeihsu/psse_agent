@@ -94,6 +94,16 @@ def test_merge_rejects_cross_shard_parent_aliases(tmp_path):
         merge_shards(tmp_path, reports, plan=plan, seed=17, elapsed_seconds=1)
 
 
+def test_merge_rejects_mixed_review_or_covariance_profiles(tmp_path):
+    plan = shard_plan({"train": 2}, seed=23, workers=2)
+    reports = [_fake_shard(tmp_path, item) for item in plan]
+    for report in reports:
+        report.update(scenario_profile="reviewed_v1", noise_profile="baseline", curriculum_stage="full")
+    reports[1]["noise_profile"] = "accuracy_005"
+    with pytest.raises(ValueError, match="different noise_profile"):
+        merge_shards(tmp_path, reports, plan=plan, seed=23, elapsed_seconds=1)
+
+
 def test_actual_two_worker_corpus_is_readable_by_existing_manifest_loader(tmp_path):
     # This is a real physical-generation integration check, not a detection test.
     result = generate_parallel(tmp_path / "physical", parents_by_split={"train": 2}, seed=841202609,
@@ -111,3 +121,20 @@ def test_actual_two_worker_corpus_is_readable_by_existing_manifest_loader(tmp_pa
         audit = json.loads((root / metadata["physical_audit_path"]).read_text())
         if "actual_physical_model_path" in audit:
             assert (root / metadata["source_shard_root"] / audit["actual_physical_model_path"]).is_dir()
+
+
+def test_reviewed_parallel_keeps_evaluation_manifests_and_profile_identity(tmp_path):
+    result = generate_parallel(tmp_path / "reviewed", parents_by_split={"validation": 2}, seed=184201,
+        workers=2, noise_replicates=1, healthy_calibration_replicates=1, attempt_cap=2,
+        scenario_profile="reviewed_v1", noise_profile="accuracy_002", stage="full")
+    assert result["schema"] == "parallel_practical_physical_wls_screen_corpus_v2"
+    assert result["scenario_profile"] == "reviewed_v1" and result["noise_profile"] == "accuracy_002"
+    weak = result["auxiliary_manifests"]["weak_hif_evaluation"]
+    rows = load_manifest(weak["path"])
+    assert weak["row_count"] == len(rows) == 2
+    assert all(row["split"] == "validation" and not row["offline_metadata"]["training_eligible"] for row in rows)
+    for row in load_manifest(result["manifest"]):
+        assert row["measurement_sigma"][0] == .001 and row["measurement_sigma"][14] == .002
+        assert row["offline_metadata"]["profile_identity_sha256"] == result["profile_identity_sha256"]
+    for info in result["auxiliary_manifests"].values():
+        assert file_sha256(info["path"]) == info["sha256"]

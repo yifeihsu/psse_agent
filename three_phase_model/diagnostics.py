@@ -37,7 +37,13 @@ def _decode(values: Any, shape: tuple[int, ...], name: str) -> np.ndarray:
     return arr[..., 0] + 1j * arr[..., 1]
 
 
-def _abc_y(dss: Any, name: str, bus_names: list[str], zbase: float) -> np.ndarray:
+def _abc_y(dss: Any, name: str, bus_names: list[str], bus_kv_ll: list[float], base_mva: float) -> np.ndarray:
+    """Map SI YPrim to local-terminal per-unit currents versus local pu volts.
+
+    Ypu = diag(1/Ibase) Ysi diag(Vbase). With one three-phase power base,
+    the scaling is the outer product of terminal kV_LL divided by base MVA;
+    a single scalar Zbase is only correct when every terminal has the same kV.
+    """
     element = _element(dss, name)
     size = 3 * len(bus_names)
     if not element["enabled"]:
@@ -53,7 +59,10 @@ def _abc_y(dss: Any, name: str, bus_names: list[str], zbase: float) -> np.ndarra
             if node not in (1, 2, 3) or _bus_name(bus) not in names:
                 raise ValueError(f"unsupported terminal/node in nominal {name}")
             projection[index, 3 * names[_bus_name(bus)] + node - 1] = 1
-    return projection.T @ _yprim(dss, element) @ projection * zbase
+    kv = np.repeat(np.asarray(bus_kv_ll, dtype=float), 3)
+    if kv.shape != (size,) or not np.all(np.isfinite(kv)) or np.any(kv <= 0):
+        raise ValueError("Nominal terminal voltage bases must be finite and positive")
+    return (projection.T @ _yprim(dss, element) @ projection) * (np.outer(kv, kv) / base_mva)
 
 
 def capture_nominal_model(dss: Any, registry: Mapping[str, Any], assumptions: Mapping[str, Any]) -> dict[str, Any]:
@@ -84,11 +93,12 @@ def capture_nominal_model(dss: Any, registry: Mapping[str, Any], assumptions: Ma
             for field, actual in (("kw", api.kW()), ("kvar", api.kvar())):
                 if not math.isclose(float(row[field]), actual, rel_tol=1e-10, abs_tol=1e-8):
                     raise ValueError("nominal capture requires unchanged registry PQ device settings")
-    zbase = kv**2 / base
     buses = sorted(registry["buses"], key=lambda row: row["row0"])
     bus_names = {int(row["external_bus"]): row["dss_bus"] for row in buses}
-    if len(bus_names) != len(buses) or any(float(row["kv_ll"]) != kv for row in buses):
-        raise ValueError("nominal registry needs unique buses on the declared uniform voltage base")
+    bus_kv = {int(row["external_bus"]): float(row["kv_ll"]) for row in buses}
+    if (len(bus_names) != len(buses) or len(set(bus_names.values())) != len(buses)
+        or any(not math.isfinite(value) or value <= 0 for value in bus_kv.values())):
+        raise ValueError("nominal registry needs unique buses with positive finite local voltage bases")
     net = {bus: np.zeros(3, dtype=complex) for bus in bus_names}
     load = {bus: np.zeros(3, dtype=complex) for bus in bus_names}
     shunt = {bus: np.zeros((3, 3), dtype=complex) for bus in bus_names}
@@ -101,10 +111,10 @@ def capture_nominal_model(dss: Any, registry: Mapping[str, Any], assumptions: Ma
                 load[bus][phase] += power
     for row in registry.get("shunts", []):
         bus = int(row["bus"])
-        shunt[bus] += _abc_y(dss, row["element"], [bus_names[bus]], zbase)
+        shunt[bus] += _abc_y(dss, row["element"], [bus_names[bus]], [bus_kv[bus]], base)
     source = registry["source"]
     source_bus = int(source["bus"])
-    source_y = _abc_y(dss, source["element"], [bus_names[source_bus]], zbase)
+    source_y = _abc_y(dss, source["element"], [bus_names[source_bus]], [bus_kv[source_bus]], base)
     a = np.exp(2j * np.pi / 3)
     emf = complex(*source["emf_pu"]) * np.asarray([1, a*a, a])
     branch_rows = []
@@ -117,14 +127,21 @@ def capture_nominal_model(dss: Any, registry: Mapping[str, Any], assumptions: Ma
                 names.extend(item["element"] if isinstance(item, Mapping) else item
                              for item in row.get("charging_elements", {}).get(end, []))
             for name in names:
-                y += _abc_y(dss, name, [bus_names[fb], bus_names[tb]], zbase)
+                y += _abc_y(dss, name, [bus_names[fb], bus_names[tb]], [bus_kv[fb], bus_kv[tb]], base)
+        same_voltage = math.isclose(bus_kv[fb], bus_kv[tb], rel_tol=1e-12, abs_tol=0)
+        kind = str(row["dss_element"]).split(".")[0].lower()
+        if kind == "line" and not same_voltage:
+            raise ValueError("A nominal cross-voltage branch requires an explicit transformer model")
         branch_rows.append({"asset_id": row["asset_id"], "branch_row0": int(row["branch_row0"]),
                             "from_bus": fb, "to_bus": tb, "status": int(row["status"]),
-                            "kind": str(row["dss_element"]).split(".")[0].lower(),
+                            "kind": kind, "from_base_kv_ll": bus_kv[fb], "to_base_kv_ll": bus_kv[tb],
+                            "hif_resistance_zbase_ohm": bus_kv[fb]**2 / base if kind == "line" else None,
                             "terminal_y_pu_rect": _rect(y)})
     return {"contract": "pristine_compiled_phase_screening_model_v1", "base_mva": base, "base_kv_ll": kv,
+            "normalization": "per_bus_voltage_and_per_terminal_current_bases",
             "branches": branch_rows,
-            "buses": [{"bus": bus, "dss_bus": bus_names[bus], "nominal_net_pq_pu_rect": _rect(net[bus]),
+            "buses": [{"bus": bus, "dss_bus": bus_names[bus], "base_kv_ll": bus_kv[bus],
+                       "nominal_net_pq_pu_rect": _rect(net[bus]),
                        "nominal_load_pq_pu_rect": _rect(load[bus]), "shunt_y_pu_rect": _rect(shunt[bus])}
                       for bus in bus_names],
             "source": {"bus": source_bus, "y_pu_rect": _rect(source_y), "emf_pu_rect": _rect(emf)}}
@@ -321,6 +338,15 @@ def screen_measurements(telemetry: Mapping[str, Any], nominal_model: Mapping[str
             and phase_scores[0] >= config.ambiguity_ratio*phase_scores[1]):
             hif = {key: top[key] for key in ("asset_id", "branch_row0", "phase", "phase_label", "normalized_residual")}
             hif.update(_line_estimate(*branch_data[top["asset_id"]], top["phase"]-1, config))
+            branch_spec = next(row for row in nominal_model["branches"] if row["asset_id"] == top["asset_id"])
+            local_zbase = branch_spec.get("hif_resistance_zbase_ohm")
+            if local_zbase is not None:
+                hif["resistance_zbase_ohm"] = local_zbase
+                hif["local_base_kv_ll"] = branch_spec["from_base_kv_ll"]
+                estimate = hif.get("resistance_pu_estimate")
+                hif["resistance_ohm_estimate"] = None if estimate is None else estimate * local_zbase
+                sigma = hif.get("resistance_sigma_linearized_pu")
+                hif["resistance_sigma_linearized_ohm"] = None if sigma is None else sigma * local_zbase
         else:
             reasons.append("branch_mismatch_not_uniquely_consistent_with_one_line_and_phase")
     if node_bad:

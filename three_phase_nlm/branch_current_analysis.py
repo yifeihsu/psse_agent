@@ -23,6 +23,17 @@ This module is pure numpy: it never touches OpenDSS.  It consumes the
 
 Sign convention: every terminal current is the current flowing *into* the
 branch from that terminal, matching ``CktElement.Currents()`` in OpenDSS.
+
+Resistance units (2026-09-19): every ``r_hif_pu`` is per unit on the 100 MVA
+base and is base-invariant (the normalized 1 kV model and the physical 69 /
+13.8 / 18 kV map agree on it).  ``r_hif_ohm`` in the HIF estimates is
+PHYSICAL ohms on the faulted line's local voltage base
+(``r_hif_pu * kV_LL**2 / 100``), resolved per line by
+``three_phase_nlm.hif_units.resolve_line_kv_ll`` unless a caller passes
+``kv_ll`` explicitly; ``r_hif_model_ohm`` (``r_hif_pu * 0.01``) is the value
+the normalized DSS model and legacy NLM bridge use.  The cross-voltage
+``Line.7-8`` (13.8/18 kV) is converted on its from-bus base and flagged with
+``cross_voltage_branch``.
 """
 
 from __future__ import annotations
@@ -61,6 +72,10 @@ ENDPOINT_AMBIGUITY_ALPHA = 0.02
 #: the rest are observable only through the branch-current channel.
 DEFAULT_UNBALANCE_VUF_THRESHOLD = 0.01
 S_BASE_MVA = 100.0
+#: Line-to-line kV of the NORMALIZED OpenDSS model (impedance base 0.01 ohm).
+#: It is not a physical voltage; ``zbase_ohm()`` with this default yields the
+#: model base used for ``r_hif_model_ohm``.  Physical bases come from
+#: ``three_phase_nlm.hif_units`` per line.  The name is kept for importers.
 KV_LL_BASE = 1.0
 TERMINAL_CURRENT_METHOD = "terminal_current_differential"
 SHUNT_POWER_SPREAD_METHOD = "per_phase_shunt_power_spread"
@@ -221,7 +236,53 @@ def case14_line_parameters() -> dict[int, dict[str, Any]]:
 
 
 def zbase_ohm(*, base_mva: float = S_BASE_MVA, kv_ll: float = KV_LL_BASE) -> float:
+    """Impedance base ``kV_LL**2 / MVA``; the default is the normalized model base."""
     return (float(kv_ll) * 1000.0) ** 2 / (float(base_mva) * 1e6)
+
+
+def resolve_hif_resistance_base(
+    branch_row0: int, kv_ll: float | None = None, *, base_mva: float = S_BASE_MVA
+) -> dict[str, Any]:
+    """Voltage base for converting a fitted ``r_hif_pu`` to physical ohms.
+
+    ``kv_ll=None`` resolves the branch's local line-to-line kV through
+    ``three_phase_nlm.hif_units.resolve_line_kv_ll`` (cross-voltage rows use
+    the from-bus base and are flagged).  Rows outside the IEEE-14
+    ``BRANCH_ORDER`` (custom ``line_parameters``) fall back to the normalized
+    model base so the estimate never fails on the units receipt.
+    """
+    # Lazy import: hif_units imports the IEEE-14 adapter, whose package
+    # __init__ imports this module.
+    from .hif_units import (
+        BASIS_EXPLICIT,
+        BASIS_NORMALIZED_MODEL,
+        VOLTAGE_BASE_PROFILE_ID,
+        resolve_line_kv_ll,
+    )
+
+    try:
+        base = resolve_line_kv_ll(int(branch_row0), kv_ll)
+    except (IndexError, ValueError):
+        if kv_ll is not None:
+            base = {
+                "kv_ll": float(kv_ll),
+                "resistance_basis": BASIS_EXPLICIT,
+                "cross_voltage_branch": False,
+            }
+        else:
+            base = {
+                "kv_ll": KV_LL_BASE,
+                "resistance_basis": BASIS_NORMALIZED_MODEL,
+                "cross_voltage_branch": False,
+            }
+    kv = float(base["kv_ll"])
+    return {
+        "kv_ll": kv,
+        "impedance_base_ohm": zbase_ohm(base_mva=base_mva, kv_ll=kv),
+        "resistance_basis": str(base["resistance_basis"]),
+        "cross_voltage_branch": bool(base["cross_voltage_branch"]),
+        "voltage_base_profile": VOLTAGE_BASE_PROFILE_ID,
+    }
 
 
 # ------------------------------------------------------------ noise helpers
@@ -540,13 +601,21 @@ def two_terminal_hif_estimate(
     line_parameters: Mapping[int, Mapping[str, Any]] | None = None,
     alpha_grid_size: int = 401,
     base_mva: float = S_BASE_MVA,
-    kv_ll: float = KV_LL_BASE,
+    kv_ll: float | None = None,
 ) -> dict[str, Any] | None:
     """Closed-form position and resistance of a mid-span shunt fault.
 
     The fault position is the fraction ``alpha`` from the from-bus at which
     the fault-point voltage computed from the from-end equals the one computed
     from the to-end.  Each segment keeps its share of the line charging.
+
+    ``r_hif_pu`` is base-invariant.  ``r_hif_ohm`` is PHYSICAL ohms on the
+    line's local voltage base: ``kv_ll=None`` resolves that base per line
+    (69 kV for buses 1-5, 13.8 kV for 6-7 and 9-14; the cross-voltage
+    ``Line.7-8`` uses its 13.8 kV from-bus base and sets
+    ``cross_voltage_branch``), an explicit ``kv_ll`` overrides it.  The payload
+    also carries ``kv_ll``, ``impedance_base_ohm``, ``resistance_basis`` and
+    ``r_hif_model_ohm`` (``r_hif_pu * 0.01``, the normalized-model value).
     """
     voltages = voltage_rows_to_phasors(voltage_rows)
     currents = branch_current_rows_to_phasors(current_rows)
@@ -601,7 +670,8 @@ def two_terminal_hif_estimate(
         return None
     impedance = vx / i_fault
     r_pu = float(impedance.real)
-    z_base = zbase_ohm(base_mva=base_mva, kv_ll=kv_ll)
+    base = resolve_hif_resistance_base(int(branch_row0), kv_ll, base_mva=base_mva)
+    z_base = float(base["impedance_base_ohm"])
     # Self-consistency: the fault-point voltage mismatch relative to the
     # voltage drop the differential current produces along the line.  A real
     # shunt fault leaves noise-level mismatch; a bad current sensor cannot be
@@ -624,6 +694,12 @@ def two_terminal_hif_estimate(
         "r_hif_pu": r_pu,
         "x_hif_pu": float(impedance.imag),
         "r_hif_ohm": r_pu * z_base,
+        "r_hif_model_ohm": r_pu * zbase_ohm(base_mva=base_mva, kv_ll=KV_LL_BASE),
+        "kv_ll": base["kv_ll"],
+        "impedance_base_ohm": z_base,
+        "resistance_basis": base["resistance_basis"],
+        "cross_voltage_branch": base["cross_voltage_branch"],
+        "voltage_base_profile": base["voltage_base_profile"],
         "i_hif_pu": float(abs(i_fault)),
         "fault_voltage_pu": float(abs(vx)),
         "fit_mismatch_pu": float(mismatch),
@@ -641,13 +717,15 @@ def terminal_current_hif_localization(
     sigma_pu: float = DEFAULT_BRANCH_CURRENT_SIGMA_PU,
     detection_sigmas: float = DIFFERENTIAL_DETECTION_SIGMAS,
     line_parameters: Mapping[int, Mapping[str, Any]] | None = None,
+    kv_ll: float | None = None,
 ) -> dict[str, Any] | None:
     """Line-level HIF localization payload in the three-phase NLM shape.
 
     ``top_hif_groups`` ranks lines by their largest per-phase differential
     current.  ``suspected_phase`` is the phase carrying that differential on
     the top line, and ``terminal_current_estimate`` is the closed-form position
-    and resistance on that line and phase.
+    and resistance on that line and phase; its ``r_hif_ohm`` is physical on the
+    top line's local voltage base (``kv_ll=None``) or on an explicit ``kv_ll``.
     """
     ranking = line_differential_currents(
         voltage_rows, current_rows, line_parameters=line_parameters
@@ -679,6 +757,7 @@ def terminal_current_hif_localization(
         branch_row0=int(top["branch_row0"]),
         phase=str(top["phase"]),
         line_parameters=line_parameters,
+        kv_ll=kv_ll,
     )
     phase_scores = {
         PHASES[index]: float(value) for index, value in enumerate(top["differential_pu"])
@@ -707,6 +786,7 @@ def terminal_current_hif_localization_multiscan(
     sigma_pu: float = DEFAULT_BRANCH_CURRENT_SIGMA_PU,
     detection_sigmas: float = DIFFERENTIAL_DETECTION_SIGMAS,
     line_parameters: Mapping[int, Mapping[str, Any]] | None = None,
+    kv_ll: float | None = None,
 ) -> dict[str, Any] | None:
     """Line-level HIF localization from a persistent multi-scan window.
 
@@ -715,7 +795,9 @@ def terminal_current_hif_localization_multiscan(
     across scans before ranking: the fault signal survives and the noise floor
     falls by ``sqrt(N)``.  Position and resistance are the per-scan closed-form
     medians on the winning line and phase.  Scans without both channels are
-    skipped; a single usable scan degrades to the snapshot method.
+    skipped; a single usable scan degrades to the snapshot method.  The
+    aggregated ``r_hif_ohm`` is physical on the winning line's local base
+    (``kv_ll=None``) or on an explicit ``kv_ll``; ``r_hif_pu`` is unchanged.
     """
     usable: list[tuple[Mapping[str, Any], dict[int, dict[str, Any]]]] = []
     for scan in scans:
@@ -739,6 +821,7 @@ def terminal_current_hif_localization_multiscan(
             sigma_pu=sigma_pu,
             detection_sigmas=detection_sigmas,
             line_parameters=line_parameters,
+            kv_ll=kv_ll,
         )
         if payload is not None:
             payload["scan_count"] = 1
@@ -776,6 +859,7 @@ def terminal_current_hif_localization_multiscan(
             branch_row0=int(top["branch_row0"]),
             phase=str(top["phase"]),
             line_parameters=line_parameters,
+            kv_ll=kv_ll,
         )
         if estimate is not None:
             estimate = dict(estimate)
@@ -790,6 +874,9 @@ def terminal_current_hif_localization_multiscan(
             if math.isfinite(float(item["r_hif_pu"])) and float(item["r_hif_pu"]) > 0.0
         ]
         reference = per_scan_estimates[0]
+        # Every per-scan estimate shares the top line, hence its voltage base.
+        base = resolve_hif_resistance_base(int(top["branch_row0"]), kv_ll)
+        median_r_pu = float(math.exp(np.median(log_rs))) if log_rs else None
         aggregated = {
             "method": TERMINAL_CURRENT_METHOD,
             "branch_row0": int(top["branch_row0"]),
@@ -801,11 +888,19 @@ def terminal_current_hif_localization_multiscan(
             "alpha_from_from_bus": float(np.median(alphas)),
             "distance_percent_from_from_bus": 100.0 * float(np.median(alphas)),
             "alpha_interval": [min(alphas), max(alphas)],
-            "r_hif_pu": float(math.exp(np.median(log_rs))) if log_rs else None,
+            "r_hif_pu": median_r_pu,
             "r_hif_pu_interval": [math.exp(min(log_rs)), math.exp(max(log_rs))] if log_rs else None,
             "r_hif_ohm": (
-                float(math.exp(np.median(log_rs))) * zbase_ohm() if log_rs else None
+                median_r_pu * float(base["impedance_base_ohm"]) if median_r_pu is not None else None
             ),
+            "r_hif_model_ohm": (
+                median_r_pu * zbase_ohm() if median_r_pu is not None else None
+            ),
+            "kv_ll": base["kv_ll"],
+            "impedance_base_ohm": base["impedance_base_ohm"],
+            "resistance_basis": base["resistance_basis"],
+            "cross_voltage_branch": base["cross_voltage_branch"],
+            "voltage_base_profile": base["voltage_base_profile"],
             "i_hif_pu": float(top["score"]),
             "x_hif_pu": float(np.median([item["x_hif_pu"] for item in per_scan_estimates])),
             "fit_mismatch_pu": float(np.median([item["fit_mismatch_pu"] for item in per_scan_estimates])),

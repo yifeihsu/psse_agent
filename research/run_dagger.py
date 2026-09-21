@@ -18,6 +18,8 @@ import random
 from pathlib import Path
 from typing import Any, Sequence
 
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT
+
 from .train import file_sha256, read_jsonl, write_jsonl
 
 STAGES = ("bc0", "collect", "aggregate", "round1", "evaluate")
@@ -279,7 +281,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--max-steps",
         type=int,
-        default=24,
+        default=DEFAULT_EPISODE_ACTION_LIMIT,
         help="Collection/evaluation episode horizon (not optimizer updates)",
     )
     parser.add_argument(

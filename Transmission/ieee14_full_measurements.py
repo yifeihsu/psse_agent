@@ -60,6 +60,7 @@ __all__ = [
     "flipped_case",
     "main_section_nodes",
     "operator_measurements",
+    "fixed_operator_layout",
     "single_flip_catalogue",
 ]
 
@@ -178,12 +179,15 @@ def operator_measurements(
     dead: Sequence[int],
     vm_nodes: Mapping[int, str],
 ) -> np.ndarray:
-    """Fixed-identity SCADA vector of a solved contracted case in 14-bus operator order.
+    """Noiseless fixed-identity SCADA mean in 14-bus operator order.
 
     ``solved`` is the PYPOWER result (``runpf``/``runopf``) of a case produced by
     ``flipped_case``; ``reference`` is the 14-bus case that was contracted, whose gen
     row order and per-bus loads identify the equipment. ``vm_nodes`` names the
     voltage-meter node of each planning bus.
+    This deterministic helper does not draw sensor noise. For observed telemetry
+    and its propagated covariance use ``operator_observation_for_layout`` from
+    ``ieee14_full_substation`` with the fixed layout below.
     """
     bus = np.asarray(solved["bus"], dtype=float)
     gen = np.asarray(solved["gen"], dtype=float)
@@ -223,6 +227,33 @@ def operator_measurements(
         pt[k] = float(r[PT]) / base
         qt[k] = float(r[QT]) / base
     return np.r_[vm, pinj, qinj, pf, qf, pt, qt]
+
+
+def fixed_operator_layout(
+    reference: Mapping[str, Any], model: FullTopology, vm_nodes: Mapping[int, str]
+) -> dict[str, Any]:
+    """Bind the original 122 channels to physical meters without resampling.
+
+    The layout selects one voltage meter and the distinct generator/load meter
+    nodes for each planning bus. It is independent of any candidate breaker
+    map; retain it with the raw physical observation for candidate comparisons.
+    """
+    gen_buses = set(np.asarray(reference["gen"])[:, GEN_BUS].astype(int).tolist())
+    ref_bus = np.asarray(reference["bus"], dtype=float)
+    sections = {}
+    for b in range(1, NB + 1):
+        equipment = set()
+        if b in gen_buses:
+            equipment.add(model.equipment["gen"][b])
+        if ref_bus[b - 1, PD] != 0 or ref_bus[b - 1, QD] != 0:
+            equipment.add(model.equipment["load"][b])
+        sections[str(b)] = {
+            "meter_node": str(vm_nodes[b]), "equipment_nodes": sorted(equipment),
+            "nodes": sorted(node for node, meta in model.nodes.items() if meta.planning_bus == b),
+            "planning_buses": [b],
+        }
+    return {"bus_count": NB, "sections": sections,
+            "contract": "fixed_planning_bus_physical_meter_layout_v1"}
 
 
 # ------------------------------------------------------------------------ classification

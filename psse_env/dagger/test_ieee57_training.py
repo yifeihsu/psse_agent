@@ -52,6 +52,30 @@ def test_observable_targets_ignore_hidden_truth_and_quarantine_stopping(collecte
     assert "offline_teacher_target_audit_failed" in hidden[-1]["quarantine_reasons"]
 
 
+def test_explicit_smoke_limit_is_recorded_and_visible(collected):
+    for rows in collected:
+        assert all(row["episode_action_limit"] == 8 for row in rows)
+        assert rows[0]["policy_observation"]["remaining_budget"] == 8
+
+
+def test_default_limit_is_forty_and_old_rows_without_limit_replay_with_default(scenarios):
+    with threadpool_limits(limits=1):
+        rows = collect_episode(scenarios[0])
+        assert rows[0]["episode_action_limit"] == 40
+        assert rows[0]["policy_observation"]["remaining_budget"] == 40
+        for row in rows:
+            row.pop("episode_action_limit")
+        exported, _ = export_audited_rows(rows)
+        assert replay_episode(scenarios[0], rows, exported)["passed"]
+
+
+def test_replay_rejects_inconsistent_recorded_episode_limits(scenarios, collected):
+    rows = deepcopy(collected[0])
+    rows[-1]["episode_action_limit"] = 40
+    with pytest.raises(ValueError, match="disagree on their episode action limit"):
+        replay_episode(scenarios[0], rows, [])
+
+
 def test_export_keeps_valid_prefix_and_parent_without_truth_leak(collected):
     exported, audit = export_audited_rows(collected[1])
     assert audit["accepted"] == 1 and audit["quarantined"] == 1

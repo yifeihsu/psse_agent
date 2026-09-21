@@ -459,6 +459,20 @@ def sigma_vector(idx_map, sigmas=DEFAULT_SIGMAS) -> np.ndarray:
     return out
 
 
+def scada_noise_fields(idx_map) -> dict:
+    """Declare the full Gaussian sensor covariance before explicit fault bias."""
+    return {
+        "sigma_z": sigma_vector(idx_map, DEFAULT_SIGMAS).tolist(),
+        "noise_contract": {
+            "distribution": "gaussian", "sigma_semantics": "per_component",
+            "applied_matches_declared": True,
+            "scope": "sensor_noise_before_explicit_faults",
+            "reference_role": "same_physics_noiseless_reference",
+            "selection_filter": "none_on_noise_draws",
+        },
+    }
+
+
 def apply_measurement_error(z_true, idx_map, rng, *, subtype=None):
     """
     Add base Gaussian noise plus one additional measurement-error subtype:
@@ -591,6 +605,7 @@ def make_no_error_record(rng, ppc_base, idx_map, load_scale_min, load_scale_max)
         scenario="no_error",
         z_true=z_true.tolist(),
         z_obs=z_obs.tolist(),
+        **scada_noise_fields(idx_map),
         label=dict(error_type="no_error"),
         op_point=dict(load_scale=alpha),
     )
@@ -610,6 +625,7 @@ def make_measurement_error_record(rng, ppc_base, idx_map, load_scale_min, load_s
         scenario="measurement_error",
         z_true=z_true.tolist(),
         z_obs=z_obs.tolist(),
+        **scada_noise_fields(idx_map),
         label=info,
         op_point=dict(load_scale=alpha),
     )
@@ -658,7 +674,9 @@ def make_parameter_error_record(
         scenario="parameter_error",
         z_true=z_true.tolist(),
         z_obs=z_obs.tolist(),
+        **scada_noise_fields(idx_map),
         z_scans=z_scans,
+        sigma_z_scans=sigma_R.tolist(),
         initial_states=initial_states,
         label=label,
         op_point=dict(load_scale=alpha),
@@ -730,6 +748,7 @@ def make_topology_error_record(rng, ppc_base, idx_map, out_dir: Path):
             ppc_full["bus"][:, VA] = res_va
 
         z_true_full_model = compute_measurements_pu(ppc_full)
+        z_clean_full_model = z_true_full_model.copy()
         nb_full = ppc_full["bus"].shape[0]
         nl_full = ppc_full["branch"].shape[0]
         idx_map_full = make_index_map(nb_full, nl_full)
@@ -753,11 +772,15 @@ def make_topology_error_record(rng, ppc_base, idx_map, out_dir: Path):
         scenario="topology_error",
         z_true=z_true.tolist(),
         z_obs=z_obs.tolist(),
+        **scada_noise_fields(idx_map),
         label=topo_label,
         op_point=dict(load_scale=float(alpha)),
     )
     if z_true_full_model is not None:
         rec["z_true_full_model"] = z_true_full_model.tolist()
+        rec["z_clean_full_model"] = z_clean_full_model.tolist()
+        rec["sigma_z_full_model"] = sigma_vector(idx_map_full, DEFAULT_SIGMAS).tolist()
+        rec["z_true_full_model_role"] = "noisy_verification_snapshot_despite_legacy_field_name"
     if corrected_model_path is not None:
         rec["corrected_model_path"] = str(corrected_model_path)
     return rec
@@ -789,6 +812,8 @@ def make_harmonic_anomaly_record(rng):
                     "V_real": float(c[0]),
                     "V_imag": float(c[1]),
                     "sigma": float(m["sigma"]),
+                    "sigma_semantics": m["sigma_semantics"],
+                    "sigma_complex_rms": float(m["sigma_complex_rms"]),
                 }
             )
 
@@ -797,6 +822,8 @@ def make_harmonic_anomaly_record(rng):
         scenario="harmonic_anomaly",
         z_true=trace["z_scada_true"],
         z_obs=trace["z_scada_meas"],
+        sigma_z=trace["sigma_z"],
+        noise_contract=trace["noise_contract"],
         harmonic_measurements=harmonic_measurements,
         harmonic_orders=sorted(set(int(h) for h in harmonic_orders)),
         label=dict(error_type="harmonic_anomaly", source_bus=src, thd_target=thd),
@@ -891,6 +918,9 @@ def generate_dataset(
         measurement_order=MEASUREMENT_ORDER,
         branch_info=branch_info,
         sigmas=DEFAULT_SIGMAS,
+        sigma_z=sigma_vector(idx_map, DEFAULT_SIGMAS).tolist(),
+        seed=int(seed),
+        noise_contract=scada_noise_fields(idx_map)["noise_contract"],
         scenarios_emitted=["no_error", "measurement_error", "parameter_error", "topology_error", "harmonic_anomaly"],
         omitted_scenarios=["three_phase_imbalance"],
         requested_counts={

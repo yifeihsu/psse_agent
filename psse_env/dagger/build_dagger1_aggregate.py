@@ -13,6 +13,8 @@ import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT
+
 import psse_env.dagger.dataset_builder as dataset_builder_module
 import psse_env.dagger.dagger1_semantic_audit as semantic_audit_module
 import psse_env.dagger.collect_dagger1 as collect_dagger1_module
@@ -130,6 +132,20 @@ def validate_dagger1_execution_pipeline_contract(
             "execution-pipeline contract"
         )
     return copy.deepcopy(expected)
+
+
+def validate_dagger1_release_environment_contract(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Require the current collection horizon when building a new D1 aggregate."""
+    contract = manifest.get("release_environment_contract")
+    contract = contract if isinstance(contract, Mapping) else {}
+    if (
+        contract.get("parameter_ranking_dominance_threshold") != BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD
+        or contract.get("production_dataset_mode") is not True
+        or type(contract.get("max_steps")) is not int
+        or contract.get("max_steps") != DEFAULT_EPISODE_ACTION_LIMIT
+    ):
+        raise ValueError(f"D1 release environment contract must use the approved {DEFAULT_EPISODE_ACTION_LIMIT}-action collection horizon")
+    return copy.deepcopy(dict(contract))
 
 
 def _preflight_round1_output_directory(output_dir: Path) -> None:
@@ -901,17 +917,7 @@ def build_round1_aggregate(
         binding = binding if isinstance(binding, Mapping) else {}
         if binding.get("import_spec") != spec:
             raise ValueError(f"D1 {role} factory identity does not match source")
-    release_contract = d1_manifest.get("release_environment_contract")
-    release_contract = (
-        release_contract if isinstance(release_contract, Mapping) else {}
-    )
-    if (
-        release_contract.get("parameter_ranking_dominance_threshold")
-        != BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD
-        or release_contract.get("production_dataset_mode") is not True
-        or release_contract.get("max_steps") != 24
-    ):
-        raise ValueError("D1 release environment contract is not approved")
+    validate_dagger1_release_environment_contract(d1_manifest)
     evaluation_policy = _load_mapping(DEFAULT_EVALUATION_POLICY)
     suite_policy = evaluation_policy.get("suite_policy")
     suite_policy = suite_policy if isinstance(suite_policy, Mapping) else {}

@@ -68,7 +68,8 @@ def test_pipeline_env_declares_every_setting_the_stages_use() -> None:
     for name in (
         "PIPE", "SRC", "OUT", "LOGS", "PY", "TEST_PY", "HF_HOME", "MODEL_CHOICE", "MODEL_ID",
         "MODEL_REVISION", "D0_DIR", "SUITE_DIR", "BC0_DIR", "R1_DIR", "R2_DIR", "BC0_SUITE",
-        "HIF_CORPUS_TRAIN", "HIF_CORPUS_VALID", "IMBALANCE_CORPUS", "SEED_D0", "SEED_SUITE",
+        "HIF_CORPUS_TRAIN", "HIF_CORPUS_VALID", "HIF_CORPUS_TRAIN_EXTRA", "HIF_CORPUS_VALID_EXTRA",
+        "IMBALANCE_CORPUS", "SEED_D0", "SEED_SUITE",
         "SEED_ROUND", "D0_PLAN", "ROUND_TRAIN_PLAN", "DEVELOPMENT_PLAN", "DAGGER_ROUNDS",
         "CANDIDATE_MULTIPLIER", "D0_COUNTERFACTUALS", "HIF_ALPHA_GRID", "HIF_R_GRID",
         "HIF_MAX_SCANS", "BC0_LEARNING_RATE", "BC0_EPOCHS", "BC0_SAVE_EVAL_STEPS",
@@ -86,6 +87,10 @@ def test_pipeline_env_declares_every_setting_the_stages_use() -> None:
     assert '--training-scenarios "$TRAINING_SUITE"' in text
     assert '--development-scenarios "$DEVELOPMENT_SUITE"' in text
     assert "--hif-search-profile research" in text
+    # The recorded research_profile names the HIF corpora the suites were
+    # drawn from (IEEE-14 cells only; the corpora are IEEE-14 sources).
+    assert '--hif-sample-paths "$HIF_CORPUS_TRAIN" "$HIF_CORPUS_VALID"' in text
+    assert text.index('if [[ "$SYSTEM" == case14 ]]; then') < text.index("--hif-sample-paths")
 
 
 def test_plans_cover_every_family_and_respect_corpus_capacity() -> None:
@@ -105,11 +110,87 @@ def test_plans_cover_every_family_and_respect_corpus_capacity() -> None:
     }
     assert set(d0) == set(round_plan) == set(development) == families
     total = {f: d0[f] + rounds * round_plan[f] + development[f] for f in families}
-    # 102 HIF windows serve hif and measurement+hif separately; 220 unbalance
-    # rows serve unbalance and the balanced control separately.
-    assert total["hif"] <= 102 and total["measurement+hif"] <= 102
-    assert total["three_phase_unbalance"] <= 220 and total["telemetry_no_disturbance"] <= 220
+    # 420 raw HIF windows (84 + 252 train, 21 + 63 validation of the physical-ohm
+    # corpora) serve hif and measurement+hif separately; only about 30 percent
+    # pass discovered-mode admission at margin 1.25 (about 128), so the plans
+    # are bounded by the admitted pool, not the raw count. 440 unbalance windows
+    # serve unbalance and the balanced control (160 admitted at margin 1.25).
+    assert total["hif"] <= 118 and total["measurement+hif"] <= 118
+    # The 2026-09-21 unbalance corpus has 440 windows, of which 160 pass
+    # discovered-mode admission at margin 1.25; the balanced control draws from
+    # the same windows, so both plans are bounded by the admitted pool.
+    assert total["three_phase_unbalance"] <= 160 and total["telemetry_no_disturbance"] <= 160
     assert 300 <= sum(total.values()) <= 1000
+
+
+def test_hif_corpora_are_the_physical_ohm_regeneration() -> None:
+    text = (CELL / "pipeline.env").read_text(encoding="utf-8")
+    assert re.search(
+        r"^HIF_CORPUS_TRAIN=\$SRC/artifacts/measurements/"
+        r"hif_physical69_main_train_detectable_25x10_20260921/samples\.jsonl$",
+        text,
+        flags=re.MULTILINE,
+    )
+    assert re.search(
+        r"^HIF_CORPUS_VALID=\$SRC/artifacts/measurements/"
+        r"hif_physical69_main_valid_detectable_7x10_20260921/samples\.jsonl$",
+        text,
+        flags=re.MULTILINE,
+    )
+    # The comment states the ohm bands, the voltage profile, the shunt
+    # convention and the resulting capacity.
+    assert "100-200" in text and "200-500" in text and "500-1000 ohm" in text
+    assert "ieee14_nominal_69_13p8_18kv_v1" in text
+    assert "shunt_convention ybus" in text
+    assert "118 HIF" in text
+    assert re.search(
+        r"^HIF_CORPUS_TRAIN_EXTRA=\$SRC/artifacts/measurements/"
+        r"hif_physical69_main_train_extra_detectable_69x10_20260921/samples\.jsonl$",
+        text,
+        flags=re.MULTILINE,
+    )
+    assert re.search(
+        r"^HIF_CORPUS_VALID_EXTRA=\$SRC/artifacts/measurements/"
+        r"hif_physical69_main_valid_extra_detectable_17x10_20260921/samples\.jsonl$",
+        text,
+        flags=re.MULTILINE,
+    )
+    assert '"$HIF_CORPUS_TRAIN_EXTRA" "$HIF_CORPUS_VALID_EXTRA"' in text
+    # The unbalance corpus is the 2026-09-21 WLS-convention regeneration and the
+    # collection stage names it so the recorded profile states which rows were used.
+    assert re.search(
+        r"^IMBALANCE_CORPUS=\$SRC/artifacts/measurements/"
+        r"out_measurements_imbalance_currents_ybus_detectable_160_20260921/samples\.jsonl$",
+        text,
+        flags=re.MULTILINE,
+    )
+    assert 'COLLECTION_ARGS+=(--imbalance-sample-path "$IMBALANCE_CORPUS")' in text
+    assert "out_measurements_imbalance_currents_20260903" not in text
+    assert "docs/ieee14_hif_legacy_reconfiguration_20260919.md" in text
+    # The legacy system-pu corpora are no longer referenced by the cell.
+    assert "hif_multiscan_currents_train_85x10_20260903" not in text
+    assert "hif_multiscan_currents_17x10_20260903" not in text
+
+
+def test_build_suite_accepts_and_forwards_the_corpus_flags() -> None:
+    build_suite = _load("build_suite.py")
+    parser = build_suite.build_parser()
+    required = [
+        "--source-root", "src", "--d0-raw", "d0.jsonl", "--round-train-plan", "{}",
+        "--development-plan", "{}", "--seed", "1", "--output-dir", "out",
+    ]
+    args = parser.parse_args(required)
+    assert args.hif_sample_paths is None and args.imbalance_sample_path is None
+    args = parser.parse_args(
+        required + ["--hif-sample-paths", "a.jsonl", "b.jsonl", "--imbalance-sample-path", "c.jsonl"]
+    )
+    assert args.hif_sample_paths == [Path("a.jsonl"), Path("b.jsonl")]
+    assert args.imbalance_sample_path == Path("c.jsonl")
+    source = (CELL / "build_suite.py").read_text(encoding="utf-8")
+    call = source[source.index("research.resolve_scenario_sources("):]
+    call = call[: call.index(")")]
+    assert "hif_sample_paths=args.hif_sample_paths" in call
+    assert "imbalance_sample_path=args.imbalance_sample_path" in call
 
 
 def test_development_stratum_reads_the_recorded_ranking() -> None:
@@ -231,6 +312,13 @@ def test_stage_zero_passes_the_system_selection_to_both_draws() -> None:
     assert text.count('"${system_args[@]}"') == 2
     assert 'if [[ "$SYSTEM" == case14 ]]; then' in text
     assert "--hif-corpus" in text and "--imbalance-corpus" in text
+    # The suite builder reads the same HIF corpora as the aggregate.
+    assert 'suite_waveform_args=(--hif-sample-paths "$HIF_CORPUS_TRAIN" "$HIF_CORPUS_VALID")' in text
+    assert 'suite_waveform_args+=("$HIF_CORPUS_TRAIN_EXTRA" "$HIF_CORPUS_VALID_EXTRA")' in text
+    assert '--hif-corpus "$HIF_CORPUS_TRAIN_EXTRA" --hif-corpus "$HIF_CORPUS_VALID_EXTRA"' in text
+    build_suite_call = text[text.index('"$PY" "$PIPE/build_suite.py"'):]
+    build_suite_call = build_suite_call[: build_suite_call.index("suite_console.json")]
+    assert '"${suite_waveform_args[@]}"' in build_suite_call
     env = (CELL / "pipeline.env").read_text(encoding="utf-8")
     assert re.search(r"^SYSTEM=case14$", env, flags=re.MULTILINE)
     assert re.search(r"^ADMISSION_MODE=recoverable$", env, flags=re.MULTILINE)

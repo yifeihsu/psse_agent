@@ -87,13 +87,14 @@ SEED=20260720
 TRAIN_PLAN='{"measurement+parameter":2,"multi_measurement":2,"parameter":1}'
 DEVELOPMENT_PLAN='{"measurement+parameter":6,"multi_measurement":6,"parameter":3}'
 COLLECTION_BETA=0.25
-COLLECTION_MAX_STEPS=4
+EPISODE_MAX_STEPS=${EPISODE_MAX_STEPS:-40}
+COLLECTION_MAX_STEPS="$EPISODE_MAX_STEPS"
 D1_CAP=20
 D1_SHARE=0.5
 CANDIDATE_MULTIPLIER=6
 TRAIN_MAX_STEPS=32
 SAVE_EVAL_STEPS=8
-EVAL_MAX_STEPS=24
+EVAL_MAX_STEPS="$EPISODE_MAX_STEPS"
 MINIMUM_PREFLIGHT_EXACT=5
 
 BLOCKING_JOB_IDS="${RESEARCH_DAGGER_R1_BLOCKING_JOB_IDS:-16347744,16347745}"
@@ -378,7 +379,8 @@ TELEMETRY_PID=$!
 "$PYTHON" - \
   "$D0_RAW" "$D0_TRAIN" "$VALIDATION" "$PROTECTED_D1" "$WARM_START" "$RUN_IDENTITY" \
   "$SOURCE_COMMIT" "$D0_RAW_SHA256" "$D0_TRAIN_SHA256" "$VALIDATION_SHA256" \
-  "$PROTECTED_D1_SHA256" "$WARM_START_DIGEST" "$TRAIN_PLAN" "$DEVELOPMENT_PLAN" <<'PY'
+  "$PROTECTED_D1_SHA256" "$WARM_START_DIGEST" "$TRAIN_PLAN" "$DEVELOPMENT_PLAN" \
+  "$COLLECTION_MAX_STEPS" "$EVAL_MAX_STEPS" <<'PY'
 import hashlib
 import json
 import os
@@ -417,6 +419,8 @@ expected_hashes = sys.argv[8:12]
 expected_warm = sys.argv[12]
 train_plan = json.loads(sys.argv[13])
 development_plan = json.loads(sys.argv[14])
+collection_max_steps = int(sys.argv[15])
+evaluation_max_steps = int(sys.argv[16])
 for path, expected in zip((d0_raw, d0_train, validation, protected_d1), expected_hashes):
     observed = sha(path.resolve(strict=True))
     if observed != expected:
@@ -493,7 +497,7 @@ identity = {
     "collection": {
         "seed": 20260720,
         "beta": 0.25,
-        "max_steps": 4,
+        "max_steps": collection_max_steps,
         "d1_cap": 20,
         "d1_share": 0.5,
         "candidate_multiplier": 6,
@@ -512,7 +516,7 @@ identity = {
         "best_metric": "eval_loss",
     },
     "preflight": {"rows": 27, "minimum_exact": 5, "requires_exact_improvement": True},
-    "paired_development_evaluation": {"roots": 15, "max_steps": 24},
+    "paired_development_evaluation": {"roots": 15, "max_steps": evaluation_max_steps},
 }
 if identity_path.is_file():
     recorded = json.loads(identity_path.read_text(encoding="utf-8"))
@@ -988,7 +992,7 @@ else
     "${COLLECTION_ARGS[@]}" \
     --eval-r1-adapter "$CANDIDATE" \
     --eval-max-steps "$EVAL_MAX_STEPS"
-  "$PYTHON" - "$COLLECTION_DIR/evaluation/comparison.json" "$WARM_START" "$CANDIDATE" <<'PY'
+  "$PYTHON" - "$COLLECTION_DIR/evaluation/comparison.json" "$WARM_START" "$CANDIDATE" "$EVAL_MAX_STEPS" <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -1000,7 +1004,7 @@ if Path(str(comparison.get("bc0_adapter") or "")).resolve() != Path(sys.argv[2])
     raise SystemExit("paired evaluation baseline adapter mismatch")
 if Path(str(comparison.get("r1_adapter") or "")).resolve() != Path(sys.argv[3]).resolve():
     raise SystemExit("paired evaluation candidate adapter mismatch")
-if comparison.get("max_steps") != 24:
+if comparison.get("max_steps") != int(sys.argv[4]):
     raise SystemExit("paired evaluation horizon mismatch")
 PY
   write_binding "$EVALUATION_BINDING" "$EVALUATION_REQUEST" "${EVALUATION_OUTPUTS[@]}"

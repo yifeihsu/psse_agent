@@ -59,6 +59,7 @@ from .oracle.measurement_recovery_evidence import (
 )
 from .oracle.process_validity import ProcessValidityOracle
 from .private_target_matching import correction_family
+from .episode_budget import DEFAULT_EPISODE_ACTION_LIMIT, validate_episode_action_limit
 from .state_store import (
     CandidateLifecycle,
     FORBIDDEN_POLICY_KEYS,
@@ -419,7 +420,7 @@ class TransactionalPSSEEnv:
         | None = None,
         production_dataset_mode: bool = False,
         approved_deterministic_providers: Iterable[str] | None = None,
-        max_steps: int = 24,
+        max_steps: int = DEFAULT_EPISODE_ACTION_LIMIT,
         history_window: int = 4,
     ) -> None:
         self.store = store or PowerSystemStateStore()
@@ -433,11 +434,12 @@ class TransactionalPSSEEnv:
         self.approved_deterministic_providers = {
             str(name) for name in (approved_deterministic_providers or ())
         }
-        self.max_steps = int(max_steps)
+        self.max_steps = validate_episode_action_limit(max_steps)
         self.history_window = int(history_window)
         self.current_candidate_id: str | None = None
         self.context_flags: dict[str, Any] = {}
         self.history: list[dict[str, Any]] = []
+        self._non_dispatched_action_count = 0
         self.terminal = False
         self.terminal_outcome: str | None = None
         self._episode_counter = 0
@@ -630,6 +632,11 @@ class TransactionalPSSEEnv:
         self._oracle_payload = oracle_payload
 
         metadata = {key: copy.deepcopy(value) for key, value in raw_metadata.items() if key not in FORBIDDEN_POLICY_KEYS}
+        for key in ("sigma_z", "noise_contract", "operator_noise", "structural_zero_indices"):
+            if key in scenario:
+                if key in metadata and metadata[key] != scenario[key]:
+                    raise ValueError(f"Conflicting root and metadata {key}")
+                metadata[key] = copy.deepcopy(scenario[key])
         metadata.setdefault("scenario_id", scenario_id)
         root_id = self.store.create_root(
             case=scenario.get("case", scenario.get("case_path")),
@@ -666,6 +673,7 @@ class TransactionalPSSEEnv:
             "semantic_field_provenance": semantic_provenance,
         }
         self.history = []
+        self._non_dispatched_action_count = 0
         self.terminal = False
         self.terminal_outcome = None
         return self.current_state()
@@ -716,7 +724,7 @@ class TransactionalPSSEEnv:
         self._rebind_telemetry_requests(active_id, active_hash)
         summary = self.store.decision_summary(
             candidate_state_id=self.current_candidate_id,
-            remaining_budget=max(self.max_steps - len(self.history), 0),
+            remaining_budget=max(self.max_steps - len(self.history) - self._non_dispatched_action_count, 0),
             context_flags=self.context_flags,
         )
         contexts = summary["fresh_context_evidence"]
@@ -939,8 +947,46 @@ class TransactionalPSSEEnv:
         finally:
             self._audited_evaluation_setup_correction = False
 
+    def account_non_dispatched_actions(self, count: int) -> None:
+        """Count evaluator-rejected attempts without inventing tool evidence.
+
+        Call for synthetic setup failures or circuit-breaker rejections that
+        did not go through ``step``. Actual tool calls already count in history.
+        This bookkeeping cannot grant success, dispatch a provider, or change
+        physical state or the diagnostic evidence ledger.
+        """
+        count = validate_episode_action_limit(count)
+        if self.store.active_state_id is None:
+            raise ValueError("setup action accounting requires an initialized episode")
+        if len(self.history) + self._non_dispatched_action_count + count > self.max_steps:
+            raise ValueError("non-dispatched actions exceed the remaining episode action budget")
+        self._non_dispatched_action_count += count
+
+    def account_setup_actions(self, count: int) -> None:
+        """Compatibility entry point for synthetic pre-policy setup attempts."""
+        self.account_non_dispatched_actions(count)
+
     def step(self, action: Any) -> tuple[dict[str, Any], dict[str, Any]]:
         normalized = safe_normalize_action(action)
+        counted_actions = len(self.history) + self._non_dispatched_action_count
+        if counted_actions >= self.max_steps:
+            # The final allowed action was already executed and recorded.
+            # Reject subsequent calls without another dispatch or transition.
+            # Budget exhaustion is a nonterminal horizon, not a diagnosis,
+            # physical-success claim, or automatic operator escalation.
+            output = self._standard_output(
+                execution_status="failure",
+                error_code="episode_action_limit_reached",
+                error_detail=f"episode action limit {self.max_steps} has been reached",
+                state_mutated=False,
+                valid_next_actions=[],
+                tool_metrics={"episode_action_limit": self.max_steps,
+                              "executed_action_count": len(self.history),
+                              "non_dispatched_action_count": self._non_dispatched_action_count,
+                              "counted_action_count": counted_actions,
+                              "remaining_budget": 0},
+            )
+            return self.current_state(), output
         before_hash = self.store.episode_hash()
         before_active_id = self.store.active_state_id
         before_candidate_id = self.current_candidate_id
@@ -3026,6 +3072,7 @@ class TransactionalPSSEEnv:
         branch.store = copy.deepcopy(self.store)
         branch.context_flags = copy.deepcopy(self.context_flags)
         branch.history = copy.deepcopy(self.history)
+        branch._non_dispatched_action_count = self._non_dispatched_action_count
         branch._oracle_payload = copy.deepcopy(self._oracle_payload)
         # Counterfactual execution must not mutate stateful solver/oracle
         # collaborators owned by the live rollout environment.

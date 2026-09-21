@@ -12,7 +12,7 @@ from typing import Any, Mapping
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = REPO_ROOT / "scripts" / "validate_hif_multiscan_parameter_estimates.py"
-LABEL_KEYS = ("branch_row0", "split_ratio", "phase", "r_hif_pu")
+LABEL_KEYS = ("branch_row0", "split_ratio", "phase", "r_hif_pu", "resistance_units", "r_hif_model_ohm", "local_kv_ll", "resistance_class")
 
 
 def _rows(path: Path) -> list[Mapping[str, Any]]:

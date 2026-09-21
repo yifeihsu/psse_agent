@@ -26,11 +26,12 @@ from psse_env.dagger.rollout_collector import (
     DaggerRolloutCollector,
 )
 from psse_env.oracle import ExpertPolicyOracle
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT
 
 from .model import load_policy
 from .train import write_jsonl
 
-DEFAULT_MAX_STEPS = 24
+DEFAULT_MAX_STEPS = DEFAULT_EPISODE_ACTION_LIMIT
 DEFAULT_EVALUATION_SUITE = (
     Path(__file__).resolve().parents[1]
     / "psse_env"

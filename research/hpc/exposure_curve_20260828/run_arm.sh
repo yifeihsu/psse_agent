@@ -1,5 +1,6 @@
 #!/bin/bash
 set -Eeuo pipefail
+EPISODE_MAX_STEPS=${EPISODE_MAX_STEPS:-40}
 
 : "${CELL_CONFIG:?set CELL_CONFIG}"
 : "${CELL_CONFIG_SHA256:?set CELL_CONFIG_SHA256}"
@@ -175,7 +176,7 @@ for MILESTONE in p075 p100 p150 p200; do
   "$CELL_PYTHON" -m research.evaluate --scenarios "$SCENARIOS" \
     --adapter "$JOB_ROOT/milestones/$MILESTONE" \
     --label "exposure-curve-$CELL_ARM-$MILESTONE" --output "$EVALUATION" \
-    --max-steps 24 --model-id "$MODEL_ID" --revision "$MODEL_REVISION" \
+    --max-steps "$EPISODE_MAX_STEPS" --model-id "$MODEL_ID" --revision "$MODEL_REVISION" \
     > "$EVAL_ATTEMPT/evaluation_console.json"
   "$CELL_PYTHON" "$SCRIPT_DIR/build.py" gate-evaluation --config "$CELL_CONFIG" \
     --expected-config-sha "$CELL_CONFIG_SHA256" --arm "$CELL_ARM" --job-id "$JOB_ID" \

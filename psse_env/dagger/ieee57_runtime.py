@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass
 import math
 from typing import Any, Mapping
 
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT, validate_episode_action_limit
+
 from psse_env.dagger.release_factories import production_environment_factory
 from psse_env.providers.matpower import MatpowerDeploymentProviders
 from psse_env.oracle import ExpertPolicyOracle, ProcessValidityOracle
@@ -24,7 +26,7 @@ class IEEE57RuntimeConfig:
     normalized_residual_threshold: float = 4.0
     anomaly_rule: str = "chi_square_or_normalized_residual"
     alarm_comparison: str = ">="
-    max_steps: int = 40
+    max_steps: int = DEFAULT_EPISODE_ACTION_LIMIT
     history_window: int = 4
     production_dataset_mode: bool = True
     executor_hydrated_corrections: bool = True
@@ -38,16 +40,25 @@ def ieee57_runtime_manifest() -> dict[str, Any]:
     return asdict(IEEE57_RUNTIME_CONFIG)
 
 
-def validate_ieee57_runtime(env: TransactionalPSSEEnv) -> dict[str, Any]:
-    """Inspect live execution hooks, not just a caller-supplied config label."""
+def validate_ieee57_runtime(
+    env: TransactionalPSSEEnv, *, expected_max_steps: int = DEFAULT_EPISODE_ACTION_LIMIT,
+) -> dict[str, Any]:
+    """Inspect live hooks while allowing an explicit episode-horizon override.
+
+    The ordinary contract remains forty actions. A caller running a deliberate
+    shorter episode must name that horizon; detector settings remain pinned.
+    """
     config = IEEE57_RUNTIME_CONFIG
+    expected_max_steps = validate_episode_action_limit(expected_max_steps)
     owner = getattr(env.wls_runner, "__self__", None)
     if not isinstance(owner, MatpowerDeploymentProviders):
         raise ValueError("IEEE57 runtime requires the MATPOWER deployment WLS provider")
     for field in ("chi2_alpha", "normalized_residual_threshold"):
         if getattr(owner, field, None) != getattr(config, field):
             raise ValueError(f"IEEE57 runtime detector mismatch: {field}")
-    for field in ("max_steps", "history_window", "production_dataset_mode"):
+    if getattr(env, "max_steps", None) != expected_max_steps:
+        raise ValueError("IEEE57 runtime environment mismatch: max_steps")
+    for field in ("history_window", "production_dataset_mode"):
         if getattr(env, field, None) != getattr(config, field):
             raise ValueError(f"IEEE57 runtime environment mismatch: {field}")
     # Candidate verification invokes this same WLS runner. All other numerical
@@ -61,7 +72,9 @@ def validate_ieee57_runtime(env: TransactionalPSSEEnv) -> dict[str, Any]:
     if getattr(env.process_oracle, "executor_hydrated_corrections", None) is not True:
         raise ValueError("IEEE57 runtime requires executor-hydrated correction payloads")
     env.validate_production_configuration()
-    return ieee57_runtime_manifest()
+    manifest = ieee57_runtime_manifest()
+    manifest["max_steps"] = expected_max_steps
+    return manifest
 
 
 def validate_ieee57_wls_metrics(metrics: Mapping[str, Any]) -> None:

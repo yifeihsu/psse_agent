@@ -241,10 +241,16 @@ def audit_full_circuit_kcl(dss: Any, assumptions: Mapping[str, Any]) -> dict[str
         dss.Circuit.SetActiveBus(bus)
         kv_ln = float(dss.Bus.kVBase())
         if kv_ln <= 0.0:
-            # Newly introduced hidden nodes may not yet have a DSS voltage
-            # base. This package's declared normalized uniform realization
-            # supplies their base without inferring an equipment voltage.
-            kv_ln = _positive(assumptions["base_kv_ll"], "base_kv_ll") / math.sqrt(3.0)
+            per_bus = assumptions.get("bus_base_kv_ll")
+            if per_bus is not None:
+                external = bus[1:] if bus.startswith("b") else ""
+                declared = per_bus.get(external, per_bus.get(int(external)) if external.isdigit() else None)
+                if declared is None:
+                    raise ValueError(f"multivoltage node {bus} needs an explicit local DSS voltage base")
+                kv_ln = _positive(declared, f"{bus} kV LL") / math.sqrt(3.0)
+            else:
+                # Compatibility for explicitly uniform normalized models only.
+                kv_ln = _positive(assumptions["base_kv_ll"], "base_kv_ll") / math.sqrt(3.0)
         current_bases[bus] = base_va / 3.0 / (1000.0 * _positive(kv_ln, "bus kV LN"))
         for node in dss.Bus.Nodes():
             if int(node) != 0:

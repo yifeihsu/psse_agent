@@ -1270,6 +1270,7 @@ def _episode_record(
     index: int,
     max_steps: int,
     artifact_schema_version: int,
+    action_budget_scope: str = "policy_actions_legacy",
 ) -> dict[str, Any]:
     label = f"episode[{index}]"
     if artifact_schema_version == STUDY_EVALUATION_SCHEMA_VERSION:
@@ -1425,7 +1426,11 @@ def _episode_record(
     policy_steps = _nonnegative_integer(
         episode.get("policy_steps"), field=f"{label}.policy_steps"
     )
-    horizon_without_disposition = bool(not terminal and policy_steps >= max_steps)
+    if action_budget_scope not in {"all_episode_actions", "policy_actions_legacy"}:
+        raise StudyEvidenceError(f"unsupported action_budget_scope: {action_budget_scope}")
+    budget_steps = (_nonnegative_integer(episode.get("steps"), field=f"{label}.steps")
+                    if action_budget_scope == "all_episode_actions" else policy_steps)
+    horizon_without_disposition = bool(not terminal and budget_steps >= max_steps)
     strict_success_evidence = bool(not audit_quarantined and not strict_problems)
     safe_recovery = bool(
         final_physical_success
@@ -1436,7 +1441,7 @@ def _episode_record(
         and false_rollback == 0
         and not episode.get("loop_detected")
         and evaluator_error is None
-        and policy_steps <= max_steps
+        and budget_steps <= max_steps
         and strict_success_evidence
         and (
             artifact_schema_version != STUDY_EVALUATION_SCHEMA_VERSION
@@ -2326,6 +2331,7 @@ def extract_artifact_metrics(
             index=index,
             max_steps=max_steps,
             artifact_schema_version=int(artifact_schema_version),
+            action_budget_scope=str(configuration.get("action_budget_scope", "policy_actions_legacy")),
         )
         for index, row in enumerate(raw_episodes)
     ]

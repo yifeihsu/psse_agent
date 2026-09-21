@@ -35,6 +35,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT, bind_env_action_limit, validate_episode_action_limit
 
 from psse_env.actions import (
     ASK_FOR_MORE_EVIDENCE,
@@ -330,6 +331,7 @@ _OFFLINE_EXECUTION_KEYS = frozenset(
         "final_state",
         "final_states",
         "hidden_truth",
+        "z_true",
         "initial_states",
         "ground_truth",
         "label",
@@ -394,6 +396,15 @@ _EXECUTION_METADATA_KEYS = frozenset(
         "no_material_anomaly_remaining",
         "requires_measurement_context",
         "measurement_covariance",
+        # Observable sensor uncertainties and measurement-operator conventions.
+        # These preserve the covariance used by generation and runtime solvers;
+        # the recursive privileged-field validator still checks their contents.
+        "sigma_z",
+        "operator_noise",
+        "structural_zero_indices",
+        "noise_contract",
+        "three_phase_sigma",
+        "telemetry_control_semantics",
         "slack_bus",
         "pristine_model_dir",
         "faulted_model_dir",
@@ -403,6 +414,7 @@ _EXECUTION_METADATA_KEYS = frozenset(
         "harmonic_orders",
         "nlm_diagnostic",
         "hif_runtime",
+        "measurement_convention",
         "hif_scan_window",
         "three_phase_voltages",
         "three_phase_branch_currents",
@@ -1598,7 +1610,7 @@ class ClosedLoopRolloutEvaluator:
         *,
         env_factory: Callable[..., Any],
         policy_factory: Callable[..., Any],
-        max_steps: int = 24,
+        max_steps: int = DEFAULT_EPISODE_ACTION_LIMIT,
         seed: int = 0,
         weights: Mapping[str, float] | None = None,
         physical_audit_fn: PhysicalAudit | None = None,
@@ -1617,8 +1629,7 @@ class ClosedLoopRolloutEvaluator:
     ) -> None:
         if not callable(env_factory) or not callable(policy_factory):
             raise TypeError("env_factory and policy_factory must be callable.")
-        if int(max_steps) <= 0:
-            raise ValueError("max_steps must be positive.")
+        max_steps = validate_episode_action_limit(max_steps)
         if case_loader is not None and not callable(case_loader):
             raise TypeError("case_loader must be callable when supplied.")
         if physical_audit_fn is not None and not callable(physical_audit_fn):
@@ -1809,6 +1820,7 @@ class ClosedLoopRolloutEvaluator:
             "configuration": {
                 "seed": self.seed,
                 "max_steps": self.max_steps,
+                "action_budget_scope": "all_episode_actions",
                 "suite_names": sorted(suites),
                 "required_suites": list(self.required_suites),
                 "minimum_suites": self.minimum_suites,
@@ -1867,6 +1879,7 @@ class ClosedLoopRolloutEvaluator:
         scenario_groups = _scenario_groups(audit_scenario)
         progress_episode_key = f"{suite}:{progress_scenario_id}:{scenario_index}"
         env = _call_factory(self.env_factory, episode_seed)
+        bind_env_action_limit(env, self.max_steps)
         environment_attestation = _release_environment_attestation(env)
         if self.require_release_environment and not environment_attestation["passed"]:
             raise ValueError(
@@ -1946,6 +1959,8 @@ class ClosedLoopRolloutEvaluator:
 
         if intervention_contract is not None:
             intervention_kind = intervention_contract["kind"]
+            if len(intervention_contract.get("setup_actions", [])) > self.max_steps:
+                raise ValueError("evaluation setup actions exceed the episode action limit")
             if intervention_kind in {
                 "pre_policy_failure",
                 "failed_policy_action",
@@ -1994,6 +2009,8 @@ class ClosedLoopRolloutEvaluator:
                     "tool_output": policy_safe_copy(injected_output),
                 }
                 history.append(transition)
+                if hasattr(env, "account_setup_actions"):
+                    env.account_setup_actions(1)
                 trace.append(
                     {
                         "step": 0,
@@ -2327,7 +2344,11 @@ class ClosedLoopRolloutEvaluator:
                     )
                 intervention_evidence["pre_policy_step_count"] = len(setup_actions)
 
-        for policy_step in range(self.max_steps):
+        # Setup actions are real environment actions, not a second allowance
+        # outside the episode budget.
+        pre_policy_steps = int(intervention_evidence.get("pre_policy_step_count", 0))
+        policy_action_limit = max(0, self.max_steps - pre_policy_steps)
+        for policy_step in range(policy_action_limit):
             step = len(trace)
             policy_steps += 1
             false_finalization_this_step = False
@@ -2338,6 +2359,7 @@ class ClosedLoopRolloutEvaluator:
                 state_before=state_before_action,
                 history=history,
             )
+            observation["remaining_budget"] = max(self.max_steps - len(trace), 0)
             # This check is repeated even for PolicyObservation implementations
             # so custom environments cannot accidentally expand the boundary.
             validate_policy_payload(observation)
@@ -2467,7 +2489,12 @@ class ClosedLoopRolloutEvaluator:
                     "error_code": circuit_breaker_error,
                     "state_mutated": False,
                 }
-                next_state = copy.deepcopy(state_before_action)
+                if hasattr(env, "account_non_dispatched_actions"):
+                    env.account_non_dispatched_actions(1)
+                    next_state = _current_state(env)
+                else:
+                    next_state = copy.deepcopy(state_before_action)
+                    next_state["remaining_budget"] = max(self.max_steps - len(trace) - 1, 0)
             else:
                 try:
                     next_state, tool_output = env.step(copy.deepcopy(action))
@@ -2908,7 +2935,7 @@ def evaluate_rollout_suites(
     *,
     env_factory: Callable[..., Any],
     policy_factory: Callable[..., Any],
-    max_steps: int = 24,
+    max_steps: int = DEFAULT_EPISODE_ACTION_LIMIT,
     seed: int = 0,
     weights: Mapping[str, float] | None = None,
     physical_audit_fn: PhysicalAudit | None = None,
@@ -4771,7 +4798,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--max-steps", type=int, default=24)
+    parser.add_argument("--max-steps", type=int, default=DEFAULT_EPISODE_ACTION_LIMIT)
     parser.add_argument("--required-suite", action="append", default=None)
     parser.add_argument("--minimum-suites", type=int, default=1)
     parser.add_argument("--minimum-episodes-per-suite", type=int, default=1)

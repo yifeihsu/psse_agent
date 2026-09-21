@@ -15,6 +15,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from three_phase_nlm.hif_units import label_physical_ohm, label_model_ohm, label_local_kv_ll
+from scripts.validate_hif_parameter_estimates import truth_power_kw
 from three_phase_nlm.hif_multiscan_estimator import (  # noqa: E402
     estimate_hif_location_magnitude_multiscan,
 )
@@ -106,8 +108,10 @@ def main() -> None:
     )
     parser.add_argument("--alpha-grid-size", type=int, default=31)
     parser.add_argument("--r-grid-size", type=int, default=35)
-    parser.add_argument("--r-hif-pu-min", type=float, default=5.0)
-    parser.add_argument("--r-hif-pu-max", type=float, default=1000.0)
+    parser.add_argument("--r-hif-pu-min", type=float)
+    parser.add_argument("--r-hif-ohm-min", type=float)
+    parser.add_argument("--r-hif-pu-max", type=float)
+    parser.add_argument("--r-hif-ohm-max", type=float)
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--refine-top-n", type=int, default=3)
     parser.add_argument("--local-max-nfev", type=int, default=40)
@@ -191,8 +195,10 @@ def main() -> None:
             top_k=int(args.top_k),
             alpha_grid_size=int(args.alpha_grid_size),
             r_grid_size=int(args.r_grid_size),
-            r_hif_pu_min=float(args.r_hif_pu_min),
-            r_hif_pu_max=float(args.r_hif_pu_max),
+            r_hif_pu_min=args.r_hif_pu_min,
+            r_hif_ohm_min=args.r_hif_ohm_min,
+            r_hif_pu_max=args.r_hif_pu_max,
+            r_hif_ohm_max=args.r_hif_ohm_max,
             condition_number_limit=float(args.condition_number_limit),
             absolute_correlation_limit=float(args.absolute_correlation_limit),
             refine_top_n=max(0, int(args.refine_top_n)),
@@ -284,6 +290,10 @@ def main() -> None:
                     "phase": phase_truth,
                     "alpha_from_from_bus": alpha_truth,
                     "r_hif_pu": r_truth,
+                    "r_hif_ohm": label_physical_ohm(label),
+                    "r_hif_model_ohm": label_model_ohm(label),
+                    "local_kv_ll": label_local_kv_ll(label),
+                    "nominal_p_hif_kw": truth_power_kw(label),
                 },
                 "errors": {
                     "alpha_absolute_error": alpha_error,

@@ -58,6 +58,7 @@ from psse_env.dagger.release_factories import (
     select_observable_expert_actions,
 )
 from psse_env.oracle import ExpertPolicyOracle
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT, bind_env_action_limit
 from psse_env.private_target_matching import (
     PARAMETER_BRANCH_COLUMNS,
     canonical_branch_target,
@@ -1230,6 +1231,7 @@ def expert_step_baseline(
     env = env_factory()
     rows: list[dict[str, Any]] = []
     for index, scenario in enumerate(scenarios):
+        max_steps = bind_env_action_limit(env, max_steps)
         env.reset(_scenario_execution(scenario))
         expert = ExpertPolicyOracle(
             process_oracle=env.process_oracle,
@@ -1587,7 +1589,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--summary-output",
         help="Optional compact report without the per-episode replay traces.",
     )
-    parser.add_argument("--max-steps", type=int, default=24)
+    parser.add_argument("--max-steps", type=int, default=DEFAULT_EPISODE_ACTION_LIMIT)
     parser.add_argument(
         "--skip-expert-baseline",
         action="store_true",

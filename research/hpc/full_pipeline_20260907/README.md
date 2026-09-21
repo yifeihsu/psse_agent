@@ -206,3 +206,7 @@ success basis per family (first-pass correction versus bounded handoff).
 Measurement+HIF is scored as fault-identified rather than resolved, so the
 ceiling on the 160 development roots is 152; on ambiguous roots the
 expert's own row is the ceiling.
+
+### Physical-ohm HIF sources (2026-09-20)
+
+D0 collection and suite generation receive the same explicit train/validation HIF sources from `pipeline.env`. These use 100-200, 200-500 and 500-1000 ohm bands at 69 kV, with the `ieee14_nominal_69_13p8_18kv_v1` voltage profile and `ybus` injection convention. Historical sources remain available through their existing constants; choose `hif_resistance_search="legacy_pu"` for the old search box.

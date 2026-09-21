@@ -53,6 +53,10 @@ def configured_case(case: Mapping[str, Any]) -> dict[str, Any]:
         raise ScreenInputError("Zero branch impedance or negative transformer tap is unsupported.")
     clean_bus = np.zeros((bus.shape[0], max(13, bus.shape[1])), dtype=np.float64)
     clean_bus[:, [0, 1, 4, 5]] = bus[:, [0, 1, 4, 5]]
+    if bus.shape[1] > 9:
+        if not np.all(np.isfinite(bus[:, 9])) or np.any(bus[:, 9] < 0):
+            raise ScreenInputError("Configured voltage bases must be finite and nonnegative; zero means unspecified.")
+        clean_bus[:, 9] = bus[:, 9]
     clean_bus[:, 7] = 1.0
     return {"baseMVA": base, "bus": clean_bus, "branch": branch[:, :13].copy(),
             "gen": np.empty((0, 21), dtype=np.float64)}

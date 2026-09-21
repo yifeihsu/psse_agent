@@ -113,10 +113,17 @@ def merge_shards(output_dir: str | Path, reports: list[dict[str, Any]], *,
     common = reports[0]
     invariant_keys = ("policy_version", "implementation_sha256", "noise_replicates",
         "healthy_replicates_by_split", "attempt_cap_per_slot", "main_minimum_paired_distance", "profiles")
+    profile_keys = ("scenario_profile", "noise_profile", "curriculum_stage", "profile_identity", "profile_identity_sha256")
+    auxiliary_names = {cohort: Path(info["path"]).name for cohort, info in common.get("auxiliary_manifests", {}).items()}
     for report in reports[1:]:
         for key in invariant_keys:
             if report[key] != common[key]:
                 raise ValueError(f"Cannot merge shards with different {key}")
+        for key in profile_keys:
+            if report.get(key) != common.get(key):
+                raise ValueError(f"Cannot merge shards with different {key}")
+        if {cohort: Path(info["path"]).name for cohort, info in report.get("auxiliary_manifests", {}).items()} != auxiliary_names:
+            raise ValueError("Cannot merge shards with different auxiliary cohort manifests")
     counts, merged_counts = Counter(), Counter()
     parent_owner, parent_splits, windows = {}, {}, set()
     source_reports = []
@@ -125,7 +132,9 @@ def merge_shards(output_dir: str | Path, reports: list[dict[str, Any]], *,
         if report["seed"] != item["seed"] or report["parents_by_split"] != item["parents_by_split"]:
             raise ValueError("Shard report identity does not match its deterministic plan")
         counts.update(report["counts"])
-    for filename, scope in (("manifest.jsonl", "main"), ("boundary_manifest.jsonl", "boundary")):
+    manifest_specs = [("manifest.jsonl", "main"), ("boundary_manifest.jsonl", "boundary"),
+                      *[(filename, cohort) for cohort, filename in auxiliary_names.items()]]
+    for filename, scope in manifest_specs:
         with (out / filename).open("w", encoding="utf-8") as destination:
             for item, report in zip(plan, reports):
                 index = item["shard_index"]
@@ -137,6 +146,8 @@ def merge_shards(output_dir: str | Path, reports: list[dict[str, Any]], *,
                             continue
                         row = json.loads(line)
                         parent, split = row["parent_id"], row["split"]
+                        if scope in auxiliary_names and split not in {"validation", "test"}:
+                            raise ValueError(f"Evaluation-only auxiliary cohort {scope} cannot contain split={split}")
                         if parent in parent_owner and parent_owner[parent] != index:
                             raise ValueError(f"Parent identity is shared by different shards: {parent}")
                         if parent in parent_splits and parent_splits[parent] != split:
@@ -152,8 +163,9 @@ def merge_shards(output_dir: str | Path, reports: list[dict[str, Any]], *,
                         merged_counts[f"{scope}:{split}:noise_windows"] += int(row.get("noise_replicates", 1))
                         for family in row["families"] or ["healthy"]:
                             merged_counts[f"{scope}:{split}:{family}"] += 1
+    manifest_scopes = {scope for _, scope in manifest_specs}
     receipt_counts = Counter({key: value for key, value in counts.items()
-                             if key.startswith("main:") or key.startswith("boundary:")})
+                             if key.split(":", 1)[0] in manifest_scopes})
     if receipt_counts != merged_counts:
         raise ValueError("Merged manifest counts disagree with shard receipts")
     failure_count = ledger_count = 0
@@ -183,12 +195,14 @@ def merge_shards(output_dir: str | Path, reports: list[dict[str, Any]], *,
                 "generation_report_sha256": file_sha256(report_path),
                 "manifest_sha256": report["manifest_sha256"],
                 "boundary_manifest_sha256": report["boundary_manifest_sha256"],
+                "auxiliary_manifest_sha256": {cohort: info["sha256"] for cohort, info in report.get("auxiliary_manifests", {}).items()},
                 "implementation_sha256": report["implementation_sha256"]})
     totals = {split: sum(item["parents_by_split"][split] for item in plan) for split in SPLITS}
     observed_parents = Counter(parent_splits.values())
     if any(observed_parents.get(split, 0) != expected for split, expected in totals.items()):
         raise ValueError("Merged parent counts disagree with the shard plan")
     report = {**{key: copy.deepcopy(common[key]) for key in invariant_keys},
+        **{key: copy.deepcopy(common[key]) for key in profile_keys if key in common},
         "schema": "parallel_practical_physical_wls_screen_corpus_v1", "seed": seed,
         "seed_derivation": "numpy.random.SeedSequence(root_seed).spawn(shard_count), one uint32 state per child; uniqueness verified",
         "parents_by_split": totals, "shard_count": len(plan), "source_reports": source_reports,
@@ -212,6 +226,16 @@ def merge_shards(output_dir: str | Path, reports: list[dict[str, Any]], *,
         "reported_model_stays_identical_within_parent": all(report["reported_model_stays_identical_within_parent"] for report in reports),
         "physical_audit_path_base": "physical_audit_path is relative to merged root; internal references inside unchanged audit files use offline_metadata.source_shard_root",
         "limitations": common["limitations"]}
+    if auxiliary_names:
+        report["schema"] = "parallel_practical_physical_wls_screen_corpus_v2"
+        report["auxiliary_manifests"] = {cohort: {"path": str(out / filename),
+            "sha256": file_sha256(out / filename), "training_eligible": False,
+            "parent_splits": ["validation", "test"],
+            "row_count": sum(counts.get(f"{cohort}:{split}:rows", 0) for split in SPLITS),
+            "rows_by_split": {split: counts.get(f"{cohort}:{split}:rows", 0) for split in SPLITS}}
+            for cohort, filename in auxiliary_names.items()}
+        report["positive_boundary_storage"] = common.get("positive_boundary_storage")
+        report["exact_wls_audit_used_for_admission"] = False
     write_json(out / "generation_report.json", report)
     return report
 
@@ -220,18 +244,25 @@ def generate_parallel(output_dir: str | Path, *, parents_by_split: dict[str, int
                       workers: int = 4, noise_replicates: int = 2,
                       healthy_calibration_replicates: int = 80,
                       healthy_replicates_by_split: dict[str, int] | None = None,
-                      attempt_cap: int = 24) -> dict[str, Any]:
+                      attempt_cap: int = 24, scenario_profile: str = "legacy_v1",
+                      noise_profile: str = "baseline", stage: str = "full") -> dict[str, Any]:
+    if scenario_profile not in {"legacy_v1", "reviewed_v1", "ieee14_physical_hif_v1"} or noise_profile not in {"baseline", "accuracy_005", "accuracy_002"}:
+        raise ValueError("Unsupported scenario_profile or noise_profile")
+    if stage not in {"early", "full"} or (scenario_profile == "legacy_v1" and stage != "full"):
+        raise ValueError("early curriculum requires reviewed_v1; stage must be early or full")
     plan = shard_plan(parents_by_split, seed=seed, workers=workers)
     out = Path(output_dir).resolve()
     out.mkdir(parents=True, exist_ok=False)
     (out / "shards").mkdir()
-    write_json(out / "shard_plan.json", {"seed": seed, "workers": workers, "shards": plan})
+    write_json(out / "shard_plan.json", {"seed": seed, "workers": workers, "shards": plan,
+        "scenario_profile": scenario_profile, "noise_profile": noise_profile, "stage": stage})
     jobs = [{"output_dir": str(out / "shards" / f"shard_{item['shard_index']:03d}"),
              "log_path": str(out / "shards" / f"shard_{item['shard_index']:03d}.log"),
              "arguments": {"parents_by_split": item["parents_by_split"], "seed": item["seed"],
                  "noise_replicates": noise_replicates,
                  "healthy_calibration_replicates": healthy_calibration_replicates,
-                 "healthy_replicates_by_split": healthy_replicates_by_split, "attempt_cap": attempt_cap}}
+                 "healthy_replicates_by_split": healthy_replicates_by_split, "attempt_cap": attempt_cap,
+                 "scenario_profile": scenario_profile, "noise_profile": noise_profile, "stage": stage}}
             for item in plan]
     started = time.monotonic()
     reports: list[Any] = [None] * len(plan)
@@ -257,12 +288,16 @@ def main(argv=None):
     parser.add_argument("--healthy-validation-replicates", type=int)
     parser.add_argument("--healthy-test-replicates", type=int)
     parser.add_argument("--attempt-cap", type=int, default=24)
+    parser.add_argument("--scenario-profile", choices=("legacy_v1", "reviewed_v1", "ieee14_physical_hif_v1"), default="legacy_v1")
+    parser.add_argument("--noise-profile", choices=("baseline", "accuracy_005", "accuracy_002"), default="baseline")
+    parser.add_argument("--stage", choices=("early", "full"), default="full")
     args = parser.parse_args(argv)
     report = generate_parallel(args.output_dir, parents_by_split={s: getattr(args, f"{s}_parents") for s in SPLITS},
         workers=args.workers, seed=args.seed, noise_replicates=args.noise_replicates,
         healthy_calibration_replicates=args.healthy_calibration_replicates, attempt_cap=args.attempt_cap,
         healthy_replicates_by_split={s: n for s, n in (("validation", args.healthy_validation_replicates),
-            ("test", args.healthy_test_replicates)) if n is not None})
+            ("test", args.healthy_test_replicates)) if n is not None},
+        scenario_profile=args.scenario_profile, noise_profile=args.noise_profile, stage=args.stage)
     print(json.dumps({"manifest": report["manifest"], "counts": report["counts"],
                       "elapsed_seconds": report["elapsed_seconds"]}, indent=2))
 

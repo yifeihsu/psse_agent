@@ -34,6 +34,7 @@
 # again before PEFT loads them. No mode permits a Hub download or dirty source.
 
 set -euo pipefail
+EPISODE_MAX_STEPS=${EPISODE_MAX_STEPS:-40}
 umask 077
 
 REPO_ROOT=${REPO_ROOT:-/scratch/yx3882/psse_agent}
@@ -45,7 +46,7 @@ EXPECTED_ACCELERATOR_CLASS=${EXPECTED_ACCELERATOR_CLASS:-auto}
 
 FROZEN_EVALUATION_SUITE=${EVALUATION_SUITE:-psse_env/dagger/suites/bc0_eval_suite_v1.json}
 EVALUATION_POLICY=${EVALUATION_POLICY:-psse_env/dagger/bc0_evaluation_policy.json}
-STUDY_MANIFEST=${STUDY_MANIFEST:-psse_env/dagger/studies/dagger_multiseed_study_v1.json}
+STUDY_MANIFEST=${STUDY_MANIFEST:-psse_env/dagger/studies/dagger_multiseed_study_v2.json}
 RECOVERY_STRESS_SUITE=${RECOVERY_STRESS_SUITE:-}
 RECOVERY_STRESS_MANIFEST=${RECOVERY_STRESS_MANIFEST:-}
 STUDY_VARIANT=${STUDY_VARIANT:-}
@@ -519,7 +520,7 @@ if [[ "$EVALUATION_SCOPE" == "development_holdout" ]]; then
     EVALUATE+=(
         --diagnostic-only
         --seed 20260721
-        --max-steps 24
+        --max-steps "$EPISODE_MAX_STEPS"
         --required-suite dagger1_development
         --minimum-suites 1
         --minimum-episodes-per-suite 1
@@ -530,7 +531,7 @@ if [[ "$EVALUATION_SCOPE" == "development_holdout" ]]; then
 elif [[ "$EVALUATION_SCOPE" == "recovery_stress" ]]; then
     EVALUATE+=(
         --seed 20260723
-        --max-steps 24
+        --max-steps "$EPISODE_MAX_STEPS"
         --required-suite recovery_measurement_parameter_sequential_handoff
         --required-suite recovery_post_failure_no_candidate
         --required-suite recovery_premature_commit
@@ -546,7 +547,7 @@ elif [[ "$EVALUATION_SCOPE" == "recovery_stress" ]]; then
 else
     EVALUATE+=(
         --seed 20260719
-        --max-steps 24
+        --max-steps "$EPISODE_MAX_STEPS"
         --required-suite standard_success
         --required-suite forced_error_recovery
         --required-suite partial_success_retention

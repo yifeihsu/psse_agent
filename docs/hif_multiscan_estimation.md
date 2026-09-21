@@ -237,3 +237,7 @@ the measured results and no-go decision.
 Label-backed mock estimates are smoke-test fixtures. They are tagged
 `synthetic_oracle` and fail `scripts/validate_hif_traces.py` unless the explicit
 `--allow-mock-estimator` override is supplied.
+
+## Physical resistance update (2026-09-20)
+
+Historical HIF pu values and unmarked `r_hif_ohm` labels in this document describe the normalized 1 kV model. New physical-ohm corpora use local voltage bases and explicit measurement conventions. See [the reconfiguration and fresh results](ieee14_hif_legacy_reconfiguration_20260919.md); old corpora and historical measurements remain unchanged.

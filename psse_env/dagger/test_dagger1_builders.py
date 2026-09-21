@@ -731,6 +731,20 @@ class Dagger1ScenarioBuilderTests(unittest.TestCase):
 
 
 class Dagger1AggregateBuilderTests(unittest.TestCase):
+    def test_current_collection_environment_requires_forty_actions(self) -> None:
+        contract = {
+            "parameter_ranking_dominance_threshold": BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD,
+            "production_dataset_mode": True, "max_steps": 40,
+        }
+        self.assertEqual(
+            aggregate_module.validate_dagger1_release_environment_contract({"release_environment_contract": contract}),
+            contract,
+        )
+        for limit in (24, 40.0, True, None):
+            with self.subTest(limit=limit), self.assertRaisesRegex(ValueError, "40-action"):
+                aggregate_module.validate_dagger1_release_environment_contract(
+                    {"release_environment_contract": {**contract, "max_steps": limit}})
+
     def test_release_aggregate_requires_exact_overlap_execution_pipeline(self) -> None:
         approved = dagger1_execution_pipeline_contract(overlap_policy_audit=True)
         self.assertEqual(
@@ -1169,7 +1183,7 @@ class Dagger1AggregateBuilderTests(unittest.TestCase):
                     BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD
                 ),
                 "production_dataset_mode": True,
-                "max_steps": 24,
+                "max_steps": 40,
             },
             "forbidden_suite_sha256": file_sha256(DEFAULT_FORBIDDEN_SUITE),
             "evaluation_policy_sha256": file_sha256(DEFAULT_EVALUATION_POLICY),

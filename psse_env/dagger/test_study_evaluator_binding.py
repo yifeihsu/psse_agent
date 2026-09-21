@@ -173,7 +173,7 @@ def _base_development_binding_kwargs(root: Path) -> dict[str, Any]:
         "input_suite_path": suite,
         "diagnostic_only": True,
         "evaluator_seed": 20260721,
-        "max_steps": 24,
+        "max_steps": 40,
         "required_suites": (DAGGER1_DEVELOPMENT_SUITE_NAME,),
         "minimum_suites": 1,
         "minimum_episodes_per_suite": 1,
@@ -235,7 +235,7 @@ def test_cli_emits_real_bound_development_artifact_consumed_by_metrics(
         "--seed",
         "20260721",
         "--max-steps",
-        "24",
+        "40",
         "--diagnostic-only",
         "--study-manifest",
         str(DEFAULT_STUDY_MANIFEST),
@@ -262,7 +262,7 @@ def test_cli_emits_real_bound_development_artifact_consumed_by_metrics(
     )
     assert run["evaluation_scope"] == "development_holdout"
     assert run["evaluator_seed"] == 20260721
-    assert run["max_steps"] == 24
+    assert run["max_steps"] == 40
     assert len(run["root_records"]) == 30
     assert artifact["checkpoint_receipt_id"] is None
     assert artifact["checkpoint_adapter_tree_sha256"] is None
@@ -321,7 +321,7 @@ def test_cli_emits_real_bound_development_artifact_consumed_by_metrics(
             input_suite_path=suite,
             diagnostic_only=True,
             evaluator_seed=20260721,
-            max_steps=24,
+            max_steps=40,
             required_suites=(DAGGER1_DEVELOPMENT_SUITE_NAME,),
             minimum_suites=1,
             minimum_episodes_per_suite=1,

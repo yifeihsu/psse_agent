@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Sequence, Tuple
 
 import numpy as np
 import scipy.sparse as sp
@@ -259,6 +259,7 @@ def lagrangian_m_singlephase_details(
     max_it: int = 20,
     tol: float = 1e-5,
     measurement_sigma: np.ndarray | None = None,
+    exact_measurement_indices: Sequence[int] | None = None,
 ) -> Dict[str, Any]:
     """
     WLS state estimation with normalized Lagrange multipliers (NLM) for branch R/X.
@@ -301,8 +302,13 @@ def lagrangian_m_singlephase_details(
     tol : float
         Convergence tolerance on max(abs(dx)).
     measurement_sigma : ndarray or None
-        Optional positive standard deviations in full measurement-vector order.
+        Optional standard deviations in full measurement-vector order.
+        Zero is allowed only for explicitly declared structural constraints.
         None retains the existing 0.001 voltage / 0.01 power covariance.
+    exact_measurement_indices : sequence of int or None
+        Exact zero P/Q injection rows at equipment-free buses (no load and no
+        online generator). These rows must have zero sigma and zero observed
+        value. They enter the KKT constraints, not the stochastic covariance.
 
     Returns
     -------
@@ -346,12 +352,34 @@ def lagrangian_m_singlephase_details(
         zin = np.flatnonzero(np.abs(ZI) < zero_injection_tol)
     nzi = zin.size
 
+    exact_rows = np.asarray(list(exact_measurement_indices) if exact_measurement_indices is not None else [])
+    if exact_rows.size:
+        if (exact_rows.ndim != 1 or not np.issubdtype(exact_rows.dtype, np.integer)
+                or np.issubdtype(exact_rows.dtype, np.bool_)):
+            raise ValueError("exact_measurement_indices must contain integer injection-row indices")
+        exact_rows = exact_rows.astype(int)
+        if len(set(exact_rows.tolist())) != exact_rows.size:
+            raise ValueError("exact_measurement_indices must not repeat a row")
+        if np.any(exact_rows < nb) or np.any(exact_rows >= 3 * nb):
+            raise ValueError("exact constraints must be P/Q injection rows")
+        exact_buses = (exact_rows - nb) % nb
+        online_generator_buses = set(gen[gen[:, GEN_STATUS] > 0, GEN_BUS].astype(int).tolist())
+        if any(bus[b, PD] != 0 or bus[b, QD] != 0 or int(b) in online_generator_buses for b in exact_buses):
+            raise ValueError("exact injection rows require structurally zero load/generation buses")
+        if z.size != 3 * nb + 4 * nl or not np.all(np.isfinite(z[exact_rows])) or np.any(z[exact_rows] != 0):
+            raise ValueError("exact structural injection observations must equal zero")
+    else:
+        exact_rows = np.array([], dtype=int)
+    zi_rows = np.unique(np.r_[nb + zin, 2 * nb + zin, exact_rows]).astype(int)
+
     # measurement covariance / weights
     sigma = (np.r_[np.full(nb, 0.001), np.full(2 * nb + 4 * nl, 0.01)]
              if measurement_sigma is None else np.asarray(measurement_sigma, dtype=float).reshape(-1))
-    if sigma.size != 3 * nb + 4 * nl or not np.all(np.isfinite(sigma)) or np.any(sigma <= 0):
-        raise ValueError("measurement_sigma must be finite, positive, and match the full measurement vector.")
-    Rdiag_full = _drop_rows_dense(sigma ** 2, np.r_[nb + zin, 2 * nb + zin].astype(int))
+    if sigma.size != 3 * nb + 4 * nl or not np.all(np.isfinite(sigma)) or np.any(sigma < 0):
+        raise ValueError("measurement_sigma must be finite, nonnegative, and match the full measurement vector.")
+    if set(np.flatnonzero(sigma == 0).tolist()) != set(exact_rows.tolist()):
+        raise ValueError("zero sigma requires exactly the declared structural exact_measurement_indices")
+    Rdiag_full = _drop_rows_dense(sigma ** 2, zi_rows)
     W = sp.diags(1.0 / Rdiag_full, offsets=0, format="csc")
 
     # build Y-bus
@@ -365,7 +393,6 @@ def lagrangian_m_singlephase_details(
     x0 = x[np.r_[np.arange(ref), np.arange(ref + 1, nb), np.arange(nb, 2 * nb)]].copy()
 
     # rows removed by zero injections
-    zi_rows = np.r_[nb + zin, 2 * nb + zin].astype(int)
     z_used = _drop_rows_dense(z, zi_rows)
 
     success = 1
@@ -426,7 +453,8 @@ def lagrangian_m_singlephase_details(
         dxl = lu.solve(tk)
         dx = dxl[:ns]
 
-        if np.max(np.abs(dx)) < tol:
+        constraint_tolerance = min(tol, 1e-9) if exact_rows.size else tol
+        if np.max(np.abs(dx)) < tol and (not zi_rows.size or np.max(np.abs(cx)) <= constraint_tolerance):
             break
 
         x0 = x0 + dx
@@ -445,8 +473,12 @@ def lagrangian_m_singlephase_details(
             "vm_est_pu": np.array([]),
             "n_measurements": int(z_used.shape[0]),
             "n_states": int(2 * nb - 1),
-            "dof": int(z_used.shape[0] - (2 * nb - 1)),
+            "dof": int(z_used.shape[0] - (2 * nb - 1) + np.linalg.matrix_rank(C.toarray())) if zi_rows.size else int(z_used.shape[0] - (2 * nb - 1)),
             "iterations": int(max_it + 1),
+            "measurement_rows": np.delete(np.arange(z.size), zi_rows),
+            "exact_measurement_indices": zi_rows.copy(),
+            "effective_state_count": int(2 * nb - 1 - np.linalg.matrix_rank(C.toarray())) if zi_rows.size else int(2 * nb - 1),
+            "residual_covariance": np.empty((0, 0)),
         }
     iterations = int(_k + 1)
 
@@ -528,10 +560,33 @@ def lagrangian_m_singlephase_details(
 
     final_resid = z_resid - hx_resid
 
-    Gres = (H_resid.T @ sp.diags(1.0 / Rdiag_resid, 0, format="csc") @ H_resid).tocsc()
-    lu_res = spla.splu(Gres, permc_spec="MMD_AT_PLUS_A")
-    Ginv_Ht = lu_res.solve(H_resid.T.toarray())
-    proj_diag = np.sum(H_resid.toarray() * Ginv_Ht.T, axis=1)
+    if zi_rows.size:
+        # Exact constraints remove state directions, not noisy observations
+        # with a small invented variance. Linearize on the feasible tangent.
+        from scipy.linalg import null_space
+
+        tangent = null_space(C.toarray())
+        reduced_h = np.asarray(H_resid @ tangent)
+        effective_state_count = int(np.linalg.matrix_rank(reduced_h / np.sqrt(Rdiag_resid[:, None])))
+        constraint_rank = int((2 * nb - 1) - tangent.shape[1])
+        if effective_state_count != tangent.shape[1]:
+            raise ValueError("stochastic measurements do not observe the constraint-feasible state")
+        if tangent.shape[1]:
+            reduced_gain = reduced_h.T @ (reduced_h / Rdiag_resid[:, None])
+            projection = reduced_h @ np.linalg.solve(reduced_gain, reduced_h.T)
+        else:
+            projection = np.zeros((len(Rdiag_resid), len(Rdiag_resid)))
+        proj_diag = np.diag(projection)
+    else:
+        # Preserve the ordinary positive-covariance numerical path.
+        Gres = (H_resid.T @ sp.diags(1.0 / Rdiag_resid, 0, format="csc") @ H_resid).tocsc()
+        lu_res = spla.splu(Gres, permc_spec="MMD_AT_PLUS_A")
+        Ginv_Ht = lu_res.solve(H_resid.T.toarray())
+        proj_diag = np.sum(H_resid.toarray() * Ginv_Ht.T, axis=1)
+        projection = H_resid.toarray() @ Ginv_Ht
+        effective_state_count = 2 * nb - 1
+        constraint_rank = 0
+    residual_covariance = np.diag(Rdiag_resid) - projection
     omega_diag = Rdiag_resid - proj_diag
     omega_diag_unclipped = omega_diag.copy()
     omega_diag = np.clip(omega_diag, a_min=np.finfo(float).eps, a_max=None)
@@ -553,7 +608,12 @@ def lagrangian_m_singlephase_details(
         "vm_est_pu": x[nb : 2 * nb].copy(),
         "n_measurements": int(final_resid.shape[0]),
         "n_states": int(2 * nb - 1),
-        "dof": int(final_resid.shape[0] - (2 * nb - 1)),
+        "dof": int(final_resid.shape[0] - effective_state_count),
+        "effective_state_count": int(effective_state_count),
+        "constraint_rank": constraint_rank,
+        "exact_measurement_indices": zi_rows.copy(),
+        "constraint_jacobian": C.toarray(),
+        "constraint_residual": hx_full[zi_rows].copy(),
         "iterations": iterations,
         # Numeric evidence for WLS-only screening. Preserve the unclipped
         # covariance so a downstream mask can distinguish unusable residuals.
@@ -561,6 +621,7 @@ def lagrangian_m_singlephase_details(
         "measurement_jacobian": H_resid.toarray(),
         "measurement_variance_diag": Rdiag_resid.copy(),
         "residual_covariance_diag": omega_diag_unclipped,
+        "residual_covariance": residual_covariance,
         "measurement_rows": np.delete(
             np.delete(np.arange(z.size), zi_rows), nb - 1 if ind == 1 else []
         ),

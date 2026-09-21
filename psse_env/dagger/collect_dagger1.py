@@ -18,6 +18,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT
+
 from psse_env.dagger.build_dagger1_development_holdout import (
     APPROVED_DAGGER1_DEVELOPMENT_ROOT_COUNT,
     DAGGER1_DEVELOPMENT_PARAMETER_RANKING_THRESHOLD,
@@ -3151,7 +3153,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "or environment mutation"
         ),
     )
-    parser.add_argument("--max-steps", type=int, default=24)
+    parser.add_argument("--max-steps", type=int, default=DEFAULT_EPISODE_ACTION_LIMIT)
     parser.add_argument("--seed", type=int, default=20260719)
     args = parser.parse_args(list(argv) if argv is not None else None)
     execution_pipeline_contract = dagger1_execution_pipeline_contract(
@@ -3237,8 +3239,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--model-revision must be a 40- or 64-character hex digest")
     if args.iteration < 1 or not 0.0 <= args.beta < 1.0:
         parser.error("DAgger-1 requires --iteration >= 1 and 0 <= --beta < 1")
-    if args.max_steps != 24:
-        parser.error("production DAgger-1 collection requires --max-steps 24")
+    if args.max_steps != DEFAULT_EPISODE_ACTION_LIMIT:
+        parser.error(f"production DAgger-1 collection requires --max-steps {DEFAULT_EPISODE_ACTION_LIMIT}")
     try:
         beta_contract = validate_collection_pass(
             collection_pass=args.collection_pass,

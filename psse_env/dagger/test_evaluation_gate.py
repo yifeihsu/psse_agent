@@ -2500,6 +2500,22 @@ class EvaluationGateV3Tests(unittest.TestCase):
                     result.failures,
                 )
 
+    def test_current_action_scope_counts_setup_and_legacy_scope_preserves_old_budget(self) -> None:
+        suite_path, _contract, policy, artifact = self._fixture_for_suite("forced_error_recovery")
+        policy["hard_constraints"]["maximum_steps_per_episode"] = 2
+        episode = artifact["evaluation"]["suite_metrics"]["episodes"][0]
+        self.assertEqual(episode["policy_steps"], 2)
+        self.assertGreater(episode["steps"], 2)
+        legacy = _validate(artifact, role="expert-baseline", policy=policy, suite_path=suite_path)
+        self.assertEqual(legacy.observed["maximum_steps_per_episode"], 2)
+        self.assertTrue(legacy.performance_passed, legacy.failures)
+        artifact["evaluation"]["suite_metrics"]["configuration"]["action_budget_scope"] = "all_episode_actions"
+        _rehash(artifact)
+        current = _validate(artifact, role="expert-baseline", policy=policy, suite_path=suite_path)
+        self.assertEqual(current.observed["maximum_steps_per_episode"], episode["steps"])
+        self.assertFalse(current.performance_passed)
+        self.assertTrue(any("maximum_steps_per_episode" in reason for reason in current.failures))
+
     def test_custom_callback_isolation_evidence_is_mandatory(self) -> None:
         for callback_evidence in (
             None,

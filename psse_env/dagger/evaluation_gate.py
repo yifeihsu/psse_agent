@@ -22,6 +22,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT
+
 from psse_env.actions import (
     ASK_FOR_MORE_EVIDENCE,
     CORRECT_MEASUREMENTS,
@@ -56,7 +58,7 @@ from psse_env.sft.release_hardware import normalize_accelerator_class
 
 
 DEFAULT_POLICY_PATH = Path(__file__).with_name("bc0_evaluation_policy.json")
-DEFAULT_POLICY_ID = "bc0_closed_loop_hard_gate_v3"
+DEFAULT_POLICY_ID = "bc0_closed_loop_hard_gate_v4"
 SINGLE_SOURCE_VALIDATOR_CONTRACT = "single_source_exact_commit_v1"
 DUAL_SOURCE_VALIDATOR_CONTRACT = "gate_only_json_domain_revalidation_v1"
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -560,6 +562,11 @@ def _validate_evaluation_policy_payload(value: Mapping[str, Any]) -> dict[str, A
         _nonnegative_integer(hard[name], field=name)
     for name in sorted(rate_constraints):
         _rate(hard[name], field=name)
+    if policy.get("policy_id") == DEFAULT_POLICY_ID and (
+        suite_policy["max_steps"] != DEFAULT_EPISODE_ACTION_LIMIT
+        or hard["maximum_steps_per_episode"] != DEFAULT_EPISODE_ACTION_LIMIT
+    ):
+        raise ValueError(f"current BC0 policy must use {DEFAULT_EPISODE_ACTION_LIMIT} actions for both suite and hard episode limits")
     if float(hard["minimum_terminal_rate"]) != 1.0:
         raise ValueError("BC0 evaluation policy must require 100% terminality")
     # These are non-negotiable safety constraints.  A custom policy cannot
@@ -2390,7 +2397,7 @@ def validate_evaluation_artifact(
         )
         if policy_hash != packaged_policy_hash:
             failures.append(
-                "bc0_closed_loop_hard_gate_v3 content does not match the packaged policy"
+                f"{DEFAULT_POLICY_ID} content does not match the packaged policy"
             )
 
     repository_root = Path(repo_root or Path(__file__).resolve().parents[2]).resolve()
@@ -2759,6 +2766,11 @@ def validate_evaluation_artifact(
         "minimum_episodes_per_suite": 1,
         "minimum_roots_per_suite": expected_minimum_configuration,
     }
+    action_budget_scope = configuration.get("action_budget_scope")
+    if action_budget_scope not in {None, "policy_actions_only", "all_episode_actions"}:
+        failures.append("evaluator configuration action_budget_scope is unsupported")
+    if policy_id == DEFAULT_POLICY_ID:
+        expected_configuration["action_budget_scope"] = "all_episode_actions"
     for name, expected_value in expected_configuration.items():
         if configuration.get(name) != expected_value:
             failures.append(
@@ -3070,7 +3082,10 @@ def validate_evaluation_artifact(
             failures.append(
                 f"episode {key!r} step count does not match policy plus intervention steps"
             )
-        max_steps_seen = max(max_steps_seen, policy_steps)
+        # New runs charge setup/intervention and policy actions to one horizon.
+        # Missing scope is the historical policy-only artifact convention.
+        budget_steps = steps if action_budget_scope == "all_episode_actions" else policy_steps
+        max_steps_seen = max(max_steps_seen, budget_steps)
         if (
             episode.get("healthy_preservation_known") is True
             and episode.get("healthy_components_preserved") is False
@@ -3462,6 +3477,7 @@ def validate_evaluation_artifact(
         "evaluator_error_episodes": evaluator_errors,
         "maximum_steps_per_episode": max_steps_seen,
         "accelerator_classes": list(candidate_accelerator_classes),
+        "action_budget_scope": action_budget_scope or "historical_policy_actions_only",
         "families": family_observed,
         "suites": {
             suite_name: {

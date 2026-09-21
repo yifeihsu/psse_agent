@@ -5,6 +5,11 @@ import opendssdirect as dss
 from opendssdirect import Capacitors, Generators, Loads, Vsources
 
 from IEEE_14_OpenDSS.constants import BRANCH_ORDER, BUS_ORDER
+from IEEE_14_OpenDSS.measurement_convention import (
+    SHUNT_CONVENTION_LEGACY,
+    SHUNT_CONVENTION_YBUS,
+    validate_shunt_convention,
+)
 
 
 def _phase_terminal_complex_powers(
@@ -284,7 +289,13 @@ def _active_element_enabled():
     return not hasattr(dss.CktElement, "Enabled") or bool(dss.CktElement.Enabled())
 
 
-def extract_measurement_series(*, buses=None, branch_names=None, branch_element_overrides=None):
+def extract_measurement_series(
+    *,
+    buses=None,
+    branch_names=None,
+    branch_element_overrides=None,
+    shunt_convention="legacy_injection",
+):
     """
     Extract the 1ϕ-equivalent (phase-A) operator measurement vector from the *currently solved* circuit.
 
@@ -292,12 +303,34 @@ def extract_measurement_series(*, buses=None, branch_names=None, branch_element_
       [Vm(1..nb), Pinj(1..nb), Qinj(1..nb), Pf(1..nl), Qf(1..nl), Pt(1..nl), Qt(1..nl)]
 
     - Vm uses phase-1 (phase A) VLN magnitude per bus.
-    - Pinj/Qinj follow MATPOWER makeSbus convention in per-unit on 100 MVA.
+    - Pinj/Qinj are generation minus demand in per-unit on 100 MVA.
     - Branch flows use BRANCH_ORDER to match MATPOWER case14 branch rows.
     - branch_element_overrides can map an external branch name to replacement
       OpenDSS elements, e.g. for hidden midspan HIF buses:
       {"Line.2-3": {"from": "Line.2-3_hif_a", "to": "Line.2-3_hif_b"}}.
+
+    Shunt convention (``shunt_convention``, see
+    ``IEEE_14_OpenDSS.measurement_convention``):
+
+    - ``"legacy_injection"`` (default): the historical exporter behaviour.
+      Capacitor element powers are accumulated into Pinj/Qinj like loads and
+      generators, so the 19 Mvar bus-9 capacitor appears as a reactive
+      injection ``+0.19*V9**2`` pu in ``Qinj[8]``.  The operator WLS
+      (MATPOWER case14) keeps that capacitor as ``Bs`` inside Ybus, so under
+      this convention *every* OpenDSS-derived window disagreed with the WLS
+      model at bus 9 whether or not a fault was present (the WLS saw the shunt
+      twice).  The default stays legacy so tracked corpora replay bit-identically.
+    - ``"ybus"``: fixed bus shunts stay in Ybus and Pinj/Qinj follow the
+      MATPOWER ``makeSbus`` convention exactly (generation minus demand,
+      capacitor powers excluded).  This is the convention consistent with the
+      operator WLS and the one regenerated corpora declare in their
+      ``measurement_convention`` payload.
+
+    Only ``Qinj`` at buses carrying a Capacitor element differs between the
+    two conventions; voltages, the remaining injections and every branch flow
+    are identical.
     """
+    convention = validate_shunt_convention(shunt_convention)
     buses = BUS_ORDER if buses is None else list(buses)
     branch_names = BRANCH_ORDER if branch_names is None else list(branch_names)
 
@@ -349,18 +382,23 @@ def extract_measurement_series(*, buses=None, branch_names=None, branch_element_
             P_inj[bus] += -p
             Q_inj[bus] += -q
 
-    # Capacitors (reactive injections)
-    for name in Capacitors.AllNames() or []:
-        Capacitors.Name(name)
-        if not _active_element_enabled():
-            continue
-        buses_el = dss.CktElement.BusNames()
-        bus = buses_el[0].split(".")[0].lower()
-        pqs = element_pq_3ph_per_terminal()
-        p, q = pqs[0] if pqs else (0.0, 0.0)
-        if bus in P_inj:
-            P_inj[bus] += -p
-            Q_inj[bus] += -q
+    # Capacitors (reactive injections) -- legacy convention only.  Under the
+    # "ybus" convention fixed shunts stay in Ybus (MATPOWER makeSbus), so their
+    # powers must not appear in the injection measurements.
+    if convention == SHUNT_CONVENTION_LEGACY:
+        for name in Capacitors.AllNames() or []:
+            Capacitors.Name(name)
+            if not _active_element_enabled():
+                continue
+            buses_el = dss.CktElement.BusNames()
+            bus = buses_el[0].split(".")[0].lower()
+            pqs = element_pq_3ph_per_terminal()
+            p, q = pqs[0] if pqs else (0.0, 0.0)
+            if bus in P_inj:
+                P_inj[bus] += -p
+                Q_inj[bus] += -q
+    else:
+        assert convention == SHUNT_CONVENTION_YBUS
 
     # Bus voltages: phase-1 VLN, per-unit
     Vm = []

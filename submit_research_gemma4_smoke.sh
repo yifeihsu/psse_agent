@@ -22,6 +22,7 @@
 #SBATCH --error=gemma4_research_smoke_%j.err
 
 set -Eeuo pipefail
+EPISODE_MAX_STEPS=${EPISODE_MAX_STEPS:-40}
 
 MODEL_CHOICE="${1:?usage: sbatch submit_research_gemma4_smoke.sh e4b|12b}"
 case "$MODEL_CHOICE" in
@@ -168,5 +169,5 @@ python -m psse_env.sft research-smoke \
   --lora-rank 16 \
   --lora-alpha 16 \
   --closed-loop-scenarios 3 \
-  --closed-loop-max-steps 8 \
+  --closed-loop-max-steps "$EPISODE_MAX_STEPS" \
   --seed 20260720

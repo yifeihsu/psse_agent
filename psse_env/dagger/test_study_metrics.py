@@ -11,6 +11,9 @@ from typing import Any
 
 import pytest
 
+from psse_env.dagger.study_manifest import DEFAULT_STUDY_MANIFEST
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT
+
 from psse_env.actions import (
     ASK_FOR_MORE_EVIDENCE,
     COMMIT_STATE,
@@ -161,11 +164,7 @@ def _coordinated_trace_state_substitution(
     return original, first_before_hash
 
 
-STUDY_MANIFEST_PAYLOAD = json.loads(
-    (
-        Path(__file__).resolve().parent / "studies" / "dagger_multiseed_study_v1.json"
-    ).read_text(encoding="utf-8")
-)
+STUDY_MANIFEST_PAYLOAD = json.loads(DEFAULT_STUDY_MANIFEST.read_text(encoding="utf-8"))
 OBJECTIVE_THRESHOLDS = STUDY_MANIFEST_PAYLOAD["objective_thresholds"]
 COMPARISON_POLICY = STUDY_MANIFEST_PAYLOAD["comparison_policy"]
 
@@ -672,7 +671,7 @@ def _episode(
     target_family: str = "measurement",
     accepted_target: int | None = None,
     trace: list[dict[str, Any]] | None = None,
-    max_steps: int = 24,
+    max_steps: int = DEFAULT_EPISODE_ACTION_LIMIT,
 ) -> dict[str, Any]:
     true_targets = {
         "measurement": [],
@@ -776,7 +775,7 @@ def _episode(
 
 
 def _artifact(
-    episodes: list[dict[str, Any]], *, model: str, max_steps: int = 24
+    episodes: list[dict[str, Any]], *, model: str, max_steps: int = DEFAULT_EPISODE_ACTION_LIMIT
 ) -> dict[str, Any]:
     cleaned = []
     for episode in episodes:

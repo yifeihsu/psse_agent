@@ -147,3 +147,7 @@ reported as conditional practical-cohort results, with proposal/rejection
 counts, phase/asset coverage, and a separate boundary evaluation. A higher
 score on this stronger cohort is not an algorithmic improvement on the old
 unfiltered distribution.
+
+## Physical resistance update (2026-09-20)
+
+Historical HIF pu values and unmarked `r_hif_ohm` labels in this document describe the normalized 1 kV model. New physical-ohm corpora use local voltage bases and explicit measurement conventions. See [the reconfiguration and fresh results](ieee14_hif_legacy_reconfiguration_20260919.md); old corpora and historical measurements remain unchanged.

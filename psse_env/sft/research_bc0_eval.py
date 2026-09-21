@@ -20,6 +20,7 @@ from psse_env.dagger.release_audit import (
     validate_post_correction_handoff_assessment,
 )
 from psse_env.research_models import GEMMA4_12B
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT
 
 from .gates import GateError, load_jsonl
 from .provenance import file_sha256, stable_json_sha256
@@ -28,7 +29,7 @@ from .provenance import file_sha256, stable_json_sha256
 RESEARCH_BC0_EVAL_CONTRACT = "research_gemma4_12b_bc0_baseline_v2"
 REQUIRED_MAX_INPUT_TOKENS = 32768
 DEFAULT_SEED = 20260720
-DEFAULT_MAX_STEPS = 24
+DEFAULT_MAX_STEPS = DEFAULT_EPISODE_ACTION_LIMIT
 DEFAULT_CANDIDATE_MULTIPLIER = 3
 DEFAULT_D1_PLAN = {
     "measurement+parameter": 6,

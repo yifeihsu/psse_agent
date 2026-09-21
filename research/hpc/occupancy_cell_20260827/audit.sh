@@ -1,5 +1,6 @@
 #!/bin/bash
 set -Eeuo pipefail
+EPISODE_MAX_STEPS=${EPISODE_MAX_STEPS:-40}
 
 : "${CELL_CONFIG:?set CELL_CONFIG}"
 : "${CELL_CONFIG_SHA256:?set CELL_CONFIG_SHA256}"
@@ -47,7 +48,7 @@ FULL="$ATTEMPT/physical_audit.full.json"
 SUMMARY="$ATTEMPT/physical_audit.summary.json"
 "$CELL_PYTHON" -m research.physical_outcome_audit --scenarios "$SCENARIOS" \
   --evaluation "occupancy-cell-$CELL_ARM=$EVALUATION" --output "$FULL" \
-  --summary-output "$SUMMARY" --max-steps 24 > "$ATTEMPT/audit_console.json"
+  --summary-output "$SUMMARY" --max-steps "$EPISODE_MAX_STEPS" > "$ATTEMPT/audit_console.json"
 "$CELL_PYTHON" "$SCRIPT_DIR/build.py" gate-audit --config "$CELL_CONFIG" \
   --expected-config-sha "$CELL_CONFIG_SHA256" --arm "$CELL_ARM" \
   --parent-job "$CELL_PARENT_JOB_ID" --full "$FULL" --summary "$SUMMARY" \

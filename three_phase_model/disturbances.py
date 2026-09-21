@@ -18,6 +18,7 @@ import numpy as np
 
 from .runtime import solve
 from .validation import _element, _yprim
+from .voltage_bases import hif_resistance_class, hif_resistance_spec, impedance_base_ohm
 
 
 def _matrix(values: np.ndarray) -> str:
@@ -36,6 +37,17 @@ def _unpair(values: Any) -> np.ndarray:
 
 def _bus(name: str) -> str:
     return str(name).split(".", 1)[0].lower()
+
+
+def _registry_voltage_bases(registry: Mapping[str, Any]) -> dict[str, float]:
+    """Read physical bus bases from the registry, never the slack reference base."""
+    result = {}
+    for row in registry["buses"]:
+        name, kv = _bus(row["dss_bus"]), float(row["kv_ll"])
+        if name in result or not math.isfinite(kv) or kv <= 0:
+            raise ValueError("Registry buses require unique names and positive finite voltage bases")
+        result[name] = kv
+    return result
 
 
 def _node_voltage_snapshot(dss: Any) -> dict[str, complex]:
@@ -90,20 +102,32 @@ def _grounded_stamp(element: Mapping[str, Any], primitive: np.ndarray, buses: li
 
 
 def eligible_hif_branch_rows(registry: Mapping[str, Any]) -> tuple[int, ...]:
-    """Active line rows only; TAP=1 transformer assets remain ineligible."""
+    """Active same-voltage lines only, regardless of a source branch's TAP flag."""
+    _registry_voltage_bases(registry)
+    kv = {int(row["external_bus"]): float(row["kv_ll"]) for row in registry["buses"]}
     return tuple(int(row["branch_row0"]) for row in registry["branches"]
-                 if str(row["dss_element"]).lower().startswith("line.") and row["status"] == 1)
+                 if str(row["dss_element"]).lower().startswith("line.") and row["status"] == 1
+                 and math.isclose(kv[int(row["from_bus"])], kv[int(row["to_bus"])],
+                                  rel_tol=1e-12, abs_tol=0))
 
 
 def inject_midspan_hif(
     dss: Any, registry: Mapping[str, Any], assumptions: Mapping[str, Any], *,
     branch_row0: int, alpha: float = 0.5, phase: int = 1,
-    resistance_pu: float = 10.0, enabled: bool = True,
+    resistance_pu: float | None = None, resistance_ohm: float | None = None,
+    enabled: bool = True,
 ) -> dict[str, Any]:
     """Install and solve one midpoint phase-to-ground resistor; return a receipt.
 
-    ``alpha`` is measured from the canonical from-terminal. Resistance uses
-    Zbase = kV_LL**2 / MVA_three_phase. The receipt's ``branch_overrides`` is
+    ``alpha`` is measured from the canonical from-terminal. Supply resistance
+    in exactly one unit. Omitting both is accepted ONLY on a uniform registry
+    (every bus shares one ``kv_ll``, i.e. the legacy normalized model), where
+    the historical 10 pu default is retained; on a multi-voltage registry the
+    default would silently mean a different physical resistance on every line
+    (476 ohm at 69 kV, 19.04 ohm at 13.8 kV), so a ``ValueError`` is raised
+    before any circuit mutation. Zbase = local endpoint kV_LL**2 /
+    MVA_three_phase. The receipt records both units, the local bases and the
+    physical-ohm ``resistance_class``. The receipt's ``branch_overrides`` is
     directly consumable by the registry-driven measurement extractor.
     ``enabled=False`` installs the exactly equivalent no-fault split control.
     """
@@ -113,24 +137,36 @@ def inject_midspan_hif(
         raise ValueError("phase must be one of 1, 2, 3")
     if not isinstance(enabled, bool):
         raise ValueError("enabled must be boolean")
-    alpha, resistance_pu = float(alpha), float(resistance_pu)
+    alpha = float(alpha)
     if not math.isfinite(alpha) or not 0 < alpha < 1:
         raise ValueError("alpha must be finite and strictly between zero and one")
-    if not math.isfinite(resistance_pu) or resistance_pu <= 0:
-        raise ValueError("resistance_pu must be finite and positive")
+    if resistance_pu is not None and resistance_ohm is not None:
+        raise ValueError("Supply exactly one resistance unit: resistance_pu or resistance_ohm")
+    resistance_defaulted = resistance_pu is None and resistance_ohm is None
+    if resistance_defaulted:
+        registry_kv = list(_registry_voltage_bases(registry).values())
+        if not all(math.isclose(kv, registry_kv[0], rel_tol=1e-12, abs_tol=0) for kv in registry_kv):
+            raise ValueError("resistance_ohm or resistance_pu is required for a multi-voltage registry")
+    resistance_input_unit = "ohm" if resistance_ohm is not None else "pu"
+    resistance_value = resistance_ohm if resistance_ohm is not None else (
+        10.0 if resistance_pu is None else resistance_pu)
+    if isinstance(resistance_value, (bool, np.bool_)):
+        raise ValueError("Resistance must be finite and positive, not boolean")
+    resistance_value = float(resistance_value)
+    if not math.isfinite(resistance_value) or resistance_value <= 0:
+        raise ValueError("Resistance must be finite and positive")
     matches = [row for row in registry["branches"] if row["branch_row0"] == branch_row0]
     if len(matches) != 1 or branch_row0 not in eligible_hif_branch_rows(registry):
-        raise ValueError("Midspan HIF requires one active line asset; transformers are unsupported")
+        raise ValueError("Midspan HIF requires one active same-voltage line asset; transformers are unsupported")
     branch = matches[0]
     by_bus = {row["external_bus"]: row for row in registry["buses"]}
     from_bus = str(by_bus[branch["from_bus"]]["dss_bus"]).lower()
     to_bus = str(by_bus[branch["to_bus"]]["dss_bus"]).lower()
-    kv, base = float(assumptions["base_kv_ll"]), float(assumptions["base_mva"])
+    voltage_bases = _registry_voltage_bases(registry)
+    kv, base = voltage_bases[from_bus], float(assumptions["base_mva"])
     frequency = float(assumptions["frequency_hz"])
     if not np.isfinite([kv, base, frequency]).all() or min(kv, base, frequency) <= 0:
         raise ValueError("Voltage, power and frequency bases must be finite and positive")
-    if any(float(by_bus[number]["kv_ll"]) != kv for number in (branch["from_bus"], branch["to_bus"])):
-        raise ValueError("A uniform declared voltage base is required at both endpoints")
     if not math.isclose(float(dss.Solution.Frequency()), frequency, rel_tol=0, abs_tol=1e-9):
         raise ValueError("The compiled circuit frequency disagrees with assumptions")
     original = str(branch["dss_element"])
@@ -161,8 +197,11 @@ def inject_midspan_hif(
         if hidden not in bus_names and all(name.lower() not in names for name in (segment_from, segment_to, fault)):
             break
         ordinal += 1
-    zbase = kv * kv / base
-    resistance_ohm = resistance_pu * zbase
+    zbase = impedance_base_ohm(kv, base)
+    resistance_ohm = resistance_value if resistance_input_unit == "ohm" else resistance_value * zbase
+    resistance_pu = resistance_ohm / zbase
+    resistance_spec = hif_resistance_spec(resistance_ohm, kv, base)
+    voltage_bases[hidden] = kv
     zero = _matrix(np.zeros((3, 3)))
     commands = [f"Edit {original} Enabled=no"]
     # Like retains the declared length units and line-frequency model. Setting
@@ -218,6 +257,15 @@ def inject_midspan_hif(
         "line_index1": int(branch_row0) + 1, "from_bus": branch["from_bus"], "to_bus": branch["to_bus"],
         "original_element": original, "hidden_bus": hidden, "phase": int(phase), "alpha": alpha,
         "resistance_pu": resistance_pu, "resistance_ohm": resistance_ohm, "zbase_ohm": zbase,
+        "resistance_input_unit": resistance_input_unit,
+        "resistance_defaulted": resistance_defaulted,
+        # Physical-ohm class of the engine resistor; on a normalized 1 kV base
+        # the ohms are model ohms, so the class is only physical for declared bases.
+        "resistance_class": hif_resistance_class(resistance_ohm),
+        "resistance_class_scope": "classification of resistance_ohm on the registry's declared local base",
+        "local_base_kv_ll": kv, "local_voltage_base_ln_v": kv * 1000 / math.sqrt(3),
+        "local_current_base_a": base * 1000 / (math.sqrt(3) * kv), "base_mva": base,
+        "resistance_physical_spec": resistance_spec,
         "fault_element": fault, "fault_enabled": enabled, "restored": False,
         "segments": {"from": segment_from, "to": segment_to}, "external_terminals": copy.deepcopy(external),
         "branch_overrides": {branch["asset_id"]: copy.deepcopy(external)},
@@ -239,9 +287,14 @@ def inject_midspan_hif(
             dss.Text.Command(command)
         _solve_from_node_voltages(dss, numerical_seeds)
         after = _node_voltage_snapshot(dss)
-        null_deviation = max(abs(after[name] - value) for name, value in healthy_voltages.items()) / (kv * 1000 / math.sqrt(3))
+        null_deviation = max(abs(after[name] - value) / (voltage_bases[_bus(name)] * 1000 / math.sqrt(3))
+                             for name, value in healthy_voltages.items() if _bus(name) in voltage_bases)
+        hidden_deviation = max(abs(after[f"{hidden}.{node}"] - numerical_seeds[f"{hidden}.{node}"])
+                               / (kv * 1000 / math.sqrt(3)) for node in (1, 2, 3))
         receipt["numerical_initialization"]["no_fault_external_voltage_max_deviation_pu"] = null_deviation
-        if null_deviation > 1e-6:
+        receipt["numerical_initialization"]["no_fault_hidden_voltage_max_deviation_pu"] = hidden_deviation
+        receipt["numerical_initialization"]["voltage_normalization"] = "each_node_declared_local_phase_voltage_base"
+        if max(null_deviation, hidden_deviation) > 1e-6:
             raise RuntimeError("No-fault split converged away from the preceding healthy operating solution")
         if enabled:
             before_fault = _node_voltage_snapshot(dss)
@@ -297,8 +350,16 @@ def audit_disturbed_circuit(
     """
     if not math.isfinite(tolerance_pu) or tolerance_pu <= 0:
         raise ValueError("tolerance_pu must be finite and positive")
-    kv, base = float(assumptions["base_kv_ll"]), float(assumptions["base_mva"])
-    ibase, sbase = base * 1000 / (math.sqrt(3) * kv), base * 1e6
+    base = float(assumptions["base_mva"])
+    if not math.isfinite(base) or base <= 0:
+        raise ValueError("Power base must be finite and positive")
+    voltage_bases = _registry_voltage_bases(registry)
+    endpoint_bases = [voltage_bases[_bus(name)] for name in receipt["original_endpoint_bus_names"]]
+    if not math.isclose(*endpoint_bases, rel_tol=1e-12, abs_tol=0):
+        raise ValueError("HIF split endpoints must have the same voltage base")
+    voltage_bases[_bus(receipt["hidden_bus"])] = endpoint_bases[0]
+    current_bases = {name: base * 1000 / (math.sqrt(3) * kv) for name, kv in voltage_bases.items()}
+    sbase = base * 1e6
     elements = {name.lower(): _element(dss, name) for name in dss.Circuit.AllElementNames()}
     active = {name: element for name, element in elements.items() if element["enabled"]}
     expected = {str(registry["source"]["element"]).lower()}
@@ -336,15 +397,18 @@ def audit_disturbed_circuit(
                 if node:
                     kcl[(_bus(bus), node)] += element["currents"][index]
         if name.startswith(("line.", "transformer.", "capacitor.", "reactor.", "fault.")):
-            passive_error = max(passive_error, float(np.max(np.abs(element["currents"] - _yprim(dss, element) @ element["volts"]))))
-    check("all_active_phase_node_kcl", max(map(abs, kcl.values()), default=0.0) / ibase)
-    check("active_passive_primitive_equations", passive_error / ibase)
+            terminal_bases = np.repeat([current_bases[_bus(bus)] for bus in element["buses"]], element["ncond"])
+            passive_error = max(passive_error, float(np.max(
+                np.abs(element["currents"] - _yprim(dss, element) @ element["volts"]) / terminal_bases)))
+    check("all_active_phase_node_kcl", max((abs(value) / current_bases[bus]
+                                            for (bus, _), value in kcl.items()), default=0.0))
+    check("active_passive_primitive_equations", passive_error)
     check("network_complex_power_balance", abs(power_sum) / sbase)
     fault = elements[receipt["fault_element"].lower()]
     if fault["enabled"]:
         voltage, current = complex(fault["volts"][0]), complex(fault["currents"][0])
         resistance = float(receipt["resistance_ohm"])
-        check("fault_ohms_law", abs(current - voltage / resistance) / ibase)
+        check("fault_ohms_law", abs(current - voltage / resistance) / current_bases[_bus(receipt["hidden_bus"])])
         check("fault_resistive_power", abs(sum(fault["powers_kva"]) * 1000 - abs(voltage)**2 / resistance) / sbase)
     else:
         voltage, current = 0j, 0j
@@ -359,14 +423,20 @@ def audit_disturbed_circuit(
             element = elements[name.lower()]
             assembled += _grounded_stamp(element, _yprim(dss, element), buses)
         reduced = assembled[:6, :6] - assembled[:6, 6:] @ np.linalg.solve(assembled[6:, 6:], assembled[6:, :6])
-        check("no_fault_split_full_abc_admittance", float(np.max(np.abs(reduced - _unpair(receipt["original_terminal_admittance_siemens"])))) * kv * kv / base)
+        check("no_fault_split_full_abc_admittance", float(np.max(np.abs(reduced - _unpair(receipt["original_terminal_admittance_siemens"]))))
+              * impedance_base_ohm(endpoint_bases[0], base))
     else:
         original = elements[receipt["original_element"].lower()]
         actual = _grounded_stamp(original, _yprim(dss, original), receipt["original_endpoint_bus_names"])
-        check("restored_original_full_abc_admittance", float(np.max(np.abs(actual - _unpair(receipt["original_terminal_admittance_siemens"])))) * kv * kv / base)
+        check("restored_original_full_abc_admittance", float(np.max(np.abs(actual - _unpair(receipt["original_terminal_admittance_siemens"]))))
+              * impedance_base_ohm(endpoint_bases[0], base))
     failed = [name for name, result in checks.items() if not result["passed"]]
     return {"contract": "full_phase_circuit_resistive_hif_equations_v1", "passed": not failed,
             "failed_checks": failed, "checks": checks, "active_element_count": len(active),
             "active_phase_node_count": len(kcl), "hidden_bus": receipt["hidden_bus"],
             "fault_enabled": fault["enabled"], "fault_current_a": [current.real, current.imag],
-            "fault_voltage_v": [voltage.real, voltage.imag], "resistance_ohm": receipt["resistance_ohm"]}
+            "fault_voltage_v": [voltage.real, voltage.imag], "resistance_ohm": receipt["resistance_ohm"],
+            "fault_real_power_w": float((voltage * current.conjugate()).real),
+            "local_base_kv_ll": endpoint_bases[0],
+            "normalization": "per_node_and_terminal_local_voltage_and_current_bases_shared_three_phase_power_base",
+            "node_current_bases_a": current_bases}

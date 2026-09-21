@@ -29,7 +29,7 @@ SPLITS = ("train", "validation", "calibration", "test")
 ROW_KEYS = {
     "case", "z", "parent_id", "families", "severity", "split", "window_id",
     "measurement_sigma", "solver_settings", "measurement_convention",
-    "measurement_kind", "noise_replicates", "noise_seed", "offline_metadata",
+    "measurement_kind", "noise_replicates", "noise_seed", "noise_group_id", "offline_metadata",
 }
 
 
@@ -115,6 +115,10 @@ def load_manifest(path: str | Path) -> list[dict[str, Any]]:
         row["labels"] = make_labels(row["families"])
         row["severity"] = str(row.get("severity", "unspecified"))
         row["window_id"] = str(row.get("window_id", content_hash(row["z"])))
+        if "noise_group_id" in row and (
+            not isinstance(row["noise_group_id"], str) or not row["noise_group_id"].strip()
+        ):
+            raise ValueError("noise_group_id must be a nonempty string when supplied")
         if row.get("split") not in (None, *SPLITS):
             raise ValueError("split must be train, validation, calibration, or test")
         records.append(row)
@@ -270,6 +274,7 @@ def prepare_corpus(manifest: str | Path, *, cache_dir: str | Path | None = None,
             if progress:
                 print(f"graphs={completed} cached={hits} invalid={len(invalid)} elapsed_s={time.monotonic()-started:.1f}", flush=True)
 
+    noise_groups = {}
     for row in records:
         case, z = row["case"], np.asarray(row["z"], dtype=np.float64)
         if z.ndim != 1 or not np.all(np.isfinite(z)):
@@ -284,12 +289,21 @@ def prepare_corpus(manifest: str | Path, *, cache_dir: str | Path | None = None,
         kind = row.get("measurement_kind", "observed")
         if kind not in ("observed", "noiseless_mean"):
             raise ValueError("measurement_kind must be observed or noiseless_mean")
-        if kind == "observed" and (reps != 1 or "noise_seed" in row):
+        if kind == "observed" and (reps != 1 or "noise_seed" in row or "noise_group_id" in row):
             raise ValueError("fresh noise requires explicitly declared noiseless_mean measurements")
         if kind == "noiseless_mean" and ("measurement_sigma" not in row or "noise_seed" not in row):
             raise ValueError("noise generation requires explicit measurement_sigma and noise_seed")
-        # Stable per-window stream; family/severity labels never seed noise.
-        rng_seed = int(content_hash({"seed": row.get("noise_seed", 0), "parent": row["parent_id"], "window": row["window_id"]})[:16], 16)
+        # An explicit within-parent group permits paired diagnostic arms with
+        # distinct sample identities but the same standardized Gaussian draw.
+        # With no group the historical per-window stream is exactly preserved.
+        noise_identity = row.get("noise_group_id", row["window_id"])
+        if "noise_group_id" in row:
+            group_key = (row["parent_id"], noise_identity)
+            group_contract = (row["noise_seed"], reps, z.size)
+            if group_key in noise_groups and noise_groups[group_key] != group_contract:
+                raise ValueError("paired noise group disagrees on seed, replicate count, or sensor dimension")
+            noise_groups[group_key] = group_contract
+        rng_seed = int(content_hash({"seed": row.get("noise_seed", 0), "parent": row["parent_id"], "window": noise_identity})[:16], 16)
         rng = np.random.default_rng(rng_seed)
         settings = {"max_it": 30, "tol": 1e-8, **row.get("solver_settings", {})}
         if set(settings) != {"max_it", "tol"}:

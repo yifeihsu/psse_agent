@@ -329,3 +329,7 @@ its zero-sequence relay flag by default.
 - `artifacts/measurements/out_measurements_imbalance_currents_20260903/` (220 rows, `branch_current_localization_report.json`)
 - `artifacts/measurements/hif_multiscan_currents_17x10_20260903/` (17 x 10 scans, `quality_report.json`, `branch_current_localization_report.json`)
 - `artifacts/measurements/hif_multiscan_currents_train_85x10_20260903/` (85 x 10 scans, seed 20260904, `quality_report.json`, `branch_current_localization_report.json`)
+
+## Physical resistance update (2026-09-20)
+
+Historical HIF pu values and unmarked `r_hif_ohm` labels in this document describe the normalized 1 kV model. New physical-ohm corpora use local voltage bases and explicit measurement conventions. See [the reconfiguration and fresh results](ieee14_hif_legacy_reconfiguration_20260919.md); old corpora and historical measurements remain unchanged.

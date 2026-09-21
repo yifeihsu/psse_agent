@@ -88,6 +88,33 @@ def test_split_null_fault_ohms_law_and_full_restoration(model, row, alpha, phase
         set_hif_enabled(dss, receipt, True)
 
 
+def test_uniform_case57_registry_keeps_ten_pu_default_and_multivoltage_copy_refuses_it(model):
+    # case57 is exported on the legacy uniform normalized base: every bus shares one kv_ll,
+    # so omitting the resistance still means the historical 10 pu (0.1 model-ohm).
+    registry = model["registry"]
+    assert len({float(bus["kv_ll"]) for bus in registry["buses"]}) == 1
+    dss = _engine(model)
+    receipt = inject_midspan_hif(dss, registry, model["assumptions"], branch_row0=0, enabled=False)
+    assert receipt["resistance_defaulted"] and receipt["resistance_input_unit"] == "pu"
+    assert receipt["resistance_pu"] == pytest.approx(10)
+    assert receipt["resistance_ohm"] == pytest.approx(0.1)
+    assert receipt["resistance_class"] == "low_resistance_fault"
+    assert "declared local base" in receipt["resistance_class_scope"]
+    json.dumps(receipt, allow_nan=False)
+    restore_midspan_hif(dss, receipt)
+    # A registry with more than one voltage base must be told the resistance unit.
+    mixed = copy.deepcopy(registry)
+    mixed["buses"][-1]["kv_ll"] = 2.0 * float(mixed["buses"][-1]["kv_ll"])
+    dss = _engine(model)
+    before = dss.Circuit.AllElementNames()
+    with pytest.raises(ValueError, match="resistance_ohm or resistance_pu is required for a multi-voltage registry"):
+        inject_midspan_hif(dss, mixed, model["assumptions"], branch_row0=0)
+    assert dss.Circuit.AllElementNames() == before
+    explicit = inject_midspan_hif(dss, mixed, model["assumptions"], branch_row0=0, resistance_pu=10, enabled=False)
+    assert not explicit["resistance_defaulted"] and explicit["resistance_pu"] == pytest.approx(10)
+    restore_midspan_hif(dss, explicit)
+
+
 def test_series_sections_retain_full_phase_coupling_and_no_internal_charging(model):
     dss = _engine(model)
     receipt = inject_midspan_hif(dss, model["registry"], model["assumptions"],

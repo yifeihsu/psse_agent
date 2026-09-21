@@ -14,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from IEEE_14_OpenDSS.measurement_convention import resolve_shunt_convention
 from three_phase_nlm.hif_parameter_estimator import estimate_hif_location_magnitude
 
 
@@ -63,8 +64,12 @@ def top_nlm_branch(rec: Mapping[str, Any]) -> int | None:
 
 
 def truth_power_kw(label: Mapping[str, Any]) -> float | None:
-    r_ohm = maybe_float(label.get("r_hif_ohm"))
-    kv_ln = maybe_float(label.get("kv_ln")) or (1.0 / math.sqrt(3.0))
+    from three_phase_nlm.hif_units import label_physical_ohm, label_local_kv_ll
+    r_ohm = label_physical_ohm(label)
+    kv_ll = label_local_kv_ll(label)
+    kv_ln = kv_ll / math.sqrt(3.0) if kv_ll else None
+    if kv_ln is None:
+        return None
     if r_ohm is None or r_ohm <= 0:
         return None
     return (float(kv_ln) * 1000.0) ** 2 / r_ohm / 1000.0
@@ -102,8 +107,10 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=20, help="Maximum HIF rows to evaluate; use 0 for all rows.")
     parser.add_argument("--alpha-grid-size", type=int, default=15)
     parser.add_argument("--r-grid-size", type=int, default=17)
-    parser.add_argument("--r-hif-pu-min", type=float, default=5.0)
-    parser.add_argument("--r-hif-pu-max", type=float, default=1000.0)
+    parser.add_argument("--r-hif-pu-min", type=float)
+    parser.add_argument("--r-hif-ohm-min", type=float)
+    parser.add_argument("--r-hif-pu-max", type=float)
+    parser.add_argument("--r-hif-ohm-max", type=float)
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--alpha-hit-tol", type=float, default=0.05)
     parser.add_argument("--r-rel-hit-tol", type=float, default=0.20)
@@ -166,8 +173,11 @@ def main() -> None:
             top_k=int(args.top_k),
             alpha_grid_size=int(args.alpha_grid_size),
             r_grid_size=int(args.r_grid_size),
-            r_hif_pu_min=float(args.r_hif_pu_min),
-            r_hif_pu_max=float(args.r_hif_pu_max),
+            r_hif_pu_min=args.r_hif_pu_min,
+            r_hif_ohm_min=args.r_hif_ohm_min,
+            r_hif_pu_max=args.r_hif_pu_max,
+            r_hif_ohm_max=args.r_hif_ohm_max,
+            shunt_convention=resolve_shunt_convention(None, rec),
         )
         if not payload.get("success"):
             estimator_failures += 1

@@ -17,6 +17,14 @@ from hif_search_limits import (
     HIF_R_GRID_SIZE_MIN,
 )
 
+# Default physical fault-resistance search box for the HIF estimators, in ohms
+# on the candidate line's local voltage base (kV_LL^2 / 100 MVA).  Literal
+# copies of ``three_phase_nlm.hif_units.DEFAULT_HIF_SEARCH_OHM`` so this
+# prompt-facing module stays free of OpenDSS imports; test_trace_protocol pins
+# the two values against each other.
+HIF_R_OHM_MIN_DEFAULT = 50.0
+HIF_R_OHM_MAX_DEFAULT = 5000.0
+
 
 MEASUREMENT_ORDER = ["Vm", "Pinj", "Qinj", "Pf", "Qf", "Pt", "Qt"]
 ERROR_FAMILIES = [
@@ -94,10 +102,15 @@ DECISION_SCHEMA_TEXT = {
             "alpha_from_from_bus": "estimated line fraction from the from bus",
             "distance_percent_from_from_bus": "estimated distance percent from the from bus",
             "phase": "optional estimated phase if the estimator searched or scored phases",
-            "r_hif_pu": "estimated HIF resistance in per unit",
-            "r_hif_ohm": "estimated HIF resistance in ohms",
+            "r_hif_pu": "estimated HIF resistance in per unit on the faulted line's local voltage base (kV_LL^2 / 100 MVA)",
+            "r_hif_ohm": "estimated HIF resistance in physical ohms on the faulted line's local voltage base",
+            "r_hif_model_ohm": "optional resistance injected into the normalized 1 kV OpenDSS model (r_hif_pu x 0.01 ohm); not a physical value",
+            "local_kv_ll": "optional line-to-line kV of the faulted line's voltage base (69, 13.8 or 18)",
+            "impedance_base_ohm": "optional impedance base kV_LL^2 / 100 MVA in ohms used for the pu <-> ohm conversion",
+            "resistance_basis": "optional local_line_kv_ll|from_bus_kv_ll_cross_voltage|explicit_kv_ll|normalized_model_kv1",
+            "resistance_class": "optional physical resistance class of r_hif_ohm, e.g. representative_hif|weak_hif|extreme_weak_hif",
             "p_hif_kw": "estimated HIF active power",
-            "i_hif_amp": "estimated HIF current",
+            "i_hif_amp": "estimated HIF current in physical amperes at the local voltage base",
             "localization_certainty": "well_separated|moderately_separated|ambiguous_top2",
             "parameter_identifiable": "boolean from multi-scan observability diagnostics when available",
             "observability_status": "optional full_rank_well_conditioned|full_rank_weakly_conditioned|rank_deficient|noise_averaging_only|model_mismatch_suspected|diagnostic_partial",
@@ -483,8 +496,32 @@ CANONICAL_POWER_TOOLS: list[dict[str, Any]] = [
                         "maximum": HIF_R_GRID_SIZE_MAX,
                         "default": HIF_R_GRID_SIZE_MAX,
                     },
-                    "r_hif_pu_min": {"type": "number", "default": 5.0},
-                    "r_hif_pu_max": {"type": "number", "default": 1000.0},
+                    "r_hif_ohm_min": {
+                        "type": "number",
+                        "default": HIF_R_OHM_MIN_DEFAULT,
+                        "description": (
+                            "Lower bound of the fault-resistance search in physical ohms on the "
+                            "candidate line's local voltage base (kV_LL^2/100 MVA)."
+                        ),
+                    },
+                    "r_hif_ohm_max": {
+                        "type": "number",
+                        "default": HIF_R_OHM_MAX_DEFAULT,
+                        "description": (
+                            "Upper bound of the fault-resistance search in physical ohms on the "
+                            "candidate line's local voltage base (kV_LL^2/100 MVA)."
+                        ),
+                    },
+                    "r_hif_pu_min": {
+                        "type": ["number", "null"],
+                        "default": None,
+                        "description": "optional override in local-base per unit; never combine with the ohm bounds",
+                    },
+                    "r_hif_pu_max": {
+                        "type": ["number", "null"],
+                        "default": None,
+                        "description": "optional override in local-base per unit; never combine with the ohm bounds",
+                    },
                 },
                 "required": ["case_path", "candidate_branch_row0"],
             },
@@ -544,8 +581,32 @@ CANONICAL_POWER_TOOLS: list[dict[str, Any]] = [
                         "maximum": HIF_R_GRID_SIZE_MAX,
                         "default": HIF_R_GRID_SIZE_MAX,
                     },
-                    "r_hif_pu_min": {"type": "number", "default": 5.0},
-                    "r_hif_pu_max": {"type": "number", "default": 1000.0},
+                    "r_hif_ohm_min": {
+                        "type": "number",
+                        "default": HIF_R_OHM_MIN_DEFAULT,
+                        "description": (
+                            "Lower bound of the fault-resistance search in physical ohms on the "
+                            "candidate line's local voltage base (kV_LL^2/100 MVA)."
+                        ),
+                    },
+                    "r_hif_ohm_max": {
+                        "type": "number",
+                        "default": HIF_R_OHM_MAX_DEFAULT,
+                        "description": (
+                            "Upper bound of the fault-resistance search in physical ohms on the "
+                            "candidate line's local voltage base (kV_LL^2/100 MVA)."
+                        ),
+                    },
+                    "r_hif_pu_min": {
+                        "type": ["number", "null"],
+                        "default": None,
+                        "description": "optional override in local-base per unit; never combine with the ohm bounds",
+                    },
+                    "r_hif_pu_max": {
+                        "type": ["number", "null"],
+                        "default": None,
+                        "description": "optional override in local-base per unit; never combine with the ohm bounds",
+                    },
                     "robust_loss": {
                         "type": "string",
                         "enum": ["linear", "soft_l1", "huber"],
@@ -624,7 +685,14 @@ def round_user_payload(value: Any) -> Any:
     if isinstance(value, list):
         return [round_user_payload(item) for item in value]
     if isinstance(value, dict):
-        return {key: round_user_payload(item) for key, item in value.items()}
+        # Sensor weights are numerical configuration, not display numbers.
+        # Rounding 1e-8 variances to six decimals destroys the covariance;
+        # harmonic component sigmas also need their full stored precision.
+        return {
+            key: copy.deepcopy(item) if any(token in str(key).lower() for token in ("sigma", "variance", "covariance"))
+            else round_user_payload(item)
+            for key, item in value.items()
+        }
     return value
 
 
@@ -654,7 +722,11 @@ def round_tool_result_payload(value: Any) -> Any:
     if isinstance(value, list):
         return [round_tool_result_payload(item) for item in value]
     if isinstance(value, dict):
-        return {key: round_tool_result_payload(item) for key, item in value.items()}
+        return {
+            key: copy.deepcopy(item) if any(token in str(key).lower() for token in ("sigma", "variance", "covariance"))
+            else round_tool_result_payload(item)
+            for key, item in value.items()
+        }
     return value
 
 
@@ -1233,6 +1305,11 @@ def summarize_hif_parameter_estimate_payload(tool_payload: Mapping[str, Any]) ->
         },
         "top_parameter_candidates": compact_candidates,
     }
+    for key in ("r_hif_model_ohm", "local_kv_ll", "impedance_base_ohm", "resistance_basis", "resistance_class", "voltage_base_profile", "r_hif_ohm_range", "resistance_units", "i_hif_amp_range"):
+        if key in estimated:
+            summary["estimated"][key] = estimated[key]
+    search = tool_payload.get("search") or {}
+    summary["search"] = {key: search[key] for key in ("r_hif_pu_min", "r_hif_pu_max", "r_hif_ohm_min", "r_hif_ohm_max", "kv_ll", "impedance_base_ohm", "resistance_basis", "voltage_base_profile", "box_source", "shunt_convention", "resistance_search") if key in search}
     if isinstance(tool_payload.get("phase_scores"), Mapping):
         summary["phase_scores"] = tool_payload.get("phase_scores")
     if tool_payload.get("error"):
@@ -1490,6 +1567,16 @@ def hydrate_tool_arguments(
             return nested_tool_context.get(name)
         return None
 
+    def bind_noise_argument(key: str, value: Any) -> None:
+        if value is None:
+            return
+        if key in hydrated and hydrated[key] is not None:
+            supplied, declared = np.asarray(hydrated[key]), np.asarray(value)
+            if supplied.shape != declared.shape or not np.allclose(supplied, declared, rtol=1e-12, atol=0):
+                raise ValueError(f"{key} conflicts with the acquired measurement covariance")
+        hydrated[key] = copy.deepcopy(value)
+        notes.append(f"hydrated_{key}_from_measurement_context")
+
     latest_payload = latest_user_payload(messages)
 
     if isinstance(latest_payload, dict):
@@ -1498,7 +1585,7 @@ def hydrate_tool_arguments(
             hydrated["case_path"] = user_case
             notes.append("filled_case_path_from_user")
 
-    if tool_name in {"wls_from_path", "correct_measurements_from_path"}:
+    if tool_name in {"wls_from_path", "wls_from_text", "correct_measurements_from_path", "correct_measurements_from_text"}:
         source = hidden.get("snapshot_context")
         source_from_hidden = isinstance(source, dict)
         if not source_from_hidden:
@@ -1509,6 +1596,16 @@ def hydrate_tool_arguments(
         if isinstance(source, dict) and source.get("case_path") and (source_from_hidden or not hydrated.get("case_path")):
             hydrated["case_path"] = source["case_path"]
             notes.append(f"hydrated_{tool_name}_case_path_from_snapshot")
+        if isinstance(source, dict):
+            sigma = source.get("sigma_z", source.get("measurement_sigma"))
+            if sigma is not None:
+                if tool_name.startswith("wls_"):
+                    bind_noise_argument("measurement_sigma", sigma)
+                else:
+                    bind_noise_argument("R_variances_full", np.square(np.asarray(sigma, dtype=float)).tolist())
+            exact = source.get("exact_measurement_indices", source.get("structural_zero_indices"))
+            if exact is not None:
+                bind_noise_argument("exact_measurement_indices", exact)
 
     if tool_name == "correct_parameters_from_path":
         source = hidden.get("parameter_context")
@@ -1525,6 +1622,9 @@ def hydrate_tool_arguments(
             if "initial_states" not in hydrated and isinstance(source.get("initial_states"), list):
                 hydrated["initial_states"] = source["initial_states"]
                 notes.append("hydrated_correct_parameters_initial_states")
+            sigma = source.get("sigma_z_scans", source.get("sigma_z"))
+            if sigma is not None:
+                bind_noise_argument("R_variances_full", np.square(np.asarray(sigma, dtype=float)).tolist())
 
     if tool_name == "run_hse_from_path":
         source = hidden.get("harmonic_context")
@@ -1563,6 +1663,8 @@ def hydrate_tool_arguments(
             source = latest_user_payload_with_keys(messages, ("z_obs",))
         if not isinstance(source, dict):
             source = {}
+        for key in ("sigma_z", "three_phase_sigma", "branch_current_sigma_pu"):
+            bind_noise_argument(key, source.get(key))
         if source.get("case_path") and (source_from_hidden or not hydrated.get("case_path")):
             hydrated["case_path"] = source["case_path"]
             notes.append("hydrated_hif_estimator_case_path")
@@ -1619,6 +1721,8 @@ def hydrate_tool_arguments(
             source = latest_user_payload_with_keys(messages, ("scan_window_path",))
         if not isinstance(source, dict):
             source = {}
+        bind_noise_argument("sigma_z", source.get("sigma_z"))
+        bind_noise_argument("branch_current_sigma_pu", source.get("branch_current_sigma_pu"))
         if "scan_window_path" not in hydrated and source.get("scan_window_path"):
             hydrated["scan_window_path"] = source["scan_window_path"]
             notes.append("hydrated_hif_multiscan_window_path")
@@ -1646,6 +1750,11 @@ def hydrate_tool_arguments(
         if "pristine_model_dir" not in hydrated and source.get("pristine_model_dir") is not None:
             hydrated["pristine_model_dir"] = source.get("pristine_model_dir")
             notes.append("hydrated_hif_multiscan_pristine_model_dir")
+
+    if tool_name in {"estimate_hif_location_magnitude_from_path", "estimate_hif_location_magnitude_multiscan_from_path"} and source.get("measurement_convention") is not None:
+        from IEEE_14_OpenDSS.measurement_convention import resolve_shunt_convention
+        hydrated["shunt_convention"] = resolve_shunt_convention(None, source)
+        notes.append("hydrated_hif_measurement_convention")
 
     if tool_name == "correct_topology_from_path":
         source = hidden.get("topology_context")

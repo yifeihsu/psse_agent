@@ -7,7 +7,9 @@ constants and reject out-of-budget values before any OpenDSS work begins.
 
 from __future__ import annotations
 
+import math
 import operator
+from numbers import Real
 from typing import Any
 
 
@@ -92,6 +94,59 @@ def validate_hif_search_limits(
     return alpha, resistance, scans
 
 
+def _optional_positive_float(value: Any, *, field: str) -> float | None:
+    """Return ``None`` or a finite positive float; booleans and strings are rejected."""
+
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ValueError(f"{field} must be a finite positive number, got {value!r}")
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0.0:
+        raise ValueError(f"{field} must be a finite positive number, got {value!r}")
+    return parsed
+
+
+def validate_hif_resistance_box(
+    *,
+    r_hif_pu_min: Any | None = None,
+    r_hif_pu_max: Any | None = None,
+    r_hif_ohm_min: Any | None = None,
+    r_hif_ohm_max: Any | None = None,
+) -> dict[str, float | None]:
+    """Validate a model-supplied HIF resistance search box without resolving it.
+
+    The box may be given in physical ohms (on the candidate line's local
+    voltage base) or in per unit, never both. Each unit needs both bounds,
+    every bound must be a finite positive number and ``min < max``. Nothing is
+    clamped or defaulted here: the estimators resolve an absent box against
+    their own defaults. Returns the validated bounds as floats (or ``None``).
+    """
+
+    pu_min = _optional_positive_float(r_hif_pu_min, field="r_hif_pu_min")
+    pu_max = _optional_positive_float(r_hif_pu_max, field="r_hif_pu_max")
+    ohm_min = _optional_positive_float(r_hif_ohm_min, field="r_hif_ohm_min")
+    ohm_max = _optional_positive_float(r_hif_ohm_max, field="r_hif_ohm_max")
+    pu_given = pu_min is not None or pu_max is not None
+    ohm_given = ohm_min is not None or ohm_max is not None
+    if pu_given and ohm_given:
+        raise ValueError("Supply the HIF resistance search box in ohms or in pu, not both")
+    if pu_given and (pu_min is None or pu_max is None):
+        raise ValueError("Both r_hif_pu_min and r_hif_pu_max are required")
+    if ohm_given and (ohm_min is None or ohm_max is None):
+        raise ValueError("Both r_hif_ohm_min and r_hif_ohm_max are required")
+    if pu_given and pu_max <= pu_min:
+        raise ValueError("Require 0 < r_hif_pu_min < r_hif_pu_max")
+    if ohm_given and ohm_max <= ohm_min:
+        raise ValueError("Require 0 < r_hif_ohm_min < r_hif_ohm_max")
+    return {
+        "r_hif_pu_min": pu_min,
+        "r_hif_pu_max": pu_max,
+        "r_hif_ohm_min": ohm_min,
+        "r_hif_ohm_max": ohm_max,
+    }
+
+
 __all__ = [
     "HIF_ALPHA_GRID_SIZE_MAX",
     "HIF_ALPHA_GRID_SIZE_MIN",
@@ -99,5 +154,6 @@ __all__ = [
     "HIF_MAX_SCANS_MIN",
     "HIF_R_GRID_SIZE_MAX",
     "HIF_R_GRID_SIZE_MIN",
+    "validate_hif_resistance_box",
     "validate_hif_search_limits",
 ]

@@ -137,7 +137,9 @@ def _load_python_case(case_path: str) -> Dict[str, Any]:
     return _parse_matpower_case(case_text)
 
 
-def _wls_json(case_path: str, z_list: List[float], *, include_screen_evidence: bool = False) -> Dict[str, Any]:  # pragma: no cover
+def _wls_json(case_path: str, z_list: List[float], *, include_screen_evidence: bool = False,
+              measurement_sigma: List[float] | None = None,
+              exact_measurement_indices: List[int] | None = None) -> Dict[str, Any]:  # pragma: no cover
     """
     Python equivalent of LagrangianM_singlephase(z, result, ind, bus_data).
     Bypasses MATLAB engine completely.
@@ -169,11 +171,17 @@ def _wls_json(case_path: str, z_list: List[float], *, include_screen_evidence: b
         raise ValueError(f"WLS input error: |z|={len(z_arr)}, expected {expN} (=3*nb + 4*nl).")
         
     try:
+        noise_options = {}
+        if measurement_sigma is not None:
+            noise_options["measurement_sigma"] = np.asarray(measurement_sigma, dtype=float)
+        if exact_measurement_indices:
+            noise_options["exact_measurement_indices"] = exact_measurement_indices
         details = lagrangian_port.lagrangian_m_singlephase_details(
             z=z_arr,
             result=ppc,
             ind=0,
             bus_data=bus_data,
+            **noise_options,
         )
 
         def _finite(value: Any) -> float | None:
@@ -185,6 +193,15 @@ def _wls_json(case_path: str, z_list: List[float], *, include_screen_evidence: b
 
         def _as_list(value: Any) -> List[float]:
             return value.tolist() if isinstance(value, np.ndarray) else list(value)
+
+        def _external_rows(value: Any) -> List[float]:
+            values = np.asarray(value, dtype=float)
+            rows = np.asarray(details.get("measurement_rows", np.arange(len(values))), dtype=int)
+            if len(values) == len(z_arr):
+                return values.tolist()
+            expanded = np.zeros(len(z_arr), dtype=float)
+            expanded[rows] = values
+            return expanded.tolist()
 
         # ``global_residual_sum`` is the classical WLS objective J = e' R^-1 e,
         # the quantity that follows chi^2(m - n) under clean Gaussian noise and
@@ -198,14 +215,17 @@ def _wls_json(case_path: str, z_list: List[float], *, include_screen_evidence: b
             "success": bool(details["success"]),
             "lambdaN": _as_list(details["lambdaN"]),
             "lambda_layout": "per_branch_R_X_interleaved",
-            "r": _as_list(details["r_norm"]),
-            "raw_residual": _as_list(details["raw_residual"]),
+            "r": _external_rows(details["r_norm"]),
+            "raw_residual": _external_rows(details["raw_residual"]),
             "wls_objective": wls_objective,
             "global_residual_sum": wls_objective,
             "sum_normalized_residual_sq": _finite(details["sum_normalized_residual_sq"]),
             "n_measurements": int(details["n_measurements"]),
             "n_states": int(details["n_states"]),
             "dof": int(details["dof"]),
+            "exact_measurement_indices": list(exact_measurement_indices or []),
+            "measurement_sigma": (list(measurement_sigma) if measurement_sigma is not None else
+                                  np.r_[np.full(nb, .001), np.full(2*nb + 4*nl, .01)].tolist()),
             "theta_est_rad": _as_list(details["theta_est_rad"]),
             "vm_est_pu": _as_list(details["vm_est_pu"]),
             "iterations": int(details["iterations"]),
@@ -238,6 +258,7 @@ def _meas_correction_json(
     max_correction_iterations: int = 2,
     error_tolerance: float = 1e-3,
     R_variances_full: List[float] | None = None,
+    exact_measurement_indices: List[int] | None = None,
 ) -> Dict[str, Any]:  # pragma: no cover
     """
     Measurement-error correction using Python lagrangian_correct_port.py
@@ -302,7 +323,153 @@ def _meas_correction_json(
     else:
         R_variances_full_arr = np.array(R_variances_full, dtype=float)
 
+    if (R_variances_full_arr.shape != (nz,) or not np.all(np.isfinite(R_variances_full_arr))
+            or np.any(R_variances_full_arr < 0)):
+        raise ValueError("R_variances_full must be a finite nonnegative full measurement vector")
+    exact_rows = np.asarray(exact_measurement_indices if exact_measurement_indices is not None else [])
+    if exact_rows.size:
+        if (exact_rows.ndim != 1 or not np.issubdtype(exact_rows.dtype, np.integer)
+                or np.issubdtype(exact_rows.dtype, np.bool_)):
+            raise ValueError("exact_measurement_indices must contain integer indices")
+        exact_rows = exact_rows.astype(int)
+        if len(set(exact_rows.tolist())) != len(exact_rows):
+            raise ValueError("exact_measurement_indices must not repeat a row")
+        if any(index in set(exact_rows.tolist()) for index in suspect_group_0):
+            raise ValueError("Correction targets must not include exact measurement constraints")
+    else:
+        exact_rows = np.array([], dtype=int)
+    if set(np.flatnonzero(R_variances_full_arr == 0).tolist()) != set(exact_rows.tolist()):
+        raise ValueError("Zero variances require exactly the declared exact_measurement_indices")
+
     try:
+        if exact_rows.size:
+            # Structural zero injections belong in KKT constraints. They must
+            # not be deleted or assigned a fictitious small sensor variance.
+            from tools.lagrangian_port import lagrangian_m_singlephase_details
+
+            if not np.all(np.isfinite(z_arr)):
+                raise ValueError("Exact-constraint correction requires finite observations")
+            if (isinstance(max_correction_iterations, bool)
+                    or int(max_correction_iterations) != max_correction_iterations
+                    or max_correction_iterations < 0):
+                raise ValueError("max_correction_iterations must be a nonnegative integer")
+            if not np.isfinite(error_tolerance) or error_tolerance < 0:
+                raise ValueError("error_tolerance must be finite and nonnegative")
+            group = np.asarray(sorted(set(suspect_group_0)), dtype=int)
+            current = z_arr.copy()
+            applied_count = 0
+            last_original = np.array([], dtype=float)
+            last_error = np.array([], dtype=float)
+            failure_reason = None
+            skipped_reason = "Correction not enabled or no group specified by options."
+
+            def solve_exact(values):
+                return lagrangian_m_singlephase_details(
+                    values, ppc, 0, bus_data,
+                    max_it=50, tol=1e-9,
+                    measurement_sigma=np.sqrt(R_variances_full_arr),
+                    exact_measurement_indices=exact_rows.tolist(),
+                )
+
+            details = solve_exact(current)
+            budget = int(max_correction_iterations) if enable_correction and group.size else 0
+            for _ in range(budget):
+                if not details["success"]:
+                    failure_reason = "constrained_wls_did_not_converge"
+                    break
+                measurement_rows = np.asarray(details["measurement_rows"], dtype=int)
+                local_by_external = {int(index): position for position, index in enumerate(measurement_rows)}
+                if any(int(index) not in local_by_external for index in group):
+                    raise ValueError("Correction target is absent from the stochastic measurement rows")
+                local_group = np.array([local_by_external[int(index)] for index in group], dtype=int)
+                omega = np.asarray(details["residual_covariance"], dtype=float)
+                omega_group = omega[np.ix_(local_group, local_group)]
+                # Check identifiability instead of selecting an arbitrary
+                # pseudoinverse repair for a rank-deficient target group.
+                singular_values = np.linalg.svd(omega_group, compute_uv=False)
+                if (not np.all(np.isfinite(omega_group)) or not singular_values.size
+                        or singular_values[0] <= 0 or singular_values[-1] <= 1e-12 * singular_values[0]):
+                    failure_reason = "rank_deficient_or_ill_conditioned_residual_covariance_group"
+                    skipped_reason = failure_reason
+                    break
+                residual_group = np.asarray(details["raw_residual"], dtype=float)[local_group]
+                estimated_error = R_variances_full_arr[group] * np.linalg.solve(omega_group, residual_group)
+                if not np.all(np.isfinite(estimated_error)):
+                    raise ValueError("Nonfinite grouped error estimate")
+                if float(np.linalg.norm(estimated_error)) <= float(error_tolerance):
+                    skipped_reason = "Estimated errors below tolerance."
+                    break
+                last_original = current[group].copy()
+                last_error = estimated_error.copy()
+                current[group] -= estimated_error
+                applied_count += 1
+                skipped_reason = "Max correction iterations reached."
+                # Every applied update is followed by a solve with the same
+                # covariance and exact physical constraints, including the last.
+                details = solve_exact(current)
+
+            if not details["success"]:
+                return {
+                    "success": False, "error": "constrained_wls_did_not_converge",
+                    "corrected_measurements": [], "applied_any_correction": False,
+                    "iterations_performed": applied_count,
+                    "suspect_group_zero_based": suspect_group_0,
+                    "exact_measurement_indices": exact_rows.tolist(),
+                    "z_corrected_info": {
+                        "applied_any_correction": False,
+                        "iterations_performed": applied_count,
+                        "skipped_reason": "Final constrained WLS failed; proposed updates discarded.",
+                    },
+                }
+            measurement_rows = np.asarray(details["measurement_rows"], dtype=int)
+            residual_raw = np.zeros(nz, dtype=float)
+            residual_norm = np.zeros(nz, dtype=float)
+            residual_raw[measurement_rows] = np.asarray(details["raw_residual"], dtype=float)
+            residual_norm[measurement_rows] = np.asarray(details["r_norm"], dtype=float)
+            # Exact rows have no normalized stochastic residual. Zero placeholders
+            # retain external indexing; actual constraint error is separate.
+            corrected_group = group if applied_count else np.array([], dtype=int)
+            total_error = z_arr[corrected_group] - current[corrected_group]
+            zci = {
+                "applied_any_correction": bool(applied_count),
+                "iterations_performed": applied_count,
+                "skipped_reason": skipped_reason,
+                "last_applied_error_norm": float(np.linalg.norm(last_error)) if applied_count else None,
+                "last_corrected_global_indices": (corrected_group + 1).tolist(),
+                "last_original_values": last_original.tolist(),
+                "last_estimated_errors": last_error.tolist(),
+                "last_corrected_values": current[corrected_group].tolist(),
+                "first_original_values": z_arr[corrected_group].tolist(),
+                "total_estimated_errors": total_error.tolist(),
+            }
+            summary = {
+                "success": bool(details["success"] and failure_reason is None),
+                "method": "group_correction_with_exact_injection_constraints",
+                "lambdaN": np.asarray(details["lambdaN"]).tolist(),
+                "r_norm": residual_norm.tolist(), "resid_raw": residual_raw.tolist(),
+                "measurement_rows": measurement_rows.tolist(),
+                "exact_measurement_indices": exact_rows.tolist(),
+                "constraint_residual": np.asarray(details["constraint_residual"]).tolist(),
+                "residual_index_space": "full_external_order_with_zero_placeholders_at_exact_rows",
+                "wls_objective": float(details["wls_objective"]),
+                "dof": int(details["dof"]),
+                "z_corrected_info": zci,
+                "corrected_measurements": [
+                    {"index1": int(index + 1), "index0": int(index),
+                     "corrected": float(current[index]), "original": float(z_arr[index]),
+                     "estimated_error": float(z_arr[index] - current[index])}
+                    for index in corrected_group
+                ],
+                "applied_any_correction": bool(applied_count),
+                "iterations_performed": applied_count,
+                "suspect_group_zero_based": suspect_group_0,
+            }
+            omega = np.asarray(details["residual_covariance"])
+            summary["Omega" if omega.size <= 4000 else "Omega_shape"] = omega.tolist() if omega.size <= 4000 else list(omega.shape)
+            if failure_reason is not None:
+                summary["error"] = failure_reason
+            return summary
+
         lambdaN, success, r_norm, Omega, final_resid_raw, z_corrected_info = \
             lagrangian_correct_port.lagrangian_m_correct(
                 z_in_full=z_arr,
@@ -511,6 +678,7 @@ def correct_measurements_from_path(
     max_correction_iterations: int = 2,
     error_tolerance: float = 1e-3,
     R_variances_full: List[float] | None = None,
+    exact_measurement_indices: List[int] | None = None,
 ) -> Dict[str, Any]:
     """
     Grouped measurement-error correction using the pure-Python Lagrangian
@@ -549,6 +717,7 @@ def correct_measurements_from_path(
             max_correction_iterations=max_correction_iterations,
             error_tolerance=error_tolerance,
             R_variances_full=R_variances_full,
+            exact_measurement_indices=exact_measurement_indices,
         )
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -565,13 +734,14 @@ def correct_measurements_from_text(
     max_correction_iterations: int = 2,
     error_tolerance: float = 1e-3,
     R_variances_full: List[float] | None = None,
+    exact_measurement_indices: List[int] | None = None,
 ) -> Dict[str, Any]:
     """
     Same as correct_measurements_from_path, but accepts inline case.m text.
     'case_name' must match the function name inside the .m.
     """
     path = _write_case_text(case_text, case_name)
-    return correct_measurements_from_path(
+    return correct_measurements_from_path.fn(
         case_path=str(path),
         z=z,
         suspect_group=suspect_group,
@@ -579,6 +749,7 @@ def correct_measurements_from_text(
         max_correction_iterations=max_correction_iterations,
         error_tolerance=error_tolerance,
         R_variances_full=R_variances_full,
+        exact_measurement_indices=exact_measurement_indices,
     )
 
 
@@ -721,6 +892,11 @@ def _run_hse_logic(
                 v_complex = complex(mag * math.cos(rad), mag * math.sin(rad))
                 
             sigma = float(m.get("sigma", 1e-4))
+            semantics = m.get("sigma_semantics", "per_component")
+            if semantics == "complex_rms":
+                sigma /= math.sqrt(2.0)
+            elif semantics != "per_component":
+                raise ValueError(f"Unsupported harmonic sigma semantics: {semantics}")
             
             grouped[h]["buses"].append(b_idx)
             grouped[h]["V"].append(v_complex)
@@ -853,6 +1029,7 @@ def _run_three_phase_nlm_logic(
     top_k: int = 5,
     scans: List[Dict[str, Any]] | None = None,
 ) -> Dict[str, Any]:
+    """Run the legacy bridge; r_hif_ohm is normalized 1 kV MODEL ohms."""
     try:
         import sys as _sys
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
@@ -924,10 +1101,17 @@ def _estimate_hif_location_magnitude_logic(
     top_k: int = 5,
     alpha_grid_size: int = 31,
     r_grid_size: int = 35,
-    r_hif_pu_min: float = 5.0,
-    r_hif_pu_max: float = 1000.0,
+    r_hif_pu_min: float | None = None,
+    r_hif_pu_max: float | None = None,
+    r_hif_ohm_min: float | None = None,
+    r_hif_ohm_max: float | None = None,
+    kv_ll: float | None = None,
+    shunt_convention: str | None = None,
+    resistance_search: str = "physical_ohm",
     three_phase_branch_currents: List[Dict[str, Any]] | None = None,
     branch_current_sigma_pu: float | None = None,
+    sigma_z: List[float] | None = None,
+    three_phase_sigma: float = 5e-3,
 ) -> Dict[str, Any]:
     try:
         import sys as _sys
@@ -954,10 +1138,17 @@ def _estimate_hif_location_magnitude_logic(
             top_k=int(top_k),
             alpha_grid_size=int(alpha_grid_size),
             r_grid_size=int(r_grid_size),
-            r_hif_pu_min=float(r_hif_pu_min),
-            r_hif_pu_max=float(r_hif_pu_max),
+            r_hif_pu_min=r_hif_pu_min,
+            r_hif_pu_max=r_hif_pu_max,
+            r_hif_ohm_min=r_hif_ohm_min,
+            r_hif_ohm_max=r_hif_ohm_max,
+            kv_ll=kv_ll,
+            shunt_convention=shunt_convention,
+            resistance_search=resistance_search,
             three_phase_branch_currents=three_phase_branch_currents,
             branch_current_sigma=sigma,
+            sigma_z=sigma_z,
+            three_phase_sigma=three_phase_sigma,
         )
     except Exception as e:
         return {"success": False, "error": f"HIF parameter estimator failed for {case_path}: {e}"}
@@ -978,8 +1169,13 @@ def _estimate_hif_location_magnitude_multiscan_logic(
     top_k: int = 5,
     alpha_grid_size: int = 31,
     r_grid_size: int = 35,
-    r_hif_pu_min: float = 5.0,
-    r_hif_pu_max: float = 1000.0,
+    r_hif_pu_min: float | None = None,
+    r_hif_pu_max: float | None = None,
+    r_hif_ohm_min: float | None = None,
+    r_hif_ohm_max: float | None = None,
+    kv_ll: float | None = None,
+    shunt_convention: str | None = None,
+    resistance_search: str = "physical_ohm",
     robust_loss: str = "soft_l1",
     smoothness_lambda: float = 0.10,
     branch_current_sigma_pu: float | None = None,
@@ -1022,8 +1218,13 @@ def _estimate_hif_location_magnitude_multiscan_logic(
             top_k=int(top_k),
             alpha_grid_size=int(alpha_grid_size),
             r_grid_size=int(r_grid_size),
-            r_hif_pu_min=float(r_hif_pu_min),
-            r_hif_pu_max=float(r_hif_pu_max),
+            r_hif_pu_min=r_hif_pu_min,
+            r_hif_pu_max=r_hif_pu_max,
+            r_hif_ohm_min=r_hif_ohm_min,
+            r_hif_ohm_max=r_hif_ohm_max,
+            kv_ll=kv_ll,
+            shunt_convention=shunt_convention,
+            resistance_search=resistance_search,
             robust_loss=robust_loss,
             smoothness_lambda=float(smoothness_lambda),
         )
@@ -1156,10 +1357,17 @@ def estimate_hif_location_magnitude_from_path(
     top_k: int = 5,
     alpha_grid_size: int = 31,
     r_grid_size: int = 35,
-    r_hif_pu_min: float = 5.0,
-    r_hif_pu_max: float = 1000.0,
+    r_hif_pu_min: float | None = None,
+    r_hif_pu_max: float | None = None,
+    r_hif_ohm_min: float | None = None,
+    r_hif_ohm_max: float | None = None,
+    kv_ll: float | None = None,
+    shunt_convention: str | None = None,
+    resistance_search: str = "physical_ohm",
     three_phase_branch_currents: List[Dict[str, Any]] | None = None,
     branch_current_sigma_pu: float | None = None,
+    sigma_z: List[float] | None = None,
+    three_phase_sigma: float = 5e-3,
 ) -> Dict[str, Any]:
     """
     Estimate HIF position and magnitude on a suspected IEEE-14 Line.* branch.
@@ -1183,8 +1391,15 @@ def estimate_hif_location_magnitude_from_path(
         r_grid_size=r_grid_size,
         r_hif_pu_min=r_hif_pu_min,
         r_hif_pu_max=r_hif_pu_max,
+        r_hif_ohm_min=r_hif_ohm_min,
+        r_hif_ohm_max=r_hif_ohm_max,
+        kv_ll=kv_ll,
+        shunt_convention=shunt_convention,
+        resistance_search=resistance_search,
         three_phase_branch_currents=three_phase_branch_currents,
         branch_current_sigma_pu=branch_current_sigma_pu,
+        sigma_z=sigma_z,
+        three_phase_sigma=three_phase_sigma,
     )
 
 
@@ -1204,8 +1419,13 @@ def estimate_hif_location_magnitude_multiscan_from_path(
     top_k: int = 5,
     alpha_grid_size: int = 31,
     r_grid_size: int = 35,
-    r_hif_pu_min: float = 5.0,
-    r_hif_pu_max: float = 1000.0,
+    r_hif_pu_min: float | None = None,
+    r_hif_pu_max: float | None = None,
+    r_hif_ohm_min: float | None = None,
+    r_hif_ohm_max: float | None = None,
+    kv_ll: float | None = None,
+    shunt_convention: str | None = None,
+    resistance_search: str = "physical_ohm",
     robust_loss: str = "soft_l1",
     smoothness_lambda: float = 0.10,
     branch_current_sigma_pu: float | None = None,
@@ -1227,6 +1447,11 @@ def estimate_hif_location_magnitude_multiscan_from_path(
         r_grid_size=r_grid_size,
         r_hif_pu_min=r_hif_pu_min,
         r_hif_pu_max=r_hif_pu_max,
+        r_hif_ohm_min=r_hif_ohm_min,
+        r_hif_ohm_max=r_hif_ohm_max,
+        kv_ll=kv_ll,
+        shunt_convention=shunt_convention,
+        resistance_search=resistance_search,
         robust_loss=robust_loss,
         smoothness_lambda=smoothness_lambda,
         branch_current_sigma_pu=branch_current_sigma_pu,
@@ -1320,13 +1545,17 @@ def correct_topology_from_path(
     return {
         "success": True,
         "z_corrected": z_corr.tolist(),
+        "z_corrected_role": "noiseless_model_prediction",
+        "z_corrected_noise_applied": False,
         "cb_name": cb_name,
         "old_status": None,  # not tracked here
         "new_status": ds_bool,
     }
 
 @mcp.tool(name="wls_from_path")
-def wls_from_path(*, case_path: str, z: List[float]) -> Dict[str, Any]:
+def wls_from_path(*, case_path: str, z: List[float],
+                  measurement_sigma: List[float] | None = None,
+                  exact_measurement_indices: List[int] | None = None) -> Dict[str, Any]:
     """
     Weighted least-squares state estimation with normalized Lagrange multipliers (WLS+NLM).
 
@@ -1344,16 +1573,20 @@ def wls_from_path(*, case_path: str, z: List[float]) -> Dict[str, Any]:
     - lambdaN: normalized multipliers (typically length 2*nl)
     Note: large diagnostic arrays (EA, lambda_vec) are omitted to reduce payload size.
     """
-    return _wls_json(case_path, z)
+    return _wls_json(case_path, z, measurement_sigma=measurement_sigma,
+                     exact_measurement_indices=exact_measurement_indices)
 
 @mcp.tool(name="wls_from_text")
-def wls_from_text(*, case_name: str, case_text: str, z: List[float]) -> Dict[str, Any]:
+def wls_from_text(*, case_name: str, case_text: str, z: List[float],
+                  measurement_sigma: List[float] | None = None,
+                  exact_measurement_indices: List[int] | None = None) -> Dict[str, Any]:
     """
     Same as wls_from_path, but accepts inline case.m contents.
     'case_name' must match the function name inside the .m file.
     """
     path = _write_case_text(case_text, case_name)
-    return _wls_json(path, z)
+    return _wls_json(path, z, measurement_sigma=measurement_sigma,
+                     exact_measurement_indices=exact_measurement_indices)
 
 if __name__ == "__main__":
     # Bind to a stable HTTP port so clients (build_sft_traces.py) can call reliably

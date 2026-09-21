@@ -48,7 +48,8 @@ def test_round1_launcher_freezes_inputs_collection_and_training_recipe() -> None
         "/scratch/yx3882/research_gemma4_small_20260824_fe94580/evaluation/"
         "bc0_12b_replay_compare_v2/published_replay/d1_development_suite.json",
         "PROTECTED_D1_SHA256=",
-        "COLLECTION_MAX_STEPS=4",
+        'EPISODE_MAX_STEPS=${EPISODE_MAX_STEPS:-40}',
+        'COLLECTION_MAX_STEPS="$EPISODE_MAX_STEPS"',
         "D1_CAP=20",
         "D1_SHARE=0.5",
         "CANDIDATE_MULTIPLIER=6",
@@ -95,7 +96,7 @@ def test_round1_launcher_gates_paired_generated_evaluation_and_attests_gpu() -> 
         "RESEARCH_GEMMA4_DAGGER_ROUND1_GATED_STOP",
         "DEVELOPMENT_PLAN='{\"measurement+parameter\":6,"
         "\"multi_measurement\":6,\"parameter\":3}'",
-        "EVAL_MAX_STEPS=24",
+        'EVAL_MAX_STEPS="$EPISODE_MAX_STEPS"',
         '--eval-r1-adapter "$CANDIDATE"',
         'len(roots) != 15 or len(set(roots)) != 15',
         "stage_status.json",

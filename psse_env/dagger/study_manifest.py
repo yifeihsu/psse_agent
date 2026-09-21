@@ -16,13 +16,20 @@ import re
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Mapping, Sequence
 
+from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT
 
-STUDY_MANIFEST_CONTRACT = "dagger_multiseed_four_variant_study_v1"
-STUDY_ID = "dagger_multi_error_comparison_v1"
+
+STUDY_MANIFEST_CONTRACT = "dagger_multiseed_four_variant_study_v2"
+STUDY_ID = "dagger_multi_error_comparison_v2"
+ARCHIVED_STUDY_MANIFEST_CONTRACT = "dagger_multiseed_four_variant_study_v1"
+ARCHIVED_STUDY_ID = "dagger_multi_error_comparison_v1"
+ARCHIVED_EPISODE_ACTION_LIMIT = 24
+ARCHIVED_POLICY_PATH = "psse_env/dagger/studies/archive/bc0_evaluation_policy_v3_24_steps.json"
+ARCHIVED_STUDY_MANIFEST = Path(__file__).resolve().parent / "studies" / "dagger_multiseed_study_v1.json"
 DEFAULT_STUDY_MANIFEST = (
     Path(__file__).resolve().parent
     / "studies"
-    / "dagger_multiseed_study_v1.json"
+    / "dagger_multiseed_study_v2.json"
 )
 EXPECTED_COMPARISON_POLICY_SHA256 = (
     "9763dc426de33e328a06cd5abfb4f5788a05ef91fac6cb4113e30680f8c2c550"
@@ -51,10 +58,10 @@ TRAINING_RNG_ENGINES = (
 PINNED_SUITE_PATH = "psse_env/dagger/suites/bc0_eval_suite_v1.json"
 PINNED_POLICY_PATH = "psse_env/dagger/bc0_evaluation_policy.json"
 DEVELOPMENT_EVALUATION_PROTOCOL_CONTRACT = (
-    "dagger_development_evaluation_protocol_v1"
+    "dagger_development_evaluation_protocol_v2"
 )
 EXPECTED_DEVELOPMENT_EVALUATION_CONTRACT_SHA256 = (
-    "3aa33a88fa22f91eb8f0a7a5622cf30d5574af2c57f7ac9bda8614b30f8bb645"
+    "383ca2f594b689a27143cde1c924f6b2a88e6e8f5634aea67c785bae3a8965a2"
 )
 _CANONICAL_DEVELOPMENT_EVALUATION_CONTRACT = {
     "contract": DEVELOPMENT_EVALUATION_PROTOCOL_CONTRACT,
@@ -62,7 +69,7 @@ _CANONICAL_DEVELOPMENT_EVALUATION_CONTRACT = {
     "diagnostic_only": True,
     "input_suite_name": "dagger1_development",
     "evaluator_seed": 20260721,
-    "max_steps": 24,
+    "max_steps": DEFAULT_EPISODE_ACTION_LIMIT,
     "required_suites": ["dagger1_development"],
     "minimum_suites": 1,
     "minimum_episodes_per_suite": 1,
@@ -72,10 +79,10 @@ _CANONICAL_DEVELOPMENT_EVALUATION_CONTRACT = {
     "release_qualification_allowed": False,
 }
 RECOVERY_STRESS_EVALUATION_PROTOCOL_CONTRACT = (
-    "dagger_recovery_stress_evaluation_protocol_v1"
+    "dagger_recovery_stress_evaluation_protocol_v2"
 )
 EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256 = (
-    "4a65b9950ef273d5ca5b4c1fc80e0b4831880bc53b327940688eb7fe3cfb9a19"
+    "0046f43e7342284697bce993c627da689ebd3f6f916e77ecc93c6fe10a33f145"
 )
 _RECOVERY_STRESS_SUITE_NAMES = (
     "recovery_measurement_parameter_sequential_handoff",
@@ -92,7 +99,7 @@ _CANONICAL_RECOVERY_STRESS_EVALUATION_CONTRACT = {
     "diagnostic_only": False,
     "input_suite_names": list(_RECOVERY_STRESS_SUITE_NAMES),
     "evaluator_seed": 20260723,
-    "max_steps": 24,
+    "max_steps": DEFAULT_EPISODE_ACTION_LIMIT,
     "required_suites": list(_RECOVERY_STRESS_SUITE_NAMES),
     "minimum_suites": 7,
     "minimum_episodes_per_suite": 10,
@@ -244,8 +251,8 @@ def _content_sha256(value: Any) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def canonical_development_evaluation_contract() -> dict[str, Any]:
-    """Return the sole preregistered diagnostic evaluator configuration."""
+def canonical_development_evaluation_contract(*, archive_context: bool = False) -> dict[str, Any]:
+    """Return current 40-action settings, or explicit historical v1 settings."""
 
     contract = json.loads(
         json.dumps(
@@ -254,15 +261,19 @@ def canonical_development_evaluation_contract() -> dict[str, Any]:
             allow_nan=False,
         )
     )
-    if _content_sha256(contract) != EXPECTED_DEVELOPMENT_EVALUATION_CONTRACT_SHA256:
+    expected_hash = EXPECTED_DEVELOPMENT_EVALUATION_CONTRACT_SHA256
+    if archive_context:
+        contract.update(contract="dagger_development_evaluation_protocol_v1", max_steps=ARCHIVED_EPISODE_ACTION_LIMIT)
+        expected_hash = "3aa33a88fa22f91eb8f0a7a5622cf30d5574af2c57f7ac9bda8614b30f8bb645"
+    if _content_sha256(contract) != expected_hash:
         raise StudyManifestError(
             "internal development evaluator contract digest is inconsistent"
         )
     return contract
 
 
-def canonical_recovery_stress_evaluation_contract() -> dict[str, Any]:
-    """Return the sole preregistered recovery-stress configuration."""
+def canonical_recovery_stress_evaluation_contract(*, archive_context: bool = False) -> dict[str, Any]:
+    """Return current 40-action settings, or explicit historical v1 settings."""
 
     contract = json.loads(
         json.dumps(
@@ -271,10 +282,11 @@ def canonical_recovery_stress_evaluation_contract() -> dict[str, Any]:
             allow_nan=False,
         )
     )
-    if (
-        _content_sha256(contract)
-        != EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256
-    ):
+    expected_hash = EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256
+    if archive_context:
+        contract.update(contract="dagger_recovery_stress_evaluation_protocol_v1", max_steps=ARCHIVED_EPISODE_ACTION_LIMIT)
+        expected_hash = "4a65b9950ef273d5ca5b4c1fc80e0b4831880bc53b327940688eb7fe3cfb9a19"
+    if _content_sha256(contract) != expected_hash:
         raise StudyManifestError(
             "internal recovery-stress evaluator contract digest is inconsistent"
         )
@@ -594,17 +606,22 @@ def validate_study_manifest(
     *,
     repo_root: str | Path | None = None,
     verify_bound_files: bool = True,
+    archive_context: bool = False,
 ) -> dict[str, Any]:
-    """Validate the complete semantic contract and its bound suite/policy."""
+    """Validate current settings; historical v1 requires explicit read-only context."""
 
+    expected_contract = ARCHIVED_STUDY_MANIFEST_CONTRACT if archive_context else STUDY_MANIFEST_CONTRACT
+    expected_study_id = ARCHIVED_STUDY_ID if archive_context else STUDY_ID
+    expected_steps = ARCHIVED_EPISODE_ACTION_LIMIT if archive_context else DEFAULT_EPISODE_ACTION_LIMIT
+    expected_policy_id = "bc0_closed_loop_hard_gate_v3" if archive_context else "bc0_closed_loop_hard_gate_v4"
     if manifest.get("schema_version") != 1:
         raise StudyManifestError("study manifest schema_version must be 1")
-    if manifest.get("contract") != STUDY_MANIFEST_CONTRACT:
+    if manifest.get("contract") != expected_contract:
         raise StudyManifestError(
-            f"study manifest contract must be {STUDY_MANIFEST_CONTRACT!r}"
+            f"study manifest contract must be {expected_contract!r}; historical v1 requires archive_context=True"
         )
-    if manifest.get("study_id") != STUDY_ID:
-        raise StudyManifestError(f"study_id must be {STUDY_ID!r}")
+    if manifest.get("study_id") != expected_study_id:
+        raise StudyManifestError(f"study_id must be {expected_study_id!r}")
     if manifest.get("status") != "preregistered":
         raise StudyManifestError("study manifest status must be 'preregistered'")
 
@@ -788,12 +805,12 @@ def validate_study_manifest(
     for hash_field in ("suite_sha256", "policy_sha256"):
         if _SHA256_RE.fullmatch(str(evaluation.get(hash_field) or "")) is None:
             raise StudyManifestError(f"bindings.evaluation.{hash_field} must be 64-hex")
-    if evaluation.get("policy_id") != "bc0_closed_loop_hard_gate_v3":
+    if evaluation.get("policy_id") != expected_policy_id:
         raise StudyManifestError("bindings.evaluation.policy_id is not approved")
     if evaluation.get("evaluator_seed") != 20260719:
         raise StudyManifestError("bindings.evaluation.evaluator_seed is not pinned")
-    if evaluation.get("max_steps") != 24:
-        raise StudyManifestError("bindings.evaluation.max_steps must be 24")
+    if evaluation.get("max_steps") != expected_steps:
+        raise StudyManifestError(f"bindings.evaluation.max_steps must be {expected_steps}")
     if evaluation.get("same_physical_roots_and_protocol_for_every_variant") is not True:
         raise StudyManifestError("every variant must use identical evaluation roots")
 
@@ -801,11 +818,12 @@ def validate_study_manifest(
         bindings.get("development_evaluation"),
         field="bindings.development_evaluation",
     )
-    canonical_development = canonical_development_evaluation_contract()
+    canonical_development = canonical_development_evaluation_contract(archive_context=archive_context)
+    development_hash = _content_sha256(canonical_development)
     if (
         set(development_evaluation) != set(canonical_development)
         or _content_sha256(development_evaluation)
-        != EXPECTED_DEVELOPMENT_EVALUATION_CONTRACT_SHA256
+        != development_hash
         or dict(development_evaluation) != canonical_development
     ):
         raise StudyManifestError(
@@ -817,12 +835,13 @@ def validate_study_manifest(
         field="bindings.recovery_stress_evaluation",
     )
     canonical_recovery_stress = (
-        canonical_recovery_stress_evaluation_contract()
+        canonical_recovery_stress_evaluation_contract(archive_context=archive_context)
     )
+    recovery_hash = _content_sha256(canonical_recovery_stress)
     if (
         set(recovery_stress_evaluation) != set(canonical_recovery_stress)
         or _content_sha256(recovery_stress_evaluation)
-        != EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256
+        != recovery_hash
         or dict(recovery_stress_evaluation) != canonical_recovery_stress
     ):
         raise StudyManifestError(
@@ -833,7 +852,7 @@ def validate_study_manifest(
     if verify_bound_files:
         root = Path(repo_root) if repo_root is not None else _repo_root()
         suite_path = root / str(evaluation.get("suite_path") or "")
-        policy_path = root / str(evaluation.get("policy_path") or "")
+        policy_path = root / (ARCHIVED_POLICY_PATH if archive_context else str(evaluation.get("policy_path") or ""))
         dependency_lock_path = root / TRAINING_DEPENDENCY_LOCK_PATH
         # The recorded digests are provenance, not a gate: only presence is
         # checked, so an edited policy or a rebuilt suite needs no re-pin.
@@ -1141,17 +1160,18 @@ def validate_study_manifest(
 
     return {
         "passed": True,
-        "contract": STUDY_MANIFEST_CONTRACT,
-        "study_id": STUDY_ID,
+        "contract": expected_contract,
+        "study_id": expected_study_id,
+        "archive_context": archive_context,
         "training_seeds": seeds,
         "variant_ids": list(variant_ids),
         "suite_sha256": evaluation["suite_sha256"],
         "policy_sha256": evaluation["policy_sha256"],
         "development_evaluation_contract_sha256": (
-            EXPECTED_DEVELOPMENT_EVALUATION_CONTRACT_SHA256
+            development_hash
         ),
         "recovery_stress_evaluation_contract_sha256": (
-            EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256
+            recovery_hash
         ),
     }
 
@@ -1160,6 +1180,7 @@ def load_study_manifest(
     path: str | Path = DEFAULT_STUDY_MANIFEST,
     *,
     repo_root: str | Path | None = None,
+    archive_context: bool = False,
 ) -> dict[str, Any]:
     """Load the study manifest, record its digest, and validate all bindings."""
 
@@ -1178,6 +1199,7 @@ def load_study_manifest(
         manifest,
         repo_root=repo_root,
         verify_bound_files=True,
+        archive_context=archive_context,
     )
     return {**dict(manifest), "manifest_sha256": actual_hash, "validation": result}
 
@@ -1190,6 +1212,7 @@ def validate_study_artifact_binding(
     artifact_role: str,
     expected_source_commit: str,
     expected_training_seed: int | None = None,
+    archive_context: bool = False,
 ) -> dict[str, Any]:
     """Validate one future checkpoint/evaluation against the preregistration.
 
@@ -1198,7 +1221,7 @@ def validate_study_artifact_binding(
     comparison cannot mix implementations.
     """
 
-    validate_study_manifest(manifest, verify_bound_files=False)
+    validate_study_manifest(manifest, verify_bound_files=False, archive_context=archive_context)
     if variant_id not in REQUIRED_VARIANT_IDS:
         raise StudyManifestError(f"unknown study variant: {variant_id!r}")
     if artifact_role not in {
@@ -1513,10 +1536,10 @@ def validate_study_artifact_binding(
                     raise StudyManifestError(
                         f"development evaluation {hash_field} must be lowercase 64-hex"
                     )
-            development_contract = canonical_development_evaluation_contract()
+            development_contract = canonical_development_evaluation_contract(archive_context=archive_context)
             if (
                 artifact.get("development_evaluation_contract_sha256")
-                != EXPECTED_DEVELOPMENT_EVALUATION_CONTRACT_SHA256
+                != _content_sha256(development_contract)
             ):
                 raise StudyManifestError(
                     "development evaluation does not bind the exact "
@@ -1553,13 +1576,13 @@ def validate_study_artifact_binding(
                         "lowercase 64-hex"
                     )
             recovery_contract = (
-                canonical_recovery_stress_evaluation_contract()
+                canonical_recovery_stress_evaluation_contract(archive_context=archive_context)
             )
             if (
                 artifact.get(
                     "recovery_stress_evaluation_contract_sha256"
                 )
-                != EXPECTED_RECOVERY_STRESS_EVALUATION_CONTRACT_SHA256
+                != _content_sha256(recovery_contract)
             ):
                 raise StudyManifestError(
                     "recovery-stress evaluation does not bind the exact "
@@ -1595,6 +1618,10 @@ def validate_study_artifact_binding(
 
 
 __all__ = [
+    "ARCHIVED_STUDY_MANIFEST",
+    "ARCHIVED_STUDY_MANIFEST_CONTRACT",
+    "ARCHIVED_STUDY_ID",
+    "ARCHIVED_POLICY_PATH",
     "DEFAULT_STUDY_MANIFEST",
     "DEVELOPMENT_EVALUATION_PROTOCOL_CONTRACT",
     "EXPECTED_COMPARISON_POLICY_SHA256",

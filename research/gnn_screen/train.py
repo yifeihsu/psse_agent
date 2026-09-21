@@ -14,7 +14,8 @@ import numpy as np
 import torch
 
 from .dataset import (FAMILY_NAMES, FEATURE_SCHEMA_VERSION, MEASUREMENT_CONVENTION,
-                      Sample, content_hash, prepare_corpus, trained_family_mask, write_json)
+                      Sample, assign_parent_splits, content_hash, load_manifest,
+                      prepare_corpus, trained_family_mask, write_json)
 from .graph_builder import FeatureScaler
 from .losses import screen_loss
 from .model import WLSScreenGNN, collate_graphs
@@ -27,6 +28,90 @@ DEFAULT_CONFIG = {
                  "training_seeds": [0, 1, 2, 3, 4], "split_seed": 2026,
                  "healthy_false_trigger_rate": 0.01, "balanced_sampling": True},
 }
+
+REVIEWED_TRAINING_ADMISSION_CONTRACT = "wls_observable_expert_prefix_v1"
+
+
+def validate_reviewed_training_admission(manifest: str | Path, *, split_seed: int = 2026) -> dict[str, Any]:
+    """Verify reviewed training windows before graph building or model training.
+
+    Admission binds the fixed observed vector, configured model and covariance
+    to an executed observable expert prefix. It does not assert full physical
+    repair. Validation/calibration/test rows and legacy cohorts are not filtered
+    or required to have this training-only selection evidence.
+    """
+    records = load_manifest(manifest)
+    assign_parent_splits(records, seed=split_seed)
+    checked, faults, healthy = 0, 0, 0
+    admission_bindings = []
+    training_labels = []
+    for row in records:
+        if row["split"] != "train":
+            continue
+        training_labels.append(row["labels"])
+        metadata = row.get("offline_metadata") or {}
+        if not isinstance(metadata, dict):
+            raise ValueError("offline_metadata must be a mapping")
+        reviewed = metadata.get("scenario_profile", metadata.get("profile_id")) in {"reviewed_v1", "ieee14_physical_hif_v1"}
+        if not reviewed:
+            continue
+        label = str(row.get("window_id") or row["parent_id"])
+        def reject(reason):
+            raise ValueError(f"reviewed training window {label}: {reason}")
+        if (row.get("measurement_kind") != "observed" or type(row.get("noise_replicates", 1)) is not int
+                or row.get("noise_replicates", 1) != 1
+                or "noise_seed" in row or "noise_group_id" in row):
+            reject("requires a fixed observed replica after admission; no post-selection noise redraw")
+        measured = np.asarray(row["z"], dtype=float)
+        sigma = np.asarray(row.get("measurement_sigma"), dtype=float)
+        if (measured.ndim != 1 or measured.size == 0 or sigma.shape != measured.shape
+                or not np.isfinite(measured).all() or not np.isfinite(sigma).all() or np.any(sigma <= 0)):
+            reject("requires a finite observed vector and matching positive declared sigma")
+        admission = metadata.get("training_admission")
+        if not isinstance(admission, dict):
+            reject("missing verified training_admission; filter the reviewed population first")
+        if admission.get("contract") != REVIEWED_TRAINING_ADMISSION_CONTRACT or admission.get("eligible") is not True:
+            reject("training admission contract is absent, unsupported or ineligible")
+        if admission.get("scope") != "executed_expert_prefix_only":
+            reject("admission must explicitly describe an executed expert prefix, not full repair")
+        for field, value in (("measurement_sha256", row["z"]), ("case_sha256", row["case"]),
+                             ("sigma_sha256", row.get("measurement_sigma"))):
+            if admission.get(field) != content_hash(value):
+                reject(f"{field} differs from the selected observed window")
+        thresholds = admission.get("thresholds")
+        if not isinstance(thresholds, dict) or thresholds.get("chi_square_alpha") != .01 or thresholds.get("normalized_residual") != 4.0:
+            reject("admission thresholds must match chi-square alpha .01 and normalized residual 4")
+        for field in ("expert_valid", "action_executed", "execution_success"):
+            if admission.get(field) is not True:
+                reject(f"{field} must certify the executed observable prefix")
+        labels = row["labels"]
+        if labels["anomaly_mask"] != 1.0:
+            reject("admission requires a known healthy or fault label")
+        fault = labels["anomaly"] == 1.0
+        if fault:
+            if admission.get("kind") != "fault_actionable" or admission.get("wls_alarm") is not True:
+                reject("positive fault needs an actual WLS alarm and fault_actionable prefix")
+            positive_families = sum(bool(value) for value in labels["family"])
+            if positive_families > 1 and admission.get("component_checks_passed") is not True:
+                reject("mixed faults require all component checks, not just a global alarm")
+            faults += 1
+        else:
+            if (admission.get("kind") != "healthy_completion" or admission.get("wls_alarm") is not False
+                    or admission.get("safe_finalize") is not True):
+                reject("healthy control requires quiet WLS and an executed safe finalization")
+            healthy += 1
+        checked += 1
+        admission_bindings.append({"parent_id": row["parent_id"], "window_id": row["window_id"],
+                                   "admission": admission})
+    if checked:
+        known = {labels["anomaly"] for labels in training_labels if labels["anomaly_mask"]}
+        if known != {0.0, 1.0}:
+            raise ValueError("reviewed training requires nonempty fault and healthy training populations")
+    return {"contract": REVIEWED_TRAINING_ADMISSION_CONTRACT, "reviewed_training_windows_checked": checked,
+            "reviewed_fault_windows": faults, "reviewed_healthy_windows": healthy,
+            "scope": "executed_expert_prefix_only", "full_physical_repair_validated": False,
+            "nontraining_rows_filtered": False, "legacy_rows_require_admission": False,
+            "admission_bindings_sha256": content_hash(admission_bindings) if checked else None}
 
 
 def load_config(path: str | Path | None = None) -> dict[str, Any]:
@@ -192,6 +277,7 @@ def train(manifest: str | Path, output_dir: str | Path, *, config: dict | None =
           progress: bool = False, resume: bool = False) -> dict[str, Any]:
     config = copy.deepcopy(config or DEFAULT_CONFIG)
     settings = config["training"]
+    admission_validation = validate_reviewed_training_admission(manifest, split_seed=settings["split_seed"])
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     corpus = prepare_corpus(manifest, cache_dir=cache_dir, split_seed=settings["split_seed"], workers=workers, progress=progress)
@@ -215,6 +301,8 @@ def train(manifest: str | Path, output_dir: str | Path, *, config: dict | None =
     run_id = content_hash({"config": config, "scaler": scaler.to_dict(), "samples": [
         {"graph": s.graph["metadata"]["cache_fingerprint"], "labels": s.labels, "parent": s.parent_id,
          "split": s.split, "severity": s.severity} for s in corpus.samples], "invalid": corpus.invalid})
+    if admission_validation["reviewed_training_windows_checked"]:
+        run_id = content_hash({"graph_training_run_id": run_id, "training_admission": admission_validation})
     restored = None
     if resume:
         restored = torch.load(output_dir / "latest.pt", map_location="cpu", weights_only=True)
@@ -297,6 +385,8 @@ def train(manifest: str | Path, output_dir: str | Path, *, config: dict | None =
                     "validation_operating_point": operating, "training_config": settings,
                     "feature_schema_version": FEATURE_SCHEMA_VERSION, "measurement_convention": MEASUREMENT_CONVENTION,
                     "score_semantics": "uncalibrated sigmoid scores; thresholds require independent calibration"}
+                if admission_validation["reviewed_training_windows_checked"]:
+                    checkpoint["training_admission_validation"] = copy.deepcopy(admission_validation)
                 seed_dir = output_dir / f"seed_{seed}"
                 seed_dir.mkdir(exist_ok=True)
                 torch.save(checkpoint, seed_dir / "checkpoint.pt")
@@ -330,6 +420,7 @@ def train(manifest: str | Path, output_dir: str | Path, *, config: dict | None =
               "run_id": run_id, "runtime": {"device": str(device), "torch_version": str(torch.__version__),
                   "elapsed_this_process_s": time.monotonic() - started, "resume": resume},
               "status": "trained_uncalibrated", "independent_test_evaluated": False}
+    report["training_admission_validation"] = admission_validation
     write_json(output_dir / "training_report.json", report)
     write_json(output_dir / "training_progress.json", {"status": "trained_uncalibrated", "selected": global_best,
                "completed_seeds": seed_results, "checkpoint": report["checkpoint"]})

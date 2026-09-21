@@ -132,12 +132,15 @@ def score_hif(rows: list[Mapping[str, Any]], *, top_k: int, sigma_override: floa
     coherent_detected = 0
     coherent_alpha_errors: list[float] = []
     coherent_r_rel_errors: list[float] = []
+    physical_resistance_rows = []
     for row in rows:
         label = row.get("shared_label") or row.get("label") or {}
         expected_row0 = label.get("branch_row0")
         expected_phase = str(label.get("phase") or "").upper()
         expected_alpha = label.get("split_ratio", label.get("alpha_from_from_bus"))
         expected_r = label.get("r_hif_pu")
+        from three_phase_nlm.hif_units import label_physical_ohm, label_model_ohm, label_local_kv_ll
+        physical_resistance_rows.append({"id": row.get("id"), "r_hif_ohm": label_physical_ohm(label), "r_hif_model_ohm": label_model_ohm(label), "local_kv_ll": label_local_kv_ll(label)})
         if expected_row0 is None:
             continue
         scans = row.get("scans") or [row]
@@ -209,6 +212,7 @@ def score_hif(rows: list[Mapping[str, Any]], *, top_k: int, sigma_override: floa
                         )
     return {
         "family": "hif",
+        "physical_resistance_labels": physical_resistance_rows,
         "scans_scored": scans_scored,
         "line_top1_accuracy": line_top1 / scans_scored if scans_scored else None,
         f"line_top{top_k}_accuracy": line_topk / scans_scored if scans_scored else None,

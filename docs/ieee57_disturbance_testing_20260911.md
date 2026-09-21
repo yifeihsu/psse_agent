@@ -71,3 +71,5 @@ python scripts/audit_ieee57_disturbance_statistics.py --output-dir output/ieee57
 Each model directory contains its DSS model, balanced reference checks, nominal diagnostic model, scenario definitions, all result rows, compressed truth-free exact/noisy telemetry, and standalone scenario DSS files. The root directory retains experiment settings and SHA-256 snapshots of the implementation. Failed, ambiguous and undetected cases are retained rather than filtered.
 
 Relevant component/API documentation: [OpenDSS Fault](https://dss-extensions.org/dss-format/Fault.html), [Capacitor matrix units](https://dss-extensions.org/dss-format/Capacitor.html), and [OpenDSSDirect YMatrix API](https://dss-extensions.org/OpenDSSDirect.py/opendssdirect.html).
+
+The historical study above used a normalized 1 kV realization without a declared physical bus-kV map. The later [138/69 kV reconstruction and fresh physical-ohm results](ieee57_physical_hif_20260919.md) are separate evidence.
