@@ -26,6 +26,8 @@ from psse_env.oracle.expert_types import (
 )
 from psse_env.oracle.measurement_recovery_evidence import (
     accepted_measurement_indices,
+    accepted_partial_branch_rows,
+    colocated_flow_measurement_indices,
     eligible_joint_measurement_targets,
     measurement_target_indices,
     measurement_targets_predating_branch_repair,
@@ -691,30 +693,7 @@ class MeasurementExpert:
     @staticmethod
     def _accepted_partial_branch_rows(state: Any) -> set[int]:
         """Zero-based branch rows committed while an anomaly remains."""
-        rows: set[int] = set()
-        if state_value(state, "no_material_anomaly_remaining", False):
-            return rows
-        for item in state_value(state, "accepted_corrections", []) or []:
-            tool = history_action_tool(item)
-            if tool not in {CORRECT_PARAMETERS, CORRECT_TOPOLOGY}:
-                if not isinstance(item, Mapping) or str(
-                    item.get("family") or item.get("action_family") or ""
-                ).lower() not in {"parameter", "topology"}:
-                    continue
-            action = item.get("source_action") if isinstance(item, Mapping) else None
-            action = action if isinstance(action, Mapping) else item
-            arguments = action.get("arguments") if isinstance(action, Mapping) else None
-            arguments = arguments if isinstance(arguments, Mapping) else {}
-            try:
-                if arguments.get("branch_row0") is not None:
-                    rows.add(int(arguments["branch_row0"]))
-                elif arguments.get("line_index1") is not None:
-                    rows.add(int(arguments["line_index1"]) - 1)
-                elif arguments.get("line_index") is not None:
-                    rows.add(int(arguments["line_index"]) - 1)
-            except (TypeError, ValueError):
-                continue
-        return rows
+        return accepted_partial_branch_rows(state)
 
     @staticmethod
     def _colocated_post_branch_measurement_indices(
@@ -727,13 +706,6 @@ class MeasurementExpert:
         """Return direct-flow measurement targets co-located with repaired rows."""
         if not accepted_branch_rows or active_id is None:
             return set()
-        # Once a branch repair has been accepted, direct-flow residuals on
-        # that same row are not independent meter evidence.  They often arise
-        # from bounded parameter-estimation error even after the branch
-        # multiplier signature itself disappears, so requiring that stale
-        # signature let a measurement correction mask the repaired branch.
-        candidate_rows = accepted_branch_rows
-
         findings: Sequence[Any] = ()
         fresh_context_evidence = state_value(state, "fresh_context_evidence", {})
         if isinstance(fresh_context_evidence, Mapping):
@@ -769,26 +741,7 @@ class MeasurementExpert:
             if isinstance(raw_findings, (list, tuple)):
                 findings = raw_findings
                 break
-        colocated: set[int] = set()
-        for item in findings:
-            if not isinstance(item, Mapping):
-                continue
-            if str(item.get("channel") or "") not in {"Pf", "Qf", "Pt", "Qt"}:
-                continue
-            index0 = item.get("index0")
-            channel_offset = item.get("channel_offset")
-            if (
-                not isinstance(index0, int)
-                or isinstance(index0, bool)
-                or index0 < 0
-                or not isinstance(channel_offset, int)
-                or isinstance(channel_offset, bool)
-                or channel_offset < 0
-            ):
-                continue
-            if channel_offset in candidate_rows:
-                colocated.add(index0)
-        return colocated
+        return colocated_flow_measurement_indices(findings, accepted_branch_rows)
 
     @staticmethod
     def _measurement_target_indices(action: Mapping[str, Any]) -> set[int]:

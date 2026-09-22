@@ -53,6 +53,8 @@ from .oracle.expert_types import (
 )
 from .oracle.measurement_recovery_evidence import (
     accepted_measurement_indices,
+    accepted_partial_branch_rows,
+    colocated_flow_measurement_indices,
     eligible_joint_measurement_targets,
     measurement_target_indices,
     verified_terminal_measurement_closure_action,
@@ -1495,7 +1497,7 @@ class TransactionalPSSEEnv:
             if not audit["sufficient"]:
                 raise ValueError(
                     "Production operator-escalation label lacks exhausted, "
-                    "same-state observable HIF evidence: " + ", ".join(audit["missing"])
+                    "same-state observable recovery evidence: " + ", ".join(audit["missing"])
                 )
             return
         if tool in DIAGNOSTIC_TOOLS:
@@ -2160,6 +2162,20 @@ class TransactionalPSSEEnv:
                     validated_supported.append(normalized_supported)
                     supported_recovery_targets.append(signature)
                 if context_tool == GET_MEASUREMENT_CONTEXT:
+                    # Share the teacher's post-branch meter safety rule, using
+                    # only this audit's state/hash/provenance-bound provider
+                    # findings. A safety-blocked target was not tried; retain
+                    # it in the supported inventory and keep independent
+                    # meter and branch corrections outstanding.
+                    colocated_indices = colocated_flow_measurement_indices(
+                        bound_event[1].get("measurement_findings"),
+                        accepted_partial_branch_rows(summary),
+                    )
+                    for supported_action in validated_supported:
+                        if measurement_target_indices(supported_action) & colocated_indices:
+                            signature = _semantic_correction_signature(supported_action)
+                            if signature is not None:
+                                safety_blocked_recovery_targets.add(signature)
                     accepted_indices = accepted_measurement_indices(summary)
                     eligible_new_targets = eligible_joint_measurement_targets(
                         summary,
