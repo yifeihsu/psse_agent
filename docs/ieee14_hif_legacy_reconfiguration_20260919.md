@@ -202,6 +202,20 @@ All seven corpora were regenerated with unchanged seeds, so labels, observations
 
 The remaining channel is the faulted injection: a 101 ohm fault at 69 kV dissipates 15.8 MW, exactly the 0.158 pu gap at that bus, and the 0.35 pu sweep maximum is a 50 ohm fault. For unbalance the residual gap is the phase-A voltage magnitude at the unbalanced bus. `z_true` is therefore a same-physics paired healthy reference for every channel, the no-disturbance control's SCADA and telemetry now come from one operating point, and the mixed-root clean-vector check compares like with like. Regression tests: `tests/test_generate_measurements_hif_physical.py` and `tests/test_generate_measurements_imbalance_physical.py`.
 
+### 2026-09-21 HPC cell on the detectable corpora
+
+The IEEE-14 full pipeline was launched on the cluster with the updated corpora restricted to the windows the operator WLS can discover. Subsets of the regenerated corpora were written with only the admitted windows (discovered mode, anomaly margin 1.25, reference scan) and their balanced controls, each `meta.json` recording the source corpus, its digest and the audit that produced the filter:
+
+| Corpus (committed) | Windows | Controls |
+| --- | ---: | ---: |
+| `hif_physical69_main_train_detectable_25x10_20260921` | 25 | 20 |
+| `hif_physical69_main_valid_detectable_7x10_20260921` | 7 | 5 |
+| `hif_physical69_main_train_extra_detectable_69x10_20260921` | 69 | 60 |
+| `hif_physical69_main_valid_extra_detectable_17x10_20260921` | 17 | 15 |
+| `out_measurements_imbalance_currents_ybus_detectable_160_20260921` | 160 | 60 |
+
+A re-audit of the subsets admits every window (118 of 118 HIF, 160 of 160 unbalance). `pipeline.env` names these five corpora; the plans are unchanged (78 pure-HIF roots, 40 measurement+HIF, 90 unbalance, 40 balanced controls) and fit the admitted pools. The cell is `/scratch/yx3882/research_full_pipeline_20260921_physical`, deployed from commit `07880e1` on `codex/wls-screen-gnn` and submitted on 2026-09-21 at 18:13 UTC as one dependency chain: d0 18205117, bc0 18205119, r1c 18205121, r1t 18205123, r1e 18205124, r2c 18205125, r2t 18205129, r2e 18205131. Results will appear in `out/pipeline_summary.json`. Two things to keep in mind when reading them: the HIF roots are the WLS-visible subset, 91 percent of them in the 100-200 ohm band, not the declared 100-1000 ohm population; and the sweep and detection-limit corpora remain evaluation-only and untracked.
+
 ## Historical scope and limitations
 
 Tracked 20260903/20260714 corpora and the frozen BC0 suite retain their original system-pu labels and conventions. `CURRENT_TELEMETRY_HIF_SAMPLE_PATHS` retains its old paths; the new `PHYSICAL_HIF_*` constants and explicit HPC arguments select the physical corpora. No cluster job is launched by this revision.

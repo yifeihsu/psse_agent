@@ -194,6 +194,10 @@ wsl -- ssh torch bash /scratch/yx3882/research_full_pipeline_20260912/status_pip
 into a fresh directory and optionally a file from `overrides/` as
 `pipeline.overrides.env`, which `pipeline.env` sources last.
 
+### 2026-09-21 cell: detectable physical corpora
+
+`research_full_pipeline_20260921_physical` (commit 07880e1) runs the unchanged plans on the committed detectable-only corpora: 118 physical-ohm HIF windows on 69 kV lines (25 + 69 train, 7 + 17 validation; 100-1000 ohm sampled, only the windows the operator WLS discovers at margin 1.25 kept) and 160 ybus unbalance windows. Both families use the same-operating-point OpenDSS balanced reference and declare their shunt convention; Vm is the phase-A magnitude. Jobs d0 18205117 through r2e 18205131, submitted 2026-09-21T18:13Z. See docs/ieee14_hif_legacy_reconfiguration_20260919.md.
+
 ## Reading the results
 
 `out/pipeline_summary.json` carries per-family truth-audited success for
