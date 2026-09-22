@@ -439,10 +439,10 @@ class MeasurementExpert:
         rejected.  Treating the former as perpetually open stranded pure
         multi-measurement episodes after harmless WLS branch cross-signals.
 
-        This predicate consumes only state-bound provider inventories and
-        rejected-candidate records already visible to the policy.  One
-        rejection is not enough when the same context exposes another branch
-        candidate.
+        This predicate consumes only state-bound provider inventories,
+        rejected candidates and typed executor-failure receipts already
+        visible to the policy. One closed attempt is not enough when the same
+        context exposes another branch candidate.
         """
 
         if active_id is None:

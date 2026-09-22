@@ -3615,6 +3615,10 @@ class MatpowerDeploymentProviders:
         for record in observation.get("rejected_hypotheses") or []:
             if not isinstance(record, Mapping):
                 continue
+            if record.get("rejection_kind") == "executor_failure":
+                # This gate requires physical candidate verification. A
+                # numerical execution failure cannot supply that evidence.
+                continue
             parent = record.get("candidate_parent_id")
             if parent is not None and active_id and str(parent) != active_id:
                 continue

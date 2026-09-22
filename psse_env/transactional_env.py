@@ -3826,6 +3826,7 @@ class TransactionalPSSEEnv:
         self.context_flags["last_tool_status"] = output["execution_status"]
         self.context_flags["last_tool_output"] = policy_safe_copy(output)
         self.context_flags.setdefault("tried_action_signatures", []).append(action_signature(action))
+        self._remember_executor_failure(action, output, source_state_id=source_state_id)
         self.history.append(
             {
                 "state_id": source_state_id or self.store.active_state_id,
@@ -3834,6 +3835,61 @@ class TransactionalPSSEEnv:
                 "tool_output": policy_safe_copy(output),
             }
         )
+
+    def _remember_executor_failure(
+        self,
+        action: Mapping[str, Any],
+        output: Mapping[str, Any],
+        *,
+        source_state_id: str | None,
+    ) -> None:
+        """Retain an observed numerical failure beyond the bounded history.
+
+        A failed executor tested a supported hypothesis without creating a
+        candidate. It closes that attempt on this immutable state, but proves
+        neither verification rejection nor a physical correction. In
+        particular, rejected prerequisites and unavailable routes do not count.
+        """
+        executor_failures = {
+            CORRECT_MEASUREMENTS: "measurement_correction_failure",
+            CORRECT_PARAMETERS: "parameter_correction_failure",
+            CORRECT_TOPOLOGY: "topology_correction_failure",
+        }
+        normalized = safe_normalize_action(action)
+        error_code = executor_failures.get(normalized["tool"])
+        if (
+            error_code is None
+            or output.get("execution_status") != "failure"
+            or output.get("error_code") != error_code
+            or output.get("state_mutated")
+            or output.get("candidate_state_id") is not None
+        ):
+            return
+        active_id = self.store.active_state_id
+        source_id = source_state_id or active_id
+        requested_id = normalized["arguments"].get("state_id")
+        if (
+            source_id is None
+            or str(source_id) != str(active_id)
+            or requested_id is None
+            or str(requested_id) != str(source_id)
+            or str(output.get("active_state_id") or "") != str(source_id)
+        ):
+            return
+        state_hash = self.store.get_state(str(source_id)).get("state_hash")
+        record = policy_safe_copy({
+            "candidate_parent_id": str(source_id),
+            "source_action": normalized,
+            "action_signature": action_signature(normalized),
+            "rejection_kind": "executor_failure",
+            "execution_status": "failure",
+            "error_code": error_code,
+            "state_hash": state_hash,
+            "evidence_source": "controller_observed:correction_executor_failure",
+        })
+        records = self.context_flags.setdefault("rejected_hypotheses", [])
+        if record not in records:
+            records.append(record)
 
     def _record_anomaly_explanation(
         self, tool: str, target_id: str, metrics: Mapping[str, Any]

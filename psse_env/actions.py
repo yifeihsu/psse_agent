@@ -70,6 +70,10 @@ def ambiguous_branch_candidate_lines(observation: Mapping[str, Any]) -> list[int
     for record in observation.get("rejected_hypotheses") or []:
         if not isinstance(record, Mapping):
             continue
+        if record.get("rejection_kind") == "executor_failure":
+            # A solver failure closes an attempted recovery route but does
+            # not establish a verification-rejected physical hypothesis.
+            continue
         parent = record.get("candidate_parent_id")
         if parent is not None and active_id and str(parent) != active_id:
             continue
