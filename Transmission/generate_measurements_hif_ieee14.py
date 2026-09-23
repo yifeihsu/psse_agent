@@ -835,6 +835,14 @@ def generate_dataset(
         telemetry_base_semantics=telemetry_bases,
     )
     meta["hif"]["balanced_reference"] = balanced_reference
+    # Physics revision marker: the operating-point path keeps the generator
+    # reactive limits declared in IEEE14Gen.DSS. Corpora generated before
+    # 2026-09-23 lack this key; their PV units were pinned at +-1.08*kW kvar.
+    meta["hif"]["generator_reactive_limits"] = {
+        "policy": "model_file_limits_kept",
+        "note": "apply_hif_operating_point restores Maxkvar/Minkvar after dispatch and setpoint writes; "
+                "PV generators regulate within their limits",
+    }
     meta["hif"]["z_true_semantics"] = (
         "row-level z_true: balanced OpenDSS solve at scan 0's operating point with the fault removed, "
         "same dispatch/load profile/shunt convention as the scans; z_reference_opf is the pypower OPF vector"
