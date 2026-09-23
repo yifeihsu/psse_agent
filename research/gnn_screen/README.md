@@ -154,6 +154,23 @@ offline paired-separation rule and its limits. Only the main manifest is used
 for training; evaluate boundary coverage separately with the same frozen model
 and calibration.
 
+To train on the same HIF and unbalance windows as DAgger, build the corpus from
+the DAgger physical corpora in `artifacts/measurements` instead:
+
+```powershell
+python -m research.gnn_screen.dagger_corpus --output-dir output/gnn_dagger_aligned/corpus --workers 16
+```
+
+Each DAgger window becomes one parent: HIF parents keep all ten scans with a
+fault-removed healthy partner per scan on the HIF generator's own OpenDSS path,
+and unbalance parents keep the stored unbalanced and balanced solves. Parameter,
+dangling-terminal and meter errors follow DAgger's rules and are simulated on
+the parent's path and operating point. Nothing is filtered by WLS
+detectability; `offline_metadata.dagger_detectable` marks DAgger's training
+subsets. The HIF resistance sweeps go to a separate test-only manifest
+(`hif_resistance_evaluation_manifest.jsonl`). HIF parents inherit the HIF
+generator's missing voltage regulation, so the source path is recorded per row.
+
 From the repository root, with Python, NumPy, SciPy, PyTorch, PyYAML and pytest:
 
 ```powershell
