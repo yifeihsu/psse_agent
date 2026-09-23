@@ -198,16 +198,18 @@ CURRENT_TELEMETRY_HIF_SAMPLE_PATHS = (
 )
 # Physical-ohm corpora are opt-in; historical telemetry paths retain replay identity.
 PHYSICAL_HIF_SAMPLE_PATHS = tuple(_REPO_ROOT / "artifacts" / "measurements" / name / "samples.jsonl" for name in (
-    # Detectable subsets (discovered-mode WLS admission, margin 1.25) of the 2026-09-23 physical
+    # Detectable subsets (discovered-mode WLS admission, margin 1.25) of the 2026-09-23b physical
     # 69 kV 100-1000 ohm corpora (same seeds as 2026-09-19/21, re-simulated with generator reactive
-    # limits kept); the full corpora carry the same names without "_detectable".
-    "hif_physical69_main_train_detectable_27x10_20260923", "hif_physical69_main_valid_detectable_8x10_20260923",
-    "hif_physical69_main_train_extra_detectable_77x10_20260923", "hif_physical69_main_valid_extra_detectable_19x10_20260923"))
-PHYSICAL_HIF_DETECTION_LIMIT_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/hif_physical69_detection_limit_21x10_20260923/samples.jsonl"
-PHYSICAL_HIF_SWEEP_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/hif_physical_sweep_eval_336x10_20260923/samples.jsonl"
+    # limits kept and the OpenDSS solve tolerance at 1e-8); the full corpora carry the same names
+    # without "_detectable".
+    "hif_physical69_main_train_detectable_27x10_20260923b", "hif_physical69_main_valid_detectable_8x10_20260923b",
+    "hif_physical69_main_train_extra_detectable_77x10_20260923b", "hif_physical69_main_valid_extra_detectable_19x10_20260923b"))
+PHYSICAL_HIF_DETECTION_LIMIT_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/hif_physical69_detection_limit_21x10_20260923b/samples.jsonl"
+PHYSICAL_HIF_SWEEP_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/hif_physical_sweep_eval_336x10_20260923b/samples.jsonl"
 # Unbalance corpus regenerated 2026-09-21 under the WLS shunt convention (ybus), phase-A Vm,
-# physical telemetry bases; 440 windows + 60 balanced controls, seed 20260925.
-PHYSICAL_IMBALANCE_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/out_measurements_imbalance_currents_ybus_detectable_160_20260921/samples.jsonl"
+# physical telemetry bases; 440 windows + 60 balanced controls, seed 20260925; re-solved
+# 2026-09-23b at tolerance 1e-8 (160 admitted, unchanged).
+PHYSICAL_IMBALANCE_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/out_measurements_imbalance_currents_ybus_detectable_160_20260923b/samples.jsonl"
 DEFAULT_BALANCED_ARTIFACT_DIR = (
     _REPO_ROOT / "artifacts" / "measurements" / "out_measurements_balanced"
 )

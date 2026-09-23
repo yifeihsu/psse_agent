@@ -128,13 +128,13 @@ def test_hif_corpora_are_the_physical_ohm_regeneration() -> None:
     text = (CELL / "pipeline.env").read_text(encoding="utf-8")
     assert re.search(
         r"^HIF_CORPUS_TRAIN=\$SRC/artifacts/measurements/"
-        r"hif_physical69_main_train_detectable_27x10_20260923/samples\.jsonl$",
+        r"hif_physical69_main_train_detectable_27x10_20260923b/samples\.jsonl$",
         text,
         flags=re.MULTILINE,
     )
     assert re.search(
         r"^HIF_CORPUS_VALID=\$SRC/artifacts/measurements/"
-        r"hif_physical69_main_valid_detectable_8x10_20260923/samples\.jsonl$",
+        r"hif_physical69_main_valid_detectable_8x10_20260923b/samples\.jsonl$",
         text,
         flags=re.MULTILINE,
     )
@@ -146,13 +146,13 @@ def test_hif_corpora_are_the_physical_ohm_regeneration() -> None:
     assert "131 HIF" in text
     assert re.search(
         r"^HIF_CORPUS_TRAIN_EXTRA=\$SRC/artifacts/measurements/"
-        r"hif_physical69_main_train_extra_detectable_77x10_20260923/samples\.jsonl$",
+        r"hif_physical69_main_train_extra_detectable_77x10_20260923b/samples\.jsonl$",
         text,
         flags=re.MULTILINE,
     )
     assert re.search(
         r"^HIF_CORPUS_VALID_EXTRA=\$SRC/artifacts/measurements/"
-        r"hif_physical69_main_valid_extra_detectable_19x10_20260923/samples\.jsonl$",
+        r"hif_physical69_main_valid_extra_detectable_19x10_20260923b/samples\.jsonl$",
         text,
         flags=re.MULTILINE,
     )
@@ -161,7 +161,7 @@ def test_hif_corpora_are_the_physical_ohm_regeneration() -> None:
     # collection stage names it so the recorded profile states which rows were used.
     assert re.search(
         r"^IMBALANCE_CORPUS=\$SRC/artifacts/measurements/"
-        r"out_measurements_imbalance_currents_ybus_detectable_160_20260921/samples\.jsonl$",
+        r"out_measurements_imbalance_currents_ybus_detectable_160_20260923b/samples\.jsonl$",
         text,
         flags=re.MULTILINE,
     )

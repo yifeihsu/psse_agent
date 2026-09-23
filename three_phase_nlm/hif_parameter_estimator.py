@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import warnings
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -140,12 +141,54 @@ def _compile_base_model(model_dir: Path) -> None:
     )
 
 
+#: Iteration cap for the one retry after a non-converged solve. Every known
+#: IEEE-14 operating point converges at tolerance 1e-8 within about 80
+#: iterations; the retry continues the same fixed-point iteration, so a
+#: converged result is unchanged and only a genuinely stuck solve raises.
+RETRY_MAX_ITERATIONS = 1000
+
+
+#: Fresh compile-and-solve attempts before a non-converged solve is fatal.
+FRESH_SOLVE_ATTEMPTS = 3
+
+
+def _solve_from_fresh_compile(build) -> None:
+    """Run ``build`` (compile, edit, solve) again from scratch if its solve diverges.
+
+    The OpenDSS engine occasionally diverges to NaN on a solve whose inputs
+    converge on every other run (seen about once per 8,000 solves during
+    parallel corpus generation at tolerance 1e-8, with a normal circuit and a
+    converged base case). A converged solve is deterministic, so a fresh
+    compile either reproduces the converged solution or exhausts the attempts.
+    """
+    last: RuntimeError | None = None
+    for attempt in range(1, FRESH_SOLVE_ATTEMPTS + 1):
+        try:
+            build()
+            return
+        except RuntimeError as exc:
+            if "did not converge" not in str(exc):
+                raise
+            last = exc
+            warnings.warn(f"OpenDSS solve diverged on attempt {attempt}/{FRESH_SOLVE_ATTEMPTS}; "
+                          f"retrying from a fresh compile ({exc})")
+    raise RuntimeError(f"OpenDSS solve did not converge in {FRESH_SOLVE_ATTEMPTS} fresh attempts: {last}")
+
+
 def _solve_or_raise() -> None:
     import opendssdirect as dss  # type: ignore
 
     dss.Text.Command("Solve")
-    if hasattr(dss, "Solution") and not bool(dss.Solution.Converged()):
-        raise RuntimeError("OpenDSS solve did not converge")
+    if not hasattr(dss, "Solution") or bool(dss.Solution.Converged()):
+        return
+    first = int(dss.Solution.Iterations())
+    dss.Text.Command(f"Set maxiterations={RETRY_MAX_ITERATIONS}")
+    dss.Text.Command("Solve")
+    if not bool(dss.Solution.Converged()):
+        raise RuntimeError(
+            f"OpenDSS solve did not converge (tolerance {dss.Solution.Convergence():g}; "
+            f"{first} then {int(dss.Solution.Iterations())} iterations)"
+        )
 
 
 def _inject_candidate(
@@ -241,12 +284,15 @@ def _simulate_base(
         extract_three_phase_voltage_measurements,
         extract_three_phase_branch_current_measurements,
     ) = _measurement_exporters()
-    _compile_base_model(model_dir)
-    baseline = capture_operating_point_baseline()
     effective_op_point = dict(op_point or {})
     effective_op_point.setdefault("load_scale", float(load_scale))
-    apply_hif_operating_point(baseline, effective_op_point)
-    _solve_or_raise()
+
+    def build() -> None:
+        _compile_base_model(model_dir)
+        apply_hif_operating_point(capture_operating_point_baseline(), effective_op_point)
+        _solve_or_raise()
+
+    _solve_from_fresh_compile(build)
     z_sim, _buses, _branches = extract_measurement_series(shunt_convention=convention)
     return {
         "z": [float(x) for x in z_sim],
@@ -287,20 +333,25 @@ def _simulate_candidate(
     # Normalized-model ohms (kV_LL = 1): never a physical resistance.
     r_hif_model_ohm = hif_ohms_from_pu(r_hif_pu, base_mva=100.0, kv_ll=1.0)
     fault_bus = "FaultEst"
-    _compile_base_model(model_dir)
-    overrides = _inject_candidate(
-        original_tokens=original_tokens,
-        dss_element=dss_element,
-        alpha=alpha,
-        phase=phase,
-        r_hif_ohm=r_hif_model_ohm,
-        fault_bus=fault_bus,
-    )
-    baseline = capture_operating_point_baseline()
     effective_op_point = dict(op_point or {})
     effective_op_point.setdefault("load_scale", float(load_scale))
-    apply_hif_operating_point(baseline, effective_op_point)
-    _solve_or_raise()
+    overrides: dict[str, str] = {}
+
+    def build() -> None:
+        _compile_base_model(model_dir)
+        overrides.clear()
+        overrides.update(_inject_candidate(
+            original_tokens=original_tokens,
+            dss_element=dss_element,
+            alpha=alpha,
+            phase=phase,
+            r_hif_ohm=r_hif_model_ohm,
+            fault_bus=fault_bus,
+        ))
+        apply_hif_operating_point(capture_operating_point_baseline(), effective_op_point)
+        _solve_or_raise()
+
+    _solve_from_fresh_compile(build)
     z_sim, _buses, _branches = extract_measurement_series(
         branch_element_overrides=overrides, shunt_convention=convention
     )

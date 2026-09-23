@@ -1,0 +1,1549 @@
+{
+  "hif": {
+    "alpha_abs_error_median": 0.22185068454900642,
+    "alpha_abs_error_p90": 0.5279609465190946,
+    "coherent_window_alpha_abs_error_median": 0.08397451371569276,
+    "coherent_window_alpha_abs_error_p90": 0.30437984197596646,
+    "coherent_window_detected_rate": 1.0,
+    "coherent_window_line_top1_accuracy": 1.0,
+    "coherent_window_phase_accuracy": 1.0,
+    "coherent_window_r_rel_error_median": 0.0028709473701674856,
+    "coherent_window_r_rel_error_p90": 0.009526880123581022,
+    "differential_detected_rate": 1.0,
+    "family": "hif",
+    "line_top1_accuracy": 1.0,
+    "line_top3_accuracy": 1.0,
+    "phase_accuracy": 1.0,
+    "physical_resistance_labels": [
+      {
+        "id": "ieee14_hif_000000",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.1969168181794349,
+        "r_hif_ohm": 937.5209713522895
+      },
+      {
+        "id": "ieee14_hif_000001",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03766719073187961,
+        "r_hif_ohm": 179.3334950744788
+      },
+      {
+        "id": "ieee14_hif_000002",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.08695732337862383,
+        "r_hif_ohm": 414.00381660562806
+      },
+      {
+        "id": "ieee14_hif_000003",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.11319653929164641,
+        "r_hif_ohm": 538.9287235675286
+      },
+      {
+        "id": "ieee14_hif_000004",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.058567213738305396,
+        "r_hif_ohm": 278.83850460807196
+      },
+      {
+        "id": "ieee14_hif_000005",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.025548900328689218,
+        "r_hif_ohm": 121.63831446488936
+      },
+      {
+        "id": "ieee14_hif_000006",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.026259420035729064,
+        "r_hif_ohm": 125.02109879010605
+      },
+      {
+        "id": "ieee14_hif_000007",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.023620058512641134,
+        "r_hif_ohm": 112.45509857868443
+      },
+      {
+        "id": "ieee14_hif_000008",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.022422635658452476,
+        "r_hif_ohm": 106.75416836989223
+      },
+      {
+        "id": "ieee14_hif_000009",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.08241097096543147,
+        "r_hif_ohm": 392.35863276641925
+      },
+      {
+        "id": "ieee14_hif_000010",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.09294115568248609,
+        "r_hif_ohm": 442.4928422043163
+      },
+      {
+        "id": "ieee14_hif_000011",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.09042947411495572,
+        "r_hif_ohm": 430.5347262613042
+      },
+      {
+        "id": "ieee14_hif_000012",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.07711375538145043,
+        "r_hif_ohm": 367.13858937108546
+      },
+      {
+        "id": "ieee14_hif_000013",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.12636066181126046,
+        "r_hif_ohm": 601.6031108834111
+      },
+      {
+        "id": "ieee14_hif_000014",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.0994972545720441,
+        "r_hif_ohm": 473.70642901750193
+      },
+      {
+        "id": "ieee14_hif_000015",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.08075486809538457,
+        "r_hif_ohm": 384.47392700212595
+      },
+      {
+        "id": "ieee14_hif_000016",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.1082792210129945,
+        "r_hif_ohm": 515.5173712428668
+      },
+      {
+        "id": "ieee14_hif_000017",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03746395737029248,
+        "r_hif_ohm": 178.3659010399625
+      },
+      {
+        "id": "ieee14_hif_000018",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.19328030135956933,
+        "r_hif_ohm": 920.2075147729096
+      },
+      {
+        "id": "ieee14_hif_000019",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.051207922376744354,
+        "r_hif_ohm": 243.80091843567988
+      },
+      {
+        "id": "ieee14_hif_000020",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.12189849327663027,
+        "r_hif_ohm": 580.3587264900367
+      },
+      {
+        "id": "ieee14_hif_000021",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.055513974628833056,
+        "r_hif_ohm": 264.30203320787416
+      },
+      {
+        "id": "ieee14_hif_000022",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03012446040069307,
+        "r_hif_ohm": 143.4225559676997
+      },
+      {
+        "id": "ieee14_hif_000023",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.14991992808419427,
+        "r_hif_ohm": 713.768777608849
+      },
+      {
+        "id": "ieee14_hif_000024",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.0371526529282383,
+        "r_hif_ohm": 176.88378059134254
+      },
+      {
+        "id": "ieee14_hif_000025",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.13991614844237293,
+        "r_hif_ohm": 666.1407827341375
+      },
+      {
+        "id": "ieee14_hif_000026",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.08554177067058737,
+        "r_hif_ohm": 407.2643701626664
+      },
+      {
+        "id": "ieee14_hif_000027",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.05318851516456509,
+        "r_hif_ohm": 253.23052069849442
+      },
+      {
+        "id": "ieee14_hif_000028",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.10807196749106034,
+        "r_hif_ohm": 514.5306372249382
+      },
+      {
+        "id": "ieee14_hif_000029",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.09371302477345335,
+        "r_hif_ohm": 446.1677109464114
+      },
+      {
+        "id": "ieee14_hif_000030",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.1716456049650887,
+        "r_hif_ohm": 817.2047252387872
+      },
+      {
+        "id": "ieee14_hif_000031",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.07228936232059795,
+        "r_hif_ohm": 344.1696540083668
+      },
+      {
+        "id": "ieee14_hif_000032",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.050728953257249076,
+        "r_hif_ohm": 241.52054645776283
+      },
+      {
+        "id": "ieee14_hif_000033",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.061141589765378916,
+        "r_hif_ohm": 291.095108872969
+      },
+      {
+        "id": "ieee14_hif_000034",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03183989700346382,
+        "r_hif_ohm": 151.58974963349124
+      },
+      {
+        "id": "ieee14_hif_000035",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03437767129554747,
+        "r_hif_ohm": 163.67209303810148
+      },
+      {
+        "id": "ieee14_hif_000036",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.1310146619564089,
+        "r_hif_ohm": 623.7608055744628
+      },
+      {
+        "id": "ieee14_hif_000037",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.06025942758198377,
+        "r_hif_ohm": 286.8951347178247
+      },
+      {
+        "id": "ieee14_hif_000038",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03291121950878267,
+        "r_hif_ohm": 156.69031608131428
+      },
+      {
+        "id": "ieee14_hif_000039",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.18878173090568987,
+        "r_hif_ohm": 898.7898208419895
+      },
+      {
+        "id": "ieee14_hif_000040",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.025425529686281124,
+        "r_hif_ohm": 121.05094683638444
+      },
+      {
+        "id": "ieee14_hif_000041",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.027602561190355004,
+        "r_hif_ohm": 131.41579382728017
+      },
+      {
+        "id": "ieee14_hif_000042",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.039480997421604956,
+        "r_hif_ohm": 187.9690287242612
+      },
+      {
+        "id": "ieee14_hif_000043",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.051602693492479326,
+        "r_hif_ohm": 245.68042371769405
+      },
+      {
+        "id": "ieee14_hif_000044",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.1541208325140246,
+        "r_hif_ohm": 733.7692835992711
+      },
+      {
+        "id": "ieee14_hif_000045",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.05221707781942761,
+        "r_hif_ohm": 248.60550749829483
+      },
+      {
+        "id": "ieee14_hif_000046",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.030412401554987378,
+        "r_hif_ohm": 144.7934438032949
+      },
+      {
+        "id": "ieee14_hif_000047",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.047257097872243636,
+        "r_hif_ohm": 224.99104296975193
+      },
+      {
+        "id": "ieee14_hif_000048",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.026258845106782457,
+        "r_hif_ohm": 125.01836155339127
+      },
+      {
+        "id": "ieee14_hif_000049",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.17028753284836928,
+        "r_hif_ohm": 810.738943891086
+      },
+      {
+        "id": "ieee14_hif_000050",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.07554582850490173,
+        "r_hif_ohm": 359.6736895118371
+      },
+      {
+        "id": "ieee14_hif_000051",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.09225893254468286,
+        "r_hif_ohm": 439.24477784523503
+      },
+      {
+        "id": "ieee14_hif_000052",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03237047945554117,
+        "r_hif_ohm": 154.1158526878315
+      },
+      {
+        "id": "ieee14_hif_000053",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.17571709061224572,
+        "r_hif_ohm": 836.5890684049018
+      },
+      {
+        "id": "ieee14_hif_000054",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.027793095777469967,
+        "r_hif_ohm": 132.3229289965345
+      },
+      {
+        "id": "ieee14_hif_000055",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.07716711143476418,
+        "r_hif_ohm": 367.3926175409123
+      },
+      {
+        "id": "ieee14_hif_000056",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.021264112212551364,
+        "r_hif_ohm": 101.23843824395705
+      },
+      {
+        "id": "ieee14_hif_000057",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.19874518467097566,
+        "r_hif_ohm": 946.2258242185152
+      },
+      {
+        "id": "ieee14_hif_000058",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.12877854415316495,
+        "r_hif_ohm": 613.1146487132182
+      },
+      {
+        "id": "ieee14_hif_000059",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.08105380284699275,
+        "r_hif_ohm": 385.89715535453246
+      },
+      {
+        "id": "ieee14_hif_000060",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.12773530209003794,
+        "r_hif_ohm": 608.1477732506706
+      },
+      {
+        "id": "ieee14_hif_000061",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.1753963406401185,
+        "r_hif_ohm": 835.0619777876041
+      },
+      {
+        "id": "ieee14_hif_000062",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03962006658031078,
+        "r_hif_ohm": 188.63113698885962
+      },
+      {
+        "id": "ieee14_hif_000063",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.04017440152637907,
+        "r_hif_ohm": 191.27032566709076
+      },
+      {
+        "id": "ieee14_hif_000064",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03164930209282609,
+        "r_hif_ohm": 150.682327263945
+      },
+      {
+        "id": "ieee14_hif_000065",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.037365928567655526,
+        "r_hif_ohm": 177.89918591060797
+      },
+      {
+        "id": "ieee14_hif_000066",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03069604769502058,
+        "r_hif_ohm": 146.143883075993
+      },
+      {
+        "id": "ieee14_hif_000067",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.1939579712572064,
+        "r_hif_ohm": 923.4339011555596
+      },
+      {
+        "id": "ieee14_hif_000068",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.08229548865924458,
+        "r_hif_ohm": 391.8088215066634
+      },
+      {
+        "id": "ieee14_hif_000069",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.09071813707258786,
+        "r_hif_ohm": 431.9090506025908
+      },
+      {
+        "id": "ieee14_hif_000070",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.05700279689077926,
+        "r_hif_ohm": 271.390315997
+      },
+      {
+        "id": "ieee14_hif_000071",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.14523257279399082,
+        "r_hif_ohm": 691.4522790721903
+      },
+      {
+        "id": "ieee14_hif_000072",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.061062024307601215,
+        "r_hif_ohm": 290.7162977284894
+      },
+      {
+        "id": "ieee14_hif_000073",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.15175256640714346,
+        "r_hif_ohm": 722.49396866441
+      },
+      {
+        "id": "ieee14_hif_000074",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.12274622248372725,
+        "r_hif_ohm": 584.3947652450255
+      },
+      {
+        "id": "ieee14_hif_000075",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.0377870391284553,
+        "r_hif_ohm": 179.9040932905757
+      },
+      {
+        "id": "ieee14_hif_000076",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.09734341858021367,
+        "r_hif_ohm": 463.4520158603973
+      },
+      {
+        "id": "ieee14_hif_000077",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.10016448848282346,
+        "r_hif_ohm": 476.8831296667225
+      },
+      {
+        "id": "ieee14_hif_000078",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.062484642863806235,
+        "r_hif_ohm": 297.48938467458146
+      },
+      {
+        "id": "ieee14_hif_000079",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.054327016970919434,
+        "r_hif_ohm": 258.6509277985474
+      },
+      {
+        "id": "ieee14_hif_000080",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.08186143718539828,
+        "r_hif_ohm": 389.74230243968117
+      },
+      {
+        "id": "ieee14_hif_000081",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.024919076122811096,
+        "r_hif_ohm": 118.63972142070362
+      },
+      {
+        "id": "ieee14_hif_000082",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.022435868427103264,
+        "r_hif_ohm": 106.81716958143863
+      },
+      {
+        "id": "ieee14_hif_000083",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.05803843709807314,
+        "r_hif_ohm": 276.3209990239262
+      },
+      {
+        "id": "ieee14_hif_000084",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.08634376936791492,
+        "r_hif_ohm": 411.0826859606429
+      },
+      {
+        "id": "ieee14_hif_000085",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.12470744319257052,
+        "r_hif_ohm": 593.7321370398282
+      },
+      {
+        "id": "ieee14_hif_000086",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.02455049599202543,
+        "r_hif_ohm": 116.88491141803307
+      },
+      {
+        "id": "ieee14_hif_000087",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.04748472218780999,
+        "r_hif_ohm": 226.07476233616336
+      },
+      {
+        "id": "ieee14_hif_000088",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.1324786877236173,
+        "r_hif_ohm": 630.7310322521419
+      },
+      {
+        "id": "ieee14_hif_000089",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.021880532743197883,
+        "r_hif_ohm": 104.17321639036513
+      },
+      {
+        "id": "ieee14_hif_000090",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.028683747735340135,
+        "r_hif_ohm": 136.56332296795438
+      },
+      {
+        "id": "ieee14_hif_000091",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.0345812348028203,
+        "r_hif_ohm": 164.64125889622744
+      },
+      {
+        "id": "ieee14_hif_000092",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.08657701464361045,
+        "r_hif_ohm": 412.19316671822935
+      },
+      {
+        "id": "ieee14_hif_000093",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.02363769720496116,
+        "r_hif_ohm": 112.53907639282006
+      },
+      {
+        "id": "ieee14_hif_000094",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.06625047797368416,
+        "r_hif_ohm": 315.41852563271027
+      },
+      {
+        "id": "ieee14_hif_000095",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.09342409876239023,
+        "r_hif_ohm": 444.7921342077399
+      },
+      {
+        "id": "ieee14_hif_000096",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.20858002866867104,
+        "r_hif_ohm": 993.0495164915428
+      },
+      {
+        "id": "ieee14_hif_000097",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.028728770243968277,
+        "r_hif_ohm": 136.77767513153296
+      },
+      {
+        "id": "ieee14_hif_000098",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.02753873722161039,
+        "r_hif_ohm": 131.11192791208705
+      },
+      {
+        "id": "ieee14_hif_000099",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.02598585931321706,
+        "r_hif_ohm": 123.71867619022642
+      },
+      {
+        "id": "ieee14_hif_000100",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.054366540417369845,
+        "r_hif_ohm": 258.83909892709784
+      },
+      {
+        "id": "ieee14_hif_000101",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03542265122725546,
+        "r_hif_ohm": 168.64724249296322
+      },
+      {
+        "id": "ieee14_hif_000102",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.14603658604982234,
+        "r_hif_ohm": 695.2801861832041
+      },
+      {
+        "id": "ieee14_hif_000103",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.15002660412344754,
+        "r_hif_ohm": 714.2766622317337
+      },
+      {
+        "id": "ieee14_hif_000104",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03314078872120087,
+        "r_hif_ohm": 157.78329510163732
+      },
+      {
+        "id": "ieee14_hif_000105",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.18311279816779963,
+        "r_hif_ohm": 871.8000320768939
+      },
+      {
+        "id": "ieee14_hif_000106",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.02548606469060423,
+        "r_hif_ohm": 121.33915399196673
+      },
+      {
+        "id": "ieee14_hif_000107",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.09614843951424418,
+        "r_hif_ohm": 457.7627205273165
+      },
+      {
+        "id": "ieee14_hif_000108",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.20837130353155725,
+        "r_hif_ohm": 992.0557761137441
+      },
+      {
+        "id": "ieee14_hif_000109",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.11187695691731436,
+        "r_hif_ohm": 532.6461918833337
+      },
+      {
+        "id": "ieee14_hif_000110",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.1632543790583576,
+        "r_hif_ohm": 777.2540986968405
+      },
+      {
+        "id": "ieee14_hif_000111",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.1994100412751446,
+        "r_hif_ohm": 949.3912065109635
+      },
+      {
+        "id": "ieee14_hif_000112",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.09593172062408012,
+        "r_hif_ohm": 456.73092189124543
+      },
+      {
+        "id": "ieee14_hif_000113",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.05286013256555833,
+        "r_hif_ohm": 251.6670911446232
+      },
+      {
+        "id": "ieee14_hif_000114",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.08157013768291468,
+        "r_hif_ohm": 388.3554255083568
+      },
+      {
+        "id": "ieee14_hif_000115",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.07922732974545968,
+        "r_hif_ohm": 377.20131691813356
+      },
+      {
+        "id": "ieee14_hif_000116",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.038250351081184346,
+        "r_hif_ohm": 182.10992149751866
+      },
+      {
+        "id": "ieee14_hif_000117",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.16743924698115276,
+        "r_hif_ohm": 797.1782548772683
+      },
+      {
+        "id": "ieee14_hif_000118",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03580930565059164,
+        "r_hif_ohm": 170.4881042024668
+      },
+      {
+        "id": "ieee14_hif_000119",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.09864948778581453,
+        "r_hif_ohm": 469.670211348263
+      },
+      {
+        "id": "ieee14_hif_000120",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.07616479562362469,
+        "r_hif_ohm": 362.6205919640771
+      },
+      {
+        "id": "ieee14_hif_000121",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.0602975549620253,
+        "r_hif_ohm": 287.07665917420246
+      },
+      {
+        "id": "ieee14_hif_000122",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.20851511848021184,
+        "r_hif_ohm": 992.7404790842885
+      },
+      {
+        "id": "ieee14_hif_000123",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.0578257184616196,
+        "r_hif_ohm": 275.3082455957709
+      },
+      {
+        "id": "ieee14_hif_000124",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.04025990045750661,
+        "r_hif_ohm": 191.67738607818896
+      },
+      {
+        "id": "ieee14_hif_000125",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.11803186385721512,
+        "r_hif_ohm": 561.9497038242012
+      },
+      {
+        "id": "ieee14_hif_000126",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03611799784438162,
+        "r_hif_ohm": 171.95778773710086
+      },
+      {
+        "id": "ieee14_hif_000127",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.06789371669526902,
+        "r_hif_ohm": 323.2419851861758
+      },
+      {
+        "id": "ieee14_hif_000128",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.09364853231865844,
+        "r_hif_ohm": 445.8606623691328
+      },
+      {
+        "id": "ieee14_hif_000129",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.1882225444637639,
+        "r_hif_ohm": 896.12753419198
+      },
+      {
+        "id": "ieee14_hif_000130",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.022236070880774325,
+        "r_hif_ohm": 105.86593346336655
+      },
+      {
+        "id": "ieee14_hif_000131",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.029113063352907406,
+        "r_hif_ohm": 138.60729462319216
+      },
+      {
+        "id": "ieee14_hif_000132",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.20832263762048708,
+        "r_hif_ohm": 991.8240777111389
+      },
+      {
+        "id": "ieee14_hif_000133",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.14086020250275091,
+        "r_hif_ohm": 670.6354241155971
+      },
+      {
+        "id": "ieee14_hif_000134",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.08751046145573227,
+        "r_hif_ohm": 416.6373069907413
+      },
+      {
+        "id": "ieee14_hif_000135",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.047232081207538856,
+        "r_hif_ohm": 224.8719386290925
+      },
+      {
+        "id": "ieee14_hif_000136",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.09203598878369908,
+        "r_hif_ohm": 438.1833425991913
+      },
+      {
+        "id": "ieee14_hif_000137",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.04872074640883689,
+        "r_hif_ohm": 231.9594736524724
+      },
+      {
+        "id": "ieee14_hif_000138",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.07350184366190828,
+        "r_hif_ohm": 349.9422776743453
+      },
+      {
+        "id": "ieee14_hif_000139",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.1764389670948239,
+        "r_hif_ohm": 840.0259223384566
+      },
+      {
+        "id": "ieee14_hif_000140",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03396345585708564,
+        "r_hif_ohm": 161.70001333558474
+      },
+      {
+        "id": "ieee14_hif_000141",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.040741235842753104,
+        "r_hif_ohm": 193.9690238473475
+      },
+      {
+        "id": "ieee14_hif_000142",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.16984926908548933,
+        "r_hif_ohm": 808.6523701160147
+      },
+      {
+        "id": "ieee14_hif_000143",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.12696359781324976,
+        "r_hif_ohm": 604.4736891888821
+      },
+      {
+        "id": "ieee14_hif_000144",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.1274660296685956,
+        "r_hif_ohm": 606.8657672521836
+      },
+      {
+        "id": "ieee14_hif_000145",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.13013399498299194,
+        "r_hif_ohm": 619.5679501140246
+      },
+      {
+        "id": "ieee14_hif_000146",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.035967356122380084,
+        "r_hif_ohm": 171.24058249865158
+      },
+      {
+        "id": "ieee14_hif_000147",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.0871865600473339,
+        "r_hif_ohm": 415.0952123853567
+      },
+      {
+        "id": "ieee14_hif_000148",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.1129008642567737,
+        "r_hif_ohm": 537.5210147264995
+      },
+      {
+        "id": "ieee14_hif_000149",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.04098169472876016,
+        "r_hif_ohm": 195.11384860362713
+      },
+      {
+        "id": "ieee14_hif_000150",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.06136368723148448,
+        "r_hif_ohm": 292.1525149090976
+      },
+      {
+        "id": "ieee14_hif_000151",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03756054408578963,
+        "r_hif_ohm": 178.8257503924444
+      },
+      {
+        "id": "ieee14_hif_000152",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.19303792951728366,
+        "r_hif_ohm": 919.0535824317874
+      },
+      {
+        "id": "ieee14_hif_000153",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03624816667294781,
+        "r_hif_ohm": 172.57752152990452
+      },
+      {
+        "id": "ieee14_hif_000154",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.11320661867061255,
+        "r_hif_ohm": 538.9767114907863
+      },
+      {
+        "id": "ieee14_hif_000155",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.12510952362404087,
+        "r_hif_ohm": 595.6464419740587
+      },
+      {
+        "id": "ieee14_hif_000156",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.061632972322541744,
+        "r_hif_ohm": 293.4345812276212
+      },
+      {
+        "id": "ieee14_hif_000157",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.13909357222097973,
+        "r_hif_ohm": 662.2244973440844
+      },
+      {
+        "id": "ieee14_hif_000158",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.12014611232047513,
+        "r_hif_ohm": 572.0156407577821
+      },
+      {
+        "id": "ieee14_hif_000159",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.1620784657373058,
+        "r_hif_ohm": 771.655575375313
+      },
+      {
+        "id": "ieee14_hif_000160",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.04052655640338824,
+        "r_hif_ohm": 192.94693503653139
+      },
+      {
+        "id": "ieee14_hif_000161",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.13156151334223387,
+        "r_hif_ohm": 626.3643650223755
+      },
+      {
+        "id": "ieee14_hif_000162",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03490262255407701,
+        "r_hif_ohm": 166.17138597996063
+      },
+      {
+        "id": "ieee14_hif_000163",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.15372284019717414,
+        "r_hif_ohm": 731.874442178746
+      },
+      {
+        "id": "ieee14_hif_000164",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.04020049692257346,
+        "r_hif_ohm": 191.39456584837222
+      },
+      {
+        "id": "ieee14_hif_000165",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.17438132191046968,
+        "r_hif_ohm": 830.2294736157462
+      },
+      {
+        "id": "ieee14_hif_000166",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.05071612067926079,
+        "r_hif_ohm": 241.45945055396064
+      },
+      {
+        "id": "ieee14_hif_000167",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.19892917140962246,
+        "r_hif_ohm": 947.1017850812125
+      },
+      {
+        "id": "ieee14_hif_000168",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.14898176383956505,
+        "r_hif_ohm": 709.3021776401691
+      },
+      {
+        "id": "ieee14_hif_000169",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.10441420755953626,
+        "r_hif_ohm": 497.1160421909521
+      },
+      {
+        "id": "ieee14_hif_000170",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.05098747330986163,
+        "r_hif_ohm": 242.7513604282512
+      },
+      {
+        "id": "ieee14_hif_000171",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.18137144558383775,
+        "r_hif_ohm": 863.5094524246515
+      },
+      {
+        "id": "ieee14_hif_000172",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.2096583005830765,
+        "r_hif_ohm": 998.1831690760272
+      },
+      {
+        "id": "ieee14_hif_000173",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.08620470754004725,
+        "r_hif_ohm": 410.4206125981649
+      },
+      {
+        "id": "ieee14_hif_000174",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.10250793134123903,
+        "r_hif_ohm": 488.040261115639
+      },
+      {
+        "id": "ieee14_hif_000175",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.022417092499742188,
+        "r_hif_ohm": 106.72777739127255
+      },
+      {
+        "id": "ieee14_hif_000176",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.13177070948649836,
+        "r_hif_ohm": 627.3603478652187
+      },
+      {
+        "id": "ieee14_hif_000177",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.04016186295149668,
+        "r_hif_ohm": 191.21062951207566
+      },
+      {
+        "id": "ieee14_hif_000178",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.16801381218912417,
+        "r_hif_ohm": 799.9137598324203
+      },
+      {
+        "id": "ieee14_hif_000179",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.16798042683646983,
+        "r_hif_ohm": 799.7548121684329
+      },
+      {
+        "id": "ieee14_hif_000180",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03315218307945431,
+        "r_hif_ohm": 157.83754364128197
+      },
+      {
+        "id": "ieee14_hif_000181",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.06321334430156492,
+        "r_hif_ohm": 300.9587322197506
+      },
+      {
+        "id": "ieee14_hif_000182",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.08995275476006427,
+        "r_hif_ohm": 428.265065412666
+      },
+      {
+        "id": "ieee14_hif_000183",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.11911624303011202,
+        "r_hif_ohm": 567.1124330663633
+      },
+      {
+        "id": "ieee14_hif_000184",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.05718233586913078,
+        "r_hif_ohm": 272.2451010729316
+      },
+      {
+        "id": "ieee14_hif_000185",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03551138623703261,
+        "r_hif_ohm": 169.06970987451226
+      },
+      {
+        "id": "ieee14_hif_000186",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.18412996498739137,
+        "r_hif_ohm": 876.6427633049703
+      },
+      {
+        "id": "ieee14_hif_000187",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.04431631459135082,
+        "r_hif_ohm": 210.98997376942123
+      },
+      {
+        "id": "ieee14_hif_000188",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.16320459830075276,
+        "r_hif_ohm": 777.0170925098839
+      },
+      {
+        "id": "ieee14_hif_000189",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.08165596195804668,
+        "r_hif_ohm": 388.7640348822602
+      },
+      {
+        "id": "ieee14_hif_000190",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.04153226264716335,
+        "r_hif_ohm": 197.73510246314473
+      },
+      {
+        "id": "ieee14_hif_000191",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03834956416237829,
+        "r_hif_ohm": 182.58227497708302
+      },
+      {
+        "id": "ieee14_hif_000192",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.20615537877043053,
+        "r_hif_ohm": 981.5057583260198
+      },
+      {
+        "id": "ieee14_hif_000193",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.026021044200760155,
+        "r_hif_ohm": 123.8861914398191
+      },
+      {
+        "id": "ieee14_hif_000194",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.044841021576522214,
+        "r_hif_ohm": 213.48810372582224
+      },
+      {
+        "id": "ieee14_hif_000195",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.18374001825356756,
+        "r_hif_ohm": 874.7862269052353
+      },
+      {
+        "id": "ieee14_hif_000196",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.11887031513815494,
+        "r_hif_ohm": 565.9415703727557
+      },
+      {
+        "id": "ieee14_hif_000197",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.10136725837950371,
+        "r_hif_ohm": 482.6095171448171
+      },
+      {
+        "id": "ieee14_hif_000198",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.08365276423966048,
+        "r_hif_ohm": 398.27081054502355
+      },
+      {
+        "id": "ieee14_hif_000199",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.035147913164151626,
+        "r_hif_ohm": 167.3392145745259
+      },
+      {
+        "id": "ieee14_hif_000200",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.08056845446955142,
+        "r_hif_ohm": 383.5864117295343
+      },
+      {
+        "id": "ieee14_hif_000201",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.04163704189682167,
+        "r_hif_ohm": 198.23395647076796
+      },
+      {
+        "id": "ieee14_hif_000202",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.051136457980861104,
+        "r_hif_ohm": 243.46067644687972
+      },
+      {
+        "id": "ieee14_hif_000203",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.11535089746776166,
+        "r_hif_ohm": 549.1856228440132
+      },
+      {
+        "id": "ieee14_hif_000204",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.1315436900657266,
+        "r_hif_ohm": 626.2795084029244
+      },
+      {
+        "id": "ieee14_hif_000205",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.15512814423465363,
+        "r_hif_ohm": 738.5650947011859
+      },
+      {
+        "id": "ieee14_hif_000206",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03828011626829285,
+        "r_hif_ohm": 182.25163355334226
+      },
+      {
+        "id": "ieee14_hif_000207",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.035766449295884004,
+        "r_hif_ohm": 170.28406509770372
+      },
+      {
+        "id": "ieee14_hif_000208",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.1312624598012746,
+        "r_hif_ohm": 624.9405711138684
+      },
+      {
+        "id": "ieee14_hif_000209",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.09301740582529058,
+        "r_hif_ohm": 442.85586913420843
+      },
+      {
+        "id": "ieee14_hif_000210",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.08433120898069711,
+        "r_hif_ohm": 401.50088595709894
+      },
+      {
+        "id": "ieee14_hif_000211",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.17388709022009033,
+        "r_hif_ohm": 827.8764365378499
+      },
+      {
+        "id": "ieee14_hif_000212",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.06695274025058123,
+        "r_hif_ohm": 318.76199633301724
+      },
+      {
+        "id": "ieee14_hif_000213",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.059542106122589325,
+        "r_hif_ohm": 283.47996724964776
+      },
+      {
+        "id": "ieee14_hif_000214",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.1633529994145204,
+        "r_hif_ohm": 777.7236302125316
+      },
+      {
+        "id": "ieee14_hif_000215",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.02167055533558867,
+        "r_hif_ohm": 103.17351395273765
+      },
+      {
+        "id": "ieee14_hif_000216",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.1762872492189225,
+        "r_hif_ohm": 839.3035935312901
+      },
+      {
+        "id": "ieee14_hif_000217",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.08245687612635783,
+        "r_hif_ohm": 392.57718723758956
+      },
+      {
+        "id": "ieee14_hif_000218",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.021473516578373784,
+        "r_hif_ohm": 102.23541242963759
+      },
+      {
+        "id": "ieee14_hif_000219",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.05270892631758593,
+        "r_hif_ohm": 250.9471981980266
+      },
+      {
+        "id": "ieee14_hif_000220",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.08021933693758902,
+        "r_hif_ohm": 381.9242631598613
+      },
+      {
+        "id": "ieee14_hif_000221",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.118051625634296,
+        "r_hif_ohm": 562.0437896448832
+      },
+      {
+        "id": "ieee14_hif_000222",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.04632471791106828,
+        "r_hif_ohm": 220.5519819745961
+      },
+      {
+        "id": "ieee14_hif_000223",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.1465338052048972,
+        "r_hif_ohm": 697.6474465805156
+      },
+      {
+        "id": "ieee14_hif_000224",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.0552382933391733,
+        "r_hif_ohm": 262.9895145878041
+      },
+      {
+        "id": "ieee14_hif_000225",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.18109071232871152,
+        "r_hif_ohm": 862.1728813969955
+      },
+      {
+        "id": "ieee14_hif_000226",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.028667005474080767,
+        "r_hif_ohm": 136.48361306209853
+      },
+      {
+        "id": "ieee14_hif_000227",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.10541999560666111,
+        "r_hif_ohm": 501.9045990833136
+      },
+      {
+        "id": "ieee14_hif_000228",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.15053274187759091,
+        "r_hif_ohm": 716.6863840792104
+      },
+      {
+        "id": "ieee14_hif_000229",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.1533066692133511,
+        "r_hif_ohm": 729.8930521247646
+      },
+      {
+        "id": "ieee14_hif_000230",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.0874833007666537,
+        "r_hif_ohm": 416.50799495003827
+      },
+      {
+        "id": "ieee14_hif_000231",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.05230100188950863,
+        "r_hif_ohm": 249.0050699959506
+      },
+      {
+        "id": "ieee14_hif_000232",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.027723902264217032,
+        "r_hif_ohm": 131.9934986799373
+      },
+      {
+        "id": "ieee14_hif_000233",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.024308522319446718,
+        "r_hif_ohm": 115.73287476288581
+      },
+      {
+        "id": "ieee14_hif_000234",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.12955252557303104,
+        "r_hif_ohm": 616.7995742532007
+      },
+      {
+        "id": "ieee14_hif_000235",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.06825877486757405,
+        "r_hif_ohm": 324.98002714452
+      },
+      {
+        "id": "ieee14_hif_000236",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.06574894675802324,
+        "r_hif_ohm": 313.0307355149487
+      },
+      {
+        "id": "ieee14_hif_000237",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.15258623308052874,
+        "r_hif_ohm": 726.4630556963973
+      },
+      {
+        "id": "ieee14_hif_000238",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.07498384245534284,
+        "r_hif_ohm": 356.99807392988725
+      },
+      {
+        "id": "ieee14_hif_000239",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.04919598862450083,
+        "r_hif_ohm": 234.22210184124845
+      },
+      {
+        "id": "ieee14_hif_000240",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.046648340729364496,
+        "r_hif_ohm": 222.09275021250437
+      },
+      {
+        "id": "ieee14_hif_000241",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.09852753998373213,
+        "r_hif_ohm": 469.08961786254866
+      },
+      {
+        "id": "ieee14_hif_000242",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.06315538711595024,
+        "r_hif_ohm": 300.6827980590391
+      },
+      {
+        "id": "ieee14_hif_000243",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.14605901763808332,
+        "r_hif_ohm": 695.3869829749146
+      },
+      {
+        "id": "ieee14_hif_000244",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.0301482692987227,
+        "r_hif_ohm": 143.53591013121877
+      },
+      {
+        "id": "ieee14_hif_000245",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.023927475785863423,
+        "r_hif_ohm": 113.91871221649575
+      },
+      {
+        "id": "ieee14_hif_000246",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.03475622639397797,
+        "r_hif_ohm": 165.4743938617291
+      },
+      {
+        "id": "ieee14_hif_000247",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.08749316026342605,
+        "r_hif_ohm": 416.5549360141714
+      },
+      {
+        "id": "ieee14_hif_000248",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.10018172198005677,
+        "r_hif_ohm": 476.9651783470503
+      },
+      {
+        "id": "ieee14_hif_000249",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.05981510154104667,
+        "r_hif_ohm": 284.7796984369232
+      },
+      {
+        "id": "ieee14_hif_000250",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.17441091521502447,
+        "r_hif_ohm": 830.3703673387315
+      },
+      {
+        "id": "ieee14_hif_000251",
+        "local_kv_ll": 69.0,
+        "r_hif_model_ohm": 0.10559038976925832,
+        "r_hif_ohm": 502.71584569143886
+      }
+    ],
+    "r_rel_error_median": 0.007954660343682907,
+    "r_rel_error_p90": 0.027499545064602796,
+    "scans_scored": 2520,
+    "window_line_top1_accuracy": 1.0,
+    "window_median_alpha_abs_error_median": 0.08397451371569276,
+    "window_median_alpha_abs_error_p90": 0.30437984197596646,
+    "window_median_r_rel_error_median": 0.0028709473701674856,
+    "window_median_r_rel_error_p90": 0.009526880123581022,
+    "window_phase_accuracy": 1.0,
+    "windows_scored": 252
+  },
+  "rows": 312,
+  "rows_by_scenario": {
+    "high_impedance_fault": 252,
+    "no_error": 60
+  },
+  "rows_with_branch_currents": 252,
+  "samples": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\artifacts\\measurements\\hif_physical69_main_train_extra_252x10_20260923b\\samples.jsonl"
+}

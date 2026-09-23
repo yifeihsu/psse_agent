@@ -47,23 +47,24 @@ from .dataset import FAMILY_NAMES, MEASUREMENT_CONVENTION, load_manifest
 CONTRACT = "gnn_dagger_aligned_corpus_v1"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS = REPO_ROOT / "artifacts" / "measurements"
-# 2026-09-23 HIF corpora: same seeds and recipes as the 2026-09-19/21 corpora,
-# re-simulated with generator reactive limits kept (voltage regulation active).
+# 2026-09-23b corpora: same seeds and recipes as the 2026-09-19/21 corpora,
+# re-simulated with generator reactive limits kept (voltage regulation active)
+# and the OpenDSS solve tolerance at 1e-8, so the HIF and unbalance paths agree.
 DEFAULT_HIF_CORPORA = (
-    "hif_physical69_main_train_84x10_20260923",
-    "hif_physical69_main_valid_21x10_20260923",
-    "hif_physical69_main_train_extra_252x10_20260923",
-    "hif_physical69_main_valid_extra_63x10_20260923",
+    "hif_physical69_main_train_84x10_20260923b",
+    "hif_physical69_main_valid_21x10_20260923b",
+    "hif_physical69_main_train_extra_252x10_20260923b",
+    "hif_physical69_main_valid_extra_63x10_20260923b",
 )
 DEFAULT_HIF_DETECTABLE = {
-    "hif_physical69_main_train_84x10_20260923": "hif_physical69_main_train_detectable_27x10_20260923",
-    "hif_physical69_main_valid_21x10_20260923": "hif_physical69_main_valid_detectable_8x10_20260923",
-    "hif_physical69_main_train_extra_252x10_20260923": "hif_physical69_main_train_extra_detectable_77x10_20260923",
-    "hif_physical69_main_valid_extra_63x10_20260923": "hif_physical69_main_valid_extra_detectable_19x10_20260923",
+    "hif_physical69_main_train_84x10_20260923b": "hif_physical69_main_train_detectable_27x10_20260923b",
+    "hif_physical69_main_valid_21x10_20260923b": "hif_physical69_main_valid_detectable_8x10_20260923b",
+    "hif_physical69_main_train_extra_252x10_20260923b": "hif_physical69_main_train_extra_detectable_77x10_20260923b",
+    "hif_physical69_main_valid_extra_63x10_20260923b": "hif_physical69_main_valid_extra_detectable_19x10_20260923b",
 }
-DEFAULT_UNBALANCE_CORPUS = "out_measurements_imbalance_currents_ybus_440_20260921"
-DEFAULT_UNBALANCE_DETECTABLE = "out_measurements_imbalance_currents_ybus_detectable_160_20260921"
-DEFAULT_EVALUATION_HIF = ("hif_physical_sweep_eval_336x10_20260923", "hif_physical69_detection_limit_21x10_20260923")
+DEFAULT_UNBALANCE_CORPUS = "out_measurements_imbalance_currents_ybus_440_20260923b"
+DEFAULT_UNBALANCE_DETECTABLE = "out_measurements_imbalance_currents_ybus_detectable_160_20260923b"
+DEFAULT_EVALUATION_HIF = ("hif_physical_sweep_eval_336x10_20260923b", "hif_physical69_detection_limit_21x10_20260923b")
 SPLIT_FRACTIONS = {"train": 0.60, "validation": 0.15, "calibration": 0.10, "test": 0.15}
 # Noise replicates per noiseless mean. Calibration parents contribute healthy
 # windows only. An unbalance parent has one unbalanced mean against ten HIF
@@ -213,19 +214,22 @@ class _Simulator:
         import opendssdirect as dss
         from IEEE_14_OpenDSS.constants import BRANCH_ORDER
         from IEEE_14_OpenDSS.export_measurement_series import extract_measurement_series
-        self._prepare(op_point)
-        if parameter:
-            element = BRANCH_ORDER[parameter["branch_row0"]]
-            if not element.startswith("Line."):
-                raise ValueError("parameter errors are applied to lines only")
-            dss.Lines.Name(element.split(".", 1)[1])
-            dss.Lines.RMatrix((np.asarray(dss.Lines.RMatrix()) * parameter["r_factor"]).tolist())
-            dss.Lines.XMatrix((np.asarray(dss.Lines.XMatrix()) * parameter["x_factor"]).tolist())
-        if topology:
-            dss.Text.Command(f"Open {BRANCH_ORDER[topology['branch_row0']]} term={int(topology['open_terminal'])}")
-        dss.Text.Command("Solve")
-        if not bool(dss.Solution.Converged()):
-            raise RuntimeError("OpenDSS solve did not converge")
+        from three_phase_nlm.hif_parameter_estimator import _solve_from_fresh_compile, _solve_or_raise
+
+        def build() -> None:
+            self._prepare(op_point)
+            if parameter:
+                element = BRANCH_ORDER[parameter["branch_row0"]]
+                if not element.startswith("Line."):
+                    raise ValueError("parameter errors are applied to lines only")
+                dss.Lines.Name(element.split(".", 1)[1])
+                dss.Lines.RMatrix((np.asarray(dss.Lines.RMatrix()) * parameter["r_factor"]).tolist())
+                dss.Lines.XMatrix((np.asarray(dss.Lines.XMatrix()) * parameter["x_factor"]).tolist())
+            if topology:
+                dss.Text.Command(f"Open {BRANCH_ORDER[topology['branch_row0']]} term={int(topology['open_terminal'])}")
+            _solve_or_raise()
+
+        _solve_from_fresh_compile(build)
         z = [float(x) for x in extract_measurement_series(shunt_convention="ybus")[0]]
         if len(z) != 3 * NB + 4 * NL or not np.all(np.isfinite(z)):
             raise RuntimeError("unexpected measurement vector")
@@ -396,6 +400,10 @@ def build_unbalance_parent(task: dict[str, Any]) -> dict[str, Any]:
     stratum = vuf_stratum(vuf)
     parent = _Parent(parent_id, "unbalance", stratum, bool(task["detectable"]), sigma, task["case"])
     op = {"load_scale": float(row["op_point"]["load_scale"])}
+    mismatch = float(np.max(np.abs(np.subtract(sim.solve(op), row["z_true"]))))
+    if mismatch > 1e-9:
+        raise ValueError(f"{parent_id}: the current unbalance simulator does not reproduce the stored balanced reference "
+                         f"(max |dz| {mismatch:.3g} pu); the corpus was generated with different physics")
     fractions = [float(label["load_split"]["fractions"][p]) for p in ("a", "b", "c")]
     source = {"dagger_corpus": corpus, "dagger_source_id": row["id"], "simulator_path": "imbalance_balanced",
               "generator_reactive_limits_reset": False, "dagger_detectable": parent.detectable,

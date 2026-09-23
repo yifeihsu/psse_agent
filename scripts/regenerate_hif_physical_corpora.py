@@ -1,16 +1,20 @@
-"""Regenerate the IEEE-14 physical HIF corpora and their WLS-detectable subsets.
+"""Regenerate the IEEE-14 physical HIF and unbalance corpora and their WLS-detectable subsets.
 
-Stages (run in order, each resumable on its own):
+Stages (run in order, each resumable on its own; ``--families`` selects hif, unbalance or both):
 
-1. ``generate``   six corpora with the recipes and seeds of the 2026-09-19/21 corpora
-2. ``validate``   sample validator, strict-physics multiscan replay, branch-current localization
-3. ``audit``      operator WLS and discovered-mode scenario admission (scripts/audit_hif_physical_corpora.py)
-4. ``subset``     detectable subsets of the four main corpora: every healthy control plus the
-                  admitted HIF windows, rows copied verbatim, meta.json gains ``detectable_filter``
-5. ``reaudit``    audit of the subsets (every HIF window must be admitted)
+1. ``generate``   six HIF corpora with the recipes and seeds of the 2026-09-19/21 corpora, and the
+                  440-window unbalance corpus with its 2026-09-21 seed
+2. ``validate``   HIF: sample validator, strict-physics multiscan replay, branch-current localization;
+                  unbalance: exact replay of every balanced reference and unbalanced sensor mean
+3. ``audit``      operator WLS and discovered-mode scenario admission
+                  (scripts/audit_hif_physical_corpora.py, scripts/audit_unbalance_physical_corpus.py)
+4. ``subset``     detectable subsets: every healthy control plus the admitted disturbance windows,
+                  rows copied verbatim, meta.json gains ``detectable_filter``
+5. ``reaudit``    audit of the subsets (every disturbance window must be admitted)
 
 Seeds are unchanged, so fault labels and operating points repeat the earlier corpora; only the
-simulated physics differs. New directories carry ``--tag``; nothing existing is overwritten.
+simulated physics differs. New directories carry ``--tag``; nothing existing is overwritten. An
+implementation manifest records the commit, dirty files and digests of the physics sources.
 """
 from __future__ import annotations
 
@@ -26,7 +30,9 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-MAIN_BANDS = ["--r-hif-ohm-bands", "100:200,200:500,500:1000", "--r-hif-ohm-band-weights", "1,1,1", "--voltage-stratum", "69kv"]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))  # in-process replay imports repository packages
+MAIN_BANDS =["--r-hif-ohm-bands", "100:200,200:500,500:1000", "--r-hif-ohm-band-weights", "1,1,1", "--voltage-stratum", "69kv"]
 # (name stem, HIF windows, healthy controls, seed, extra arguments, detectable-subset stem or None)
 RECIPES = (
     ("hif_physical69_main_train_84x10", 84, 20, 20260919, MAIN_BANDS, "hif_physical69_main_train_detectable"),
@@ -38,6 +44,10 @@ RECIPES = (
     ("hif_physical69_main_train_extra_252x10", 252, 60, 20260923, MAIN_BANDS, "hif_physical69_main_train_extra_detectable"),
     ("hif_physical69_main_valid_extra_63x10", 63, 15, 20260924, MAIN_BANDS, "hif_physical69_main_valid_extra_detectable"),
 )
+# The three-phase unbalance corpus (Transmission/generate_measurements_imbalance.py), its
+# discovered-mode audit (scripts/audit_unbalance_physical_corpus.py) and detectable subset.
+UNBALANCE = {"stem": "out_measurements_imbalance_currents_ybus_440", "windows": 440, "controls": 60, "seed": 20260925,
+             "subset_stem": "out_measurements_imbalance_currents_ybus_detectable"}
 ENV = dict(os.environ, OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")
 ADMISSION = ("scenario generator discovered-mode WLS admission, anomaly margin 1.25 "
              "(chi-square 0.01 OR normalized residual 4.0), reference scan")
@@ -230,12 +240,142 @@ def reaudit(artifacts: Path, out: Path, tag: str) -> None:
     print(json.dumps({"reaudit": {name: summary["cohorts"][name]["counts"]["scenario_admitted"] for name in names}}), flush=True)
 
 
+# ----------------------------------------------------------------- unbalance family
+
+def _unbalance_name(tag: str) -> str:
+    return f"{UNBALANCE['stem']}_{tag}"
+
+
+def generate_unbalance(artifacts: Path, out: Path, tag: str) -> None:
+    target = artifacts / _unbalance_name(tag)
+    if target.exists():
+        raise SystemExit(f"refusing to overwrite {target}")
+    command = [sys.executable, "Transmission/generate_measurements_imbalance.py", "--out", str(target),
+               "--n-imbalance", str(UNBALANCE["windows"]), "--n-no-error", str(UNBALANCE["controls"]),
+               "--seed", str(UNBALANCE["seed"])]
+    receipt = {"corpus": target.name, **_run(command, out / f"{target.name}_generation.log")}
+    if receipt["exit_code"] == 0:
+        rows = _rows(target / "samples.jsonl")
+        receipt.update(actual_unbalance=sum(r["scenario"] == "three_phase_imbalance" for r in rows),
+                       actual_healthy=sum(r["scenario"] == "no_error" for r in rows))
+    receipt.update(expected_unbalance=UNBALANCE["windows"], expected_healthy=UNBALANCE["controls"])
+    print(json.dumps(receipt), flush=True)
+    _write_receipts(out / "generation_receipts_unbalance.json", [receipt])
+    if receipt["exit_code"] or receipt.get("actual_unbalance") != UNBALANCE["windows"] \
+            or receipt.get("actual_healthy") != UNBALANCE["controls"]:
+        raise SystemExit(f"incomplete unbalance generation: {receipt}")
+
+
+def validate_unbalance(artifacts: Path, out: Path, tag: str) -> None:
+    """Strict replay: every row's balanced reference and unbalanced sensor mean re-solve exactly."""
+    import numpy as np
+    from Transmission import generate_measurements_imbalance as gi
+    from IEEE_14_OpenDSS.export_measurement_series import extract_measurement_series
+    name = _unbalance_name(tag)
+    rows = [r for r in _rows(artifacts / name / "samples.jsonl") if r["scenario"] == "three_phase_imbalance"]
+    repo = str(ROOT / "IEEE_14_OpenDSS")
+    gi._compile_ieee14_opendss(repo)
+    base_loads = gi._read_base_loads()
+    worst_true = worst_clean = 0.0
+    for row in rows:
+        scale = float(row["op_point"]["load_scale"])
+        split = row["label"]["load_split"]
+        gi._compile_ieee14_opendss(repo)
+        gi._scale_all_loads(base_loads, scale)
+        gi._solve_or_raise()
+        z_true = np.asarray(extract_measurement_series(shunt_convention="ybus")[0], dtype=float)
+        worst_true = max(worst_true, float(np.max(np.abs(z_true - np.asarray(row["z_true"])))))
+        gi._compile_ieee14_opendss(repo)
+        gi._set_loads_scaled_with_bus_unbalance(base_loads, target_bus=split["bus"], load_scale=scale,
+                                                bus_fracs=tuple(split["fractions"][p] for p in ("a", "b", "c")))
+        gi._solve_or_raise()
+        z_clean = np.asarray(extract_measurement_series(shunt_convention="ybus")[0], dtype=float)
+        worst_clean = max(worst_clean, float(np.max(np.abs(z_clean - np.asarray(row["z_clean"])))))
+    report = {"corpus": name, "rows": len(rows), "max_abs_z_true_replay_error_pu": worst_true,
+              "max_abs_z_clean_replay_error_pu": worst_clean, "tolerance_pu": 1e-9}
+    (out / f"{name}_replay.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(report), flush=True)
+    if max(worst_true, worst_clean) > 1e-9:
+        raise SystemExit(f"unbalance corpus does not replay: {report}")
+
+
+def audit_unbalance(artifacts: Path, out: Path, tag: str, *, corpus: str | None = None, audit_name: str = "unbalance_audit") -> dict:
+    corpus = corpus or _unbalance_name(tag)
+    target = out / audit_name
+    command = [sys.executable, "scripts/audit_unbalance_physical_corpus.py", "--corpus", str(artifacts / corpus), "--out", str(target)]
+    receipt = _run(command, out / f"{audit_name}.log")
+    print(json.dumps(receipt), flush=True)
+    _write_receipts(out / f"{audit_name}_receipt.json", [receipt])
+    if receipt["exit_code"]:
+        raise SystemExit(f"unbalance audit failed; see {receipt['log']}")
+    summary = json.loads((target / "summary.json").read_text(encoding="utf-8"))
+    actual = hashlib.sha256((artifacts / corpus / "samples.jsonl").read_bytes()).hexdigest()
+    if summary.get("source_sha256") not in (None, actual):
+        raise SystemExit(f"unbalance audit {audit_name} read a different samples.jsonl than the one on disk")
+    return summary
+
+
+def subset_unbalance(artifacts: Path, out: Path, tag: str) -> str:
+    name = _unbalance_name(tag)
+    source = artifacts / name
+    manifest = [json.loads(line) for line in (out / "unbalance_audit" / "unbalance_admission_manifest.jsonl")
+                .read_text(encoding="utf-8").splitlines() if line.strip()]
+    source_sha = hashlib.sha256((source / "samples.jsonl").read_bytes()).hexdigest()
+    if any(entry.get("source_sha256") not in (None, source_sha) for entry in manifest):
+        raise SystemExit(f"{name}: admission manifest digest differs from samples.jsonl on disk")
+    admitted = {entry["id"] for entry in manifest if entry["admitted"]}
+    lines = [line for line in (source / "samples.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    kept, controls, windows = [], 0, 0
+    for line in lines:
+        row = json.loads(line)
+        if row["scenario"] == "no_error":
+            kept.append(line)
+            controls += 1
+        elif row["scenario"] == "three_phase_imbalance":
+            windows += 1
+            if row["id"] in admitted:
+                kept.append(line)
+    target = artifacts / f"{UNBALANCE['subset_stem']}_{len(admitted)}_{tag}"
+    if target.exists():
+        raise SystemExit(f"refusing to overwrite {target}")
+    target.mkdir(parents=True)
+    (target / "samples.jsonl").write_text("\n".join(kept) + "\n", encoding="utf-8")
+    meta = json.loads((source / "meta.json").read_text(encoding="utf-8"))
+    repo = artifacts.parents[1]
+    audit_dir = out / "unbalance_audit"
+    meta["detectable_filter"] = {
+        "schema": "discovered_mode_admission_filter_v1", "source_corpus": name, "source_samples_sha256": source_sha,
+        "criterion": ADMISSION,
+        "audit": audit_dir.relative_to(repo).as_posix() if audit_dir.is_relative_to(repo) else audit_dir.as_posix(),
+        "kept_windows": len(admitted), "source_windows": windows, "controls_kept": controls,
+        "note": "controls are kept unchanged; only disturbance windows that the operator WLS can discover are retained"}
+    (target / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    (out / "detectable_unbalance_subset.json").write_text(json.dumps(target.name) + "\n", encoding="utf-8")
+    print(json.dumps({"subset": target.name, "kept_windows": len(admitted), "source_windows": windows, "controls": controls}), flush=True)
+    return target.name
+
+
+def reaudit_unbalance(artifacts: Path, out: Path, tag: str) -> None:
+    name = json.loads((out / "detectable_unbalance_subset.json").read_text(encoding="utf-8"))
+    summary = audit_unbalance(artifacts, out, tag, corpus=name, audit_name="detectable_unbalance_audit")
+    counts = summary["counts"]
+    if counts.get("scenario_admitted") != counts.get("unbalance_rows"):
+        raise SystemExit(f"{name}: re-audit admits {counts.get('scenario_admitted')} of {counts.get('unbalance_rows')} windows")
+    print(json.dumps({"reaudit_unbalance": {name: counts.get("scenario_admitted")}}), flush=True)
+
+
+UNBALANCE_STAGES = {"generate": generate_unbalance, "validate": validate_unbalance, "audit": audit_unbalance,
+                    "subset": subset_unbalance, "reaudit": reaudit_unbalance}
+
+
 PROVENANCE_FILES = (
     "three_phase_nlm/hif_operating_point.py", "three_phase_nlm/hif_parameter_estimator.py",
     "Transmission/generate_measurements_hif_ieee14.py", "IEEE_14_OpenDSS/IEEE14Gen.DSS", "IEEE_14_OpenDSS/IEEE14Lines.DSS",
     "IEEE_14_OpenDSS/IEEE14Loads.DSS", "IEEE_14_OpenDSS/Run_IEEE14Bus.dss", "scripts/audit_hif_physical_corpora.py",
     "scripts/validate_hif_samples.py", "scripts/validate_hif_multiscan_dataset.py",
     "scripts/validate_branch_current_localization.py", "scripts/regenerate_hif_physical_corpora.py",
+    "Transmission/generate_measurements_imbalance.py", "scripts/audit_unbalance_physical_corpus.py",
+    "IEEE_14_OpenDSS/IEEE14BusMaster.dss", "IEEE_14_OpenDSS/IEEE14Cap.DSS", "IEEE_14_OpenDSS/IEEE14Trafo.DSS",
 )
 
 
@@ -273,24 +413,29 @@ def main(argv=None) -> None:
     parser.add_argument("--artifacts-dir", type=Path, default=ROOT / "artifacts" / "measurements")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--stages", default=",".join(STAGES))
+    parser.add_argument("--families", default="hif,unbalance", help="hif, unbalance, or both")
     parser.add_argument("--workers", type=int, default=6)
     args = parser.parse_args(argv)
     artifacts, out = args.artifacts_dir.resolve(), args.output_dir.resolve()
     stages = [s.strip() for s in args.stages.split(",") if s.strip()]
-    unknown = [s for s in stages if s not in STAGES]
+    families = [f.strip() for f in args.families.split(",") if f.strip()]
+    unknown = [s for s in stages if s not in STAGES] + [f for f in families if f not in ("hif", "unbalance")]
     if unknown:
-        parser.error(f"unknown stages {unknown}; choose from {list(STAGES)}")
+        parser.error(f"unknown stages or families {unknown}; stages {list(STAGES)}, families hif, unbalance")
     out.mkdir(parents=True, exist_ok=True)
     write_provenance(out, args)
     for stage in STAGES:
         if stage not in stages:
             continue
-        if stage == "generate":
-            generate(artifacts, out, args.tag, args.workers)
-        elif stage == "validate":
-            validate(artifacts, out, args.tag, args.workers * 3)
-        else:
-            STAGES[stage](artifacts, out, args.tag)
+        if "hif" in families:
+            if stage == "generate":
+                generate(artifacts, out, args.tag, args.workers)
+            elif stage == "validate":
+                validate(artifacts, out, args.tag, args.workers * 3)
+            else:
+                STAGES[stage](artifacts, out, args.tag)
+        if "unbalance" in families:
+            UNBALANCE_STAGES[stage](artifacts, out, args.tag)
 
 
 if __name__ == "__main__":
