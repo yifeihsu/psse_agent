@@ -923,11 +923,15 @@ class TransactionalPSSEEnv:
     def _gated_evidence_channels(self) -> list[str]:
         """wls_gated_diagnostics: nothing is listed before it was acquired.
 
-        Metadata-key presence never appears (a scan window, a stored
-        diagnostic or an HIF runtime block would name the family).  Repeated
+        Metadata-key presence alone never appears (a stored diagnostic or an
+        HIF runtime block would name the family before any request).  Repeated
         SCADA scans and breaker telemetry are listed after the matching
         balanced context on the active state; phasors and spectra only after
-        a successful bound acquisition returned them.
+        a successful bound acquisition returned them.  A persistent scan
+        window exists only where the ground truth generated one, so it is
+        published together with the phasors it extends, after the same
+        successful bound three-phase acquisition and never before it.
+        ``hif_runtime`` and ``nlm_diagnostic`` are never listed.
         """
         channels: list[str] = []
         try:
@@ -952,7 +956,23 @@ class TransactionalPSSEEnv:
         for key in ("three_phase_voltages", "three_phase_branch_currents"):
             if key in acquired:
                 channels.append(key)
+        window = metadata.get("hif_scan_window")
+        if acquired and isinstance(window, Mapping) and window.get("scans"):
+            channels.append("hif_scan_window")
         return channels
+
+    def _configured_evidence_tools(self) -> list[str]:
+        """Diagnostic tools whose acquisition obligation this environment can meet.
+
+        A strict profile and production mode fail closed on a diagnostic with
+        no configured provider, so an acquisition or screening obligation
+        toward such a tool can never be discharged and must not block the
+        balanced corrections.  Outside those modes a synthetic placeholder
+        answers any request, so every diagnostic counts as configured.
+        """
+        if not self.production_dataset_mode and not is_strict_boundary(self.evidence_profile):
+            return sorted(DIAGNOSTIC_TOOLS)
+        return sorted(tool for tool in DIAGNOSTIC_TOOLS if callable(self.evidence_providers.get(tool)))
 
     def get_policy_observation(
         self,
@@ -1157,6 +1177,9 @@ class TransactionalPSSEEnv:
         validity_state["audited_evaluation_setup_correction"] = bool(
             self._audited_evaluation_setup_correction
         )
+        # An acquisition obligation toward a diagnostic this environment
+        # cannot dispatch is not a reason to withhold a balanced correction.
+        validity_state["configured_evidence_tools"] = self._configured_evidence_tools()
         # Synthetic pilot mode may use a private terminal fixture.  Deployment
         # training must never consume that oracle-only bit as a legality
         # bypass; its finalization labels require public evidence below.
@@ -1878,6 +1901,10 @@ class TransactionalPSSEEnv:
                     f"Production training row for {tool} lacks nlm_diagnostic or "
                     "three_phase_branch_currents telemetry."
                 )
+            # ``available`` is the acquisition-bound channel listing: under
+            # wls_gated_diagnostics the scan window appears there only after a
+            # successful bound three-phase acquisition on this state, which is
+            # exactly the evidence a multi-scan estimate must rest on.
             if (
                 tool == ESTIMATE_HIF_MULTISCAN_FROM_PATH
                 and "hif_scan_window" not in available
@@ -3298,6 +3325,7 @@ class TransactionalPSSEEnv:
             {"tool": "get_topology_context", "arguments": {"state_id": active_id}},
             {"tool": FINALIZE_DIAGNOSIS, "arguments": {}},
         ]
+        summary["configured_evidence_tools"] = self._configured_evidence_tools()
         return [
             action for action in actions
             if self.process_oracle.check(summary, action, store=self.store)["process_valid"]

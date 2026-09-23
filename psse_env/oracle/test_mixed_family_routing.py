@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import unittest
 
+from psse_env.evidence_profile import AUXILIARY_EVIDENCE_PROFILE
 from psse_env.actions import (
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
@@ -38,6 +39,7 @@ def _parameter_hints() -> list[dict]:
 def _measurement_dominant_state() -> dict:
     return {
         "active_state_id": "episode:s0",
+        "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
         "last_tool": "get_parameter_context",
         "last_tool_status": "success",
         "last_tool_output": {"execution_status": "success"},

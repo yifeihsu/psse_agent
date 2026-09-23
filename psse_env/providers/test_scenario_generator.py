@@ -1942,33 +1942,60 @@ class EndToEndRound0EpisodeTests(unittest.TestCase):
             audit_episode_against_truth,
         )
 
-        generator = Round0ScenarioGenerator(seed=29)
-        source = generator.build({"measurement": 1})[0]
-        true_index = int(source["true_measurement_errors"][0]["index"])
-        scenario = self._without_privileged_targets(source)
-        env, executed = self._run_episode(scenario)
+        # Both strict profiles run the same balanced repair without truth or
+        # hints.  scada_only investigates the balanced residual directly; the
+        # wls_gated default (2026-09-23) may request the auxiliary streams
+        # after the WLS alarm, and on a measurement root neither exists, so
+        # the two acquisitions answer "unavailable" before the same repair.
+        profile_ladders = {
+            "scada_only": [],
+            "wls_gated_diagnostics": ["get_three_phase_context", "get_harmonic_context"],
+        }
+        default_profile = Round0ScenarioGenerator(seed=29).evidence_profile
+        self.assertEqual(default_profile, "wls_gated_diagnostics")
+        for profile, acquisitions in profile_ladders.items():
+            with self.subTest(evidence_profile=profile):
+                generator = Round0ScenarioGenerator(seed=29, evidence_profile=profile)
+                source = generator.build({"measurement": 1})[0]
+                true_index = int(source["true_measurement_errors"][0]["index"])
+                scenario = self._without_privileged_targets(source)
+                env, executed = self._run_episode(
+                    scenario, provider_kwargs={"evidence_profile": profile}
+                )
 
-        self.assertTrue(env.is_terminal())
-        self.assertEqual(env.terminal_outcome, "operator_escalation")
-        oracle_state = env.get_oracle_state()
-        self.assertFalse(oracle_state.true_measurement_errors)
-        self.assertFalse(oracle_state.oracle_action_hints)
-        tools = [action["tool"] for action, _ in executed]
-        self.assertEqual(
-            tools,
-            [
-                "run_wls",
-                # Strict SCADA-only episodes investigate the balanced residual
-                # directly; no auxiliary instruments are requested.
-                "get_measurement_context",
-                "correct_measurements",
-                "run_wls",
-                "commit_state",
-                "get_measurement_context",
-                "ask_for_more_evidence",
-            ],
-        )
-        self.assertNotIn("finalize_diagnosis", tools)
+                self.assertTrue(env.is_terminal())
+                self.assertEqual(env.terminal_outcome, "operator_escalation")
+                oracle_state = env.get_oracle_state()
+                self.assertFalse(oracle_state.true_measurement_errors)
+                self.assertFalse(oracle_state.oracle_action_hints)
+                tools = [action["tool"] for action, _ in executed]
+                self.assertEqual(
+                    tools,
+                    [
+                        "run_wls",
+                        *acquisitions,
+                        "get_measurement_context",
+                        "correct_measurements",
+                        "run_wls",
+                        "commit_state",
+                        "get_measurement_context",
+                        "ask_for_more_evidence",
+                    ],
+                )
+                self.assertNotIn("finalize_diagnosis", tools)
+                # A measurement root carries no phasors or spectrum: the gated
+                # acquisitions execute (the gate is open after the alarm) and
+                # report nothing to investigate, and no waveform signature
+                # is minted from them.
+                for action, output in executed:
+                    if action["tool"] in acquisitions:
+                        self.assertEqual(output["execution_status"], "success", action)
+                signatures = env.current_state().get("unresolved_signatures") or []
+                self.assertFalse(
+                    [s for s in signatures if any(m in str(s) for m in ("hif", "harmonic", "unbalance"))],
+                    signatures,
+                )
+        # The remaining checks describe the last (default-profile) episode.
         group = next(
             action["arguments"]["suspect_group"]
             for action, _ in executed

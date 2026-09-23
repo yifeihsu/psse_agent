@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from psse_env.evidence_profile import AUXILIARY_EVIDENCE_PROFILE
 from psse_env.actions import (
     ASK_FOR_MORE_EVIDENCE,
     COMMIT_STATE,
@@ -104,6 +105,7 @@ def _production_env(*, wls=_wls_adapter, contexts=None) -> TransactionalPSSEEnv:
         GET_TOPOLOGY_CONTEXT: _context_adapter,
     }
     return TransactionalPSSEEnv(
+        evidence_profile=AUXILIARY_EVIDENCE_PROFILE,
         production_dataset_mode=True,
         approved_deterministic_providers=REQUIRED_ADAPTERS,
         wls_runner=wls,
@@ -414,7 +416,7 @@ class ProductionConfigurationTests(unittest.TestCase):
 
     def test_missing_provider_error_lists_actionable_names(self):
         with self.assertRaisesRegex(ValueError, "run_wls") as raised:
-            TransactionalPSSEEnv(production_dataset_mode=True)
+            TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, production_dataset_mode=True)
         message = str(raised.exception)
         for name in REQUIRED_ADAPTERS:
             self.assertIn(name, message)
@@ -426,6 +428,7 @@ class ProductionConfigurationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "must declare provider_kind"):
             TransactionalPSSEEnv(
+                evidence_profile=AUXILIARY_EVIDENCE_PROFILE,
                 production_dataset_mode=True,
                 wls_runner=unclassified,
                 context_providers={tool: unclassified for tool in (
@@ -443,6 +446,7 @@ class ProductionConfigurationTests(unittest.TestCase):
     def test_deterministic_adapters_require_explicit_approval(self):
         with self.assertRaisesRegex(ValueError, "without explicit approval"):
             TransactionalPSSEEnv(
+                evidence_profile=AUXILIARY_EVIDENCE_PROFILE,
                 production_dataset_mode=True,
                 wls_runner=_wls_adapter,
                 context_providers={
@@ -1206,6 +1210,7 @@ class ProductionEvidenceTests(unittest.TestCase):
                 }
                 policy = {
                     "active_state_id": active_id,
+                    "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
                     "has_fresh_parameter_context": True,
                     "parameter_context_state_id": active_id,
                     "fresh_context_evidence": {"parameter": metrics},
@@ -1415,7 +1420,7 @@ class ProductionEvidenceTests(unittest.TestCase):
         self.assertEqual(state["candidate_state_id"], candidate_id)
 
     def test_synthetic_pilot_mode_keeps_placeholder_compatibility(self):
-        env = TransactionalPSSEEnv()
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         root = env.reset(_measurement_scenario())
         _, output = env.step({"tool": RUN_WLS, "arguments": {"state_id": root["active_state_id"]}})
         self.assertEqual(output["execution_status"], "success")
@@ -1531,7 +1536,7 @@ class SemanticProvenanceTests(unittest.TestCase):
 
 class TeacherRealizabilityAndReplayTests(unittest.TestCase):
     def test_hidden_fault_family_cannot_change_first_diagnostic_action(self):
-        observation = PolicyObservation(active_state_id="active", remaining_budget=8)
+        observation = PolicyObservation(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, active_state_id="active", remaining_budget=8)
         states = [
             OracleState(
                 policy_observation=observation,
@@ -1569,6 +1574,7 @@ class TeacherRealizabilityAndReplayTests(unittest.TestCase):
 
     def test_ambiguous_observable_signatures_use_deterministic_context_tiebreak(self):
         observation = PolicyObservation(
+            evidence_profile=AUXILIARY_EVIDENCE_PROFILE,
             active_state_id="active",
             last_tool=RUN_WLS,
             last_tool_status="success",
@@ -1608,6 +1614,7 @@ class TeacherRealizabilityAndReplayTests(unittest.TestCase):
     def test_hidden_terminal_flag_cannot_choose_finalize_label(self):
         state = OracleState(
             policy_observation=PolicyObservation(
+                evidence_profile=AUXILIARY_EVIDENCE_PROFILE,
                 active_state_id="active",
                 remaining_budget=8,
             ),
@@ -1625,6 +1632,7 @@ class TeacherRealizabilityAndReplayTests(unittest.TestCase):
         }
         state = OracleState(
             policy_observation=PolicyObservation(
+                evidence_profile=AUXILIARY_EVIDENCE_PROFILE,
                 active_state_id="active",
                 last_tool=GET_MEASUREMENT_CONTEXT,
                 last_tool_status="success",
@@ -1727,6 +1735,7 @@ class TeacherRealizabilityAndReplayTests(unittest.TestCase):
         }
         verified = {
             "active_state_id": "active",
+            "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
             "candidate_state_id": "r0_fixture_episode1:s3",
             "candidate_lifecycle": "VERIFIED_CANDIDATE",
             "candidate_status": "verified",

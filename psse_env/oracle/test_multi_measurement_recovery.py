@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from psse_env.evidence_profile import AUXILIARY_EVIDENCE_PROFILE
 from psse_env.oracle import ExpertPolicyOracle, ProcessValidityOracle
 from psse_env.oracle.measurement_expert import MeasurementExpert
 from psse_env.oracle.candidate_quality import (
@@ -15,6 +16,7 @@ from psse_env.oracle.topology_expert import TopologyExpert
 def _state(signatures: list[str]) -> dict:
     return {
         "active_state_id": "episode:s1",
+        "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
         "candidate_state_id": None,
         "no_material_anomaly_remaining": False,
         "unresolved_signatures": signatures,
@@ -336,6 +338,7 @@ class MultiMeasurementContinuationTests(unittest.TestCase):
         base.update(
             {
                 "active_state_id": state_id,
+                "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
                 "has_fresh_measurement_context": True,
                 "measurement_context_state_id": state_id,
                 "rejected_hypotheses": rejected,

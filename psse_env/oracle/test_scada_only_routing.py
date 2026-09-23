@@ -224,7 +224,9 @@ def test_real_wls_rejects_historical_partial_setup_with_insufficient_progress():
     contract = evaluator.evaluation_intervention_contract(
         "partial_success_retention", row, required=False,
     )
-    env = release_factories.production_environment_factory(seed=20260719)
+    # This frozen BC0 row predates the auxiliary streams; its audited setup
+    # correction runs on the balanced-only profile it was recorded under.
+    env = release_factories.production_environment_factory(seed=20260719, evidence_profile=SCADA_ONLY_PROFILE)
     initial = env.reset(deepcopy(evaluator.strip_offline_truth(row)))
     original_active = initial["active_state_id"]
     bootstrap = {"tool": RUN_WLS, "arguments": {"state_id": "$active"}}

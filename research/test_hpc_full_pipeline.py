@@ -79,7 +79,8 @@ def test_pipeline_env_declares_every_setting_the_stages_use() -> None:
         "SUITE_DEVELOPMENT_RANK_ALLOWANCE", "MEASUREMENT_ERROR_MIN_SIGMA",
         "TOPOLOGY_EFFECTS", "SYSTEM", "MEASUREMENT_CORPUS", "BALANCED_ARTIFACT_DIR",
         "ADMISSION_MODE", "NORMALIZED_RESIDUAL_THRESHOLD", "CORPUS_COUNTS", "CORPUS_NUM_SCANS",
-        "FROZEN_STUDENT_ADAPTER", "ZEROSHOT_EVAL_NAME",
+        "FROZEN_STUDENT_ADAPTER", "ZEROSHOT_EVAL_NAME", "EVIDENCE_PROFILE", "HIF_SIGNATURE_MODE",
+        "PMU_PHASOR_SIGMA",
     ):
         assert name in declared, name
     assert 'export PSSE_HIF_WORKERS="${SLURM_CPUS_PER_TASK:-8}"' in text
@@ -352,3 +353,39 @@ def test_zero_shot_stage_and_frozen_student_wiring() -> None:
             "no_error", "measurement", "multi_measurement", "parameter", "measurement+parameter",
         }
     assert re.search(r"^FROZEN_STUDENT_ADAPTER=/scratch/", overrides, flags=re.MULTILINE)
+
+
+def test_evidence_profile_default_is_wls_gated_and_every_guard_accepts_it() -> None:
+    """The 2026-09-23 contract: WLS-gated diagnostics by default, discovered
+    signatures on every strict profile, the PMU sigma of the study declared,
+    and every shell whitelist accepting the new profile.  The corpus paths
+    may still name the 20260923b subsets (the regeneration is pending); the
+    test never requires the corpora to exist."""
+    env = (CELL / "pipeline.env").read_text(encoding="utf-8")
+    assert "EVIDENCE_PROFILE=${EVIDENCE_PROFILE:-wls_gated_diagnostics}" in env
+    assert "HIF_SIGNATURE_MODE=${HIF_SIGNATURE_MODE:-discovered}" in env
+    assert re.search(r"^PMU_PHASOR_SIGMA=1e-4$", env, flags=re.MULTILINE)
+    assert 'case "$EVIDENCE_PROFILE" in scada_only|wls_gated_diagnostics|auxiliary_diagnostics)' in env
+    assert '"$EVIDENCE_PROFILE" != auxiliary_diagnostics && "$HIF_SIGNATURE_MODE" != discovered' in env
+    assert "docs/wls_gated_evidence_20260923.md" in env
+    assert "TODO(20260923opf)" in env
+    deploy = (CELL / "deploy_remote.sh").read_text(encoding="utf-8")
+    assert 'case "$EVIDENCE_PROFILE" in scada_only|wls_gated_diagnostics|auxiliary_diagnostics)' in deploy
+    prerequisites = (CELL / "prerequisites.sh").read_text(encoding="utf-8")
+    assert '"$EVIDENCE_PROFILE" == wls_gated_diagnostics && -n "${PMU_PHASOR_SIGMA:-}"' in prerequisites
+    for key in ("three_phase_sigma", "branch_current_sigma_pu"):
+        assert key in prerequisites
+    build_suite = _load("build_suite.py")
+    args = build_suite.build_parser().parse_args([
+        "--source-root", "src", "--d0-raw", "d0.jsonl", "--round-train-plan", "{}",
+        "--development-plan", "{}", "--seed", "1", "--output-dir", "out",
+    ])
+    assert args.evidence_profile == "wls_gated_diagnostics"
+    assert args.hif_signature_mode == "discovered"
+    # The stage scripts pass the profile through unchanged and record it.
+    for name in ("stage_d0.sbatch", "stage_bc0.sbatch"):
+        text = (CELL / name).read_text(encoding="utf-8")
+        assert '"$EVIDENCE_PROFILE"' in text and '"evidence_profile": sys.argv[' in text
+    readme = (CELL / "README.md").read_text(encoding="utf-8")
+    assert "### 2026-09-23 cell: WLS-gated diagnostics" in readme
+    assert "EVIDENCE_PROFILE=wls_gated_diagnostics" in readme and "20260923opf" in readme

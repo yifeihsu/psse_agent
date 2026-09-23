@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT
+from psse_env.evidence_profile import DEFAULT_EVIDENCE_PROFILE
 
 from psse_env.actions import (
     ASK_FOR_MORE_EVIDENCE,
@@ -139,7 +140,7 @@ def production_environment_factory(
     screen_checkpoint: str | None = None,
     screen_calibration: str | None = None,
     hif_resistance_search: str = "physical_ohm",
-    evidence_profile: str = "scada_only",
+    evidence_profile: str = DEFAULT_EVIDENCE_PROFILE,
 ) -> TransactionalPSSEEnv:
     """Construct the real MATPOWER-backed deployment environment.
 

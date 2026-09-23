@@ -56,9 +56,9 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 from psse_env.evidence_profile import (
-    DEFAULT_EVIDENCE_PROFILE, AUXILIARY_EVIDENCE_PROFILE, PRECOMPUTED_DIAGNOSIS_FIELDS,
-    allows_diagnostic_tools, is_scada_only, is_strict_boundary, is_wls_gated,
-    validate_evidence_profile, sanitize_scada_execution, sanitize_scada_metadata,
+    DEFAULT_EVIDENCE_PROFILE, AUXILIARY_EVIDENCE_PROFILE,
+    allows_diagnostic_tools, is_scada_only, is_strict_boundary,
+    validate_evidence_profile, sanitize_execution_for_profile,
 )
 
 from mcp_server.matpower_server import (  # noqa: E402  (repo-root package)
@@ -204,32 +204,68 @@ CURRENT_TELEMETRY_HIF_SAMPLE_PATHS = (
 # Physical-ohm corpora are opt-in; historical telemetry paths retain replay identity.
 # PMU phasor precision of the wls_gated_diagnostics study (2026-09-23): the HIF corpora are
 # regenerated with three-phase voltage and branch-current phasor noise of 1e-4 pu per
-# rectangular component (the 2026-09-19/21/23 corpora used 5e-3 / 1e-3).  The SCADA draws
-# are unchanged by the phasor sigma, so the WLS-admitted window set and row ids equal the
-# 20260923 regeneration (27 + 8 + 77 + 19 windows).
+# rectangular component (the 2026-09-19/21/23 corpora used 5e-3 / 1e-3), and both the HIF and
+# the unbalance corpora take OPF-driven operating points (dispatch, setpoints and source voltage
+# from the AC-OPF at the window's load scale, as the pypower families already do).  The
+# phasor sigma leaves the SCADA draws unchanged; the OPF dispatch does not, so the detectable
+# counts of the 20260923opf corpora are only known after the regeneration and are resolved
+# from the artifact directory names below rather than hard-coded.
 PMU_PHASOR_SIGMA_PU = 1e-4
-PHYSICAL_HIF_CORPUS_TAG = "20260923pmu"
-# TODO(20260923pmu): the corpora below are PENDING regeneration on the corrected reactive-limit
-# physics (scripts/regenerate_hif_physical_corpora.py --tag 20260923pmu --three-phase-noise-pu 1e-4
-# --branch-current-noise-pu 1e-4); until they exist, pass explicit hif_sample_paths.
-PHYSICAL_HIF_SAMPLE_PATHS = tuple(_REPO_ROOT / "artifacts" / "measurements" / name / "samples.jsonl" for name in (
+PHYSICAL_HIF_CORPUS_TAG = "20260923opf"
+_PHYSICAL_MEASUREMENTS_DIR = _REPO_ROOT / "artifacts" / "measurements"
+
+
+def resolve_tagged_corpus_path(stem: str, tag: str = PHYSICAL_HIF_CORPUS_TAG, *,
+                               suffix: str = "x10", root: Path = _PHYSICAL_MEASUREMENTS_DIR) -> Path:
+    """``samples.jsonl`` of ``<stem>_<N><suffix>_<tag>`` with ``N`` read from the directory name.
+
+    Detectable subsets carry their admitted window count in the name, which is
+    unknown until the corpus is regenerated.  Exactly one matching directory
+    resolves to its samples file; none resolves to a placeholder path with
+    ``PENDING`` in place of the count (``Path.is_file()`` is False, so the
+    generator's source lookups skip it and the pipeline's existence checks
+    fail loudly); several matches are ambiguous and raise.
+    """
+    pattern = f"{stem}_*{suffix}_{tag}"
+    matches = sorted(candidate for candidate in root.glob(pattern) if (candidate / "samples.jsonl").is_file())
+    if len(matches) > 1:
+        raise RuntimeError(f"ambiguous corpus directories for {pattern!r}: {[m.name for m in matches]}")
+    if matches:
+        return matches[0] / "samples.jsonl"
+    return root / f"{stem}_PENDING{suffix}_{tag}" / "samples.jsonl"
+
+
+# TODO(20260923opf): PENDING regeneration by the corpus package (WP4): HIF corpora at PMU
+# sigma 1e-4 with OPF-driven operating points on the regulated, tightly converged OpenDSS
+# model, then the discovered-mode detectable subsets.  Until the directories exist these
+# resolve to PENDING placeholders; pass explicit hif_sample_paths to run on the committed
+# 20260923b corpora (5e-3 / 1e-3 phasor sigma, model-default dispatch).
+PHYSICAL_HIF_SAMPLE_PATHS = tuple(resolve_tagged_corpus_path(stem) for stem in (
     # Detectable subsets (discovered-mode WLS admission, margin 1.25) of the physical 69 kV
-    # 100-1000 ohm corpora at PMU sigma 1e-4; the full corpora carry the same names without
-    # "_detectable" (84 + 21 + 252 + 63 windows).
-    f"hif_physical69_main_train_detectable_27x10_{PHYSICAL_HIF_CORPUS_TAG}",
-    f"hif_physical69_main_valid_detectable_8x10_{PHYSICAL_HIF_CORPUS_TAG}",
-    f"hif_physical69_main_train_extra_detectable_77x10_{PHYSICAL_HIF_CORPUS_TAG}",
-    f"hif_physical69_main_valid_extra_detectable_19x10_{PHYSICAL_HIF_CORPUS_TAG}"))
+    # 100-1000 ohm corpora; the full corpora carry the same names without "_detectable"
+    # (84 + 21 + 252 + 63 windows).
+    "hif_physical69_main_train_detectable", "hif_physical69_main_valid_detectable",
+    "hif_physical69_main_train_extra_detectable", "hif_physical69_main_valid_extra_detectable"))
+# The 2026-09-23b detectable subsets (regulated reactive limits, OpenDSS tolerance 1e-8,
+# 5e-3 / 1e-3 phasor sigma, model-default dispatch): 27 + 8 + 77 + 19 windows, committed.
+PHYSICAL_HIF_SAMPLE_PATHS_20260923B = tuple(_PHYSICAL_MEASUREMENTS_DIR / name / "samples.jsonl" for name in (
+    "hif_physical69_main_train_detectable_27x10_20260923b", "hif_physical69_main_valid_detectable_8x10_20260923b",
+    "hif_physical69_main_train_extra_detectable_77x10_20260923b", "hif_physical69_main_valid_extra_detectable_19x10_20260923b"))
 # The 2026-09-21 detectable subsets (5e-3 / 1e-3 phasor sigma, pre-fix reactive limits) that
 # the 2026-09-21 cell ran on; kept for replay identity of that cell only.
-PHYSICAL_HIF_SAMPLE_PATHS_20260921 = tuple(_REPO_ROOT / "artifacts" / "measurements" / name / "samples.jsonl" for name in (
+PHYSICAL_HIF_SAMPLE_PATHS_20260921 = tuple(_PHYSICAL_MEASUREMENTS_DIR / name / "samples.jsonl" for name in (
     "hif_physical69_main_train_detectable_25x10_20260921", "hif_physical69_main_valid_detectable_7x10_20260921",
     "hif_physical69_main_train_extra_detectable_69x10_20260921", "hif_physical69_main_valid_extra_detectable_17x10_20260921"))
-PHYSICAL_HIF_DETECTION_LIMIT_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/hif_physical69_detection_limit_21x10_20260923b/samples.jsonl"
-PHYSICAL_HIF_SWEEP_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/hif_physical_sweep_eval_336x10_20260923b/samples.jsonl"
-# Unbalance corpus regenerated 2026-09-21 under the WLS shunt convention (ybus), phase-A Vm,
-# physical telemetry bases; 440 windows + 60 balanced controls, seed 20260925.
-PHYSICAL_IMBALANCE_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/out_measurements_imbalance_currents_ybus_detectable_160_20260923b/samples.jsonl"
+# PENDING (20260923opf): the detection-limit and sweep corpora follow the tag; their window
+# counts are fixed by the recipe (21 and 336), so the names are known.
+PHYSICAL_HIF_DETECTION_LIMIT_SAMPLE_PATH = _PHYSICAL_MEASUREMENTS_DIR / f"hif_physical69_detection_limit_21x10_{PHYSICAL_HIF_CORPUS_TAG}" / "samples.jsonl"
+PHYSICAL_HIF_SWEEP_SAMPLE_PATH = _PHYSICAL_MEASUREMENTS_DIR / f"hif_physical_sweep_eval_336x10_{PHYSICAL_HIF_CORPUS_TAG}" / "samples.jsonl"
+# Unbalance corpus under the WLS shunt convention (ybus), phase-A Vm, physical telemetry bases;
+# 440 windows + 60 balanced controls, seed 20260925.  PENDING (20260923opf): regenerated with
+# OPF-driven operating points (phasor sigmas unchanged); the admitted count is resolved from
+# the directory name.  The committed 20260923b subset (160 windows) is kept beside it.
+PHYSICAL_IMBALANCE_SAMPLE_PATH = resolve_tagged_corpus_path("out_measurements_imbalance_currents_ybus_detectable", suffix="")
+PHYSICAL_IMBALANCE_SAMPLE_PATH_20260923B = _PHYSICAL_MEASUREMENTS_DIR / "out_measurements_imbalance_currents_ybus_detectable_160_20260923b" / "samples.jsonl"
 DEFAULT_BALANCED_ARTIFACT_DIR = (
     _REPO_ROOT / "artifacts" / "measurements" / "out_measurements_balanced"
 )
@@ -390,81 +426,6 @@ def _canonicalize_synthesized_measurement_vector(
             normalized = float(quantized)
             canonical.append(0.0 if normalized == 0.0 else normalized)
     return canonical
-
-
-# Truth-side values a strict root must not carry in its execution metadata
-# under wls_gated_diagnostics: precomputed diagnoses and model handles
-# (recomputed by the tools), and simulator-truth descriptors of the root
-# itself.  The auxiliary streams the ground truth generated (phasors,
-# spectra, breaker telemetry, scan windows with their scan operating points)
-# stay; the environment gates them behind the balanced WLS alarm.
-WLS_GATED_PRIVATE_METADATA_FIELDS = frozenset(PRECOMPUTED_DIAGNOSIS_FIELDS) | frozenset({
-    "op_point", "load_scale", "label", "labels", "initial_states", "load_profile", "load_profiles",
-    "family_hint", "correction_hint", "scenario_family", "true_measurement_errors",
-    "true_parameter_errors", "true_topology_errors", "hidden_truth",
-})
-_WLS_GATED_SCAN_PRIVATE_FIELDS = frozenset({
-    "z_clean", "three_phase_voltages_clean", "three_phase_branch_currents_clean", "label",
-})
-
-
-def wls_gated_execution_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Execution metadata of a root under ``wls_gated_diagnostics``.
-
-    Keeps every measured channel and its declared noise (balanced SCADA and
-    its covariance, three-phase PMU voltages and branch currents with their
-    per-component sigmas, harmonic spectra, substation telemetry, the HIF
-    scan window and runtime binding, repeated SCADA scans) and removes what
-    only the truth side may hold: cached diagnoses, model handles, clean
-    copies, labels and root-level simulator operating points.  Repeated SCADA
-    scans keep the fields the balanced estimator reads, exactly as under
-    ``scada_only``.
-    """
-    metadata = dict(copy.deepcopy(dict(metadata or {})))
-    for key in list(metadata):
-        if key in WLS_GATED_PRIVATE_METADATA_FIELDS:
-            metadata.pop(key, None)
-    if "parameter_scans" in metadata:
-        scans = sanitize_scada_metadata({"parameter_scans": metadata["parameter_scans"]}).get("parameter_scans")
-        if scans is None:
-            metadata.pop("parameter_scans", None)
-        else:
-            metadata["parameter_scans"] = scans
-    window = metadata.get("hif_scan_window")
-    if isinstance(window, dict):
-        window.pop("window_metadata", None)
-        window.pop("pristine_model_dir", None)
-        window.pop("faulted_model_dir", None)
-        scans = window.get("scans")
-        if isinstance(scans, list):
-            for scan in scans:
-                if isinstance(scan, dict):
-                    for key in _WLS_GATED_SCAN_PRIVATE_FIELDS:
-                        scan.pop(key, None)
-    runtime = metadata.get("hif_runtime")
-    if isinstance(runtime, dict):
-        for key in PRECOMPUTED_DIAGNOSIS_FIELDS | {"pristine_model_dir", "label"}:
-            runtime.pop(key, None)
-    metadata["evidence_profile"] = "wls_gated_diagnostics"
-    return metadata
-
-
-def apply_wls_gated_execution_boundary(scenario: dict[str, Any]) -> dict[str, Any]:
-    """Apply the strict wls_gated boundary to a generated root in place.
-
-    Runtime fields are replaced; generator-only truth and grouping fields
-    (``hidden_truth``, ``release_audit``, ``true_*_errors``, ``clean_*``) are
-    left for the later execution/audit partition, as under ``scada_only``.
-    No seeded sensor signature survives: the strict profiles never flag.
-    """
-    scenario["metadata"] = wls_gated_execution_metadata(scenario.get("metadata"))
-    scenario.pop("unresolved_signatures", None)
-    provenance = scenario.get("semantic_field_provenance")
-    if isinstance(provenance, dict):
-        provenance.pop("unresolved_signatures", None)
-    for key in ("family_hint", "correction_hint", "expected_actions", "hint"):
-        scenario.pop(key, None)
-    return scenario
 
 
 def _canonicalize_telemetry(telemetry: Mapping[str, Any]) -> dict[str, Any]:
@@ -3784,18 +3745,23 @@ class Round0ScenarioGenerator:
             scenario["source_tier"] = source_tier
             if scenario.get("source_realization_id"):
                 scenario["source_tier"] = "physics_synthesized_balanced"
-            if is_scada_only(self.evidence_profile):
-                strict = sanitize_scada_execution(scenario)
-                # Keep generator-only truth/grouping fields for the later
-                # execution/audit partition; replace only runtime fields.
+            if is_strict_boundary(self.evidence_profile):
+                # scada_only keeps balanced SCADA and its declarations only;
+                # wls_gated_diagnostics also keeps the auxiliary streams the
+                # ground truth generated (gated at runtime behind the WLS
+                # alarm) but no seeded signature, hint, label or precomputed
+                # diagnosis.  Keep generator-only truth/grouping fields for
+                # the later execution/audit partition; replace only runtime
+                # fields.
+                strict = sanitize_execution_for_profile(scenario, self.evidence_profile)
                 for key in ("metadata", "semantic_field_provenance", "unresolved_signatures",
                             "remaining_anomaly_score", "no_material_anomaly_remaining", "requires_measurement_context"):
                     if key in strict:
                         scenario[key] = strict[key]
                     else:
                         scenario.pop(key, None)
-            elif is_wls_gated(self.evidence_profile):
-                apply_wls_gated_execution_boundary(scenario)
+                for key in ("family_hint", "correction_hint", "expected_actions", "hint"):
+                    scenario.pop(key, None)
             self.manifest.append(
                 {
                     "scenario_id": scenario["scenario_id"],
@@ -4007,12 +3973,12 @@ __all__ = [
     "LEGACY_IMBALANCE_SAMPLE_PATH",
     "CURRENT_TELEMETRY_HIF_SAMPLE_PATHS",
     "PHYSICAL_HIF_SAMPLE_PATHS",
+    "PHYSICAL_HIF_SAMPLE_PATHS_20260923B",
     "PHYSICAL_HIF_SAMPLE_PATHS_20260921",
     "PHYSICAL_HIF_CORPUS_TAG",
+    "PHYSICAL_IMBALANCE_SAMPLE_PATH_20260923B",
     "PMU_PHASOR_SIGMA_PU",
-    "WLS_GATED_PRIVATE_METADATA_FIELDS",
-    "wls_gated_execution_metadata",
-    "apply_wls_gated_execution_boundary",
+    "resolve_tagged_corpus_path",
     "PHYSICAL_HIF_DETECTION_LIMIT_SAMPLE_PATH",
     "PHYSICAL_HIF_SWEEP_SAMPLE_PATH",
     "PHYSICAL_IMBALANCE_SAMPLE_PATH",

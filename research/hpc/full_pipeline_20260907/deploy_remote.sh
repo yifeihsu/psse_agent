@@ -43,7 +43,7 @@ else
 fi
 # Record the effective instrument capability after applying the staged overrides.
 source "$PIPE/pipeline.env"
-case "$EVIDENCE_PROFILE" in scada_only|auxiliary_diagnostics) ;; *) echo "unknown evidence profile" >&2; exit 2 ;; esac
+case "$EVIDENCE_PROFILE" in scada_only|wls_gated_diagnostics|auxiliary_diagnostics) ;; *) echo "unknown evidence profile" >&2; exit 2 ;; esac
 case "$HIF_SIGNATURE_MODE" in discovered|flagged) ;; *) echo "unknown HIF signature mode" >&2; exit 2 ;; esac
 printf '{"contract": "research_full_pipeline_deploy_v1", "pipeline_dir": "%s", "source_pipeline_dir": "%s", "source_commit": "%s", "branch": "%s", "overrides": "%s", "evidence_profile": "%s", "hif_signature_mode": "%s", "deployed_at_utc": "%s"}\n' \
   "$PIPE" "$SOURCE_PIPE" "$HEAD" "$BRANCH" "$OVERRIDES" "$EVIDENCE_PROFILE" "$HIF_SIGNATURE_MODE" "$(date -u +%FT%TZ)" > "$PIPE/deploy.json"

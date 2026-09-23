@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from psse_env.evidence_profile import AUXILIARY_EVIDENCE_PROFILE
 from psse_env.episode_budget import (
     DEFAULT_EPISODE_ACTION_LIMIT, bind_env_action_limit, validate_episode_action_limit,
 )
@@ -17,7 +18,7 @@ def _scenario(*, quiet=False):
 
 
 def test_default_forty_and_explicit_runner_limit_reach_policy_before_reset():
-    env = TransactionalPSSEEnv()
+    env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
     assert DEFAULT_EPISODE_ACTION_LIMIT == env.max_steps == 40
     env.reset(_scenario())
     assert env.get_policy_observation().remaining_budget == 40
@@ -34,7 +35,7 @@ def test_default_forty_and_explicit_runner_limit_reach_policy_before_reset():
 
 
 def test_failures_spend_budget_and_extra_attempts_neither_dispatch_nor_append(monkeypatch):
-    env = TransactionalPSSEEnv(max_steps=3)
+    env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, max_steps=3)
     env.reset(_scenario())
     for expected in (2, 1, 0):
         state, output = env.step({"tool": "unknown_tool", "arguments": {}})
@@ -68,7 +69,7 @@ def test_successful_provider_call_forty_executes_but_forty_one_does_not():
         return {"remaining_anomaly_score": 2.0, "wls_objective": 2.0,
                 "no_material_anomaly_remaining": False}
 
-    env = TransactionalPSSEEnv(wls_runner=runner)
+    env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, wls_runner=runner)
     env.reset(_scenario())
     for action_count in range(1, 41):
         state, output = env.step({"tool": "run_wls", "arguments": {}})
@@ -83,7 +84,7 @@ def test_successful_provider_call_forty_executes_but_forty_one_does_not():
 
 
 def test_finalization_is_valid_as_the_fortieth_action():
-    env = TransactionalPSSEEnv()
+    env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
     env.reset(_scenario(quiet=True))
     for _ in range(39):
         env.step({"tool": "unknown_tool", "arguments": {}})
@@ -100,7 +101,7 @@ def test_finalization_is_valid_as_the_fortieth_action():
 
 
 def test_exhaustion_does_not_grant_a_free_finalization():
-    env = TransactionalPSSEEnv(max_steps=1)
+    env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, max_steps=1)
     env.reset(_scenario(quiet=True))
     env.step({"tool": "unknown_tool", "arguments": {}})
     _, rejected = env.step({"tool": "finalize_diagnosis", "arguments": {}})
@@ -111,7 +112,7 @@ def test_exhaustion_does_not_grant_a_free_finalization():
 
 
 def test_synthetic_setup_attempt_counts_without_fabricating_tool_history():
-    env = TransactionalPSSEEnv()
+    env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
     env.reset(_scenario())
     physical_hash = env.store.episode_hash()
     flags = deepcopy(env.context_flags)
@@ -135,7 +136,7 @@ def test_synthetic_setup_attempt_counts_without_fabricating_tool_history():
 
 
 def test_setup_accounting_rejects_overspend_without_partial_mutation():
-    env = TransactionalPSSEEnv(max_steps=2)
+    env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, max_steps=2)
     env.reset(_scenario())
     env.step({"tool": "unknown_tool", "arguments": {}})
     with pytest.raises(ValueError, match="exceed"):
@@ -148,7 +149,7 @@ def test_setup_accounting_rejects_overspend_without_partial_mutation():
 
 
 def test_counterfactual_clone_keeps_setup_cost_without_sharing_bookkeeping():
-    env = TransactionalPSSEEnv(max_steps=5)
+    env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, max_steps=5)
     env.reset(_scenario())
     env.account_setup_actions(1)
     branch = env.clone()
@@ -164,7 +165,7 @@ def test_counterfactual_clone_keeps_setup_cost_without_sharing_bookkeeping():
     "correct_measurements", "verify_candidate", "commit_state", "rollback_state", "finalize_diagnosis",
 ])
 def test_each_attempted_environment_tool_uses_one_action_including_rejections(tool):
-    env = TransactionalPSSEEnv(max_steps=2)
+    env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, max_steps=2)
     env.reset(_scenario())
     state, output = env.step({"tool": tool, "arguments": {}})
     assert output["execution_status"] in {"success", "failure"}
@@ -192,6 +193,6 @@ def test_invalid_horizons_are_rejected(invalid):
     with pytest.raises(ValueError, match="positive integer"):
         validate_episode_action_limit(invalid)
     with pytest.raises(ValueError, match="positive integer"):
-        TransactionalPSSEEnv(max_steps=invalid)
+        TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, max_steps=invalid)
     with pytest.raises(ValueError, match="positive integer"):
         bind_env_action_limit(SimpleNamespace(), invalid)

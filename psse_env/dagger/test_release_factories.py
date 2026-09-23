@@ -99,7 +99,9 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
         self.assertIs(env.production_dataset_mode, True)
         self.assertEqual(env.candidate_quality_oracle.mode, "deployment")
         self.assertEqual(env.kwargs["provider_marker"], "deployment")
-        self.assertEqual(env.kwargs["evidence_profile"], "scada_only")
+        # The production default follows the research contract (2026-09-23:
+        # wls_gated_diagnostics); an explicit profile is passed through.
+        self.assertEqual(env.kwargs["evidence_profile"], "wls_gated_diagnostics")
         self.assertEqual(env.kwargs["chi2_alpha"], factories.BC0_CHI2_ALPHA)
         self.assertEqual(
             env.kwargs["parameter_ranking_dominance_threshold"],

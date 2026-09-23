@@ -36,6 +36,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT, bind_env_action_limit, validate_episode_action_limit
+from psse_env.evidence_profile import is_strict_boundary
 
 from psse_env.actions import (
     ASK_FOR_MORE_EVIDENCE,
@@ -1962,8 +1963,13 @@ class ClosedLoopRolloutEvaluator:
         if intervention_contract is not None:
             intervention_kind = intervention_contract["kind"]
             setup_actions = intervention_contract.get("setup_actions", [])
+            # Every strict-boundary profile (scada_only, wls_gated_diagnostics)
+            # must obtain real balanced WLS evidence before any setup context;
+            # an environment without a declared profile keeps the historical
+            # setup verbatim.
+            env_profile = getattr(env, "evidence_profile", None)
             scada_setup_wls = bool(
-                getattr(env, "evidence_profile", None) == "scada_only"
+                env_profile is not None and is_strict_boundary(env_profile)
                 and setup_actions and setup_actions[0].get("tool") != RUN_WLS
             )
             if len(setup_actions) + int(scada_setup_wls) > self.max_steps:

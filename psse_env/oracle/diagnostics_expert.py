@@ -29,7 +29,7 @@ import json
 import math
 from typing import Any, Mapping, Sequence
 
-from psse_env.evidence_profile import allows_diagnostic_tools, is_strict_boundary
+from psse_env.evidence_profile import allows_diagnostic_tools, is_strict_boundary, is_wls_gated
 
 from psse_env.actions import (
     ANOMALY_FAMILY_MARKERS,
@@ -274,10 +274,20 @@ class DiagnosticsExpert:
             # phase; passing it bounds the estimator search to that phase.
             if hif_phase is not None:
                 follow_up_arguments["candidate_phase"] = hif_phase
-            if (
-                "hif_scan_window" in available
-                and ESTIMATE_HIF_MULTISCAN_FROM_PATH not in completed
-            ):
+            # Where a scan window is advertised the multiscan estimator is
+            # required.  The WLS-gated profile advertises no metadata key (a
+            # window would name the family), so its ladder asks the
+            # persistent-window estimator first and treats a missing window
+            # like any other "unavailable" answer: that execution failure
+            # retires multiscan from the requirement and the single-scan
+            # estimator follows.
+            multiscan_record = completed.get(ESTIMATE_HIF_MULTISCAN_FROM_PATH)
+            window_advertised = "hif_scan_window" in available
+            multiscan_applicable = window_advertised or (
+                is_wls_gated(state)
+                and (multiscan_record is None or multiscan_record.get("_execution_status") == "success")
+            )
+            if multiscan_applicable and ESTIMATE_HIF_MULTISCAN_FROM_PATH not in completed:
                 proposals.append(
                     self._proposal(
                         ESTIMATE_HIF_MULTISCAN_FROM_PATH,
@@ -285,7 +295,8 @@ class DiagnosticsExpert:
                         confidence=0.91,
                         evidence=[
                             "nlm_branch_localized",
-                            "persistent_scan_window_available",
+                            "persistent_scan_window_available" if window_advertised
+                            else "persistent_scan_window_requested",
                         ],
                     )
                 )
@@ -299,7 +310,7 @@ class DiagnosticsExpert:
                     )
                 )
             required_estimators = [ESTIMATE_HIF_FROM_PATH]
-            if "hif_scan_window" in available:
+            if multiscan_applicable:
                 required_estimators.insert(0, ESTIMATE_HIF_MULTISCAN_FROM_PATH)
             if all(
                 self._diagnostic_rejected(completed.get(tool))

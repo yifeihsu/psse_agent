@@ -113,6 +113,22 @@ _CORRECTION_TOOL_FOR_FAMILY = {
 }
 
 
+def _acquisition_configured(state: Any, tool: str) -> bool:
+    """Whether an acquisition or screening obligation toward ``tool`` can be met.
+
+    The environment declares ``configured_evidence_tools`` (the diagnostics it
+    can dispatch) on the validity state.  A pending obligation toward a tool
+    with no configured provider can never be discharged, so it must not
+    withhold a balanced correction.  Compact hand-built states carry no
+    declaration and keep the historical behaviour: every obligation applies.
+    """
+    getter = getattr(state, "get", None)
+    configured = getter("configured_evidence_tools") if callable(getter) else None
+    if configured is None:
+        return True
+    return str(tool) in {str(item) for item in configured}
+
+
 def post_correction_confirmation_required(state: Mapping[str, Any]) -> bool:
     """Whether an autonomous correction would hit the confirmation guard.
 
@@ -236,7 +252,7 @@ class ProcessValidityOracle:
                 family = _CORRECTION_CONTEXT_FAMILY[tool]
                 error_code = "correction_route_not_actionable"
                 error_detail = f"{family}_fundamental_route_blocked_by_waveform_anomaly"
-            elif harmonic_screening_pending(
+            elif _acquisition_configured(state, GET_HARMONIC_CONTEXT) and harmonic_screening_pending(
                 unresolved=state.get("unresolved_signatures") or [],
                 tried_action_signatures=state.get("tried_action_signatures") or [],
                 active_state_id=active_id,
@@ -246,7 +262,7 @@ class ProcessValidityOracle:
                 family = _CORRECTION_CONTEXT_FAMILY[tool]
                 error_code = "correction_route_not_actionable"
                 error_detail = f"{family}_harmonic_evidence_request_pending"
-            elif three_phase_acquisition_pending(
+            elif _acquisition_configured(state, GET_THREE_PHASE_CONTEXT) and three_phase_acquisition_pending(
                 unresolved=state.get("unresolved_signatures") or [],
                 tried_action_signatures=state.get("tried_action_signatures") or [],
                 active_state_id=active_id,
@@ -256,7 +272,7 @@ class ProcessValidityOracle:
                 family = _CORRECTION_CONTEXT_FAMILY[tool]
                 error_code = "correction_route_not_actionable"
                 error_detail = f"{family}_three_phase_evidence_request_pending"
-            elif three_phase_screening_pending(
+            elif _acquisition_configured(state, RUN_THREE_PHASE_NLM_FROM_PATH) and three_phase_screening_pending(
                 unresolved=state.get("unresolved_signatures") or [],
                 available_evidence=state.get("available_evidence") or [],
                 tried_action_signatures=state.get("tried_action_signatures") or [],
@@ -744,7 +760,7 @@ class ProcessValidityOracle:
             }:
                 if not successful_current_wls(state):
                     tool = RUN_WLS
-                elif harmonic_screening_pending(
+                elif _acquisition_configured(state, GET_HARMONIC_CONTEXT) and harmonic_screening_pending(
                     unresolved=state.get("unresolved_signatures") or [],
                     tried_action_signatures=state.get("tried_action_signatures") or [],
                     active_state_id=active_id,

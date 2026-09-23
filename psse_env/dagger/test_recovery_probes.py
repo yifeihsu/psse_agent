@@ -34,6 +34,7 @@ from psse_env.dagger.recovery_probes import (
     stamp_recovery_probe_row,
     verify_probe_stratum,
 )
+from psse_env.evidence_profile import AUXILIARY_EVIDENCE_PROFILE
 from psse_env.oracle.process_validity import (
     ProcessValidityOracle,
     post_correction_confirmation_required,
@@ -159,6 +160,9 @@ class PostCorrectionConfirmationBoundaryTests(unittest.TestCase):
     def _state(**updates: Any) -> dict[str, Any]:
         state: dict[str, Any] = {
             "active_state_id": STATE,
+            # Pre-seeded post-correction evidence without a bound WLS ledger is
+            # the historical fixture shape; the strict profiles demand WLS first.
+            "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
             "accepted_corrections": [{"source_action": {"tool": CORRECT_MEASUREMENTS}}],
             "unresolved_signatures": [POST_CORRECTION_CONFIRMATION_SIGNATURE],
             "has_open_candidate": False,

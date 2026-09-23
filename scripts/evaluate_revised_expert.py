@@ -262,7 +262,9 @@ def parser():
     p.add_argument("--trust-remote-code", action="store_true")
     p.add_argument("--resume", action="store_true")
     p.add_argument("--evidence-profile", choices=EVIDENCE_PROFILES, default=DEFAULT_EVIDENCE_PROFILE,
-        help="Default strictly uses SCADA; historical sensor-assisted reproduction requires auxiliary_diagnostics")
+        help=("Default wls_gated_diagnostics: balanced SCADA/WLS detection, auxiliary streams only after a "
+              "current WLS alarm; scada_only refuses them; historical sensor-assisted reproduction "
+              "requires auxiliary_diagnostics"))
     return p
 
 

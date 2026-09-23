@@ -25,10 +25,16 @@ def _source(generator):
 
 
 def test_default_discovery_cannot_seed_waveform_alarms():
-    generator = Round0ScenarioGenerator()
+    # The research default moved to wls_gated_diagnostics on 2026-09-23; the
+    # scada_only invariants below are unchanged for the explicit profile.
+    assert Round0ScenarioGenerator().evidence_profile == "wls_gated_diagnostics"
+    generator = Round0ScenarioGenerator(evidence_profile="scada_only")
     assert generator.evidence_profile == "scada_only"
     assert set(generator.waveform_signature_mode.values()) == {"discovered"}
     for family in ("hif", "harmonic", "three_phase_unbalance"):
+        for profile in ("scada_only", "wls_gated_diagnostics"):
+            with pytest.raises(ValueError, match="auxiliary"):
+                Round0ScenarioGenerator(evidence_profile=profile, waveform_signature_mode={family: "flagged"})
         with pytest.raises(ValueError, match="auxiliary"):
             Round0ScenarioGenerator(waveform_signature_mode={family: "flagged"})
     legacy = Round0ScenarioGenerator(evidence_profile="auxiliary_diagnostics", waveform_signature_mode={"hif": "flagged"})
@@ -37,7 +43,7 @@ def test_default_discovery_cannot_seed_waveform_alarms():
 
 @pytest.mark.parametrize("family,method", [("hif", "_hif_scenario"), ("harmonic", "_harmonic_scenario"), ("three_phase_unbalance", "_unbalance_scenario")])
 def test_strict_waveform_sources_require_wls_alarm_not_auxiliary_diagnosis(family, method):
-    generator = Round0ScenarioGenerator()
+    generator = Round0ScenarioGenerator(evidence_profile="scada_only")
     source = _source(generator)
     with patch.object(generator, "_aligned_waveform_row", side_effect=lambda row, _: deepcopy(row)), \
          patch.object(generator, "_chi2_statistic", return_value=1000), \
@@ -60,7 +66,7 @@ def test_strict_waveform_sources_require_wls_alarm_not_auxiliary_diagnosis(famil
 
 
 def test_public_build_sanitizes_runtime_but_keeps_offline_truth_and_scada_history():
-    generator = Round0ScenarioGenerator(validate=False)
+    generator = Round0ScenarioGenerator(validate=False, evidence_profile="scada_only")
     source = _source(generator)
     raw = generator._base_scenario("opaque-root", case="case14", measurements=source["z_obs"], family="hif", sigma_z=source["sigma_z"])
     raw["hidden_truth"] = {"true_hif_errors": [{"source_bus": 7}]}
@@ -101,19 +107,26 @@ def test_legacy_reproduction_is_explicit_and_never_relabels_source_rows():
 def test_mixture_checks_both_pools_before_sampling_and_preserves_observations():
     d0 = {"example_id": "d0", "physical_root_fingerprint": "r0", "metadata": {"evidence_profile": "scada_only"}, "messages": [{"role": "user", "content": "observed SCADA"}]}
     d1 = {"example_id": "d1", "physical_root_fingerprint": "r1", "evidence_profile": "scada_only", "messages": [{"role": "user", "content": "another observation"}]}
-    mixed, report = build_research_mixture([d0], [d1], d1_share=.5, d1_cap=None, seed=3)
+    mixed, report = build_research_mixture([d0], [d1], d1_share=.5, d1_cap=None, seed=3, evidence_profile="scada_only")
     assert report["evidence_profile"] == "scada_only"
     assert {r["example_id"]: r["messages"] for r in mixed} == {"d0": d0["messages"], "d1": d1["messages"]}
     for first, second in (([{}], [d1]), ([d0], [{}])):
         with pytest.raises(ValueError, match="evidence profile"):
-            build_research_mixture(first, second, d1_share=1, d1_cap=None, seed=3)
+            build_research_mixture(first, second, d1_share=1, d1_cap=None, seed=3, evidence_profile="scada_only")
+    # scada_only rows are not wls_gated rows: the default profile refuses them.
+    with pytest.raises(ValueError, match="evidence profile"):
+        build_research_mixture([d0], [d1], d1_share=.5, d1_cap=None, seed=3)
 
 
 def test_cli_and_source_descriptor_declare_strict_default():
     args = parser().parse_args(["--d0-raw", "raw", "--d0-train", "train", "--adapter-path", "adapter", "--output-dir", "out"])
-    assert args.evidence_profile == "scada_only"
+    assert args.evidence_profile == "wls_gated_diagnostics"
     assert args.hif_signature_mode == "discovered"
-    assert resolve_scenario_sources(plan_families={"measurement"})["evidence_profile"] == "scada_only"
+    assert resolve_scenario_sources(plan_families={"measurement"})["evidence_profile"] == "wls_gated_diagnostics"
+    assert resolve_scenario_sources(plan_families={"measurement"}, evidence_profile="scada_only")["evidence_profile"] == "scada_only"
+    for profile in ("scada_only", "wls_gated_diagnostics"):
+        with pytest.raises(ValueError, match="auxiliary"):
+            resolve_scenario_sources(plan_families={"hif"}, signature_modes={"hif": "flagged"}, evidence_profile=profile)
     with pytest.raises(ValueError, match="auxiliary"):
         resolve_scenario_sources(plan_families={"hif"}, signature_modes={"hif": "flagged"})
 
@@ -121,7 +134,8 @@ def test_cli_and_source_descriptor_declare_strict_default():
 def test_hpc_templates_guard_reuse_and_record_selected_profile():
     root = Path(__file__).resolve().parents[1] / "research/hpc/full_pipeline_20260907"
     env = (root / "pipeline.env").read_text(encoding="utf-8")
-    assert 'EVIDENCE_PROFILE=${EVIDENCE_PROFILE:-scada_only}' in env
+    assert 'EVIDENCE_PROFILE=${EVIDENCE_PROFILE:-wls_gated_diagnostics}' in env
+    assert 'case "$EVIDENCE_PROFILE" in scada_only|wls_gated_diagnostics|auxiliary_diagnostics)' in env
     assert 'declared = declared or "auxiliary_diagnostics"' in env
     assert 'assert_stage_evidence_profile "$PREVIOUS_PIPE/out/$receipt"' in env
     assert env.index('assert_stage_evidence_profile "$PREVIOUS_PIPE/out/$receipt"') < env.index('ln -s "$PREVIOUS_PIPE/out/$subdir"')

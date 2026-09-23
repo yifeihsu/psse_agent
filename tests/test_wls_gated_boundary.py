@@ -128,6 +128,8 @@ class RecordingProvider:
                     "remaining_anomaly_score": 2. if self.alarm else 0., "no_material_anomaly_remaining": not self.alarm,
                     "chi_square_alarm": self.alarm, "normalized_residual_alarm": False,
                     "unresolved_signatures": ["wls_residual_outlier index=40 channel=Qinj"] if self.alarm else []}
+        if self.kind == "failing":
+            return {**binding, "execution_status": "failure", "error_code": "three_phase_context_failure"}
         if self.kind == "three_phase":
             return {**binding, "evidence_source": "deployment_context:three_phase_measurements",
                     "context_tool": GET_THREE_PHASE_CONTEXT, "request_attempted": True,
@@ -271,7 +273,8 @@ def test_gated_tools_are_rejected_before_an_alarm_and_admitted_after():
     assert acquired["execution_status"] == "success", acquired
     assert acquired["tool_metrics"]["three_phase_context_status"] == "available"
     assert acquired["tool_metrics"]["available_evidence_channels"] == ["three_phase_voltages"]
-    assert env.get_policy_observation().available_evidence == ["three_phase_voltages"]
+    # The root's persistent scan window is revealed by this acquisition only.
+    assert env.get_policy_observation().available_evidence == ["three_phase_voltages", "hif_scan_window"]
     _, screened = env.step({"tool": RUN_THREE_PHASE_NLM_FROM_PATH, "arguments": {"state_id": active}})
     assert screened["execution_status"] == "success", screened
     assert screened["tool_metrics"]["nlm_summary"]["diagnostic_classification"] in {"balanced_three_phase", "unresolved"}
@@ -382,12 +385,77 @@ def test_channels_are_listed_only_after_acquisition():
     assert env.get_policy_observation().available_evidence == ["parameter_scans", "substation_telemetry"]
     _, output = env.step({"tool": GET_THREE_PHASE_CONTEXT, "arguments": {"state_id": active}})
     assert output["execution_status"] == "success", output
+    # An answered acquisition retires the balanced contexts taken while it
+    # was pending (they must be taken again), so only the acquired phasor
+    # channels remain listed until the contexts are refreshed.  The root's
+    # persistent scan window is published with the phasors it extends.
+    acquired = ["three_phase_voltages", "three_phase_branch_currents", "hif_scan_window"]
     channels = env.get_policy_observation().available_evidence
-    assert channels == ["parameter_scans", "substation_telemetry", "three_phase_voltages", "three_phase_branch_currents"]
-    for never in ("hif_scan_window", "hif_runtime", "nlm_diagnostic", "harmonic_measurements"):
+    assert channels == acquired
+    env.context_flags.update(has_fresh_parameter_context=True, parameter_context_state_id=active,
+                             has_fresh_topology_context=True, topology_context_state_id=active)
+    channels = env.get_policy_observation().available_evidence
+    assert channels == ["parameter_scans", "substation_telemetry", *acquired]
+    for never in ("hif_runtime", "nlm_diagnostic", "harmonic_measurements"):
         assert never not in channels
     env.context_flags.update(has_fresh_parameter_context=False, has_fresh_topology_context=False)
+    assert env.get_policy_observation().available_evidence == acquired
+
+
+def test_scan_window_channel_is_bound_to_the_acquisition_and_to_the_root():
+    # A root without a scan window never lists one, before or after acquisition.
+    wls, three_phase = RecordingProvider("wls"), RecordingProvider("three_phase")
+    scenario = _scenario()
+    del scenario["metadata"]["hif_scan_window"]
+    env = TransactionalPSSEEnv(wls_runner=wls, evidence_providers={GET_THREE_PHASE_CONTEXT: three_phase})
+    active = env.reset(scenario)["active_state_id"]
+    env.step({"tool": RUN_WLS, "arguments": {"state_id": active}})
+    env.step({"tool": GET_THREE_PHASE_CONTEXT, "arguments": {"state_id": active}})
     assert env.get_policy_observation().available_evidence == ["three_phase_voltages", "three_phase_branch_currents"]
+    # A root with a window lists nothing until the acquisition succeeded on the active state.
+    env = TransactionalPSSEEnv(wls_runner=wls, evidence_providers={GET_THREE_PHASE_CONTEXT: three_phase})
+    active = env.reset(_scenario())["active_state_id"]
+    env.step({"tool": RUN_WLS, "arguments": {"state_id": active}})
+    assert "hif_scan_window" not in env.get_policy_observation().available_evidence
+    env.step({"tool": GET_THREE_PHASE_CONTEXT, "arguments": {"state_id": active}})
+    assert "hif_scan_window" in env.get_policy_observation().available_evidence
+    # A failed re-acquisition on the same state retires the listing again.
+    three_phase.kind = "failing"
+    env.step({"tool": GET_THREE_PHASE_CONTEXT, "arguments": {"state_id": active}})
+    assert env.get_policy_observation().available_evidence == []
+
+
+def test_unmeetable_acquisition_obligation_does_not_block_balanced_corrections():
+    correction = {"tool": "correct_measurements",
+                  "arguments": {"state_id": None, "measurement_updates": {"40": 0.1}}}
+    # No auxiliary provider at all: the WLS alarm opens no obligation the
+    # environment could discharge, so the correction reaches its executor gate.
+    env = TransactionalPSSEEnv(wls_runner=RecordingProvider("wls"))
+    active = env.reset(_scenario())["active_state_id"]
+    env.step({"tool": RUN_WLS, "arguments": {"state_id": active}})
+    correction["arguments"]["state_id"] = active
+    _, output = env.step(correction)
+    assert output["error_code"] == "correction_executor_missing", output
+    assert env._configured_evidence_tools() == []
+    # A configured three-phase provider makes the acquisition obligation real.
+    env = TransactionalPSSEEnv(wls_runner=RecordingProvider("wls"),
+                               evidence_providers={GET_THREE_PHASE_CONTEXT: RecordingProvider("three_phase")})
+    active = env.reset(_scenario())["active_state_id"]
+    env.step({"tool": RUN_WLS, "arguments": {"state_id": active}})
+    correction["arguments"]["state_id"] = active
+    _, output = env.step(correction)
+    assert output["error_code"] == "correction_route_not_actionable"
+    assert output["error_detail"] == "measurement_three_phase_evidence_request_pending"
+    assert env._configured_evidence_tools() == [GET_THREE_PHASE_CONTEXT]
+    # Hand-built oracle states without the declaration keep every obligation.
+    oracle = ProcessValidityOracle()
+    state = {"evidence_profile": WLS_GATED_PROFILE, "active_state_id": "s0", "candidate_state_id": None,
+             "has_open_candidate": False, "unresolved_signatures": ["wls_residual_outlier index=40"],
+             "fresh_context_evidence": {"wls": _alarm_ledger()}, "available_evidence": [], "tried_action_signatures": []}
+    action = {"tool": "correct_measurements", "arguments": {"state_id": "s0", "measurement_updates": {"40": 0.1}}}
+    assert oracle.check(state, action)["error_detail"] == "measurement_harmonic_evidence_request_pending"
+    assert oracle.check({**state, "configured_evidence_tools": []}, action)["process_valid"]
+    assert oracle.check({**state, "configured_evidence_tools": [GET_THREE_PHASE_CONTEXT]}, action)["error_detail"] == "measurement_three_phase_evidence_request_pending"
 
 
 def test_admitted_provider_receives_gated_payload_without_truth():
@@ -507,10 +575,28 @@ def test_nlm_uses_declared_current_sigma_and_never_the_stored_diagnosis(monkeypa
     # Phasors present with an undeclared current sigma: fail closed.
     undeclared = provider.run_three_phase_nlm(_provider_snapshot(alarm=True, declare_sigma=False), {"arguments": {}})
     assert undeclared["error_code"] == "branch_current_sigma_pu_undeclared"
-    # Phasors present and declared: computed from the measurements.
+    # Phasors present and declared: computed from the measurements.  The
+    # synthetic currents omit line charging, so at the 1e-4 floor the screen
+    # may classify the line as HIF-like and return the terminal-current
+    # summary instead of the null test; either shape carries the floor that
+    # the declared sigma sets (6 * sqrt(2) * sigma).
     computed = provider.run_three_phase_nlm(_provider_snapshot(alarm=True), {"arguments": {}})
     assert computed.get("execution_status", "success") == "success", computed
-    assert computed["nlm_summary"]["line_differential_null"]["differential_detection_floor_pu"] == pytest.approx(6 * 2 ** .5 * PMU_SIGMA)
+    assert computed["evidence_source"] in {
+        "deployment_diagnostic:sequence_voltage_unbalance+branch_currents",
+        "deployment_diagnostic:terminal_current_differential",
+    }
+    summary = computed["nlm_summary"]
+    floor = (summary.get("line_differential_null") or {}).get("differential_detection_floor_pu",
+                                                                 summary.get("differential_detection_floor_pu"))
+    from three_phase_nlm.branch_current_analysis import line_differential_null_test
+    snapshot = _provider_snapshot(alarm=True)
+    rows = snapshot["metadata"]["three_phase_voltages"], snapshot["metadata"]["three_phase_branch_currents"]
+    declared_floor = line_differential_null_test(*rows, sigma_pu=PMU_SIGMA)["differential_detection_floor_pu"]
+    legacy_floor = line_differential_null_test(*rows, sigma_pu=1e-3)["differential_detection_floor_pu"]
+    # The compact summary rounds its floats to four decimals.
+    assert floor == pytest.approx(declared_floor, abs=1e-4)
+    assert abs(floor - legacy_floor) > 10 * abs(floor - declared_floor)
     # No phasors, only a stored diagnosis and model dirs: fail closed instead of replaying truth.
     truth_only = _provider_snapshot(alarm=True)
     for key in ("three_phase_voltages", "three_phase_branch_currents", "hif_runtime", "hif_scan_window"):

@@ -43,7 +43,8 @@ from psse_env.actions import (
 from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT
 from psse_env.evidence_profile import (
     DEFAULT_EVIDENCE_PROFILE, EVIDENCE_PROFILES, is_scada_only, is_wls_gated,
-    validate_evidence_profile, sanitize_scada_execution, sanitize_scada_metadata,
+    validate_evidence_profile, sanitize_gated_execution, sanitize_gated_metadata,
+    sanitize_scada_execution, sanitize_scada_metadata,
 )
 from psse_env.providers.scenario_generator import (
     DEFAULT_BALANCED_ARTIFACT_DIR,
@@ -52,7 +53,6 @@ from psse_env.providers.scenario_generator import (
     DEFAULT_IMBALANCE_SAMPLE_PATH,
     Round0ScenarioGenerator,
     ScenarioRejected,
-    wls_gated_execution_metadata,
 )
 from psse_env.sft.provenance import file_sha256, stable_json_sha256
 
@@ -571,7 +571,7 @@ def _execution_metadata(scenario: Mapping[str, Any]) -> dict[str, Any] | None:
     if is_wls_gated(profile):
         # Measured auxiliary streams stay (gated at runtime behind the WLS
         # alarm); cached diagnoses, clean copies and labels never ship.
-        return wls_gated_execution_metadata(metadata)
+        return sanitize_gated_metadata(metadata)
 
     scan_window = metadata.get("hif_scan_window")
     if isinstance(scan_window, Mapping):
@@ -626,11 +626,9 @@ def partition_release_scenario_v1(
     if is_scada_only(execution_profile):
         execution = sanitize_scada_execution(execution)
     elif is_wls_gated(execution_profile):
-        # Strict boundary: no seeded sensor signature reaches execution.
-        execution.pop("unresolved_signatures", None)
-        provenance = execution.get("semantic_field_provenance")
-        if isinstance(provenance, dict):
-            provenance.pop("unresolved_signatures", None)
+        # Strict boundary: no seeded sensor signature, hint or precomputed
+        # diagnosis reaches execution; the auxiliary streams stay.
+        execution = sanitize_gated_execution(execution)
 
     truth = _truth_payload(scenario)
     audit: dict[str, Any] = {

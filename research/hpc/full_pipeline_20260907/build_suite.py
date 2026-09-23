@@ -150,7 +150,10 @@ def _sha256(path: Path) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", required=True, type=Path)
-    parser.add_argument("--evidence-profile", choices=("scada_only", "auxiliary_diagnostics"), default="scada_only")
+    # Literal choices: psse_env is importable only after --source-root is known.
+    # They mirror psse_env.evidence_profile.EVIDENCE_PROFILES and its default.
+    parser.add_argument("--evidence-profile", choices=("scada_only", "wls_gated_diagnostics", "auxiliary_diagnostics"),
+                        default="wls_gated_diagnostics")
     parser.add_argument("--hif-signature-mode", choices=("discovered", "flagged"), default="discovered")
     parser.add_argument("--d0-raw", required=True, type=Path)
     parser.add_argument("--protected-suite", action="append", default=[], type=Path)

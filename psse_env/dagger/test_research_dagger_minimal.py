@@ -56,7 +56,7 @@ def _raw_row(root: str = "root_a", *, audit_passed: bool = True) -> dict:
         "supervision_policy": "dagger1_observable_recovery_handoff_v2",
         "step": 1,
         "policy_observation": {
-            "evidence_profile": "scada_only",
+            "evidence_profile": "wls_gated_diagnostics",
             "active_state_id": state_id,
             "candidate_state_id": None,
             "candidate_parent_id": None,
@@ -298,7 +298,7 @@ class ResearchSplitAndResumeTests(unittest.TestCase):
             {
                 "example_id": f"d0_{index}",
                 "physical_root_fingerprint": f"d0_root_{index}",
-                "metadata": {"protocol": "canonical", "evidence_profile": "scada_only"},
+                "metadata": {"protocol": "canonical", "evidence_profile": "wls_gated_diagnostics"},
             }
             for index in range(20)
         ]
@@ -306,7 +306,7 @@ class ResearchSplitAndResumeTests(unittest.TestCase):
             {
                 "example_id": f"d1_{index}",
                 "physical_root_fingerprint": f"d1_root_{index}",
-                "metadata": {"protocol": "canonical", "evidence_profile": "scada_only"},
+                "metadata": {"protocol": "canonical", "evidence_profile": "wls_gated_diagnostics"},
             }
             for index in range(4)
         ]
@@ -550,7 +550,11 @@ class DiagnosticFamilyPresetTests(unittest.TestCase):
 
     def test_core_plan_keeps_generator_default_corpora(self) -> None:
         sources = resolve_scenario_sources(plan_families=set(DEFAULT_TRAIN_PLAN))
-        self.assertEqual(sources["evidence_profile"], "scada_only")
+        self.assertEqual(sources["evidence_profile"], "wls_gated_diagnostics")
+        self.assertEqual(
+            resolve_scenario_sources(plan_families=set(DEFAULT_TRAIN_PLAN), evidence_profile="scada_only")["evidence_profile"],
+            "scada_only",
+        )
         self.assertIsNone(sources["hif_sample_paths"])
 
     def test_diagnostic_plan_defaults_to_branch_current_corpora(self) -> None:
@@ -591,7 +595,7 @@ class DiagnosticFamilyPresetTests(unittest.TestCase):
             resolve_scenario_sources(
                 plan_families=set(DEFAULT_TRAIN_PLAN),
                 signature_modes={"three_phase_unbalance": "discovered"},
-            )["evidence_profile"], "scada_only"
+            )["evidence_profile"], "wls_gated_diagnostics"
         )
 
     def test_harmonic_only_plan_records_modes_without_telemetry_corpora(self) -> None:
@@ -602,7 +606,7 @@ class DiagnosticFamilyPresetTests(unittest.TestCase):
                 "hif_sample_paths": None,
                 "imbalance_sample_path": None,
                 "signature_modes": {"harmonic": "discovered"},
-                "evidence_profile": "scada_only",
+                "evidence_profile": "wls_gated_diagnostics",
                 "system": "case14",
             },
         )
@@ -736,7 +740,7 @@ class SystemSwitchSourceTests(unittest.TestCase):
         return corpus, artifacts
 
     def test_default_system_leaves_legacy_sources_untouched(self) -> None:
-        self.assertEqual(resolve_scenario_sources(plan_families={"measurement"}, system="case14")["evidence_profile"], "scada_only")
+        self.assertEqual(resolve_scenario_sources(plan_families={"measurement"}, system="case14")["evidence_profile"], "wls_gated_diagnostics")
         sources = resolve_scenario_sources(plan_families={"three_phase_unbalance"}, system="ieee14")
         assert sources is not None
         self.assertEqual(sources["system"], "case14")

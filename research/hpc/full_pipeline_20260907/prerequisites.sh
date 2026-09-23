@@ -33,6 +33,34 @@ for path in "$HIF_CORPUS_TRAIN" "$HIF_CORPUS_VALID" "$HIF_CORPUS_TRAIN_EXTRA" "$
   "$SRC/data/measurements_5class_merged.jsonl" "$BC0_SUITE"; do
   [[ -s "$path" ]] || { echo "missing or empty input: $path" >&2; exit 2; }
 done
+# Under wls_gated_diagnostics the HIF corpora must declare the PMU phasor
+# precision of the study (pipeline.env PMU_PHASOR_SIGMA) in their meta.json;
+# an empty PMU_PHASOR_SIGMA disables the check for an explicit ablation.
+if [[ "$EVIDENCE_PROFILE" == wls_gated_diagnostics && -n "${PMU_PHASOR_SIGMA:-}" ]]; then
+  "$PY" - "$PMU_PHASOR_SIGMA" "$HIF_CORPUS_TRAIN" "$HIF_CORPUS_VALID" "$HIF_CORPUS_TRAIN_EXTRA" "$HIF_CORPUS_VALID_EXTRA" <<'PY'
+import json
+import math
+import sys
+from pathlib import Path
+expected = float(sys.argv[1])
+problems = []
+for samples in sys.argv[2:]:
+    meta_path = Path(samples).with_name("meta.json")
+    if not meta_path.is_file():
+        problems.append(f"{meta_path}: missing")
+        continue
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    for key in ("three_phase_sigma", "branch_current_sigma_pu"):
+        declared = meta.get(key)
+        if not isinstance(declared, (int, float)) or not math.isclose(float(declared), expected, rel_tol=1e-9, abs_tol=0.0):
+            problems.append(f"{meta_path}: {key}={declared!r}, expected {expected!r}")
+if problems:
+    sys.exit("HIF corpora do not declare the PMU phasor sigma of the wls_gated_diagnostics study "
+             "(regenerate with --three-phase-noise-pu/--branch-current-noise-pu or set PMU_PHASOR_SIGMA= to ablate):\n  "
+             + "\n  ".join(problems))
+print(f"HIF corpora declare PMU phasor sigma {expected!r} per component")
+PY
+fi
 [[ -s "$TRACE_VALIDATION" ]] || echo "note: trace validation set absent; only the BC0 suite is protected"
 SNAPSHOT="$HF_HOME/hub/models--${MODEL_ID//\//--}/snapshots/$MODEL_REVISION"
 if [[ ! -s "$SNAPSHOT/config.json" || ! -e "$SNAPSHOT/model.safetensors" ]]; then

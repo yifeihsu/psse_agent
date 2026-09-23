@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from psse_env.evidence_profile import AUXILIARY_EVIDENCE_PROFILE
 from psse_env.actions import (
     ASK_FOR_MORE_EVIDENCE,
     POST_CORRECTION_CONFIRMATION_SIGNATURE,
@@ -57,6 +58,7 @@ class SequentialRecoveryTests(unittest.TestCase):
         state_id = "episode:s1"
         state = {
             "active_state_id": state_id,
+            "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
             "accepted_corrections": [
                 {
                     "candidate_state_id": state_id,
@@ -102,6 +104,7 @@ class SequentialRecoveryTests(unittest.TestCase):
         state_id = "episode:s1"
         state = {
             "active_state_id": state_id,
+            "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
             "accepted_corrections": [
                 {
                     "candidate_state_id": state_id,
@@ -162,6 +165,7 @@ class SequentialRecoveryTests(unittest.TestCase):
         ]
         state = {
             "active_state_id": state_id,
+            "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
             "last_tool": "rollback_state",
             "last_tool_status": "success",
             "last_tool_output": {"execution_status": "success"},
@@ -218,6 +222,7 @@ class SequentialRecoveryTests(unittest.TestCase):
         ]
         state = {
             "active_state_id": state_id,
+            "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
             "last_tool": "rollback_state",
             "last_tool_status": "success",
             "last_tool_output": {"execution_status": "success"},
@@ -255,6 +260,7 @@ class SequentialRecoveryTests(unittest.TestCase):
         }
         state = {
             "active_state_id": "episode:s1",
+            "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
             "last_tool": "rollback_state",
             "remaining_anomaly_score": 5.0,
             "unresolved_signatures": ["measurement_residual_outlier"],
@@ -299,6 +305,7 @@ class SequentialRecoveryTests(unittest.TestCase):
         ]
         state = {
             "active_state_id": state_id,
+            "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
             "last_tool": "get_topology_context",
             "last_tool_status": "success",
             "last_tool_output": history[-1]["tool_output"],
@@ -328,6 +335,7 @@ class SequentialRecoveryTests(unittest.TestCase):
         history = [_context_event("get_topology_context", old_state, [stale])]
         state = {
             "active_state_id": active_state,
+            "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
             "last_tool": "commit_state",
             "last_tool_status": "success",
             "last_tool_output": {"execution_status": "success"},
@@ -369,6 +377,7 @@ class SequentialRecoveryTests(unittest.TestCase):
         ]
         state = {
             "active_state_id": active_state,
+            "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
             "last_tool": "get_topology_context",
             "last_tool_status": "success",
             "last_tool_output": history[-1]["tool_output"],
@@ -390,6 +399,7 @@ class SequentialRecoveryTests(unittest.TestCase):
             with self.subTest(evidence_tool=evidence_tool):
                 policy_observation = {
                     "active_state_id": "episode:s0",
+                    "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
                     "candidate_state_id": "episode:s1",
                     "candidate_status": "verified",
                     "candidate_lifecycle": "VERIFIED",
@@ -463,6 +473,7 @@ class SequentialRecoveryTests(unittest.TestCase):
         ]
         state = {
             "active_state_id": state_id,
+            "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
             "last_tool": "run_wls",
             "last_tool_status": "success",
             "last_tool_output": {"execution_status": "success"},
@@ -525,6 +536,7 @@ class SequentialRecoveryTests(unittest.TestCase):
         ]
         state = {
             "active_state_id": state_id,
+            "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
             "last_tool": "rollback_state",
             "unresolved_signatures": [
                 "wls_residual_outlier index=16 channel=Pinj",

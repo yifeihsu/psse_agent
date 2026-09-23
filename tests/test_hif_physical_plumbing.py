@@ -11,7 +11,8 @@ from trace_protocol import summarize_hif_parameter_estimate_payload, hydrate_too
 @pytest.mark.parametrize('mode,arguments', [('physical_ohm', {}), ('physical_ohm', {'r_hif_pu_min':5,'r_hif_pu_max':1000}), ('physical_ohm', {'r_hif_ohm_min':100,'r_hif_ohm_max':500}), ('legacy_pu', {})])
 @pytest.mark.parametrize('multiscan', [False, True])
 def test_provider_forwards_only_explicit_units_and_observation_convention(monkeypatch, mode, arguments, multiscan):
-    provider = providers.MatpowerDeploymentProviders(hif_resistance_search=mode)
+    # Direct estimator plumbing without a WLS alarm: the gated default refuses the call.
+    provider = providers.MatpowerDeploymentProviders(evidence_profile='auxiliary_diagnostics', hif_resistance_search=mode)
     calls = []
     fake = lambda **kwargs: calls.append(kwargs) or {'success':False, 'error':'test stop after forwarding'}
     monkeypatch.setattr(providers, '_estimate_hif_location_magnitude_logic', fake)
