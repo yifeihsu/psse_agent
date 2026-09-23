@@ -48,6 +48,7 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
                 hif_r_grid_size: int,
                 hif_max_scans: int,
                 hif_resistance_search: str,
+                evidence_profile: str,
                 normalized_residual_threshold: float | None = None,
                 screen_checkpoint: str | None = None,
                 screen_calibration: str | None = None,
@@ -60,10 +61,12 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
                 self.hif_r_grid_size = hif_r_grid_size
                 self.hif_max_scans = hif_max_scans
                 self.hif_resistance_search = hif_resistance_search
+                self.evidence_profile = evidence_profile
 
             def env_kwargs(self) -> dict[str, Any]:
                 return {
                     "provider_marker": "deployment",
+                    "evidence_profile": self.evidence_profile,
                     "chi2_alpha": self.chi2_alpha,
                     "parameter_ranking_dominance_threshold": (
                         self.parameter_ranking_dominance_threshold
@@ -96,6 +99,7 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
         self.assertIs(env.production_dataset_mode, True)
         self.assertEqual(env.candidate_quality_oracle.mode, "deployment")
         self.assertEqual(env.kwargs["provider_marker"], "deployment")
+        self.assertEqual(env.kwargs["evidence_profile"], "scada_only")
         self.assertEqual(env.kwargs["chi2_alpha"], factories.BC0_CHI2_ALPHA)
         self.assertEqual(
             env.kwargs["parameter_ranking_dominance_threshold"],
@@ -135,6 +139,7 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
                 hif_r_grid_size: int,
                 hif_max_scans: int,
                 hif_resistance_search: str,
+                evidence_profile: str,
                 normalized_residual_threshold: float | None = None,
                 screen_checkpoint: str | None = None,
                 screen_calibration: str | None = None,
@@ -589,9 +594,10 @@ class ObservableExpertFactoryTests(unittest.TestCase):
 
 class RealProductionExpertRecoveryTests(unittest.TestCase):
     @staticmethod
-    def _evaluator(*, required_suite: str) -> ClosedLoopRolloutEvaluator:
+    def _evaluator(*, required_suite: str, evidence_profile: str = "scada_only") -> ClosedLoopRolloutEvaluator:
+        from functools import partial
         return ClosedLoopRolloutEvaluator(
-            env_factory=factories.production_environment_factory,
+            env_factory=partial(factories.production_environment_factory, evidence_profile=evidence_profile),
             policy_factory=factories.observable_expert_policy_factory,
             case_loader=factories.deterministic_case_loader,
             max_steps=40,
@@ -661,13 +667,20 @@ class RealProductionExpertRecoveryTests(unittest.TestCase):
         # under the current contract.
         prior_failures: set[str] = set()
         for suite_name, scenarios in selected.items():
-            result = self._evaluator(required_suite=suite_name).evaluate(
-                {suite_name: scenarios}
-            )
-            self.assertEqual(
-                len(result.suite_metrics["episodes"]), len(scenarios)
-            )
-            for episode in result.suite_metrics["episodes"]:
+            # This one historical intervention assumed a partial commit before
+            # any parent WLS. With real initial WLS its 8.2% improvement correctly
+            # fails the 30% partial-progress gate. Preserve the legacy replay
+            # explicitly; test_scada_only_routing separately requires rejection.
+            historical_setup = {"r0_1e06979fa21e"}
+            episodes = []
+            for profile in ("scada_only", "auxiliary_diagnostics"):
+                cohort = [row for row in scenarios if
+                    (row["execution"]["scenario_id"] in historical_setup) == (profile == "auxiliary_diagnostics")]
+                if cohort:
+                    result = self._evaluator(required_suite=suite_name, evidence_profile=profile).evaluate({suite_name: cohort})
+                    episodes.extend(result.suite_metrics["episodes"])
+            self.assertEqual(len(episodes), len(scenarios))
+            for episode in episodes:
                 scenario_id = episode["scenario_id"]
                 family = episode["family"]
                 observed_regressions.add(scenario_id)
@@ -760,6 +773,15 @@ class RealProductionExpertRecoveryTests(unittest.TestCase):
             {"partial_success_retention": [scenario]}
         )
         episode = result.suite_metrics["episodes"][0]
+        setup = episode["evaluation_intervention"]
+        self.assertIs(setup["scada_setup_wls_bootstrap"], True)
+        self.assertEqual(setup["pre_policy_step_count"], len(setup["contract"]["setup_actions"]) + 1)
+        self.assertEqual(episode["trace"][0]["action"]["tool"], RUN_WLS)
+        self.assertIs(episode["trace"][0]["intervention"], True)
+        self.assertLessEqual(episode["steps"], 40)
+        from psse_env.dagger.evaluation_gate import _intervention_failures
+        evidence_failures, _ = _intervention_failures(episode, setup["contract"])
+        self.assertEqual(evidence_failures, [])
         self.assertIs(episode["terminal"], True)
         self.assertEqual(episode["terminal_outcome"], "operator_escalation")
         self.assertEqual(episode["invalid_action_count"], 0)

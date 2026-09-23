@@ -51,7 +51,7 @@ fi
 # System selection and detector (pipeline.env): the fresh-corpus sources of
 # a non-IEEE14 system, the shared normalized-residual threshold, and the
 # IEEE-14 waveform corpora for case14 only.
-system_args=(--system "$SYSTEM" --admission-mode "$ADMISSION_MODE"
+system_args=(--system "$SYSTEM" --admission-mode "$ADMISSION_MODE" --evidence-profile "$EVIDENCE_PROFILE" --hif-signature-mode "$HIF_SIGNATURE_MODE"
   --normalized-residual-threshold "$NORMALIZED_RESIDUAL_THRESHOLD")
 if [[ -n "$MEASUREMENT_CORPUS" ]]; then system_args+=(--measurement-corpus "$MEASUREMENT_CORPUS"); fi
 if [[ -n "$BALANCED_ARTIFACT_DIR" ]]; then system_args+=(--balanced-artifact-dir "$BALANCED_ARTIFACT_DIR"); fi
@@ -83,7 +83,7 @@ if [[ ! -s "$OUT/d0.done" ]]; then
     "${system_args[@]}" \
     "${waveform_args[@]}" \
     > "$OUT/d0_console.json"
-  "$PY" - "$D0_DIR" "$OUT/d0.done" <<'PY'
+  "$PY" - "$D0_DIR" "$OUT/d0.done" "$EVIDENCE_PROFILE" <<'PY'
 import hashlib
 import json
 import os
@@ -116,6 +116,7 @@ if train_roots & validation_roots:
 provenance = json.loads((d0 / "aggregate.generation_provenance.json").read_text(encoding="utf-8"))
 payload = {
     "contract": "research_full_pipeline_d0_done_v1",
+    "evidence_profile": sys.argv[3],
     "raw_rows": len(raw),
     "raw_roots": len({root(r) for r in raw}),
     "raw_families": dict(sorted(Counter(r.get("scenario_family") for r in raw).items())),
@@ -174,10 +175,11 @@ fi
 # A frozen student from an earlier run stands in for BC0: link it as this
 # run's adapter and write the receipt stage 1 checks, so no training runs.
 if [[ -n "$FROZEN_STUDENT_ADAPTER" && ! -s "$OUT/bc0.done" ]]; then
+  [[ "${FROZEN_STUDENT_EVIDENCE_PROFILE:-auxiliary_diagnostics}" == "$EVIDENCE_PROFILE" ]] || { echo "frozen student evidence profile differs; use a compatible checkpoint or a separate explicit historical evaluation" >&2; exit 2; }
   [[ -s "$FROZEN_STUDENT_ADAPTER/adapter_model.safetensors" ]] || { echo "frozen student adapter missing: $FROZEN_STUDENT_ADAPTER" >&2; exit 2; }
   mkdir -p "$BC0_DIR"
   ln -sfn "$FROZEN_STUDENT_ADAPTER" "$BC0_DIR/lora"
-  "$PY" - "$BC0_DIR" "$OUT/bc0.done" "$FROZEN_STUDENT_ADAPTER" <<'PY'
+  "$PY" - "$BC0_DIR" "$OUT/bc0.done" "$FROZEN_STUDENT_ADAPTER" "$EVIDENCE_PROFILE" <<'PY'
 import json
 import os
 import sys
@@ -189,6 +191,7 @@ bc0 = Path(sys.argv[1])
 frozen = Path(sys.argv[3]).resolve()
 payload = {
     "contract": "research_full_pipeline_bc0_reused_v1",
+    "evidence_profile": sys.argv[4],
     "adapter_path": str(bc0 / "lora"),
     "frozen_student_adapter": str(frozen),
     "adapter_tree_sha256": checkpoint_tree_sha256(bc0 / "lora"),

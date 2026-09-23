@@ -76,6 +76,8 @@ _RESOLVED_CHECKS = frozenset(
 # independently validated explanation-only case contract exists.
 ALLOWED_NOT_APPLICABLE_CHECKS = frozenset({FINAL_MEASUREMENTS_CHECK})
 EXPLANATION_ONLY_DIAGNOSTIC_CONTRACT = "explanation_only_diagnostic_localization_v1"
+HEALTHY_ACQUISITION_REFERENCE = "original_healthy_acquisition"
+HIF_METER_ACQUISITION_REFERENCE = "hif_present_meter_recovery_acquisition_v1"
 
 # These problems mean the offline audit could not determine final task
 # correctness from canonical truth and physical-state evidence.  They are kept
@@ -97,6 +99,7 @@ _TASK_SUCCESS_EVIDENCE_GAPS = frozenset(
         "supplied_remaining_truth_ledger_disagrees_with_derived",
         "true_measurement_targets_malformed",
         "true_measurement_target_out_of_range",
+        "mixed_hif_measurement_reference_truth_invalid",
     }
 )
 _DIAGNOSTIC_FAMILIES = frozenset({"harmonic", "hif", "three_phase_unbalance"})
@@ -1862,6 +1865,7 @@ def audit_episode_against_truth(
         if embedded_tolerances is not None:
             tolerances = embedded_tolerances
     tolerance_profile = _coerce_tolerances(tolerances)
+    measurement_reference = _acquisition_measurement_reference(scenario)
     checks: dict[str, dict[str, Any]] = {}
     all_problems: list[str] = []
 
@@ -1887,6 +1891,8 @@ def audit_episode_against_truth(
         case_loader=case_loader,
     )
     record(ACCEPTED_TARGETS_CHECK, target_problems)
+    if measurement_reference["problems"]:
+        record("measurement_reference_contract", measurement_reference["problems"])
 
     outcome = str(terminal_outcome) if terminal_outcome is not None else None
     resolved = outcome == "resolved"
@@ -1905,6 +1911,19 @@ def audit_episode_against_truth(
     declarations, declaration_problems = _not_applicable_declarations(
         scenario, not_applicable
     )
+    superseded_measurement_waiver = bool(
+        measurement_reference["kind"] == HIF_METER_ACQUISITION_REFERENCE
+        and not measurement_reference["problems"]
+        and FINAL_MEASUREMENTS_CHECK in declarations
+        and isinstance(release_audit_config, Mapping)
+        and release_audit_config.get("explanation_only_contract")
+        == EXPLANATION_ONLY_DIAGNOSTIC_CONTRACT
+    )
+    if superseded_measurement_waiver:
+        # Older mixed roots inherited their pure-HIF parent's waiver. Replace
+        # only that declaration with an explicit full acquisition comparison;
+        # target, preservation, remaining-fault and diagnostic checks still run.
+        declarations.pop(FINAL_MEASUREMENTS_CHECK)
     declarations, contract_problems = _validated_not_applicable_declarations(
         scenario,
         final_state,
@@ -1999,10 +2018,18 @@ def audit_episode_against_truth(
     clean_measurements = clean_state.get(
         "measurements", scenario.get("clean_measurements")
     )
+    reference_scenario = scenario
+    if measurement_reference["kind"] is not None and not measurement_reference["problems"]:
+        clean_measurements = measurement_reference["measurements"]
+        reference_scenario = {
+            **scenario,
+            "clean_measurements": clean_measurements,
+            "clean_state": {**clean_state, "measurements": clean_measurements},
+        }
 
     if terminal:
         nonregression_problems, nonregression_evidence = _accepted_target_nonregression(
-            scenario,
+            reference_scenario,
             final_measurements=final_measurements,
             final_case=final_case,
             case_loader=case_loader,
@@ -2021,6 +2048,10 @@ def audit_episode_against_truth(
         record(ACCEPTED_TARGET_NONREGRESSION_CHECK, [], status="not_required")
 
     healthy_measurement_problems: list[str] = []
+    preserve_acquisition = bool(
+        measurement_reference["kind"] is not None
+        and not measurement_reference["problems"]
+    )
     before = _as_sequence(initial_measurements)
     after = _as_sequence(final_measurements)
     clean_rows = _as_sequence(clean_measurements)
@@ -2050,8 +2081,8 @@ def audit_episode_against_truth(
         not _values_close(
             after[index],
             before[index],
-            abs_tolerance=tolerance_profile.measurement_abs,
-            rel_tolerance=tolerance_profile.measurement_rel,
+            abs_tolerance=0.0 if preserve_acquisition else tolerance_profile.measurement_abs,
+            rel_tolerance=0.0 if preserve_acquisition else tolerance_profile.measurement_rel,
         )
         for index in range(len(before))
         if index not in measurement_targets
@@ -2132,6 +2163,14 @@ def audit_episode_against_truth(
     else:
         final_measurement_problems = []
     resolved_check(FINAL_MEASUREMENTS_CHECK, final_measurement_problems)
+    checks[FINAL_MEASUREMENTS_CHECK]["reference_kind"] = (
+        measurement_reference["kind"] or "scenario_clean_measurements"
+    )
+    if measurement_reference["kind"] is not None:
+        checks[FINAL_MEASUREMENTS_CHECK]["reference_reason"] = measurement_reference["reason"]
+        checks[FINAL_MEASUREMENTS_CHECK]["superseded_explanation_only_waiver"] = (
+            superseded_measurement_waiver
+        )
 
     clean_case = clean_state.get("case", scenario.get("clean_case"))
     case_match = (
@@ -2173,6 +2212,76 @@ def audit_episode_against_truth(
         "problems": unique_problems,
         "quarantined": bool(unique_problems),
     }
+
+
+def _acquisition_measurement_reference(scenario: Mapping[str, Any]) -> dict[str, Any]:
+    """Choose a noise-preserving reference for explicitly supported controls.
+
+    This is offline truth interpretation, never a runtime correction. A
+    healthy acquisition needs no denoising. A mixed HIF/meter acquisition
+    retains the diagnosed physical event and its original sensor noise while
+    restoring only the independently declared gross-error targets.
+    """
+    result: dict[str, Any] = {"kind": None, "measurements": None, "problems": [], "reason": None}
+    family = str(scenario.get("scenario_family") or "").strip().lower()
+    healthy_family = family in {"no_error", "telemetry_no_disturbance"}
+    mixed_hif_family = family in {"measurement+hif", "hif+measurement"}
+    if not (healthy_family or mixed_hif_family) or scenario.get("truth_complete") is not True:
+        return result
+    count, truth_problems = _initial_true_fault_count(scenario)
+    if healthy_family:
+        hidden_truth = scenario.get("hidden_truth")
+        truth_sources = [scenario, hidden_truth] if isinstance(hidden_truth, Mapping) else [scenario]
+        declared_faults = any(
+            bool(value)
+            for source in truth_sources
+            for key, value in source.items()
+            if str(key).startswith("true_") and str(key).endswith("_errors")
+        )
+        if count or truth_problems or declared_faults:
+            return result
+        result.update(
+            kind=HEALTHY_ACQUISITION_REFERENCE,
+            reason="A complete zero-fault control preserves the original noisy acquisition; it does not denoise it.",
+        )
+    else:
+        diagnostics, diagnostic_problems = _diagnostic_truth(scenario)
+        meter_rows = _as_sequence(scenario.get("true_measurement_errors"))
+        other_faults = any(
+            bool(scenario.get(key)) for key in ("true_parameter_errors", "true_topology_errors")
+        ) or any(rows for name, rows in diagnostics.items() if name != "hif")
+        if truth_problems or diagnostic_problems or not diagnostics.get("hif") or not meter_rows or other_faults:
+            result["problems"].append("mixed_hif_measurement_reference_truth_invalid")
+            return result
+        result.update(
+            kind=HIF_METER_ACQUISITION_REFERENCE,
+            reason="Restore declared meter targets against their HIF-present pre-overlay values and preserve all other acquired channels.",
+        )
+    initial = _as_sequence(scenario.get("measurements"))
+    if initial is None or any(_finite_number(value) is None for value in initial):
+        result["problems"].append("final_clean_measurement_evidence_missing_or_malformed")
+        return result
+    reference = list(initial)
+    if mixed_hif_family:
+        targets: set[int] = set()
+        for fault in meter_rows:
+            if not isinstance(fault, Mapping):
+                result["problems"].append("mixed_hif_measurement_reference_truth_invalid")
+                break
+            index = _shared_measurement_fault_target(fault)
+            clean = _finite_number(fault.get("clean"))
+            observed = _finite_number(fault.get("observed")) if "observed" in fault else None
+            if (
+                index is None or index < 0 or index >= len(reference) or index in targets
+                or clean is None
+                or ("observed" in fault and (observed is None or observed != initial[index]))
+            ):
+                result["problems"].append("mixed_hif_measurement_reference_truth_invalid")
+                break
+            targets.add(index)
+            reference[index] = clean
+    result["measurements"] = reference
+    return result
 
 
 def _initial_true_fault_count(

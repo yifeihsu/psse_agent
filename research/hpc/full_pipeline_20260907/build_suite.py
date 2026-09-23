@@ -150,6 +150,8 @@ def _sha256(path: Path) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", required=True, type=Path)
+    parser.add_argument("--evidence-profile", choices=("scada_only", "auxiliary_diagnostics"), default="scada_only")
+    parser.add_argument("--hif-signature-mode", choices=("discovered", "flagged"), default="discovered")
     parser.add_argument("--d0-raw", required=True, type=Path)
     parser.add_argument("--protected-suite", action="append", default=[], type=Path)
     parser.add_argument("--round-train-plan", required=True)
@@ -243,10 +245,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         imbalance_sample_path=args.imbalance_sample_path,
         balanced_artifact_dir=args.balanced_artifact_dir,
         admission_mode=args.admission_mode,
+        evidence_profile=args.evidence_profile,
+        signature_modes={"hif": args.hif_signature_mode},
     )
     profile = {
         "plan_preset": "full_pipeline_suite",
         "hif_search_profile": "research",
+        "evidence_profile": args.evidence_profile,
         "scenario_sources": sources,
     }
 

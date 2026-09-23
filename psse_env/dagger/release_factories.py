@@ -45,6 +45,8 @@ from psse_env.actions import (
 from psse_env.dagger.dataset_builder import (
     CANONICAL_DAGGER_SYSTEM_PROMPT,
     validate_policy_payload,
+    tool_schemas_for_observation,
+    system_prompt_for_observation,
 )
 from psse_env.dagger.policy_adapter import LocalAliasPolicyAdapter
 from psse_env.dagger.protocol_bridge import canonical_to_internal_action, unified_tool_schemas
@@ -137,6 +139,7 @@ def production_environment_factory(
     screen_checkpoint: str | None = None,
     screen_calibration: str | None = None,
     hif_resistance_search: str = "physical_ohm",
+    evidence_profile: str = "scada_only",
 ) -> TransactionalPSSEEnv:
     """Construct the real MATPOWER-backed deployment environment.
 
@@ -151,6 +154,7 @@ def production_environment_factory(
     # significance level.  Relying on the provider's general-purpose default
     # made healthy release roots anomalous only at evaluation time.
     providers = MatpowerDeploymentProviders(
+        evidence_profile=evidence_profile,
         chi2_alpha=chi2_alpha,
         normalized_residual_threshold=normalized_residual_threshold,
         screen_checkpoint=screen_checkpoint,
@@ -341,6 +345,79 @@ def _latest_candidate_correction(
     return None
 
 
+def _observable_hif_meter_nonregression(
+    observation: Mapping[str, Any], correction: Mapping[str, Any], verification: Mapping[str, Any],
+) -> bool:
+    """Read the controller's bound stored-state proof and recheck public data."""
+    proof = verification.get("hif_meter_nonregression")
+    if not isinstance(proof, Mapping) or proof.get("contract") != "hif_conditioned_meter_nonregression_v1":
+        return False
+    active, candidate = observation.get("active_state_id"), observation.get("candidate_state_id")
+    contexts = observation.get("fresh_context_evidence") or {}
+    parent_conditioning = contexts.get("hif_conditioning") if isinstance(contexts, Mapping) else None
+    conditioning = verification.get("hif_conditioning")
+    if (proof.get("evidence_source") != "controller_observed:stored_state_hif_meter_nonregression"
+        or proof.get("parent_state_id") != active or proof.get("candidate_state_id") != candidate
+        or not proof.get("candidate_state_hash") or proof["candidate_state_hash"] != verification.get("state_hash")
+        or not isinstance(parent_conditioning, Mapping) or parent_conditioning.get("state_id") != active
+        or proof.get("parent_state_hash") != parent_conditioning.get("state_hash")
+        or parent_conditioning.get("status") != "ready"
+        or not isinstance(conditioning, Mapping) or conditioning.get("state_id") != candidate
+        or conditioning.get("state_hash") != proof["candidate_state_hash"]
+        or conditioning.get("status") != "ready" or conditioning.get("failure_reasons") != []
+        or conditioning.get("remaining_meter_candidate_indices") != []
+        or conditioning.get("method") != "paired_opendss_effect_compensation"
+        or conditioning.get("physical_fault_still_present") is not True):
+        return False
+    if any(proof.get(key) is not True for key in (
+        "case_unchanged", "non_target_measurements_unchanged", "preexisting_voltage_violations_unchanged",
+        "physical_fault_still_present", "operator_review_required",
+    )):
+        return False
+    recorded = proof.get("source_action")
+    if not isinstance(recorded, Mapping) or safe_normalize_action(recorded) != correction or correction.get("tool") != "correct_measurements":
+        return False
+    arguments = correction.get("arguments") or {}
+    indices = arguments.get("suspect_group")
+    if (arguments.get("state_id") != active or "measurement_updates" in arguments
+        or not isinstance(indices, (list, tuple)) or not indices
+        or any(type(index) is not int or index < 0 for index in indices)
+        or len(set(indices)) != len(indices)):
+        return False
+    if (verification.get("physical_constraints_ok") is not False
+        or verification.get("physical_evidence_complete") is not True
+        or verification.get("physical_evidence_scope") != "observed_snapshot_topology_vm_rate_a"
+        or verification.get("chi_square_alarm") is not False
+        or verification.get("normalized_residual_alarm") is not False
+        or verification.get("collateral_damage") is True
+        or verification.get("healthy_component_modified") is True
+        or verification.get("power_flow_converged") is False or verification.get("topology_feasible") is False):
+        return False
+    for value_key, threshold_key in (("chi_square_statistic", "chi_square_threshold"),
+                                      ("max_normalized_residual", "normalized_residual_threshold"),
+                                      ("target_metric_value", "target_metric_threshold")):
+        value, threshold = _finite_float(verification.get(value_key)), _finite_float(verification.get(threshold_key))
+        if value is None or threshold is None or not 0 <= value < threshold:
+            return False
+    progress = _finite_float(verification.get("global_progress"))
+    scores = verification.get("conditional_meter_scores")
+    violations = verification.get("physical_bound_violations")
+    if (progress is None or progress < 0 or not isinstance(scores, (list, tuple))
+        or any(index >= len(scores) or _finite_float(scores[index]) is None or abs(float(scores[index])) > 1e-8 for index in indices)
+        or not isinstance(violations, list) or not violations
+        or any(not isinstance(row, Mapping) or row.get("type") != "bus_voltage_out_of_bounds"
+               or row.get("measurement_index0") in indices for row in violations)):
+        return False
+    physical = verification.get("steady_state_physical_evidence") or {}
+    if not isinstance(physical, Mapping) or physical.get("complete") is not True or physical.get("input_errors"):
+        return False
+    topology, thermal = physical.get("topology_connectivity") or {}, physical.get("active_branch_rate_a_bounds") or {}
+    return bool(isinstance(topology, Mapping) and isinstance(thermal, Mapping)
+        and topology.get("checked") is True and topology.get("connected") is True
+        and thermal.get("checked") is True and thermal.get("within_defined_rate_a_bounds") is True
+        and thermal.get("violation_count") == 0)
+
+
 def _observable_candidate_disposition(
     observation: Mapping[str, Any], history: list[Mapping[str, Any]]
 ) -> str | None:
@@ -387,6 +464,10 @@ def _observable_candidate_disposition(
     else:
         numeric_violations = _finite_float(violations)
         violation_count = int(numeric_violations or 0.0)
+    if _observable_hif_meter_nonregression(observation, correction, verification):
+        # This is a partial meter repair. The physical HIF and voltage-limit
+        # violations remain visible and the controller still requires handoff.
+        return "commit"
     if physical is False or any(value is False for value in feasibility) or violation_count > 0:
         return "rollback"
     physical_known_safe = physical is True or (
@@ -1342,8 +1423,10 @@ class _CanonicalGemmaPolicy:
             raise TypeError("Gemma policy requires a model-observation mapping")
         payload = {"state": copy.deepcopy(dict(observation))}
         validate_policy_payload(payload)
+        visible_tools = tool_schemas_for_observation(self._tools, observation)
+        visible_parameters = {row["function"]["name"]: row["function"]["parameters"] for row in visible_tools}
         messages = [
-            {"role": "system", "content": CANONICAL_DAGGER_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt_for_observation(CANONICAL_DAGGER_SYSTEM_PROMPT, observation)},
             {
                 "role": "user",
                 "content": json.dumps(payload, sort_keys=True, allow_nan=False),
@@ -1352,7 +1435,7 @@ class _CanonicalGemmaPolicy:
         rendered = _render(
             self._bundle.processor,
             messages,
-            self._tools,
+            visible_tools,
             add_generation_prompt=True,
         )
         encoded = _tokenize_rendered(self._bundle.processor, rendered)
@@ -1408,7 +1491,7 @@ class _CanonicalGemmaPolicy:
             else self._bundle.processor.tokenizer
         )
         text = decoder.decode(output_ids, skip_special_tokens=False)
-        return _validated_generated_action(text, self._parameter_schemas)
+        return _validated_generated_action(text, visible_parameters)
 
 
 class GemmaReleasePolicy:

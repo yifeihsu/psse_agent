@@ -56,6 +56,7 @@ def _raw_row(root: str = "root_a", *, audit_passed: bool = True) -> dict:
         "supervision_policy": "dagger1_observable_recovery_handoff_v2",
         "step": 1,
         "policy_observation": {
+            "evidence_profile": "scada_only",
             "active_state_id": state_id,
             "candidate_state_id": None,
             "candidate_parent_id": None,
@@ -297,7 +298,7 @@ class ResearchSplitAndResumeTests(unittest.TestCase):
             {
                 "example_id": f"d0_{index}",
                 "physical_root_fingerprint": f"d0_root_{index}",
-                "metadata": {"protocol": "canonical"},
+                "metadata": {"protocol": "canonical", "evidence_profile": "scada_only"},
             }
             for index in range(20)
         ]
@@ -305,7 +306,7 @@ class ResearchSplitAndResumeTests(unittest.TestCase):
             {
                 "example_id": f"d1_{index}",
                 "physical_root_fingerprint": f"d1_root_{index}",
-                "metadata": {"protocol": "canonical"},
+                "metadata": {"protocol": "canonical", "evidence_profile": "scada_only"},
             }
             for index in range(4)
         ]
@@ -548,7 +549,9 @@ class DiagnosticFamilyPresetTests(unittest.TestCase):
         self.assertEqual(set(combined_dev), set(DEFAULT_DEVELOPMENT_PLAN) | set(development))
 
     def test_core_plan_keeps_generator_default_corpora(self) -> None:
-        self.assertIsNone(resolve_scenario_sources(plan_families=set(DEFAULT_TRAIN_PLAN)))
+        sources = resolve_scenario_sources(plan_families=set(DEFAULT_TRAIN_PLAN))
+        self.assertEqual(sources["evidence_profile"], "scada_only")
+        self.assertIsNone(sources["hif_sample_paths"])
 
     def test_diagnostic_plan_defaults_to_branch_current_corpora(self) -> None:
         sources = resolve_scenario_sources(plan_families={"three_phase_unbalance"})
@@ -568,6 +571,7 @@ class DiagnosticFamilyPresetTests(unittest.TestCase):
     def test_signature_modes_are_recorded_with_the_corpora(self) -> None:
         sources = resolve_scenario_sources(
             plan_families={"three_phase_unbalance"},
+            evidence_profile="auxiliary_diagnostics",
             signature_modes={"three_phase_unbalance": "discovered", "hif": "flagged"},
         )
         assert sources is not None
@@ -583,11 +587,11 @@ class DiagnosticFamilyPresetTests(unittest.TestCase):
             resolve_scenario_sources(
                 plan_families={"hif"}, signature_modes={"unknown_family": "flagged"}
             )
-        self.assertIsNone(
+        self.assertEqual(
             resolve_scenario_sources(
                 plan_families=set(DEFAULT_TRAIN_PLAN),
                 signature_modes={"three_phase_unbalance": "discovered"},
-            )
+            )["evidence_profile"], "scada_only"
         )
 
     def test_harmonic_only_plan_records_modes_without_telemetry_corpora(self) -> None:
@@ -598,10 +602,12 @@ class DiagnosticFamilyPresetTests(unittest.TestCase):
                 "hif_sample_paths": None,
                 "imbalance_sample_path": None,
                 "signature_modes": {"harmonic": "discovered"},
+                "evidence_profile": "scada_only",
+                "system": "case14",
             },
         )
         flagged = resolve_scenario_sources(
-            plan_families={"harmonic"}, signature_modes={"harmonic": "flagged"}
+            plan_families={"harmonic"}, signature_modes={"harmonic": "flagged"}, evidence_profile="auxiliary_diagnostics"
         )
         self.assertEqual(flagged["signature_modes"], {"harmonic": "flagged"})
         self.assertNotEqual(flagged, sources)
@@ -730,10 +736,10 @@ class SystemSwitchSourceTests(unittest.TestCase):
         return corpus, artifacts
 
     def test_default_system_leaves_legacy_sources_untouched(self) -> None:
-        self.assertIsNone(resolve_scenario_sources(plan_families={"measurement"}, system="case14"))
+        self.assertEqual(resolve_scenario_sources(plan_families={"measurement"}, system="case14")["evidence_profile"], "scada_only")
         sources = resolve_scenario_sources(plan_families={"three_phase_unbalance"}, system="ieee14")
         assert sources is not None
-        self.assertNotIn("system", sources)
+        self.assertEqual(sources["system"], "case14")
 
     def test_case57_sources_need_a_fresh_corpus_and_balanced_families(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

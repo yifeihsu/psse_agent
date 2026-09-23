@@ -4,6 +4,8 @@ import json
 import re
 from typing import Any, Mapping
 
+from psse_env.evidence_profile import DEFAULT_EVIDENCE_PROFILE, is_scada_only
+
 
 RUN_WLS = "run_wls"
 VERIFY_CANDIDATE = "verify_candidate"
@@ -20,6 +22,9 @@ ASK_FOR_MORE_EVIDENCE = "ask_for_more_evidence"
 RUN_ALTERNATIVE_TEST = "run_alternative_test"
 HIF_DIAGNOSTICS_EXHAUSTED_REQUEST = (
     "operator_escalation:hif_diagnostics_exhausted"
+)
+HIF_CONDITIONING_UNAVAILABLE_REQUEST = (
+    "operator_escalation:hif_conditioning_unavailable"
 )
 RECOVERY_OPTIONS_EXHAUSTED_REQUEST = (
     "operator_escalation:recovery_options_exhausted"
@@ -213,7 +218,7 @@ THREE_PHASE_TELEMETRY_CHANNELS = frozenset(
 
 def harmonic_screening_pending(
     *, unresolved: Any, tried_action_signatures: Any, active_state_id: Any,
-    context_evidence: Any = None,
+    context_evidence: Any = None, evidence_profile: Any = DEFAULT_EVIDENCE_PROFILE,
 ) -> bool:
     """An observed WLS anomaly permits one request for spectral evidence.
 
@@ -221,6 +226,8 @@ def harmonic_screening_pending(
     hidden scenario family. Only a process-valid request enters the request
     ledger. Rejected pre-WLS calls must not bypass later spectral acquisition.
     """
+    if is_scada_only(evidence_profile):
+        return False
     signatures = [str(item) for item in (unresolved or [])]
     if not any(item.startswith("wls_") for item in signatures):
         return False
@@ -251,7 +258,7 @@ def harmonic_screening_pending(
 
 def three_phase_acquisition_pending(
     *, unresolved: Any, tried_action_signatures: Any, active_state_id: Any,
-    context_evidence: Any = None,
+    context_evidence: Any = None, evidence_profile: Any = DEFAULT_EVIDENCE_PROFILE,
 ) -> bool:
     """Request phase-resolved evidence after a generic WLS anomaly.
 
@@ -259,6 +266,8 @@ def three_phase_acquisition_pending(
     on whether the hidden root happens to carry phase-resolved telemetry.
     Rejected calls do not count as acquisitions.
     """
+    if is_scada_only(evidence_profile):
+        return False
     signatures = [str(item) for item in (unresolved or [])]
     if not any(item.startswith("wls_") for item in signatures):
         return False
@@ -385,6 +394,16 @@ def gnn_investigation_pending(state: Any) -> bool:
     screen = current_gnn_screen(state)
     if not (screen.get("phase_trigger") is True or screen.get("anomaly_trigger") is True):
         return False
+    if is_scada_only(state):
+        # A learned score derived from these same SCADA/WLS values may request
+        # balanced investigation; it does not create a phase sensor or a fault
+        # diagnosis. Both anomaly and phase heads use the same generic route.
+        contexts = state.get("fresh_context_evidence") or {}
+        return any(not (
+            isinstance(contexts.get(family), Mapping)
+            and contexts[family].get("state_id") == screen["state_id"]
+            and contexts[family].get("state_hash") == screen["state_hash"]
+        ) for family in ("measurement", "parameter", "topology"))
     waveform = waveform_anomaly_signatures(state.get("unresolved_signatures") or [])
     if waveform:
         # Independent acquired waveform evidence supersedes the screening
@@ -417,6 +436,8 @@ def preferred_first_request(state: Any, history: Any = None) -> str:
     returns nothing.  Without a breadth statistic (compact fixtures) the
     spectral request keeps its historical precedence.
     """
+    if is_scada_only(state):
+        return GET_MEASUREMENT_CONTEXT
     if current_gnn_screen(state).get("phase_trigger") is True:
         return GET_THREE_PHASE_CONTEXT
     breadth = wls_anomaly_breadth(state, history)
@@ -435,7 +456,14 @@ def successful_current_wls(state: Any, history: Any = None) -> bool:
             isinstance(evidence, Mapping)
             and str(evidence.get("state_id") or "") == active
             and evidence.get("successful") is True
+            and (not is_scada_only(state) or (
+                isinstance(evidence.get("state_hash"), str) and bool(evidence["state_hash"])
+            ))
         )
+    if is_scada_only(state):
+        # New strict episodes always publish a content-bound WLS ledger. A
+        # legacy score, family flag or claimed last tool is not that proof.
+        return False
     provenance = state.get("semantic_field_provenance") or {}
     source = str(provenance.get("remaining_anomaly_score") or "").lower()
     if state.get("remaining_anomaly_score") is not None and (
@@ -470,7 +498,7 @@ def three_phase_screening_pending(
     available_evidence: Any,
     tried_action_signatures: Any,
     active_state_id: Any,
-    context_evidence: Any = None,
+    context_evidence: Any = None, evidence_profile: Any = DEFAULT_EVIDENCE_PROFILE,
 ) -> bool:
     """Whether an unflagged WLS anomaly still awaits its three-phase screening.
 
@@ -479,6 +507,8 @@ def three_phase_screening_pending(
     counts process-valid NLM dispatches, so rejected premature attempts never
     suppress later screening, even when their history has been truncated.
     """
+    if is_scada_only(evidence_profile):
+        return False
     signatures = [str(item) for item in (unresolved or [])]
     if not any(item.startswith("wls_") for item in signatures):
         return False

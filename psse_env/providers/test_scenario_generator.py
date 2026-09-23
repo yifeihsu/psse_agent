@@ -66,7 +66,7 @@ def _quick_plan() -> dict[str, int]:
 class ScenarioConstructionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.generator = Round0ScenarioGenerator(seed=20260719)
+        cls.generator = Round0ScenarioGenerator(seed=20260719, evidence_profile="auxiliary_diagnostics", waveform_signature_mode={"hif": "flagged"})
         cls.scenarios = cls.generator.build(_quick_plan())
         cls.by_family = {
             scenario["scenario_family"]: scenario for scenario in cls.scenarios
@@ -202,7 +202,7 @@ class ScenarioConstructionTests(unittest.TestCase):
 
     def test_flagged_harmonic_mode_preserves_legacy_monitor_alarm(self) -> None:
         generator = Round0ScenarioGenerator(
-            seed=20260719, waveform_signature_mode={"harmonic": "flagged"}
+            seed=20260719, waveform_signature_mode={"harmonic": "flagged"}, evidence_profile="auxiliary_diagnostics"
         )
         scenario = generator.build({"harmonic": 1})[0]
         self.assertEqual(
@@ -277,6 +277,7 @@ class ScenarioConstructionTests(unittest.TestCase):
         generator = Round0ScenarioGenerator(
             seed=20260719,
             waveform_signature_mode={"three_phase_unbalance": "flagged"},
+            evidence_profile="auxiliary_diagnostics",
         )
         scenario = generator.build({"three_phase_unbalance": 1})[0]
         signatures = scenario["unresolved_signatures"]
@@ -1709,7 +1710,7 @@ class ValidationGateTests(unittest.TestCase):
 class WlsSignatureEmissionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.providers = MatpowerDeploymentProviders(chi2_alpha=0.01)
+        cls.providers = MatpowerDeploymentProviders(chi2_alpha=0.01, evidence_profile="auxiliary_diagnostics")
         data = json.loads(FIXTURE.read_text())
         cls.clean_z = list(data["z_obs"])
 
@@ -1957,11 +1958,8 @@ class EndToEndRound0EpisodeTests(unittest.TestCase):
             tools,
             [
                 "run_wls",
-                # A gross meter error is a narrow anomaly: the phase-resolved
-                # request comes first, then spectra; both return nothing and
-                # ordinary investigation follows.
-                "get_three_phase_context",
-                "get_harmonic_context",
+                # Strict SCADA-only episodes investigate the balanced residual
+                # directly; no auxiliary instruments are requested.
                 "get_measurement_context",
                 "correct_measurements",
                 "run_wls",
@@ -2142,12 +2140,14 @@ class EndToEndRound0EpisodeTests(unittest.TestCase):
         self.assertFalse(audit["quarantined"], audit)
 
     def test_rejected_mixed_hif_ladder_ends_in_explicit_operator_escalation(self) -> None:
-        generator = Round0ScenarioGenerator(seed=20260719, hif_max_scans=3)
+        generator = Round0ScenarioGenerator(seed=20260719, hif_max_scans=3,
+            evidence_profile="auxiliary_diagnostics", waveform_signature_mode={"hif": "flagged"})
         source = generator.build({"measurement+hif": 1})[0]
         env, executed = self._run_episode(
             self._without_privileged_targets(source),
             max_steps=24,
             provider_kwargs={
+                "evidence_profile": "auxiliary_diagnostics",
                 "hif_alpha_grid_size": 5,
                 "hif_r_grid_size": 7,
                 "hif_max_scans": 3,
@@ -2260,7 +2260,7 @@ class BranchCurrentChannelPropagationTests(unittest.TestCase):
     """Source rows carrying per-phase branch currents reach runtime metadata."""
 
     def setUp(self) -> None:
-        self.generator = Round0ScenarioGenerator(seed=1, validate=False)
+        self.generator = Round0ScenarioGenerator(seed=1, validate=False, evidence_profile="auxiliary_diagnostics")
         self.z = list(json.loads(FIXTURE.read_text(encoding="utf-8"))["z_obs"])
         # These algebraic phasor fixtures test plumbing, not a sampled sensor
         # distribution. Exercise real noise admission separately in alignment tests.
@@ -2379,7 +2379,7 @@ class SynthesizedFamilyOperatingPointTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.generator = Round0ScenarioGenerator(seed=20260910)
+        cls.generator = Round0ScenarioGenerator(seed=20260910, evidence_profile="auxiliary_diagnostics")
         cls.scenarios = cls.generator.build({"topology": 1, "harmonic": 1})
         cls.by_family = {row["scenario_family"]: row for row in cls.scenarios}
 

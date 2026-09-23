@@ -9,12 +9,15 @@ from psse_env.actions import (
     ROLLBACK_STATE,
     RUN_WLS,
     gnn_investigation_pending,
+    successful_current_wls,
     terminal_explanation_signatures,
     unexplained_signatures,
 )
 from psse_env.oracle.expert_types import ExpertActionProposal, state_value
 from psse_env.oracle.anomaly_evidence import normalized_residual_alarm
+from psse_env.oracle.hif_continuation import accepted_hif_explanation, hif_conditioned_closure_ready
 from psse_env.state_store import SYNTHETIC_TERMINAL_COMPATIBILITY_KEY
+from psse_env.evidence_profile import is_scada_only
 
 
 class TerminationExpert:
@@ -103,8 +106,10 @@ class TerminationExpert:
         state: Any,
         history: Sequence[Mapping[str, Any]] | None = None,
     ) -> list[ExpertActionProposal]:
-        del history
+        strict = is_scada_only(state)
         if state_value(state, "has_open_candidate"):
+            return []
+        if strict and not successful_current_wls(state, history):
             return []
         if gnn_investigation_pending(state):
             return []
@@ -117,13 +122,16 @@ class TerminationExpert:
             below_threshold = False
         accepted_corrections = state_value(state, "accepted_corrections", []) or []
         synthetic_terminal_eligible = bool(
-            state_value(state, SYNTHETIC_TERMINAL_COMPATIBILITY_KEY, False)
+            not strict and state_value(state, SYNTHETIC_TERMINAL_COMPATIBILITY_KEY, False)
             and state_value(state, "oracle_terminal_eligible", False)
         )
+        if (accepted_hif_explanation(state) and not synthetic_terminal_eligible
+            and not hif_conditioned_closure_ready(state)):
+            return []
         signatures = terminal_explanation_signatures(
             state_value(state, "unresolved_signatures", []) or []
         )
-        anomalies_explained = bool(signatures) and not unexplained_signatures(
+        anomalies_explained = not strict and bool(signatures) and not unexplained_signatures(
             signatures, state_value(state, "explained_anomalies", [])
         )
         statistical_closure = (no_anomaly or below_threshold) and not normalized_residual_alarm(state)

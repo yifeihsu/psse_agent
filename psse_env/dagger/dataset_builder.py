@@ -24,6 +24,7 @@ from psse_env.dagger.offline_teacher_target_audit import (
     validate_offline_teacher_target_audit_metadata,
 )
 from psse_env.state_store import find_forbidden_policy_paths
+from psse_env.evidence_profile import DEFAULT_EVIDENCE_PROFILE, SCADA_ALLOWED_TOOLS, validate_evidence_profile
 
 
 DEFAULT_DAGGER_SYSTEM_PROMPT = (
@@ -40,6 +41,41 @@ CANONICAL_DAGGER_SYSTEM_PROMPT = (
     "use them exactly as provided."
 )
 SUPPORTED_EXPORT_PROTOCOLS = ("controller", "canonical")
+
+
+def tool_schemas_for_observation(tools: Iterable[Mapping[str, Any]], observation: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Expose only configured capabilities; retain unlabelled legacy exports.
+
+    New environments always emit the explicit profile. Missing historical
+    profile evidence is deliberately not rewritten as SCADA-only provenance.
+    """
+    profile = observation.get("evidence_profile")
+    if profile is None:
+        return copy.deepcopy(list(tools))
+    validate_evidence_profile(profile)
+    if profile != DEFAULT_EVIDENCE_PROFILE:
+        return copy.deepcopy(list(tools))
+    from psse_env.dagger.protocol_bridge import CANONICAL_TO_INTERNAL_TOOL
+    return [copy.deepcopy(dict(tool)) for tool in tools
+            if CANONICAL_TO_INTERNAL_TOOL.get(str(tool.get("function", {}).get("name")),
+                str(tool.get("function", {}).get("name"))) in SCADA_ALLOWED_TOOLS]
+
+
+def system_prompt_for_observation(system_prompt: str, observation: Mapping[str, Any]) -> str:
+    profile = observation.get("evidence_profile")
+    if profile is None:
+        return system_prompt
+    validate_evidence_profile(profile)
+    if profile != DEFAULT_EVIDENCE_PROFILE:
+        return system_prompt
+    return system_prompt + (
+        " Evidence profile: scada_only. Use only the configured balanced-network model, "
+        "observed SCADA voltage magnitudes and P/Q injections/flows, declared sensor noise, "
+        "and permitted SCADA history. Auxiliary phase, harmonic and HIF replay data are "
+        "unavailable. Start with WLS and base later actions on its evidence. If supported "
+        "SCADA recovery cannot resolve the discrepancy, request operator review without "
+        "inventing a fault-family diagnosis."
+    )
 
 # State identifiers are transaction-controller capabilities, not semantic model
 # features.  Only these argument keys are rebound after model generation.
@@ -70,6 +106,8 @@ HASH_IDENTIFIER_KEY_ORDER = (
     "state_hash_before",
     "state_hash_after",
     "restored_parent_hash",
+    "parent_state_hash",
+    "candidate_state_hash",
 )
 HASH_IDENTIFIER_KEYS = frozenset(HASH_IDENTIFIER_KEY_ORDER)
 IDENTIFIER_BEARING_TEXT_KEYS = frozenset(
@@ -172,6 +210,8 @@ HISTORY_METRIC_KEYS = (
     "nlm_summary",
     "hif_summary",
     "diagnostic_acceptance",
+    "hif_conditioning",
+    "hif_meter_nonregression",
 )
 
 # ``last_verification`` can contain a large physical-evidence payload.  Taking
@@ -193,6 +233,8 @@ LAST_VERIFICATION_PRIORITY_KEYS = (
     "no_material_anomaly_remaining",
     "physical_constraints_ok",
     "physical_evidence_complete",
+    "hif_conditioning",
+    "hif_meter_nonregression",
     "candidate_disposition",
     "target_fixed",
     "target_test_passed",
@@ -972,7 +1014,51 @@ def _bounded_value(
     return copy.deepcopy(value)
 
 
+def _compact_hif_evidence(key: str, value: Any) -> dict[str, Any]:
+    """Keep the controller's small HIF decision proof, never prediction data.
+
+    The nonregression contract authorizes partial meter progress only. This
+    serializer exposes the existing receipt; it does not validate or mint one.
+    State IDs and hashes retain the ordinary controller-alias treatment.
+    """
+    if not isinstance(value, Mapping):
+        return {}
+    keys = (
+        (
+            "status", "state_id", "state_hash", "evidence_source", "method",
+            "remaining_meter_candidate_indices", "failure_reasons",
+            "physical_fault_still_present",
+        )
+        if key == "hif_conditioning"
+        else (
+            "contract", "evidence_source", "parent_state_id", "parent_state_hash",
+            "candidate_state_id", "candidate_state_hash", "case_unchanged",
+            "non_target_measurements_unchanged", "preexisting_voltage_violations_unchanged",
+            "physical_fault_still_present", "operator_review_required", "source_action",
+        )
+    )
+    compact: dict[str, Any] = {}
+    for name in keys:
+        if name not in value:
+            continue
+        item = value[name]
+        if name == "source_action":
+            if not isinstance(item, Mapping):
+                compact[name] = {}
+                continue
+            arguments = item.get("arguments")
+            arguments = arguments if isinstance(arguments, Mapping) else {}
+            item = {
+                "tool": item.get("tool"),
+                "arguments": {arg: arguments[arg] for arg in ("state_id", "suspect_group") if arg in arguments},
+            }
+        compact[name] = _bounded_value(item, max_depth=4, max_items=16, max_text_chars=160)
+    return compact
+
+
 def _bounded_history_metric(key: str, value: Any) -> Any:
+    if key in {"hif_conditioning", "hif_meter_nonregression"}:
+        return _compact_hif_evidence(key, value)
     return _bounded_value(
         value,
         max_depth=6 if key in CONTEXT_DETAIL_KEYS else 3,
@@ -1124,11 +1210,15 @@ def _compact_last_verification(value: Any) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         return {}
     compact = {
-        key: _bounded_value(
-            value[key],
-            max_depth=5 if key == "evidence_sufficiency" else 4,
-            max_items=16 if key == "evidence_sufficiency" else 8,
-            max_text_chars=160,
+        key: (
+            _compact_hif_evidence(key, value[key])
+            if key in {"hif_conditioning", "hif_meter_nonregression"}
+            else _bounded_value(
+                value[key],
+                max_depth=5 if key == "evidence_sufficiency" else 4,
+                max_items=16 if key == "evidence_sufficiency" else 8,
+                max_text_chars=160,
+            )
         )
         for key in LAST_VERIFICATION_PRIORITY_KEYS
         if key in value
@@ -1395,6 +1485,9 @@ def examples_to_chat_sft(
             max_history_chars=max_history_chars,
             alias_before_compaction=alias_before_compaction,
         )
+        row_tools = tool_schemas_for_observation(tools, aliased_observation)
+        schema_names = {tool["function"]["name"] for tool in row_tools}
+        row_system_prompt = system_prompt_for_observation(system_prompt, aliased_observation)
 
         normalized_target = safe_normalize_action(target)
         if normalized_target["tool"] == INVALID_ACTION:
@@ -1540,11 +1633,11 @@ def examples_to_chat_sft(
             "source_tier": example.get("source_tier"),
             "episode_terminal_outcome": example.get("episode_terminal_outcome"),
             "messages": [
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": row_system_prompt},
                 {"role": "user", "content": json.dumps(user_payload, sort_keys=True)},
                 assistant_message,
             ],
-            "tools": copy.deepcopy(tools),
+            "tools": row_tools,
             "metadata": {
                 "iteration": example.get("iteration"),
                 "step": example.get("step"),
@@ -1614,6 +1707,12 @@ def examples_to_chat_sft(
                 },
             },
         }
+        if "evidence_profile" in aliased_observation:
+            # Only explicit runtime provenance may label a row. Re-rendering
+            # an old unlabelled example never makes it a SCADA-only example.
+            profile = validate_evidence_profile(aliased_observation["evidence_profile"])
+            row["evidence_profile"] = profile
+            row["metadata"]["evidence_profile"] = profile
         if offline_target_audit is not None:
             # Privileged collection result retained only as non-model row
             # metadata.  It is never interpolated into system/user/assistant

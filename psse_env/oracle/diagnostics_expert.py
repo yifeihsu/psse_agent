@@ -24,9 +24,12 @@ import json
 import math
 from typing import Any, Mapping, Sequence
 
+from psse_env.evidence_profile import is_scada_only
+
 from psse_env.actions import (
     ANOMALY_FAMILY_MARKERS,
     ASK_FOR_MORE_EVIDENCE,
+    CORRECT_MEASUREMENTS,
     DIAGNOSTIC_TOOLS,
     ESTIMATE_HIF_FROM_PATH,
     ESTIMATE_HIF_MULTISCAN_FROM_PATH,
@@ -36,6 +39,7 @@ from psse_env.actions import (
     GET_THREE_PHASE_CONTEXT,
     GET_TOPOLOGY_CONTEXT,
     HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
+    HIF_CONDITIONING_UNAVAILABLE_REQUEST,
     RUN_HSE_FROM_PATH,
     RUN_THREE_PHASE_NLM_FROM_PATH,
     RUN_WLS,
@@ -55,6 +59,10 @@ from psse_env.oracle.expert_types import (
     policy_state_view,
     state_value,
 )
+from psse_env.oracle.hif_continuation import (
+    accepted_hif_explanation, current_hif_conditioning,
+    hif_conditioned_closure_ready, hif_meter_route_ready,
+)
 
 
 # One shared vocabulary with the environment's explained-anomaly recording,
@@ -70,6 +78,50 @@ class DiagnosticsExpert:
 
     source_expert = "diagnostics_expert"
 
+    def hif_continuation_proposals(self, state: Any) -> list[ExpertActionProposal]:
+        """Check residuals after every accepted fit, irrespective of true family."""
+        state = policy_state_view(state)
+        if is_scada_only(state):
+            return []
+        active = state_value(state, "active_state_id")
+        if not active or state_value(state, "has_open_candidate") or not accepted_hif_explanation(state):
+            return []
+        conditioning = current_hif_conditioning(state)
+        if conditioning is None:
+            return [self._proposal(RUN_WLS, {"state_id": active}, confidence=1.0,
+                evidence=["accepted_hif_requires_current_conditioned_residual_check"])]
+        if conditioning["status"] == "unavailable":
+            return [self._proposal(ASK_FOR_MORE_EVIDENCE,
+                {"state_id": active, "request": HIF_CONDITIONING_UNAVAILABLE_REQUEST}, confidence=1.0,
+                evidence=["hif_conditioning_unavailable", "physical_fault_still_present", "operator_handoff_required"])]
+        if not hif_meter_route_ready(state):
+            return []
+        if hif_conditioned_closure_ready(state) and not state_value(state, "accepted_corrections", []):
+            return []
+        contexts = state_value(state, "fresh_context_evidence") or {}
+        measurement = contexts.get("measurement") or {}
+        if (not state_value(state, "has_fresh_measurement_context")
+            or str(measurement.get("state_id") or "") != str(active)
+            or measurement.get("state_hash") != conditioning["state_hash"]):
+            return [self._proposal(GET_MEASUREMENT_CONTEXT, {"state_id": active}, confidence=1.0,
+                evidence=["hif_effect_accounted", "conditional_meter_investigation_required"])]
+        candidates = set(conditioning["remaining_meter_candidate_indices"])
+        proposals = []
+        for raw in measurement.get("supported_corrections") or []:
+            if not isinstance(raw, Mapping):
+                continue
+            action = safe_normalize_action(raw)
+            indices = action["arguments"].get("suspect_group")
+            if (action["tool"] != CORRECT_MEASUREMENTS
+                or str(action["arguments"].get("state_id") or "") != str(active)
+                or not isinstance(indices, (list, tuple)) or not indices
+                or any(type(index) is not int for index in indices)
+                or len(set(indices)) != len(indices) or not set(indices) <= candidates):
+                continue
+            proposals.append(self._proposal(CORRECT_MEASUREMENTS, action["arguments"], confidence=.99,
+                evidence=["hif_effect_accounted", "same_state_conditional_meter_candidate"]))
+        return proposals
+
     def propose(
         self,
         state: Any,
@@ -83,6 +135,8 @@ class DiagnosticsExpert:
         # but never let privileged data affect a production diagnostic label.
         del oracle_hints, harmonic_fault_present, hif_fault_present
         state = policy_state_view(state)
+        if is_scada_only(state):
+            return []
         active_id = state_value(state, "active_state_id")
         if not active_id:
             return []
@@ -268,16 +322,15 @@ class DiagnosticsExpert:
         active_id = str(state_value(state, "active_state_id") or "")
         if not active_id or state_value(state, "has_open_candidate"):
             return []
-        if waveform_anomaly_signatures(state_value(state, "unresolved_signatures", [])):
+        strict = is_scada_only(state)
+        if not strict and waveform_anomaly_signatures(state_value(state, "unresolved_signatures", [])):
             return []
         contexts = state_value(state, "fresh_context_evidence") or {}
         if not isinstance(contexts, Mapping):
             return []
         screen = current_gnn_screen(state)
-        if not (
-            screen.get("phase_trigger") is False
-            and screen.get("anomaly_trigger") is True
-        ):
+        if not ((strict and (screen.get("phase_trigger") is True or screen.get("anomaly_trigger") is True))
+            or (not strict and screen.get("phase_trigger") is False and screen.get("anomaly_trigger") is True)):
             return []
         state_hash = screen["state_hash"]
         tried: set[str] = set()
@@ -327,6 +380,8 @@ class DiagnosticsExpert:
     ) -> list[ExpertActionProposal]:
         """Request additional measurements after WLS, without a family hint."""
         state = policy_state_view(state)
+        if is_scada_only(state):
+            return []
         active_id = state_value(state, "active_state_id")
         if not active_id or state_value(state, "has_open_candidate"):
             return []
@@ -335,6 +390,7 @@ class DiagnosticsExpert:
             tried_action_signatures=state_value(state, "tried_action_signatures", []),
             active_state_id=active_id,
             context_evidence=state_value(state, "fresh_context_evidence"),
+            evidence_profile=state_value(state, "evidence_profile"),
         ):
             return []
         if GET_HARMONIC_CONTEXT in self._completed_diagnostics(
@@ -353,6 +409,8 @@ class DiagnosticsExpert:
     ) -> list[ExpertActionProposal]:
         """Acquire phase measurements, then screen an unflagged WLS anomaly."""
         state = policy_state_view(state)
+        if is_scada_only(state):
+            return []
         active_id = state_value(state, "active_state_id")
         if not active_id or state_value(state, "has_open_candidate"):
             return []
@@ -371,6 +429,7 @@ class DiagnosticsExpert:
             tried_action_signatures=state_value(state, "tried_action_signatures", []),
             active_state_id=active_id,
             context_evidence=contexts,
+            evidence_profile=state_value(state, "evidence_profile"),
         ):
             tool = GET_THREE_PHASE_CONTEXT if successful_current_wls(state, history) else RUN_WLS
             return [self._proposal(
@@ -382,6 +441,7 @@ class DiagnosticsExpert:
             unresolved=unresolved, available_evidence=available,
             tried_action_signatures=state_value(state, "tried_action_signatures", []),
             active_state_id=active_id, context_evidence=contexts,
+            evidence_profile=state_value(state, "evidence_profile"),
         ):
             return []
         if not successful_current_wls(state, history):

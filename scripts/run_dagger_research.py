@@ -20,6 +20,7 @@ import random
 import re
 import sys
 from collections import Counter
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -42,6 +43,7 @@ from psse_env.dagger.suite_builder import partition_release_scenario_v1  # noqa:
 from psse_env.oracle.expert_policy import ExpertPolicyOracle  # noqa: E402
 from psse_env.providers.scenario_generator import DEFAULT_NORMALIZED_RESIDUAL_THRESHOLD
 from psse_env.systems import resolve_system
+from psse_env.evidence_profile import DEFAULT_EVIDENCE_PROFILE, EVIDENCE_PROFILES, validate_evidence_profile
 from psse_env.providers.scenario_generator import (  # noqa: E402
     CURRENT_TELEMETRY_HIF_SAMPLE_PATHS,
     CURRENT_TELEMETRY_IMBALANCE_SAMPLE_PATH,
@@ -120,6 +122,7 @@ HIF_SEARCH_PROFILES = ("auto", "release", "research")
 #: Research environment ablations, set from the command line before the
 #: environment factory is first called and recorded in the run report.
 RESEARCH_ENVIRONMENT_OPTIONS: dict[str, Any] = {
+    "evidence_profile": DEFAULT_EVIDENCE_PROFILE,
     "branch_first_partial": False,
     # Local residual test paired with the chi-square test in the research
     # environment and in generated-scenario admission; None is the
@@ -158,6 +161,7 @@ def resolve_scenario_sources(
     measurement_corpus: Path | str | None = None,
     balanced_artifact_dir: Path | str | None = None,
     admission_mode: str | None = None,
+    evidence_profile: str = DEFAULT_EVIDENCE_PROFILE,
 ) -> dict[str, Any] | None:
     """Corpus paths for the generator, or ``None`` for its legacy defaults.
 
@@ -176,9 +180,10 @@ def resolve_scenario_sources(
     plans with default corpus paths, so a resumed run cannot silently switch
     between a sensor-flagged and a discovered root.
     """
+    evidence_profile = validate_evidence_profile(evidence_profile)
     families = set(plan_families)
     spec = resolve_system(str(system or "case14"))
-    fresh: dict[str, Any] = {}
+    fresh: dict[str, Any] = {"evidence_profile": evidence_profile}
     if spec.case_id != "case14":
         unsupported = sorted(families - set(spec.supported_families))
         if unsupported:
@@ -239,6 +244,8 @@ def resolve_scenario_sources(
             raise ValueError(f"unknown waveform signature family {family!r}")
         if mode not in WAVEFORM_SIGNATURE_MODES:
             raise ValueError(f"unknown waveform signature mode {mode!r} for {family!r}")
+        if evidence_profile == "scada_only" and mode == "flagged":
+            raise ValueError("flagged waveform signatures require --evidence-profile auxiliary_diagnostics")
     return {
         "hif_sample_paths": (
             [str(Path(path).resolve()) for path in hif] if hif else None
@@ -260,7 +267,7 @@ def resolve_hif_search_profile(profile: str, plan_families: Iterable[str]) -> st
 
 
 def research_diagnostic_environment_factory(
-    *, seed: int | None = None, rng: Any | None = None
+    *, seed: int | None = None, rng: Any | None = None, evidence_profile: str | None = None
 ) -> Any:
     """Production environment with the research HIF search budget.
 
@@ -281,6 +288,7 @@ def research_diagnostic_environment_factory(
     from psse_env.transactional_env import TransactionalPSSEEnv
 
     providers = MatpowerDeploymentProviders(
+        evidence_profile=validate_evidence_profile(evidence_profile or RESEARCH_ENVIRONMENT_OPTIONS.get("evidence_profile", DEFAULT_EVIDENCE_PROFILE)),
         chi2_alpha=BC0_CHI2_ALPHA,
         parameter_ranking_dominance_threshold=(
             BC0_PARAMETER_RANKING_DOMINANCE_THRESHOLD
@@ -307,14 +315,14 @@ def research_diagnostic_environment_factory(
     return env
 
 
-def resolve_environment_factory(hif_search_profile: str) -> Callable[..., Any]:
+def resolve_environment_factory(hif_search_profile: str, evidence_profile: str = DEFAULT_EVIDENCE_PROFILE) -> Callable[..., Any]:
     from psse_env.dagger.release_factories import production_environment_factory
 
-    if hif_search_profile == "release":
-        return production_environment_factory
-    if hif_search_profile == "research":
-        return research_diagnostic_environment_factory
-    raise ValueError(f"unresolved HIF search profile {hif_search_profile!r}")
+    profile = validate_evidence_profile(evidence_profile)
+    factory = {"release": production_environment_factory, "research": research_diagnostic_environment_factory}.get(hif_search_profile)
+    if factory is None:
+        raise ValueError(f"unresolved HIF search profile {hif_search_profile!r}")
+    return partial(factory, evidence_profile=profile)
 
 
 def _stable_json(value: Any) -> str:
@@ -522,9 +530,45 @@ def validate_d0_training_roots(
     return roots
 
 
+def validate_training_evidence_profile(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    evidence_profile: str = DEFAULT_EVIDENCE_PROFILE,
+    source: str = "training rows",
+) -> None:
+    """Require an explicit compatible observation profile in this experiment.
+
+    Missing historical declarations are accepted only by the explicitly selected
+    auxiliary profile. Reformatting an old trace cannot make its evidence SCADA-only.
+    This guard is intentionally scoped to the research pipeline, not generic SFT.
+    """
+    profile = validate_evidence_profile(evidence_profile)
+    for index, row in enumerate(rows):
+        declared: set[str] = set()
+        pending = [row]
+        while pending:
+            value = pending.pop()
+            if not isinstance(value, Mapping):
+                continue
+            if "evidence_profile" in value:
+                declared.add(validate_evidence_profile(value["evidence_profile"]))
+            for key in ("metadata", "observation", "policy_observation", "model_observation", "state"):
+                nested = value.get(key)
+                if isinstance(nested, Mapping):
+                    pending.append(nested)
+        if declared - {profile} or (not declared and profile == DEFAULT_EVIDENCE_PROFILE):
+            example = row.get("example_id", index)
+            raise ValueError(
+                f"{source} example {example!r} has evidence profile {sorted(declared) or 'undeclared historical'}; "
+                f"requested {profile}. Generate/recollect compatible traces; do not relabel old observations."
+            )
+
+
 def refresh_d0_training_view(
     raw_rows: Sequence[Mapping[str, Any]],
     selected_chat_rows: Sequence[Mapping[str, Any]],
+    *,
+    evidence_profile: str = DEFAULT_EVIDENCE_PROFILE,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Re-export the selected D0 IDs with the current canonical prompt view.
 
@@ -532,6 +576,8 @@ def refresh_d0_training_view(
     silently training on different observable-state compaction contracts.
     """
 
+    validate_training_evidence_profile(raw_rows, evidence_profile=evidence_profile, source="D0 raw")
+    validate_training_evidence_profile(selected_chat_rows, evidence_profile=evidence_profile, source="D0 chat")
     by_id: dict[str, Mapping[str, Any]] = {}
     for index, row in enumerate(raw_rows):
         example_id = str(row.get("example_id") or "").strip()
@@ -565,6 +611,7 @@ def refresh_d0_training_view(
         refreshed.append(current)
     return refreshed, {
         "contract": "canonical_current_source_observation_view_v1",
+        "evidence_profile": evidence_profile,
         "selected_rows": len(selected_chat_rows),
         "rerendered_rows": len(refreshed),
         "rows_changed_from_input_view": changed,
@@ -717,7 +764,9 @@ def research_scenario_generator(
         # node/breaker model (see Round0ScenarioGenerator.topology_effects).
         generator_kwargs["topology_effects"] = tuple(str(effect) for effect in topology_effects)
     sources = profile.get("scenario_sources")
+    generator_kwargs["evidence_profile"] = validate_evidence_profile(profile.get("evidence_profile", DEFAULT_EVIDENCE_PROFILE))
     if isinstance(sources, Mapping):
+        generator_kwargs["evidence_profile"] = validate_evidence_profile(sources.get("evidence_profile", generator_kwargs["evidence_profile"]))
         if sources.get("hif_sample_paths"):
             generator_kwargs["hif_sample_paths"] = [
                 Path(path) for path in sources["hif_sample_paths"]
@@ -726,7 +775,7 @@ def research_scenario_generator(
             generator_kwargs["imbalance_sample_path"] = Path(
                 sources["imbalance_sample_path"]
             )
-        if sources.get("signature_modes"):
+        if sources.get("signature_modes") and sources.get("system", "case14") == "case14":
             generator_kwargs["waveform_signature_mode"] = dict(
                 sources["signature_modes"]
             )
@@ -1296,11 +1345,14 @@ def build_research_mixture(
     d1_share: float,
     d1_cap: int | None,
     seed: int,
+    evidence_profile: str = DEFAULT_EVIDENCE_PROFILE,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if not 0.0 < float(d1_share) <= 1.0:
         raise ValueError("d1_share must be in (0, 1]")
     if d1_cap is not None and d1_cap <= 0:
         raise ValueError("d1_cap must be positive when supplied")
+    validate_training_evidence_profile(d0_rows, evidence_profile=evidence_profile, source="D0 replay")
+    validate_training_evidence_profile(d1_rows, evidence_profile=evidence_profile, source="D1 collection")
     rootless_d0 = [
         str(row.get("example_id") or index)
         for index, row in enumerate(d0_rows)
@@ -1355,6 +1407,7 @@ def build_research_mixture(
     rng.shuffle(mixture)
     report = {
         "contract": RESEARCH_CONTRACT,
+        "evidence_profile": evidence_profile,
         "requested_d1_share": float(d1_share),
         "d0_available": len(d0_rows),
         "d1_available": len(d1_rows),
@@ -1647,19 +1700,19 @@ def parser() -> argparse.ArgumentParser:
         choices=WAVEFORM_SIGNATURE_MODES,
         default=DEFAULT_WAVEFORM_SIGNATURE_MODE["harmonic"],
         help=(
-            "discovered: start from positive-sequence measurements and the model, "
-            "assess WLS, then request measured harmonic evidence; flagged: "
-            "seed the legacy power-quality alarm at reset for reproduction"
+            "discovered: start from the balanced SCADA snapshot and WLS; flagged: "
+            "seed a legacy monitor alarm (requires auxiliary_diagnostics)"
         ),
     )
+    result.add_argument("--evidence-profile", choices=EVIDENCE_PROFILES, default=DEFAULT_EVIDENCE_PROFILE,
+        help="scada_only: balanced SCADA/model evidence only; auxiliary_diagnostics: explicit historical sensor-assisted experiments")
     result.add_argument(
         "--unbalance-signature-mode",
         choices=WAVEFORM_SIGNATURE_MODES,
         default=DEFAULT_WAVEFORM_SIGNATURE_MODE["three_phase_unbalance"],
         help=(
-            "discovered: the operator starts from the positive-sequence snapshot "
-            "and must screen three-phase telemetry after the WLS anomaly; flagged: "
-            "a power-quality monitor seeds the unbalance signature at reset"
+            "discovered: start from balanced SCADA and WLS; flagged: "
+            "seed a legacy unbalance monitor alarm (requires auxiliary_diagnostics)"
         ),
     )
     result.add_argument(
@@ -1667,8 +1720,8 @@ def parser() -> argparse.ArgumentParser:
         choices=WAVEFORM_SIGNATURE_MODES,
         default=DEFAULT_WAVEFORM_SIGNATURE_MODE["hif"],
         help=(
-            "flagged: a zero-sequence relay seeds the HIF signature at reset; "
-            "discovered: screening must find the line differential first"
+            "discovered: start from balanced SCADA and WLS without a HIF hint; "
+            "flagged: seed a legacy relay alarm (requires auxiliary_diagnostics)"
         ),
     )
     result.add_argument(
@@ -1734,6 +1787,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         research_gemma_policy_factory,
     )
 
+    args.evidence_profile = validate_evidence_profile(getattr(args, "evidence_profile", DEFAULT_EVIDENCE_PROFILE))
     selected = get_research_model_spec(args.model_choice)
     model_spec = resolve_research_model_spec(
         model=args.base_model or selected.model_id,
@@ -1751,7 +1805,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     d0_raw_rows = load_jsonl(d0_raw)
     d0_roots = load_d0_roots(d0_raw)
     d0_train_rows, d0_view_report = refresh_d0_training_view(
-        d0_raw_rows, load_jsonl(d0_train)
+        d0_raw_rows, load_jsonl(d0_train), evidence_profile=args.evidence_profile
     )
     d0_train_roots = validate_d0_training_roots(
         d0_train_rows, raw_roots=d0_roots
@@ -1790,6 +1844,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         measurement_corpus=args.measurement_corpus,
         balanced_artifact_dir=args.balanced_artifact_dir,
         admission_mode=args.admission_mode,
+        evidence_profile=args.evidence_profile,
         signature_modes={
             "harmonic": args.harmonic_signature_mode,
             "three_phase_unbalance": args.unbalance_signature_mode,
@@ -1800,13 +1855,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         args.hif_search_profile, plan_families
     )
     RESEARCH_ENVIRONMENT_OPTIONS["branch_first_partial"] = bool(args.branch_first_partial)
+    RESEARCH_ENVIRONMENT_OPTIONS["evidence_profile"] = args.evidence_profile
     RESEARCH_ENVIRONMENT_OPTIONS["normalized_residual_threshold"] = (
         None if args.chi_square_only else float(args.normalized_residual_threshold)
     )
-    environment_factory = resolve_environment_factory(hif_search_profile)
+    environment_factory = resolve_environment_factory(hif_search_profile, args.evidence_profile)
     research_profile = {
         "plan_preset": str(args.plan_preset),
         "hif_search_profile": hif_search_profile,
+        "evidence_profile": args.evidence_profile,
         "scenario_sources": scenario_sources,
     }
     # The environment ablation is recorded on the report, not in the research
@@ -1902,6 +1959,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         d1_share=args.d1_share,
         d1_cap=args.d1_cap,
         seed=args.seed,
+        evidence_profile=args.evidence_profile,
     )
     _write_jsonl(output_dir / "round1.train.jsonl", mixture)
     _write_json(output_dir / "mixture_report.json", mixture_report)

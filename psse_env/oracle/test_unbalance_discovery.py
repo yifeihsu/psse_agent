@@ -16,6 +16,7 @@ from psse_env.oracle import ExpertPolicyOracle
 from psse_env.providers import MatpowerDeploymentProviders
 from psse_env.providers.scenario_generator import Round0ScenarioGenerator
 from psse_env.transactional_env import TransactionalPSSEEnv
+from psse_env.evidence_profile import AUXILIARY_EVIDENCE_PROFILE
 
 
 PHASE_CHANNELS = {"three_phase_voltages", "three_phase_branch_currents"}
@@ -36,14 +37,14 @@ class UnbalanceDiscoveryTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.scenarios = {
             row["scenario_family"]: row
-            for row in Round0ScenarioGenerator(seed=20260719).build(
+            for row in Round0ScenarioGenerator(seed=20260719, evidence_profile=AUXILIARY_EVIDENCE_PROFILE).build(
                 {"three_phase_unbalance": 1, "measurement": 1, "no_error": 1}
             )
         }
 
     def _environment(self, scenario: dict) -> tuple[TransactionalPSSEEnv, ExpertPolicyOracle]:
         env = TransactionalPSSEEnv(
-            **MatpowerDeploymentProviders().env_kwargs(),
+            **MatpowerDeploymentProviders(evidence_profile=AUXILIARY_EVIDENCE_PROFILE).env_kwargs(),
             production_dataset_mode=True,
             max_steps=24,
         )

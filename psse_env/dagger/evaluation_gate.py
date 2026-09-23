@@ -1331,8 +1331,13 @@ def _intervention_failures(
         "retention_opportunity_count",
         "retained_opportunity_count",
     }
-    if not isinstance(evidence, Mapping) or set(evidence) != fields:
+    optional_fields = {"scada_setup_wls_bootstrap"}
+    if (not isinstance(evidence, Mapping) or not fields <= set(evidence)
+        or not set(evidence) <= fields | optional_fields):
         return ["evaluation intervention evidence has an invalid schema"], []
+    bootstrap = evidence.get("scada_setup_wls_bootstrap") is True
+    if "scada_setup_wls_bootstrap" in evidence and not bootstrap:
+        evidence_failures.append("SCADA setup WLS marker must be true when present")
     if evidence.get("contract") != expected_contract:
         evidence_failures.append(
             "evaluation intervention does not match the frozen suite"
@@ -1379,6 +1384,11 @@ def _intervention_failures(
         )
     elif kind not in {"none", "efficiency_budget"}:
         evidence_failures.append("frozen suite intervention kind is invalid")
+
+    if bootstrap:
+        if kind not in {"committed_partial_correction", "committed_partial_correction_with_observable_bridge", "open_rejected_candidate"}:
+            evidence_failures.append("SCADA setup WLS bootstrap requires a correction setup contract")
+        expected_pre_steps += 1
 
     expected_counts = {
         "pre_policy_step_count": expected_pre_steps,
@@ -1704,6 +1714,19 @@ def _intervention_failures(
         evidence_failures.append(
             "episode trace does not contain the complete intervention prefix"
         )
+    if bootstrap:
+        bootstrap_row = _mapping(prefix[0]) if prefix else {}
+        bootstrap_action = _mapping(bootstrap_row.get("action"))
+        bootstrap_args = _mapping(bootstrap_action.get("arguments"))
+        if not (
+            bootstrap_action.get("tool") == RUN_WLS
+            and set(bootstrap_args) == {"state_id"}
+            and str(bootstrap_args.get("state_id") or "").strip()
+            and bootstrap_row.get("execution_status") == "success"
+            and bootstrap_row.get("error_code") is None
+            and bootstrap_row.get("candidate_disposition_offline") is None
+        ):
+            evidence_failures.append("SCADA setup WLS bootstrap trace is invalid")
     if kind == "pre_policy_failure" and len(prefix) == 1:
         row = prefix[0]
         action = row.get("action")
@@ -1738,7 +1761,7 @@ def _intervention_failures(
         setup_actions = setup_actions if isinstance(setup_actions, list) else []
         active_aliases: list[str] = []
         candidate_aliases: list[str] = []
-        for index, (row, expected_action) in enumerate(zip(prefix, setup_actions)):
+        for index, (row, expected_action) in enumerate(zip(prefix[int(bootstrap):], setup_actions)):
             actual_action = row.get("action")
             actual_action = actual_action if isinstance(actual_action, Mapping) else {}
             actual_arguments = actual_action.get("arguments")
@@ -1752,6 +1775,9 @@ def _intervention_failures(
             expected_arguments = (
                 expected_arguments if isinstance(expected_arguments, Mapping) else {}
             )
+            # In-memory validated measurement-update maps may use integer
+            # indices; trace payloads use their canonical JSON string keys.
+            expected_arguments = json.loads(json.dumps(expected_arguments))
             if (
                 actual_action.get("tool") != expected_action.get("tool")
                 or set(actual_arguments) != set(expected_arguments)

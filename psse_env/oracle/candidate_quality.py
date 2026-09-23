@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Mapping
@@ -269,6 +270,23 @@ class CandidateQualityOracle:
             disposition = CandidateDisposition.REJECT
             progress_class = "healthy_component_corruption"
             rationale.append("collateral_damage_detected")
+        elif (
+            not synthetic_truth
+            and physical_ok is False
+            and target_fixed is True
+            and self._hif_meter_only_voltage_nonregression(
+                action, parent, candidate, verification
+            )
+        ):
+            disposition = CandidateDisposition.ACCEPT_PARTIAL
+            progress_class = "meter_repaired_preexisting_hif_voltage_violation"
+            rationale.extend([
+                "conditioned_meter_target_fixed",
+                "case_and_non_target_measurements_unchanged",
+                "preexisting_hif_voltage_violations_unchanged",
+                "physical_fault_still_present",
+                "operator_handoff_required",
+            ])
         elif physical_ok is False:
             disposition = CandidateDisposition.REJECT
             progress_class = "physical_regression"
@@ -959,6 +977,144 @@ class CandidateQualityOracle:
         else:
             allowed_field = self._topology_field(args, before)
         return changed_fields != {allowed_field}
+
+    def _hif_meter_only_voltage_nonregression(
+        self,
+        action: Mapping[str, Any],
+        parent: Mapping[str, Any],
+        candidate: Mapping[str, Any],
+        verification: Mapping[str, Any],
+    ) -> bool:
+        """Retain a meter repair without claiming to repair a retained HIF.
+
+        This exception covers only unchanged, already-observed voltage-limit
+        violations. The ordinary collateral and exact context-support gates
+        remain authoritative; thermal, topology, unknown physical status and
+        any voltage-channel change cannot use this route.
+        """
+        if self._action_family(action) != "measurement":
+            return False
+        arguments = action.get("arguments")
+        arguments = arguments if isinstance(arguments, Mapping) else {}
+        targets = arguments.get("suspect_group")
+        if (
+            "measurement_updates" in arguments
+            or not isinstance(targets, (list, tuple)) or not targets
+            or any(type(index) is not int or index < 0 for index in targets)
+            or len(set(targets)) != len(targets)
+        ):
+            return False
+        if (
+            verification.get("physical_constraints_ok") is not False
+            or verification.get("physical_evidence_complete") is not True
+            or verification.get("physical_evidence_scope") != "observed_snapshot_topology_vm_rate_a"
+            or verification.get("chi_square_alarm") is not False
+            or verification.get("normalized_residual_alarm") is not False
+            or self._solve_resolved(verification) is not True
+            or verification.get("power_flow_converged") is False
+            or verification.get("topology_feasible") is False
+        ):
+            return False
+        for value_key, threshold_key in (
+            ("chi_square_statistic", "chi_square_threshold"),
+            ("max_normalized_residual", "normalized_residual_threshold"),
+        ):
+            value = _optional_float(verification.get(value_key))
+            threshold = _optional_float(verification.get(threshold_key))
+            if (
+                value is None or threshold is None
+                or not math.isfinite(value) or not math.isfinite(threshold)
+                or not 0.0 <= value < threshold
+            ):
+                return False
+        progress = _optional_float(verification.get("global_progress"))
+        if progress is None or not math.isfinite(progress) or progress < 0.0:
+            return False
+        conditioning = verification.get("hif_conditioning")
+        if not isinstance(conditioning, Mapping) or not (
+            conditioning.get("status") == "ready"
+            and conditioning.get("method") == "paired_opendss_effect_compensation"
+            and conditioning.get("physical_fault_still_present") is True
+            and conditioning.get("remaining_meter_candidate_indices") == []
+            and conditioning.get("failure_reasons") == []
+            and bool(candidate.get("state_id"))
+            and conditioning.get("state_id") == candidate.get("state_id")
+            and bool(candidate.get("state_hash"))
+            and conditioning.get("state_hash") == candidate.get("state_hash")
+        ):
+            return False
+        before, after = parent.get("measurements"), candidate.get("measurements")
+        scores = verification.get("conditional_meter_scores")
+        try:
+            finite_measurements = all(
+                not isinstance(value, bool) and math.isfinite(float(value))
+                for values in (before, after, scores)
+                for value in values
+            )
+        except (TypeError, ValueError, OverflowError):
+            finite_measurements = False
+        if (
+            not isinstance(before, list) or not isinstance(after, list)
+            or len(before) != len(after) or max(targets) >= len(after)
+            or not isinstance(scores, (list, tuple)) or len(scores) != len(after)
+            or not finite_measurements
+            or any(abs(float(scores[index])) > 1e-8 for index in targets)
+            or {index for index, pair in enumerate(zip(before, after)) if pair[0] != pair[1]} != set(targets)
+            or parent.get("case") != candidate.get("case")
+        ):
+            return False
+        physical = verification.get("steady_state_physical_evidence")
+        if not isinstance(physical, Mapping):
+            return False
+        topology = physical.get("topology_connectivity")
+        voltage = physical.get("bus_voltage_bounds")
+        thermal = physical.get("active_branch_rate_a_bounds")
+        if not all(isinstance(item, Mapping) for item in (topology, voltage, thermal)):
+            return False
+        if not (
+            physical.get("scope") == "observed_snapshot_topology_vm_rate_a"
+            and physical.get("complete") is True and physical.get("input_errors") == []
+            and topology.get("checked") is True and topology.get("connected") is True
+            and topology.get("component_count") == 1
+            and voltage.get("checked") is True and voltage.get("within_bounds") is False
+            and thermal.get("checked") is True and thermal.get("within_defined_rate_a_bounds") is True
+            and thermal.get("violation_count") == 0
+        ):
+            return False
+        try:
+            case = parent.get("case")
+            if not isinstance(case, Mapping) or "bus" not in case:
+                if not callable(self.case_loader):
+                    return False
+                case = self.case_loader(case)
+            bus = case["bus"]
+            count = len(bus)
+            if count < 1 or len(after) < count or before[:count] != after[:count]:
+                return False
+            violations = verification.get("physical_bound_violations")
+            if not isinstance(violations, list) or not violations:
+                return False
+            if physical.get("violation_count") != len(violations) or voltage.get("violation_count") != len(violations):
+                return False
+            seen: set[int] = set()
+            for violation in violations:
+                if not isinstance(violation, Mapping) or violation.get("type") != "bus_voltage_out_of_bounds":
+                    return False
+                index = violation.get("measurement_index0")
+                if type(index) is not int or not 0 <= index < count or index in seen:
+                    return False
+                seen.add(index)
+                if not (
+                    float(violation["observed_vm_pu"]) == float(before[index]) == float(after[index])
+                    and float(violation["vmin_pu"]) == float(bus[index][12])
+                    and float(violation["vmax_pu"]) == float(bus[index][11])
+                    and float(violation["bus"]) == float(bus[index][0])
+                    and (after[index] < bus[index][12] or after[index] > bus[index][11])
+                ):
+                    return False
+        except (KeyError, TypeError, ValueError, IndexError, OverflowError, OSError, RuntimeError):
+            return False
+        return True
 
     def _physical_ok(self, verification: Mapping[str, Any]) -> bool | None:
         explicit = verification.get("physical_constraints_ok")

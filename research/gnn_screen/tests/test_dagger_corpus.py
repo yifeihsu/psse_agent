@@ -50,6 +50,17 @@ def test_hif_and_unbalance_means_are_the_stored_dagger_vectors(corpus):
             assert windows[f"{parent}:unbalance"]["z"] == source["z_clean"]
 
 
+def test_corpus_from_different_physics_is_refused():
+    legacy = "hif_physical69_main_train_84x10_20260919"
+    if not (dc.ARTIFACTS / legacy / "samples.jsonl").is_file():
+        pytest.skip("pre-fix HIF corpus not present")
+    row = dc.fault_rows(legacy)[0]
+    task = {"kind": "hif", "row": row, "corpus": legacy, "detectable": False, "seed": 1,
+            "sigma": dc.measurement_sigma().tolist(), "case": dc.configured_case14()}
+    with pytest.raises(ValueError, match="different physics"):
+        dc.build_hif_parent(task)
+
+
 def test_resimulated_healthy_scans_use_the_generators_own_paths():
     hif = dc.fault_rows(dc.DEFAULT_HIF_CORPORA[0])[0]
     unbalance = dc.fault_rows(dc.DEFAULT_UNBALANCE_CORPUS)[0]
@@ -73,7 +84,7 @@ def test_parent_grouping_splits_and_labels(corpus):
             assert row["severity"] == dc.TRAIN_SEVERITY
         else:
             assert row["severity"] == meta["stratum"]
-        assert meta["generator_reactive_limits_reset"] == (meta["simulator_path"] == "hif_operating_point")
+        assert meta["generator_reactive_limits_reset"] is False
     hif_parents = [p for p in splits if "hif_physical" in p and splits[p] != "calibration"]
     for parent in hif_parents:
         group = [r for r in rows if r["parent_id"] == parent]

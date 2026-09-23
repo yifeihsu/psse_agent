@@ -29,6 +29,8 @@ from gpt_oss_power_sft_revised_v3 import encode_text, sanitize_tool_schemas
 from psse_env.dagger.dataset_builder import (
     CANONICAL_DAGGER_SYSTEM_PROMPT,
     validate_policy_payload,
+    tool_schemas_for_observation,
+    system_prompt_for_observation,
 )
 from psse_env.dagger.policy_adapter import LocalAliasPolicyAdapter
 from psse_env.dagger.protocol_bridge import unified_tool_schemas
@@ -235,8 +237,9 @@ class _CanonicalE2BPolicy:
             raise TypeError("E2B policy requires a model-observation mapping")
         payload = {"state": copy.deepcopy(dict(observation))}
         validate_policy_payload(payload)
+        visible_tools = tool_schemas_for_observation(self._tools, observation)
         messages = [
-            {"role": "system", "content": CANONICAL_DAGGER_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt_for_observation(CANONICAL_DAGGER_SYSTEM_PROMPT, observation)},
             {
                 "role": "user",
                 "content": json.dumps(payload, sort_keys=True, allow_nan=False),
@@ -245,7 +248,7 @@ class _CanonicalE2BPolicy:
         rendered = render_eval_text(
             self._bundle.processor,
             messages,
-            self._tools,
+            visible_tools,
             enable_thinking=False,
             # The injection exists to mirror SFT formatting, but this pipeline's
             # rows are rendered by apply_chat_template with no thought channel,
@@ -353,7 +356,8 @@ class _CanonicalE2BPolicy:
             "trimmed_trailing_pad_tokens": int(trimmed_pad_tokens),
         }
         try:
-            action = _validated_generated_action(text, self._parameter_schemas)
+            action = _validated_generated_action(text,
+                {row["function"]["name"]: row["function"]["parameters"] for row in visible_tools})
         except GateError:
             return text
         normalized, rewrites = normalize_episode_state_reference(action, observation)
@@ -367,7 +371,9 @@ class _CanonicalE2BPolicy:
 
     def act(self, observation: Mapping[str, Any]) -> dict[str, Any]:
         return _validated_generated_action(
-            self.generate_text(observation), self._parameter_schemas
+            self.generate_text(observation),
+            {row["function"]["name"]: row["function"]["parameters"]
+             for row in tool_schemas_for_observation(self._tools, observation)},
         )
 
 

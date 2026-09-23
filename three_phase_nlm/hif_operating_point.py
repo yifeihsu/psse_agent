@@ -128,6 +128,13 @@ def _first_bus_name() -> str:
     return normalize_bus_name(names[0]) if names else ""
 
 
+def _generator_reactive_limits() -> tuple[float, float]:
+    """Reactive limits (kvar) of the active generator."""
+    import opendssdirect as dss  # type: ignore
+
+    return float(dss.Properties.Value("maxkvar")), float(dss.Properties.Value("minkvar"))
+
+
 def capture_operating_point_baseline() -> dict[str, Any]:
     """Capture enabled non-HIF loads, generators, and source setpoints."""
     import opendssdirect as dss  # type: ignore
@@ -159,6 +166,7 @@ def capture_operating_point_baseline() -> dict[str, Any]:
             vpu = float(dss.Properties.Value("vpu"))
         except Exception:
             vpu = math.nan
+        maxkvar, minkvar = _generator_reactive_limits()
         generators.append(
             {
                 "name": str(name),
@@ -166,6 +174,8 @@ def capture_operating_point_baseline() -> dict[str, Any]:
                 "bus": _first_bus_name(),
                 "kw": float(dss.Generators.kW()),
                 "vpu": vpu,
+                "maxkvar": maxkvar,
+                "minkvar": minkvar,
             }
         )
 
@@ -226,6 +236,7 @@ def apply_hif_operating_point(
 
     applied_dispatch: dict[str, float] = {}
     applied_voltage_setpoints: dict[str, float] = {}
+    applied_reactive_limits: dict[str, dict[str, float]] = {}
     for item in baseline.get("generators", []):
         if not isinstance(item, Mapping):
             continue
@@ -241,6 +252,14 @@ def apply_hif_operating_point(
         if kw < 0.0:
             raise ValueError(f"generator dispatch for {name} must be non-negative")
         dss.Generators.Name(name)
+        # Writing kW makes OpenDSS recompute maxkvar/minkvar from the nominal
+        # power factor (+-1.08*kW at the default 0.88), which pins the 1 kW
+        # synchronous condensers at about 1 kvar and stops voltage regulation.
+        # Keep the model's own limits: the baseline's, or the live ones.
+        if "maxkvar" in item and "minkvar" in item:
+            maxkvar, minkvar = float(item["maxkvar"]), float(item["minkvar"])
+        else:
+            maxkvar, minkvar = _generator_reactive_limits()
         dss.Generators.kW(kw)
         applied_dispatch[name] = kw
 
@@ -255,6 +274,8 @@ def apply_hif_operating_point(
                 raise ValueError(f"voltage setpoint for {name} must be in [0.8, 1.2] pu")
             dss.Text.Command(f"Edit Generator.{name} Vpu={vpu:.12g}")
             applied_voltage_setpoints[name] = vpu
+        dss.Text.Command(f"Edit Generator.{name} Maxkvar={maxkvar:.12g} Minkvar={minkvar:.12g}")
+        applied_reactive_limits[name] = {"maxkvar": maxkvar, "minkvar": minkvar}
 
     source_pu = float(op["source_voltage_pu"])
     applied_source: dict[str, float] = {}
@@ -276,6 +297,7 @@ def apply_hif_operating_point(
         "load_scales": applied_load_scales,
         "generator_dispatch_kw": applied_dispatch,
         "voltage_setpoints_pu": applied_voltage_setpoints,
+        "reactive_limits_kvar": applied_reactive_limits,
         "source_voltage_pu": applied_source,
     }
 

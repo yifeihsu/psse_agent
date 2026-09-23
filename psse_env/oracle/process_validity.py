@@ -20,6 +20,8 @@ from psse_env.actions import (
     RUN_THREE_PHASE_NLM_FROM_PATH,
     GET_PARAMETER_CONTEXT,
     GET_TOPOLOGY_CONTEXT,
+    HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
+    HIF_CONDITIONING_UNAVAILABLE_REQUEST,
     INVALID_ACTION,
     MACRO_ACTIONS,
     POST_CORRECTION_CONFIRMATION_SIGNATURE,
@@ -43,6 +45,11 @@ from psse_env.actions import (
 from psse_env.state_store import SYNTHETIC_TERMINAL_COMPATIBILITY_KEY
 from psse_env.oracle.expert_types import matching_evidence_codes
 from psse_env.oracle.anomaly_evidence import normalized_residual_alarm
+from psse_env.evidence_profile import DEFAULT_EVIDENCE_PROFILE, is_scada_only
+from psse_env.oracle.hif_continuation import (
+    accepted_hif_explanation, hif_conditioned_closure_ready,
+    hif_meter_route_ready, recovery_signatures,
+)
 
 
 _CORRECTION_CONTEXT_FAMILY = {
@@ -80,9 +87,7 @@ def post_correction_confirmation_required(state: Mapping[str, Any]) -> bool:
         or normalized_residual_alarm(state)
     ):
         return False
-    signatures = {
-        str(item) for item in (state.get("unresolved_signatures") or [])
-    }
+    signatures = set(recovery_signatures(state))
     return signatures == {POST_CORRECTION_CONFIRMATION_SIGNATURE}
 _RECOVERY_FAMILY_ORDER = {
     "measurement": ("parameter", "topology"),
@@ -130,12 +135,17 @@ class ProcessValidityOracle:
         )
         has_unverified_candidate = bool(state.get("has_unverified_candidate"))
         has_verified_candidate = bool(state.get("has_verified_candidate"))
+        strict = is_scada_only(state)
 
         if tool == INVALID_ACTION:
             error_code = str(args.get("error_code") or "schema_error")
             error_detail = str(args.get("error_detail") or "malformed_policy_action")
         elif tool not in MACRO_ACTIONS:
             error_code, error_detail = "unknown_tool", str(tool)
+        elif strict and (tool in DIAGNOSTIC_TOOLS or tool == RUN_ALTERNATIVE_TEST
+                         or (tool == ASK_FOR_MORE_EVIDENCE and args.get("request") in {
+                             HIF_DIAGNOSTICS_EXHAUSTED_REQUEST, HIF_CONDITIONING_UNAVAILABLE_REQUEST})):
+            error_code, error_detail = "tool_disabled_by_evidence_profile", str(tool)
         elif tool in CORRECTION_TOOLS:
             requested = args.get("state_id") or active_id
             confirmation_required = post_correction_confirmation_required(state)
@@ -145,6 +155,8 @@ class ProcessValidityOracle:
                 error_code, error_detail = "unknown_state_id", str(requested)
             elif str(requested) != str(active_id):
                 error_code, error_detail = "state_reference_mismatch", "correction_state_not_active"
+            elif strict and not successful_current_wls(state):
+                error_code, error_detail = "missing_precondition", "current_balanced_wls_required"
             elif confirmation_required:
                 # This controller marker is created only after an accepted
                 # correction reaches observable statistical quiescence.  It
@@ -159,7 +171,9 @@ class ProcessValidityOracle:
                 error_detail = (
                     f"{family}_autonomous_correction_blocked_for_operator_review"
                 )
-            elif waveform_anomaly_signatures(state.get("unresolved_signatures") or []):
+            elif not strict and waveform_anomaly_signatures(state.get("unresolved_signatures") or []) and not (
+                tool == CORRECT_MEASUREMENTS and hif_meter_route_ready(state)
+            ):
                 # A waveform-level anomaly (harmonic, unbalance, HIF) is on the
                 # network whether or not a diagnostic has explained it.  The
                 # fundamental-frequency residuals then attribute the event
@@ -175,6 +189,7 @@ class ProcessValidityOracle:
                 tried_action_signatures=state.get("tried_action_signatures") or [],
                 active_state_id=active_id,
                 context_evidence=state.get("fresh_context_evidence"),
+                evidence_profile=state.get("evidence_profile", DEFAULT_EVIDENCE_PROFILE),
             ):
                 family = _CORRECTION_CONTEXT_FAMILY[tool]
                 error_code = "correction_route_not_actionable"
@@ -184,6 +199,7 @@ class ProcessValidityOracle:
                 tried_action_signatures=state.get("tried_action_signatures") or [],
                 active_state_id=active_id,
                 context_evidence=state.get("fresh_context_evidence"),
+                evidence_profile=state.get("evidence_profile", DEFAULT_EVIDENCE_PROFILE),
             ):
                 family = _CORRECTION_CONTEXT_FAMILY[tool]
                 error_code = "correction_route_not_actionable"
@@ -194,6 +210,7 @@ class ProcessValidityOracle:
                 tried_action_signatures=state.get("tried_action_signatures") or [],
                 active_state_id=active_id,
                 context_evidence=state.get("fresh_context_evidence"),
+                evidence_profile=state.get("evidence_profile", DEFAULT_EVIDENCE_PROFILE),
             ):
                 # An unflagged fundamental-frequency anomaly on a root with
                 # three-phase telemetry has not been screened yet; the
@@ -202,7 +219,7 @@ class ProcessValidityOracle:
                 family = _CORRECTION_CONTEXT_FAMILY[tool]
                 error_code = "correction_route_not_actionable"
                 error_detail = f"{family}_three_phase_screening_pending"
-            elif tool == CORRECT_MEASUREMENTS and self._measurement_route_blocked_by_branch_dominance(
+            elif tool == CORRECT_MEASUREMENTS and not hif_meter_route_ready(state) and self._measurement_route_blocked_by_branch_dominance(
                 state, active_id
             ):
                 # The fresh measurement context declared the meter route shut:
@@ -256,6 +273,8 @@ class ProcessValidityOracle:
                 error_code, error_detail = "unknown_state_id", str(requested)
             elif str(requested) != str(active_id):
                 error_code, error_detail = "state_reference_mismatch", "context_state_not_active"
+            elif strict and not successful_current_wls(state):
+                error_code, error_detail = "missing_precondition", "current_balanced_wls_required"
         elif tool in {RUN_WLS, VERIFY_CANDIDATE}:
             expected = candidate_id if has_open_candidate else active_id
             requested = args.get("state_id") or expected
@@ -431,16 +450,19 @@ class ProcessValidityOracle:
         return context_state_id is not None and str(context_state_id) == str(state.get("active_state_id"))
 
     def _terminal_condition_met(self, state: Any) -> bool:
+        strict = is_scada_only(state)
+        if strict and not successful_current_wls(state):
+            return False
         if gnn_investigation_pending(state):
             return False
         signatures = terminal_explanation_signatures(
             state.get("unresolved_signatures") or []
         )
-        anomalies_explained = bool(signatures) and not unexplained_signatures(
+        anomalies_explained = not strict and bool(signatures) and not unexplained_signatures(
             signatures, state.get("explained_anomalies")
         )
         synthetic_terminal_eligible = bool(
-            state.get(SYNTHETIC_TERMINAL_COMPATIBILITY_KEY)
+            not strict and state.get(SYNTHETIC_TERMINAL_COMPATIBILITY_KEY)
             and state.get("oracle_terminal_eligible")
         )
         if synthetic_terminal_eligible:
@@ -448,6 +470,8 @@ class ProcessValidityOracle:
             # capability bit is never part of a PolicyObservation and is never
             # injected by a production environment.
             return True
+        if accepted_hif_explanation(state) and not hif_conditioned_closure_ready(state):
+            return False
         if state.get("accepted_corrections"):
             # Candidate WLS evidence is sufficient to accept a transaction,
             # not to certify the whole corrected state as release-final.
@@ -638,6 +662,10 @@ class ProcessValidityOracle:
     ) -> list[dict[str, Any]]:
         active_id = state.get("active_state_id")
         candidate_id = state.get("candidate_state_id")
+        if is_scada_only(state) and (error_code == "tool_disabled_by_evidence_profile"
+            or error_detail == "current_balanced_wls_required"
+            or any(str(error_detail or "").startswith(prefix) for prefix in ("harmonic_", "three_phase_", "hse_", "nlm_", "hif_"))):
+            return self._safe_actions_for_state(state)
         if error_code in {"json_parse_error", "argument_decode_error", "schema_error", "policy_exception"}:
             return self._safe_actions_for_state(state)
         if error_code == "missing_precondition":
@@ -653,6 +681,7 @@ class ProcessValidityOracle:
                     tried_action_signatures=state.get("tried_action_signatures") or [],
                     active_state_id=active_id,
                     context_evidence=state.get("fresh_context_evidence"),
+                    evidence_profile=state.get("evidence_profile", DEFAULT_EVIDENCE_PROFILE),
                 ):
                     tool = GET_HARMONIC_CONTEXT
                 else:

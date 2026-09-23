@@ -5,12 +5,14 @@ import unittest
 from pathlib import Path
 
 from psse_env.oracle import DiagnosticsExpert, ExpertPolicyOracle
+from psse_env.evidence_profile import AUXILIARY_EVIDENCE_PROFILE
 
 FIXTURE = Path(__file__).parent.parent / "providers" / "fixtures" / "case14_z.json"
 
 
 def _policy_state(**overrides) -> dict:
     state = {
+        "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
         "active_state_id": "episode:s0",
         "candidate_state_id": None,
         "episode_id": "episode",
@@ -561,7 +563,7 @@ class EndToEndHarmonicRoutingTests(unittest.TestCase):
         from psse_env.transactional_env import TransactionalPSSEEnv
 
         data = json.loads(FIXTURE.read_text())
-        providers = MatpowerDeploymentProviders()
+        providers = MatpowerDeploymentProviders(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         env = TransactionalPSSEEnv(**providers.env_kwargs(), production_dataset_mode=True)
         oracle = ExpertPolicyOracle(process_oracle=env.process_oracle)
         env.reset(
@@ -634,7 +636,7 @@ class ProductionDiagnosticEvidenceGateTests(unittest.TestCase):
         from psse_env.transactional_env import TransactionalPSSEEnv
 
         self.data = json.loads(FIXTURE.read_text())
-        providers = MatpowerDeploymentProviders()
+        providers = MatpowerDeploymentProviders(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         self.env = TransactionalPSSEEnv(
             **providers.env_kwargs(), production_dataset_mode=True
         )
@@ -954,6 +956,7 @@ class ThreePhaseScreeningTests(unittest.TestCase):
                 available_evidence=state["available_evidence"],
                 tried_action_signatures=[tried],
                 active_state_id="episode:s0",
+                evidence_profile=AUXILIARY_EVIDENCE_PROFILE,
             )
         )
         # A screening bound to an earlier active state does not count.
@@ -963,6 +966,7 @@ class ThreePhaseScreeningTests(unittest.TestCase):
                 available_evidence=state["available_evidence"],
                 tried_action_signatures=['run_three_phase_nlm_from_path:{"state_id":"episode:s9"}'],
                 active_state_id="episode:s0",
+                evidence_profile=AUXILIARY_EVIDENCE_PROFILE,
             )
         )
 

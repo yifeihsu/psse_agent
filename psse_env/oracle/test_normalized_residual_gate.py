@@ -20,6 +20,8 @@ def _state(*, alarm: bool = True) -> dict:
         "fresh_context_evidence": {
             "wls": {
                 "state_id": "episode:s1",
+                "state_hash": "fixture-current-state",
+                "evidence_source": "deployment_wls:dual_alarm_fixture",
                 "successful": True,
                 "normalized_residual_alarm": alarm,
                 "normalized_residual_threshold": 4.0,
@@ -64,7 +66,9 @@ class NormalizedResidualGateTests(unittest.TestCase):
         state = _state()
         self.assertFalse(ProcessValidityOracle()._terminal_condition_met(state))
         self.assertEqual(TerminationExpert().propose(state), [])
-        state["fresh_context_evidence"]["wls"]["normalized_residual_alarm"] = False
+        state["fresh_context_evidence"]["wls"].update(
+            normalized_residual_alarm=False, max_normalized_residual=2.0,
+        )
         self.assertTrue(ProcessValidityOracle()._terminal_condition_met(state))
 
     def test_only_explicit_current_successful_alarm_enables_new_gate(self):
@@ -96,11 +100,34 @@ class NormalizedResidualGateTests(unittest.TestCase):
             ExpertPolicyOracle()._post_correction_confirmation_handoff_proposals(state, []),
             [],
         )
-        state["fresh_context_evidence"]["wls"]["normalized_residual_alarm"] = False
+        state["fresh_context_evidence"]["wls"].update(
+            normalized_residual_alarm=False, max_normalized_residual=2.0,
+        )
         self.assertTrue(post_correction_confirmation_required(state))
         self.assertTrue(
             ExpertPolicyOracle()._post_correction_confirmation_handoff_proposals(state, [])
         )
+        # Score provenance alone cannot certify an incomplete durable WLS
+        # record after the original event has left the bounded history.
+        state["fresh_context_evidence"]["wls"].pop("state_hash")
+        self.assertEqual(
+            ExpertPolicyOracle()._post_correction_confirmation_handoff_proposals(state, []),
+            [],
+        )
+
+    def test_runtime_wls_ledger_supplies_the_binding_used_by_handoff(self):
+        env = _production_env()
+        env.wls_runner = _dual_wls
+        state = env.reset({"scenario_id": "bound-dual-alarm", "case": {}, "measurements": [9.0, 5.0]})
+        active = state["active_state_id"]
+        _, output = env.step({"tool": "run_wls", "arguments": {"state_id": active}})
+        self.assertEqual(output["execution_status"], "success", output)
+        evidence = env.get_policy_observation().fresh_context_evidence["wls"]
+        self.assertTrue(evidence["successful"])
+        self.assertEqual(evidence["state_id"], active)
+        self.assertEqual(evidence["state_hash"], env.store.state_hash(active))
+        self.assertEqual(evidence["evidence_source"], "deployment_wls:dual_alarm_fixture")
+        self.assertTrue(normalized_residual_alarm(env.get_policy_observation()))
 
     def test_residual_alarm_vetoes_contradictory_final_candidate_flags(self):
         metrics = {

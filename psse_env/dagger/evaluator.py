@@ -390,6 +390,7 @@ _SCENARIO_PARTITION_KEYS = frozenset(
 _SCENARIO_PARTITION_MARKERS = _SCENARIO_PARTITION_KEYS
 _EXECUTION_METADATA_KEYS = frozenset(
     {
+        "evidence_profile",
         "semantic_field_provenance",
         "unresolved_signatures",
         "remaining_anomaly_score",
@@ -443,6 +444,7 @@ _PHYSICAL_AUDIT_OVERRIDE_KEYS = frozenset(
 )
 _EXECUTION_SCENARIO_KEYS = frozenset(
     {
+        "evidence_profile",
         "scenario_id",
         "id",
         "episode_id",
@@ -1959,8 +1961,38 @@ class ClosedLoopRolloutEvaluator:
 
         if intervention_contract is not None:
             intervention_kind = intervention_contract["kind"]
-            if len(intervention_contract.get("setup_actions", [])) > self.max_steps:
+            setup_actions = intervention_contract.get("setup_actions", [])
+            scada_setup_wls = bool(
+                getattr(env, "evidence_profile", None) == "scada_only"
+                and setup_actions and setup_actions[0].get("tool") != RUN_WLS
+            )
+            if len(setup_actions) + int(scada_setup_wls) > self.max_steps:
                 raise ValueError("evaluation setup actions exceed the episode action limit")
+            if scada_setup_wls:
+                # Historical intervention contracts begin with a context request.
+                # Strict execution must obtain real SCADA evidence first, even
+                # during setup. Record and charge that action; never preseed WLS.
+                before = _current_state(env)
+                bootstrap_action = {"tool": RUN_WLS, "arguments": {"state_id": before["active_state_id"]}}
+                after, raw_output = env.step(copy.deepcopy(bootstrap_action))
+                output = copy.deepcopy(dict(raw_output))
+                if output.get("execution_status") != "success" or _is_terminal(env, after):
+                    raise ValueError("SCADA evaluation setup requires a successful initial WLS")
+                history.append({"state_id": before.get("active_state_id"),
+                    "candidate_state_id": before.get("candidate_state_id"),
+                    "action": policy_safe_copy(bootstrap_action), "tool_output": policy_safe_copy(output)})
+                trace.append({"step": len(trace), "intervention": True,
+                    "observation_hash": None, "policy_observation": None,
+                    "objective_action_assessment": None, "policy_tool_output": policy_safe_copy(output),
+                    "action": policy_safe_copy(bootstrap_action), "execution_status": "success",
+                    "advanced": _successful_action_advanced(before=before, after=after, output=output, terminal=False),
+                    "error_code": None, "candidate_disposition_offline": None, "tool_regret": None,
+                    "runtime_state_hash": _output_runtime_state_hash(output),
+                    "objective_tool_evidence": objective_tool_evidence(bootstrap_action, output),
+                    "terminal_outcome": None,
+                    **trace_progress_evidence(before=before, after=after, output=output, terminal=False)})
+                intervention_evidence["pre_policy_step_count"] = 1
+                intervention_evidence["scada_setup_wls_bootstrap"] = True
             if intervention_kind in {
                 "pre_policy_failure",
                 "failed_policy_action",
@@ -2194,7 +2226,7 @@ class ClosedLoopRolloutEvaluator:
                 assert committed_signature is not None
                 partial_candidate_ids.append(committed_candidate_id)
                 partial_action_signatures.append(committed_signature)
-                intervention_evidence["pre_policy_step_count"] = len(setup_actions)
+                intervention_evidence["pre_policy_step_count"] += len(setup_actions)
                 intervention_evidence["retention_opportunity_count"] = int(
                     intervention_kind == "committed_partial_correction"
                 )
@@ -2342,7 +2374,7 @@ class ClosedLoopRolloutEvaluator:
                         f"scenario={_scenario_id(audit_scenario, scenario_index)}, "
                         f"observed={final_disposition}"
                     )
-                intervention_evidence["pre_policy_step_count"] = len(setup_actions)
+                intervention_evidence["pre_policy_step_count"] += len(setup_actions)
 
         # Setup actions are real environment actions, not a second allowance
         # outside the episode budget.
@@ -6862,6 +6894,7 @@ _STRICT_PHYSICAL_EVIDENCE_GAPS = frozenset(
         "final_clean_case_evidence_missing_or_unloadable",
         "true_measurement_targets_malformed",
         "true_measurement_target_out_of_range",
+        "mixed_hif_measurement_reference_truth_invalid",
     }
 )
 

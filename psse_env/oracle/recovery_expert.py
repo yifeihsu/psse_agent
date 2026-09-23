@@ -10,6 +10,7 @@ from psse_env.actions import (
 )
 from psse_env.oracle.expert_types import ExpertActionProposal, state_value
 from psse_env.oracle.process_validity import ProcessValidityOracle
+from psse_env.evidence_profile import is_scada_only
 
 
 class RecoveryExpert:
@@ -58,7 +59,7 @@ class RecoveryExpert:
         # recorded as a teacher target, that taught a student to open unbalance
         # episodes with WLS.  Defer to the diagnostic ladder and termination
         # experts, which own these families.
-        if not state_value(state, "candidate_state_id") and waveform_anomaly_signatures(
+        if not is_scada_only(state) and not state_value(state, "candidate_state_id") and waveform_anomaly_signatures(
             state_value(state, "unresolved_signatures", []) or []
         ):
             return []

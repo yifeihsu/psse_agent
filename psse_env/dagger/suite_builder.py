@@ -16,6 +16,7 @@ import os
 import platform
 import subprocess
 import tempfile
+from functools import partial
 from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -40,6 +41,9 @@ from psse_env.actions import (
     invalid_action,
 )
 from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT
+from psse_env.evidence_profile import (
+    DEFAULT_EVIDENCE_PROFILE, validate_evidence_profile, sanitize_scada_execution, sanitize_scada_metadata,
+)
 from psse_env.providers.scenario_generator import (
     DEFAULT_BALANCED_ARTIFACT_DIR,
     DEFAULT_CORPUS_PATH,
@@ -558,6 +562,10 @@ def _execution_metadata(scenario: Mapping[str, Any]) -> dict[str, Any] | None:
                 rename_reference_role_description(nested)
 
     rename_reference_role_description(metadata)
+    profile = validate_evidence_profile(metadata.get("evidence_profile", DEFAULT_EVIDENCE_PROFILE))
+    metadata["evidence_profile"] = profile
+    if profile == "scada_only":
+        return sanitize_scada_metadata(metadata)
 
     scan_window = metadata.get("hif_scan_window")
     if isinstance(scan_window, Mapping):
@@ -608,6 +616,8 @@ def partition_release_scenario_v1(
     ):
         if key in scenario:
             execution[key] = _json_native(scenario[key])
+    if (execution.get("metadata") or {}).get("evidence_profile", DEFAULT_EVIDENCE_PROFILE) == "scada_only":
+        execution = sanitize_scada_execution(execution)
 
     truth = _truth_payload(scenario)
     audit: dict[str, Any] = {
@@ -742,7 +752,7 @@ class _PartialSetupProbePolicy:
         return invalid_action("partial_setup_probe_complete")
 
 
-def _production_partial_setup_validator() -> Callable[[Mapping[str, Any]], bool]:
+def _production_partial_setup_validator(evidence_profile: str = DEFAULT_EVIDENCE_PROFILE) -> Callable[[Mapping[str, Any]], bool]:
     """Return an exact production probe for the partial-retention prelude."""
 
     from psse_env.dagger.evaluator import ClosedLoopRolloutEvaluator
@@ -756,7 +766,7 @@ def _production_partial_setup_validator() -> Callable[[Mapping[str, Any]], bool]
         return _PartialSetupProbePolicy()
 
     evaluator = ClosedLoopRolloutEvaluator(
-        env_factory=production_environment_factory,
+        env_factory=partial(production_environment_factory, evidence_profile=evidence_profile),
         policy_factory=policy_factory,
         max_steps=1,
         seed=BC0_SUITE_SEED,
@@ -881,6 +891,7 @@ def build_bc0_suite(
     policy_path: str | os.PathLike[str] = DEFAULT_POLICY_PATH,
     seed: int = BC0_SUITE_GENERATION_SEED,
     validate_physics: bool = True,
+    evidence_profile: str = DEFAULT_EVIDENCE_PROFILE,
 ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Any]]:
     if int(seed) != BC0_SUITE_GENERATION_SEED:
         raise ValueError(
@@ -893,6 +904,7 @@ def build_bc0_suite(
     tracked_inputs = _tracked_release_inputs()
     with tempfile.TemporaryDirectory(prefix="bc0_suite_cases_") as case_directory:
         generator = _TrackedArtifactScenarioGenerator(
+            evidence_profile=evidence_profile,
             corpus_path=DEFAULT_CORPUS_PATH,
             hif_sample_paths=DEFAULT_HIF_FALLBACK_SAMPLE_PATHS,
             imbalance_sample_path=DEFAULT_IMBALANCE_SAMPLE_PATH,
@@ -916,7 +928,7 @@ def build_bc0_suite(
         suites = allocate_suite_roots(
             generated,
             plan=plan,
-            partial_setup_validator=_production_partial_setup_validator(),
+            partial_setup_validator=_production_partial_setup_validator(evidence_profile),
         )
         report = generator.report()
         consumed_inputs = set(_FIXED_SOURCE_INPUTS) | generator.consumed_artifacts
@@ -940,8 +952,11 @@ def write_frozen_suite(
     *,
     check: bool = False,
     validate_physics: bool = True,
+    evidence_profile: str = DEFAULT_EVIDENCE_PROFILE,
 ) -> dict[str, Any]:
-    suites, report = build_bc0_suite(validate_physics=validate_physics)
+    if Path(output_path).exists() and not check:
+        raise FileExistsError("Frozen suite already exists; use --check or a new output path for the selected evidence profile")
+    suites, report = build_bc0_suite(validate_physics=validate_physics, evidence_profile=evidence_profile)
     serialized = canonical_json_bytes(suites)
     output = Path(output_path)
     if check:
@@ -968,6 +983,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT_PATH))
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--evidence-profile", choices=("scada_only", "auxiliary_diagnostics"), default=DEFAULT_EVIDENCE_PROFILE)
     parser.add_argument(
         "--skip-physics-validation",
         action="store_true",
@@ -978,6 +994,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.output,
         check=args.check,
         validate_physics=not args.skip_physics_validation,
+        evidence_profile=args.evidence_profile,
     )
     print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
     return 0

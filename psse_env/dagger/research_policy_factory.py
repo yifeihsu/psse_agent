@@ -24,6 +24,8 @@ from eval_sft_agent_gemma_v4 import (
 from psse_env.dagger.dataset_builder import (
     CANONICAL_DAGGER_SYSTEM_PROMPT,
     validate_policy_payload,
+    tool_schemas_for_observation,
+    system_prompt_for_observation,
 )
 from psse_env.dagger.policy_adapter import LocalAliasPolicyAdapter
 from psse_env.research_models import (
@@ -524,8 +526,10 @@ class _CanonicalResearchNativePolicy:
             raise TypeError("Research Gemma policy requires a model-observation mapping")
         payload = {"state": copy.deepcopy(dict(observation))}
         validate_policy_payload(payload)
+        visible_tools = tool_schemas_for_observation(self._tools, observation)
+        visible_parameters = {row["function"]["name"]: row["function"]["parameters"] for row in visible_tools}
         messages = [
-            {"role": "system", "content": CANONICAL_DAGGER_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt_for_observation(CANONICAL_DAGGER_SYSTEM_PROMPT, observation)},
             {
                 "role": "user",
                 "content": json.dumps(payload, sort_keys=True, allow_nan=False),
@@ -534,7 +538,7 @@ class _CanonicalResearchNativePolicy:
         rendered = render_eval_text(
             self._bundle.processor,
             messages,
-            self._tools,
+            visible_tools,
             enable_thinking=False,
             # The pinned Unified processor inserts its own empty thought
             # channel.  A manual injection would risk duplicating the prefix.
@@ -615,7 +619,7 @@ class _CanonicalResearchNativePolicy:
             **repetition,
         }
         try:
-            action = _validated_generated_action(text, self._parameter_schemas)
+            action = _validated_generated_action(text, visible_parameters)
         except GateError:
             return text
         normalized, rewrites = normalize_episode_state_reference(action, observation)
@@ -629,7 +633,9 @@ class _CanonicalResearchNativePolicy:
 
     def act(self, observation: Mapping[str, Any]) -> dict[str, Any]:
         return _validated_generated_action(
-            self.generate_text(observation), self._parameter_schemas
+            self.generate_text(observation),
+            {row["function"]["name"]: row["function"]["parameters"]
+             for row in tool_schemas_for_observation(self._tools, observation)},
         )
 
 

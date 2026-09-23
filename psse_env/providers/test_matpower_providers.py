@@ -40,7 +40,7 @@ def _acquire_three_phase(test: unittest.TestCase, env: TransactionalPSSEEnv) -> 
 
 class WlsRunnerTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.providers = MatpowerDeploymentProviders()
+        self.providers = MatpowerDeploymentProviders(evidence_profile="auxiliary_diagnostics", )
         data = _fixture()
         self.state = {
             "state_id": "episode:s0",
@@ -357,7 +357,7 @@ class WlsRunnerTests(unittest.TestCase):
 
 class MeasurementContextTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.providers = MatpowerDeploymentProviders()
+        self.providers = MatpowerDeploymentProviders(evidence_profile="auxiliary_diagnostics", )
         data = _fixture()
         z = list(data["z_obs"])
         self.error_index = 5
@@ -932,7 +932,7 @@ class MeasurementContextTests(unittest.TestCase):
 
 class CorrectionExecutorTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.providers = MatpowerDeploymentProviders()
+        self.providers = MatpowerDeploymentProviders(evidence_profile="auxiliary_diagnostics", )
         data = _fixture()
         z = list(data["z_obs"])
         self.error_index = 5
@@ -1041,7 +1041,7 @@ class CorrectionExecutorTests(unittest.TestCase):
 
     def test_content_addressed_case_replaces_stale_existing_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            providers = MatpowerDeploymentProviders(derived_case_dir=directory)
+            providers = MatpowerDeploymentProviders(evidence_profile="auxiliary_diagnostics", derived_case_dir=directory)
             case = _load_python_case("case14")
             derived = Path(providers._derived_case(case, "determinism"))
             expected = derived.read_bytes()
@@ -1056,7 +1056,7 @@ class CorrectionExecutorTests(unittest.TestCase):
 
 class DiagnosticProviderTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.providers = MatpowerDeploymentProviders()
+        self.providers = MatpowerDeploymentProviders(evidence_profile="auxiliary_diagnostics", )
         self.data = _fixture()
 
     def _env(
@@ -1334,7 +1334,7 @@ class DiagnosticProviderTests(unittest.TestCase):
             "estimated": {"alpha_from_from_bus": 0.5, "r_hif_pu": 100.0},
             "fit": {"weighted_residual_norm": 1.0, "residual_reduction_vs_no_hif": 0.50},
         }
-        providers = MatpowerDeploymentProviders(hif_max_scans=3)
+        providers = MatpowerDeploymentProviders(evidence_profile="auxiliary_diagnostics", hif_max_scans=3)
         with patch(
             "psse_env.providers.matpower._estimate_hif_location_magnitude_multiscan_logic",
             return_value=payload,
@@ -1352,7 +1352,7 @@ class DiagnosticProviderTests(unittest.TestCase):
         self.assertTrue(changed["diagnostic_acceptance"]["accepted"])
 
     def test_hif_search_budget_rejects_oversized_model_grid_before_executor(self) -> None:
-        providers = MatpowerDeploymentProviders(
+        providers = MatpowerDeploymentProviders(evidence_profile="auxiliary_diagnostics",
             hif_alpha_grid_size=5,
             hif_r_grid_size=7,
             hif_max_scans=3,
@@ -1384,7 +1384,7 @@ class DiagnosticProviderTests(unittest.TestCase):
     def test_hif_multiscan_budget_rejects_oversized_scan_count_before_window_read(
         self,
     ) -> None:
-        providers = MatpowerDeploymentProviders(hif_max_scans=3)
+        providers = MatpowerDeploymentProviders(evidence_profile="auxiliary_diagnostics", hif_max_scans=3)
         state = {
             "state_id": "episode:s0",
             "state_hash": "hash0",
@@ -1482,7 +1482,7 @@ class DiagnosticProviderTests(unittest.TestCase):
 
 class EndToEndEnvironmentTests(unittest.TestCase):
     def test_production_env_runs_wls_context_correct_verify_cycle(self) -> None:
-        providers = MatpowerDeploymentProviders()
+        providers = MatpowerDeploymentProviders(evidence_profile="auxiliary_diagnostics", )
         data = _fixture()
         z = list(data["z_obs"])
         error_index = 5
@@ -1550,7 +1550,7 @@ class BranchCurrentDiagnosticProviderTests(unittest.TestCase):
     SENSOR_PROVENANCE = {"unresolved_signatures": "deployment_sensor:waveform_capture"}
 
     def setUp(self) -> None:
-        self.providers = MatpowerDeploymentProviders()
+        self.providers = MatpowerDeploymentProviders(evidence_profile="auxiliary_diagnostics", )
         self.data = _fixture()
 
     def _env(self, metadata: dict, **scenario_overrides) -> TransactionalPSSEEnv:

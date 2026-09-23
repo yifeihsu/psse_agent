@@ -76,6 +76,13 @@ PY
 fi
 
 cd "$SRC"
+"$PY" - "$D0_DIR/aggregate.train_view.jsonl" "$VALIDATION_SUBSET" "$EVIDENCE_PROFILE" <<'PY'
+import sys
+from scripts.run_dagger_research import load_jsonl, validate_training_evidence_profile
+from pathlib import Path
+for path in sys.argv[1:3]:
+    validate_training_evidence_profile(load_jsonl(Path(path)), evidence_profile=sys.argv[3], source=path)
+PY
 if [[ ! -s "$BC0_DIR/lora/adapter_model.safetensors" || ! -s "$BC0_DIR/research_run.json" ]]; then
   resume_args=()
   checkpoint_path=$("$PY" -m psse_env.sft.research_checkpoint \
@@ -109,7 +116,7 @@ if [[ ! -s "$BC0_DIR/lora/adapter_model.safetensors" || ! -s "$BC0_DIR/research_
     --report-to none \
     "${resume_args[@]}"
 fi
-"$PY" - "$BC0_DIR" "$OUT/bc0.done" "$D0_DIR/aggregate.train_view.jsonl" "$VALIDATION_SUBSET" <<'PY'
+"$PY" - "$BC0_DIR" "$OUT/bc0.done" "$D0_DIR/aggregate.train_view.jsonl" "$VALIDATION_SUBSET" "$EVIDENCE_PROFILE" <<'PY'
 import hashlib
 import json
 import os
@@ -128,6 +135,7 @@ def count(path):
     return sum(1 for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip())
 payload = {
     "contract": "research_full_pipeline_bc0_done_v1",
+    "evidence_profile": sys.argv[5],
     "adapter_path": str(bc0 / "lora"),
     "adapter_tree_sha256": checkpoint_tree_sha256(bc0 / "lora"),
     "train_rows": count(sys.argv[3]),

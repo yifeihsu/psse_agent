@@ -27,6 +27,7 @@ from psse_env.actions import (
     RUN_WLS,
     action_signature,
     safe_normalize_action,
+    successful_current_wls,
     terminal_explanation_signatures,
     waveform_anomaly_signatures,
 )
@@ -42,7 +43,9 @@ from psse_env.oracle.parameter_expert import ParameterExpert
 from psse_env.oracle.process_validity import ProcessValidityOracle
 from psse_env.oracle.recovery_expert import RecoveryExpert
 from psse_env.oracle.termination_expert import TerminationExpert
+from psse_env.oracle.hif_continuation import hif_meter_route_ready, recovery_signatures
 from psse_env.oracle.topology_expert import TopologyExpert
+from psse_env.evidence_profile import is_scada_only
 from psse_env.state_store import (
     SYNTHETIC_TERMINAL_COMPATIBILITY_KEY,
     OracleState,
@@ -146,6 +149,20 @@ class ExpertPolicyOracle:
             policy, context.history
         )
 
+        # Strict SCADA episodes establish their own current balanced solve
+        # before any terminal claim, context, learned screen or correction.
+        # Initial labels, prior diagnostic records and score fields cannot
+        # select a different opening action.
+        if is_scada_only(policy) and not self._get(policy, "has_open_candidate", False) and not successful_current_wls(policy, context.history):
+            active_id = self._get(policy, "active_state_id")
+            baseline = [ExpertActionProposal(
+                action={"tool": RUN_WLS, "arguments": {"state_id": active_id}},
+                source_expert="diagnostic_baseline", confidence=1.0,
+                evidence_codes=["scada_only_current_balanced_wls_required"], admissible=active_id is not None,
+            )]
+            return self._rank_and_filter(baseline, policy, seen_signatures=seen_signatures,
+                blocked_correction_tools=blocked_correction_tools, mandatory=True)
+
         # A remaining budget too small to close another lifecycle hands off
         # before any further request or investigation is started.
         budget_handoff = self._recovery_budget_proposals(policy, context.history)
@@ -200,6 +217,16 @@ class ExpertPolicyOracle:
                 blocked_correction_tools=blocked_correction_tools,
                 mandatory=True,
             )
+
+        hif_continuation = self.diagnostics_expert.hif_continuation_proposals(policy)
+        if hif_continuation:
+            ranked = self._rank_and_filter(
+                hif_continuation, policy, seen_signatures=seen_signatures,
+                blocked_correction_tools=blocked_correction_tools,
+                mandatory=all(proposal.action["tool"] != CORRECT_MEASUREMENTS for proposal in hif_continuation),
+            )
+            if ranked:
+                return ranked
 
         recovery = self.recovery_expert.repair_actions(policy, context.history)
         if recovery:
@@ -316,13 +343,14 @@ class ExpertPolicyOracle:
         # Their proposals would only be context requests and WLS repeats that
         # teach a student to chase the waveform event as a meter or branch
         # fault, so the combined stage keeps the diagnostics expert alone.
-        if waveform_anomaly_signatures(
+        if not is_scada_only(policy) and waveform_anomaly_signatures(
             self._get(policy, "unresolved_signatures", []) or []
         ):
             proposals = [
                 proposal
                 for proposal in proposals
                 if proposal.source_expert == "diagnostics_expert"
+                or (hif_meter_route_ready(policy) and proposal.source_expert == "measurement_expert")
             ]
         # MeasurementExpert contributes RUN_WLS as the generic observable
         # fallback when it has no family-specific proposal of its own.  Once
@@ -574,6 +602,7 @@ class ExpertPolicyOracle:
             policy["candidate_assessment"] = dict(state.candidate_assessment)
             if (
                 policy.get("accepted_corrections")
+                and not is_scada_only(policy)
                 and state.hidden_truth.get("oracle_terminal_eligible") is True
             ):
                 # This private expert-only view preserves legacy synthetic
@@ -628,6 +657,12 @@ class ExpertPolicyOracle:
             policy = dict(policy)
             if policy.get("has_unverified_candidate") or policy.get("has_verified_candidate"):
                 policy["has_open_candidate"] = True
+        if is_scada_only(policy):
+            # The strict teacher may label only the same observable route as
+            # the learner. Even an OracleState supplies no private family or
+            # scenario-authored correction hint to this controller profile.
+            hints = []
+            fault_families = set()
         if history is None:
             raw_history = self._get(policy, "history_window", []) or []
             history_items = [dict(item) for item in raw_history if isinstance(item, Mapping)]
@@ -942,7 +977,7 @@ class ExpertPolicyOracle:
         if self._get(policy, "has_open_candidate", False):
             return []
         active_id = self._get(policy, "active_state_id")
-        signatures = list(self._get(policy, "unresolved_signatures", []) or [])
+        signatures = recovery_signatures(policy)
         if (
             active_id is None
             or not self._get(policy, "accepted_corrections", [])
@@ -1061,7 +1096,8 @@ class ExpertPolicyOracle:
                 confidence=1.0,
                 evidence_codes=[
                     "observable_recovery_options_exhausted",
-                    "unresolved_anomaly_requires_operator_handoff",
+                    ("unresolved_balanced_model_discrepancy_requires_operator_handoff"
+                     if is_scada_only(policy) else "unresolved_anomaly_requires_operator_handoff"),
                 ],
                 admissible=True,
                 estimated_immediate_risk=0.0,
@@ -1163,6 +1199,18 @@ class ExpertPolicyOracle:
                 or score_source.startswith("observable_candidate_verification")
             )
         )
+        contexts = self._get(policy, "fresh_context_evidence", {}) or {}
+        durable_wls = contexts.get("wls") if isinstance(contexts, Mapping) else None
+        if isinstance(durable_wls, Mapping) and "successful" in durable_wls:
+            # A context refresh can overwrite score provenance, and candidate
+            # verification/rollback can evict parent WLS from bounded history.
+            # The controller's exact-state WLS ledger remains authoritative.
+            successful_current_wls = bool(
+                durable_wls.get("successful") is True
+                and str(durable_wls.get("state_id") or "") == str(active_id)
+                and isinstance(durable_wls.get("state_hash"), str)
+                and bool(durable_wls["state_hash"])
+            )
         investigation_seen = any(
             bool(self._get(policy, f"has_fresh_{family}_context", False))
             and str(self._get(policy, f"{family}_context_state_id") or "")

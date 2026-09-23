@@ -128,6 +128,7 @@ def find_forbidden_policy_paths(value: Any, prefix: str = "$") -> list[str]:
 @dataclass(frozen=True)
 class PolicyObservation:
     active_state_id: str
+    evidence_profile: str = "scada_only"
     candidate_state_id: str | None = None
     candidate_status: str | None = None
     last_tool: str | None = None
@@ -730,6 +731,7 @@ class PowerSystemStateStore:
         lifecycle = candidate.candidate_lifecycle if candidate else CandidateLifecycle.NO_CANDIDATE
         return {
             "episode_id": active.episode_id,
+            "evidence_profile": str(flags.get("evidence_profile") or "scada_only"),
             "active_state_id": active.state_id,
             "candidate_state_id": candidate.state_id if candidate else None,
             "candidate_parent_id": candidate.parent_state_id if candidate else None,

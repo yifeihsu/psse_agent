@@ -22,10 +22,11 @@ DAgger, never corrupt the faulted branch's own flow meters. No window is
 filtered by WLS detectability; DAgger's detectable training subsets are marked
 in offline metadata instead.
 
-Known inherited property: the HIF path sets every generator's kW, which in
-OpenDSS resets its reactive limit, so HIF parents have no voltage regulation
-while unbalance parents do. Rerunning after that path is fixed regenerates the
-HIF parents with regulated physics.
+Physics: the default HIF corpora (2026-09-23) keep generator reactive limits, so
+HIF and unbalance parents both regulate voltage. The earlier 2026-09-19/21 HIF
+corpora were simulated while dispatch writes reset those limits; every HIF
+parent is checked to reproduce its stored healthy reference with the current
+simulator, so a corpus from different physics is refused instead of mixed.
 """
 from __future__ import annotations
 
@@ -44,21 +45,23 @@ from .dataset import FAMILY_NAMES, MEASUREMENT_CONVENTION, load_manifest
 CONTRACT = "gnn_dagger_aligned_corpus_v1"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS = REPO_ROOT / "artifacts" / "measurements"
+# 2026-09-23 HIF corpora: same seeds and recipes as the 2026-09-19/21 corpora,
+# re-simulated with generator reactive limits kept (voltage regulation active).
 DEFAULT_HIF_CORPORA = (
-    "hif_physical69_main_train_84x10_20260919",
-    "hif_physical69_main_valid_21x10_20260919",
-    "hif_physical69_main_train_extra_252x10_20260921",
-    "hif_physical69_main_valid_extra_63x10_20260921",
+    "hif_physical69_main_train_84x10_20260923",
+    "hif_physical69_main_valid_21x10_20260923",
+    "hif_physical69_main_train_extra_252x10_20260923",
+    "hif_physical69_main_valid_extra_63x10_20260923",
 )
 DEFAULT_HIF_DETECTABLE = {
-    "hif_physical69_main_train_84x10_20260919": "hif_physical69_main_train_detectable_25x10_20260921",
-    "hif_physical69_main_valid_21x10_20260919": "hif_physical69_main_valid_detectable_7x10_20260921",
-    "hif_physical69_main_train_extra_252x10_20260921": "hif_physical69_main_train_extra_detectable_69x10_20260921",
-    "hif_physical69_main_valid_extra_63x10_20260921": "hif_physical69_main_valid_extra_detectable_17x10_20260921",
+    "hif_physical69_main_train_84x10_20260923": "hif_physical69_main_train_detectable_27x10_20260923",
+    "hif_physical69_main_valid_21x10_20260923": "hif_physical69_main_valid_detectable_8x10_20260923",
+    "hif_physical69_main_train_extra_252x10_20260923": "hif_physical69_main_train_extra_detectable_77x10_20260923",
+    "hif_physical69_main_valid_extra_63x10_20260923": "hif_physical69_main_valid_extra_detectable_19x10_20260923",
 }
 DEFAULT_UNBALANCE_CORPUS = "out_measurements_imbalance_currents_ybus_440_20260921"
 DEFAULT_UNBALANCE_DETECTABLE = "out_measurements_imbalance_currents_ybus_detectable_160_20260921"
-DEFAULT_EVALUATION_HIF = ("hif_physical_sweep_eval_336x10_20260919", "hif_physical69_detection_limit_21x10_20260919")
+DEFAULT_EVALUATION_HIF = ("hif_physical_sweep_eval_336x10_20260923", "hif_physical69_detection_limit_21x10_20260923")
 SPLIT_FRACTIONS = {"train": 0.60, "validation": 0.15, "calibration": 0.10, "test": 0.15}
 # Noise replicates per noiseless mean. Calibration parents contribute healthy
 # windows only. An unbalance parent has one unbalanced mean against ten HIF
@@ -336,8 +339,13 @@ def build_hif_parent(task: dict[str, Any]) -> dict[str, Any]:
                 "resistance_ohm": float(label["resistance_ohm"]), "r_hif_pu_local": float(label["r_hif_pu"]),
                 "local_kv_ll": float(label.get("local_kv_ll") or 69.0),
                 "resistance_band_ohm": label.get("resistance_band_ohm")}
+    scan0 = next(scan for scan in row["scans"] if int(scan["scan_index"]) == 0)
+    mismatch = float(np.max(np.abs(np.subtract(sim.solve(scan0["op_point"]), row["z_true"]))))
+    if mismatch > 1e-9:
+        raise ValueError(f"{parent_id}: the current HIF simulator does not reproduce the stored healthy reference "
+                         f"(max |dz| {mismatch:.3g} pu); the corpus was generated with different physics")
     base = {"dagger_corpus": corpus, "dagger_source_id": row["id"], "simulator_path": "hif_operating_point",
-            "generator_reactive_limits_reset": True, "dagger_detectable": parent.detectable,
+            "generator_reactive_limits_reset": False, "dagger_detectable": parent.detectable,
             "evaluation_only": bool(task.get("evaluation_only"))}
     healthy, faulted, sources, ops = {}, {}, {}, {}
     for scan in row["scans"]:
@@ -548,9 +556,9 @@ def build_corpus(output_dir: str | Path, *, seed: int = 2026092301, workers: int
         "evaluation_windows_by_family_stratum_energy": _window_counts(evaluation_rows, detail=True),
         "simulation_failures": len(failures),
         "inherited_properties": [
-            "HIF parents use the HIF generator path, which resets generator reactive limits (no voltage "
-            "regulation); unbalance parents use the regulated unbalance path. Each parent carries its own "
-            "healthy partners, so phase and anomaly heads cannot use the path as a healthy/fault cue.",
+            "HIF parents use the HIF generator path (operating-point profiles, dispatch and PV setpoints) and "
+            "unbalance parents the unbalance path (uniform load scale, file setpoints); both keep generator "
+            "reactive limits. Each parent carries its own healthy partners.",
             "No WLS-detectability filtering; offline_metadata.dagger_detectable marks DAgger's training subsets.",
             "The parent split is independent of the DAgger suite split; offline_metadata.dagger_corpus and "
             "dagger_source_id identify every source window.",

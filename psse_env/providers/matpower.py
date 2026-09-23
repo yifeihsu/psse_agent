@@ -60,6 +60,7 @@ from psse_env.actions import (
     GET_PARAMETER_CONTEXT,
     GET_TOPOLOGY_CONTEXT,
     HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
+    HIF_CONDITIONING_UNAVAILABLE_REQUEST,
     POST_CORRECTION_CONFIRMATION_SIGNATURE,
     RECOVERY_BUDGET_EXHAUSTED_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
@@ -69,9 +70,18 @@ from psse_env.actions import (
 )
 from psse_env.state_store import apply_modification
 from psse_env.noise_contract import resolve_state_measurement_noise, validate_shared_scada_covariance
+from psse_env.evidence_profile import (
+    DEFAULT_EVIDENCE_PROFILE, validate_evidence_profile, sanitize_scada_metadata,
+    sanitize_scada_observation,
+)
+from psse_env.providers.hif_continuation import (
+    accepted_fit as accepted_hif_fit, conditioned_prediction, current_scan,
+    diagnose as diagnose_hif_meters, fit_receipt, model_fingerprint,
+)
 from psse_env.oracle.measurement_recovery_evidence import (
     measurement_targets_predating_branch_repair,
 )
+from psse_env.oracle.expert_types import matching_evidence_codes
 
 from three_phase_nlm.branch_current_analysis import (  # noqa: E402  (repo-root package)
     BRANCH_CURRENT_CHANNEL,
@@ -473,10 +483,13 @@ class MatpowerDeploymentProviders:
         branch_first_partial: bool = False,
         screen_checkpoint: str | None = None,
         screen_calibration: str | None = None,
+        evidence_profile: str = DEFAULT_EVIDENCE_PROFILE,
     ) -> None:
+        self.evidence_profile = validate_evidence_profile(evidence_profile)
         if bool(screen_checkpoint) != bool(screen_calibration):
             raise ValueError("screen_checkpoint and screen_calibration must be provided together")
         self.screen_checkpoint = str(screen_checkpoint) if screen_checkpoint else None
+        self._hif_prediction_cache: dict[str, Any] = {}
         self.screen_calibration = str(screen_calibration) if screen_calibration else None
         if hif_resistance_search not in {"physical_ohm", "legacy_pu"}:
             raise ValueError("hif_resistance_search must be physical_ohm or legacy_pu")
@@ -566,6 +579,7 @@ class MatpowerDeploymentProviders:
         from psse_env.oracle import ProcessValidityOracle
 
         return {
+            "evidence_profile": self.evidence_profile,
             "process_oracle": ProcessValidityOracle(executor_hydrated_corrections=True),
             "candidate_quality_oracle": self._deployment_candidate_quality_oracle(),
             "wls_runner": self.run_wls,
@@ -611,9 +625,19 @@ class MatpowerDeploymentProviders:
         transactional environment separately checks the full bound history and
         the rejected acceptance tests before this report can end an episode.
         """
+        state = self._evidence_state(state)
         observation = state.get("policy_observation")
         observation = observation if isinstance(observation, Mapping) else {}
         request = state.get("evidence_request")
+        if request == HIF_CONDITIONING_UNAVAILABLE_REQUEST:
+            condition = (observation.get("fresh_context_evidence") or {}).get("hif_conditioning") or {}
+            if not (accepted_hif_fit(state) is not None and condition.get("status") == "unavailable"
+                    and all(condition.get(key) == value for key, value in self._binding(state).items())):
+                return self._failure("hif_conditioning_handoff_unbound")
+            return {**self._binding(state), "request": request, "family": "hif",
+                    "evidence_source": "deployment_diagnostic:hif_conditioning_unavailable",
+                    "additional_evidence_available": False, "operator_review_required": True,
+                    "hif_conditioning": condition}
         attempted = {
             str(signature).split(":", 1)[0]
             for signature in observation.get("tried_action_signatures") or []
@@ -761,6 +785,48 @@ class MatpowerDeploymentProviders:
 
     # ----------------------------------------------------------------- helpers
 
+    def _strict_scada(self, state: Mapping[str, Any]) -> bool:
+        observation = state.get("policy_observation") or {}
+        return self.evidence_profile == "scada_only" or state.get("evidence_profile") == "scada_only" or (
+            isinstance(observation, Mapping) and observation.get("evidence_profile") == "scada_only"
+        )
+
+    def _evidence_state(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        """Defend the provider boundary even when called without the controller.
+
+        An auxiliary-capable historical provider cannot override a stricter
+        controller. Case and raw SCADA readings are unchanged; simulated
+        operating points and auxiliary streams never reach numerical routines.
+        """
+        if not self._strict_scada(state):
+            result = dict(state)
+            result["evidence_profile"] = self.evidence_profile
+            return result
+        result = dict(state)
+        result["evidence_profile"] = "scada_only"
+        result["metadata"] = sanitize_scada_metadata(state.get("metadata") or {})
+        observation = state.get("policy_observation")
+        if isinstance(observation, Mapping):
+            safe = sanitize_scada_observation(observation)
+            safe["evidence_profile"] = "scada_only"
+            safe["unresolved_signatures"] = [str(s) for s in observation.get("unresolved_signatures") or []
+                if str(s).startswith("wls_") or str(s) == POST_CORRECTION_CONFIRMATION_SIGNATURE]
+            safe["explained_anomalies"] = []
+            safe["available_evidence"] = []
+            contexts = observation.get("fresh_context_evidence") or {}
+            safe["fresh_context_evidence"] = {k: v for k, v in contexts.items()
+                if k in {"wls", "measurement", "parameter", "topology"}}
+            result["policy_observation"] = safe
+        return result
+
+    def _auxiliary_unavailable(self, state: Mapping[str, Any], tool: str) -> dict[str, Any] | None:
+        if self._strict_scada(state):
+            return self._failure("evidence_unavailable_in_scada_only_profile",
+                "Only balanced SCADA measurements and their WLS-derived evidence are available.",
+                **self._binding(state), evidence_source="deployment_evidence:scada_only_capability",
+                evidence_profile="scada_only", requested_tool=tool)
+        return None
+
     @staticmethod
     def _case_path(state: Mapping[str, Any]) -> str:
         case = state.get("case")
@@ -817,15 +883,25 @@ class MatpowerDeploymentProviders:
         return binding
 
     def _solve(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        state = self._evidence_state(state)
         case_path = self._case_path(state)
         z = self._measurements(state)
         ppc = _load_python_case(case_path)
         nb = int(ppc["bus"].shape[0])
         nl = int(ppc["branch"].shape[0])
         noise_options = self._noise_options(state, len(z))
+        prediction = None if self._strict_scada(state) else conditioned_prediction(state, self._hif_prediction_cache)
+        conditional = None
+        wls_z = z
+        if prediction is not None:
+            conditional = diagnose_hif_meters(state, prediction, noise_options.get("measurement_sigma"))
+            if self.normalized_residual_threshold is None:
+                conditional["conditioning"]["status"] = "unavailable"
+                conditional["conditioning"]["failure_reasons"].append("normalized_residual_test_not_configured")
+            wls_z = (np.asarray(z) - np.asarray(prediction["measurement_effect"])).tolist()
         if self.screen_checkpoint:
             noise_options["include_screen_evidence"] = True
-        payload = _wls_json(case_path, z, **noise_options)
+        payload = _wls_json(case_path, wls_z, **noise_options)
         return {
             "case_path": case_path,
             "z": z,
@@ -834,6 +910,9 @@ class MatpowerDeploymentProviders:
             "nl": nl,
             "index_map": measurement_index_map(nb, nl),
             "payload": payload,
+            "hif_prediction": prediction,
+            "hif_meter_diagnosis": conditional,
+            "wls_measurements": wls_z,
         }
 
     @staticmethod
@@ -1405,13 +1484,24 @@ class MatpowerDeploymentProviders:
             return unavailable_report("model_unavailable", str(exc), **self._binding(state))
 
     def run_wls(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        state = self._evidence_state(state)
         try:
             solved = self._solve(state)
         except Exception as exc:
-            return self._failure("wls_input_error", f"{type(exc).__name__}: {exc}")
+            extra = {}
+            if accepted_hif_fit(state) is not None:
+                extra["hif_conditioning"] = {**self._binding(state), "status": "unavailable",
+                    "method": "paired_opendss_effect_compensation",
+                    "failure_reasons": [str(exc)], "remaining_meter_candidate_indices": [],
+                    "physical_fault_still_present": True}
+            return self._failure("wls_input_error", f"{type(exc).__name__}: {exc}", **extra)
         payload = solved["payload"]
         if not payload.get("success"):
             screen_failure = {}
+            if solved.get("hif_meter_diagnosis"):
+                condition = dict(solved["hif_meter_diagnosis"]["conditioning"])
+                condition.update(status="unavailable", failure_reasons=["conditioned_wls_solver_failure"])
+                screen_failure["hif_conditioning"] = condition
             if self.screen_checkpoint:
                 from research.gnn_screen.protocol_adapter import unavailable_report
                 screen_failure["gnn_screen"] = unavailable_report(
@@ -1428,10 +1518,26 @@ class MatpowerDeploymentProviders:
         try:
             detection = self._wls_detection_metrics(solved)
         except (KeyError, TypeError, ValueError, OverflowError) as exc:
-            return self._failure("wls_evidence_error", str(exc))
+            extra = {}
+            if solved.get("hif_meter_diagnosis"):
+                condition = dict(solved["hif_meter_diagnosis"]["conditioning"])
+                condition.update(status="unavailable", failure_reasons=["conditioned_wls_evidence_invalid"])
+                extra["hif_conditioning"] = condition
+            return self._failure("wls_evidence_error", str(exc), **extra)
         statistic = detection["chi_square_statistic"]
         threshold = detection["chi_square_threshold"]
         resolved = detection["no_material_anomaly_remaining"]
+        conditional = solved.get("hif_meter_diagnosis")
+        if conditional:
+            ready = conditional["conditioning"]["status"] == "ready"
+            pending = conditional["candidate_indices"]
+            resolved = resolved and ready and not pending
+            detection.update(no_material_anomaly_remaining=resolved, globally_resolved=resolved)
+            detection["remaining_anomaly_score"] = max(
+                detection["remaining_anomaly_score"],
+                max((abs(v) / 5.0 for v in conditional["conditional_scores"]), default=0.0),
+                1.0 if not ready else 0.0,
+            )
         summary = summarize_wls_payload(
             {**payload, "global_residual_threshold": threshold},
             {"nb": nb, "branch_info": payload.get("branch_info") or []},
@@ -1461,6 +1567,8 @@ class MatpowerDeploymentProviders:
         # not remove the event from the network.  The solve still reports its
         # metrics but mints no signatures while such a sensor signature stands.
         waveform_sensor = waveform_anomaly_signatures(preserved)
+        if conditional and conditional["conditioning"]["status"] == "ready":
+            waveform_sensor = [s for s in waveform_sensor if not matching_evidence_codes([s], *ANOMALY_FAMILY_MARKERS["hif"])]
         if not resolved and not waveform_sensor:
             lambda_values = [float(value) for value in payload.get("lambdaN") or []]
             max_abs_lambda = max((abs(value) for value in lambda_values), default=0.0)
@@ -1519,6 +1627,17 @@ class MatpowerDeploymentProviders:
             "unresolved_signatures": _dedupe(signatures),
             "wls_summary": summary,
         }
+        if conditional:
+            metrics["hif_conditioning"] = conditional["conditioning"]
+            metrics["conditional_meter_scores"] = conditional["conditional_scores"]
+            # The independent forward discrepancy supports sparse meter targets
+            # even when balanced WLS absorbs part of their bias into its state.
+            if conditional["conditioning"]["status"] == "ready":
+                metrics["unresolved_signatures"] = _dedupe([
+                    *metrics["unresolved_signatures"],
+                    *[f"wls_residual_outlier_dominant conditioned_meter index={i}"
+                      for i in conditional["candidate_indices"]],
+                ])
         source_action = state.get("source_action")
         is_candidate = str(state.get("status") or "") == "candidate"
         if is_candidate and isinstance(source_action, Mapping):
@@ -1548,7 +1667,8 @@ class MatpowerDeploymentProviders:
         if self.screen_checkpoint:
             report = self._screen_wls(state, solved)
             metrics["gnn_screen"] = report
-            if report.get("screen_status") == "valid" and report.get("phase_trigger") is True:
+            if (report.get("screen_status") == "valid" and report.get("phase_trigger") is True
+                and (not self._strict_scada(state) or not resolved)):
                 # A request for evidence, not a diagnosed HIF/unbalance signature.
                 # Existing acquisition and verification gates remain in force.
                 metrics["unresolved_signatures"] = _dedupe([
@@ -1559,6 +1679,7 @@ class MatpowerDeploymentProviders:
     # ----------------------------------------------------------------- contexts
 
     def get_measurement_context(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        state = self._evidence_state(state)
         try:
             solved = self._solve(state)
         except Exception as exc:
@@ -1567,6 +1688,21 @@ class MatpowerDeploymentProviders:
         if not payload.get("success"):
             return self._failure("measurement_context_failure", payload.get("error"))
         residuals = [float(value) for value in payload.get("r") or []]
+        conditional = solved.get("hif_meter_diagnosis")
+        if conditional:
+            condition = conditional["conditioning"]
+            indices = conditional["candidate_indices"] if condition["status"] == "ready" else []
+            return {
+                **self._binding(state), "context_tool": GET_MEASUREMENT_CONTEXT,
+                "evidence_source": "deployment_context:hif_conditioned_meter_residuals",
+                "hif_conditioning": condition,
+                "measurement_findings": build_residual_evidence(residuals, solved["index_map"], k=self.top_k, min_abs=self.residual_threshold),
+                "conditional_meter_scores": conditional["conditional_scores"],
+                "finding_count": len(indices),
+                "supported_corrections": ([{"tool": CORRECT_MEASUREMENTS,
+                    "arguments": {"state_id": str(state.get("state_id") or ""), "suspect_group": indices}}] if indices else []),
+                **self._wls_detection_metrics(solved),
+            }
         evidence = build_residual_evidence(
             residuals, solved["index_map"], k=self.top_k, min_abs=self.residual_threshold
         )
@@ -2240,6 +2376,7 @@ class MatpowerDeploymentProviders:
         )
 
     def get_parameter_context(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        state = self._evidence_state(state)
         try:
             solved = self._solve(state)
         except Exception as exc:
@@ -2419,6 +2556,7 @@ class MatpowerDeploymentProviders:
         }
 
     def get_topology_context(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        state = self._evidence_state(state)
         try:
             solved = self._solve(state)
         except Exception as exc:
@@ -3406,7 +3544,28 @@ class MatpowerDeploymentProviders:
     def correct_measurements(
         self, state: Mapping[str, Any], action: Mapping[str, Any]
     ) -> dict[str, Any]:
+        state = self._evidence_state(state)
         arguments = dict(action.get("arguments") or {})
+        if not self._strict_scada(state) and accepted_hif_fit(state) is not None:
+            try:
+                solved = self._solve(state)
+                conditional = solved["hif_meter_diagnosis"]
+                group = arguments.get("suspect_group") or []
+                indices = [int(i) for i in group]
+                if (not indices or arguments.get("measurement_updates")
+                    or conditional["conditioning"]["status"] != "ready"
+                    or not set(indices).issubset(conditional["candidate_indices"])):
+                    return self._failure("hif_conditioned_measurement_target_unsupported")
+                present = solved["hif_prediction"]["predicted_hif_measurements"]
+                return {
+                    "modification": {"measurement_updates": {i: float(present[i]) for i in indices}},
+                    "evidence_source": "deployment_correction:hif_present_prediction",
+                    "suspect_group": sorted(indices), "applied_any_correction": True,
+                    "hif_conditioning": conditional["conditioning"],
+                    "physical_fault_still_present": True,
+                }
+            except Exception as exc:
+                return self._failure("hif_conditioned_measurement_correction_error", exc)
         updates = arguments.get("measurement_updates")
         if isinstance(updates, Mapping) and updates:
             return {
@@ -3459,6 +3618,7 @@ class MatpowerDeploymentProviders:
     def correct_parameters(
         self, state: Mapping[str, Any], action: Mapping[str, Any]
     ) -> dict[str, Any]:
+        state = self._evidence_state(state)
         arguments = dict(action.get("arguments") or {})
         try:
             case_path = self._case_path(state)
@@ -3513,6 +3673,7 @@ class MatpowerDeploymentProviders:
     def correct_topology(
         self, state: Mapping[str, Any], action: Mapping[str, Any]
     ) -> dict[str, Any]:
+        state = self._evidence_state(state)
         arguments = dict(action.get("arguments") or {})
         if arguments.get("cb_name") is not None:
             return self._correct_breaker_status(state, arguments)
@@ -3644,18 +3805,24 @@ class MatpowerDeploymentProviders:
         Explained or not: the event is still on the network, so residual and
         multiplier evidence cannot be attributed to a meter or a branch.
         """
+        if state.get("evidence_profile") == "scada_only":
+            return []
         return waveform_anomaly_signatures(cls._observable_signatures(state))
 
     @classmethod
     def _screening_pending(cls, state: Mapping[str, Any]) -> bool:
         """Unflagged WLS anomaly with acquisition or screening still pending."""
+        if state.get("evidence_profile") == "scada_only":
+            return False
         observation = state.get("policy_observation")
         observation = observation if isinstance(observation, Mapping) else {}
+        profile = state.get("evidence_profile") or observation.get("evidence_profile") or DEFAULT_EVIDENCE_PROFILE
         if harmonic_screening_pending(
             unresolved=observation.get("unresolved_signatures") or [],
             tried_action_signatures=observation.get("tried_action_signatures") or [],
             active_state_id=observation.get("active_state_id") or state.get("state_id"),
             context_evidence=observation.get("fresh_context_evidence"),
+            evidence_profile=profile,
         ):
             return True
         if three_phase_acquisition_pending(
@@ -3663,6 +3830,7 @@ class MatpowerDeploymentProviders:
             tried_action_signatures=observation.get("tried_action_signatures") or [],
             active_state_id=observation.get("active_state_id") or state.get("state_id"),
             context_evidence=observation.get("fresh_context_evidence"),
+            evidence_profile=profile,
         ):
             return True
         return three_phase_screening_pending(
@@ -3671,6 +3839,7 @@ class MatpowerDeploymentProviders:
             tried_action_signatures=observation.get("tried_action_signatures") or [],
             active_state_id=observation.get("active_state_id") or state.get("state_id"),
             context_evidence=observation.get("fresh_context_evidence"),
+            evidence_profile=profile,
         )
 
     @classmethod
@@ -3725,7 +3894,7 @@ class MatpowerDeploymentProviders:
             self._hif_multiscan_memo = memo
         try:
             key = hashlib.sha256(
-                json.dumps(kwargs, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+                json.dumps([kwargs, model_fingerprint(kwargs.get("pristine_model_dir"))], sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
             ).hexdigest()
         except (TypeError, ValueError):
             return _estimate_hif_location_magnitude_multiscan_logic(**kwargs)
@@ -3854,6 +4023,9 @@ class MatpowerDeploymentProviders:
     def get_three_phase_context(
         self, state: Mapping[str, Any], action: Mapping[str, Any] | None = None
     ) -> dict[str, Any]:
+        unavailable = self._auxiliary_unavailable(state, GET_THREE_PHASE_CONTEXT)
+        if unavailable is not None:
+            return unavailable
         from mcp_server.matpower_server import _get_three_phase_context_logic
 
         metadata = self._metadata(state)
@@ -3874,6 +4046,9 @@ class MatpowerDeploymentProviders:
     def get_harmonic_context(
         self, state: Mapping[str, Any], action: Mapping[str, Any] | None = None
     ) -> dict[str, Any]:
+        unavailable = self._auxiliary_unavailable(state, GET_HARMONIC_CONTEXT)
+        if unavailable is not None:
+            return unavailable
         # Requesting a measurement channel does not imply that it exists or
         # that the unknown event is harmonic. Availability is learned here,
         # after WLS, rather than advertised from hidden scenario metadata.
@@ -3966,6 +4141,9 @@ class MatpowerDeploymentProviders:
         }
 
     def run_hse(self, state: Mapping[str, Any], action: Mapping[str, Any]) -> dict[str, Any]:
+        unavailable = self._auxiliary_unavailable(state, RUN_HSE_FROM_PATH)
+        if unavailable is not None:
+            return unavailable
         try:
             measurements = self._harmonic_measurements(state)
             case_path = self._case_path(state)
@@ -4048,6 +4226,9 @@ class MatpowerDeploymentProviders:
     def run_three_phase_nlm(
         self, state: Mapping[str, Any], action: Mapping[str, Any]
     ) -> dict[str, Any]:
+        unavailable = self._auxiliary_unavailable(state, RUN_THREE_PHASE_NLM_FROM_PATH)
+        if unavailable is not None:
+            return unavailable
         metadata = self._metadata(state)
         diagnostic = metadata.get("nlm_diagnostic")
         pristine_dir = metadata.get("pristine_model_dir")
@@ -4340,6 +4521,9 @@ class MatpowerDeploymentProviders:
         }
 
     def estimate_hif(self, state: Mapping[str, Any], action: Mapping[str, Any]) -> dict[str, Any]:
+        unavailable = self._auxiliary_unavailable(state, ESTIMATE_HIF_FROM_PATH)
+        if unavailable is not None:
+            return unavailable
         arguments = dict(action.get("arguments") or {})
         if arguments.get("candidate_branch_row0") is None:
             return self._failure(
@@ -4362,7 +4546,7 @@ class MatpowerDeploymentProviders:
         runtime = dict(runtime) if isinstance(runtime, Mapping) else {}
         try:
             case_path = self._case_path(state)
-            z_obs = runtime.get("z_obs") or self._measurements(state)
+            z_obs = self._measurements(state)
         except Exception as exc:
             return self._failure("hif_input_error", f"{type(exc).__name__}: {exc}")
         branch_currents, current_sigma = self._branch_current_channel(state)
@@ -4406,6 +4590,7 @@ class MatpowerDeploymentProviders:
                 "detail": {
                     "candidate_branch_row0": int(arguments["candidate_branch_row0"]),
                     "estimated": summary.get("estimated"),
+                    "conditioning_fit": fit_receipt(payload, case_path, independent=False),
                     "terminal_current_estimate": summary.get("terminal_current_estimate"),
                     "residual_reduction_vs_null": acceptance[
                         "residual_reduction_vs_null"
@@ -4417,6 +4602,9 @@ class MatpowerDeploymentProviders:
     def estimate_hif_multiscan(
         self, state: Mapping[str, Any], action: Mapping[str, Any]
     ) -> dict[str, Any]:
+        unavailable = self._auxiliary_unavailable(state, ESTIMATE_HIF_MULTISCAN_FROM_PATH)
+        if unavailable is not None:
+            return unavailable
         arguments = dict(action.get("arguments") or {})
         if arguments.get("candidate_branch_row0") is None:
             return self._failure(
@@ -4449,6 +4637,17 @@ class MatpowerDeploymentProviders:
             case_path = self._case_path(state)
         except Exception as exc:
             return self._failure("hif_input_error", f"{type(exc).__name__}: {exc}")
+        independent = False
+        try:
+            acquisition = current_scan(self._metadata(state))
+            history_scans = [scan for scan in scans if scan.get("scan_index") != acquisition["scan_index"]]
+            if len(history_scans) >= 2:
+                scans = history_scans
+                independent = True
+        except ValueError:
+            # Diagnosis remains available; independent replay/meter repair
+            # fails closed if the current acquisition cannot be bound.
+            pass
         payload = self._memoized_hif_multiscan(
             scan_window_path=str(window.get("scan_window_path") or state.get("state_id") or "scan_window"),
             candidate_branch_row0=int(arguments["candidate_branch_row0"]),
@@ -4482,6 +4681,7 @@ class MatpowerDeploymentProviders:
             ),
             "hif_summary": summary,
             "diagnostic_acceptance": acceptance,
+            "conditioning_fit_independent_of_current_scada": independent,
         }
         if acceptance["accepted"]:
             metrics["anomaly_explanation"] = {
@@ -4490,6 +4690,7 @@ class MatpowerDeploymentProviders:
                 "detail": {
                     "candidate_branch_row0": int(arguments["candidate_branch_row0"]),
                     "estimated": summary.get("estimated"),
+                    "conditioning_fit": fit_receipt(payload, case_path, independent=independent, metadata=self._metadata(state)),
                     "terminal_current_estimate": summary.get("terminal_current_estimate"),
                     "residual_reduction_vs_null": acceptance[
                         "residual_reduction_vs_null"

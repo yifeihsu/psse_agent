@@ -436,6 +436,7 @@ class ObservableBaselinePolicy:
 
 def build_environment(args: argparse.Namespace) -> tuple[TransactionalPSSEEnv, ExpertPolicyOracle]:
     providers = MatpowerDeploymentProviders(
+        evidence_profile=getattr(args, "evidence_profile", "scada_only"),
         chi2_alpha=args.chi2_alpha,
         # None keeps the chi-square-only detector; the IEEE 57 runtime pins
         # the normalized-residual test too (psse_env.dagger.ieee57_runtime).
@@ -1982,6 +1983,8 @@ def _generation_descriptor(
         "evaluation_holdout": evaluation_holdout,
         "evaluation_policy": evaluation_policy,
         "generation_config": {
+            "evidence_profile": getattr(args, "evidence_profile", "scada_only"),
+            "hif_signature_mode": getattr(args, "hif_signature_mode", "discovered"),
             "seed": args.seed,
             "source_partition": BC0_AGGREGATE_SOURCE_PARTITION,
             "plan": dict(sorted(plan.items())),
@@ -2835,6 +2838,7 @@ def _scenario_generator_kwargs(
     """Round0ScenarioGenerator arguments for the selected system."""
     spec = _validate_plan_for_system(args, plan)
     kwargs: dict[str, Any] = {
+        "evidence_profile": getattr(args, "evidence_profile", "scada_only"),
         "system": spec.case_id,
         "admission_mode": _admission_mode(args),
         "corpus_path": configured_corpora["measurement_corpus"],
@@ -2849,6 +2853,7 @@ def _scenario_generator_kwargs(
         kwargs["topology_effects"] = tuple(getattr(args, "topology_effects"))
     if spec.case_id == "case14":
         kwargs.update(
+            waveform_signature_mode={"hif": getattr(args, "hif_signature_mode", "discovered")},
             hif_sample_paths=[
                 path
                 for name, path in sorted(configured_corpora.items())
@@ -3477,6 +3482,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
         / "round0_aggregate_release",
     )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument("--evidence-profile", choices=("scada_only", "auxiliary_diagnostics"), default="scada_only")
+    parser.add_argument("--hif-signature-mode", choices=("discovered", "flagged"), default="discovered")
     parser.add_argument("--scale", type=int, default=1, help="Multiply the default plan.")
     parser.add_argument("--plan", type=str, default=None, help="JSON plan or path to one.")
     parser.add_argument("--protocol", choices=("controller", "canonical"), default="canonical")

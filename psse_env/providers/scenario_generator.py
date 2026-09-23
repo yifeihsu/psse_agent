@@ -55,6 +55,10 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
+from psse_env.evidence_profile import (
+    DEFAULT_EVIDENCE_PROFILE, AUXILIARY_EVIDENCE_PROFILE,
+    validate_evidence_profile, sanitize_scada_execution,
+)
 
 from mcp_server.matpower_server import (  # noqa: E402  (repo-root package)
     _load_python_case,
@@ -275,13 +279,13 @@ UNBALANCE_CURRENT_SIGNATURE = "three_phase_unbalance phase_current_spread_detect
 # positive-sequence snapshot and the balanced model alone, the first
 # observable evidence is the WLS anomaly.  Attributing it requires additional
 # measured telemetry; positive-sequence SCADA alone does not identify an
-# unbalance or harmonic source.  Both families default to discovery; a mid-span
-# HIF keeps its zero-sequence relay flag by default.
+# unbalance or harmonic source. Every waveform family defaults to discovery;
+# auxiliary telemetry requires an explicitly selected evidence profile.
 WAVEFORM_SIGNATURE_MODES = ("flagged", "discovered")
 DEFAULT_WAVEFORM_SIGNATURE_MODE = {
     "harmonic": "discovered",
     "three_phase_unbalance": "discovered",
-    "hif": "flagged",
+    "hif": "discovered",
 }
 
 # The tabular measurement corpus is shared by both the round-0 aggregate and
@@ -452,7 +456,9 @@ class Round0ScenarioGenerator:
         unbalance_vuf_threshold: float = DEFAULT_UNBALANCE_VUF_THRESHOLD,
         waveform_signature_mode: Mapping[str, str] | None = None,
         min_measurement_error_sigma: float | None = None,
+        evidence_profile: str = DEFAULT_EVIDENCE_PROFILE,
     ) -> None:
+        self.evidence_profile = validate_evidence_profile(evidence_profile)
         self.system = resolve_system(system)
         self.case_path = self.system.case_path
         self.nb, self.nl = self.system.nb, self.system.nl
@@ -567,6 +573,8 @@ class Round0ScenarioGenerator:
                 )
             modes[family] = str(mode)
         self.waveform_signature_mode = modes
+        if self.evidence_profile == "scada_only" and any(mode == "flagged" for mode in modes.values()):
+            raise ValueError("flagged waveform signatures require evidence_profile='auxiliary_diagnostics'")
         # The frozen evaluation suite deliberately preserves its previously
         # approved physical roots, including hard/ambiguous parameter cases.
         # Dominance is a single-label *training admission* requirement, not a
@@ -641,6 +649,7 @@ class Round0ScenarioGenerator:
         }
         self._parameter_gate_provider = MatpowerDeploymentProviders(
             chi2_alpha=self.chi2_alpha,
+            evidence_profile=self.evidence_profile,
             derived_case_dir=str(self.derived_case_dir),
             parameter_ranking_dominance_threshold=(
                 self.parameter_ranking_dominance_threshold
@@ -1384,7 +1393,8 @@ class Round0ScenarioGenerator:
             "case": case,
             "measurements": [float(value) for value in measurements],
             "semantic_field_provenance": {"measurements": _SNAPSHOT_PROVENANCE},
-            "metadata": {"sigma_z": list(sigma_z) if sigma_z is not None else self.noise_profile().tolist()},
+            "metadata": {"sigma_z": list(sigma_z) if sigma_z is not None else self.noise_profile().tolist(),
+                         "evidence_profile": self.evidence_profile},
         }
 
     def _declare_measurement_recovery_tolerance(
@@ -2040,9 +2050,9 @@ class Round0ScenarioGenerator:
     def _harmonic_scenario(self, row: Mapping[str, Any], index: int) -> dict[str, Any]:
         label = dict(row.get("label") or {})
         harmonic_measurements = row.get("harmonic_measurements")
-        if not harmonic_measurements:
+        if not harmonic_measurements and self.evidence_profile == AUXILIARY_EVIDENCE_PROFILE:
             raise ScenarioRejected("harmonic_measurements_missing", str(row.get("id")))
-        harmonic_measurements = copy.deepcopy(harmonic_measurements)
+        harmonic_measurements = copy.deepcopy(harmonic_measurements or [])
         for item in harmonic_measurements:
             # Legacy generated harmonic rows stored complex RMS sigma. Fresh
             # rows name rectangular component sigma explicitly.
@@ -2104,10 +2114,12 @@ class Round0ScenarioGenerator:
         label = dict(row.get("label") or {})
         diagnostic = row.get("nlm_diagnostic")
         scans = row.get("scans")
-        if not isinstance(diagnostic, Mapping) or not diagnostic.get("success"):
+        if self.evidence_profile == AUXILIARY_EVIDENCE_PROFILE and (not isinstance(diagnostic, Mapping) or not diagnostic.get("success")):
             raise ScenarioRejected("nlm_diagnostic_missing", str(row.get("id")))
-        if not scans:
+        if self.evidence_profile == AUXILIARY_EVIDENCE_PROFILE and not scans:
             raise ScenarioRejected("hif_scans_missing", str(row.get("id")))
+        diagnostic = diagnostic if isinstance(diagnostic, Mapping) else {}
+        scans = list(scans or [])
         z_obs = [float(value) for value in row["z_obs"]]
         if self.validate:
             self._chi2_statistic(self.case_path, z_obs, sigma_z=row["sigma_z"])  # must solve; may be subtle
@@ -2131,6 +2143,15 @@ class Round0ScenarioGenerator:
             scenario["semantic_field_provenance"]["unresolved_signatures"] = (
                 _WAVEFORM_PROVENANCE
             )
+        if self.evidence_profile == "scada_only":
+            if row.get("noise_contract") is not None:
+                scenario["metadata"]["noise_contract"] = copy.deepcopy(row["noise_contract"])
+            if row.get("measurement_convention") is not None:
+                scenario["metadata"]["measurement_convention"] = copy.deepcopy(row["measurement_convention"])
+            scenario["hidden_truth"] = {"true_hif_errors": [copy.deepcopy(label)]}
+            scenario["release_audit"] = {**copy.deepcopy(_EXPLANATION_ONLY_RELEASE_AUDIT),
+                "signature_mode": hif_mode, "sensor_signatures_withheld": [HIF_SIGNATURE]}
+            return scenario
         scenario["metadata"]["nlm_diagnostic"] = {
             key: copy.deepcopy(diagnostic[key])
             for key in ("success", "converged", "method", "backend", "top_hif_groups") if key in diagnostic
@@ -2140,6 +2161,8 @@ class Round0ScenarioGenerator:
             scenario["metadata"]["noise_contract"] = copy.deepcopy(row["noise_contract"])
         scenario["metadata"]["hif_runtime"] = {
             "z_obs": z_obs,
+            "scan_index": row.get("scan_index", scans[0].get("scan_index")),
+            "op_point": copy.deepcopy(row.get("op_point") or scans[0].get("op_point")),
             "sigma_z": copy.deepcopy(row["sigma_z"]),
             "three_phase_sigma": float(row["three_phase_sigma"]),
             "three_phase_voltages": copy.deepcopy(row.get("three_phase_voltages")),
@@ -2261,10 +2284,10 @@ class Round0ScenarioGenerator:
         row = self._aligned_waveform_row(row, "three_phase_unbalance")
         label = copy.deepcopy(dict(row.get("label") or {}))
         voltages = row.get("three_phase_voltages")
-        if not isinstance(voltages, Sequence) or not voltages:
+        if self.evidence_profile == AUXILIARY_EVIDENCE_PROFILE and (not isinstance(voltages, Sequence) or not voltages):
             raise ScenarioRejected("three_phase_voltages_missing", str(row.get("id")))
-        signatures = self._observable_unbalance_signatures(row)
-        if not signatures:
+        signatures = self._observable_unbalance_signatures(row) if self.evidence_profile == AUXILIARY_EVIDENCE_PROFILE else []
+        if self.evidence_profile == AUXILIARY_EVIDENCE_PROFILE and not signatures:
             raise ScenarioRejected("unbalance_not_observable", str(row.get("id")))
         z_obs = [float(value) for value in row["z_obs"]]
         mode = self.waveform_signature_mode["three_phase_unbalance"]
@@ -2288,8 +2311,9 @@ class Round0ScenarioGenerator:
             scenario["semantic_field_provenance"]["unresolved_signatures"] = (
                 _WAVEFORM_PROVENANCE
             )
-        scenario["metadata"]["three_phase_voltages"] = copy.deepcopy(list(voltages))
-        scenario["metadata"]["three_phase_sigma"] = float(row["three_phase_sigma"])
+        if self.evidence_profile == AUXILIARY_EVIDENCE_PROFILE:
+            scenario["metadata"]["three_phase_voltages"] = copy.deepcopy(list(voltages))
+            scenario["metadata"]["three_phase_sigma"] = float(row["three_phase_sigma"])
         if row.get("noise_contract") is not None:
             scenario["metadata"]["noise_contract"] = copy.deepcopy(row["noise_contract"])
         branch_currents = row.get(BRANCH_CURRENT_CHANNEL)
@@ -3523,6 +3547,10 @@ class Round0ScenarioGenerator:
                 if scan.get("z_obs") == scenario["measurements"]:
                     scan["z_obs"] = list(measurements)
         composed["true_measurement_errors"] = errors
+        if family == "measurement+hif":
+            audit = composed.setdefault("release_audit", {})
+            audit.get("not_applicable", {}).pop("final_measurements_match_clean", None)
+            audit["measurement_reference_kind"] = "hif_present_meter_recovery_acquisition_v1"
         self._declare_measurement_recovery_tolerance(
             composed,
             [int(item["index"]) for item in errors if item.get("index") is not None],
@@ -3630,6 +3658,16 @@ class Round0ScenarioGenerator:
             scenario["source_tier"] = source_tier
             if scenario.get("source_realization_id"):
                 scenario["source_tier"] = "physics_synthesized_balanced"
+            if self.evidence_profile == "scada_only":
+                strict = sanitize_scada_execution(scenario)
+                # Keep generator-only truth/grouping fields for the later
+                # execution/audit partition; replace only runtime fields.
+                for key in ("metadata", "semantic_field_provenance", "unresolved_signatures",
+                            "remaining_anomaly_score", "no_material_anomaly_remaining", "requires_measurement_context"):
+                    if key in strict:
+                        scenario[key] = strict[key]
+                    else:
+                        scenario.pop(key, None)
             self.manifest.append(
                 {
                     "scenario_id": scenario["scenario_id"],
@@ -3638,6 +3676,7 @@ class Round0ScenarioGenerator:
                     "network_case": scenario["network_case"],
                     "error_cardinality": scenario["error_cardinality"],
                     "source_tier": scenario["source_tier"],
+                    "evidence_profile": self.evidence_profile,
                 }
             )
             built.append(scenario)
@@ -3792,6 +3831,8 @@ class Round0ScenarioGenerator:
             "seed": self.seed,
             "system": self.system.to_manifest(),
             "admission_mode": self.admission_mode,
+            "evidence_profile": self.evidence_profile,
+            "waveform_signature_mode": dict(self.waveform_signature_mode),
             "chi2_alpha": self.chi2_alpha,
             "chi2_limit": self.chi2_limit,
             "normalized_residual_threshold": self.normalized_residual_threshold,

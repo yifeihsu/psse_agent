@@ -13,6 +13,7 @@ from psse_env.oracle import ExpertPolicyOracle
 from psse_env.providers import MatpowerDeploymentProviders
 from psse_env.providers.scenario_generator import Round0ScenarioGenerator
 from psse_env.transactional_env import TransactionalPSSEEnv
+from psse_env.evidence_profile import AUXILIARY_EVIDENCE_PROFILE
 
 
 class _BaselinePolicy:
@@ -26,7 +27,7 @@ class HarmonicDiscoveryTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        generator = Round0ScenarioGenerator(seed=20260719)
+        generator = Round0ScenarioGenerator(seed=20260719, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         cls.scenarios = {
             row["scenario_family"]: row
             for row in generator.build({"harmonic": 1, "measurement": 1, "no_error": 1})
@@ -34,7 +35,7 @@ class HarmonicDiscoveryTests(unittest.TestCase):
 
     def _environment(self, scenario: dict) -> tuple[TransactionalPSSEEnv, ExpertPolicyOracle]:
         env = TransactionalPSSEEnv(
-            **MatpowerDeploymentProviders().env_kwargs(),
+            **MatpowerDeploymentProviders(evidence_profile=AUXILIARY_EVIDENCE_PROFILE).env_kwargs(),
             production_dataset_mode=True,
             max_steps=20,
         )
@@ -96,7 +97,10 @@ class HarmonicDiscoveryTests(unittest.TestCase):
             self.assertEqual(self._expert_step(env, oracle)[0], "run_wls")
             self.assertNotIn("harmonic_measurements", env.get_policy_observation().available_evidence)
             actions.append(oracle.next_actions(env.get_oracle_state(), env.history)[0]["tool"])
-        self.assertEqual(actions, ["get_harmonic_context", "get_harmonic_context"])
+        # This frozen source has a narrow WLS residual pattern (9/122), so
+        # the explicit auxiliary profile asks for phase telemetry first.
+        # Private availability of spectra cannot alter that opening request.
+        self.assertEqual(actions, ["get_three_phase_context", "get_three_phase_context"])
 
     def test_real_source_episode_and_export_observe_evidence_only_after_request(self) -> None:
         scenario = self.scenarios["harmonic"]
@@ -109,10 +113,11 @@ class HarmonicDiscoveryTests(unittest.TestCase):
         ).collect_iteration(scenarios=[scenario], iteration=0, beta=1.0, max_steps=8)
         self.assertEqual(
             [row["preferred_action"]["tool"] for row in rows],
-            ["run_wls", "get_harmonic_context", "run_hse_from_path", "finalize_diagnosis"],
+            ["run_wls", "get_three_phase_context", "get_harmonic_context", "run_hse_from_path", "finalize_diagnosis"],
         )
         self.assertTrue(env.is_terminal())
-        hse = rows[2]["policy_observation"]
+        self.assertEqual(rows[1]["tool_output"]["tool_metrics"]["three_phase_context_status"], "unavailable")
+        hse = rows[3]["policy_observation"]
         self.assertIn("harmonic_measurements", hse["available_evidence"])
         self.assertTrue(hse["fresh_context_evidence"]["harmonic"]["harmonic_distortion_detected"])
         record = env.get_policy_observation().explained_anomalies[0]
@@ -122,17 +127,17 @@ class HarmonicDiscoveryTests(unittest.TestCase):
         )
         self.assertTrue(any(str(item).startswith("wls_") for item in record["explained_signatures"]))
         exported = examples_to_chat_sft(rows, protocol="canonical", allow_ineligible_auxiliary=True)
-        self.assertEqual(len(exported), 4)
+        self.assertEqual(len(exported), 5)
         self.assertEqual(
             [row["messages"][2]["tool_calls"][0]["function"]["name"] for row in exported],
-            ["wls_from_path", "get_harmonic_context", "run_hse_from_path", "finalize_diagnosis"],
+            ["wls_from_path", "get_three_phase_context", "get_harmonic_context", "run_hse_from_path", "finalize_diagnosis"],
         )
         states = [json.loads(row["messages"][1]["content"])["state"] for row in exported]
-        for state in states[:2]:
+        for state in states[:3]:
             self.assertNotIn("harmonic_measurements", state["available_evidence"])
             self.assertFalse(any("harmonic" in str(item) for item in state["unresolved_signatures"]))
-        self.assertIn("harmonic_measurements", states[2]["available_evidence"])
-        self.assertTrue(any("harmonic" in str(item) for item in states[2]["unresolved_signatures"]))
+        self.assertIn("harmonic_measurements", states[3]["available_evidence"])
+        self.assertTrue(any("harmonic" in str(item) for item in states[3]["unresolved_signatures"]))
         for row in exported:
             self.assertNotIn("true_harmonic_errors", json.dumps(row["messages"]))
             self.assertNotIn("sensor_signatures_withheld", json.dumps(row["messages"]))

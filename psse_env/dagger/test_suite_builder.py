@@ -368,6 +368,7 @@ class BC0SuiteBuilderTests(unittest.TestCase):
     def test_partition_removes_hif_corpus_only_evaluation_labels(self) -> None:
         flat = _scenario("hif", 2)
         flat["metadata"] = {
+            "evidence_profile": "auxiliary_diagnostics",
             "hif_scan_window": {
                 "scans": [{"z_obs": [1.0], "z_clean": [0.0]}]
             },
@@ -397,6 +398,7 @@ class BC0SuiteBuilderTests(unittest.TestCase):
             {"cb_name": "CB_6_L611_B2", "expected_status": 0, "true_cb_closed": False}
         ]
         flat["metadata"] = {
+            "evidence_profile": "auxiliary_diagnostics",
             "reported_breaker_status": {"CB_6_L611_B2": "closed", "CB_6_B1_B2": "closed"},
             "substation_telemetry": {
                 "node_vm": {"N6_B1": 1.07},
@@ -415,6 +417,7 @@ class BC0SuiteBuilderTests(unittest.TestCase):
         self.assertEqual(
             set(metadata),
             {
+                "evidence_profile",
                 "reported_breaker_status",
                 "substation_telemetry",
                 "operator_layout",
