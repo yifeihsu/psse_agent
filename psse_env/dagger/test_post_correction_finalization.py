@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from psse_env.evidence_profile import AUXILIARY_EVIDENCE_PROFILE
 from psse_env.actions import (
     ASK_FOR_MORE_EVIDENCE,
     COMMIT_STATE,
@@ -99,6 +100,7 @@ def _correction_adapter(state, action):
 
 def _production_env() -> TransactionalPSSEEnv:
     return TransactionalPSSEEnv(
+        evidence_profile=AUXILIARY_EVIDENCE_PROFILE,
         production_dataset_mode=True,
         approved_deterministic_providers=REQUIRED_ADAPTERS,
         wls_runner=_wls_adapter,
@@ -119,6 +121,7 @@ def _production_env() -> TransactionalPSSEEnv:
 def _uncertified_post_correction_observation() -> dict:
     return {
         "active_state_id": "episode:s1",
+        "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
         "candidate_state_id": None,
         "has_open_candidate": False,
         "has_unverified_candidate": False,

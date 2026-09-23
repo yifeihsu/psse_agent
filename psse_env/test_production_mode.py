@@ -1420,7 +1420,7 @@ class ProductionEvidenceTests(unittest.TestCase):
         self.assertEqual(state["candidate_state_id"], candidate_id)
 
     def test_synthetic_pilot_mode_keeps_placeholder_compatibility(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         root = env.reset(_measurement_scenario())
         _, output = env.step({"tool": RUN_WLS, "arguments": {"state_id": root["active_state_id"]}})
         self.assertEqual(output["execution_status"], "success")

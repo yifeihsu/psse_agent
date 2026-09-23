@@ -122,7 +122,7 @@ class StateStoreTests(unittest.TestCase):
 
 class ObservationBoundaryTests(unittest.TestCase):
     def setUp(self):
-        self.env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        self.env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         self.env.reset(
             {
                 "scenario_id": "boundary",
@@ -214,7 +214,7 @@ class ObservationBoundaryTests(unittest.TestCase):
 
     def test_candidate_truth_label_does_not_change_policy_observation(self):
         def verified_observation(fault_index):
-            env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+            env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
             state = env.reset(
                 {
                     "scenario_id": "same",
@@ -231,7 +231,7 @@ class ObservationBoundaryTests(unittest.TestCase):
         self.assertEqual(verified_observation(0), verified_observation(1))
 
     def test_oracle_finality_does_not_set_policy_terminal_bit(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(synthetic_scenario())
         state, _ = env.step(correct_measurement(state["active_state_id"]))
         state, _ = env.step({"tool": "run_wls", "arguments": {"state_id": state["candidate_state_id"]}})
@@ -268,7 +268,8 @@ class ProcessValidityTests(unittest.TestCase):
         return state
 
     def test_missing_parameter_context_routes_to_parameter_context(self):
-        state = {"active_state_id": "e:s0", "has_fresh_parameter_context": False}
+        state = {"active_state_id": "e:s0", "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
+                 "has_fresh_parameter_context": False}
         result = ProcessValidityOracle().check(
             state,
             {"tool": "correct_parameters", "arguments": {"state_id": "e:s0", "line_index": 2}},
@@ -434,7 +435,7 @@ class ProcessValidityTests(unittest.TestCase):
 
 class TransactionTests(unittest.TestCase):
     def test_malformed_action_becomes_structured_failure(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         env.reset(synthetic_scenario())
         _, output = env.step('{"tool":')
         self.assertEqual(set(output), STANDARD_OUTPUT_KEYS)
@@ -443,7 +444,7 @@ class TransactionTests(unittest.TestCase):
         self.assertFalse(output["state_mutated"])
 
     def test_invalid_action_does_not_mutate_state(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(synthetic_scenario())
         before = (env.store.episode_hash(), state["active_state_id"], state["candidate_state_id"])
         state, output = env.step({"tool": "commit_state", "arguments": {"candidate_state_id": "missing"}})
@@ -569,7 +570,7 @@ class TransactionTests(unittest.TestCase):
         self.assertLessEqual(len(output["valid_next_actions"]), 2)
 
     def test_unverified_candidate_cannot_rollback(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(synthetic_scenario())
         state, _ = env.step(correct_measurement(state["active_state_id"]))
         candidate_id = state["candidate_state_id"]
@@ -578,13 +579,13 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual(state["candidate_state_id"], candidate_id)
 
     def test_rejected_candidate_cannot_commit(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(synthetic_scenario())
         state, _ = env.step(correct_measurement(state["active_state_id"], index=1))
         state, _ = env.step({"tool": "run_wls", "arguments": {"state_id": state["candidate_state_id"]}})
         self.assertEqual(state["candidate_disposition"], "REJECT")
 
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(
             {
                 "scenario_id": "parameter-case-collateral",
@@ -614,14 +615,14 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual(output["error_detail"], "commit_rejected_or_inconclusive_candidate")
 
     def test_false_finalization_is_blocked(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         env.reset({"scenario_id": "unresolved", "case": {}, "measurements": [1.0]})
         _, output = env.step({"tool": "finalize_diagnosis", "arguments": {}})
         self.assertEqual(output["error_code"], "terminal_condition_not_met")
         self.assertFalse(env.is_terminal())
 
     def test_second_correction_is_blocked(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         root = env.reset(synthetic_scenario())
         state, _ = env.step(correct_measurement(root["active_state_id"]))
         before_hash = env.store.episode_hash()
@@ -631,7 +632,7 @@ class TransactionTests(unittest.TestCase):
         self.assertTrue(state["has_unverified_candidate"])
 
     def test_wrong_candidate_id_is_blocked(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         root = env.reset(synthetic_scenario())
         state, _ = env.step(correct_measurement(root["active_state_id"]))
         candidate_id = state["candidate_state_id"]
@@ -641,7 +642,7 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual(env.store.active_state_id, root["active_state_id"])
 
     def test_wls_must_target_active_or_current_candidate(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         root = env.reset(synthetic_scenario())
         state, _ = env.step(correct_measurement(root["active_state_id"]))
         _, output = env.step({"tool": "run_wls", "arguments": {"state_id": root["active_state_id"]}})
@@ -649,14 +650,14 @@ class TransactionTests(unittest.TestCase):
         self.assertTrue(state["has_unverified_candidate"])
 
     def test_previous_episode_state_is_not_addressable_by_environment(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         old = env.reset(synthetic_scenario(scenario_id="old"))["active_state_id"]
         env.reset(synthetic_scenario(scenario_id="new"))
         _, output = env.step(correct_measurement(old))
         self.assertEqual(output["error_code"], "unknown_state_id")
 
     def test_empty_and_no_effect_corrections_are_atomic_failures(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(synthetic_scenario())
         before = env.store.episode_hash()
         _, empty = env.step(
@@ -682,7 +683,7 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual(env.store.episode_hash(), before)
 
     def test_whole_measurement_vector_is_not_a_bounded_correction(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(synthetic_scenario())
         before = env.store.episode_hash()
         _, output = env.step(
@@ -699,7 +700,7 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual(env.store.episode_hash(), before)
 
     def test_nested_correction_payload_is_canonical_and_conflicts_fail_closed(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(synthetic_scenario())
         state, output = env.step(
             {
@@ -717,7 +718,7 @@ class TransactionTests(unittest.TestCase):
         self.assertNotIn("modification", source["arguments"])
         self.assertEqual(source["arguments"]["measurement_updates"], {0: 1.0})
 
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(synthetic_scenario())
         before = env.store.episode_hash()
         _, output = env.step(
@@ -733,7 +734,7 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual(output["error_code"], "schema_error")
         self.assertEqual(env.store.episode_hash(), before)
 
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(synthetic_scenario())
         before = env.store.episode_hash()
         _, output = env.step(
@@ -750,7 +751,7 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual(env.store.episode_hash(), before)
 
     def test_non_json_policy_values_are_collectable_failures(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(synthetic_scenario())
         _, output = env.step(
             {
@@ -763,7 +764,7 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual(env.history[-1]["action"]["tool"], "__invalid_action__")
 
     def test_commit_precomputation_failure_is_atomic_and_history_uses_parent(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(synthetic_scenario())
         parent_id = state["active_state_id"]
         state, _ = env.step(correct_measurement(parent_id))
@@ -812,7 +813,7 @@ class TransactionTests(unittest.TestCase):
         self.assertIn("policy_observation", seen[0])
 
     def test_parameter_and_topology_macros_change_physical_case(self):
-        parameter_env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        parameter_env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = parameter_env.reset(
             {
                 "scenario_id": "parameter",
@@ -834,7 +835,7 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual(output["execution_status"], "success")
         self.assertEqual(parameter_env.store.get_state(state["candidate_state_id"])["case"]["branch"][0]["x"], 0.2)
 
-        topology_env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        topology_env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = topology_env.reset(
             {
                 "scenario_id": "topology",
@@ -861,7 +862,7 @@ class TransactionTests(unittest.TestCase):
             {"line_index": 0},
             {"line_index1": 1},
         ):
-            env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+            env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
             state = env.reset(
                 {
                     "scenario_id": f"topology-{next(iter(reference))}",
@@ -884,7 +885,7 @@ class TransactionTests(unittest.TestCase):
             self.assertEqual(candidate["case"]["branch"][0]["status"], 1)
 
     def test_parameter_branch_id_dispatches(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(
             {
                 "scenario_id": "parameter-branch-id",
@@ -924,7 +925,7 @@ class TransactionTests(unittest.TestCase):
         self.assertNotIn("true_measurement_errors", serialized)
 
     def test_observable_signature_does_not_claim_complete_truth(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         env.reset(
             {
                 "scenario_id": "observable-signature-only",
@@ -1266,13 +1267,13 @@ class CandidateQualityTests(unittest.TestCase):
         self.assertNotIn("true_parameter_errors", json.dumps(call["candidate_state"]))
 
     def test_partial_and_healthy_change_have_different_labels(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         root = env.reset(synthetic_scenario(parameter_fault=True))
         partial, _ = env.step(correct_measurement(root["active_state_id"], index=0))
         partial, _ = env.step({"tool": "run_wls", "arguments": {"state_id": partial["candidate_state_id"]}})
         self.assertEqual(partial["candidate_disposition"], "ACCEPT_PARTIAL")
 
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         root = env.reset(synthetic_scenario(parameter_fault=True))
         rejected, _ = env.step(correct_measurement(root["active_state_id"], index=1))
         rejected, _ = env.step({"tool": "run_wls", "arguments": {"state_id": rejected["candidate_state_id"]}})
@@ -1286,7 +1287,7 @@ class CandidateQualityTests(unittest.TestCase):
             "clean_measurements": [1.0, 1.0],
             "true_measurement_errors": [{"index": 0}],
         }
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(scenario)
         state, _ = env.step(correct_measurement(state["active_state_id"], value=90.0))
         state, _ = env.step({"tool": "run_wls", "arguments": {"state_id": state["candidate_state_id"]}})
@@ -1318,7 +1319,7 @@ class CandidateQualityTests(unittest.TestCase):
             {"measurement_updates": {0: 1.0, 1: 99.0}},
             {"measurement_updates": {0: 1.0}, "case_updates": {"x": 999}},
         ):
-            env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+            env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
             state = env.reset(base)
             action = {
                 "tool": "correct_measurements",
@@ -1328,7 +1329,7 @@ class CandidateQualityTests(unittest.TestCase):
             state, _ = env.step({"tool": "run_wls", "arguments": {"state_id": state["candidate_state_id"]}})
             self.assertEqual(state["candidate_disposition"], "REJECT")
 
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(
             {
                 "scenario_id": "parameter-collateral",
@@ -1393,7 +1394,7 @@ class CandidateQualityTests(unittest.TestCase):
     def test_remaining_truth_is_initialized_and_explicit_subset_does_not_resurrect(self):
         fault0 = {"index": 0, "clean": 1.0}
         fault1 = {"index": 1, "clean": 2.0}
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(
             {
                 "scenario_id": "explicit-remaining-subset",
@@ -1420,7 +1421,7 @@ class CandidateQualityTests(unittest.TestCase):
         self.assertEqual(oracle_state.remaining_true_faults, [])
         self.assertEqual(oracle_state.hidden_truth["remaining_true_fault_count"], 0)
 
-        fresh = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        fresh = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         fresh.reset(
             {
                 "scenario_id": "initialize-all-remaining",
@@ -1472,7 +1473,7 @@ class CandidateQualityTests(unittest.TestCase):
                 {"index": 1, "clean": 2.0},
             ],
         }
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(scenario)
         state, _ = env.step(
             {
@@ -1486,7 +1487,7 @@ class CandidateQualityTests(unittest.TestCase):
         state, _ = env.step({"tool": "run_wls", "arguments": {"state_id": state["candidate_state_id"]}})
         self.assertEqual(state["candidate_disposition"], "ACCEPT_PARTIAL")
 
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(scenario)
         state, _ = env.step(
             {
@@ -1512,7 +1513,7 @@ class CandidateQualityTests(unittest.TestCase):
                 {"branch_row0": 0, "status_field": "in_service", "expected_status": 1}
             ],
         }
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(scenario)
         env.step({"tool": "get_topology_context", "arguments": {"state_id": state["active_state_id"]}})
         state, _ = env.step(
@@ -1524,7 +1525,7 @@ class CandidateQualityTests(unittest.TestCase):
         state, _ = env.step({"tool": "run_wls", "arguments": {"state_id": state["candidate_state_id"]}})
         self.assertEqual(state["candidate_disposition"], "REJECT")
 
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(scenario)
         env.step({"tool": "get_topology_context", "arguments": {"state_id": state["active_state_id"]}})
         state, _ = env.step(
@@ -1542,7 +1543,7 @@ class CandidateQualityTests(unittest.TestCase):
         self.assertEqual(state["candidate_disposition"], "ACCEPT_FINAL")
 
     def test_partial_fix_rejects_regression_on_another_known_fault(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(
             {
                 "scenario_id": "mixed-regression",
@@ -1572,7 +1573,7 @@ class CandidateQualityTests(unittest.TestCase):
             ({"branch_id": "b0"}, {"line_index": 1}),
         )
         for truth_target, action_target in pairs:
-            env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+            env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
             state = env.reset(
                 {
                     "scenario_id": f"convention-{next(iter(truth_target))}-{next(iter(action_target))}",
@@ -1600,7 +1601,7 @@ class CandidateQualityTests(unittest.TestCase):
             self.assertEqual(state["candidate_disposition"], "ACCEPT_FINAL")
 
     def test_truth_advancement_preserves_second_fault_on_same_component(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(
             {
                 "scenario_id": "same-component",
@@ -1642,13 +1643,13 @@ class CandidateQualityTests(unittest.TestCase):
             "true_measurement_errors": [{"index": 0}],
             "hidden_truth": {"target_fixed": True, "healthy_component_modified": True},
         }
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(common)
         state, _ = env.step(correct_measurement(state["active_state_id"], value=8.0))
         state, _ = env.step({"tool": "run_wls", "arguments": {"state_id": state["candidate_state_id"]}})
         self.assertEqual(state["candidate_disposition"], "REJECT")
 
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(common)
         state, _ = env.step(correct_measurement(state["active_state_id"], value=1.0))
         state, _ = env.step({"tool": "run_wls", "arguments": {"state_id": state["candidate_state_id"]}})
@@ -1740,7 +1741,7 @@ class ExpertPolicyTests(unittest.TestCase):
         self.assertNotIn(action_signature(rejected), {action_signature(action) for action in actions})
 
     def test_expert_does_not_use_hidden_truth_in_policy_features(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         env.reset(synthetic_scenario(parameter_fault=True))
         observation = env.get_policy_observation().as_dict()
         self.oracle.next_actions(env.get_oracle_state())
@@ -1799,7 +1800,7 @@ class DaggerCollectorTests(unittest.TestCase):
                 raise RuntimeError("boom")
 
         collector = DaggerRolloutCollector(
-            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE), policy=BrokenPolicy(), expert_oracle=ExpertPolicyOracle(), rng=random.Random(0)
+            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE), policy=BrokenPolicy(), expert_oracle=ExpertPolicyOracle(), rng=random.Random(0)
         )
         rows = collector.collect_iteration(scenarios=[synthetic_scenario()], iteration=0, beta=0.0, max_steps=1)
         self.assertEqual(rows[0]["model_action"]["tool"], "__invalid_action__")
@@ -1811,7 +1812,7 @@ class DaggerCollectorTests(unittest.TestCase):
                 return '{"tool":'
 
         rows = DaggerRolloutCollector(
-            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE), policy=BrokenJSONPolicy(), expert_oracle=ExpertPolicyOracle(), rng=random.Random(0)
+            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE), policy=BrokenJSONPolicy(), expert_oracle=ExpertPolicyOracle(), rng=random.Random(0)
         ).collect_iteration(scenarios=[synthetic_scenario()], iteration=0, beta=0.0, max_steps=1)
         self.assertEqual(rows[0]["model_action"]["arguments"]["error_code"], "json_parse_error")
         self.assertEqual(rows[0]["tool_output"]["error_code"], "json_parse_error")
@@ -1825,7 +1826,7 @@ class DaggerCollectorTests(unittest.TestCase):
                 }
 
         rows = DaggerRolloutCollector(
-            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE),
+            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE),
             policy=PythonObjectPolicy(),
             expert_oracle=ExpertPolicyOracle(),
             rng=random.Random(0),
@@ -1838,7 +1839,7 @@ class DaggerCollectorTests(unittest.TestCase):
     def test_next_state_oracle_receives_updated_history(self):
         oracle = _RunWLSOracle()
         collector = DaggerRolloutCollector(
-            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE), policy=_RunWLSPolicy(), expert_oracle=oracle, rng=random.Random(0)
+            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE), policy=_RunWLSPolicy(), expert_oracle=oracle, rng=random.Random(0)
         )
         rows = collector.collect_iteration(scenarios=[synthetic_scenario()], iteration=0, beta=0.0, max_steps=2)
         self.assertIn(1, oracle.history_lengths)
@@ -1850,7 +1851,7 @@ class DaggerCollectorTests(unittest.TestCase):
         _, rows = run_dagger(
             policy=_RunWLSPolicy(),
             expert_oracle=_RunWLSOracle(),
-            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE),
+            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE),
             scenarios_by_iteration=scenarios,
             num_iterations=3,
             beta_schedule=[0.0],
@@ -1864,7 +1865,7 @@ class DaggerCollectorTests(unittest.TestCase):
         _, rows = run_dagger(
             policy=_RunWLSPolicy(),
             expert_oracle=_RunWLSOracle(),
-            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE),
+            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE),
             scenarios_by_iteration=scenarios,
             num_iterations=2,
             beta_schedule=[0.0],
@@ -1882,7 +1883,7 @@ class DaggerCollectorTests(unittest.TestCase):
         best, _ = run_dagger(
             policy=_RunWLSPolicy(),
             expert_oracle=_RunWLSOracle(),
-            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE),
+            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE),
             scenarios_by_iteration=[synthetic_scenario()],
             num_iterations=3,
             beta_schedule=[0.0],
@@ -1903,7 +1904,7 @@ class DaggerCollectorTests(unittest.TestCase):
         best, _ = run_dagger(
             policy=_RunWLSPolicy(),
             expert_oracle=_RunWLSOracle(),
-            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE),
+            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE),
             scenarios_by_iteration=[synthetic_scenario()],
             num_iterations=2,
             beta_schedule=[0.0],
@@ -1918,7 +1919,7 @@ class DaggerCollectorTests(unittest.TestCase):
     def test_fixed_seed_produces_identical_rollout_json(self):
         def collect():
             return DaggerRolloutCollector(
-                env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE),
+                env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE),
                 policy=_RunWLSPolicy(),
                 expert_oracle=_RunWLSOracle(),
                 rng=random.Random(42),
@@ -2009,7 +2010,7 @@ class CounterfactualTests(unittest.TestCase):
                 scenario["true_parameter_errors"] = [{**target, "parameter": "x", "clean": 1.0}]
             else:
                 scenario["true_topology_errors"] = [{**target, "expected_status": 1}]
-            env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+            env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
             env.reset(scenario)
             actions = CounterfactualGenerator._truth_correction_actions(env.get_oracle_state())
             tool = "correct_parameters" if family == "parameter" else "correct_topology"
@@ -2022,7 +2023,7 @@ class CounterfactualTests(unittest.TestCase):
 
     def test_default_generator_uses_separate_clean_measurements(self):
         rows = CounterfactualGenerator(
-            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE), expert_oracle=ExpertPolicyOracle()
+            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE), expert_oracle=ExpertPolicyOracle()
         ).generate(
             scenario={
                 "scenario_id": "separate-clean-counterfactual",
@@ -2068,7 +2069,7 @@ class CounterfactualTests(unittest.TestCase):
         )
         for scenario in scenarios:
             rows = CounterfactualGenerator(
-                env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE), expert_oracle=ExpertPolicyOracle()
+                env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE), expert_oracle=ExpertPolicyOracle()
             ).generate(scenario=scenario)
             variants = {
                 row["branch_family"]: row
@@ -2102,7 +2103,7 @@ class CounterfactualTests(unittest.TestCase):
         self.assertTrue(row["verification_transition"]["labels"]["process_valid"])
 
     def test_wrong_family_branch_generates_reject(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(synthetic_scenario())
         root_hash = env.store.episode_hash()
         wrong = InjectedAction(
@@ -2125,7 +2126,7 @@ class CounterfactualTests(unittest.TestCase):
         self.assertEqual(env.store.episode_hash(), root_hash)
 
     def test_correct_partial_branch_generates_accept_partial(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(synthetic_scenario(parameter_fault=True))
         partial = InjectedAction("correct_partial", correct_measurement(state["active_state_id"]))
         rows = CounterfactualGenerator(env=env, expert_oracle=ExpertPolicyOracle()).generate_from_current(
@@ -2136,7 +2137,7 @@ class CounterfactualTests(unittest.TestCase):
         self.assertTrue(rows[0]["continuation_actions"])
 
     def test_wrong_target_branch_preserves_parent(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(synthetic_scenario())
         root_hash = env.store.state_hash(state["active_state_id"])
         wrong_target = InjectedAction("wrong_target_component", correct_measurement(state["active_state_id"], index=1))
@@ -2148,7 +2149,7 @@ class CounterfactualTests(unittest.TestCase):
 
     def test_wrong_magnitude_and_sign_branches_reject(self):
         for family, value in (("wrong_correction_magnitude", 10.0), ("wrong_correction_sign", -1.0)):
-            env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+            env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
             state = env.reset(synthetic_scenario())
             row = CounterfactualGenerator(env=env, expert_oracle=ExpertPolicyOracle()).generate_from_current(
                 [InjectedAction(family, correct_measurement(state["active_state_id"], value=value))],
@@ -2157,7 +2158,7 @@ class CounterfactualTests(unittest.TestCase):
             self.assertEqual(row["labels"]["candidate_disposition"], "REJECT")
 
     def test_counterfactual_branch_does_not_mutate_root(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(synthetic_scenario(parameter_fault=True))
         root_hash = env.store.episode_hash()
         CounterfactualGenerator(env=env, expert_oracle=ExpertPolicyOracle()).generate_from_current(
@@ -2167,7 +2168,7 @@ class CounterfactualTests(unittest.TestCase):
         self.assertEqual(env.store.episode_hash(), root_hash)
 
     def test_skipped_verification_bootstraps_verify_recovery(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(synthetic_scenario())
         injected = InjectedAction(
             "skipped_verification",
@@ -2181,7 +2182,7 @@ class CounterfactualTests(unittest.TestCase):
         self.assertEqual(row["executed_action"]["tool"], "run_wls")
 
     def test_rollback_of_valid_partial_correction_bootstraps_commit(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(synthetic_scenario(parameter_fault=True))
         injected = InjectedAction(
             "rollback_of_valid_partial_correction",
@@ -2205,7 +2206,7 @@ class ProcessVerifierTests(unittest.TestCase):
                 return correct_measurement(observation["active_state_id"])
 
         rows = DaggerRolloutCollector(
-            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE),
+            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE),
             policy=CorrectionPolicy(),
             expert_oracle=ExpertPolicyOracle(),
             rng=random.Random(0),
@@ -2215,7 +2216,7 @@ class ProcessVerifierTests(unittest.TestCase):
         self.assertIsNotNone(verifier_row["candidate_state_summary"]["candidate_state_id"])
 
     def test_counterfactual_nested_transitions_reach_verifier_dataset(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(synthetic_scenario())
         rows = CounterfactualGenerator(env=env, expert_oracle=ExpertPolicyOracle()).generate_from_current(
             [InjectedAction("wrong_target_component", correct_measurement(state["active_state_id"], index=1))],
@@ -2307,7 +2308,7 @@ class ProcessVerifierTests(unittest.TestCase):
 
 class AggreVaTeLiteTests(unittest.TestCase):
     def test_valid_oracle_finalization_has_no_false_final_cost(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(synthetic_scenario())
         state, _ = env.step(correct_measurement(state["active_state_id"]))
         state, _ = env.step({"tool": "run_wls", "arguments": {"state_id": state["candidate_state_id"]}})
@@ -2377,7 +2378,7 @@ class AggreVaTeLiteTests(unittest.TestCase):
             env.clone()
 
     def test_branch_cost_separates_correct_and_healthy_corrupting_corrections(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(
             {
                 "scenario_id": "rank-corrections",
@@ -2402,7 +2403,7 @@ class AggreVaTeLiteTests(unittest.TestCase):
         self.assertEqual(env.store.episode_hash(), root_hash)
 
     def test_top_l_branch_ranking_is_isolated_and_penalizes_false_commit(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         state = env.reset(
             {
                 "scenario_id": "rank",

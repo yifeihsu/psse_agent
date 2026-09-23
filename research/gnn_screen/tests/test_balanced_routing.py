@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from mcp_server.matpower_server import _load_python_case
+from psse_env.evidence_profile import AUXILIARY_EVIDENCE_PROFILE
 from psse_env.actions import action_signature, gnn_investigation_pending
 from psse_env.dagger.dataset_builder import prepare_model_policy_observation
 from psse_env.oracle import ExpertPolicyOracle
@@ -19,6 +20,7 @@ from research.gnn_screen.tests.test_protocol_adapter import constant_screen
 def screened_state():
     return {
         "active_state_id": "s0", "has_open_candidate": False,
+        "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
         "unresolved_signatures": [], "tried_action_signatures": [],
         "fresh_context_evidence": {"wls": {
             "successful": True, "state_id": "s0", "state_hash": "hash0",
@@ -107,7 +109,7 @@ def test_acquired_waveform_diagnosis_supersedes_screening_context_obligation():
 
 def test_anomaly_only_screen_prevents_expert_immediate_wls_based_finalization():
     case = _load_python_case("case14")
-    provider = MatpowerDeploymentProviders(screen_checkpoint="test.pt", screen_calibration="cal.json")
+    provider = MatpowerDeploymentProviders(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, screen_checkpoint="test.pt", screen_calibration="cal.json")
     screen = constant_screen(phase=-5., anomaly=5.)
     with patch("research.gnn_screen.protocol_adapter.load_screen", return_value=screen):
         env = TransactionalPSSEEnv(**provider.env_kwargs(), production_dataset_mode=True, max_steps=12)

@@ -9,6 +9,7 @@ import torch
 from mcp_server.matpower_server import _load_python_case
 from psse_env.actions import preferred_first_request
 from psse_env.dagger.dataset_builder import prepare_model_policy_observation, summarize_history
+from psse_env.evidence_profile import AUXILIARY_EVIDENCE_PROFILE
 from psse_env.oracle import ExpertPolicyOracle
 from psse_env.providers.matpower import MatpowerDeploymentProviders
 from psse_env.providers.scenario_generator import build_measurement_vector
@@ -95,8 +96,11 @@ def test_negative_screen_preserves_independent_coverage():
 
 def test_phase_screen_routes_negative_wls_without_acquiring_telemetry_or_certifying_fault():
     case = _load_python_case("case14")
-    provider = MatpowerDeploymentProviders(screen_checkpoint="test.pt", screen_calibration="cal.json")
-    baseline = MatpowerDeploymentProviders()
+    # The learned screen is historical auxiliary behaviour: the strict
+    # profiles refuse a screen checkpoint by construction.
+    provider = MatpowerDeploymentProviders(
+        evidence_profile=AUXILIARY_EVIDENCE_PROFILE, screen_checkpoint="test.pt", screen_calibration="cal.json")
+    baseline = MatpowerDeploymentProviders(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
     z = build_measurement_vector(case).tolist()
     scenario = {"case": "case14", "measurements": z, "metadata": {}}
     # Use real WLS evidence; only neural scores are mocked in this protocol test.
@@ -137,7 +141,8 @@ def test_no_checkpoint_preserves_default_and_missing_artifact_is_unavailable():
     case = _load_python_case("case14")
     state = {"case": "case14", "measurements": build_measurement_vector(case).tolist()}
     assert "gnn_screen" not in MatpowerDeploymentProviders().run_wls(state)
-    provider = MatpowerDeploymentProviders(screen_checkpoint="missing.pt", screen_calibration="missing.json")
+    provider = MatpowerDeploymentProviders(
+        evidence_profile=AUXILIARY_EVIDENCE_PROFILE, screen_checkpoint="missing.pt", screen_calibration="missing.json")
     report = provider.run_wls(state)["gnn_screen"]
     assert report["screen_status"] == "model_unavailable"
     assert report["phase_trigger"] is None
@@ -147,7 +152,8 @@ def test_stale_screen_cannot_override_acquisition_order():
     evidence = {"successful": True, "state_id": "s0", "state_hash": "h0", "anomaly_breadth": .9,
                 "gnn_screen": {"screen_status": "valid", "phase_trigger": True,
                                "state_id": "s0", "state_hash": "old"}}
-    state = {"active_state_id": "s0", "fresh_context_evidence": {"wls": evidence}}
+    state = {"active_state_id": "s0", "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
+             "fresh_context_evidence": {"wls": evidence}}
     assert preferred_first_request(state) == "get_harmonic_context"
     evidence["gnn_screen"]["state_hash"] = "h0"
     assert preferred_first_request(state) == "get_three_phase_context"

@@ -18,7 +18,7 @@ def _scenario(*, quiet=False):
 
 
 def test_default_forty_and_explicit_runner_limit_reach_policy_before_reset():
-    env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+    env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
     assert DEFAULT_EPISODE_ACTION_LIMIT == env.max_steps == 40
     env.reset(_scenario())
     assert env.get_policy_observation().remaining_budget == 40
@@ -84,7 +84,7 @@ def test_successful_provider_call_forty_executes_but_forty_one_does_not():
 
 
 def test_finalization_is_valid_as_the_fortieth_action():
-    env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+    env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
     env.reset(_scenario(quiet=True))
     for _ in range(39):
         env.step({"tool": "unknown_tool", "arguments": {}})
@@ -112,7 +112,7 @@ def test_exhaustion_does_not_grant_a_free_finalization():
 
 
 def test_synthetic_setup_attempt_counts_without_fabricating_tool_history():
-    env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
+    env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
     env.reset(_scenario())
     physical_hash = env.store.episode_hash()
     flags = deepcopy(env.context_flags)
