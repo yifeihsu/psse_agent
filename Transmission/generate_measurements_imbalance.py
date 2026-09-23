@@ -164,6 +164,48 @@ def _balance_bus3_loads() -> None:
         )
 
 
+def _solve_or_raise() -> None:
+    """Solve the active circuit; a non-converged power flow is never exported.
+
+    One retry continues the same fixed-point iteration with a larger cap (the
+    model converges at tolerance 1e-8 within about 80 iterations), so a
+    converged result is unchanged and only a genuinely stuck solve raises.
+    """
+    dss.Text.Command("Solve")
+    if bool(dss.Solution.Converged()):
+        return
+    first = int(dss.Solution.Iterations())
+    dss.Text.Command("Set maxiterations=1000")
+    dss.Text.Command("Solve")
+    if not bool(dss.Solution.Converged()):
+        raise RuntimeError(f"OpenDSS solve did not converge (tolerance {dss.Solution.Convergence():g}; "
+                           f"{first} then {int(dss.Solution.Iterations())} iterations)")
+
+
+FRESH_SOLVE_ATTEMPTS = 3
+
+
+def _solve_from_fresh_compile(build) -> None:
+    """Run ``build`` (compile, edit, solve) again from scratch if its solve diverges.
+
+    The OpenDSS engine occasionally diverges to NaN on a solve whose inputs
+    converge on every other run; a converged solve is deterministic, so a fresh
+    compile either reproduces it or exhausts the attempts.
+    """
+    last = None
+    for attempt in range(1, FRESH_SOLVE_ATTEMPTS + 1):
+        try:
+            build()
+            return
+        except RuntimeError as exc:
+            if "did not converge" not in str(exc):
+                raise
+            last = exc
+            print(f"warning: OpenDSS solve diverged on attempt {attempt}/{FRESH_SOLVE_ATTEMPTS}; "
+                  f"retrying from a fresh compile ({exc})", file=sys.stderr, flush=True)
+    raise RuntimeError(f"OpenDSS solve did not converge in {FRESH_SOLVE_ATTEMPTS} fresh attempts: {last}")
+
+
 def _compile_ieee14_opendss(repo_dir: str) -> None:
     caller_cwd = os.getcwd()
     try:
@@ -516,14 +558,20 @@ def generate_dataset(
                 for x in rng.dirichlet([float(dirichlet_alpha)] * 3).tolist()
             )
             target_bus = str(rng.choice(eligible_buses))
-            _compile_ieee14_opendss(dss_repo)
-            applied = _set_loads_scaled_with_bus_unbalance(
-                base_loads,
-                target_bus=target_bus,
-                load_scale=alpha,
-                bus_fracs=fracs,
-            )
-            dss.Text.Command("Solve")
+            applied: Dict[str, Any] = {}
+
+            def build_unbalanced() -> None:
+                _compile_ieee14_opendss(dss_repo)
+                applied.clear()
+                applied.update(_set_loads_scaled_with_bus_unbalance(
+                    base_loads,
+                    target_bus=target_bus,
+                    load_scale=alpha,
+                    bus_fracs=fracs,
+                ))
+                _solve_or_raise()
+
+            _solve_from_fresh_compile(build_unbalanced)
 
             z_clean, buses, branches = extract_measurement_series(shunt_convention=shunt_convention)
             if len(z_clean) != 3 * nb + 4 * nl:
@@ -560,9 +608,12 @@ def generate_dataset(
                 # Paired balanced reference: the same OpenDSS model, dispatch, load scale and
                 # shunt convention with every load balanced (the unbalanced exports above are
                 # complete, so recompiling here is safe).
-                _compile_ieee14_opendss(dss_repo)
-                _scale_all_loads(base_loads, alpha)
-                dss.Text.Command("Solve")
+                def build_balanced() -> None:
+                    _compile_ieee14_opendss(dss_repo)
+                    _scale_all_loads(base_loads, alpha)
+                    _solve_or_raise()
+
+                _solve_from_fresh_compile(build_balanced)
                 z_balanced, _, _ = extract_measurement_series(shunt_convention=shunt_convention)
                 z_true = [float(x) for x in z_balanced]
                 z_true_semantics = ("balanced_same_operating_point_opendss_reference; every load balanced, same "

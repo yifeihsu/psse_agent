@@ -225,11 +225,11 @@ PHYSICAL_HIF_SAMPLE_PATHS = tuple(_REPO_ROOT / "artifacts" / "measurements" / na
 PHYSICAL_HIF_SAMPLE_PATHS_20260921 = tuple(_REPO_ROOT / "artifacts" / "measurements" / name / "samples.jsonl" for name in (
     "hif_physical69_main_train_detectable_25x10_20260921", "hif_physical69_main_valid_detectable_7x10_20260921",
     "hif_physical69_main_train_extra_detectable_69x10_20260921", "hif_physical69_main_valid_extra_detectable_17x10_20260921"))
-PHYSICAL_HIF_DETECTION_LIMIT_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/hif_physical69_detection_limit_21x10_20260919/samples.jsonl"
-PHYSICAL_HIF_SWEEP_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/hif_physical_sweep_eval_336x10_20260919/samples.jsonl"
+PHYSICAL_HIF_DETECTION_LIMIT_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/hif_physical69_detection_limit_21x10_20260923b/samples.jsonl"
+PHYSICAL_HIF_SWEEP_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/hif_physical_sweep_eval_336x10_20260923b/samples.jsonl"
 # Unbalance corpus regenerated 2026-09-21 under the WLS shunt convention (ybus), phase-A Vm,
 # physical telemetry bases; 440 windows + 60 balanced controls, seed 20260925.
-PHYSICAL_IMBALANCE_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/out_measurements_imbalance_currents_ybus_detectable_160_20260921/samples.jsonl"
+PHYSICAL_IMBALANCE_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/out_measurements_imbalance_currents_ybus_detectable_160_20260923b/samples.jsonl"
 DEFAULT_BALANCED_ARTIFACT_DIR = (
     _REPO_ROOT / "artifacts" / "measurements" / "out_measurements_balanced"
 )

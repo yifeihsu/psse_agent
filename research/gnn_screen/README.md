@@ -168,8 +168,14 @@ dangling-terminal and meter errors follow DAgger's rules and are simulated on
 the parent's path and operating point. Nothing is filtered by WLS
 detectability; `offline_metadata.dagger_detectable` marks DAgger's training
 subsets. The HIF resistance sweeps go to a separate test-only manifest
-(`hif_resistance_evaluation_manifest.jsonl`). HIF parents inherit the HIF
-generator's missing voltage regulation, so the source path is recorded per row.
+(`hif_resistance_evaluation_manifest.jsonl`). The defaults are the 2026-09-23b
+HIF and unbalance corpora, simulated with generator reactive limits kept
+(voltage regulation active) at OpenDSS solve tolerance 1e-8, so both simulator
+paths converge to the same balanced solution; a corpus whose stored healthy
+reference the current simulator cannot reproduce is refused, so earlier
+corpora cannot be mixed in. The
+`output/gnn_dagger_aligned_20260922` build and its results come from the
+pre-fix, unregulated HIF corpora.
 
 From the repository root, with Python, NumPy, SciPy, PyTorch, PyYAML and pytest:
 

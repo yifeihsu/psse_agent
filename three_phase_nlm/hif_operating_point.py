@@ -260,22 +260,24 @@ def apply_hif_operating_point(
             maxkvar, minkvar = float(item["maxkvar"]), float(item["minkvar"])
         else:
             maxkvar, minkvar = _generator_reactive_limits()
-        dss.Generators.kW(kw)
-        applied_dispatch[name] = kw
+        try:
+            dss.Generators.kW(kw)
+            applied_dispatch[name] = kw
 
-        raw_vpu = _mapping_value(voltage_setpoints, name=name, bus=bus)
-        if raw_vpu is not None or math.isfinite(float(item.get("vpu", math.nan))):
-            vpu = (
-                _finite_float(raw_vpu, field=f"voltage setpoint for {name}")
-                if raw_vpu is not None
-                else float(item["vpu"])
-            )
-            if not 0.8 <= vpu <= 1.2:
-                raise ValueError(f"voltage setpoint for {name} must be in [0.8, 1.2] pu")
-            dss.Text.Command(f"Edit Generator.{name} Vpu={vpu:.12g}")
-            applied_voltage_setpoints[name] = vpu
-        dss.Text.Command(f"Edit Generator.{name} Maxkvar={maxkvar:.12g} Minkvar={minkvar:.12g}")
-        applied_reactive_limits[name] = {"maxkvar": maxkvar, "minkvar": minkvar}
+            raw_vpu = _mapping_value(voltage_setpoints, name=name, bus=bus)
+            if raw_vpu is not None or math.isfinite(float(item.get("vpu", math.nan))):
+                vpu = (
+                    _finite_float(raw_vpu, field=f"voltage setpoint for {name}")
+                    if raw_vpu is not None
+                    else float(item["vpu"])
+                )
+                if not 0.8 <= vpu <= 1.2:
+                    raise ValueError(f"voltage setpoint for {name} must be in [0.8, 1.2] pu")
+                dss.Text.Command(f"Edit Generator.{name} Vpu={vpu:.12g}")
+                applied_voltage_setpoints[name] = vpu
+        finally:
+            dss.Text.Command(f"Edit Generator.{name} Maxkvar={maxkvar:.12g} Minkvar={minkvar:.12g}")
+            applied_reactive_limits[name] = {"maxkvar": maxkvar, "minkvar": minkvar}
 
     source_pu = float(op["source_voltage_pu"])
     applied_source: dict[str, float] = {}

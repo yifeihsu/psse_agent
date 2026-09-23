@@ -14,7 +14,15 @@ Compile IEEE14BusMaster.dss
 ! The compile builds the circuit model and sets the voltage bases
 
 ! sometimes this model needs more than the default 15 iterations
-Set maxiterations=100
+Set maxiterations=200
+
+! Converge the power flow properly. With the four PV generators regulating,
+! the default tolerance (1e-4) stops a solve up to 1.7 measurement sigmas
+! (0.017 pu) short of the converged solution and the operating-point and
+! load-scaling code paths land on different sides of it (1.5 sigma apart on
+! bus-2/3 injections). 1e-8 brings both below 1e-3 sigma at about 50
+! iterations (2026-09-23).
+Set tolerance=1e-8
 
 ! This command solves the base case power flow
 Solve

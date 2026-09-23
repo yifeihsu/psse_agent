@@ -97,3 +97,27 @@ def test_pv_buses_regulate_and_bus8_condenser_supplies_reactive_power(model_dir,
 def test_hif_reference_solve_carries_bus8_reactive_injection(model_dir):
     z = _simulate_base(model_dir, op_point=DIVERSE_POINT, shunt_convention="ybus")["z"]
     assert z[QINJ_BUS8] > 0.05
+
+
+def test_generator_at_its_limit_stops_at_the_model_limit(model_dir):
+    """At high load with a high setpoint, bus 8 binds at 24 MVAr (not at the +-1.08 kvar reset value)."""
+    import opendssdirect as dss
+
+    heavy = {**DIVERSE_POINT, "load_scale": 1.25, "voltage_setpoints_pu": {"b2": 1.045, "b3": 1.01, "b6": 1.07, "b8": 1.10}}
+    _compile_base_model(model_dir)
+    apply_hif_operating_point(capture_operating_point_baseline(), heavy)
+    _solve_or_raise()
+    dss.Circuit.SetActiveElement("Generator.b8")
+    q_kvar = -sum(dss.CktElement.Powers()[1::2][:3])
+    assert abs(q_kvar - MODEL_LIMITS_KVAR["b8"][0]) < 10.0
+    assert _pv_voltage_errors(heavy)["b8"] < -1e-3  # setpoint unattainable, so voltage sits below it
+
+
+def test_injected_hif_candidate_keeps_regulation(model_dir):
+    """The candidate simulator (corpus scans and the estimator's forward model) regulates too."""
+    from three_phase_nlm.hif_parameter_estimator import simulate_hif_candidate
+
+    result = simulate_hif_candidate(candidate_branch_row0=4, alpha=0.5, phase="A", r_hif_pu=4.0,
+                                    op_point=DIVERSE_POINT, shunt_convention="ybus")
+    assert result["z"][QINJ_BUS8] > 0.05
+    assert _live_limits() == MODEL_LIMITS_KVAR
